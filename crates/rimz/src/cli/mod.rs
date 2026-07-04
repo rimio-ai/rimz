@@ -206,10 +206,11 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
 }
 
 /// The current channel a command runs in: an explicit named lane from
-/// `RIMZ_CHANNEL`, else the worktree's branch, else its directory basename when
-/// we are genuinely inside a separate worktree. A bare directory workspace
-/// (root == worktree) yields `None` for humans, but Rimz-launched members carry
-/// `RIMZ_CHANNEL` or `RIMZ_TEAM`, so their calls scope to that lane.
+/// `RIMZ_CHANNEL`, else the worktree directory basename when we are genuinely
+/// inside a separate worktree, else an in-place team as `<dir>/<team>`. A bare
+/// directory workspace (root == worktree) yields `None` for humans, but
+/// Rimz-launched members carry `RIMZ_CHANNEL` or `RIMZ_TEAM`, so their calls
+/// scope to that lane.
 pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
     if let Ok(channel) = std::env::var(rimz::harness::run::ENV_CHANNEL)
         && !channel.is_empty()
@@ -224,26 +225,18 @@ fn current_channel_for_team(
     workspace: &rimz::ResolvedWorkspace,
     team: Option<&str>,
 ) -> Option<String> {
-    if let Some(branch) = workspace.worktree_branch.as_deref() {
-        return Some(branch.to_owned());
-    }
     if workspace.worktree_root != workspace.project_root {
         return workspace
             .worktree_root
             .file_name()
             .map(|name| name.to_string_lossy().into_owned());
     }
-    match (
-        workspace
-            .project_root
-            .file_name()
-            .map(|name| name.to_string_lossy()),
-        team.filter(|value| !value.is_empty()),
-    ) {
-        (Some(dir), Some(team)) => Some(format!("{dir}/{team}")),
-        (None, Some(team)) => Some(team.to_owned()),
-        _ => None,
-    }
+    let team = team.filter(|value| !value.is_empty())?;
+    let dir = workspace
+        .project_root
+        .file_name()
+        .map(|name| name.to_string_lossy());
+    rimz::harness::target::compose_channel(None, dir.as_deref(), Some(team))
 }
 
 /// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<profile>`
@@ -650,11 +643,11 @@ mod tests {
     }
 
     #[test]
-    fn current_channel_keeps_worktree_precedence() {
+    fn current_channel_ignores_branch_for_lane_identity() {
         let branch = workspace("/code/project", "/code/project", Some("feat/auth"));
         assert_eq!(
             current_channel_for_team(&branch, Some("pcr")).as_deref(),
-            Some("feat/auth")
+            Some("project/pcr")
         );
 
         let child_worktree = workspace("/code/project", "/code/project-wt/auth", None);
@@ -698,6 +691,21 @@ mod tests {
         let mut cli = Cli::try_parse_from(["rimz", "--mux", "tmux"]).unwrap();
         cli.global.normalize().unwrap();
         assert_eq!(cli.global.mux, Some(MuxName::Tmux));
+    }
+
+    #[test]
+    fn current_channel_is_stable_across_branch_changes() {
+        let before = workspace("/code/project", "/code/project-wt/auth", Some("feat/auth"));
+        let after = workspace("/code/project", "/code/project-wt/auth", Some("scratch"));
+
+        assert_eq!(
+            current_channel_for_team(&before, Some("pcr")),
+            current_channel_for_team(&after, Some("pcr"))
+        );
+        assert_eq!(
+            current_channel_for_team(&before, Some("pcr")).as_deref(),
+            Some("auth")
+        );
     }
 
     #[test]

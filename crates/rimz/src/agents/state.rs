@@ -633,7 +633,7 @@ pub struct AgentState {
     pub role: Option<String>,
     /// The `[agents.teams]` team this agent launched under, stamped by the
     /// launch event and carried forward like `role`. In-place team launches use
-    /// it as the channel suffix when no worktree branch exists.
+    /// it as the channel suffix after the worktree directory name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     /// Inline multi-agent launch cohort, stamped by `RIMZ_LAUNCH_GROUP` and
@@ -647,7 +647,7 @@ pub struct AgentState {
     pub launch_ordinal: Option<u32>,
     /// A named cooperation lane, stamped by `RIMZ_CHANNEL` and carried forward
     /// like `team`. When present it is the routing channel ahead of worktree
-    /// branch, team, and directory fallback.
+    /// name, team, and directory fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     pub status: AgentStatus,

@@ -2340,12 +2340,14 @@ fn assert_text_then_enter(trace_log: &Path, text: &str) {
 }
 
 fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &[(&str, &str)]) {
+    let worktree_path = env.home_root.join(branch).display().to_string();
     run_hook(
         env,
         json!({
             "hook_event_name": "SessionStart",
             "session_id": session_id,
             "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
         }),
         pane_env,
     );
@@ -2356,6 +2358,7 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &
             "session_id": session_id,
             "prompt": "work",
             "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
         }),
         pane_env,
     );
@@ -2437,12 +2440,59 @@ fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
 }
 
 fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
+    let mut payload = payload;
+    stamp_worktree_path(env, &mut payload);
     let payload = serde_json::to_string(&payload).expect("payload");
-    let output = env.run_installed_hook_in_pane("claude", &payload, pane_env);
+    let mut cmd = env.hook_command("claude");
+    scrub_launch_identity(&mut cmd);
+    cmd.env("RIMZ_AGENT_PID", "");
+    for (key, value) in pane_env {
+        cmd.env(key, value);
+    }
+    let output = env
+        .spawn_payload(cmd, &payload)
+        .wait_with_output()
+        .expect("wait hook");
     assert!(
         output.status.success(),
         "hook failed: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn scrub_launch_identity(cmd: &mut std::process::Command) {
+    for key in [
+        rimz::harness::run::ENV_AGENT_NAME,
+        rimz::harness::run::ENV_AGENT_PROFILE,
+        rimz::harness::run::ENV_AGENT_ROLE,
+        rimz::harness::run::ENV_TEAM,
+        rimz::harness::run::ENV_LAUNCH_GROUP,
+        rimz::harness::run::ENV_LAUNCH_ORDINAL,
+        rimz::harness::run::ENV_CHANNEL,
+        rimz::harness::run::ENV_AGENT_MODEL,
+        rimz::harness::run::ENV_AGENT_EFFORT,
+    ] {
+        cmd.env(key, "");
+    }
+}
+
+fn stamp_worktree_path(env: &Env, payload: &mut serde_json::Value) {
+    if payload.get("worktree_path").is_some() {
+        return;
+    }
+    let Some(branch) = payload
+        .get("worktree_branch")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return;
+    };
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "worktree_path".to_owned(),
+        json!(env.home_root.join(branch).display().to_string()),
     );
 }
 

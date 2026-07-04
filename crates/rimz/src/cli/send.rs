@@ -13,7 +13,7 @@ use rimz::message::{AutoCompact, MessageSender, delivery_window_from_env};
 /// The flags shared by immediate and parked message delivery.
 #[derive(Debug, Args)]
 pub(crate) struct SendFlags {
-    /// Restrict matches to one worktree branch, name, or path.
+    /// Restrict matches to one worktree name or path.
     #[arg(long, conflicts_with = "channel")]
     pub(crate) worktree: Option<String>,
     /// Restrict matches to one named channel.

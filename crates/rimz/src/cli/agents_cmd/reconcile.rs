@@ -172,9 +172,9 @@ fn recreate_or_done(
             )
             .map_err(Into::into)
         },
-        |branch, _reason| {
+        |channel, _reason| {
             ledger
-                .archive_channel_messages(branch, "worktree recreated", &workspace.session_name)
+                .archive_channel_messages(channel, "worktree recreated", &workspace.session_name)
                 .map(|_| ())
                 .map_err(Into::into)
         },

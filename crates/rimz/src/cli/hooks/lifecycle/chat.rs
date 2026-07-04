@@ -50,11 +50,6 @@ pub(super) fn record_native_answer(
         .unwrap_or_else(|| Cow::Owned(workspace.worktree_root.display().to_string()));
     let channel = rimz::harness::target::compose_channel(
         None,
-        payload
-            .get("worktree_branch")
-            .and_then(Value::as_str)
-            .filter(|branch| !branch.is_empty())
-            .or(workspace.worktree_branch.as_deref()),
         rimz::harness::target::path_basename(&worktree_path),
         None,
     );
@@ -97,14 +92,18 @@ pub(super) fn record_chat_conversation(
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
     let channel = rimz::harness::target::compose_channel(
         observation.launch.channel.as_deref(),
-        observation.worktree_branch.as_deref(),
         observation
             .worktree_path
             .as_deref()
             .and_then(rimz::harness::target::path_basename),
         observation.launch.team.as_deref(),
     )
-    .or_else(|| workspace.worktree_branch.clone());
+    .or_else(|| {
+        workspace
+            .worktree_root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    });
     let entry_base = |entry, text: String| {
         let mut entry = rimz::chat::ChatEntry::new(
             jiff::Timestamp::now(),
@@ -208,7 +207,10 @@ pub(super) fn record_turn_error_chat_entry(
             .clone()
             .unwrap_or_else(|| "provider API error".to_owned()),
     );
-    entry.channel = workspace.worktree_branch.clone();
+    entry.channel = workspace
+        .worktree_root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
     if let Err(err) = rimz::chat::append(ledger.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,

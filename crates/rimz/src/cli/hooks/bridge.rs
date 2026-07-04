@@ -189,7 +189,6 @@ fn chat_ask_entry(
     let text = last.unwrap_or_default();
     let channel = rimz::harness::target::compose_channel(
         None,
-        item.worktree_branch.as_deref(),
         item.worktree_path
             .as_deref()
             .and_then(rimz::harness::target::path_basename),

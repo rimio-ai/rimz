@@ -108,7 +108,7 @@ fn worktree_new_archives_messages_for_recreated_channel() {
     let message_id = queue_channel_message(&env, "demo", "old work");
 
     env.rimz()
-        .args(["worktree", "new", "demo"])
+        .args(["worktree", "new", "demo", "--branch", "scratch"])
         .assert()
         .success();
 
@@ -132,7 +132,7 @@ fn worktree_remove_archives_messages_for_removed_channel() {
     let env = Env::new();
     init_repo(&env.project_root);
     env.rimz()
-        .args(["worktree", "new", "demo"])
+        .args(["worktree", "new", "demo", "--branch", "scratch"])
         .assert()
         .success();
     let message_id = queue_channel_message(&env, "demo", "old work");

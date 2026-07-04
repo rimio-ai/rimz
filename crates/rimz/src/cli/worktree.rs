@@ -31,7 +31,7 @@ pub(super) fn remove_and_archive(
     archive_channel: impl FnOnce(&str, &str) -> Result<()>,
 ) -> Result<RemovedWorktree> {
     let branch_deletion = remove()?;
-    let archive = archive_channel(&marker.branch, WORKTREE_REMOVED_ARCHIVE_REASON);
+    let archive = archive_channel(&marker.name, WORKTREE_REMOVED_ARCHIVE_REASON);
     Ok(RemovedWorktree {
         branch_deletion,
         archive,
@@ -136,7 +136,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             };
             ledger
                 .archive_channel_messages(
-                    &created.branch,
+                    &created.name,
                     "channel recreated",
                     &workspace.session_name,
                 )
@@ -245,9 +245,9 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                     rimz::worktree::remove(&workspace.project_root, &config, &name, force)
                         .map_err(Into::into)
                 },
-                |branch, reason| {
+                |channel, reason| {
                     ledger
-                        .archive_channel_messages(branch, reason, &workspace.session_name)
+                        .archive_channel_messages(channel, reason, &workspace.session_name)
                         .map(|_| ())
                         .map_err(Into::into)
                 },
@@ -303,8 +303,8 @@ pub(super) fn cleanup_worktree(
             let removed = remove_and_archive(
                 &marker,
                 || remove_after_leaving_worktree(path, &marker, false),
-                |branch, reason| {
-                    archive_removed_worktree_messages(&marker, globals, branch, reason)
+                |channel, reason| {
+                    archive_removed_worktree_messages(&marker, globals, channel, reason)
                 },
             )?;
             if let Err(err) = removed.archive {
@@ -329,8 +329,8 @@ pub(super) fn cleanup_worktree(
                         let removed = remove_and_archive(
                             &marker,
                             || remove_after_leaving_worktree(path, &marker, true),
-                            |branch, reason| {
-                                archive_removed_worktree_messages(&marker, globals, branch, reason)
+                            |channel, reason| {
+                                archive_removed_worktree_messages(&marker, globals, channel, reason)
                             },
                         )?;
                         if let Err(err) = removed.archive {
@@ -438,12 +438,12 @@ fn remove_after_leaving_worktree(
 fn archive_removed_worktree_messages(
     marker: &rimz::worktree::WorktreeMarker,
     globals: &GlobalFlags,
-    branch: &str,
+    channel: &str,
     reason: &str,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    ledger.archive_channel_messages(branch, reason, &workspace.session_name)?;
+    ledger.archive_channel_messages(channel, reason, &workspace.session_name)?;
     Ok(())
 }
 
@@ -646,6 +646,44 @@ mod tests {
             Some(&own),
             worktree,
         ));
+    }
+
+    #[test]
+    fn remove_and_archive_uses_worktree_name_as_channel() {
+        let marker = rimz::worktree::WorktreeMarker {
+            version: 3,
+            name: "demo".to_owned(),
+            branch: "scratch".to_owned(),
+            base_branch: Some("main".to_owned()),
+            base_ref: "base".to_owned(),
+            repo_root: PathBuf::from("/repo"),
+            worktree_path: PathBuf::from("/repo-worktrees/demo"),
+            created_at: jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+        };
+        let mut archived = None;
+
+        let removed = remove_and_archive(
+            &marker,
+            || Ok(rimz::worktree::BranchDeletion::Deleted),
+            |channel, reason| {
+                archived = Some((channel.to_owned(), reason.to_owned()));
+                Ok(())
+            },
+        )
+        .expect("remove");
+
+        assert_eq!(
+            removed.branch_deletion,
+            rimz::worktree::BranchDeletion::Deleted
+        );
+        removed.archive.expect("archive");
+        assert_eq!(
+            archived,
+            Some((
+                "demo".to_owned(),
+                WORKTREE_REMOVED_ARCHIVE_REASON.to_owned()
+            ))
+        );
     }
 
     #[cfg(target_os = "linux")]

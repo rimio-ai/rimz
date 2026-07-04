@@ -13,9 +13,9 @@
 //! agent.
 //!
 //! The channel is the workspace segment the room groups by — an explicit named
-//! lane, else a worktree branch, else a directory basename, with an in-place
-//! named team appended as `<dir>/<team>`. Callers pass the *current* channel; an
-//! explicit `#name`, `--channel name`, or `--worktree name` overrides it. A
+//! lane, else a directory basename, with an in-place named team appended as
+//! `<dir>/<team>`. Callers pass the *current* channel; an explicit `#name`,
+//! `--channel name`, or `--worktree name` overrides it. A
 //! `None` current channel means **all
 //! channels** — it never silently narrows to "only worktree-less agents", so
 //! addressing the room from a bare directory workspace still reaches every
@@ -25,6 +25,8 @@ use crate::agents::AgentState;
 use crate::ids::{AgentKind, PaneId};
 use crate::ledger::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::message::MessageSender;
+
+pub use crate::ledger::snapshot::compose_channel;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TargetErr {
@@ -96,16 +98,14 @@ trait Candidate<'a>: Copy {
     fn team(self) -> Option<&'a str>;
     fn channel(self) -> Option<&'a str>;
     fn session_id(self) -> Option<&'a str>;
-    fn worktree_branch(self) -> Option<&'a str>;
     fn worktree_path(self) -> Option<&'a str>;
     fn pane_id(self) -> Option<&'a PaneId>;
 
-    /// The channel label: explicit named lane, else branch, else
-    /// worktree-directory basename plus team when present, else a placeholder.
+    /// The channel label: explicit named lane, else worktree-directory basename
+    /// plus team when present, else a placeholder.
     fn channel_label(self) -> String {
         compose_channel(
             self.channel(),
-            self.worktree_branch(),
             self.worktree_path()
                 .and_then(|path| path.rsplit('/').next()),
             self.team(),
@@ -119,13 +119,11 @@ trait Candidate<'a>: Copy {
         }
         let channel = compose_channel(
             self.channel(),
-            self.worktree_branch(),
             self.worktree_path()
                 .and_then(|path| path.rsplit('/').next()),
             self.team(),
         );
         channel.as_deref() == Some(filter)
-            || self.worktree_branch() == Some(filter)
             || self
                 .worktree_path()
                 .is_some_and(|path| path == filter || path.rsplit('/').next() == Some(filter))
@@ -156,9 +154,6 @@ impl<'a> Candidate<'a> for &'a AgentState {
     }
     fn session_id(self) -> Option<&'a str> {
         (!self.agent_id.is_provisional()).then(|| self.agent_id.as_str())
-    }
-    fn worktree_branch(self) -> Option<&'a str> {
-        self.worktree_branch.as_deref()
     }
     fn worktree_path(self) -> Option<&'a str> {
         self.worktree_path.as_deref()
@@ -192,9 +187,6 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     }
     fn session_id(self) -> Option<&'a str> {
         self.agent_id.as_ref().map(|id| id.as_str())
-    }
-    fn worktree_branch(self) -> Option<&'a str> {
-        self.worktree_branch.as_deref()
     }
     fn worktree_path(self) -> Option<&'a str> {
         self.worktree_path.as_deref()
@@ -590,9 +582,10 @@ fn prefer_exact_session<'a, C: Candidate<'a>>(selector: &str, candidates: Vec<C>
     if exact.is_empty() { candidates } else { exact }
 }
 
-/// Whether `agent` lives in the channel `filter` names — branch, worktree path,
-/// or that path's basename. A display-side wrapper over the resolver's
-/// [`Candidate::in_worktree`], so channel membership keeps one definition.
+/// Whether `agent` lives in the channel `filter` names — explicit channel,
+/// directory channel, team channel, worktree path, or that path's basename. A
+/// display-side wrapper over the resolver's [`Candidate::in_worktree`], so
+/// channel membership keeps one definition.
 pub fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
     agent.in_worktree(filter)
 }
@@ -622,44 +615,17 @@ fn no_match_error<'a, C: Candidate<'a>>(
     }
 }
 
-/// Compose a routing channel from launch identity. An explicit named lane wins,
-/// then branch, then an in-place named team extends the directory channel as
-/// `<dir>/<team>`.
-pub fn compose_channel(
-    explicit: Option<&str>,
-    branch: Option<&str>,
-    dir_basename: Option<&str>,
-    team: Option<&str>,
-) -> Option<String> {
-    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
-        return Some(channel.to_owned());
-    }
-    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
-        return Some(branch.to_owned());
-    }
-    match (
-        dir_basename.filter(|dir| !dir.is_empty()),
-        team.filter(|team| !team.is_empty()),
-    ) {
-        (Some(dir), Some(team)) => Some(format!("{dir}/{team}")),
-        (Some(dir), None) => Some(dir.to_owned()),
-        (None, Some(team)) => Some(team.to_owned()),
-        (None, None) => None,
-    }
-}
-
 pub fn path_basename(path: &str) -> Option<&str> {
     path.rsplit('/').next().filter(|value| !value.is_empty())
 }
 
 /// The agent's channel — the lane it cooperates in: explicit named lane, else
-/// branch, else worktree directory basename plus in-place team when present.
+/// worktree directory basename plus in-place team when present.
 /// `None` when the agent runs outside any channel context.
 /// The display-side `Option` peer of the resolver's [`Candidate::channel_label`].
 pub fn agent_channel(agent: &AgentState) -> Option<String> {
     compose_channel(
         agent.channel.as_deref(),
-        agent.worktree_branch.as_deref(),
         agent
             .worktree_path
             .as_deref()

@@ -233,13 +233,12 @@ impl PaneAgent {
         }
     }
 
-    /// The channel this pane participates in: branch, else worktree directory
-    /// basename plus team when present. `None` means the pane is outside a
-    /// known worktree and team.
+    /// The channel this pane participates in: explicit named lane, else
+    /// worktree directory basename plus team when present. `None` means the
+    /// pane is outside a known worktree and team.
     pub fn channel(&self) -> Option<String> {
         compose_channel(
             self.channel.as_deref(),
-            self.worktree_branch.as_deref(),
             self.worktree_path
                 .as_deref()
                 .and_then(|path| path.rsplit('/').next()),
@@ -248,17 +247,15 @@ impl PaneAgent {
     }
 }
 
-fn compose_channel(
+/// Compose a routing channel from launch identity. An explicit named lane wins,
+/// then an in-place named team extends the directory channel as `<dir>/<team>`.
+pub fn compose_channel(
     explicit: Option<&str>,
-    branch: Option<&str>,
     dir_basename: Option<&str>,
     team: Option<&str>,
 ) -> Option<String> {
     if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
         return Some(channel.to_owned());
-    }
-    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
-        return Some(branch.to_owned());
     }
     match (
         dir_basename.filter(|dir| !dir.is_empty()),

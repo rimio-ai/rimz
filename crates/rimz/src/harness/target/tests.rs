@@ -37,9 +37,9 @@ fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
         resolve_one(&snapshot, "@claude", None, None),
         Err(TargetErr::Ambiguous { .. })
     ));
-    // Compact channel form picks the branch.
+    // Compact channel form picks the worktree basename.
     assert_eq!(
-        resolve_one(&snapshot, "@claude#feature/x.y", None, None)
+        resolve_one(&snapshot, "@claude#x.y", None, None)
             .unwrap()
             .agent_id
             .as_str(),
@@ -53,7 +53,7 @@ fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
         "session-alpha"
     );
     assert_eq!(
-        resolve_one(&snapshot, "@bright-beacon#feature/x.y", None, None)
+        resolve_one(&snapshot, "@bright-beacon#x.y", None, None)
             .unwrap()
             .agent_id
             .as_str(),
@@ -248,14 +248,17 @@ fn in_place_team_channel_uses_directory_and_team() {
 }
 
 #[test]
-fn branch_channel_wins_over_team() {
+fn agent_channel_and_in_worktree_use_directory_not_branch() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
     team_agent.team = Some("pcr".to_owned());
+    team_agent.worktree_branch = Some("scratch".to_owned());
 
-    assert_eq!(agent_channel(&team_agent).as_deref(), Some("feat/auth"));
-    assert_eq!((&team_agent).channel_label(), "feat/auth");
-    assert!((&team_agent).in_worktree("feat/auth"));
-    assert!(!(&team_agent).in_worktree("auth/pcr"));
+    assert_eq!(agent_channel(&team_agent).as_deref(), Some("auth/pcr"));
+    assert_eq!((&team_agent).channel_label(), "auth/pcr");
+    assert!((&team_agent).in_worktree("auth/pcr"));
+    assert!((&team_agent).in_worktree("auth"));
+    assert!(!(&team_agent).in_worktree("scratch"));
+    assert!(!(&team_agent).in_worktree("feat/auth"));
 }
 
 #[test]

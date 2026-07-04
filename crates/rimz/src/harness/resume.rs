@@ -609,8 +609,8 @@ pub fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
     )
 }
 
-/// A short, view-safe label for a resumed agent: `kind:branch`, falling back to
-/// the worktree directory name, then `kind:agent`. Used in skip reports and
+/// A short, view-safe label for a resumed agent: `kind:<channel>`, falling back
+/// to the worktree directory name, then `kind:agent`. Used in skip reports and
 /// legacy per-agent tab title fallbacks.
 pub fn build_label(
     kind: &str,
@@ -621,17 +621,12 @@ pub fn build_label(
     format!("{kind}:{}", channel_short(channel, branch, worktree))
 }
 
-/// A short, view-safe channel name: branch, then worktree directory, then
-/// `agent`.
-pub fn channel_short(channel: Option<&str>, branch: Option<&str>, worktree: &Path) -> String {
+/// A short, view-safe channel name: explicit channel, then worktree directory,
+/// then `agent`.
+pub fn channel_short(channel: Option<&str>, _branch: Option<&str>, worktree: &Path) -> String {
     channel
         .filter(|channel| !channel.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            branch
-                .filter(|branch| !branch.is_empty())
-                .map(ToOwned::to_owned)
-        })
         .or_else(|| {
             worktree
                 .file_name()

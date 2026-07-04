@@ -248,7 +248,7 @@ fn stop_failure_records_turn_error_transcript_entry() {
     assert_eq!(entry.entry, rimz::chat::ChatKind::Error);
     assert_eq!(entry.kind.as_str(), "claude");
     assert_eq!(entry.agent_id.as_str(), "sess-1");
-    assert_eq!(entry.channel.as_deref(), Some("main"));
+    assert_eq!(entry.channel.as_deref(), Some("hooks-test"));
     assert_eq!(
         entry.text,
         "API Error: Response stalled mid-stream. The response above may be incomplete."

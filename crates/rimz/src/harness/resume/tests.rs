@@ -639,6 +639,15 @@ fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
         build_label("codex", None, None, Path::new("/code/query-engine")),
         "codex:query-engine"
     );
+    assert_eq!(
+        build_label(
+            "codex",
+            None,
+            Some("scratch"),
+            Path::new("/code/query-engine")
+        ),
+        "codex:query-engine"
+    );
 }
 
 #[test]

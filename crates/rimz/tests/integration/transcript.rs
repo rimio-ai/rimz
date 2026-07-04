@@ -273,6 +273,7 @@ fn resolving_agent_ask_through_cli_appends_transcript_answer() {
     );
     item.payload = json!({ "session_id": "sess-answer" });
     item.worktree_branch = Some("feature-answer".to_owned());
+    item.worktree_path = Some(env.home_root.join("feature-answer").display().to_string());
     let request_id = item.request_id.clone();
     env.ledger()
         .push_feed_item(&item, "rimz-test")
@@ -313,6 +314,7 @@ fn dismissing_agent_ask_through_cli_does_not_append_transcript_answer() {
     );
     item.payload = json!({ "session_id": "sess-dismiss" });
     item.worktree_branch = Some("feature-dismiss".to_owned());
+    item.worktree_path = Some(env.home_root.join("feature-dismiss").display().to_string());
     let request_id = item.request_id.clone();
     env.ledger()
         .push_feed_item(&item, "rimz-test")
@@ -660,6 +662,7 @@ fn register_claude_turn(
     prompt: &str,
 ) {
     let transcript = transcript.to_string_lossy().into_owned();
+    let worktree_path = env.home_root.join(branch).display().to_string();
     run_hook(
         env,
         "claude",
@@ -667,6 +670,7 @@ fn register_claude_turn(
             "hook_event_name": "SessionStart",
             "session_id": session_id,
             "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
             "transcript_path": transcript,
         }),
     );
@@ -678,6 +682,7 @@ fn register_claude_turn(
             "session_id": session_id,
             "prompt": prompt,
             "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
             "transcript_path": transcript,
         }),
     );
@@ -688,12 +693,14 @@ fn register_claude_turn(
             "hook_event_name": "Stop",
             "session_id": session_id,
             "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
             "transcript_path": transcript,
         }),
     );
 }
 
 fn register_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &str, answer: &str) {
+    let worktree_path = env.home_root.join(branch).display().to_string();
     run_hook(
         env,
         "codex",
@@ -701,6 +708,7 @@ fn register_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &str, 
             "hook_event_name": "SessionStart",
             "session_id": session_id,
             "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
         }),
     );
     run_hook(
@@ -711,6 +719,7 @@ fn register_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &str, 
             "session_id": session_id,
             "prompt": prompt,
             "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
         }),
     );
     run_hook(
@@ -721,6 +730,7 @@ fn register_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &str, 
             "session_id": session_id,
             "last_assistant_message": answer,
             "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
         }),
     );
 }
@@ -740,11 +750,13 @@ fn bridge_permission_to_allow(
         "tool_name": "Bash",
         "tool_input": { "command": "echo hi" },
         "worktree_branch": branch,
+        "worktree_path": env.home_root.join(branch).display().to_string(),
         "transcript_path": transcript,
     }))
     .expect("payload");
     let mut cmd = env.hook_command("claude");
-    cmd.env_remove("RIMZ_AGENT_PID");
+    scrub_launch_identity(&mut cmd);
+    cmd.env("RIMZ_AGENT_PID", "");
     cmd.env(rimz::harness::run::ENV_AGENT_ROLE, "claude");
     let child = env.spawn_payload(cmd, &payload);
     let request_id = env
@@ -767,19 +779,67 @@ fn bridge_permission_to_allow(
 }
 
 fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
+    let mut payload = payload;
+    stamp_worktree_path(env, &mut payload);
     let payload = serde_json::to_string(&payload).expect("payload");
     let mut cmd = env.hook_command(source);
-    cmd.env_remove("RIMZ_AGENT_PID");
+    scrub_launch_identity(&mut cmd);
+    let mut owner = dummy_agent_process();
+    cmd.env("RIMZ_AGENT_PID", owner.id().to_string());
     cmd.env(rimz::harness::run::ENV_AGENT_ROLE, source);
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()
         .expect("wait hook");
+    let _ = owner.kill();
+    let _ = owner.wait();
     assert!(
         output.status.success(),
         "hook failed\nstdout={}\nstderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn dummy_agent_process() -> std::process::Child {
+    let mut cmd = std::process::Command::new("sleep");
+    scrub_launch_identity(&mut cmd);
+    cmd.arg("5").spawn().expect("spawn dummy agent process")
+}
+
+fn scrub_launch_identity(cmd: &mut std::process::Command) {
+    for key in [
+        rimz::harness::run::ENV_AGENT_NAME,
+        rimz::harness::run::ENV_AGENT_PROFILE,
+        rimz::harness::run::ENV_AGENT_ROLE,
+        rimz::harness::run::ENV_TEAM,
+        rimz::harness::run::ENV_LAUNCH_GROUP,
+        rimz::harness::run::ENV_LAUNCH_ORDINAL,
+        rimz::harness::run::ENV_CHANNEL,
+        rimz::harness::run::ENV_AGENT_MODEL,
+        rimz::harness::run::ENV_AGENT_EFFORT,
+    ] {
+        cmd.env(key, "");
+    }
+}
+
+fn stamp_worktree_path(env: &Env, payload: &mut serde_json::Value) {
+    if payload.get("worktree_path").is_some() {
+        return;
+    }
+    let Some(branch) = payload
+        .get("worktree_branch")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return;
+    };
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "worktree_path".to_owned(),
+        json!(env.home_root.join(branch).display().to_string()),
     );
 }
 

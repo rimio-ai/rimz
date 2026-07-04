@@ -235,9 +235,9 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
                 )
                 .map_err(Into::into)
             },
-            |branch, reason| {
+            |channel, reason| {
                 ledger
-                    .archive_channel_messages(branch, reason, &workspace.session_name)
+                    .archive_channel_messages(channel, reason, &workspace.session_name)
                     .map(|_| ())
                     .map_err(Into::into)
             },

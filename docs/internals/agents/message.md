@@ -224,11 +224,11 @@ Every target lives in a channel. A channel is a cooperation lane inside one room
 Four backings can produce a channel:
 
 - **Named channel**: a durable bare name created by `rimz channel new design` or first use through `--channel design`; it carries `RIMZ_CHANNEL=design`.
-- **Worktree channel**: a Rimz-owned Git worktree; the branch is the preferred label and the worktree name and path stay addressable aliases.
+- **Worktree channel**: a Rimz-owned Git worktree; the worktree name is the stable label and the worktree path stays addressable.
 - **Team channel**: an in-place named team under one directory, labelled `<dir>/<team>` and carried by `RIMZ_TEAM`.
 - **Directory channel**: the directory basename used when a live agent has no named, worktree, or team identity.
 
-Label precedence is explicit named channel, then worktree branch, then `<dir>/<team>`, then directory basename. This single rule feeds target resolution, rendered handles, sidebar grouping, `agents list`, pane overlays, and recovery.
+Label precedence is explicit named channel, then `<dir>/<team>`, then directory basename. This single rule feeds target resolution, rendered handles, sidebar grouping, `agents list`, pane overlays, and recovery. Branch names stay display metadata on the worktree card and do not define lane identity.
 
 Worktree identity follows the agent's own resolved checkout, not the room tree: hooks resolve the git toplevel from the agent's cwd at any depth, so a nested checkout an agent actually works in is its own worktree channel, while non-git agents at the room root or in non-git subdirs fold into the room's root lane. How the sidebar renders these lanes on screen — pods, headers, glyphs, group roots — is [sidebar.md § Ranking and grouping](../sidebar/sidebar.md#ranking-and-grouping).
 
