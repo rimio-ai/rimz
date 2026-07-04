@@ -344,7 +344,7 @@ fn help_body_rows(
     focus_key: Option<&str>,
     keys: &SidebarKeys,
 ) -> Vec<Line<'static>> {
-    let mut key_rows = vec![
+    let key_rows = vec![
         (
             key_cell(
                 theme,
