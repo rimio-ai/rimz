@@ -4,5 +4,6 @@
 //! never skips.
 
 mod command;
+mod single_backend_room;
 mod tmux;
 mod zellij;

@@ -29,6 +29,15 @@ impl MuxName {
             Self::Tmux => "tmux",
         }
     }
+
+    /// The other backend. A path's room is single-backend; this names the
+    /// rival to probe for a live session before a new-room birth.
+    pub const fn other(self) -> Self {
+        match self {
+            Self::Zellij => Self::Tmux,
+            Self::Tmux => Self::Zellij,
+        }
+    }
 }
 
 impl fmt::Display for MuxName {
@@ -701,6 +710,12 @@ impl<'de> Deserialize<'de> for PaneId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mux_name_other_flips_backend() {
+        assert_eq!(MuxName::Zellij.other(), MuxName::Tmux);
+        assert_eq!(MuxName::Tmux.other(), MuxName::Zellij);
+    }
 
     #[test]
     fn workspace_id_is_stable_for_same_root() {

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::SystemTime;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rimz::ids::MuxName;
 use rimz::ledger::workspace_record;
 use rimz::mux::MuxBackend;
@@ -36,6 +36,39 @@ pub(crate) fn pick_mux_for_session(
         );
     }
     Ok(detected)
+}
+
+/// Whether a rival backend already owns this path's room. Session identity is
+/// path-derived and shared across backends, so a live rival session under the
+/// derived name means a second backend would share this room's ledger while its
+/// panes stay unreachable. Pure over the rival's live session list.
+fn rival_backend_owns_room(session_name: &str, rival_sessions: &[String]) -> bool {
+    rival_sessions.iter().any(|name| name == session_name)
+}
+
+/// Fail-fast guard for a new-room birth: refuse when the other backend already
+/// runs this path's room. A rival that isn't installed or can't be listed never
+/// blocks — best-effort probe, hard refusal only on a positive.
+pub(crate) fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<()> {
+    let rival = mux.other();
+    let sessions = match rimz::mux::backend_for(rival).list_sessions() {
+        Ok(sessions) => sessions,
+        Err(rimz::mux::MuxErr::NotInstalled { .. }) => return Ok(()),
+        Err(err) => {
+            tracing::warn!(mux = %rival, error = %err, "rival list_sessions failed; allowing start");
+            return Ok(());
+        }
+    };
+    if rival_backend_owns_room(session_name, &sessions) {
+        bail!(
+            "This project's room is already running under {rival} (session `{session_name}`).\n\
+             Rimz keeps one room per project, so opening it under {mux} too would split your \
+             fleet across two multiplexers that can't reach each other's panes.\n\n\
+             Attach to the running room:\n    rimz attach {session_name}\n\n\
+             Or close it, then start under {mux}:\n    rimz --mux {rival} reset"
+        );
+    }
+    Ok(())
 }
 
 /// Decide whether a workspace's live mux session is stranded by a session-name
@@ -205,6 +238,15 @@ fn matching_sidebar_heartbeat_mtime(
 mod tests {
     use super::*;
     use rimz::ids::WorkspaceId;
+
+    #[test]
+    fn rival_backend_owns_room_only_when_session_is_live() {
+        let live = vec!["rimz-alpha".to_owned(), "rimz-room".to_owned()];
+
+        assert!(rival_backend_owns_room("rimz-room", &live));
+        assert!(!rival_backend_owns_room("rimz-missing", &live));
+        assert!(!rival_backend_owns_room("rimz-room", &[]));
+    }
 
     #[test]
     fn renamed_session_retires_only_a_live_diverged_name() {

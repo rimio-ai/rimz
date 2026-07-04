@@ -14,6 +14,8 @@ Zellij and tmux carry different communities, and Rimz serves both as first-class
 
 Selection is stable across worktrees: every worktree of one repo resolves to the same session on the same backend.
 
+Room identity is path-derived and shared across backends, so a live rival session under the same derived name would share the ledger while its panes stay unreachable. `rimz start` and `rimz web` call `ensure_single_backend_room` before birth and refuse that split; `rimz attach` from the workspace resolves through `pick_mux_for_session` to the live backend instead of the ambient one.
+
 ## `MuxBackend`
 
 One trait, [`MuxBackend`](../../../crates/rimz/src/mux/mod.rs), holds every backend-specific operation — session lifecycle, pane listing and I/O, focus, sidebar and tab layout, presence install, and health/recovery. Everything correctness-critical sits above it, identical across backends: the ledger, the per-request decision sockets, the resolver heartbeat, the wakeup socket, the feed and event schemas, the trust gate, the agent hooks.

@@ -35,7 +35,7 @@ use hook_install::ensure_detected_agent_hooks;
 pub(crate) use hook_install::{detected_installable_adapters, render_dry_run};
 use resume::{plan_room_resume, record_rebirth_boundary, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;
-use session_record::retire_renamed_session;
+use session_record::{ensure_single_backend_room, retire_renamed_session};
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
@@ -286,7 +286,11 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     let mux = match &entry {
         RoomEntry::Start { mux, .. } | RoomEntry::StartWeb { mux, .. } => *mux,
         RoomEntry::WebSession { .. } => MuxName::Zellij,
-        RoomEntry::AttachCwd { .. } => rimz::mux::auto_detect_backend(globals.mux)?,
+        RoomEntry::AttachCwd { workspace, .. } => pick_mux_for_session(
+            &workspace.session_name,
+            globals.mux,
+            MissingSessionReport::Silent,
+        )?,
         RoomEntry::AttachSession {
             session, record, ..
         } => {
@@ -460,9 +464,12 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     match entry {
-        RoomEntry::Start { workspace, .. }
-        | RoomEntry::StartWeb { workspace, .. }
-        | RoomEntry::AttachCwd { workspace, .. } => {
+        RoomEntry::Start { workspace, .. } | RoomEntry::StartWeb { workspace, .. } => {
+            ensure_single_backend_room(mux, &workspace.session_name)?;
+            rimz_socket_environment_preflight(&workspace.workspace_id)?;
+            mux_environment_preflight(mux, &workspace.session_name)
+        }
+        RoomEntry::AttachCwd { workspace, .. } => {
             rimz_socket_environment_preflight(&workspace.workspace_id)?;
             mux_environment_preflight(mux, &workspace.session_name)
         }
