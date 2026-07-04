@@ -28,6 +28,9 @@ pub struct SidebarConfig {
     /// Default `Alt+p`; set empty or `off` to register nothing and leave your
     /// keybinds untouched.
     pub focus_key: String,
+    /// Sidebar motion key bindings. Each string is a space-separated list of
+    /// chords; the first chord is the one the help overlay displays.
+    pub keys: SidebarKeys,
     /// Seconds of input idle before the footer shows the AFK badge. tmux
     /// reports per-client input idle, so this drives `zᶻ idle · Nm`; Zellij
     /// reports attach state only, so it shows `zᶻ away` on full detach
@@ -41,6 +44,7 @@ impl Default for SidebarConfig {
             spend_window: Default::default(),
             trunk: None,
             focus_key: default_focus_key(),
+            keys: SidebarKeys::default(),
             afk_after_secs: NonZeroU32::new(DEFAULT_AFK_AFTER_SECS)
                 .expect("non-zero default afk window"),
         }
@@ -69,4 +73,38 @@ impl SidebarConfig {
 /// Zellij's locked mode; the user can rebind or disable it.
 pub fn default_focus_key() -> String {
     "Alt+p".to_owned()
+}
+
+/// Sidebar movement key bindings. Action keys stay fixed; these strings
+/// rebind the navigation family only.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SidebarKeys {
+    pub up: String,
+    pub down: String,
+    pub top: String,
+    pub bottom: String,
+    pub worktree_up: String,
+    pub worktree_down: String,
+    pub page_up: String,
+    pub page_down: String,
+    pub screen_top: String,
+    pub screen_bottom: String,
+}
+
+impl Default for SidebarKeys {
+    fn default() -> Self {
+        Self {
+            up: "k up".to_owned(),
+            down: "j down".to_owned(),
+            top: "g".to_owned(),
+            bottom: "G".to_owned(),
+            worktree_up: "K".to_owned(),
+            worktree_down: "J".to_owned(),
+            page_up: "ctrl+b pageup".to_owned(),
+            page_down: "ctrl+f pagedown".to_owned(),
+            screen_top: "H".to_owned(),
+            screen_bottom: "L".to_owned(),
+        }
+    }
 }

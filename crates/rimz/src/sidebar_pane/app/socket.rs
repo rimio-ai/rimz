@@ -55,7 +55,7 @@ pub(super) const RESIZE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// on its own thread for the life of the process; it self-wakes by sending to
 /// `wake_path` (the loop's bound wakeup socket), which keeps redraw and input
 /// on one path. Stops quietly if the event source or socket goes away.
-pub(super) fn spawn_event_waker(wake_path: PathBuf) {
+pub(super) fn spawn_event_waker(wake_path: PathBuf, keymap: NavKeymap) {
     std::thread::spawn(move || {
         let waker = match UnixDatagram::unbound() {
             Ok(socket) => socket,
@@ -73,7 +73,7 @@ pub(super) fn spawn_event_waker(wake_path: PathBuf) {
                         }
                     }
                     Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                        if let Some(encoded) = encode_key(key.code)
+                        if let Some(encoded) = encode_key(&keymap, key.code, key.modifiers)
                             && waker.send_to(encoded.as_bytes(), &wake_path).is_err()
                         {
                             return;

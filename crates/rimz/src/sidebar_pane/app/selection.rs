@@ -120,12 +120,52 @@ fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> Inp
         End::Top => 0,
         End::Bottom => len - 1,
     };
+    select_to_index(ui, snapshot, target)
+}
+
+fn select_to_index(ui: &mut UiState, snapshot: &SidebarSnapshot, target: usize) -> InputOutcome {
+    let len = visible_row_count(snapshot, ui.make_up_filter);
+    if len == 0 {
+        return InputOutcome::default();
+    }
+    let target = target.min(len - 1);
     if ui.selected_index == target {
         return InputOutcome::default();
     }
     select_row(ui, snapshot, target);
     begin_or_continue_browse(ui);
     InputOutcome::redraw()
+}
+
+fn visible_row_span(ui: &UiState) -> Option<(usize, usize)> {
+    let mut rows = ui.line_map.iter().flatten().copied();
+    let first = rows.next()?;
+    let last = rows.fold(first, |_, row| row);
+    Some((first, last))
+}
+
+fn select_screen_edge(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
+    let Some((first, last)) = visible_row_span(ui) else {
+        return InputOutcome::default();
+    };
+    let target = match end {
+        End::Top => first,
+        End::Bottom => last,
+    };
+    select_to_index(ui, snapshot, target)
+}
+
+fn select_page(ui: &mut UiState, snapshot: &SidebarSnapshot, down: bool) -> InputOutcome {
+    let Some((first, last)) = visible_row_span(ui) else {
+        return InputOutcome::default();
+    };
+    let page = last.saturating_sub(first).saturating_add(1).max(1);
+    let target = if down {
+        ui.selected_index.saturating_add(page)
+    } else {
+        ui.selected_index.saturating_sub(page)
+    };
+    select_to_index(ui, snapshot, target)
 }
 
 pub(super) fn handle_key(
@@ -159,6 +199,10 @@ pub(super) fn handle_key(
         KeyAction::WorktreeDown => select_adjacent_worktree(ui, snapshot, 1),
         KeyAction::Top => select_end_row(ui, snapshot, End::Top),
         KeyAction::Bottom => select_end_row(ui, snapshot, End::Bottom),
+        KeyAction::PageUp => select_page(ui, snapshot, false),
+        KeyAction::PageDown => select_page(ui, snapshot, true),
+        KeyAction::ScreenTop => select_screen_edge(ui, snapshot, End::Top),
+        KeyAction::ScreenBottom => select_screen_edge(ui, snapshot, End::Bottom),
         KeyAction::Enter => {
             // Jump on the current row: fire the focus command at the selected
             // pane without moving the highlight — it follows once the derived

@@ -44,6 +44,7 @@ mod fixtures;
 mod gate;
 mod health;
 mod input;
+mod keymap;
 mod lifecycle;
 mod loop_state;
 mod notify;
@@ -72,6 +73,7 @@ use state::placeholder_snapshot;
 
 pub use demo::{serve_fixture, serve_gallery};
 pub use health::Health;
+pub use keymap::NavKeymap;
 pub use state::{RenderState, compute_next_state};
 
 thread_local! {
@@ -91,6 +93,7 @@ pub struct ServeConfig {
     pub refresh_ms_override: Option<u16>,
     pub timezone: jiff::tz::TimeZone,
     pub notification_prefs: NotificationsPrefs,
+    pub nav_keys: NavKeymap,
     /// The sidebar's own mux pane, resolved once from the per-pane env at
     /// launch (`crate::mux::own_pane_id`) — the fold's self-exclusion and the
     /// heartbeat's pane claim. `None` outside a pane. Carried here rather than
@@ -145,7 +148,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // usable frame waits for the next `tick`, reading as a blank sidebar.
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
     let pet_render_caps = detect_pet_render_caps(config.mux, &config.session_name);
-    spawn_event_waker(socket_path.clone());
+    spawn_event_waker(socket_path.clone(), config.nav_keys.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;

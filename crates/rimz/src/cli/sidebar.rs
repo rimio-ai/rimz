@@ -545,6 +545,7 @@ fn serve(
         refresh_ms_override: refresh_ms,
         timezone: machine_config.time_zone(),
         notification_prefs: machine_config.notifications.clone(),
+        nav_keys: rimz::sidebar_pane::app::NavKeymap::from_config(&machine_config.sidebar.keys),
         own_pane: rimz::mux::own_pane_id(mux),
     };
     if rimz::sidebar_pane::supervise::is_worker() {

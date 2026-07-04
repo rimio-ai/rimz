@@ -54,6 +54,9 @@ fn refresh_override_stamps_folded_snapshot() {
         refresh_ms_override: Some(50),
         timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: NotificationsPrefs::default(),
+        nav_keys: crate::sidebar_pane::app::NavKeymap::from_config(
+            &crate::config::SidebarKeys::default(),
+        ),
         own_pane: None,
     };
 
@@ -344,6 +347,9 @@ fn test_config(workspace_id: WorkspaceId, instance_id: SidebarInstanceId) -> Ser
         refresh_ms_override: None,
         timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: NotificationsPrefs::default(),
+        nav_keys: crate::sidebar_pane::app::NavKeymap::from_config(
+            &crate::config::SidebarKeys::default(),
+        ),
         // No own pane: the fold must admit every published fixture pane even
         // when the test process itself runs inside a live mux pane.
         own_pane: None,

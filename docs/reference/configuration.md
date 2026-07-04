@@ -351,6 +351,18 @@ afk_after_secs = 900
 trunk = "develop"
 spend_window = "session"
 
+[sidebar.keys]
+up = "k up"
+down = "j down"
+top = "g"
+bottom = "G"
+worktree_up = "K"
+worktree_down = "J"
+page_up = "ctrl+b pageup"
+page_down = "ctrl+f pagedown"
+screen_top = "H"
+screen_bottom = "L"
+
 [agents.attention]
 stalled_after_secs = 1800
 inactive_after_secs = 3600
@@ -360,6 +372,8 @@ archive_after_secs = 86400
 `timezone` is an optional IANA zone for displayed transcript times, wall-clock scheduling, and the `"today"` spend cutoff; unset or unknown uses the system local zone. `focus_key` is the global multiplexer chord that focuses the sidebar from any pane and toggles back to your last working pane; both backends bind it at session birth, the default is `Alt+p`, and `""` or `off` registers nothing. `afk_after_secs` sets the input-idle window before the footer shows `zᶻ idle · Nm` on tmux; Zellij reports attach state only, so it shows `zᶻ away` on full detach regardless of this value. The default is 900 seconds (15 minutes). `trunk` is a preferred comparison branch for the worktree header's git stats, falling back to `main` → `master` → the remote default when it does not resolve. `[agents.attention]` tunes attention timing: `stalled_after_secs` is when a silent running agent escalates to the actionable `!` bucket (30 minutes by default), `inactive_after_secs` is when a card leaves hot work (one hour — the prompt-cache boundary, so a cold card reads as cold), and `archive_after_secs` is when a card parks below hot and warm work (24 hours by default). Set `archive_after_secs` greater than `inactive_after_secs`; lower values are lifted to the first second after the inactive window. The `[theme.display]` knobs that share this area — render cadence, sizing, `scrollbar`, and `card_density` — are theme settings; see [theme.md → Display](./theme.md#display).
 
 `spend_window` sets the cockpit and provider headline row: `"session"` starts at the latest activity burst after a five-hour idle gap and is the default, `"24h"` keeps a trailing-24-hour window, and `"today"` starts at calendar midnight in `timezone`.
+
+`[sidebar.keys]` rebinds movement keys only: `up`, `down`, `top`, `bottom`, `worktree_up`, `worktree_down`, `page_up`, `page_down`, `screen_top`, and `screen_bottom`. Each value is a space-separated list of alternate chords; the first chord is shown in the `?` help overlay. Chords use optional `ctrl`/`control`/`c` and `alt`/`meta`/`m` modifiers with `+` or `-`, case-sensitive single characters (`H` differs from `h`), or named keys: `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `enter`, and `space`. Defaults keep Vim movement plus arrow and page keys: `k/up`, `j/down`, `g/G`, `K/J`, `ctrl+b/pageup`, `ctrl+f/pagedown`, and `H/L`. tmux's default prefix consumes `Ctrl+b` before the sidebar sees it, so `PageUp` is the portable default page-up key there.
 
 ### Pets
 

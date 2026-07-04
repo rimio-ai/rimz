@@ -9,9 +9,9 @@ expression: screen
  ──────────────────────────────────────────────────────────────────────────────
  ? 1   ! 0   ⏸︎ 0   ✓ 0                                                ⢿ 0   ○ 0
 
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌? codex                               ╭ keys & legend ───────────────────────╮▐
-▌  allow?                              │ ↕ j/k rows   J/K worktrees  g/G ends │▐
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╭ keys & legend ───────────────────────╮🮇
+▌? codex                               │ ↕ j/k rows   J/K worktrees  g/G ends │▐
+▌  allow?                              │ ↕ ^f/^b page   H/L screen            │▐
 ▌  ▢ ──────────────────────────────────│ ⏎ l focus    1-9 direct              │▐
                                        │ ␣ n/N needs-you  (Space = n)         │
                                        │ ✉ m/M read / unread                  │

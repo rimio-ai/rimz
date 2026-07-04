@@ -48,11 +48,23 @@
 ## when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
 
 [sidebar]
-# Sidebar behavior: keybind, spend headline window, and worktree comparison target.
+# Sidebar behavior: focus keybind, motion keybinds, spend headline window, and worktree comparison target.
 # focus_key = "Alt+p"                 # global chord to focus the sidebar (toggle); "" or "off" to disable
 # afk_after_secs = 900                # input-idle seconds before the AFK badge (tmux only); default 15 min
 # spend_window = "session"            # cockpit & provider headline window: "session", "24h", or "today"
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
+
+[sidebar.keys]
+# up = "k up"
+# down = "j down"
+# top = "g"
+# bottom = "G"
+# worktree_up = "K"
+# worktree_down = "J"
+# page_up = "ctrl+b pageup"
+# page_down = "ctrl+f pagedown"
+# screen_top = "H"
+# screen_bottom = "L"
 
 [web.zellij]
 # Zellij browser access. base_url is the URL users open; set it when a reverse

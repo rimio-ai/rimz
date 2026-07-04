@@ -8,7 +8,9 @@ use std::os::unix::net::UnixDatagram;
 
 use crate::agents::AgentStatus;
 use crate::sidebar::events::{RELOAD_CONTROL_WORD, SidebarEventEnvelope};
-use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+
+use super::NavKeymap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Wakeup {
@@ -46,6 +48,14 @@ pub(super) enum KeyAction {
     /// no focus), the Vim top/bottom jump.
     Top,
     Bottom,
+    /// Move the selection up one painted screenful.
+    PageUp,
+    /// Move the selection down one painted screenful.
+    PageDown,
+    /// Move the selection to the top row currently painted on screen.
+    ScreenTop,
+    /// Move the selection to the bottom row currently painted on screen.
+    ScreenBottom,
     Enter,
     /// `n`/`Space` — jump to the next item that needs you and focus it; `N`
     /// walks the same inbox in reverse. The fleet-scale triage keys.
@@ -75,19 +85,28 @@ pub(super) enum FilterAction {
 /// socket once a snapshot is ready to fold. Riding the same socket every other
 /// wakeup uses keeps the loop blocking in exactly one place.
 pub(super) const SNAPSHOT_WAKEUP: &[u8] = b"snapshot";
-pub(super) fn encode_key(code: KeyCode) -> Option<String> {
+pub(super) const KEY_UP: &str = "key:up";
+pub(super) const KEY_DOWN: &str = "key:down";
+pub(super) const KEY_WORKTREE_UP: &str = "key:worktree_up";
+pub(super) const KEY_WORKTREE_DOWN: &str = "key:worktree_down";
+pub(super) const KEY_TOP: &str = "key:top";
+pub(super) const KEY_BOTTOM: &str = "key:bottom";
+pub(super) const KEY_PAGE_UP: &str = "key:page_up";
+pub(super) const KEY_PAGE_DOWN: &str = "key:page_down";
+pub(super) const KEY_SCREEN_TOP: &str = "key:screen_top";
+pub(super) const KEY_SCREEN_BOTTOM: &str = "key:screen_bottom";
+
+pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) -> Option<String> {
+    if let Some(wire) = keymap.wire_for(code, mods) {
+        return Some(wire.to_owned());
+    }
+    if mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+        return None;
+    }
     let wire = match code {
-        KeyCode::Up => "key:up",
-        KeyCode::Down => "key:down",
         KeyCode::Left => "key:tab_prev",
         KeyCode::Right => "key:tab_next",
         KeyCode::Enter => "key:enter",
-        KeyCode::Char('k') => "key:up",
-        KeyCode::Char('j') => "key:down",
-        KeyCode::Char('K') => "key:worktree_up",
-        KeyCode::Char('J') => "key:worktree_down",
-        KeyCode::Char('g') => "key:top",
-        KeyCode::Char('G') => "key:bottom",
         KeyCode::Char('l') => "key:enter",
         // `n` and `Space` are one key: walk forward through the inbox and read.
         // `N` walks it in reverse.
@@ -151,12 +170,16 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "snapshot" => Wakeup::Snapshot,
         "resize" => Wakeup::Resize,
         RELOAD_CONTROL_WORD => Wakeup::Reload,
-        "key:up" => Wakeup::Key(KeyAction::Up),
-        "key:down" => Wakeup::Key(KeyAction::Down),
-        "key:worktree_up" => Wakeup::Key(KeyAction::WorktreeUp),
-        "key:worktree_down" => Wakeup::Key(KeyAction::WorktreeDown),
-        "key:top" => Wakeup::Key(KeyAction::Top),
-        "key:bottom" => Wakeup::Key(KeyAction::Bottom),
+        KEY_UP => Wakeup::Key(KeyAction::Up),
+        KEY_DOWN => Wakeup::Key(KeyAction::Down),
+        KEY_WORKTREE_UP => Wakeup::Key(KeyAction::WorktreeUp),
+        KEY_WORKTREE_DOWN => Wakeup::Key(KeyAction::WorktreeDown),
+        KEY_TOP => Wakeup::Key(KeyAction::Top),
+        KEY_BOTTOM => Wakeup::Key(KeyAction::Bottom),
+        KEY_PAGE_UP => Wakeup::Key(KeyAction::PageUp),
+        KEY_PAGE_DOWN => Wakeup::Key(KeyAction::PageDown),
+        KEY_SCREEN_TOP => Wakeup::Key(KeyAction::ScreenTop),
+        KEY_SCREEN_BOTTOM => Wakeup::Key(KeyAction::ScreenBottom),
         "key:tab_prev" => Wakeup::Key(KeyAction::TabPrev),
         "key:tab_next" => Wakeup::Key(KeyAction::TabNext),
         "key:enter" => Wakeup::Key(KeyAction::Enter),
@@ -242,6 +265,14 @@ pub(super) fn wait_for_wakeup(socket: &UnixDatagram) -> io::Result<Wakeup> {
 mod tests {
     use super::*;
 
+    fn default_keymap() -> NavKeymap {
+        NavKeymap::from_config(&crate::config::SidebarKeys::default())
+    }
+
+    fn encode_default(code: KeyCode) -> Option<String> {
+        encode_key(&default_keymap(), code, KeyModifiers::NONE)
+    }
+
     #[test]
     fn mouse_events_encode_clicks_and_scrolls() {
         let encoded = encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 7)
@@ -281,7 +312,7 @@ mod tests {
     fn r_key_triggers_a_reload() {
         // Pressing `r` re-execs the renderer in place through the local input
         // control word; external reloads arrive as typed sidebar events.
-        let encoded = encode_key(KeyCode::Char('r')).expect("r is bound");
+        let encoded = encode_default(KeyCode::Char('r')).expect("r is bound");
         assert_eq!(decode_wakeup(encoded.as_bytes()), Wakeup::Reload);
     }
 
@@ -322,74 +353,150 @@ mod tests {
         // the serve loop dispatches: vim row/focus keys, the J/K worktree jumps,
         // and the full filter key set. (The `r` reload keypress is covered by
         // `r_key_triggers_a_reload`; the literal reload word is checked below.)
+        let keymap = default_keymap();
         let cases = [
             // vim row and focus keys
-            ("j → down", KeyCode::Char('j'), Wakeup::Key(KeyAction::Down)),
-            ("k → up", KeyCode::Char('k'), Wakeup::Key(KeyAction::Up)),
+            (
+                "j → down",
+                KeyCode::Char('j'),
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::Down),
+            ),
+            (
+                "↓ → down",
+                KeyCode::Down,
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::Down),
+            ),
+            (
+                "k → up",
+                KeyCode::Char('k'),
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::Up),
+            ),
+            (
+                "↑ → up",
+                KeyCode::Up,
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::Up),
+            ),
             (
                 "l → enter",
                 KeyCode::Char('l'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Enter),
             ),
             // worktree-jump keys
             (
                 "J → worktree down",
                 KeyCode::Char('J'),
+                KeyModifiers::SHIFT,
                 Wakeup::Key(KeyAction::WorktreeDown),
             ),
             (
                 "K → worktree up",
                 KeyCode::Char('K'),
+                KeyModifiers::SHIFT,
                 Wakeup::Key(KeyAction::WorktreeUp),
             ),
             // top/bottom jumps
-            ("g → top", KeyCode::Char('g'), Wakeup::Key(KeyAction::Top)),
+            (
+                "g → top",
+                KeyCode::Char('g'),
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::Top),
+            ),
             (
                 "G → bottom",
                 KeyCode::Char('G'),
+                KeyModifiers::SHIFT,
                 Wakeup::Key(KeyAction::Bottom),
+            ),
+            (
+                "Ctrl+b → page up",
+                KeyCode::Char('b'),
+                KeyModifiers::CONTROL,
+                Wakeup::Key(KeyAction::PageUp),
+            ),
+            (
+                "PageUp → page up",
+                KeyCode::PageUp,
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::PageUp),
+            ),
+            (
+                "Ctrl+f → page down",
+                KeyCode::Char('f'),
+                KeyModifiers::CONTROL,
+                Wakeup::Key(KeyAction::PageDown),
+            ),
+            (
+                "PageDown → page down",
+                KeyCode::PageDown,
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::PageDown),
+            ),
+            (
+                "H → screen top",
+                KeyCode::Char('H'),
+                KeyModifiers::SHIFT,
+                Wakeup::Key(KeyAction::ScreenTop),
+            ),
+            (
+                "L → screen bottom",
+                KeyCode::Char('L'),
+                KeyModifiers::SHIFT,
+                Wakeup::Key(KeyAction::ScreenBottom),
             ),
             // inbox triage: n and Space step forward, N steps back
             (
                 "n → inbox next",
                 KeyCode::Char('n'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::InboxNext),
             ),
             (
                 "space → inbox next",
                 KeyCode::Char(' '),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::InboxNext),
             ),
             (
                 "N → inbox prev",
                 KeyCode::Char('N'),
+                KeyModifiers::SHIFT,
                 Wakeup::Key(KeyAction::InboxPrev),
             ),
             // mark read / unread without jumping
             (
                 "m → mark read",
                 KeyCode::Char('m'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::MarkRead),
             ),
             (
                 "M → mark unread",
                 KeyCode::Char('M'),
+                KeyModifiers::SHIFT,
                 Wakeup::Key(KeyAction::MarkUnread),
             ),
             // filter keys
             (
                 "a → all",
                 KeyCode::Char('a'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::All)),
             ),
             (
                 "u → unread",
                 KeyCode::Char('u'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Unread)),
             ),
             (
                 "q → waiting",
                 KeyCode::Char('q'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Status(
                     AgentStatus::Waiting,
                 ))),
@@ -397,26 +504,31 @@ mod tests {
             (
                 "! → failed",
                 KeyCode::Char('!'),
+                KeyModifiers::SHIFT,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Failed))),
             ),
             (
                 "e → failed",
                 KeyCode::Char('e'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Failed))),
             ),
             (
                 "o → idle",
                 KeyCode::Char('o'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Idle))),
             ),
             (
                 "p → paused",
                 KeyCode::Char('p'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Paused))),
             ),
             (
                 "w → running",
                 KeyCode::Char('w'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Status(
                     AgentStatus::Running,
                 ))),
@@ -424,15 +536,21 @@ mod tests {
             (
                 "d → success",
                 KeyCode::Char('d'),
+                KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Status(
                     AgentStatus::Success,
                 ))),
             ),
         ];
-        for (label, key, wakeup) in cases {
-            let encoded = encode_key(key).expect("key is encoded");
+        for (label, key, mods, wakeup) in cases {
+            let encoded = encode_key(&keymap, key, mods).expect("key is encoded");
             assert_eq!(decode_wakeup(encoded.as_bytes()), wakeup, "{label}");
         }
+        assert_eq!(
+            encode_key(&keymap, KeyCode::Char('d'), KeyModifiers::CONTROL),
+            None,
+            "modified fixed keys do not fall back to bare actions"
+        );
         // The literal reload control word also decodes to a reload on its own.
         assert_eq!(decode_wakeup(b"reload"), Wakeup::Reload);
     }
@@ -446,38 +564,45 @@ mod tests {
             RELOAD_CONTROL_WORD.to_owned(),
             String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
         ];
-        for code in [
-            KeyCode::Up,
-            KeyCode::Down,
-            KeyCode::Left,
-            KeyCode::Right,
-            KeyCode::Enter,
-            KeyCode::Char('j'),
-            KeyCode::Char('k'),
-            KeyCode::Char('J'),
-            KeyCode::Char('K'),
-            KeyCode::Char('g'),
-            KeyCode::Char('G'),
-            KeyCode::Char('l'),
-            KeyCode::Char('n'),
-            KeyCode::Char('N'),
-            KeyCode::Char(' '),
-            KeyCode::Char('m'),
-            KeyCode::Char('M'),
-            KeyCode::Char('?'),
-            KeyCode::Char('a'),
-            KeyCode::Char('q'),
-            KeyCode::Char('!'),
-            KeyCode::Char('e'),
-            KeyCode::Char('o'),
-            KeyCode::Char('p'),
-            KeyCode::Char('w'),
-            KeyCode::Char('d'),
-            KeyCode::Char('x'),
-            KeyCode::Char('r'),
-            KeyCode::Char('1'),
+        let keymap = default_keymap();
+        for (code, mods) in [
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Down, KeyModifiers::NONE),
+            (KeyCode::Char('b'), KeyModifiers::CONTROL),
+            (KeyCode::PageUp, KeyModifiers::NONE),
+            (KeyCode::Char('f'), KeyModifiers::CONTROL),
+            (KeyCode::PageDown, KeyModifiers::NONE),
+            (KeyCode::Char('H'), KeyModifiers::SHIFT),
+            (KeyCode::Char('L'), KeyModifiers::SHIFT),
+            (KeyCode::Left, KeyModifiers::NONE),
+            (KeyCode::Right, KeyModifiers::NONE),
+            (KeyCode::Enter, KeyModifiers::NONE),
+            (KeyCode::Char('j'), KeyModifiers::NONE),
+            (KeyCode::Char('k'), KeyModifiers::NONE),
+            (KeyCode::Char('J'), KeyModifiers::SHIFT),
+            (KeyCode::Char('K'), KeyModifiers::SHIFT),
+            (KeyCode::Char('g'), KeyModifiers::NONE),
+            (KeyCode::Char('G'), KeyModifiers::SHIFT),
+            (KeyCode::Char('l'), KeyModifiers::NONE),
+            (KeyCode::Char('n'), KeyModifiers::NONE),
+            (KeyCode::Char('N'), KeyModifiers::SHIFT),
+            (KeyCode::Char(' '), KeyModifiers::NONE),
+            (KeyCode::Char('m'), KeyModifiers::NONE),
+            (KeyCode::Char('M'), KeyModifiers::SHIFT),
+            (KeyCode::Char('?'), KeyModifiers::SHIFT),
+            (KeyCode::Char('a'), KeyModifiers::NONE),
+            (KeyCode::Char('q'), KeyModifiers::NONE),
+            (KeyCode::Char('!'), KeyModifiers::SHIFT),
+            (KeyCode::Char('e'), KeyModifiers::NONE),
+            (KeyCode::Char('o'), KeyModifiers::NONE),
+            (KeyCode::Char('p'), KeyModifiers::NONE),
+            (KeyCode::Char('w'), KeyModifiers::NONE),
+            (KeyCode::Char('d'), KeyModifiers::NONE),
+            (KeyCode::Char('x'), KeyModifiers::NONE),
+            (KeyCode::Char('r'), KeyModifiers::NONE),
+            (KeyCode::Char('1'), KeyModifiers::NONE),
         ] {
-            if let Some(w) = encode_key(code) {
+            if let Some(w) = encode_key(&keymap, code, mods) {
                 words.push(w);
             }
         }
@@ -493,8 +618,10 @@ mod tests {
 
     #[test]
     fn digit_keys_round_trip_one_through_nine() {
+        let keymap = default_keymap();
         for c in '1'..='9' {
-            let encoded = encode_key(KeyCode::Char(c)).expect("digit is encoded");
+            let encoded = encode_key(&keymap, KeyCode::Char(c), KeyModifiers::NONE)
+                .expect("digit is encoded");
             let n = c.to_digit(10).unwrap() as u8;
             assert_eq!(
                 decode_wakeup(encoded.as_bytes()),
@@ -502,7 +629,10 @@ mod tests {
             );
         }
         // '0' and out-of-range digit wire strings are not selectable rows.
-        assert_eq!(encode_key(KeyCode::Char('0')), None);
+        assert_eq!(
+            encode_key(&keymap, KeyCode::Char('0'), KeyModifiers::NONE),
+            None
+        );
         assert_eq!(decode_wakeup(b"key:digit:0"), Wakeup::Tick);
     }
 }

@@ -45,6 +45,8 @@ fn render_footer_and_help_overlay() {
     assert!(help.contains("j/k rows"));
     assert!(help.contains("J/K worktrees"));
     assert!(help.contains("g/G ends"));
+    assert!(help.contains("^f/^b page"));
+    assert!(help.contains("H/L screen"));
     assert!(help.contains("n/N needs-you"));
     assert!(help.contains("l focus"));
     assert!(help.contains("m/M read / unread"));
@@ -83,14 +85,24 @@ fn chrome_rebuilds_carry_line_level_styles() {
     let centered = center_line(Line::styled("? for help", theme.faint()), 30);
     assert_eq!(centered.style, theme.faint());
 
-    for line in help_lines(&theme, Some("Alt+p"), 80) {
+    for line in help_lines(
+        &theme,
+        Some("Alt+p"),
+        &crate::config::SidebarKeys::default(),
+        80,
+    ) {
         assert_eq!(line.style, theme.body());
     }
 }
 #[test]
 fn help_overlay_falls_back_borderless_when_too_narrow() {
     let theme = Theme::fixed(false);
-    let lines = help_lines(&theme, Some("Alt+p"), 20);
+    let lines = help_lines(
+        &theme,
+        Some("Alt+p"),
+        &crate::config::SidebarKeys::default(),
+        20,
+    );
     let text_lines = lines
         .iter()
         .map(|line| {
@@ -116,10 +128,41 @@ fn help_overlay_falls_back_borderless_when_too_narrow() {
         "narrow help rows share one left gutter:\n{text}"
     );
     assert!(
-        text_lines[5].starts_with(" filter"),
+        text_lines[6].starts_with(" filter"),
         "the filter header stays on the shared left edge:\n{text}"
     );
 }
+
+#[test]
+fn help_overlay_names_configured_motion_keys() {
+    let theme = Theme::fixed(false);
+    let keys = crate::config::SidebarKeys {
+        down: "ctrl+n".to_owned(),
+        up: "ctrl+p".to_owned(),
+        page_down: "ctrl+v".to_owned(),
+        page_up: "alt+v".to_owned(),
+        top: "home".to_owned(),
+        bottom: "end".to_owned(),
+        screen_top: "H".to_owned(),
+        screen_bottom: "L".to_owned(),
+        ..Default::default()
+    };
+    let text = help_lines(&theme, Some("Alt+p"), &keys, 80)
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("^n/^p rows"), "{text}");
+    assert!(text.contains("^v/M-v page"), "{text}");
+    assert!(text.contains("Home/End ends"), "{text}");
+}
+
 #[test]
 fn render_group_cap_shows_overflow_indicator() {
     let agents = (0..9)

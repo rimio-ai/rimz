@@ -135,6 +135,7 @@ fn draw_into(
             frame,
             theme.as_ref(),
             snapshot.sidebar.focus_key_label(),
+            &snapshot.sidebar.keys,
             area,
             bottom_height,
         );
@@ -145,6 +146,7 @@ fn draw_help_overlay(
     frame: &mut Frame<'_>,
     theme: &Theme,
     focus_key: Option<&str>,
+    keys: &crate::config::SidebarKeys,
     area: Rect,
     bottom_height: usize,
 ) {
@@ -154,7 +156,7 @@ fn draw_help_overlay(
     if avail == 0 {
         return;
     }
-    let lines = help_lines(theme, focus_key, usize::from(avail));
+    let lines = help_lines(theme, focus_key, keys, usize::from(avail));
     let box_w = lines.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
     let box_h = lines.len() as u16;
     if box_w == 0 || box_h == 0 {

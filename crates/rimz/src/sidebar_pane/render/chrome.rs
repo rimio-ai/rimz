@@ -1,5 +1,5 @@
 use crate::agents::AgentStatus;
-use crate::config::{AnimationRole, GlyphRole};
+use crate::config::{AnimationRole, GlyphRole, SidebarKeys};
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::style::Modifier;
@@ -313,12 +313,13 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
 pub(super) fn help_lines(
     theme: &Theme,
     focus_key: Option<&str>,
+    keys: &SidebarKeys,
     width: usize,
 ) -> Vec<Line<'static>> {
     const TITLE: &str = "keys & legend";
     const MIN_FRAME_WIDTH: usize = 22;
 
-    let rows = help_body_rows(theme, focus_key);
+    let rows = help_body_rows(theme, focus_key, keys);
     if width < MIN_FRAME_WIDTH {
         return rows
             .into_iter()
@@ -338,7 +339,11 @@ pub(super) fn help_lines(
     )
 }
 
-fn help_body_rows(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> {
+fn help_body_rows(
+    theme: &Theme,
+    focus_key: Option<&str>,
+    keys: &SidebarKeys,
+) -> Vec<Line<'static>> {
     let waiting = status_glyph(theme, AgentStatus::Waiting);
     let attention = status_glyph(theme, AgentStatus::Failed);
     let paused = status_glyph(theme, AgentStatus::Paused);
@@ -351,7 +356,26 @@ fn help_body_rows(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> 
         key_row(
             theme,
             GlyphRole::KeysMove,
-            "j/k rows   J/K worktrees  g/G ends",
+            &format!(
+                "{}/{} rows   {}/{} worktrees  {}/{} ends",
+                chord_label(&keys.down),
+                chord_label(&keys.up),
+                chord_label(&keys.worktree_down),
+                chord_label(&keys.worktree_up),
+                chord_label(&keys.top),
+                chord_label(&keys.bottom)
+            ),
+        ),
+        key_row(
+            theme,
+            GlyphRole::KeysMove,
+            &format!(
+                "{}/{} page   {}/{} screen",
+                chord_label(&keys.page_down),
+                chord_label(&keys.page_up),
+                chord_label(&keys.screen_top),
+                chord_label(&keys.screen_bottom)
+            ),
         ),
         key_row(theme, GlyphRole::KeysFocus, "l focus    1-9 direct"),
         key_row(theme, GlyphRole::KeysInbox, "n/N needs-you  (Space = n)"),
@@ -417,6 +441,43 @@ fn help_body_rows(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> 
         ),
     ]);
     lines
+}
+
+fn chord_label(spec: &str) -> String {
+    let Some(token) = spec.split_whitespace().next() else {
+        return "?".to_owned();
+    };
+    let parts = token.split(['+', '-']).collect::<Vec<_>>();
+    let Some((base, modifiers)) = parts.split_last() else {
+        return "?".to_owned();
+    };
+    let base = key_label(base.trim());
+    let mut label = String::new();
+    for modifier in modifiers {
+        match modifier.trim().to_ascii_lowercase().as_str() {
+            "ctrl" | "control" | "c" => label.push('^'),
+            "alt" | "meta" | "m" => label.push_str("M-"),
+            _ => {}
+        }
+    }
+    label.push_str(&base);
+    label
+}
+
+fn key_label(base: &str) -> String {
+    match base.to_ascii_lowercase().as_str() {
+        "up" => "↑".to_owned(),
+        "down" => "↓".to_owned(),
+        "left" => "←".to_owned(),
+        "right" => "→".to_owned(),
+        "pageup" => "PgUp".to_owned(),
+        "pagedown" => "PgDn".to_owned(),
+        "home" => "Home".to_owned(),
+        "end" => "End".to_owned(),
+        "enter" => "Enter".to_owned(),
+        "space" => "Space".to_owned(),
+        _ => base.to_owned(),
+    }
 }
 
 fn key_row(theme: &Theme, role: GlyphRole, text: &str) -> Line<'static> {

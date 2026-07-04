@@ -430,6 +430,7 @@ These notices clear when the next accepted pane frame lands. A health alert take
 ```
 ╭ keys & legend ───────────────────────╮
 │ ↕ j/k rows   J/K worktrees  g/G ends │
+│ ↕ ^f/^b page   H/L screen             │
 │ ⏎ l focus    1-9 direct              │
 │ ␣ n/N needs-you  (Space = n)         │
 │ ✉ m/M read / unread                  │
@@ -440,7 +441,7 @@ These notices clear when the next accepted pane frame lands. A health alert take
 │   ⢿ w working    ○ o idle            │
 │   u unread       a all               │
 │ global  Alt+p sidebar (toggle)       │
-│ ⟳ r reload   ✕ x dismiss   ? close   │
+│ ⟳ r reload   ✕ x dismiss             │
 │   ⠁ thinking     ⢄ delegating        │
 ╰──────────────────────────────────────╯
 ```

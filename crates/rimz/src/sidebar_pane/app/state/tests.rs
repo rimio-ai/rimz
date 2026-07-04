@@ -31,6 +31,9 @@ fn serve_config(ws: &WorkspaceId) -> ServeConfig {
         refresh_ms_override: None,
         timezone: jiff::tz::TimeZone::UTC,
         notification_prefs: crate::config::NotificationsPrefs::default(),
+        nav_keys: crate::sidebar_pane::app::NavKeymap::from_config(
+            &crate::config::SidebarKeys::default(),
+        ),
         own_pane: None,
     }
 }

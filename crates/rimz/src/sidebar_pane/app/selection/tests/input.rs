@@ -383,6 +383,114 @@ fn top_and_bottom_keys_browse_to_the_ends() {
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, 0);
 }
+
+#[test]
+fn screen_edge_keys_browse_to_the_painted_window_edges() {
+    let ws = workspace();
+    let snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+            pane("terminal_3", "tab_0", false),
+            pane("terminal_4", "tab_0", false),
+            pane("terminal_5", "tab_0", false),
+        ],
+    );
+    let mut ui = UiState {
+        selected_index: 2,
+        line_map: vec![None, Some(1), Some(1), Some(2), Some(3), None],
+        ..Default::default()
+    };
+
+    let outcome = handle_key(KeyAction::ScreenTop, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 1);
+    assert_eq!(
+        ui.selected_pane,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_2"))
+    );
+    assert!(ui.browse.is_some(), "screen-edge jump is a browse pick");
+
+    let outcome = handle_key(KeyAction::ScreenBottom, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 3);
+    assert_eq!(
+        ui.selected_pane,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_4"))
+    );
+}
+
+#[test]
+fn page_keys_step_by_visible_row_count_and_clamp() {
+    let ws = workspace();
+    let snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+            pane("terminal_3", "tab_0", false),
+            pane("terminal_4", "tab_0", false),
+            pane("terminal_5", "tab_0", false),
+            pane("terminal_6", "tab_0", false),
+        ],
+    );
+    let mut ui = UiState {
+        selected_index: 1,
+        line_map: vec![None, Some(1), Some(2), Some(3), None],
+        ..Default::default()
+    };
+
+    let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 4);
+    assert_eq!(
+        ui.selected_pane,
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_5"))
+    );
+
+    let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 1);
+
+    ui.selected_index = 4;
+    let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 5, "page down clamps at the last row");
+
+    let outcome = handle_key(KeyAction::PageDown, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::default(), "already at bottom");
+
+    let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 2);
+
+    let outcome = handle_key(KeyAction::PageUp, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 0, "page up clamps at the first row");
+}
+
+#[test]
+fn page_and_screen_edge_keys_noop_before_first_paint() {
+    let ws = workspace();
+    let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
+    for action in [
+        KeyAction::PageUp,
+        KeyAction::PageDown,
+        KeyAction::ScreenTop,
+        KeyAction::ScreenBottom,
+    ] {
+        let mut ui = UiState {
+            selected_index: 0,
+            line_map: Vec::new(),
+            ..Default::default()
+        };
+        let outcome = handle_key(action, &mut ui, &snapshot);
+        assert_eq!(outcome, InputOutcome::default(), "{action:?}");
+        assert_eq!(ui.selected_index, 0);
+    }
+}
+
 #[test]
 fn mark_keys_name_the_selected_agent_row_without_focus() {
     // `m`/`M` name the selected agent row's id for the loop to mark read /
