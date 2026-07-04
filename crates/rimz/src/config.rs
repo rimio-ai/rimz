@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -111,6 +111,11 @@ pub const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.
 pub const MACHINE_LOOP_TEMPLATE: &str = include_str!("config/templates/loop.template.toml");
 
 const CONFIG_STAMP_TTL: Duration = Duration::from_secs(2);
+/// Re-reads allowed before a config load stops chasing an in-place rewrite and
+/// holds last-known-good.
+const STABLE_READ_ATTEMPTS: u8 = 3;
+// ponytail: mtime quiescence; require atomic writes if config gains a Rimz writer.
+const STABLE_READ_QUIET: Duration = Duration::from_millis(50);
 
 static LOAD_MEMO: OnceLock<Mutex<Option<LoadMemo>>> = OnceLock::new();
 
@@ -416,27 +421,61 @@ impl MachineConfig {
             return cached.config.clone();
         }
 
-        let stamp = ConfigStamp::from_inputs(config_path, agents_home);
-        if let Ok(stamp) = stamp {
-            if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
-                && let Some(cached) = memo.as_mut()
-                && cached.stamp == stamp
-            {
-                cached.last_verified = now;
-                return cached.config.clone();
+        let Ok(mut stamp) = ConfigStamp::from_inputs(config_path, agents_home) else {
+            // A fragment dir can vanish mid-scan. Read without caching so the
+            // next tick re-derives from a settled tree.
+            return Arc::new(Self::load_lenient_from(config_path, agents_home));
+        };
+
+        if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
+            && let Some(cached) = memo.as_mut()
+            && cached.stamp == stamp
+        {
+            cached.last_verified = now;
+            return cached.config.clone();
+        }
+
+        // A hand-edited theme.toml can be rewritten in place. A read that races
+        // the editor may parse a valid prefix whose missing fields serde fills
+        // with built-ins, e.g. `[theme.pets] enabled = true` without `pet`
+        // becomes "rocky". Cache only after the input stamp is quiet and
+        // unchanged across the read.
+        for _ in 0..STABLE_READ_ATTEMPTS {
+            if stamp.modified_within(STABLE_READ_QUIET) {
+                std::thread::sleep(STABLE_READ_QUIET);
+                match ConfigStamp::from_inputs(config_path, agents_home) {
+                    Ok(after) => {
+                        stamp = after;
+                        continue;
+                    }
+                    Err(_) => {
+                        return Arc::new(Self::load_lenient_from(config_path, agents_home));
+                    }
+                }
             }
 
             let config = Arc::new(Self::load_lenient_from(config_path, agents_home));
-            if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
-                *memo = Some(LoadMemo {
-                    stamp,
-                    config: config.clone(),
-                    last_verified: now,
-                });
+            match ConfigStamp::from_inputs(config_path, agents_home) {
+                Ok(after) if after == stamp => {
+                    if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
+                        *memo = Some(LoadMemo {
+                            stamp,
+                            config: config.clone(),
+                            last_verified: now,
+                        });
+                    }
+                    return config;
+                }
+                Ok(after) => stamp = after,
+                Err(_) => return config,
             }
-            return config;
         }
 
+        if let Ok(memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
+            && let Some(cached) = memo.as_ref()
+        {
+            return cached.config.clone();
+        }
         Arc::new(Self::load_lenient_from(config_path, agents_home))
     }
 
@@ -491,6 +530,28 @@ impl ConfigStamp {
             loop_: StampedPath::of(&sibling_path(config_path, LOOP_FILE)),
             fragments,
         })
+    }
+
+    fn modified_within(&self, quiet: Duration) -> bool {
+        let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+            return true;
+        };
+        [&self.core, &self.theme, &self.agents, &self.loop_]
+            .into_iter()
+            .chain(self.fragments.iter())
+            .any(|path| stamped_path_modified_within(path, now, quiet))
+    }
+}
+
+fn stamped_path_modified_within(path: &StampedPath, now: Duration, quiet: Duration) -> bool {
+    let stamp = path.stamp;
+    if stamp.modified_secs == 0 && stamp.modified_nanos == 0 {
+        return false;
+    }
+    let modified = Duration::new(stamp.modified_secs, stamp.modified_nanos);
+    match now.checked_sub(modified) {
+        Some(age) => age < quiet,
+        None => true,
     }
 }
 

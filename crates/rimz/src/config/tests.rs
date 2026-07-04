@@ -30,6 +30,15 @@ fn load_lenient_no_fragments(path: &Path) -> MachineConfig {
     MachineConfig::load_lenient_from(path, &no_fragments(path))
 }
 
+fn expire_load_memo() {
+    if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
+        && let Some(memo) = memo.as_mut()
+    {
+        memo.last_verified =
+            Instant::now() - CONFIG_STAMP_TTL - std::time::Duration::from_millis(1);
+    }
+}
+
 fn write_agents_home_fragment(
     root: &Path,
     subdir: &str,
@@ -198,15 +207,60 @@ fn load_memo_reuses_unchanged_inputs_and_busts_on_file_change() {
     assert_eq!(second, first);
 
     std::fs::write(&config_path, "[sidebar]\nfocus_key = \"Alt+yy\"\n").expect("rewrite config");
-    if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
-        && let Some(memo) = memo.as_mut()
-    {
-        memo.last_verified =
-            Instant::now() - CONFIG_STAMP_TTL - std::time::Duration::from_millis(1);
-    }
+    expire_load_memo();
     let changed = MachineConfig::load_with_memo(&config_path, agents_home.path());
     assert_eq!(changed.sidebar.focus_key, "Alt+yy");
     assert_ne!(changed, first);
+}
+
+#[test]
+fn load_memo_skips_torn_theme_pet_rewrite() {
+    let dir = tempdir().expect("tempdir");
+    let agents_home = tempdir().expect("agents home");
+    let config_path = write(&dir, "");
+    let theme_path = dir.path().join(THEME_FILE);
+    std::fs::write(
+        &theme_path,
+        "[theme.pets]\nenabled = true\npet = \"dewey\"\n",
+    )
+    .expect("write initial theme");
+
+    let first = MachineConfig::load_with_memo(&config_path, agents_home.path());
+    assert!(first.theme.pets.enabled);
+    assert_eq!(first.theme.pets.pet, "dewey");
+
+    let (torn_tx, torn_rx) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn({
+        let theme_path = theme_path.clone();
+        move || {
+            std::fs::write(&theme_path, "[theme.pets]\nenabled = true\n")
+                .expect("write torn theme");
+            torn_tx.send(()).expect("signal torn theme");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::fs::write(
+                &theme_path,
+                "[theme.pets]\nenabled = true\npet = \"seedy\"\n",
+            )
+            .expect("finish theme rewrite");
+        }
+    });
+    torn_rx.recv().expect("wait for torn theme");
+
+    expire_load_memo();
+    let during_rewrite = MachineConfig::load_with_memo(&config_path, agents_home.path());
+    writer.join().expect("finish writer");
+
+    assert!(during_rewrite.theme.pets.enabled);
+    assert!(
+        matches!(during_rewrite.theme.pets.pet.as_str(), "dewey" | "seedy"),
+        "torn theme read must not surface default pet {:?}",
+        during_rewrite.theme.pets,
+    );
+
+    expire_load_memo();
+    let changed = MachineConfig::load_with_memo(&config_path, agents_home.path());
+    assert!(changed.theme.pets.enabled);
+    assert_eq!(changed.theme.pets.pet, "seedy");
 }
 
 #[test]
