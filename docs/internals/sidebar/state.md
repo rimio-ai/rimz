@@ -95,9 +95,9 @@ Each push channel exists so a change a writer already knows about reaches every 
 
 Focus drives a dynamic fast tick for the work the user is viewing. The producer folds `PaneFrame.viewed_panes` into `SidebarSnapshot::viewed_panes`; git edit-sensitive facts for the viewed worktree and `/proc` metrics for the viewed pane run on the focused tier, while commit-shaped git facts and every background worktree/pane stay on their cheaper cadences.
 
-Client presence rides the same producer sample as viewed panes. The mux `client_view` read returns attached human clients plus the panes they view; tmux also returns the freshest `client_activity` epoch, so `SidebarPresence::classify` marks `Idle` once input is quiet for the configured `[sidebar] afk_after_secs` window (15 minutes by default) and `Detached` when no human client remains. Zellij exposes attach state but no per-client input-idle timestamp, so an attached Zellij room stays `Active` until every terminal client detaches.
+Client presence is sampled by the producer and classified by the reader's `now_ms`. The mux `client_view` read returns attached human clients plus the panes they view; tmux also returns the freshest `client_activity` epoch, so `SidebarPresence::classify` marks `Idle` once input is quiet for the configured `[sidebar] afk_after_secs` window (15 minutes by default) and `Detached` when no human client remains. Zellij exposes attach state but no per-client input-idle timestamp, so an attached Zellij room stays `Active` until every terminal client detaches.
 
-Remote tmux honors `afk_after_secs`: host `client_activity` advances only on input crossing SSH, which makes it a faithful idle proxy. The link-stats sidecar drives only the remote-link badge. A topology-cache hit skips the expensive pane-list command while still sampling `client_view`; if that focus probe fails, the producer carries the prior presence sample from `snapshot.json` with the prior viewed panes.
+Remote tmux honors `afk_after_secs`: host `client_activity` advances only on input crossing SSH, which makes it a faithful idle proxy. The link-stats sidecar drives only the remote-link badge. A topology-cache hit skips the expensive pane-list command; viewed panes update on the pane-frame cadence, and idle-capable tmux presence re-samples on the fast presence cadence while an attached client remains. If a full producer focus probe fails, the producer carries the prior presence sample from `snapshot.json` with the prior viewed panes.
 
 ## Fusion rules
 
@@ -119,6 +119,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | Unwatched consumer fold | ≤ `UNWATCHED_FOLD_CLAMP` for identity-free nudges; watched renderers and the producer are immediate | Off-screen `LedgerDelta` and topology nudges in active rooms |
 | Zellij topology cache | `PRESENCE_STAMP_FRESH` | Zellij pre-producer pane listing |
 | Presence stamp | `PRESENCE_STAMP_FRESH` | Switches the producer between poll and event-mode pane TTLs |
+| Presence sample | `PRESENCE_SAMPLE_TTL` while tmux reports attached clients and input-idle timestamps | AFK badge clear after fresh input |
 | Git diff stats | focused: `DIFF_STATS_FOCUSED_LOCAL_TTL` local/edit facts and `DIFF_STATS_FOCUSED_COMMIT_TTL` commit/PR facts; background: `DIFF_STATS_TTL` hot and `DIFF_STATS_IDLE_TTL` idle | Worktree header churn, ahead/behind counts, landed markers, trunk-sync classification |
 | PR state | `PR_STATE_TTL` success; escalating failure backoff starts at `PR_STATE_RETRY_TTL` and caps at `PR_STATE_TTL` | Worktree header PR glyphs after diverged stats; failed paths keep last-known-good state |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |

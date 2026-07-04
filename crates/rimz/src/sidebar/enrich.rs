@@ -389,9 +389,10 @@ pub fn enrich(
         // tmux `client_activity` is the idle signal for local and remote rooms;
         // Zellij self-suppresses idle through an absent `last_input_ms`.
         let idle_threshold_ms = machine_config.sidebar.afk_after_ms();
+        let now_ms = snapshot.now.as_millisecond().max(0) as u64;
         snapshot.presence = frame
             .presence
-            .map(|sample| SidebarPresence::classify(sample, idle_threshold_ms));
+            .map(|sample| SidebarPresence::classify(sample, now_ms, idle_threshold_ms));
         snapshot.truth_degraded = truth_notice_for_frame(frame);
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_frame(own, frame);

@@ -18,7 +18,7 @@ use crate::sidebar::cache::{
     snapshot_cache_is_fresh,
 };
 use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
-use crate::sidebar::timing::{SNAPSHOT_CACHE_TTL, unix_now_ms};
+use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL, unix_now_ms};
 
 mod carry;
 mod starts;
@@ -84,6 +84,28 @@ fn list_session_panes(
         min_topology_produced_at_ms,
         command_timeout,
     })?)
+}
+
+fn client_view(mux: MuxName, session: &str) -> Result<crate::mux::ClientView> {
+    let view = crate::mux::backend_for(mux).client_view(ClientFocusOptions {
+        session_name: Some(session.to_owned()),
+        ..Default::default()
+    })?;
+    Ok(view)
+}
+
+fn presence_sample_from_client_view(view: &crate::mux::ClientView) -> PresenceSample {
+    PresenceSample {
+        human_clients: view.presence.human_clients,
+        last_input_ms: view.presence.last_input_ms,
+        sampled_at_ms: unix_now_ms(),
+    }
+}
+
+fn sample_client_presence(mux: MuxName, session: &str) -> Option<PresenceSample> {
+    client_view(mux, session)
+        .ok()
+        .map(|view| presence_sample_from_client_view(&view))
 }
 
 /// Join a fresh frame to the last published same-session frame. Raced-null
@@ -513,9 +535,21 @@ pub(super) fn cached_panes_or_produce(
         own_pane,
         diag,
     ) {
-        return Ok(refresh_cached_metrics(
+        let cache = refresh_cached_metrics(
             cache,
             runtime,
+            &cache_path,
+            &lock_path,
+            session,
+            min_pane_cache_ms,
+            pane_ttl,
+            own_pane,
+            diag,
+        );
+        return Ok(refresh_cached_presence(
+            cache,
+            runtime,
+            mux,
             &cache_path,
             &lock_path,
             session,
@@ -570,22 +604,14 @@ pub(super) fn cached_panes_or_produce(
                     |prior| (prior.viewed_panes.clone(), prior.presence),
                 )
             };
-            let (viewed_panes, presence) =
-                match crate::mux::backend_for(mux).client_view(ClientFocusOptions {
-                    session_name: Some(session.to_owned()),
-                    ..Default::default()
-                }) {
-                    Ok(client_view) => (
-                        client_view.viewed_panes,
-                        Some(PresenceSample {
-                            human_clients: client_view.presence.human_clients,
-                            last_input_ms: client_view.presence.last_input_ms,
-                            sampled_at_ms: unix_now_ms(),
-                        }),
-                    ),
-                    Err(_) if served_from_topology => prior_client_view(),
-                    Err(_) => (Vec::new(), None),
-                };
+            let (viewed_panes, presence) = match client_view(mux, session) {
+                Ok(client_view) => {
+                    let presence = presence_sample_from_client_view(&client_view);
+                    (client_view.viewed_panes, Some(presence))
+                }
+                Err(_) if served_from_topology => prior_client_view(),
+                Err(_) => (Vec::new(), None),
+            };
             let (mut frame, diagnostics) =
                 crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
                     panes,
@@ -1106,6 +1132,89 @@ fn refresh_cached_metrics(
             .unwrap_or(frame);
             if super::metrics::enrich_pane_metrics(&mut latest, session, runtime) {
                 annotate_elevated_agents(&mut latest, &crate::proc::elevated_in_pane_agent);
+                publish_frame(runtime, cache_path, &latest);
+            }
+            latest
+        }
+    }
+}
+
+fn presence_sample_due(frame: &PaneFrame) -> bool {
+    let Some(sample) = frame.presence else {
+        return false;
+    };
+    sample.last_input_ms.is_some()
+        && sample.human_clients > 0
+        && unix_now_ms().saturating_sub(sample.sampled_at_ms)
+            >= PRESENCE_SAMPLE_TTL.as_millis() as u64
+}
+
+fn presence_meaningfully_changed(prior: Option<&PresenceSample>, sample: &PresenceSample) -> bool {
+    match prior {
+        Some(prior) => {
+            prior.last_input_ms != sample.last_input_ms
+                || prior.human_clients != sample.human_clients
+        }
+        None => true,
+    }
+}
+
+/// The fast path's presence arm: re-sample attached tmux client activity over a
+/// topology-fresh cached frame. The publish keeps the frame's `produced_at_ms`,
+/// so a presence-only refresh never masquerades as a fresh pane listing; election
+/// rides the same snapshot lock as the full produce.
+#[allow(clippy::too_many_arguments)]
+fn refresh_cached_presence(
+    frame: PaneFrame,
+    runtime: &crate::RuntimePaths,
+    mux: MuxName,
+    cache_path: &Path,
+    lock_path: &Path,
+    session: &str,
+    min_pane_cache_ms: Option<u64>,
+    pane_ttl: Duration,
+    own_pane: Option<&PaneId>,
+    diag: &crate::diag::DiagSink,
+) -> PaneFrame {
+    if !presence_sample_due(&frame) {
+        return frame;
+    }
+    let fresh = || {
+        let cache = fresh_publishable_snapshot_cache(
+            cache_path,
+            session,
+            min_pane_cache_ms,
+            pane_ttl,
+            own_pane,
+            diag,
+        )?;
+        (!presence_sample_due(&cache)).then_some(cache)
+    };
+    match single_flight::coalesce(
+        lock_path,
+        SNAPSHOT_CACHE_WAIT_STEP,
+        SNAPSHOT_CACHE_WAIT_STEPS,
+        fresh,
+    ) {
+        Coalesced::Shared(cache) => cache,
+        // A wedged producer must not block the visible tab. Keep rendering the
+        // cached frame rather than writing shared presence state outside the
+        // elected producer path.
+        Coalesced::ProduceLocal => frame,
+        Coalesced::Produce(_guard) => {
+            let mut latest = fresh_publishable_snapshot_cache(
+                cache_path,
+                session,
+                min_pane_cache_ms,
+                pane_ttl,
+                own_pane,
+                diag,
+            )
+            .unwrap_or(frame);
+            if let Some(sample) = sample_client_presence(mux, session)
+                && presence_meaningfully_changed(latest.presence.as_ref(), &sample)
+            {
+                latest.presence = Some(sample);
                 publish_frame(runtime, cache_path, &latest);
             }
             latest

@@ -49,6 +49,27 @@ fn idle_presence_badge_renders_muted_elapsed_time() {
 }
 
 #[test]
+fn idle_presence_badge_omits_sub_minute_elapsed_time() {
+    let snapshot = with_presence(Some(crate::SidebarPresence::Idle { idle_ms: 17_000 }));
+
+    let text = footer_text(&snapshot, 32);
+
+    assert!(text.starts_with("zᶻ idle"));
+    assert!(!text.contains('·'));
+    assert!(text.ends_with("? for help"));
+}
+
+#[test]
+fn idle_presence_badge_floors_elapsed_time_to_minutes() {
+    let snapshot = with_presence(Some(crate::SidebarPresence::Idle { idle_ms: 90_000 }));
+
+    let text = footer_text(&snapshot, 32);
+
+    assert!(text.starts_with("zᶻ idle · 1m"));
+    assert!(text.ends_with("? for help"));
+}
+
+#[test]
 fn detached_presence_badge_renders_away() {
     let snapshot = with_presence(Some(crate::SidebarPresence::Detached));
 

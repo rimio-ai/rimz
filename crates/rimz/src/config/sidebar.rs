@@ -32,9 +32,9 @@ pub struct SidebarConfig {
     /// chords; the first chord is the one the help overlay displays.
     pub keys: SidebarKeys,
     /// Seconds of input idle before the footer shows the AFK badge. tmux
-    /// reports per-client input idle, so this drives `zᶻ idle · Nm`; Zellij
-    /// reports attach state only, so it shows `zᶻ away` on full detach
-    /// regardless of this value. 15 minutes by default.
+    /// reports per-client input idle, so this drives `zᶻ idle` and adds `· Nm`
+    /// after the first minute; Zellij reports attach state only, so it shows
+    /// `zᶻ away` on full detach regardless of this value. 15 minutes by default.
     pub afk_after_secs: NonZeroU32,
 }
 

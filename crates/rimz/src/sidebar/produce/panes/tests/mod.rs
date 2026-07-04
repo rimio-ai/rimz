@@ -46,3 +46,60 @@ fn write_snapshot_cache(path: &Path, session: &str, produced_at_ms: u64, carried
     }
     atomic::write_temp_then_rename(path, &cache).expect("write snapshot cache");
 }
+
+fn presence_sample(
+    human_clients: usize,
+    last_input_ms: Option<u64>,
+    sampled_at_ms: u64,
+) -> PresenceSample {
+    PresenceSample {
+        human_clients,
+        last_input_ms,
+        sampled_at_ms,
+    }
+}
+
+fn frame_with_presence(presence: Option<PresenceSample>) -> crate::sidebar::frame::PaneFrame {
+    let mut frame = frame(Vec::new());
+    frame.presence = presence;
+    frame
+}
+
+#[test]
+fn presence_sample_due_requires_idle_capable_attached_stale_sample() {
+    let stale = unix_now_ms()
+        .saturating_sub(crate::sidebar::timing::PRESENCE_SAMPLE_TTL.as_millis() as u64 + 1);
+    let fresh = unix_now_ms()
+        .saturating_add(crate::sidebar::timing::PRESENCE_SAMPLE_TTL.as_millis() as u64);
+
+    assert!(presence_sample_due(&frame_with_presence(Some(
+        presence_sample(1, Some(stale - 1), stale),
+    ))));
+    assert!(!presence_sample_due(&frame_with_presence(None)));
+    assert!(!presence_sample_due(&frame_with_presence(Some(
+        presence_sample(0, Some(stale - 1), stale),
+    ))));
+    assert!(!presence_sample_due(&frame_with_presence(Some(
+        presence_sample(1, None, stale),
+    ))));
+    assert!(!presence_sample_due(&frame_with_presence(Some(
+        presence_sample(1, Some(fresh - 1), fresh),
+    ))));
+}
+
+#[test]
+fn presence_meaningfully_changed_ignores_sample_timestamp() {
+    let prior = presence_sample(1, Some(1_000), 1_000);
+    let restamped = presence_sample(1, Some(1_000), 2_000);
+
+    assert!(presence_meaningfully_changed(None, &restamped));
+    assert!(!presence_meaningfully_changed(Some(&prior), &restamped));
+    assert!(presence_meaningfully_changed(
+        Some(&prior),
+        &presence_sample(1, Some(1_500), 2_000),
+    ));
+    assert!(presence_meaningfully_changed(
+        Some(&prior),
+        &presence_sample(2, Some(1_000), 2_000),
+    ));
+}

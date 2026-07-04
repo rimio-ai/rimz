@@ -846,12 +846,16 @@ fn frame_fold_carries_presence_onto_snapshot() {
     assert_eq!(snapshot.presence, Some(crate::SidebarPresence::Detached));
 }
 
-fn stale_presence_frame() -> crate::sidebar::frame::PaneFrame {
+fn snapshot_now_ms(snapshot: &SidebarSnapshot) -> u64 {
+    snapshot.now.as_millisecond().max(0) as u64
+}
+
+fn stale_presence_frame(now_ms: u64) -> crate::sidebar::frame::PaneFrame {
     let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
     frame.presence = Some(crate::PresenceSample {
         human_clients: 1,
-        last_input_ms: Some(1_000),
-        sampled_at_ms: 1_000_000,
+        last_input_ms: Some(now_ms - 999_000),
+        sampled_at_ms: now_ms - 10_000,
     });
     frame
 }
@@ -875,8 +879,9 @@ fn enrich_presence_with_default_config(
 #[test]
 fn local_tmux_presence_keeps_idle_detection() {
     let (_dir, runtime, snapshot) = runtime();
+    let frame = stale_presence_frame(snapshot_now_ms(&snapshot));
 
-    let snapshot = enrich_presence_with_default_config(snapshot, stale_presence_frame(), &runtime);
+    let snapshot = enrich_presence_with_default_config(snapshot, frame, &runtime);
 
     assert_eq!(
         snapshot.presence,
@@ -890,8 +895,31 @@ fn remote_tmux_presence_detects_idle() {
     let file = LinkStatsFile::new(unix_now_ms(), "client".to_owned(), stats(Some(42), 0));
     atomic::write_temp_then_rename_cache(&crate::remote::link::stats_path(&runtime), &file)
         .unwrap();
+    let frame = stale_presence_frame(snapshot_now_ms(&snapshot));
 
-    let snapshot = enrich_presence_with_default_config(snapshot, stale_presence_frame(), &runtime);
+    let snapshot = enrich_presence_with_default_config(snapshot, frame, &runtime);
+
+    assert_eq!(
+        snapshot.presence,
+        Some(crate::SidebarPresence::Idle { idle_ms: 999_000 })
+    );
+}
+
+#[test]
+fn presence_idle_duration_tracks_snapshot_now() {
+    let (_dir, runtime, snapshot) = runtime();
+    let now = Timestamp::from_second(1_750_000_000).unwrap();
+    let now_ms = now.as_millisecond().max(0) as u64;
+    let snapshot =
+        SidebarSnapshot::build(snapshot.workspace_id.clone(), Vec::new(), Vec::new(), now);
+    let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
+    frame.presence = Some(crate::PresenceSample {
+        human_clients: 1,
+        last_input_ms: Some(now_ms - 999_000),
+        sampled_at_ms: now_ms - 30_000,
+    });
+
+    let snapshot = enrich_presence_with_default_config(snapshot, frame, &runtime);
 
     assert_eq!(
         snapshot.presence,

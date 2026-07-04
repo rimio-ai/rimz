@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::fmt::{age_label, age_short};
+use super::fmt::age_short;
 use super::labels::{role_glyph, status_glyph, status_rest_style};
 use super::layout;
 use super::theme::Theme;
@@ -261,8 +261,12 @@ fn presence_badge(
     let mut text = match presence {
         SidebarPresence::Active => return None,
         SidebarPresence::Idle { idle_ms } => {
-            let seconds = (idle_ms / 1_000).min(i64::MAX as u64) as i64;
-            format!("{glyph} idle · {}", age_label(seconds))
+            let minutes = idle_ms / 60_000;
+            if minutes == 0 {
+                format!("{glyph} idle")
+            } else {
+                format!("{glyph} idle · {minutes}m")
+            }
         }
         SidebarPresence::Detached => format!("{glyph} away"),
     };

@@ -78,6 +78,11 @@ pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// it, so lifecycle/resize floors still pull a fresh pane list in event mode.
 pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
+/// How often the producer re-samples tmux client activity while an idle-capable
+/// client is attached, independent of the heavy pane cache TTL, so the AFK
+/// badge clears within this bound of a keypress.
+pub const PRESENCE_SAMPLE_TTL: Duration = Duration::from_secs(1);
+
 /// Maximum time a pane omitted by the mux source may be carried from the last
 /// good frame while `/proc` still proves the old pane root alive. Long enough
 /// to bridge several bad pane pulls, short enough that a persistently lying mux

@@ -197,16 +197,17 @@ pub enum SidebarPresence {
 }
 
 impl SidebarPresence {
-    /// Classify client presence from the producer's mux sample. `last_input_ms`
-    /// is `None` when the backend cannot report trustworthy input idle (Zellij),
-    /// so an attached client reads active until it detaches.
-    pub fn classify(sample: PresenceSample, idle_threshold_ms: u64) -> Self {
+    /// Classify client presence from the producer's mux sample against the
+    /// reader's clock. `last_input_ms` is `None` when the backend cannot report
+    /// trustworthy input idle (Zellij), so an attached client reads active until
+    /// it detaches.
+    pub fn classify(sample: PresenceSample, now_ms: u64, idle_threshold_ms: u64) -> Self {
         if sample.human_clients == 0 {
             return Self::Detached;
         }
         match sample.last_input_ms {
             Some(last_input_ms) => {
-                let idle_ms = sample.sampled_at_ms.saturating_sub(last_input_ms);
+                let idle_ms = now_ms.saturating_sub(last_input_ms);
                 if idle_ms >= idle_threshold_ms {
                     Self::Idle { idle_ms }
                 } else {
@@ -248,6 +249,7 @@ mod tests {
                     last_input_ms: Some(now),
                     sampled_at_ms: now,
                 },
+                now,
                 threshold_ms,
             ),
             SidebarPresence::Detached
@@ -259,6 +261,7 @@ mod tests {
                     last_input_ms: Some(now - threshold_ms + 1),
                     sampled_at_ms: now,
                 },
+                now,
                 threshold_ms,
             ),
             SidebarPresence::Active,
@@ -270,6 +273,7 @@ mod tests {
                     last_input_ms: Some(now - threshold_ms),
                     sampled_at_ms: now,
                 },
+                now,
                 threshold_ms,
             ),
             SidebarPresence::Idle {
@@ -283,9 +287,24 @@ mod tests {
                     last_input_ms: None,
                     sampled_at_ms: now,
                 },
+                now,
                 threshold_ms,
             ),
             SidebarPresence::Active,
+        );
+        assert_eq!(
+            SidebarPresence::classify(
+                PresenceSample {
+                    human_clients: 1,
+                    last_input_ms: Some(now - threshold_ms),
+                    sampled_at_ms: now - 10_000,
+                },
+                now + 5_000,
+                threshold_ms,
+            ),
+            SidebarPresence::Idle {
+                idle_ms: threshold_ms + 5_000,
+            },
         );
     }
 }
