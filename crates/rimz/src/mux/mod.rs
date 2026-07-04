@@ -500,8 +500,8 @@ pub enum SessionHealth {
     Healthy,
     /// Was auto-rebuildable; a rebirth brought it back clean and running.
     Reborn,
-    /// Stuck and needs an explicit reset: either a rebirth could not clear it, or
-    /// the live room cannot be inspected safely enough to auto-rebirth.
+    /// Stuck and needs an explicit reset: a rebirth could not clear an
+    /// absent/exited room.
     Stuck,
 }
 
@@ -559,35 +559,34 @@ pub trait MuxBackend: Send + Sync {
     /// Only `rimz start` passes a `daemon`; other launches pass `None` and birth
     /// the working view alone.
     fn open_sidebar(&self, opts: &SidebarPaneOptions, daemon: Option<&DaemonView>) -> Result<()>;
-    /// Read-only health verdict for `name`'s room. Zellij detects a resurrected
-    /// or suspended room (every command pane held at a "Waiting to run" prompt
-    /// after a server death) and an uninspectable live room; tmux has no
-    /// resurrection, so the default is always [`SessionHealth::Healthy`]. `rimz doctor` reports this;
+    /// Read-only health verdict for `name`'s room. Zellij trusts
+    /// `list-sessions` liveness: a live session is [`SessionHealth::Healthy`],
+    /// an exited session is [`SessionHealth::Stuck`], and an absent session is
+    /// healthy because birth can create it. tmux has no resurrection, so the
+    /// default is always [`SessionHealth::Healthy`]. `rimz doctor` reports this;
     /// [`Self::ensure_clean_session`] acts on it. Never mutates the session.
     fn probe_session_health(&self, name: &str) -> Result<SessionHealth> {
         let _ = name;
         Ok(SessionHealth::Healthy)
     }
-    /// Whether an abrupt agent-wrapper exit should be treated as a pane/tab
-    /// close inside a still-live session. This is intentionally narrower than
-    /// [`Self::probe_session_health`]: a room with missing sidebar chrome is
-    /// not clean enough for attach, but an agent pane close inside it is still
-    /// deliberate. A wedged or resurrected session returns false so the wrapper
+    /// Whether an abrupt agent-wrapper exit should be treated as a deliberate
+    /// pane/tab close inside a session that `list-sessions` still reports live.
+    /// If the session is absent from the backend's live list, the wrapper
     /// preserves the agent for recovery.
     fn session_accepts_agent_close(&self, name: &str) -> bool {
         self.list_sessions()
             .map(|sessions| sessions.iter().any(|session| session == name))
             .unwrap_or(false)
     }
-    /// Guarantee the next [`Self::attach_command`] lands on a clean, running
-    /// room. Probe `opts.session_name`; a clean live room is left untouched
-    /// ([`SessionHealth::Healthy`]); an absent, exited, or inspected-stale one is
-    /// (re)birthed from the layout ([`SessionHealth::Reborn`]); a live room that
-    /// cannot be inspected, or a room that a rebirth still cannot make clean,
-    /// returns [`SessionHealth::Stuck`] so the caller can prompt for, or direct
-    /// the user to, `rimz reset`. This is the authoritative pre-attach gate that
-    /// the best-effort sidebar launch cannot bypass. tmux has no
-    /// resurrection, so the default is a no-op `Healthy`.
+    /// Guarantee the next [`Self::attach_command`] lands on a live, running
+    /// room. Probe `opts.session_name`; a live room is left untouched
+    /// ([`SessionHealth::Healthy`]); an absent or exited one is (re)birthed from
+    /// the layout ([`SessionHealth::Reborn`]); a room that a rebirth still
+    /// cannot make live returns [`SessionHealth::Stuck`] so the caller can
+    /// prompt for, or direct the user to, `rimz reset`. This is the
+    /// authoritative pre-attach gate that the best-effort sidebar launch cannot
+    /// bypass. A socket path overflow returns an error and reset is not
+    /// offered. tmux has no resurrection, so the default is a no-op `Healthy`.
     fn ensure_clean_session(
         &self,
         opts: &SidebarPaneOptions,

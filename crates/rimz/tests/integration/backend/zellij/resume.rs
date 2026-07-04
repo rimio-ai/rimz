@@ -3,8 +3,7 @@ use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
-    LayoutPanes, MuxBackend, PaneCmd, SessionHealth, SidebarPaneOptions, SidebarWidth, TabOptions,
-    ZellijBackend,
+    LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, SidebarWidth, TabOptions, ZellijBackend,
 };
 
 use crate::common::{CommandTimeoutExt, Env};
@@ -72,11 +71,11 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
 
     close_all_sidebar_panes(xdg.path(), &workspace.session_name);
     assert!(
-        matches!(
-            backend.probe_session_health(&workspace.session_name),
-            Ok(SessionHealth::Stuck)
-        ),
-        "session should be live but unclean after removing every sidebar",
+        backend
+            .list_sessions()
+            .expect("list sessions")
+            .contains(&workspace.session_name),
+        "session should stay live after removing every sidebar",
     );
 
     let work = wait_for_named_work_pane_count(xdg.path(), &workspace.session_name, tab_name, 1);

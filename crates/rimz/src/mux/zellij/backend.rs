@@ -487,22 +487,9 @@ impl MuxBackend for ZellijBackend {
             SessionState::Absent => SessionHealth::Healthy,
             // `attach --create` would resurrect a serialized, suspended layout.
             SessionState::Exited => SessionHealth::Stuck,
-            SessionState::Live => match self.session_cleanliness(name) {
-                Ok(SessionCleanliness::Clean) => SessionHealth::Healthy,
-                Ok(
-                    SessionCleanliness::MissingSidebar | SessionCleanliness::SuspendedCommandPane,
-                )
-                | Err(_) => SessionHealth::Stuck,
-            },
+            // `list-sessions` liveness is the attach gate truth; attach live rooms as-is.
+            SessionState::Live => SessionHealth::Healthy,
         })
-    }
-
-    fn session_accepts_agent_close(&self, name: &str) -> bool {
-        matches!(self.session_state(name), SessionState::Live)
-            && matches!(
-                self.session_cleanliness(name),
-                Ok(SessionCleanliness::Clean | SessionCleanliness::MissingSidebar)
-            )
     }
 
     fn ensure_clean_session(
@@ -511,30 +498,16 @@ impl MuxBackend for ZellijBackend {
         daemon: Option<&DaemonView>,
     ) -> Result<SessionHealth> {
         let state = self.session_state(&opts.session_name);
-        // A clean, live room is left untouched — never rebirth working panes.
+        // A live room is trusted from `list-sessions` alone: attach as-is, never
+        // inspect panes. A large or busy room's `list-panes` can exceed the
+        // health probe budget, and a timeout is not evidence the room is stuck.
         if matches!(state, SessionState::Live) {
-            match self.session_cleanliness(&opts.session_name) {
-                Ok(SessionCleanliness::Clean) => return Ok(SessionHealth::Healthy),
-                Ok(
-                    SessionCleanliness::MissingSidebar | SessionCleanliness::SuspendedCommandPane,
-                ) => {}
-                Err(err) => {
-                    tracing::warn!(
-                        session = %opts.session_name,
-                        tags.operation = "zellij.room_inspect",
-                        error = &err as &dyn std::error::Error,
-                        "live zellij room could not be inspected; reset confirmation is required",
-                    );
-                    return Ok(SessionHealth::Stuck);
-                }
-            }
+            return Ok(SessionHealth::Healthy);
         }
-        // Absent → first birth; Exited / inspected Live-but-suspended → delete
-        // and rebirth from the layout so the room comes up clean and RUNNING
-        // (with serialization off, a rebirth can never resurrect). An
-        // uninspectable live room returns Stuck above so the caller offers a
-        // reset before any destructive action. A rebirth that still fails to
-        // talk to Zellij reads as Stuck so the caller offers a reset.
+        // Absent → first birth; Exited → delete and rebirth from the layout so
+        // the room comes up clean and RUNNING (with serialization off, a rebirth
+        // can never resurrect). A rebirth that still fails to talk to Zellij
+        // reads as Stuck so the caller offers a reset.
         let rebirth = || -> Result<()> {
             if !matches!(state, SessionState::Absent) {
                 self.delete_session(&opts.session_name)?;

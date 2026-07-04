@@ -151,7 +151,7 @@ fn web_open_refuses_url_when_prepared_session_is_not_addressable() {
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
             materialized_room_panes_json(),
         )
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FAIL_AFTER", "4")
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FAIL_AFTER", "0")
         .bounded_output()
         .expect("run rimz web open");
 

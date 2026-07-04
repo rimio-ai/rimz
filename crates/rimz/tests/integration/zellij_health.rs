@@ -11,7 +11,7 @@ use tempfile::TempDir;
 use crate::common::{CommandTimeoutExt, Env};
 
 #[test]
-fn uninspectable_live_zellij_room_is_not_auto_deleted() {
+fn uninspectable_live_zellij_room_attaches_as_is() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
     let shim = FakeZellij::new();
@@ -26,26 +26,17 @@ fn uninspectable_live_zellij_room_is_not_auto_deleted() {
         .bounded_output()
         .expect("run rimz start");
 
-    assert!(
-        !output.status.success(),
-        "a noninteractive stuck room should fail fast before attach"
-    );
+    assert!(output.status.success(), "live room should attach as-is");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("No terminal is available to confirm"),
-        "stderr should explain the reset precondition, got: {stderr}"
+        !stderr.contains("No terminal is available to confirm"),
+        "live room should not reach reset confirmation, got: {stderr}"
     );
 
     let lines = read_trace_lines(&shim.log, Duration::from_millis(200));
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("action\tlist-panes\t-j\t-a")),
-        "the health gate should probe panes, got: {lines:?}"
-    );
-    assert!(
         !lines.iter().any(|line| line.contains("delete-session")),
-        "an uninspectable live room must be preserved until reset confirmation: {lines:?}"
+        "an uninspectable live room must be preserved: {lines:?}"
     );
 }
 
