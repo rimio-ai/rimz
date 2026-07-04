@@ -93,7 +93,6 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     if unread_agents > 0 {
         // A steady tally, not a blink — the attention blink lives on the cards
         // and the make-up buckets; the cockpit count holds its attention tone.
-        let start = spans_width(&left) + 1;
         let waiting = theme.animations.status(AgentStatus::Waiting).color();
         let style = if unread_picked {
             let chip = theme.chip(waiting, Modifier::BOLD);
@@ -105,7 +104,9 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         } else {
             theme.style(waiting, Modifier::BOLD)
         };
-        left.push(Span::styled(format!(" ({unread_agents})"), style));
+        left.push(Span::styled(" ".to_owned(), theme.body()));
+        let start = spans_width(&left);
+        left.push(Span::styled(format!("({unread_agents})"), style));
         let end = spans_width(&left);
         let left_budget = if right.is_empty() {
             width

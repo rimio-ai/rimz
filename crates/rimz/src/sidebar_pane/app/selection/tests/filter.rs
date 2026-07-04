@@ -224,8 +224,8 @@ fn unread_count_click_toggles_the_unread_lens() {
     let picked_count = picked.lines[usize::from(unread_row)]
         .spans
         .iter()
-        .find(|span| span.content.as_ref() == " (2)")
-        .expect("picked unread count stays one span");
+        .find(|span| span.content.as_ref() == "(2)")
+        .expect("picked unread count is its own chip span");
     assert!(
         picked_count.style.bg.is_some()
             || picked_count
