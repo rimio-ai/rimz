@@ -810,6 +810,8 @@ fn install_cleanup_signal_handlers() -> Result<()> {
 fn install_interrupt_signal_handler() -> Result<()> {
     use signal_hook::consts::signal::SIGINT;
 
+    // Registering a handler keeps the wrapper alive when the agent handles
+    // Ctrl-C, so the wrapper can record the exit trace and drop to a shell.
     signal_hook::flag::register(SIGINT, interrupt_signal_flag().clone())?;
     Ok(())
 }
