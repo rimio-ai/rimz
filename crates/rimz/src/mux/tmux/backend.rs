@@ -320,14 +320,17 @@ impl MuxBackend for TmuxBackend {
         // sidebar+terminal split. tmux has no tab template, so we install a
         // session-scoped `after-new-window` hook that replays window options and
         // re-runs the same left split in each new window. `-b -d` keep the
-        // sidebar left and focus on the new window's terminal, exactly as the
-        // initial window. The hook pins the verdict's fixed columns: a new
-        // window instantiates at the attached client's real geometry, and a raw
-        // percentage there would re-evaluate against it — exactly how the cap
-        // used to vanish.
+        // sidebar left and focus on the new window's terminal, matching the
+        // non-pristine initial split. The hook pins the verdict's fixed columns:
+        // a new window instantiates at the attached client's real geometry, and
+        // a raw percentage there would re-evaluate against it — exactly how the
+        // cap used to vanish.
         let set_hook = after_new_window_hook_set_cmd(opts);
         if opts.pristine_birth {
-            let sidebar_pane = self.sole_current_window_pane(&opts.session_name)?;
+            let sidebar_pane = self
+                .sole_current_window_pane(&opts.session_name)
+                .ok()
+                .flatten();
             let window_width = self.window_width(&opts.session_name);
             if let (Some(sidebar_pane), Some(window_width)) = (sidebar_pane, window_width) {
                 let mut commands = birth_split_commands(
