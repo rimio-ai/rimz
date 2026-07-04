@@ -1,4 +1,5 @@
 use super::*;
+use std::io::IsTerminal;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ReconcileAction {
