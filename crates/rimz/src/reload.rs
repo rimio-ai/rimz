@@ -27,7 +27,9 @@ use crate::mux::{
     MuxBackend, PaneListOptions, SidebarLiveness, SidebarPaneOptions, SidebarWidth, backend_for,
 };
 use crate::sidebar::heartbeat::SidebarHeartbeat;
-use crate::sidebar::timing::{RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT};
+use crate::sidebar::timing::{
+    RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, unix_now_ms,
+};
 use crate::workspace::{self, KnownWorkspace};
 
 /// Resolve the on-disk binary that should be executed after the current image
@@ -456,9 +458,16 @@ fn heartbeat_liveness<'a>(
 /// SIGTERM→SIGKILL this user's sidebar *processes* for `ws` whose pane the mux no
 /// longer lists. A process we cannot attribute to a pane is left alone.
 fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorkspace) -> usize {
+    let now = jiff::Timestamp::now();
+    let floor_ms =
+        unix_now_ms().saturating_sub(crate::sidebar::FRESH_PANE_GRACE.as_millis() as u64);
+    // Reap acts on pane absence, so topology cache hits must be no older than
+    // the grace that also protects just-born sidebar processes below.
     let live_panes: HashSet<PaneId> = match backend.list_panes(PaneListOptions {
         session_name: Some(ws.session_name.clone()),
-        ..Default::default()
+        workspace_id: Some(ws.workspace_id.clone()),
+        min_topology_produced_at_ms: Some(floor_ms),
+        command_timeout: Some(RECONCILE_LIST_TIMEOUT),
     }) {
         Ok(listing) => listing.panes.into_iter().map(|pane| pane.pane_id).collect(),
         Err(err) => {
@@ -475,6 +484,10 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         .filter(|proc| !protected.contains(&proc.pid))
         .filter(|proc| {
             recovery::is_sidebar_serve(&proc.cmdline, ws.workspace_id.as_str(), &ws.session_name)
+        })
+        .filter(|proc| {
+            !crate::proc::process_start(proc.pid)
+                .is_some_and(|start| born_recently(start, now, crate::sidebar::FRESH_PANE_GRACE))
         })
         .filter(|proc| match recovery::attributed_pane(proc.pid, mux) {
             Some(pane) => !live_panes.contains(&pane),

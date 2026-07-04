@@ -250,6 +250,9 @@ pub const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 /// stamped with the on-disk build before falling back to close-and-readd.
 pub const RELOAD_CONVERGE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Per-call bound for reload's best-effort convergence pane/layout reads.
+pub const RECONCILE_LIST_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Poll cadence while `rimz reload` waits for build-stamped heartbeats.
 pub const RELOAD_CONVERGE_POLL: Duration = Duration::from_millis(150);
 

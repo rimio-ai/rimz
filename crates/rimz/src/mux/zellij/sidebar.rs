@@ -22,6 +22,7 @@ use super::{
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{DaemonView, MuxBackend, MuxErr, Result, SidebarPaneOptions, sidebar_serve_args};
 use crate::pane::SIDEBAR_CHROME_TITLE;
+use crate::sidebar::timing::RECONCILE_LIST_TIMEOUT;
 
 const ADD_DOCK_ATTEMPTS: u32 = 2;
 const DOCK_VERIFY_SETTLE: Duration = Duration::from_millis(100);
@@ -705,7 +706,7 @@ impl ZellijBackend {
                 "dump-layout failed; falling back to live sidebars",
             ),
         }
-        let panes = match self.list_panes_with_session(Some(session)) {
+        let panes = match self.list_panes_bounded(Some(session), RECONCILE_LIST_TIMEOUT) {
             Ok(panes) => panes,
             Err(err) => {
                 tracing::debug!(
@@ -724,7 +725,10 @@ impl ZellijBackend {
         &self,
         session: &str,
     ) -> Result<Option<NonZeroU16>> {
-        let output = self.zellij_action(session).arg("dump-layout").run()?;
+        let output = self
+            .zellij_action(session)
+            .arg("dump-layout")
+            .run_with_timeout(RECONCILE_LIST_TIMEOUT)?;
         let layout = String::from_utf8_lossy(&output.stdout);
         Ok(new_tab_template_sidebar_cols(&layout))
     }

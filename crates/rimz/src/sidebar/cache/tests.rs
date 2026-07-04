@@ -1,6 +1,7 @@
 use super::*;
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic;
+use crate::sidebar::FRESH_PANE_GRACE;
 use crate::sidebar::frame::assemble_frame;
 use crate::sidebar::refresh::PrStateCache;
 use crate::sidebar::refresh::git_stats::{DiffStats, DiffStatsCacheEntry, WorktreeRootsCache};
@@ -22,6 +23,26 @@ fn pane_topology_cache_freshness_honors_requested_floor() {
 
     assert!(pane_topology_cache_is_fresh(&cache, 101, Some(100)));
     assert!(!pane_topology_cache_is_fresh(&cache, 101, Some(101)));
+}
+
+#[test]
+fn pane_topology_reap_floor_rejects_cache_older_than_fresh_pane_grace() {
+    let now = unix_now_ms();
+    let grace_ms = FRESH_PANE_GRACE.as_millis() as u64;
+    let floor = now.saturating_sub(grace_ms);
+    let old_cache = PaneTopologyCache {
+        session_name: "rimz-test".to_owned(),
+        produced_at_ms: floor.saturating_sub(1),
+        focused_pane: None,
+        panes: Vec::new(),
+    };
+    let fresh_cache = PaneTopologyCache {
+        produced_at_ms: floor,
+        ..old_cache.clone()
+    };
+
+    assert!(!pane_topology_cache_is_fresh(&old_cache, now, Some(floor)));
+    assert!(pane_topology_cache_is_fresh(&fresh_cache, now, Some(floor)));
 }
 
 #[test]

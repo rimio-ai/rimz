@@ -558,7 +558,14 @@ impl MuxBackend for ZellijBackend {
         // and add one by splitting right, moving it left, and resizing it to the
         // session's fixed birth width. This never rebirths the session, so the
         // working panes survive.
-        let panes = self.list_panes_with_session(Some(&opts.session_name))?;
+        let panes = self
+            .list_panes_cached_or_cli(
+                Some(&opts.session_name),
+                Some(&opts.workspace_id),
+                None,
+                crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+            )?
+            .panes;
         let canonical = self
             .session_sidebar_cols(&opts.session_name)
             .unwrap_or(opts.birth_size.cols);
