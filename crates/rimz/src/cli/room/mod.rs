@@ -681,6 +681,19 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
             recovery.recover_agents && machine_config.resume.on_rebirth && !birth.no_resume,
         );
     }
+    let pre_existed = match birth.backend.list_sessions() {
+        Ok(sessions) => sessions
+            .iter()
+            .any(|name| name.as_str() == room.session_name),
+        Err(err) => {
+            tracing::debug!(
+                session = %room.session_name,
+                error = %err,
+                "could not prove session is absent before birth; using non-destructive sidebar split",
+            );
+            true
+        }
+    };
     birth.backend.ensure_session(&SessionOptions {
         session_name: room.session_name.to_owned(),
         workspace_id: room.workspace_id.clone(),
@@ -706,7 +719,13 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
         &machine_config.resume,
         birth.no_resume,
     )?;
-    launch_sidebar_for_workspace(birth.backend, room, birth.daemon, &resume_plan.tabs);
+    launch_sidebar_for_workspace(
+        birth.backend,
+        room,
+        birth.daemon,
+        !pre_existed,
+        &resume_plan.tabs,
+    );
     if let Some(remote) = &birth.remote {
         maybe_launch_remote_control(
             birth.backend,
@@ -801,6 +820,7 @@ pub(crate) fn build_sidebar_opts(
         birth_size: target.birth_size(),
         rimz_bin,
         replace_existing: false,
+        pristine_birth: false,
         config: target.mux_config.clone(),
         resume_tabs,
         refresh_ms: target.refresh_ms,
@@ -811,6 +831,7 @@ pub(crate) fn launch_sidebar_for_workspace(
     backend: &dyn MuxBackend,
     target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
+    pristine_birth: bool,
     resume_tabs: &[rimz::mux::ResumeTab],
 ) -> rimz::sidebar::SidebarLaunchOutcome {
     let runtime = match RuntimePaths::for_workspace(target.workspace_id.clone()) {
@@ -824,7 +845,7 @@ pub(crate) fn launch_sidebar_for_workspace(
             return rimz::sidebar::SidebarLaunchOutcome::Failed;
         }
     };
-    let opts = match build_sidebar_opts(target, resume_tabs.to_vec()) {
+    let mut opts = match build_sidebar_opts(target, resume_tabs.to_vec()) {
         Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(
@@ -835,5 +856,6 @@ pub(crate) fn launch_sidebar_for_workspace(
             return rimz::sidebar::SidebarLaunchOutcome::Failed;
         }
     };
+    opts.pristine_birth = pristine_birth;
     rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts, daemon)
 }

@@ -16,6 +16,7 @@ fn sidebar_opts(
         birth_size: width.birth_size(detected_cols),
         rimz_bin: PathBuf::from("/usr/bin/rimz"),
         replace_existing: false,
+        pristine_birth: false,
         config: crate::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms,

@@ -138,6 +138,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         birth_size: SidebarWidth::default().birth_size(Some(120)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,

@@ -70,6 +70,7 @@ fn build_daemon_view_options(
             birth_size: room.birth_size(),
             rimz_bin,
             replace_existing: false,
+            pristine_birth: false,
             config: mux_config.clone(),
             resume_tabs: Vec::new(),
             refresh_ms: room.refresh_ms,

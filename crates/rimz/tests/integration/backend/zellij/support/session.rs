@@ -47,6 +47,7 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,

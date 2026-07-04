@@ -40,6 +40,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         birth_size: SidebarWidth::default().birth_size(Some(160)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,

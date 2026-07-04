@@ -2,7 +2,8 @@
 
 use super::TmuxBackend;
 use super::options::{
-    after_new_window_hook_set_cmd, sidebar_serve_command, tmux_views_with_sidebars,
+    after_new_window_hook_set_cmd, birth_split_commands, sidebar_serve_command,
+    tmux_views_with_sidebars,
 };
 use super::parse::{parse_client_view, parse_new_window_ids, parse_pane_line};
 use super::window::sanitize_window_name;
@@ -303,17 +304,54 @@ impl MuxBackend for TmuxBackend {
         // tmux can reorder windows freely, so the daemon view leads via
         // `open_background_view` (`swap-window`) rather than a birth layout; the
         // `daemon` hint is Zellij's concern and ignored here.
-        // Managed sidebar pane per docs/internals/sidebar/multiplexers.md:
+        // Fresh tmux births repurpose the first pane as the sidebar and split
+        // the work shell to the right at final width. Reattach/recovery keeps
+        // the long-standing non-destructive split:
         //   tmux split-window -d -h -l <cols> -b -t <session> 'rimz sidebar serve ...'
-        // `-d` keeps the spawning client focused on its existing pane;
-        // `-b` places the new pane before the target so the sidebar sits
-        // on the left. Workspace identity is passed directly to the spawned
-        // renderer command.
+        // `-d` keeps focus on the existing pane; `-b` places the new pane
+        // before the target so the sidebar sits on the left. Workspace identity
+        // is passed directly to the spawned renderer command.
         // The split uses the fixed birth verdict. `ensure_session` birthed the
         // detached room at the launch probe, and later windows get the same
         // value from the hook.
-        let size = opts.birth_size.cols.to_string();
         let command = sidebar_serve_command(opts);
+        // Cross-backend parity (DESIGN.md): a Zellij session's layout doubles
+        // as its tab template, so every new tab is born with the same
+        // sidebar+terminal split. tmux has no tab template, so we install a
+        // session-scoped `after-new-window` hook that replays window options and
+        // re-runs the same left split in each new window. `-b -d` keep the
+        // sidebar left and focus on the new window's terminal, exactly as the
+        // initial window. The hook pins the verdict's fixed columns: a new
+        // window instantiates at the attached client's real geometry, and a raw
+        // percentage there would re-evaluate against it — exactly how the cap
+        // used to vanish.
+        let set_hook = after_new_window_hook_set_cmd(opts);
+        if opts.pristine_birth {
+            let sidebar_pane = self.sole_current_window_pane(&opts.session_name)?;
+            let window_width = self.window_width(&opts.session_name);
+            if let (Some(sidebar_pane), Some(window_width)) = (sidebar_pane, window_width) {
+                let mut commands = birth_split_commands(
+                    &sidebar_pane,
+                    opts.birth_size.cols,
+                    window_width,
+                    &opts.cwd,
+                    &command,
+                );
+                commands.push(set_hook);
+                // One client invocation respawns the pristine pane as sidebar,
+                // splits the focused work shell at its final width, and
+                // installs the hook for later windows.
+                self.batch(&commands)?;
+                self.seed_resume_windows(opts);
+                return Ok(());
+            }
+            tracing::debug!(
+                session = %opts.session_name,
+                "tmux pristine birth could not prove single-pane geometry; using non-destructive sidebar split",
+            );
+        }
+
+        let size = opts.birth_size.cols.to_string();
         let mut split = vec![
             "split-window".to_owned(),
             "-d".to_owned(),
@@ -326,17 +364,6 @@ impl MuxBackend for TmuxBackend {
         ];
         split.extend(command.iter().cloned());
 
-        // Cross-backend parity (DESIGN.md): a Zellij session's layout doubles
-        // as its tab template, so every new tab is born with the same
-        // sidebar+terminal split. tmux has no tab template, so we install a
-        // session-scoped `after-new-window` hook that replays window options and
-        // re-runs the same left split in each new window. `-b -d` keep the
-        // sidebar left and focus on the new window's terminal, exactly as the
-        // initial window. The hook pins the verdict's fixed columns: a new
-        // window instantiates at the attached client's real geometry, and a raw
-        // percentage there would re-evaluate against it — exactly how the cap
-        // used to vanish.
-        let set_hook = after_new_window_hook_set_cmd(opts);
         // One client invocation births the sidebar and installs the hook.
         self.batch(&[split, set_hook])?;
         // With the `after-new-window` hook installed, re-seed the reborn
@@ -632,6 +659,23 @@ impl MuxBackend for TmuxBackend {
 }
 
 impl TmuxBackend {
+    fn sole_current_window_pane(&self, session: &str) -> Result<Option<String>> {
+        let output = self
+            .cmd()
+            .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
+            .run()?;
+        let panes: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        Ok(match panes.as_slice() {
+            [pane] => Some(pane.clone()),
+            _ => None,
+        })
+    }
+
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
         let format = "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_active}\t#{window_name}\t#{pane_title}";
         match session_name {

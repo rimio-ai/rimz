@@ -134,6 +134,7 @@ fn open_tab_rejects_an_empty_layout() {
         birth_size: width.birth_size(Some(80)),
         rimz_bin: PathBuf::from("/bin/true"),
         replace_existing: false,
+        pristine_birth: false,
         config: crate::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,

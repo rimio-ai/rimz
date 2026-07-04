@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU16;
+use std::path::Path;
 
 use crate::config::{TmuxConfig, TmuxExtendedKeysFormat};
 use crate::ids::MuxName;
@@ -16,6 +17,38 @@ pub(super) fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
     let mut command = vec![opts.rimz_bin.to_string_lossy().into_owned()];
     command.extend(sidebar_serve_args(MuxName::Tmux, opts));
     command
+}
+
+/// Fresh tmux birth path: repurpose the session's pristine first pane as the
+/// sidebar, then create the work shell to its right at its final width.
+pub(super) fn birth_split_commands(
+    sidebar_pane: &str,
+    sidebar_cols: NonZeroU16,
+    window_width: u64,
+    cwd: &Path,
+    sidebar_argv: &[String],
+) -> Vec<Vec<String>> {
+    let shell_width = window_width
+        .saturating_sub(u64::from(sidebar_cols.get()) + 1)
+        .max(1);
+    let mut respawn = vec![
+        "respawn-pane".to_owned(),
+        "-k".to_owned(),
+        "-t".to_owned(),
+        sidebar_pane.to_owned(),
+    ];
+    respawn.extend(sidebar_argv.iter().cloned());
+    let split = vec![
+        "split-window".to_owned(),
+        "-h".to_owned(),
+        "-l".to_owned(),
+        shell_width.to_string(),
+        "-t".to_owned(),
+        sidebar_pane.to_owned(),
+        "-c".to_owned(),
+        cwd.to_string_lossy().into_owned(),
+    ];
+    vec![respawn, split]
 }
 
 /// The session-scoped hook that docks the sidebar into every tmux window opened
@@ -228,6 +261,7 @@ mod tests {
             birth_size: width.birth_size(None),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
+            pristine_birth: false,
             config: MultiplexerConfig::default(),
             resume_tabs: Vec::new(),
             refresh_ms,
@@ -269,6 +303,55 @@ mod tests {
             !without.iter().any(|arg| arg == "--refresh-ms"),
             "default launch leaves refresh cadence config-driven: {without:?}",
         );
+    }
+
+    #[test]
+    fn birth_split_respawns_sidebar_then_splits_work_shell_at_final_width() {
+        let sidebar_argv = sidebar_serve_command(&sidebar_opts(None));
+        let commands = birth_split_commands(
+            "%0",
+            NonZeroU16::new(24).expect("nonzero"),
+            100,
+            Path::new("/tmp/rimz-tmux-refresh"),
+            &sidebar_argv,
+        );
+
+        let mut expected_respawn = vec![
+            "respawn-pane".to_owned(),
+            "-k".to_owned(),
+            "-t".to_owned(),
+            "%0".to_owned(),
+        ];
+        expected_respawn.extend(sidebar_argv);
+        assert_eq!(
+            commands,
+            vec![
+                expected_respawn,
+                vec![
+                    "split-window".to_owned(),
+                    "-h".to_owned(),
+                    "-l".to_owned(),
+                    "75".to_owned(),
+                    "-t".to_owned(),
+                    "%0".to_owned(),
+                    "-c".to_owned(),
+                    "/tmp/rimz-tmux-refresh".to_owned(),
+                ],
+            ],
+        );
+    }
+
+    #[test]
+    fn birth_split_clamps_work_shell_width_to_one_column() {
+        let commands = birth_split_commands(
+            "%0",
+            NonZeroU16::new(24).expect("nonzero"),
+            20,
+            Path::new("/tmp/rimz-tmux-refresh"),
+            &["rimz".to_owned()],
+        );
+
+        assert_eq!(commands[1][3], "1");
     }
 
     #[test]

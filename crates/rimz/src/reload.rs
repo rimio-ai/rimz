@@ -284,6 +284,7 @@ fn reconcile_live(
         birth_size: width.birth_size(None),
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
+        pristine_birth: false,
         config: mux_config.clone(),
         resume_tabs: Vec::new(),
         refresh_ms: None,

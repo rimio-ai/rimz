@@ -108,6 +108,7 @@ impl SidebarHarness {
             birth_size: width.birth_size(None),
             rimz_bin: PathBuf::from("rimz"),
             replace_existing: false,
+            pristine_birth: false,
             config: rimz::config::MultiplexerConfig::default(),
             resume_tabs: Vec::new(),
             refresh_ms: None,

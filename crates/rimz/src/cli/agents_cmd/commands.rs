@@ -593,7 +593,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         detected_size: if was_live { None } else { detected_size },
         refresh_ms: None,
     };
-    crate::cli::room::launch_sidebar_for_workspace(backend.as_ref(), &room, None, &[]);
+    crate::cli::room::launch_sidebar_for_workspace(backend.as_ref(), &room, None, false, &[]);
     crate::cli::room::gate_room_before_attach(backend.as_ref(), &room, None, &[])?;
     crate::cli::room::ensure_presence_plugin(
         backend.as_ref(),

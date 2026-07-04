@@ -46,6 +46,7 @@ fn sidebar_opts(session: &str, stub: PathBuf, detected_cols: Option<u16>) -> Sid
         birth_size: SidebarWidth::default().birth_size(detected_cols),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
@@ -734,6 +735,78 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
 }
 
 #[test]
+fn open_sidebar_pristine_birth_keeps_work_shell_focused_at_final_width() {
+    require_tmux!();
+
+    let session = "rimz-pristine-birth";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((100, 30)));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let mut opts = sidebar_opts(session, stub, Some(100));
+    opts.pristine_birth = true;
+    let sidebar_cols = u64::from(opts.birth_size.cols.get());
+    let shell_cols = 100 - sidebar_cols - 1;
+
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    server.wait_for_pane_command(session, "rimz-sidebar");
+
+    let panes = list_session_panes(&server, session);
+    assert_eq!(
+        panes.len(),
+        2,
+        "birth leaves sidebar and work shell: {panes:?}"
+    );
+    let sidebar = panes
+        .iter()
+        .find(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+        .expect("sidebar pane");
+    let work = panes
+        .iter()
+        .find(|pane| pane.pane_id != sidebar.pane_id)
+        .expect("work pane");
+    assert!(
+        work.is_focused,
+        "split-window without -d should focus the work pane: {panes:?}",
+    );
+    assert!(
+        !sidebar.is_focused,
+        "respawned sidebar should not keep focus: {panes:?}",
+    );
+
+    let geoms = server.wait_for_panes(session, 2);
+    let sidebar_geom = geoms
+        .iter()
+        .find(|pane| pane.id == sidebar.pane_id.raw())
+        .expect("sidebar geometry");
+    let work_geom = geoms
+        .iter()
+        .find(|pane| pane.id == work.pane_id.raw())
+        .expect("work geometry");
+    assert_eq!(sidebar_geom.left, 0, "sidebar is leftmost: {geoms:?}");
+    assert_eq!(
+        sidebar_geom.width, sidebar_cols,
+        "sidebar keeps the birth verdict width: {geoms:?}",
+    );
+    assert_eq!(
+        work_geom.left,
+        sidebar_cols + 1,
+        "work shell starts right of the sidebar border: {geoms:?}",
+    );
+    assert_eq!(
+        work_geom.width, shell_cols,
+        "work shell is born at final width: {geoms:?}",
+    );
+    assert_eq!(
+        server.display(session, "#{pane_id}"),
+        work.pane_id.raw(),
+        "session focus lands on the work shell",
+    );
+}
+
+#[test]
 fn reconcile_preserves_live_hook_birth_width() {
     require_tmux!();
 
@@ -789,6 +862,7 @@ fn reconcile_sidebars_reinstalls_after_new_window_hook() {
         birth_size: width.birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
@@ -846,6 +920,7 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
         birth_size: width.birth_size(Some(80)),
         rimz_bin: stub.clone(),
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
@@ -858,6 +933,7 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
         birth_size: width.birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
@@ -1130,6 +1206,7 @@ fn launch_sidebar_skipped_by_foreign_heartbeat_still_ensures_tmux_session_view()
         birth_size: width.birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
@@ -1474,6 +1551,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         birth_size: SidebarWidth::default().birth_size(Some(80)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         // A harmless stand-in for the agent CLIs (`claude`/`codex` aren't on a CI
         // PATH); the seeding contract is the window, not what runs in it.
@@ -1607,6 +1685,7 @@ fn closing_agent_tab_records_end_trace_when_session_survives() {
                 birth_size: SidebarWidth::default().birth_size(Some(160)),
                 rimz_bin: stub,
                 replace_existing: false,
+                pristine_birth: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_tabs: Vec::new(),
                 refresh_ms: None,
@@ -1702,6 +1781,7 @@ fn closing_agent_tab_disposes_clean_worktree_when_session_survives() {
                 birth_size: SidebarWidth::default().birth_size(Some(160)),
                 rimz_bin: stub,
                 replace_existing: false,
+                pristine_birth: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_tabs: Vec::new(),
                 refresh_ms: None,
@@ -1768,6 +1848,7 @@ fn failing_close_pane_agent_stays_visible_until_enter() {
                 birth_size: SidebarWidth::default().birth_size(Some(160)),
                 rimz_bin: stub,
                 replace_existing: false,
+                pristine_birth: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_tabs: Vec::new(),
                 refresh_ms: None,
@@ -1835,6 +1916,7 @@ fn open_tab_builds_multi_column_layout() {
         birth_size: width.birth_size(Some(300)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
@@ -1998,6 +2080,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
         birth_size: width.birth_size(Some(240)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
@@ -2080,6 +2163,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
         birth_size: width.birth_size(Some(300)),
         rimz_bin: stub,
         replace_existing: false,
+        pristine_birth: false,
         config: rimz::config::MultiplexerConfig::default(),
         resume_tabs: Vec::new(),
         refresh_ms: None,
@@ -2478,6 +2562,7 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
                 birth_size: SidebarWidth::default().birth_size(Some(80)),
                 rimz_bin,
                 replace_existing: false,
+                pristine_birth: false,
                 config: rimz::config::MultiplexerConfig::default(),
                 resume_tabs: Vec::new(),
                 refresh_ms: None,

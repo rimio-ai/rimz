@@ -305,6 +305,11 @@ pub struct SidebarPaneOptions {
     pub birth_size: BirthSize,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
+    /// True only for a fresh room birth whose session was absent before
+    /// `ensure_session`, letting tmux repurpose the pristine first pane into the
+    /// sidebar and split the work shell at its final width. Reattach and
+    /// sidebar recovery keep this false so a live shell is never respawned.
+    pub pristine_birth: bool,
     pub config: crate::config::MultiplexerConfig,
     /// Prior worktree channels the reborn session re-seeds, one tab each, so a
     /// rebirth comes back where the user left off instead of empty. Empty on
