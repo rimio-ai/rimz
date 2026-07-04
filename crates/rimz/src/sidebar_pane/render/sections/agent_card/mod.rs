@@ -142,7 +142,7 @@ pub(super) fn row_lines(
             if !awaiting {
                 inner.push(description_line(theme, row, cw, attention));
             } else if selected && compose_affordance {
-                inner.push(awaiting_prompt_line(theme, animation_phase, cw));
+                inner.push(awaiting_prompt_line(animation_phase, cw));
             }
             // A just-started idle agent sits on the 0% baseline gauge with no
             // history behind it, so it rests at identity plus any real

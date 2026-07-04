@@ -1,8 +1,8 @@
 use super::*;
 
 /// The compose-affordance frames for a selected, awaiting-first-prompt card:
-/// a bracketed ellipsis that grows `[.  ]` -> `[.. ]` -> `[...]`.
-const AWAITING_DOTS: [&str; 3] = ["[.  ]", "[.. ]", "[...]"];
+/// a fixed-width ellipsis that grows `.  ` -> `.. ` -> `...`.
+const AWAITING_DOTS: [&str; 3] = [".  ", ".. ", "..."];
 
 /// Hold each dot frame across four base animation phases so the placeholder
 /// reads as calm motion on the breath grid.
@@ -14,17 +14,13 @@ pub(super) fn awaiting_dots_frame(animation_phase: u64) -> &'static str {
 
 /// The compose-affordance line shown where the description will land once a
 /// prompt arrives.
-pub(super) fn awaiting_prompt_line(
-    theme: &Theme,
-    animation_phase: u64,
-    width: usize,
-) -> Line<'static> {
+pub(super) fn awaiting_prompt_line(animation_phase: u64, width: usize) -> Line<'static> {
     Line::from(trim_spans_to_width(
         vec![
             Span::raw("  "),
             Span::styled(
                 awaiting_dots_frame(animation_phase).to_owned(),
-                theme.faint(),
+                Style::default(),
             ),
         ],
         width,
@@ -184,9 +180,17 @@ mod tests {
 
     #[test]
     fn awaiting_dots_frame_steps_and_wraps() {
-        assert_eq!(awaiting_dots_frame(0), "[.  ]");
-        assert_eq!(awaiting_dots_frame(AWAITING_DOT_STEP), "[.. ]");
-        assert_eq!(awaiting_dots_frame(2 * AWAITING_DOT_STEP), "[...]");
-        assert_eq!(awaiting_dots_frame(3 * AWAITING_DOT_STEP), "[.  ]");
+        assert_eq!(awaiting_dots_frame(0), ".  ");
+        assert_eq!(awaiting_dots_frame(AWAITING_DOT_STEP), ".. ");
+        assert_eq!(awaiting_dots_frame(2 * AWAITING_DOT_STEP), "...");
+        assert_eq!(awaiting_dots_frame(3 * AWAITING_DOT_STEP), ".  ");
+    }
+
+    #[test]
+    fn awaiting_prompt_line_uses_default_style_for_placeholder() {
+        let line = awaiting_prompt_line(0, 8);
+
+        assert_eq!(line.spans[1].content.as_ref(), ".  ");
+        assert_eq!(line.spans[1].style, Style::default());
     }
 }

@@ -153,7 +153,7 @@ fn selected_blank_idle_agent_opens_compose_affordance() {
     let selected = line_texts(&group_lines(&snapshot, &theme, 0));
 
     assert!(
-        selected.iter().any(|line| line.contains("[.  ]")),
+        selected.iter().any(|line| line.contains(".  ")),
         "phase-0 compose placeholder renders on the selected blank idle card:\n{}",
         selected.join("\n")
     );
@@ -186,9 +186,7 @@ fn unselected_blank_idle_agent_stays_single_line() {
 
     assert_eq!(card_lines.len(), 1, "{card_lines:?}");
     assert!(
-        card_lines
-            .iter()
-            .all(|line| !line.contains('[') && !line.contains('▢')),
+        card_lines.iter().all(|line| !line.contains('▢')),
         "unselected blank idle card keeps the thin shape:\n{}",
         card_lines.join("\n")
     );
@@ -212,7 +210,7 @@ fn selected_idle_agent_with_history_keeps_existing_shape() {
     let selected = line_texts(&group_lines(&snapshot, &theme, 0));
 
     assert!(
-        selected.iter().all(|line| !line.contains("[.  ]")),
+        selected.iter().all(|line| !line.contains(".  ")),
         "idle cards with history do not get the first-prompt affordance:\n{}",
         selected.join("\n")
     );
