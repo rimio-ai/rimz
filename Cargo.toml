@@ -144,10 +144,12 @@ notify = { version = "8", default-features = false, features = ["macos_kqueue"] 
 foldhash = "0.2"
 sha2 = "0.11"
 hex = "0.4"
-# Pet sprite sheets are WebP-only. `image-webp` is decode-only-capable, pure
-# Rust, and avoids both libwebp C bindings and the full `image` crate tree for
-# the sidebar's one-format asset cache.
+# Pet sprite sheets are WebP or PNG. `image-webp` is decode-only-capable, pure
+# Rust, and avoids libwebp C bindings for the built-in Codex CDN asset cache.
 image-webp = "0.2"
+# Petdex pets may ship PNG sheets (for example `goose-default`). `png` is
+# pure Rust and keeps Rimz off the full `image` crate tree.
+png = "0.18"
 # Event-log frame checksum: hardware CRC32 for the per-frame validate and the
 # repair scan. Already in the tree through flate2 and already carries a
 # supply-chain exemption, so the direct dep adds zero footprint.

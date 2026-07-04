@@ -168,8 +168,8 @@ Built-in catalog ids are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky
 Bring-your-own sources use the same key:
 
 - `pet = "https://example.com/my-pet.webp"` fetches an HTTPS WebP sheet and caches it.
-- `pet = "~/art/my-pet.webp"` reads a local WebP sheet.
-- `pet = "wall-e"` selects a petdex slug under `~/.codex/pets/wall-e/`.
+- `pet = "~/art/my-pet.png"` reads a local WebP or PNG sheet.
+- `pet = "wall-e"` selects a petdex slug under `~/.codex/pets/wall-e/`; petdex manifests may point at WebP or PNG sheets.
 - `pet = "~/.codex/pets/wall-e/"` reads a petdex directory by path.
 
 ### Crisp pixels vs cell art

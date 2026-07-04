@@ -1,4 +1,4 @@
-//! Downsamples a decoded WebP frame into sextant terminal cells,
+//! Downsamples a decoded pet frame into sextant terminal cells,
 //! choosing each cell's best two-color split in linear light.
 
 use ratatui::style::Color;
