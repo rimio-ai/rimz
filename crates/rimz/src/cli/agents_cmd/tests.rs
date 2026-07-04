@@ -1379,6 +1379,8 @@ mod runs {
 
         let globals = GlobalFlags {
             mux: None,
+            zellij: false,
+            tmux: false,
             root: None,
             color: crate::cli::ColorWhen::Auto,
         };

@@ -324,7 +324,7 @@ This section applies only to Rimz builds compiled with the non-default `sentry` 
 
 Rimz applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without editing your global Zellij or tmux config. The `[zellij]` and `[tmux]` tables tune those settings; `rimz config init --print` lists every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/sidebar/multiplexers.md).
 
-The `[mux]` table selects the default backend after the `--mux <name>` and active Zellij/tmux environment checks. Leave `default` unset to choose tmux when both backends are installed, or set it to `"zellij"` or `"tmux"` to require that backend. A configured backend that is not installed makes `rimz start` refuse with a fix message.
+The `[mux]` table selects the default backend after the `--mux <name>` selection, its `--zellij`/`--tmux` shorthands, and active Zellij/tmux environment checks. Leave `default` unset to choose tmux when both backends are installed, or set it to `"zellij"` or `"tmux"` to require that backend. A configured backend that is not installed makes `rimz start` refuse with a fix message.
 
 The two backends differ in how a key takes effect:
 

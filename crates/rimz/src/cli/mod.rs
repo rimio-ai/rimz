@@ -53,7 +53,8 @@ use rimz::{Ledger, RuntimePaths, StatePaths};
 pub fn dispatch() -> Result<()> {
     reject_removed_top_level_tokens()?;
     let cli = Cli::parse();
-    let globals = cli.global;
+    let mut globals = cli.global;
+    globals.normalize()?;
     globals.color.write_global();
     rimz::observability::set_command_scope(scope_facts(cli.subcommand.as_ref()));
     match cli.subcommand {
@@ -382,6 +383,12 @@ pub struct GlobalFlags {
     /// Override multiplexer backend selection.
     #[arg(long, value_parser = parse_mux, global = true)]
     pub mux: Option<MuxName>,
+    /// Select the Zellij backend (shorthand for `--mux zellij`).
+    #[arg(long, global = true)]
+    pub zellij: bool,
+    /// Select the tmux backend (shorthand for `--mux tmux`).
+    #[arg(long, global = true)]
+    pub tmux: bool,
     /// Override project-root resolution (monorepo escape hatch).
     #[arg(long, global = true)]
     pub root: Option<PathBuf>,
@@ -389,6 +396,24 @@ pub struct GlobalFlags {
     /// `auto` follows the terminal and the `NO_COLOR`/`CLICOLOR` environment.
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto, global = true)]
     pub color: ColorWhen,
+}
+
+impl GlobalFlags {
+    /// Fold the `--zellij`/`--tmux` shorthands into `mux`. They are aliases for
+    /// `--mux zellij`/`--mux tmux`; giving more than one backend selector fails
+    /// fast at the CLI boundary.
+    fn normalize(&mut self) -> Result<()> {
+        let selectors = self.mux.is_some() as u8 + self.zellij as u8 + self.tmux as u8;
+        if selectors > 1 {
+            anyhow::bail!("choose one of --mux, --zellij, --tmux");
+        }
+        if self.zellij {
+            self.mux = Some(MuxName::Zellij);
+        } else if self.tmux {
+            self.mux = Some(MuxName::Tmux);
+        }
+        Ok(())
+    }
 }
 
 /// `--color` choice, mapped onto the global `colorchoice` that `render::out`
@@ -640,6 +665,42 @@ mod tests {
     }
 
     #[test]
+    fn mux_aliases_normalize_to_mux() {
+        let mut cli = Cli::try_parse_from(["rimz", "--zellij"]).unwrap();
+        cli.global.normalize().unwrap();
+        assert_eq!(cli.global.mux, Some(MuxName::Zellij));
+
+        let mut cli = Cli::try_parse_from(["rimz", "--tmux"]).unwrap();
+        cli.global.normalize().unwrap();
+        assert_eq!(cli.global.mux, Some(MuxName::Tmux));
+    }
+
+    #[test]
+    fn mux_aliases_are_global_flags() {
+        let mut cli = Cli::try_parse_from(["rimz", "list", "--tmux"]).unwrap();
+        cli.global.normalize().unwrap();
+        assert_eq!(cli.global.mux, Some(MuxName::Tmux));
+    }
+
+    #[test]
+    fn mux_aliases_conflict_with_each_other_and_mux() {
+        let mut cli = Cli::try_parse_from(["rimz", "--zellij", "--tmux"]).unwrap();
+        let err = cli.global.normalize().unwrap_err();
+        assert_eq!(err.to_string(), "choose one of --mux, --zellij, --tmux");
+
+        let mut cli = Cli::try_parse_from(["rimz", "--mux", "zellij", "--zellij"]).unwrap();
+        let err = cli.global.normalize().unwrap_err();
+        assert_eq!(err.to_string(), "choose one of --mux, --zellij, --tmux");
+    }
+
+    #[test]
+    fn mux_option_still_normalizes_unchanged() {
+        let mut cli = Cli::try_parse_from(["rimz", "--mux", "tmux"]).unwrap();
+        cli.global.normalize().unwrap();
+        assert_eq!(cli.global.mux, Some(MuxName::Tmux));
+    }
+
+    #[test]
     fn removed_top_level_command_rejects_before_global_help() {
         assert!(
             reject_removed_top_level_tokens_from([
@@ -661,6 +722,13 @@ mod tests {
             reject_removed_top_level_tokens_from([
                 OsString::from("--refresh-ms"),
                 OsString::from("100"),
+                OsString::from("autoping"),
+            ])
+            .is_err()
+        );
+        assert!(
+            reject_removed_top_level_tokens_from([
+                OsString::from("--tmux"),
                 OsString::from("autoping"),
             ])
             .is_err()

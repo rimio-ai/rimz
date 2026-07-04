@@ -64,7 +64,7 @@ A raw target is `[user@]host:<session-or-path>`. After the colon, a value contai
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`, so a remote room comes up empty instead of recovering; `remote add --no-resume` saves that birth behavior.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.
 - `--web` runs remote `rimz web open --print --json`, creates and relays a one-time Zellij web login token, starts a supervised SSH local-forward tunnel to the remote Zellij web server, prints `web: http://127.0.0.1:<port>/<session>`, opens the local browser best-effort, and stays in the foreground until Ctrl-C. `--web-port <port>` pins the local browser origin; otherwise Rimz derives a stable port from the session name in `8300..8399`.
-- For `remote add` and `remote update`, `--mux` given anywhere on the invocation is saved on the alias; `rimz remote connect --mux <name>` keeps `--mux` as a per-invocation override.
+- For `remote add` and `remote update`, `--mux`, `--zellij`, or `--tmux` given anywhere on the invocation is saved on the alias; `rimz remote connect --mux <name>` keeps `--mux` as a per-invocation override.
 - `rimz remote bandwidth [--secs N] [--json]` runs on the host serving the room and samples `/proc` to attribute per-pane process write-rate on both backends; tmux reports pane pids natively, and Zellij pane pids resolve through `/proc`. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
 
 Link-health, web tunneling, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/reach/remote.md).

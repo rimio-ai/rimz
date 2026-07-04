@@ -120,6 +120,8 @@ fn hooks_test_workspace(worktree_branch: Option<&str>) -> rimz::ResolvedWorkspac
 fn hooks_test_globals() -> crate::cli::GlobalFlags {
     crate::cli::GlobalFlags {
         mux: None,
+        zellij: false,
+        tmux: false,
         root: None,
         color: crate::cli::ColorWhen::Never,
     }

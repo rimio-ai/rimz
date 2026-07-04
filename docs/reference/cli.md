@@ -60,7 +60,7 @@ These hold across the whole CLI, so each command page assumes them rather than r
 
 **Addressing agents.** `message`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which named lane, worktree, or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
 
-**Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation. With one installed, Rimz uses it.
+**Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation; `--zellij` and `--tmux` are shorthands for those forms. With one installed, Rimz uses it.
 
 **Override the room with `--root`.** `--root <path>` overrides workspace resolution — the escape hatch for monorepos and deliberate directory rooms.
 

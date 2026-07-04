@@ -389,6 +389,8 @@ mod tests {
     fn connect_resolution_applies_alias_cli_overrides() {
         let globals = GlobalFlags {
             mux: Some(MuxName::Tmux),
+            zellij: false,
+            tmux: false,
             root: None,
             color: super::super::ColorWhen::Auto,
         };
