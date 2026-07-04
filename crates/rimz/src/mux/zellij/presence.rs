@@ -161,10 +161,10 @@ impl ZellijBackend {
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
-        seed_presence_permissions(opts);
         if !self.presence_plugin_supported(opts, PRESENCE_BOOT_PIPE) {
             return Ok(());
         }
+        seed_presence_permissions(opts);
         let url = format!("file:{}", opts.wasm.display());
         let configuration = presence_plugin_configuration(opts);
         if opts.converge {
