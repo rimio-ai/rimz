@@ -45,13 +45,13 @@ The lobby reads top to bottom in three zones, the way the sidebar does: the **wo
  ─────────────────────────────────────────────────────────────────────
   your pace · tokens / day                          ◇ 412M this month
         Mar        Apr        May        Jun
-        ░ ▒ █ ▓ ▒ █ ▓ █ ▓ ▒ ░ ▓ █ ▒ ·
   Mon   ▒ █ ▓ ▒ █ ▓ ░ ▒ ▓ █ █ ▓ █ ▒ ░
         █ ▓ ▒ ░ ▓ █ ▓ ▒ ▒ ░ ▒ █ ▓ █ ▒
   Wed   ▓ ▒ ░ · ▒ ▓ █ ▓ ░ ▒ ▓ █ ▒ ▓ █
         ▒ ░ · ░ █ ▓ ▒ ░ ▓ █ ▓ ▒ █ ▓ ▒
   Fri   ░ · ░ ▒ ▓ ▒ ░ · █ ▓ █ ▓ ▓ █ ▒ ·
         · ░ ▒ ▓ ▒ ░ · ░ ▓ ▒ ░ ▒ ░ ▒ ▓ █
+        ░ ▒ █ ▓ ▒ █ ▓ █ ▓ ▒ ░ ▓ █ ▒ ·
         less · ░ ▒ ▓ █ more              W 1.4B · M 5.2B · $8,666
  ─────────────────────────────────────────────────────────────────────
  ↵ enter   ␣ needs you   n new   x kill   / find   ? help       q quit
@@ -113,14 +113,15 @@ This is the same surface the dead-end reaches, so the moment that used to print 
                 The control room for your coding agents
 
   Token activity
+
         Mar        Apr        May        Jun
-        ░ ▒ █ █ ▓ ▒ █ █ ▓ █ █ ▓ ▒ ░ ▓ █ █ ▒ ·
   Mon   ▒ █ █ ▓ ▒ █ █ ▓ ░ ▒ ▓ █ █ █ █ ▓ █ █ ▓ ▒ ░
         █ █ ▓ ▒ ░ ▓ █ █ ▓ ▒ ▒ ░ ▒ █ █ ▓ █ █ █ █ ▒
   Wed   ▓ ▒ ░ · ▒ ▓ █ █ ▓ ░ ▒ ▓ █ █ ▒ ▓ █ █ ▓
         ▒ ░ · ░ █ █ ▓ ▒ ░ ▓ █ █ ▓ ▒ █ █ ▓ ▒ ░
   Fri   ░ · ░ ▒ ▓ ▒ ░ · █ █ ▓ █ █ ▓ ▓ █ █ ▒ ·
         · ░ ▒ ▓ ▒ ░ · ░ ▓ ▒ ░ ▒ ░ ▒ ▓ █ █
+        ░ ▒ █ █ ▓ ▒ █ █ ▓ █ █ ▓ ▒ ░ ▓ █ █ ▒ ·
   Less · ░ ▒ ▓ █ More
 
   [ All time 78B ]  ·  Week 1.4B  ·  Month 5.2B  ·  Year 78B
