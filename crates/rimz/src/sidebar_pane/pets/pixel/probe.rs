@@ -139,7 +139,7 @@ fn run_tmux<const N: usize>(args: [&str; N]) -> io::Result<String> {
 }
 
 fn termnames_allowed(termnames: &[String]) -> bool {
-    !termnames.is_empty() && termnames.iter().all(|termname| termname_allowed(termname))
+    termnames.iter().all(|termname| termname_allowed(termname))
 }
 
 fn rendering_termnames(list_clients_output: &str) -> Vec<String> {
