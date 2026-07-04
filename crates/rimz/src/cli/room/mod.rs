@@ -743,8 +743,8 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     }
     // Authoritative gate before the resurrecting `attach --create`: live rooms
     // attach as-is, absent/exited rooms are (re)birthed, and a room that cannot
-    // self-heal offers a reset (interactive) or fails fast with the fix
-    // (non-interactive). Accepted recovery seeds the reborn room with resume tabs.
+    // self-heal resets on an attached terminal or fails fast with the fix
+    // without one. Accepted recovery seeds the reborn room with resume tabs.
     gate_room_before_attach(birth.backend, room, birth.daemon, &resume_plan.tabs)?;
     report_resume(&resume_plan);
     ensure_presence_plugin(

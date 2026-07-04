@@ -514,7 +514,7 @@ impl MuxBackend for ZellijBackend {
         // Absent → first birth; Exited → delete and rebirth from the layout so
         // the room comes up clean and RUNNING (with serialization off, a rebirth
         // can never resurrect). A rebirth that still fails to talk to Zellij
-        // reads as Stuck so the caller offers a reset.
+        // reads as Stuck so the caller runs or reports the reset path.
         let rebirth = || -> Result<()> {
             if !matches!(state, SessionState::Absent) {
                 self.delete_session(&opts.session_name)?;

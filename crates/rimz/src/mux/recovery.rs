@@ -1,5 +1,5 @@
 //! Destroy every trace of a possibly-corrupt room so the next birth is clean.
-//! Shared by `rimz reset` and the auto-offer in `rimz start`, so the teardown
+//! Shared by `rimz reset` and attached `rimz start` auto-reset, so teardown
 //! lives in exactly one place and is testable without a real multiplexer.
 //!
 //! The dangerous step is the process sweep: it signals processes by heuristic, so

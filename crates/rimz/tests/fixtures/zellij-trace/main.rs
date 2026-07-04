@@ -113,6 +113,13 @@ fn main() {
         write_stderr("failed to bind socket: File name too long");
         std::process::exit(5);
     }
+    if mode == "birth-fails"
+        && cli.first().is_some_and(|arg| arg == "attach")
+        && cli.get(1).is_some_and(|arg| arg == "--create-background")
+    {
+        write_stderr("simulated zellij birth failure");
+        std::process::exit(5);
+    }
 }
 
 fn web_status_output(log_path: &Path) -> String {

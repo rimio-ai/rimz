@@ -1,12 +1,15 @@
-//! Regression coverage for Zellij IPC socket path overflow handling.
+//! Regression coverage for Zellij pre-attach failure handling.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 #[test]
 fn socket_preflight_fails_before_calling_zellij() {
@@ -64,8 +67,8 @@ fn socket_stderr_classification_does_not_offer_reset_or_dump_argv() {
         "stderr should report zellij's socket failure without contradictory local headroom, got: {stderr}"
     );
     assert!(
-        !stderr.contains("Reset now?"),
-        "reset should not be offered: {stderr}"
+        !stderr.contains("resetting the"),
+        "reset should not run for socket overflow: {stderr}"
     );
     assert!(
         !stderr.contains("--default-mode"),
@@ -77,6 +80,37 @@ fn socket_stderr_classification_does_not_offer_reset_or_dump_argv() {
             .iter()
             .any(|line| line.contains("attach\t--create-background")),
         "reactive path should reach zellij birth, got: {lines:?}"
+    );
+}
+
+#[test]
+fn terminal_stuck_room_resets_without_second_prompt() {
+    let env = Env::new();
+    let setup = env
+        .rimz()
+        .args(["setup", "--yes"])
+        .bounded_output()
+        .expect("run setup");
+    assert!(
+        setup.status.success(),
+        "setup should seed config: {}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let shim = FakeZellij::new(FakeZellijMode::BirthFails);
+
+    let output = rimz_start_pty_output(&env, &shim, &workspace.session_name);
+
+    assert!(
+        output.contains(&format!(
+            "rimz: resetting the '{}' room to clear a wedged mux session...",
+            workspace.session_name
+        )),
+        "terminal start should auto-reset a stuck room: {output}"
+    );
+    assert!(
+        !output.contains("Reset now?"),
+        "terminal start should not show a second reset prompt: {output}"
     );
 }
 
@@ -120,6 +154,7 @@ fn doctor_reports_zellij_socket_headroom_and_fix() {
 enum FakeZellijMode {
     Normal,
     SocketOverflowOnBirth,
+    BirthFails,
 }
 
 impl FakeZellijMode {
@@ -127,6 +162,7 @@ impl FakeZellijMode {
         match self {
             Self::Normal => "",
             Self::SocketOverflowOnBirth => "socket-overflow-on-birth",
+            Self::BirthFails => "birth-fails",
         }
     }
 }
@@ -155,6 +191,74 @@ impl FakeZellij {
 
 fn zellij_trace_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
+}
+
+fn rimz_start_pty_output(env: &Env, shim: &FakeZellij, session_name: &str) -> String {
+    let pty = native_pty_system();
+    let pair = pty
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    cmd.scrub_session_env();
+    cmd.args([
+        "--mux",
+        "zellij",
+        "start",
+        env.project_root.to_str().expect("utf-8 project root"),
+        "--no-attach",
+    ]);
+    cmd.env("XDG_STATE_HOME", env.state_root());
+    cmd.env("XDG_RUNTIME_DIR", &env.runtime_root);
+    cmd.env("XDG_CONFIG_HOME", env.config_root());
+    cmd.env("HOME", &env.home_root);
+    cmd.env("SHELL", "/bin/sh");
+    cmd.env("PATH", shim.log.parent().expect("fake zellij home"));
+    cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
+    cmd.env("RIMZ_ZELLIJ_BIN", &shim.bin);
+    cmd.env("RIMZ_TEST_ZELLIJ_LOG", &shim.log);
+    cmd.env("RIMZ_TEST_ZELLIJ_MODE", shim.mode.env_value());
+    cmd.env(
+        "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+        format!("{session_name} [Created 1m ago] (EXITED - attach to resurrect)\n"),
+    );
+    cmd.env_remove("ENV");
+    cmd.env_remove("BASH_ENV");
+    cmd.env_remove("ZDOTDIR");
+    cmd.env_remove("RUST_LOG");
+
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn rimz");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut exited = false;
+    while Instant::now() < deadline {
+        if child.try_wait().expect("poll rimz").is_some() {
+            exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !exited {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    assert!(exited, "rimz start did not exit; output:\n{output}");
+    output
 }
 
 fn read_trace_lines(log_path: &Path, timeout: Duration) -> Vec<String> {

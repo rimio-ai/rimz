@@ -41,7 +41,7 @@ A few specifics:
 - `--no-resume` skips recovering prior agents when a room is reborn; live agents are unaffected. The default recovers (yes on a prompt, automatically when non-interactive).
 - `--refresh-ms <ms>` overrides the sidebar render cadence for sidebars born by this launch; the persistent cadence lives in machine config.
 
-When the previous incarnation died, `start` prints a notice such as `rimz: previous session died (crash): 16 agents lost at 2026-07-02 17:37; offering recovery` before the recovery prompt.
+When the previous incarnation ended with agents still running, `start` prints a notice such as `rimz: this room's previous session ended with 16 agents still running (2026-07-02 17:37); offering to bring them back` before the recovery prompt.
 
 ## Remote rooms
 

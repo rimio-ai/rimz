@@ -30,7 +30,7 @@ fn uninspectable_live_zellij_room_attaches_as_is() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("No terminal is available to confirm"),
-        "live room should not reach reset confirmation, got: {stderr}"
+        "live room should not reach reset, got: {stderr}"
     );
 
     let lines = read_trace_lines(&shim.log, Duration::from_millis(200));

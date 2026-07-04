@@ -81,19 +81,34 @@ pub(super) fn inspect_previous_incarnation(
 }
 
 pub(super) fn report_previous_session_death(death: &LastDeathMarker, offering_recovery: bool) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "{}",
+        death_notice(death, offering_recovery)
+    );
+}
+
+fn death_notice(death: &LastDeathMarker, offering_recovery: bool) -> String {
     let agents = death.lost_agents.len();
     let action = if offering_recovery {
-        "offering recovery"
+        "offering to bring them back"
     } else {
         "recovery disabled"
     };
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "rimz: previous session died ({}): {agents} agent{} lost at {}; {action}",
-        death.cause,
-        if agents == 1 { "" } else { "s" },
-        death.at.strftime("%Y-%m-%d %H:%M"),
-    );
+    let plural = if agents == 1 { "" } else { "s" };
+    let at = death.at.strftime("%Y-%m-%d %H:%M");
+    match death.cause {
+        SessionDeathCause::Reboot => {
+            format!(
+                "rimz: machine rebooted since this room was last open; {agents} agent{plural} can be restored ({at}); {action}",
+            )
+        }
+        SessionDeathCause::Crash => {
+            format!(
+                "rimz: this room's previous session ended with {agents} agent{plural} still running ({at}); {action}",
+            )
+        }
+    }
 }
 
 fn read_audit_state(workspace_id: &WorkspaceId) -> Option<AuditState> {
@@ -292,6 +307,34 @@ mod tests {
     }
 
     #[test]
+    fn death_notice_uses_neutral_crash_wording() {
+        let notice = death_notice(&death_marker(SessionDeathCause::Crash, 2), true);
+
+        assert!(notice.contains("still running"), "{notice}");
+        assert!(notice.contains("offering to bring them back"), "{notice}");
+        assert!(!notice.contains("crash"), "{notice}");
+        assert!(!notice.contains("died"), "{notice}");
+    }
+
+    #[test]
+    fn death_notice_uses_reboot_wording() {
+        let notice = death_notice(&death_marker(SessionDeathCause::Reboot, 1), true);
+
+        assert!(notice.contains("rebooted"), "{notice}");
+        assert!(notice.contains("1 agent can be restored"), "{notice}");
+        assert!(!notice.contains("crash"), "{notice}");
+        assert!(!notice.contains("died"), "{notice}");
+    }
+
+    #[test]
+    fn death_notice_reports_recovery_disabled() {
+        let notice = death_notice(&death_marker(SessionDeathCause::Crash, 2), false);
+
+        assert!(notice.contains("recovery disabled"), "{notice}");
+        assert!(!notice.contains("offering to bring them back"), "{notice}");
+    }
+
+    #[test]
     fn crash_archive_retention_keeps_newest_five() {
         let dir = tempfile::tempdir().expect("tempdir");
         let crashes = dir.path().join("crashes");
@@ -323,5 +366,19 @@ mod tests {
                 "20260106T000000Z",
             ]
         );
+    }
+
+    fn death_marker(cause: SessionDeathCause, agents: usize) -> LastDeathMarker {
+        LastDeathMarker {
+            cause,
+            lost_agents: (0..agents)
+                .map(|index| SessionDeathAgent {
+                    kind: AgentKind::new_unchecked("claude"),
+                    agent_id: format!("sess-{index}").into(),
+                    name: None,
+                })
+                .collect(),
+            at: Timestamp::UNIX_EPOCH,
+        }
     }
 }

@@ -605,10 +605,11 @@ pub trait MuxBackend: Send + Sync {
     /// ([`SessionHealth::Healthy`]); an absent or exited one is (re)birthed from
     /// the layout ([`SessionHealth::Reborn`]); a room that a rebirth still
     /// cannot make live returns [`SessionHealth::Stuck`] so the caller can
-    /// prompt for, or direct the user to, `rimz reset`. This is the
-    /// authoritative pre-attach gate that the best-effort sidebar launch cannot
-    /// bypass. A socket path overflow returns an error and reset is not
-    /// offered. tmux has no resurrection, so the default is a no-op `Healthy`.
+    /// reset it on an attached terminal or direct the user to `rimz reset`.
+    /// This is the authoritative pre-attach gate that the best-effort sidebar
+    /// launch cannot bypass. A socket path overflow returns an error and reset
+    /// is not offered. tmux has no resurrection, so the default is a no-op
+    /// `Healthy`.
     fn ensure_clean_session(
         &self,
         opts: &SidebarPaneOptions,

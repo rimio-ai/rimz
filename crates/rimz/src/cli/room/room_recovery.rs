@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use rimz::mux::{DaemonView, MuxBackend, SessionHealth};
 use rimz::{Ledger, RuntimePaths, StatePaths};
 
-use crate::cli::{AttachFlags, GlobalFlags, StartArgs, confirm};
+use crate::cli::{AttachFlags, GlobalFlags, StartArgs};
 
 use super::{RoomTarget, build_sidebar_opts, start};
 
@@ -52,9 +52,9 @@ pub(crate) fn gate_room_before_attach(
     Ok(())
 }
 
-/// Handle a room the pre-attach gate could not make clean. Interactively, offer
-/// the destructive reset and, on consent, run it and re-gate once. Without a
-/// terminal to confirm, fail fast with the fix — never destroy a room unattended.
+/// Handle a room the pre-attach gate could not make clean. Interactively, run
+/// the destructive reset and re-gate once. Without a terminal, fail fast with
+/// the fix — never destroy a room unattended.
 fn recover_stuck_room(
     backend: &dyn MuxBackend,
     target: &RoomTarget<'_>,
@@ -67,9 +67,11 @@ fn recover_stuck_room(
         }
         .into());
     }
-    if !confirm_reset(target.session_name)? {
-        anyhow::bail!("room left untouched; run `rimz reset` when ready");
-    }
+    writeln!(
+        std::io::stderr().lock(),
+        "rimz: resetting the '{}' room to clear a wedged mux session...",
+        target.session_name,
+    )?;
     let runtime = RuntimePaths::for_workspace(target.workspace_id.clone())?;
     let report = rimz::mux::recovery::teardown_room(
         backend,
@@ -85,16 +87,6 @@ fn recover_stuck_room(
         }
         SessionHealth::Healthy | SessionHealth::Reborn => Ok(()),
     }
-}
-
-/// Single y/N confirmation, modelled on the hook consent prompt: written to
-/// stderr (stdout stays clean for scripting), default No. The caller is expected
-/// to have already checked `stdin().is_terminal()`.
-fn confirm_reset(session: &str) -> Result<bool> {
-    confirm(&format!(
-        "Rimz must reset the '{session}' room to clear a stuck or uninspectable \
-         mux session. Reset now?"
-    ))
 }
 
 /// Rebuild and attach the room from scratch — the rebirth half of `rimz reset`,
