@@ -28,15 +28,14 @@ pub(super) fn metric(day: &DaySpend, dollars: bool) -> f64 {
     if dollars { day.usd } else { day.tokens as f64 }
 }
 
-/// Day of week with Sunday = 0, GitHub's column start. Epoch day 0 is a
-/// Thursday (= 4).
-pub(super) fn dow_sun0(day: i64) -> i64 {
-    ((day % 7) + 4).rem_euclid(7)
+/// Day of week with Monday = 0. Epoch day 0 (1970-01-01) is a Thursday (= 3).
+pub(super) fn dow_mon0(day: i64) -> i64 {
+    ((day % 7) + 3).rem_euclid(7)
 }
 
-/// The Sunday that opens the week containing `day`.
+/// The Monday that opens the week containing `day`.
 pub(super) fn week_start(day: i64) -> i64 {
-    day - dow_sun0(day)
+    day - dow_mon0(day)
 }
 
 pub(super) struct Grid {
@@ -55,14 +54,14 @@ impl Grid {
         weeks: usize,
         dollars: bool,
     ) -> Self {
-        let last_sunday = week_start(today_day);
+        let last_monday = week_start(today_day);
         let mut cells = Vec::with_capacity(weeks);
         let mut max = 0.0_f64;
         for col in 0..weeks {
-            let col_sunday = last_sunday - ((weeks - 1 - col) as i64) * 7;
+            let col_monday = last_monday - ((weeks - 1 - col) as i64) * 7;
             let mut week = [None; 7];
             for (row, slot) in week.iter_mut().enumerate() {
-                let day = col_sunday + row as i64;
+                let day = col_monday + row as i64;
                 if day > today_day {
                     continue;
                 }
@@ -80,7 +79,7 @@ impl Grid {
         }
     }
 
-    pub(super) fn col_sunday(&self, col: usize) -> i64 {
+    pub(super) fn col_monday(&self, col: usize) -> i64 {
         week_start(self.today_day) - ((self.weeks - 1 - col) as i64) * 7
     }
 }
@@ -233,14 +232,15 @@ pub(super) fn heatmap_lines(
         "  {}",
         render::paint(render::palette::META, header)
     ));
+    lines.push(String::new());
     lines.push(render::paint(render::palette::MUTED, &month_row(&grid)));
 
     let styles = ramp_styles();
     for row in 0..7 {
         let label = match row {
-            1 => "Mon",
-            3 => "Wed",
-            5 => "Fri",
+            0 => "Mon",
+            2 => "Wed",
+            4 => "Fri",
             _ => "",
         };
         let mut line = render::paint(render::palette::MUTED, &format!("  {label:<4}"));
@@ -762,7 +762,7 @@ pub(super) fn month_row(grid: &Grid) -> String {
     let mut buf = vec![' '; grid.weeks * 2];
     let months = (0..grid.weeks)
         .map(|col| {
-            let date = utc_date(grid.col_sunday(col).max(0) as u64 * DAY_SECS as u64);
+            let date = utc_date(grid.col_monday(col).max(0) as u64 * DAY_SECS as u64);
             date.get(5..7)
                 .and_then(|m| m.parse::<usize>().ok())
                 .filter(|m| (1..=12).contains(m))

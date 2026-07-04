@@ -73,12 +73,12 @@ fn claude_line_today(cost: f64, msg_id: &str, req_id: &str) -> String {
 }
 
 #[test]
-fn sunday_is_column_zero() {
-    // 1970-01-04 is a Sunday (epoch day 3).
-    assert_eq!(dow_sun0(3), 0);
-    assert_eq!(dow_sun0(4), 1); // Monday
-    assert_eq!(dow_sun0(0), 4); // 1970-01-01 is a Thursday
-    assert_eq!(week_start(10), 10 - dow_sun0(10));
+fn monday_is_row_zero() {
+    // 1970-01-05 is a Monday (epoch day 4).
+    assert_eq!(dow_mon0(4), 0);
+    assert_eq!(dow_mon0(5), 1); // Tuesday
+    assert_eq!(dow_mon0(0), 3); // 1970-01-01 is a Thursday
+    assert_eq!(week_start(10), 10 - dow_mon0(10));
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn grid_places_today_in_the_last_column_and_blanks_the_future() {
     assert_eq!(grid.cells.len(), 4);
     assert!((grid.max - 100.0).abs() < f64::EPSILON);
     // Today sits in the final column at its weekday row.
-    let row = dow_sun0(today) as usize;
+    let row = dow_mon0(today) as usize;
     assert_eq!(grid.cells[3][row], Some(100.0));
     // Days after today in the current week are blank, not zero.
     if row < 6 {
@@ -402,7 +402,7 @@ fn ramp_key_keeps_less_and_more_together() {
 
 #[test]
 fn heatmap_cells_render_spaced() {
-    let today = 20_008; // Saturday, so the current week has no future blanks.
+    let today = 20_009; // Sunday, so the current week has no future blanks.
     let first_day = week_start(today) - 7;
     let mut by_day = BTreeMap::new();
     for offset in 0..14 {
@@ -436,7 +436,7 @@ fn heatmap_cells_render_spaced() {
 
 #[test]
 fn month_row_skips_one_column_leading_partial_month() {
-    let grid = Grid::build(&BTreeMap::new(), 20_282, 3, false); // 2025-07-13.
+    let grid = Grid::build(&BTreeMap::new(), 20_283, 3, false); // 2025-07-14 (Monday).
 
     let row = month_row(&grid);
 
