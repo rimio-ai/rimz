@@ -187,12 +187,7 @@ pub fn plan_resume(
         }
         let worktree = agent.worktree_path.clone().unwrap_or_default();
         let cwd = PathBuf::from(&worktree);
-        let label = build_label(
-            &agent.kind,
-            agent.channel.as_deref(),
-            agent.worktree_branch.as_deref(),
-            &cwd,
-        );
+        let label = build_label(&agent.kind, agent.channel.as_deref(), &cwd);
         if !worktree_exists(&cwd) {
             plan.tombstone
                 .push((agent.kind.clone(), agent.agent_id.clone()));
@@ -307,7 +302,7 @@ pub fn plan_cohort_resume(
             None => {
                 let label = cwd
                     .as_deref()
-                    .map(|cwd| build_label(cell.kind.as_str(), channel.as_deref(), None, cwd))
+                    .map(|cwd| build_label(cell.kind.as_str(), channel.as_deref(), cwd))
                     .unwrap_or_else(|| cell.kind.as_str().to_owned());
                 fresh.push(label);
                 CohortSeed::Fresh
@@ -514,12 +509,7 @@ fn cohort_agent_label(agent: &AgentState) -> String {
 
 fn cohort_fresh_label_for_agent(agent: &AgentState) -> String {
     let cwd = agent_worktree(agent).unwrap_or_default();
-    build_label(
-        agent.kind.as_str(),
-        agent.channel.as_deref(),
-        agent.worktree_branch.as_deref(),
-        &cwd,
-    )
+    build_label(agent.kind.as_str(), agent.channel.as_deref(), &cwd)
 }
 
 fn resume_tab_identity(channel: Option<&str>, cwd: &Path) -> ResumeTabIdentity {
@@ -612,18 +602,13 @@ pub fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
 /// A short, view-safe label for a resumed agent: `kind:<channel>`, falling back
 /// to the worktree directory name, then `kind:agent`. Used in skip reports and
 /// legacy per-agent tab title fallbacks.
-pub fn build_label(
-    kind: &str,
-    channel: Option<&str>,
-    branch: Option<&str>,
-    worktree: &Path,
-) -> String {
-    format!("{kind}:{}", channel_short(channel, branch, worktree))
+pub fn build_label(kind: &str, channel: Option<&str>, worktree: &Path) -> String {
+    format!("{kind}:{}", channel_short(channel, worktree))
 }
 
 /// A short, view-safe channel name: explicit channel, then worktree directory,
 /// then `agent`.
-pub fn channel_short(channel: Option<&str>, _branch: Option<&str>, worktree: &Path) -> String {
+pub fn channel_short(channel: Option<&str>, worktree: &Path) -> String {
     channel
         .filter(|channel| !channel.is_empty())
         .map(ToOwned::to_owned)
@@ -640,7 +625,7 @@ pub fn channel_short(channel: Option<&str>, _branch: Option<&str>, worktree: &Pa
 /// `#<repo-name>` rather than the live `kind:repo` title because resume groups by
 /// cwd.
 pub fn channel_label(channel: Option<&str>, worktree: &Path) -> String {
-    format!("#{}", channel_short(channel, None, worktree))
+    format!("#{}", channel_short(channel, worktree))
 }
 
 #[cfg(test)]

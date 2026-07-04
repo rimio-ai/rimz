@@ -636,16 +636,11 @@ fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
     );
     assert_eq!(plan.tabs[0].label, "#query-engine");
     assert_eq!(
-        build_label("codex", None, None, Path::new("/code/query-engine")),
+        build_label("codex", None, Path::new("/code/query-engine")),
         "codex:query-engine"
     );
     assert_eq!(
-        build_label(
-            "codex",
-            None,
-            Some("scratch"),
-            Path::new("/code/query-engine")
-        ),
+        build_label("codex", None, Path::new("/code/query-engine")),
         "codex:query-engine"
     );
 }
@@ -664,12 +659,7 @@ fn named_channel_groups_by_explicit_channel_and_replays_identity() {
 
     assert_eq!(plan.tabs[0].label, "#design");
     assert_eq!(
-        build_label(
-            "codex",
-            Some("design"),
-            Some("main"),
-            Path::new("/code/query-engine")
-        ),
+        build_label("codex", Some("design"), Path::new("/code/query-engine")),
         "codex:design"
     );
     assert!(
