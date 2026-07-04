@@ -31,7 +31,6 @@ mod gauge;
 mod identity;
 
 use self::{description::*, gauge::*, identity::*};
-pub(in crate::sidebar_pane::render) use description::awaiting_first_prompt;
 
 use super::process::{composed_row, process_detail_line, process_row_line};
 use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};

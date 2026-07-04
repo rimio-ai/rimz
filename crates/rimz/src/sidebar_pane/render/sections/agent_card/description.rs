@@ -160,7 +160,7 @@ fn single_line_description(value: &str) -> Option<String> {
 }
 
 /// An idle agent with nothing to describe yet — waiting for its first prompt.
-pub(in crate::sidebar_pane::render) fn awaiting_first_prompt(row: &SidebarRow) -> bool {
+pub(super) fn awaiting_first_prompt(row: &SidebarRow) -> bool {
     row.is_agent()
         && matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && descriptor(row).is_none()
