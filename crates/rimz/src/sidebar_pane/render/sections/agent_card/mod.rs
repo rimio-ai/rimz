@@ -31,6 +31,7 @@ mod gauge;
 mod identity;
 
 use self::{description::*, gauge::*, identity::*};
+pub(in crate::sidebar_pane::render) use description::awaiting_first_prompt;
 
 use super::process::{composed_row, process_detail_line, process_row_line};
 use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
@@ -52,6 +53,10 @@ fn idle_unstarted(row: &SidebarRow) -> bool {
 
 fn agent(row: &SidebarRow) -> Option<&AgentCard> {
     row.as_agent()
+}
+
+pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
+    awaiting_first_prompt(row) && idle_unstarted(row)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -133,8 +138,12 @@ pub(super) fn row_lines(
                 }
             }
         } else {
-            if !awaiting_first_prompt(row) {
+            let awaiting = awaiting_first_prompt(row);
+            let compose_affordance = awaiting_first_prompt_affordance(row);
+            if !awaiting {
                 inner.push(description_line(theme, row, cw, attention));
+            } else if selected && compose_affordance {
+                inner.push(awaiting_prompt_line(theme, animation_phase, cw));
             }
             // A just-started idle agent sits on the 0% baseline gauge with no
             // history behind it, so it rests at identity plus any real
@@ -149,6 +158,8 @@ pub(super) fn row_lines(
                 if let Some(line) = context_tokens_line(theme, row, bands, now, cw) {
                     inner.push(line);
                 }
+            } else if selected && compose_affordance {
+                inner.push(empty_gauge_line(theme, bands, cw));
             }
             // The subagents this agent spawned this turn, appended after the
             // stats. Auto and compact show them on the selected card; expanded

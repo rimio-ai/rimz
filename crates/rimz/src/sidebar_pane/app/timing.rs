@@ -10,6 +10,7 @@ pub(super) fn is_animating(
         return true;
     };
     render::animation_cadence(snapshot, &theme.animations) != render::AnimationCadence::None
+        || render::selection_awaiting_first_prompt(snapshot, ui)
         || pet_frame_interval(
             snapshot,
             ui,
@@ -82,6 +83,13 @@ pub(super) fn frame_interval(
         return base;
     }
     let cadence = render::animation_cadence(snapshot, &theme.animations);
+    let cadence = if cadence == render::AnimationCadence::None
+        && render::selection_awaiting_first_prompt(snapshot, ui)
+    {
+        render::AnimationCadence::Breath
+    } else {
+        cadence
+    };
     if cadence == render::AnimationCadence::Fast {
         return base;
     }

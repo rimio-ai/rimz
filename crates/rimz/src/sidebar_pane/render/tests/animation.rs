@@ -144,6 +144,97 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
 }
 
 #[test]
+fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
+    let bare_idle = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        )],
+    );
+
+    assert!(selection_awaiting_first_prompt(
+        &bare_idle,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        }
+    ));
+    assert!(!selection_awaiting_first_prompt(
+        &bare_idle,
+        &UiState {
+            selected_index: 99,
+            ..Default::default()
+        }
+    ));
+
+    let described = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            Some("warm up"),
+        )],
+    );
+    assert!(!selection_awaiting_first_prompt(
+        &described,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        }
+    ));
+
+    let mut used = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        )],
+    );
+    used.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .expect("agent row")
+        .total_tokens = Some(1);
+    assert!(!selection_awaiting_first_prompt(
+        &used,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        }
+    ));
+
+    let running = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        )],
+    );
+    assert!(!selection_awaiting_first_prompt(
+        &running,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        }
+    ));
+}
+
+#[test]
 fn selected_pet_action_follows_the_focused_card() {
     let statuses = |statuses: &[(AgentStatus, crate::agents::TurnPhase)]| {
         snapshot_with(

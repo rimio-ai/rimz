@@ -272,6 +272,12 @@ fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a S
         .nth(ui.selected_index)
 }
 
+/// The selected row is a bare, not-yet-prompted idle card whose selected form
+/// animates the compose affordance.
+pub(crate) fn selection_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+    selected_row(snapshot, ui).is_some_and(sections::awaiting_first_prompt_affordance)
+}
+
 /// The provider kind the dashboard's tab focus derives from the selection: the
 /// selected row's agent kind (agent rows carry the kind in `SidebarRow::name`),
 /// or `None` for a process row or an empty room — the caller falls back to the

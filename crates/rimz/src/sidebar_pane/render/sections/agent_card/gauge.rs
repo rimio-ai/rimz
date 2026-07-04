@@ -114,6 +114,25 @@ pub(super) fn gauge_line(
     ))
 }
 
+/// The placeholder context bar for a selected, not-yet-started idle card.
+pub(super) fn empty_gauge_line(
+    theme: &Theme,
+    bands: &ContextMeterConfig,
+    width: usize,
+) -> Line<'static> {
+    let severity = ContextSeverity::classify(0, None, bands);
+    let amount = severity_heat_amount(severity, 0, None, bands);
+    let color = theme.heat_tone(amount);
+    bar_row(
+        theme,
+        theme.glyph(GlyphRole::MeterContextEmpty),
+        theme.style(color, Modifier::empty()),
+        &pct_label(None, 0),
+        |bar_width| context_gauge_spans(theme, amount, &[], 0, bar_width),
+        width,
+    )
+}
+
 /// The row's severity verdict: the tier the producer classified and stamped
 /// ([`SidebarRow::context_severity`]) when present, else classified locally
 /// from the same inputs and bands — the fallback for a snapshot produced

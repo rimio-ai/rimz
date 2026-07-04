@@ -29,6 +29,7 @@ mod process;
 mod provider;
 mod worktree;
 
+pub(in crate::sidebar_pane::render) use agent_card::awaiting_first_prompt_affordance;
 pub(super) use cockpit::{cockpit_spend_line, cockpit_summary_line};
 pub(crate) use fleet::{MakeUpHit, status_total, unread_total};
 pub(super) use fleet::{fleet_header_lines, fleet_size};

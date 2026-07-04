@@ -1,5 +1,36 @@
 use super::*;
 
+/// The compose-affordance frames for a selected, awaiting-first-prompt card:
+/// a bracketed ellipsis that grows `[.  ]` -> `[.. ]` -> `[...]`.
+const AWAITING_DOTS: [&str; 3] = ["[.  ]", "[.. ]", "[...]"];
+
+/// Hold each dot frame across four base animation phases so the placeholder
+/// reads as calm motion on the breath grid.
+const AWAITING_DOT_STEP: u64 = 4;
+
+pub(super) fn awaiting_dots_frame(animation_phase: u64) -> &'static str {
+    AWAITING_DOTS[((animation_phase / AWAITING_DOT_STEP) as usize) % AWAITING_DOTS.len()]
+}
+
+/// The compose-affordance line shown where the description will land once a
+/// prompt arrives.
+pub(super) fn awaiting_prompt_line(
+    theme: &Theme,
+    animation_phase: u64,
+    width: usize,
+) -> Line<'static> {
+    Line::from(trim_spans_to_width(
+        vec![
+            Span::raw("  "),
+            Span::styled(
+                awaiting_dots_frame(animation_phase).to_owned(),
+                theme.faint(),
+            ),
+        ],
+        width,
+    ))
+}
+
 /// Line 2 for an agent: the description on its own full-width line. Rich
 /// context metadata wins first; for Codex that is app-server `preview`, then
 /// thread `name`. Named sessions and live task/prompt fallbacks keep the row
@@ -129,7 +160,7 @@ fn single_line_description(value: &str) -> Option<String> {
 }
 
 /// An idle agent with nothing to describe yet — waiting for its first prompt.
-pub(super) fn awaiting_first_prompt(row: &SidebarRow) -> bool {
+pub(in crate::sidebar_pane::render) fn awaiting_first_prompt(row: &SidebarRow) -> bool {
     row.is_agent()
         && matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && descriptor(row).is_none()
@@ -145,4 +176,17 @@ pub(super) fn looks_like_control_text(value: &str) -> bool {
     crate::agents::CONTROL_TAG_PREFIXES
         .iter()
         .any(|tag| trimmed.starts_with(tag))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn awaiting_dots_frame_steps_and_wraps() {
+        assert_eq!(awaiting_dots_frame(0), "[.  ]");
+        assert_eq!(awaiting_dots_frame(AWAITING_DOT_STEP), "[.. ]");
+        assert_eq!(awaiting_dots_frame(2 * AWAITING_DOT_STEP), "[...]");
+        assert_eq!(awaiting_dots_frame(3 * AWAITING_DOT_STEP), "[.  ]");
+    }
 }

@@ -1,6 +1,8 @@
 use super::input::{KeyAction, Wakeup};
 use super::*;
-use crate::sidebar_pane::app::fixtures::{pane, snapshot, snapshot_with_panes, workspace};
+use crate::sidebar_pane::app::fixtures::{
+    agent_snapshot, pane, snapshot, snapshot_with_panes, workspace,
+};
 use crate::sidebar_pane::pets::{PetAssets, PetPixelView, PetRenderCaps};
 use jiff::Timestamp;
 
@@ -103,6 +105,41 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         frame_interval(&slow, &ui, false),
         crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
     );
+}
+
+#[test]
+fn selected_blank_idle_agent_keeps_breath_grid_awake() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    agent.task = None;
+    agent.description = None;
+    agent.prompt = None;
+
+    let mut selected = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    selected.theme(&snapshot.theme);
+    assert!(is_animating(&snapshot, &selected, 0, false));
+    assert_eq!(
+        frame_interval(&snapshot, &selected, false),
+        crate::sidebar::timing::BREATH_ANIMATION_FRAME
+    );
+
+    let mut off_selection = UiState {
+        selected_index: 99,
+        ..Default::default()
+    };
+    off_selection.theme(&snapshot.theme);
+    assert!(!is_animating(&snapshot, &off_selection, 0, false));
+
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .task = Some("warm up".to_owned());
+    selected.theme(&snapshot.theme);
+    assert!(!is_animating(&snapshot, &selected, 0, false));
 }
 
 #[test]

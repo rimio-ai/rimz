@@ -138,6 +138,92 @@ fn blank_idle_agent_renders_single_line() {
 }
 
 #[test]
+fn selected_blank_idle_agent_opens_compose_affordance() {
+    let idle = agent(
+        "idle-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let theme = Theme::fixed(true);
+
+    let selected = line_texts(&group_lines(&snapshot, &theme, 0));
+
+    assert!(
+        selected.iter().any(|line| line.contains("[.  ]")),
+        "phase-0 compose placeholder renders on the selected blank idle card:\n{}",
+        selected.join("\n")
+    );
+    assert!(
+        selected
+            .iter()
+            .any(|line| line.contains('▢') && line.contains("0%")),
+        "selected blank idle card renders the empty context bar:\n{}",
+        selected.join("\n")
+    );
+}
+
+#[test]
+fn unselected_blank_idle_agent_stays_single_line() {
+    let idle = agent(
+        "idle-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let theme = Theme::fixed(true);
+
+    let card_lines = line_texts(&group_lines(&snapshot, &theme, 99))
+        .into_iter()
+        .skip(1)
+        .collect::<Vec<_>>();
+
+    assert_eq!(card_lines.len(), 1, "{card_lines:?}");
+    assert!(
+        card_lines
+            .iter()
+            .all(|line| !line.contains('[') && !line.contains('▢')),
+        "unselected blank idle card keeps the thin shape:\n{}",
+        card_lines.join("\n")
+    );
+}
+
+#[test]
+fn selected_idle_agent_with_history_keeps_existing_shape() {
+    let mut idle = agent(
+        "idle-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    idle.context_pct = Some(0);
+    idle.total_tokens = Some(1);
+    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let theme = Theme::fixed(true);
+
+    let selected = line_texts(&group_lines(&snapshot, &theme, 0));
+
+    assert!(
+        selected.iter().all(|line| !line.contains("[.  ]")),
+        "idle cards with history do not get the first-prompt affordance:\n{}",
+        selected.join("\n")
+    );
+    assert!(
+        selected.iter().any(|line| line.contains('▢')),
+        "idle cards with history keep their existing context bar:\n{}",
+        selected.join("\n")
+    );
+}
+
+#[test]
 fn idle_agent_omits_window_token() {
     let mk = |status| {
         let mut claude = agent(
