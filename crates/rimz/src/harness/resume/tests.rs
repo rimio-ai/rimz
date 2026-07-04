@@ -327,6 +327,34 @@ fn resumes_root_agents_most_recent_first() {
 }
 
 #[test]
+fn rebirth_resume_skips_provisional_launch_placeholder() {
+    let agents = vec![agent(
+        "codex",
+        "launch_019f2cecea067320b667c5946d266e64",
+        "/code/pets-l",
+        Some("pets-l"),
+        4,
+    )];
+    let plan = plan_resume(
+        &agents,
+        &no_ended(),
+        DEFAULT_RESUME_MAX,
+        |_| true,
+        Path::new("/bin/rimz"),
+    );
+
+    assert!(plan.tabs.is_empty());
+    assert_eq!(
+        plan.skipped,
+        vec![ResumeSkip {
+            label: "codex:pets-l".to_owned(),
+            reason: ResumeSkipReason::NoResumeSupport,
+        }]
+    );
+    assert!(plan.tombstone.is_empty());
+}
+
+#[test]
 fn disambiguates_reborn_tabs_with_the_same_basename() {
     let agents = vec![
         agent("claude", "a1", "/work/repoA/main", None, 5),

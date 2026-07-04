@@ -198,9 +198,7 @@ pub fn plan_resume(
                 .push((agent.kind.clone(), agent.agent_id.clone()));
             continue;
         }
-        let supports_resume = find_adapter(&agent.kind)
-            .is_some_and(|adapter| adapter.resume_command(&agent.agent_id, &cwd).is_some());
-        if !supports_resume {
+        if !supports_agent_resume(agent) {
             plan.skipped.push(ResumeSkip {
                 label,
                 reason: ResumeSkipReason::NoResumeSupport,
