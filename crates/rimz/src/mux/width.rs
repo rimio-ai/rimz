@@ -6,6 +6,8 @@
 
 use std::num::NonZeroU16;
 
+use super::SplitDirection;
+
 /// Default sidebar width as a percentage of the view. The single source of
 /// truth for both the CLI launch paths and the user-wide reload reconcile.
 const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
@@ -117,6 +119,18 @@ pub fn detect_terminal_size() -> Option<(u16, u16)> {
     terminal_size::terminal_size().map(|(width, height)| (width.0, height.0))
 }
 
+/// Split side-by-side when the pane is visually wider than tall, otherwise
+/// stack. This is a cell-count heuristic for detached CLI/tmux paths; Zellij's
+/// native no-direction key path uses the terminal's real pixel ratio.
+pub fn split_along_longer_edge(cols: u16, rows: u16) -> SplitDirection {
+    const CELL_ASPECT: u32 = 2;
+    if u32::from(cols) > u32::from(rows) * CELL_ASPECT {
+        SplitDirection::Right
+    } else {
+        SplitDirection::Down
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +185,12 @@ mod tests {
             "live geometry can differ from the fixed session verdict",
         );
         assert_ne!(u64::from(birth.cols.get()), width.target_cols(190));
+    }
+
+    #[test]
+    fn split_along_longer_edge_uses_cell_aspect_boundary() {
+        assert_eq!(split_along_longer_edge(121, 60), SplitDirection::Right);
+        assert_eq!(split_along_longer_edge(80, 60), SplitDirection::Down);
+        assert_eq!(split_along_longer_edge(120, 60), SplitDirection::Down);
     }
 }

@@ -70,266 +70,35 @@ fn pane_header_before<'a>(layout: &'a str, needle: &str) -> &'a str {
     &layout[pane_at..args_at]
 }
 
-fn swap_layout_ranges(layout: &str) -> Vec<std::ops::Range<usize>> {
-    let marker = r#"swap_tiled_layout name="rimz-work-area""#;
-    let mut ranges = Vec::new();
-    let mut search_from = 0;
-    while let Some(relative_start) = layout[search_from..].find(marker) {
-        let start = search_from + relative_start;
-        let brace_start = start + layout[start..].find('{').expect("swap layout starts");
-        let mut depth = 0_u16;
-        let mut end = None;
-        for (offset, ch) in layout[brace_start..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = Some(brace_start + offset + ch.len_utf8());
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let end = end.expect("swap layout closes");
-        ranges.push(start..end);
-        search_from = end;
-    }
-    ranges
-}
-
-fn only_swap_layout(layout: &str) -> &str {
-    let ranges = swap_layout_ranges(layout);
-    assert_eq!(ranges.len(), 1, "layout carries one swap layout:\n{layout}");
-    &layout[ranges[0].clone()]
-}
-
-fn layout_without_swap_layouts(layout: &str) -> String {
-    let mut without = String::new();
-    let mut copied_until = 0;
-    for range in swap_layout_ranges(layout) {
-        without.push_str(&layout[copied_until..range.start]);
-        copied_until = range.end;
-    }
-    without.push_str(&layout[copied_until..]);
-    without
-}
-
-fn assert_children_only_in_swap_layout(layout: &str) {
-    assert!(
-        only_swap_layout(layout).contains("children"),
-        "the swap layout carries children tiers:\n{layout}",
-    );
-    assert!(
-        !layout_without_swap_layouts(layout).contains("children"),
-        "children stays out of visible tabs and templates:\n{layout}",
-    );
-}
-
-fn swap_tier<'a>(layout: &'a str, marker: &str, next_marker: &str) -> &'a str {
-    let swap = only_swap_layout(layout);
-    let start = swap
-        .find(marker)
-        .unwrap_or_else(|| panic!("swap layout carries {marker}:\n{layout}"));
-    let after_marker = start + marker.len();
-    let end = after_marker
-        + swap[after_marker..].find(next_marker).unwrap_or_else(|| {
-            panic!("swap layout carries {next_marker} after {marker}:\n{layout}")
-        });
-    &swap[start..end]
-}
-
-fn unbounded_swap_tier(layout: &str) -> &str {
-    let swap = only_swap_layout(layout);
-    let unbounded_at = swap
-        .rfind("\n        tab {\n")
-        .expect("swap layout carries a final bare tab tier");
-    &swap[unbounded_at..]
-}
-
-const SWAP_TIER_COUNT: usize = 13;
-
-fn horizontal_column_count(tier: &str, rows: usize) -> usize {
-    let mut needle = String::from("                pane split_direction=\"horizontal\" {\n");
-    for _ in 0..rows {
-        needle.push_str("                    pane\n");
-    }
-    needle.push_str("                }");
-    tier.matches(&needle).count()
-}
-
-fn assert_no_flat_vertical_children_tier(layout: &str) {
-    let swap = only_swap_layout(layout);
-    assert!(
-        !swap.contains("pane split_direction=\"vertical\" {\n                children")
-            && !swap.contains("pane split_direction=\"vertical\" {\n                    children"),
-        "children must stay in horizontal overflow stacks, not flat vertical tiers:\n{layout}",
-    );
-}
-
-fn assert_unbounded_swap_tier_after_budget(layout: &str, highest_max_panes: u16) {
-    let swap = only_swap_layout(layout);
-    let highest_tier = format!("tab max_panes={highest_max_panes}");
-    let highest_at = swap.find(&highest_tier).unwrap_or_else(|| {
-        panic!("swap layout carries {highest_tier} before the unbounded tier:\n{layout}")
-    });
-    let unbounded_at = swap
-        .rfind("\n        tab {\n")
-        .expect("swap layout carries a final bare tab tier");
-    let unbounded = &swap[unbounded_at..];
-    assert!(
-        unbounded_at > highest_at,
-        "unbounded swap tier follows the max_panes tiers:\n{layout}",
-    );
-    assert!(
-        unbounded.contains("children"),
-        "unbounded swap tier absorbs extra panes:\n{layout}",
-    );
-    assert!(
-        !unbounded.contains("max_panes"),
-        "unbounded swap tier has no max_panes cap:\n{layout}",
-    );
-    assert!(
-        !swap.contains(&format!("tab max_panes={}", highest_max_panes + 1)),
-        "swap layout should catch larger pane counts with the unbounded tier:\n{layout}",
-    );
-}
-
-fn assert_docked_balanced_swap_shape(layout: &str) {
-    for max_panes in 3..=14 {
-        assert!(
-            layout.contains(&format!("tab max_panes={max_panes}")),
-            "{layout}"
-        );
-    }
-    assert_unbounded_swap_tier_after_budget(layout, 14);
-
-    let four_work = swap_tier(layout, "tab max_panes=6", "tab max_panes=7");
-    assert!(
-        !four_work.contains("children"),
-        "4-work-pane tier is exact and carries no overflow children:\n{layout}",
-    );
-    assert_eq!(
-        horizontal_column_count(four_work, 2),
-        2,
-        "4-work-pane tier carries two 2-pane columns:\n{layout}",
-    );
-
-    let five_work = swap_tier(layout, "tab max_panes=7", "tab max_panes=8");
-    assert!(
-        !five_work.contains("children"),
-        "5-work-pane tier is exact and carries no overflow children:\n{layout}",
-    );
-    assert_eq!(
-        horizontal_column_count(five_work, 2),
-        1,
-        "5-work-pane tier carries one 2-pane column:\n{layout}",
-    );
-    assert_eq!(
-        horizontal_column_count(five_work, 3),
-        1,
-        "5-work-pane tier carries one 3-pane column:\n{layout}",
-    );
-
-    let twelve_work = swap_tier(layout, "tab max_panes=14", "\n        tab {\n");
-    assert_eq!(
-        horizontal_column_count(twelve_work, 4),
-        3,
-        "12-work-pane tier carries three 4-pane columns:\n{layout}",
-    );
-
-    let unbounded = unbounded_swap_tier(layout);
-    assert!(
-        unbounded.contains("children"),
-        "unbounded tier keeps the overflow children stack:\n{layout}",
-    );
-    assert_eq!(
-        horizontal_column_count(unbounded, 4),
-        2,
-        "unbounded tier carries two explicit 4-pane columns:\n{layout}",
-    );
-    assert_no_flat_vertical_children_tier(layout);
-}
-
-fn assert_undocked_balanced_swap_shape(layout: &str) {
-    for max_panes in 2..=13 {
-        assert!(
-            layout.contains(&format!("tab max_panes={max_panes}")),
-            "{layout}"
-        );
-    }
-    assert_unbounded_swap_tier_after_budget(layout, 13);
-
-    let four_work = swap_tier(layout, "tab max_panes=5", "tab max_panes=6");
-    assert!(
-        !four_work.contains("children"),
-        "4-work-pane undocked tier is exact and carries no overflow children:\n{layout}",
-    );
-    assert_eq!(
-        horizontal_column_count(four_work, 2),
-        2,
-        "4-work-pane undocked tier carries two 2-pane columns:\n{layout}",
-    );
-
-    let five_work = swap_tier(layout, "tab max_panes=6", "tab max_panes=7");
-    assert!(
-        !five_work.contains("children"),
-        "5-work-pane undocked tier is exact and carries no overflow children:\n{layout}",
-    );
-    assert_eq!(
-        horizontal_column_count(five_work, 2),
-        1,
-        "5-work-pane undocked tier carries one 2-pane column:\n{layout}",
-    );
-    assert_eq!(
-        horizontal_column_count(five_work, 3),
-        1,
-        "5-work-pane undocked tier carries one 3-pane column:\n{layout}",
-    );
-
-    let unbounded = unbounded_swap_tier(layout);
-    assert_eq!(
-        horizontal_column_count(unbounded, 4),
-        2,
-        "unbounded undocked tier carries two explicit 4-pane columns:\n{layout}",
-    );
-    assert_no_flat_vertical_children_tier(layout);
-}
-
 fn assert_work_area_template(layout: &str, visible_compact_bars: usize, focused: usize) {
     assert!(layout.contains("compact-bar"), "{layout}");
     assert!(
-        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
-        "{layout}",
+        !layout.contains("swap_tiled_layout"),
+        "Rimz must leave Zellij's native focused-pane split path unobstructed:\n{layout}",
     );
-    assert_docked_balanced_swap_shape(layout);
-    assert_children_only_in_swap_layout(layout);
     assert_eq!(layout.matches("focus=true").count(), focused, "{layout}");
     assert_eq!(
         layout
             .matches(r#"plugin location="zellij:compact-bar""#)
             .count(),
-        visible_compact_bars + SWAP_TIER_COUNT,
-        "every visible tab/template and swap template carries compact-bar:\n{layout}",
+        visible_compact_bars,
+        "every visible tab/template carries compact-bar:\n{layout}",
     );
 }
 
 fn assert_undocked_work_area_template(layout: &str, visible_compact_bars: usize, focused: usize) {
     assert!(layout.contains("compact-bar"), "{layout}");
     assert!(
-        layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
-        "{layout}",
+        !layout.contains("swap_tiled_layout"),
+        "undocked layouts must not reintroduce a swap layout:\n{layout}",
     );
-    assert_undocked_balanced_swap_shape(layout);
-    assert_children_only_in_swap_layout(layout);
     assert_eq!(layout.matches("focus=true").count(), focused, "{layout}");
     assert_eq!(
         layout
             .matches(r#"plugin location="zellij:compact-bar""#)
             .count(),
-        visible_compact_bars + SWAP_TIER_COUNT,
-        "every visible tab/template and swap template carries compact-bar:\n{layout}",
+        visible_compact_bars,
+        "every visible tab/template carries compact-bar:\n{layout}",
     );
 }
 
@@ -345,33 +114,7 @@ fn resume_tab(label: &str, panes: &[&[&str]], cwd: &str) -> ResumeTab {
 }
 
 #[test]
-fn balanced_work_columns_splits_rows_evenly_with_taller_columns_right() {
-    let cases = [
-        (1, vec![1]),
-        (2, vec![1, 1]),
-        (3, vec![1, 2]),
-        (4, vec![2, 2]),
-        (5, vec![2, 3]),
-        (6, vec![3, 3]),
-        (7, vec![3, 4]),
-        (8, vec![4, 4]),
-        (9, vec![3, 3, 3]),
-        (10, vec![3, 3, 4]),
-        (11, vec![3, 4, 4]),
-        (12, vec![4, 4, 4]),
-        (13, vec![3, 3, 3, 4]),
-    ];
-    for (panes, columns) in cases {
-        assert_eq!(
-            balanced_work_columns(panes),
-            columns,
-            "{panes} work panes should split into balanced columns",
-        );
-    }
-}
-
-#[test]
-fn session_layout_renders_terminal_template_bar_swap_and_runtime_args() {
+fn session_layout_renders_terminal_template_bar_and_runtime_args() {
     let layout =
         render_session_layout(&sidebar_opts("rimz-contract", Some(50), None), None, &[]).unwrap();
     assert_work_area_template(&layout, 2, 3);
@@ -412,7 +155,7 @@ fn session_layout_pins_fixed_cols_attached_and_percent_detached() {
     let new_tab_template = layout
         .split("new_tab_template")
         .nth(1)
-        .and_then(|section| section.split("    swap_tiled_layout").next())
+        .and_then(|section| section.split("\n    tab").next())
         .expect("layout carries a new_tab_template");
     assert!(
         !new_tab_template.contains('%'),
@@ -477,7 +220,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
     assert_work_area_template(&layout, 1, 1);
     assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
     assert!(
-        !layout_without_swap_layouts(&layout).contains(r#"split_direction="horizontal""#),
+        !layout.contains(r#"split_direction="horizontal""#),
         "no stacked content or daemon column with one content pane and no hosts:\n{layout}",
     );
     assert_eq!(
@@ -541,8 +284,8 @@ fn tab_layout_renders_columns_and_can_mirror_template_width() {
              new_tab_template instead of this command's pane-width probe:\n{layout}",
     );
     assert!(
-        layout.matches("pane size=60").count() == 14,
-        "the visible sidebar and thirteen swap tiers must mirror the live width:\n{layout}",
+        layout.matches("pane size=60").count() == 1,
+        "the visible sidebar must mirror the live width:\n{layout}",
     );
 }
 
@@ -719,7 +462,7 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
     assert!(layout.contains(r#"tab name="rimzd""#), "{layout}");
     assert!(layout.contains(r#"args "stats" "--refresh""#), "{layout}");
     assert!(
-        !layout_without_swap_layouts(&layout).contains(r#"split_direction="horizontal""#),
+        !layout.contains(r#"split_direction="horizontal""#),
         "no stacked content or daemon column with one content pane and no hosts:\n{layout}",
     );
 }

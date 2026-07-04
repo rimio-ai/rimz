@@ -125,6 +125,7 @@ fn split_pane_injects_env_vars() {
                 ),
             ]),
             env,
+            direction: Default::default(),
             focus: false,
         })
         .expect("split_pane");

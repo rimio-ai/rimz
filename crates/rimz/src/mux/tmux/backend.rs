@@ -11,8 +11,8 @@ use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend,
     MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions,
-    ensure_pane_backend, execute_adds, execute_closes, memoized_version,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
+    TabOptions, ensure_pane_backend, execute_adds, execute_closes, memoized_version,
 };
 
 impl MuxBackend for TmuxBackend {
@@ -177,7 +177,11 @@ impl MuxBackend for TmuxBackend {
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
         // `-d` keeps focus on the splitting pane; omit it to land in the new
         // pane (the focused launch path).
-        let mut spec = self.cmd().args(["split-window", "-h"]);
+        let flag = match opts.direction {
+            SplitDirection::Right => "-h",
+            SplitDirection::Down => "-v",
+        };
+        let mut spec = self.cmd().args(["split-window", flag]);
         if !opts.focus {
             spec = spec.arg("-d");
         }

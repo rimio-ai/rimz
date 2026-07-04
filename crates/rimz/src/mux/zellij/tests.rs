@@ -18,6 +18,41 @@ fn zellij_shim(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 
 #[cfg(unix)]
 #[test]
+fn split_pane_spells_requested_direction() {
+    use crate::mux::{MuxBackend, SplitDirection, SplitPaneOptions};
+
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+exit 0
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+
+    for direction in [SplitDirection::Right, SplitDirection::Down] {
+        backend
+            .split_pane(SplitPaneOptions {
+                direction,
+                focus: true,
+                ..Default::default()
+            })
+            .expect("split_pane");
+    }
+
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    assert!(
+        log.contains("action new-pane --direction right"),
+        "right split must be explicit:\n{log}",
+    );
+    assert!(
+        log.contains("action new-pane --direction down"),
+        "down split must be explicit:\n{log}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn add_sidebar_timeout_never_closes_stdout_only_hint() {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
@@ -441,6 +476,8 @@ fn version_parser_and_floor_hold() {
     assert!((0, 42, 0) >= STACK_PANES_MIN_ZELLIJ);
     assert!((0, 44, 3) >= STACK_PANES_MIN_ZELLIJ);
     assert!((0, 41, 9) < STACK_PANES_MIN_ZELLIJ);
+    assert_eq!(MIN_STACKED_RESIZE_VERSION, (0, 42, 0));
+    assert!(MIN_STACKED_RESIZE_VERSION >= MIN_ZELLIJ_VERSION);
 }
 
 #[test]
@@ -500,6 +537,17 @@ fn option_flags_gate_by_version() {
         !args.iter().any(|arg| arg == "--mouse-hover-effects"),
         "Zellij before 0.44 rejects mouse hover effect options"
     );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--stacked-resize" && pair[1] == "true"),
+        "Zellij 0.42 supports stacked_resize"
+    );
+
+    let args = zellij_options_args(&mouse_config, Some((0, 41, 9)));
+    assert!(
+        !args.iter().any(|arg| arg == "--stacked-resize"),
+        "Zellij before 0.42 rejects stacked_resize"
+    );
 
     let args = zellij_options_args(&mouse_config, Some((0, 43, 0)));
     let has = |flag: &str, value: &str| {
@@ -532,7 +580,8 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
     assert!(has("--default-mode", "locked"));
     assert!(has("--mouse-click-through", "true"));
     assert!(has("--focus-follows-mouse", "false"));
-    assert!(has("--auto-layout", "true"));
+    assert!(has("--auto-layout", "false"));
+    assert!(has("--stacked-resize", "true"));
     assert!(has("--session-serialization", "false"));
     assert!(has("--disable-session-metadata", "true"));
     assert!(
@@ -559,9 +608,10 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
             .windows(2)
             .any(|pair| pair[0] == flag && pair[1] == value)
     };
-    assert!(has_unknown("--auto-layout", "true"));
+    assert!(has_unknown("--auto-layout", "false"));
     assert!(has_unknown("--session-serialization", "false"));
     assert!(has_unknown("--disable-session-metadata", "true"));
+    assert!(!unknown.iter().any(|arg| arg == "--stacked-resize"));
     assert!(!unknown.iter().any(|arg| arg == "--mouse-click-through"));
     assert!(!unknown.iter().any(|arg| arg == "--advanced-mouse-actions"));
     assert!(!unknown.iter().any(|arg| arg == "--mouse-hover-effects"));
@@ -585,7 +635,6 @@ fn zellij_options_enable_web_sharing_for_web_born_rooms() {
 fn zellij_options_render_configured_optionals() {
     let config = ZellijConfig {
         mouse_mode: Some(false),
-        auto_layout: false,
         pane_frames: Some(true),
         on_force_close: Some(crate::config::ZellijForceClose::Quit),
         scroll_buffer_size: Some(200_000),
@@ -604,6 +653,7 @@ fn zellij_options_render_configured_optionals() {
     };
     assert!(has("--mouse-mode", "false"));
     assert!(has("--auto-layout", "false"));
+    assert!(has("--stacked-resize", "true"));
     assert!(has("--pane-frames", "true"));
     assert!(has("--on-force-close", "quit"));
     assert!(has("--scroll-buffer-size", "200000"));

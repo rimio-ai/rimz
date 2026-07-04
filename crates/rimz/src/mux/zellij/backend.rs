@@ -22,8 +22,9 @@ use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
     MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth,
-    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
-    TabOptions, ensure_pane_backend, execute_adds, execute_closes, memoized_version,
+    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection,
+    SplitPaneOptions, TabOptions, ensure_pane_backend, execute_adds, execute_closes,
+    memoized_version,
 };
 use crate::pane::PaneRef;
 use serde::Deserialize;
@@ -344,7 +345,13 @@ impl MuxBackend for ZellijBackend {
             // Zellij's CLI opens relative to the current focus and does not
             // expose a target-pane flag for `new-pane`.
         }
-        let mut spec = self.cmd().args(["action", "new-pane"]);
+        let direction = match opts.direction {
+            SplitDirection::Right => "right",
+            SplitDirection::Down => "down",
+        };
+        let mut spec = self
+            .cmd()
+            .args(["action", "new-pane", "--direction", direction]);
         if let Some(cwd) = opts.cwd {
             spec = spec.args(["--cwd".to_owned(), cwd]);
         }

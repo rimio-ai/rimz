@@ -63,7 +63,7 @@ impl ZellijBackend {
         // come back as command panes the birth layout spells out: Zellij can't
         // reorder tabs or add command panes after birth. The same birth layout
         // handles a plain room as `None, &[]`, so every session carries the same
-        // new-tab template and work-area swap layout.
+        // new-tab template and fixed sidebar/compact-bar tree shape.
         let body = render_session_layout(opts, daemon, &opts.resume_tabs)?;
         let layout = TempLayoutFile::new(body)?;
         let mut option_args = vec![

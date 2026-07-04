@@ -820,7 +820,6 @@ fn zellij_room_options_parse_and_defaults_are_agent_friendly() {
     assert_eq!(defaults.zellij.pane_frames, None);
     assert_eq!(defaults.zellij.copy_clipboard, None);
     assert!(defaults.zellij.mouse_click_through);
-    assert!(defaults.zellij.auto_layout);
     assert!(!defaults.zellij.focus_follows_mouse);
     assert!(!defaults.zellij.session_serialization);
 
@@ -839,8 +838,7 @@ fn zellij_room_options_parse_and_defaults_are_agent_friendly() {
              scroll_buffer_size = 200000\n\
              show_startup_tips = true\n\
              show_release_notes = true\n\
-             on_force_close = \"quit\"\n\
-             auto_layout = false\n",
+             on_force_close = \"quit\"\n",
     ))
     .expect("load");
     assert_eq!(config.zellij.pane_frames, Some(true));
@@ -857,7 +855,6 @@ fn zellij_room_options_parse_and_defaults_are_agent_friendly() {
     assert_eq!(config.zellij.show_release_notes, Some(true));
     assert_eq!(config.zellij.on_force_close, Some(ZellijForceClose::Quit));
     assert!(config.zellij.mouse_click_through);
-    assert!(!config.zellij.auto_layout);
 }
 
 #[test]

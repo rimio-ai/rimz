@@ -291,7 +291,7 @@ pub(in crate::backend::zellij) fn expect_list_panes_json(
     list_panes_json(xdg, session).unwrap_or_else(|err| panic!("{err}"))
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(in crate::backend::zellij) struct PaneGeometry {
     pub(in crate::backend::zellij) id: u64,
     pub(in crate::backend::zellij) x: u64,

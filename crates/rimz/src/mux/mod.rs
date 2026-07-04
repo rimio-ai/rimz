@@ -29,7 +29,7 @@ pub(crate) use reconcile::{
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
-pub use width::{BirthSize, SidebarWidth, detect_terminal_size};
+pub use width::{BirthSize, SidebarWidth, detect_terminal_size, split_along_longer_edge};
 pub use zellij::ZellijBackend;
 
 use std::collections::BTreeMap;
@@ -363,9 +363,22 @@ pub struct SplitPaneOptions {
     pub cwd: Option<String>,
     pub command: Option<Vec<String>>,
     pub env: BTreeMap<String, String>,
+    /// Where the new pane lands relative to the pane it splits.
+    pub direction: SplitDirection,
     /// Move focus to the new pane. `false` leaves focus on the splitting pane
     /// (`target_pane_id`, when set) — the `--bg` launch path.
     pub focus: bool,
+}
+
+/// Where a new pane lands relative to the pane it splits.
+///
+/// `Right` creates side-by-side panes separated by a vertical divider. `Down`
+/// creates stacked panes separated by a horizontal divider.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SplitDirection {
+    #[default]
+    Right,
+    Down,
 }
 
 /// Inputs for [`MuxBackend::ensure_presence_plugin`] — one session's presence

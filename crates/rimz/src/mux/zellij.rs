@@ -43,6 +43,10 @@ pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 41, 0);
 /// flag is unknown, so Rimz omits it and accepts Zellij's older defaults.
 const MIN_ADVANCED_MOUSE_ACTIONS_VERSION: (u32, u32, u32) = (0, 43, 0);
 
+/// Minimum Zellij version that ships `stacked_resize`. Below this the flag is
+/// unknown, so Rimz omits it and accepts the host's native split fallback.
+const MIN_STACKED_RESIZE_VERSION: (u32, u32, u32) = (0, 42, 0);
+
 /// Minimum Zellij version that ships the `mouse_click_through` option. Below
 /// this the flag is unknown, so we omit it — a single click then focuses the
 /// sidebar without reaching the renderer (degrade, never error).
@@ -209,8 +213,14 @@ fn zellij_options_args(
         "--disable-session-metadata".to_owned(),
         bool_value(config.disable_session_metadata),
         "--auto-layout".to_owned(),
-        bool_value(config.auto_layout),
+        bool_value(false),
     ];
+    args.extend(versioned_bool_arg(
+        "--stacked-resize",
+        true,
+        parsed_version,
+        MIN_STACKED_RESIZE_VERSION,
+    ));
     if config.web_sharing {
         args.extend(["--web-sharing".to_owned(), "on".to_owned()]);
     }

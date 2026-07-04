@@ -10,54 +10,6 @@ use crate::common::CommandTimeoutExt;
 
 use super::support::*;
 
-fn work_area_has_two_by_two_grid(work: &[PaneGeometry]) -> bool {
-    if work.len() != 4 {
-        return false;
-    }
-    let mut xs: Vec<u64> = work.iter().map(|pane| pane.x).collect();
-    xs.sort_unstable();
-    xs.dedup();
-    if xs.len() != 2 {
-        return false;
-    }
-
-    let left: Vec<&PaneGeometry> = work.iter().filter(|pane| pane.x == xs[0]).collect();
-    let right: Vec<&PaneGeometry> = work.iter().filter(|pane| pane.x == xs[1]).collect();
-    if left.len() != 2 || right.len() != 2 {
-        return false;
-    }
-
-    let mut columns = [left, right];
-    for column in &mut columns {
-        column.sort_by_key(|pane| pane.y);
-    }
-
-    let widths_align = work
-        .iter()
-        .map(|pane| pane.columns)
-        .max()
-        .zip(work.iter().map(|pane| pane.columns).min())
-        .is_some_and(|(max, min)| max.abs_diff(min) <= 2);
-    let columns_adjacent = {
-        let left_edge = columns[0]
-            .iter()
-            .map(|pane| pane.x + pane.columns)
-            .max()
-            .unwrap_or(0);
-        left_edge <= xs[1] && left_edge.abs_diff(xs[1]) <= 2
-    };
-    let rows_align = (0..2).all(|row| {
-        columns[0][row].y.abs_diff(columns[1][row].y) <= 2
-            && columns[0][row].rows.abs_diff(columns[1][row].rows) <= 2
-    });
-    let rows_adjacent = columns.iter().all(|column| {
-        let previous_bottom = column[0].y + column[0].rows;
-        previous_bottom <= column[1].y && previous_bottom.abs_diff(column[1].y) <= 2
-    });
-
-    widths_align && columns_adjacent && rows_align && rows_adjacent
-}
-
 #[test]
 fn open_tab_unfocused_restores_attached_client_focus() {
     require_zellij!();
@@ -212,12 +164,11 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     );
 }
 
-/// Backend and native tabs keep the fixed sidebar outside the user's work area.
-/// Closing back to `sidebar | one work pane` and then opening a no-direction
-/// terminal must split the work area, not rebalance a flat root that still
-/// carries the fixed sidebar constraint.
+/// Backend and native tabs keep the fixed sidebar outside the user's work area,
+/// while no-direction pane opens split the focused work pane and pane closes
+/// return space to the survivor.
 #[test]
-fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
+fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
@@ -300,6 +251,7 @@ fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
         })
         .expect("open backend overflow tab layout");
     let overflow_work = wait_for_named_work_pane_count(xdg.path(), &name, overflow_tab, 3);
+    let focused_before = overflow_work[1];
     let focus = scoped_zellij(xdg.path())
         .args([
             "--session",
@@ -323,6 +275,12 @@ fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
     );
 
     spawn_sleep_pane(xdg.path(), &name, cwd.path());
+    let focused_bounds_hold_two_panes = |pane: &PaneGeometry| {
+        pane.x + 2 >= focused_before.x
+            && pane.y + 2 >= focused_before.y
+            && pane.x + pane.columns <= focused_before.x + focused_before.columns + 2
+            && pane.y + pane.rows <= focused_before.y + focused_before.rows + 2
+    };
     let overflow_split =
         wait_for_named_work_pane_state(xdg.path(), &name, overflow_tab, 4, |work| {
             let work_stays_right_of_sidebar = work
@@ -337,11 +295,20 @@ fn work_area_swap_layout_rebalances_backend_and_native_tabs() {
                         && sidebar.columns == sidebar_before.columns
                         && sidebar.rows == sidebar_before.rows
                 });
-            work_stays_right_of_sidebar && sidebar_unchanged && work_area_has_two_by_two_grid(work)
+            let focused_pane_was_split = work
+                .iter()
+                .filter(|pane| focused_bounds_hold_two_panes(pane))
+                .count()
+                >= 2;
+            work_stays_right_of_sidebar && sidebar_unchanged && focused_pane_was_split
         });
     assert!(
-        work_area_has_two_by_two_grid(&overflow_split),
-        "overflow split should re-tile the work area into a 2x2 grid: {overflow_split:?}",
+        overflow_split
+            .iter()
+            .filter(|pane| focused_bounds_hold_two_panes(pane))
+            .count()
+            >= 2,
+        "overflow split should divide the focused pane, got {overflow_split:?}",
     );
     let sidebar_after = named_sidebar_pane_geometry(xdg.path(), &name, overflow_tab)
         .expect("list overflow sidebar")

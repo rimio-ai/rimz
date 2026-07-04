@@ -44,6 +44,8 @@ session_serialization false            // prefer clean session births over held 
 
 `pane_frames true` draws a titled border around each pane so you can always see which one holds focus — the single most useful upgrade for a multi-agent layout. Rimz enforces its room's mouse pair through the presence plugin, so your personal `focus_follows_mouse` and `mouse_click_through` settings no longer break single-click sidebar jumps.
 
+Rimz rooms let Zellij split the focused pane along its longer visual edge when you open a new pane, and closing that pane returns the space to its split sibling.
+
 ## A note on resurrection
 
 Rimz disables Zellij session serialization inside its room, because it owns rebirth: when a room must come back after a reboot or crash, Rimz re-seeds the prior agents itself ([resume on rebirth](../internals/sidebar/sidebar.md#resume-on-rebirth)) rather than resurrecting a wall of suspended command panes. Setting `session_serialization false` in your own `config.kdl` gives non-Rimz sessions the same clean-birth posture when you prefer running panes over resurrection.

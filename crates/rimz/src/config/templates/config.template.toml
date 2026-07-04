@@ -78,7 +78,6 @@ mouse_click_through = true            # single click on a card jumps to the agen
 focus_follows_mouse = false           # off so a single click passes through to the renderer
 session_serialization = false         # Rimz owns rebirth instead of Zellij resurrection
 disable_session_metadata = true       # stop Zellij's per-second metadata/ps loop
-auto_layout = true                    # use Rimz's swap layout for no-direction new panes
 
 # Optional: uncomment to override your ~/.config/zellij/config.kdl. Left unset,
 # Rimz leaves these to your Zellij config or Zellij's defaults.

@@ -670,6 +670,9 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
     rimz::harness::run::create(ledger.paths(), &record).context("recording run")?;
     let target = own_pane_id(mux);
+    let direction = rimz::mux::detect_terminal_size()
+        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
+        .unwrap_or_default();
     let open_result = match run_placement(args.new_tab, target.is_some()) {
         RunPlacement::Split => backend.split_pane(SplitPaneOptions {
             target_pane_id: target,
@@ -680,6 +683,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
                 args.channel.as_deref(),
                 args.worktree.is_none() && args.from_pr.is_none(),
             ),
+            direction,
             focus: false,
         }),
         RunPlacement::Tab => backend.open_tab(&TabOptions {

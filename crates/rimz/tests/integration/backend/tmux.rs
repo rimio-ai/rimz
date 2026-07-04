@@ -904,6 +904,7 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
             cwd: None,
             command: Some(foreign_command),
             env: BTreeMap::new(),
+            direction: Default::default(),
             focus: false,
         })
         .expect("plant foreign sidebar");
@@ -2202,6 +2203,7 @@ fn split_pane_injects_env_vars() {
                 "printf RIMZ_TEST_VAR=$RIMZ_TEST_VAR; sleep 5".to_owned(),
             ]),
             env,
+            direction: Default::default(),
             focus: false,
         })
         .expect("split_pane");

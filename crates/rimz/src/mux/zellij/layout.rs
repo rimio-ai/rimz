@@ -117,11 +117,12 @@ fn sidebar_pane_kdl(
 /// creating the implicit first tab. The terminal in the template is an explicit
 /// `pane focus=true`, not Zellij's `children` placeholder; nested `children`
 /// creates the right terminal on 0.44.3 but leaves focus stranded on the
-/// sidebar in newly-created tabs. The root `rimz-work-area` swap layout applies
-/// to every birth and user-opened tab, pinning the sidebar and compact bar while
-/// no-direction pane opens rebalance the work area. All panes inherit the
-/// session's `--default-cwd` except the daemon hosts and resumed agents, which
-/// carry their own worktree cwd.
+/// sidebar in newly-created tabs. The visible layout pins the sidebar and
+/// compact-bar as fixed tree siblings. Zellij's `auto_layout=false` plus
+/// `stacked_resize=true` leaves no-direction pane opens and closes on the
+/// focused-pane native split path instead of a root swap layout. All panes
+/// inherit the session's `--default-cwd` except the daemon hosts and resumed
+/// agents, which carry their own worktree cwd.
 pub(super) fn render_session_layout(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
@@ -197,14 +198,12 @@ pub(super) fn render_session_layout(
     let work_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
     let new_tab_pane = render_plain_terminal_pane(16);
     let new_tab_body = render_sidebar_work_area(&new_tab_sidebar, &new_tab_pane, 8);
-    let swap_layout = rimz_swap_layout_kdl(opts.birth_size.cols.get());
     Ok(format!(
         r#"layout {{
     new_tab_template {{
 {new_tab_body}
         {COMPACT_BAR_KDL}
     }}
-{swap_layout}
 {daemon_tab}{agent_tabs}    tab{work_focus} {{
 {work_body}
         {COMPACT_BAR_KDL}
@@ -247,14 +246,12 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
         opts.sidebar.birth_size.percent,
         4,
     )?;
-    let swap_layout = rimz_swap_layout_kdl(opts.sidebar.birth_size.cols.get());
     // The body (sidebar + work area) is a nested vertical split above the
     // one-row compact-bar.
     Ok(format!(
         r#"layout {{
 {body}
     {COMPACT_BAR_KDL}
-{swap_layout}
 }}
 "#,
     ))
@@ -283,7 +280,6 @@ pub(super) fn render_tab_layout(
         BirthGeometry::Attached,
         template_sidebar_cols,
     )?;
-    let sidebar_cols = template_sidebar_cols.unwrap_or(opts.sidebar.birth_size.cols);
     let mut focused = false;
     let mut columns = String::new();
     for column in &opts.panes.columns {
@@ -300,10 +296,8 @@ pub(super) fn render_tab_layout(
         r#"layout {{
 {body}
     {COMPACT_BAR_KDL}
-{swap_layout}
 }}
 "#,
-        swap_layout = rimz_swap_layout_kdl(sidebar_cols.get()),
     ))
 }
 
@@ -319,126 +313,14 @@ fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
             8,
         )?);
     }
-    let swap_layout = rimz_undocked_swap_layout();
     Ok(format!(
         r#"layout {{
     pane split_direction="vertical" {{
 {columns}    }}
     {COMPACT_BAR_KDL}
-{swap_layout}
 }}
 "#,
     ))
-}
-
-/// The swap-layout shape Zellij's `auto_layout` flow applies after native
-/// no-direction pane opens and closes. The first tiled pane in a Rimz tab is the
-/// sidebar and the final tiled pane is the compact-bar plugin; keeping both
-/// explicit makes Zellij rebalance only the work area when users close one peer
-/// pane and open another. The plugin slot is load-bearing: `max_panes` counts
-/// plugin panes and Zellij assigns them to swap slots like terminals, so a
-/// template without one re-tiles the bar into the work area as a full-size pane
-/// (swap-layout semantics in `docs/externals/mux-adapter/zellij-reference.md`).
-///
-/// The bounded tiers render exact balanced grids for one through twelve work
-/// panes, with columns capped at four rows and the taller columns on the right.
-/// The last tier stays unbounded so the sidebar and compact-bar stay pinned at
-/// any pane count. Without that catch-all, Zellij's native no-direction
-/// fallback splits the largest weighted-area pane, which is normally the
-/// full-height sidebar.
-fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
-    rimz_work_area_swap_layout(Some(sidebar_cols))
-}
-
-fn rimz_undocked_swap_layout() -> String {
-    rimz_work_area_swap_layout(None)
-}
-
-fn rimz_work_area_swap_layout(sidebar_cols: Option<u16>) -> String {
-    let mut layout = String::from("    swap_tiled_layout name=\"rimz-work-area\" {\n");
-    for work_panes in 1..=12 {
-        layout.push_str(&render_balanced_swap_tier(work_panes, sidebar_cols));
-    }
-    layout.push_str(&render_unbounded_swap_tier(sidebar_cols));
-    layout.push_str("    }\n");
-    layout
-}
-
-fn balanced_work_columns(n: usize) -> Vec<usize> {
-    if n == 0 {
-        return Vec::new();
-    }
-    if n == 1 {
-        return vec![1];
-    }
-    let columns = 2.max(n.div_ceil(4));
-    let shorter_rows = n / columns;
-    let taller_columns = n % columns;
-    (0..columns)
-        .map(|index| shorter_rows + usize::from(index >= columns - taller_columns))
-        .collect()
-}
-
-fn render_balanced_swap_tier(work_panes: usize, sidebar_cols: Option<u16>) -> String {
-    let max_panes = work_panes + 1 + usize::from(sidebar_cols.is_some());
-    let mut tier = format!("        tab max_panes={max_panes} {{\n");
-    let columns = balanced_work_columns(work_panes);
-    if sidebar_cols.is_some() || columns.len() > 1 {
-        tier.push_str("            pane split_direction=\"vertical\" {\n");
-        if let Some(sidebar_cols) = sidebar_cols {
-            tier.push_str(&format!("                pane size={sidebar_cols}\n"));
-        }
-        tier.push_str(&render_swap_work_columns(&columns, 16));
-        tier.push_str("            }\n");
-    } else {
-        tier.push_str(&render_swap_work_columns(&columns, 12));
-    }
-    tier.push_str(render_swap_compact_bar());
-    tier.push_str("        }\n");
-    tier
-}
-
-fn render_unbounded_swap_tier(sidebar_cols: Option<u16>) -> String {
-    let mut tier = String::from("        tab {\n            pane split_direction=\"vertical\" {\n");
-    if let Some(sidebar_cols) = sidebar_cols {
-        tier.push_str(&format!("                pane size={sidebar_cols}\n"));
-    }
-    tier.push_str(
-        r#"                pane split_direction="horizontal" {
-                    children
-                }
-"#,
-    );
-    tier.push_str(&render_swap_work_columns(&[4, 4], 16));
-    tier.push_str("            }\n");
-    tier.push_str(render_swap_compact_bar());
-    tier.push_str("        }\n");
-    tier
-}
-
-fn render_swap_work_columns(columns: &[usize], indent: usize) -> String {
-    let mut rendered = String::new();
-    let base = " ".repeat(indent);
-    let child = " ".repeat(indent + 4);
-    for &rows in columns {
-        if rows == 1 {
-            rendered.push_str(&format!("{base}pane\n"));
-        } else {
-            rendered.push_str(&format!("{base}pane split_direction=\"horizontal\" {{\n"));
-            for _ in 0..rows {
-                rendered.push_str(&format!("{child}pane\n"));
-            }
-            rendered.push_str(&format!("{base}}}\n"));
-        }
-    }
-    rendered
-}
-
-fn render_swap_compact_bar() -> &'static str {
-    r#"            pane size=1 borderless=true {
-                plugin location="zellij:compact-bar"
-            }
-"#
 }
 
 fn render_daemon_columns(

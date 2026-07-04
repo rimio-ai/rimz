@@ -145,6 +145,9 @@ pub(super) fn launch_layout(
         },
         &launch_identities,
     )?;
+    let direction = rimz::mux::detect_terminal_size()
+        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
+        .unwrap_or_default();
     let (open_result, what): (Result<()>, &str) = match placement {
         Placement::NewTab => (
             backend
@@ -171,6 +174,7 @@ pub(super) fn launch_layout(
                         args.channel.as_deref(),
                         !worktree_launch,
                     ),
+                    direction,
                     focus: !args.bg,
                 })
                 .map_err(Into::into),
@@ -320,6 +324,9 @@ fn launch_resume_layout(
         },
         &launch_identities,
     )?;
+    let direction = rimz::mux::detect_terminal_size()
+        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
+        .unwrap_or_default();
     let (open_result, what): (Result<()>, &str) = match placement {
         Placement::NewTab => (
             backend
@@ -342,6 +349,7 @@ fn launch_resume_layout(
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(single_pane_argv(&panes)?),
                     env: agents_launch::launch_identity_env(workspace, channel.as_deref(), false),
+                    direction,
                     focus: !args.bg,
                 })
                 .map_err(Into::into),

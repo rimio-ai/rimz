@@ -197,6 +197,8 @@ rimz pane detach
 
 `list` is the room seen as panes: every pane grouped under its native tab, each row labelled with the agent that lives in it (`@kind#worktree`) or `process` for a plain pane, with status and working directory. Rimz's own sidebar pane is omitted, and a `●` marks the active pane in each tab.
 
+`split` opens a shell beside the current pane along its longer visual edge, matching the room's native new-pane behavior.
+
 ```text
 #auth-refresh
  ●  @claude#auth-refresh   running   ~/code/qe-wt/auth-refresh   zellij:terminal_3
