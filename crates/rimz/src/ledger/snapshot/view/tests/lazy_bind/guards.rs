@@ -89,7 +89,7 @@ fn stale_codex_ghosts_predating_pane_start_render_idle_live_pane() {
         ghost.model = Some("gpt-5.5".to_owned());
 
         let mut snapshot = room(Vec::new(), vec![ghost]);
-        snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+        snapshot.wired_kinds = vec!["codex".to_owned()];
         let fresh_pane = PaneRef {
             pane_process_start: Some(epoch()),
             elevated_agent: None,

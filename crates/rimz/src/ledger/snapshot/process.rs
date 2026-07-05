@@ -21,8 +21,8 @@ pub(super) fn pane_command_is_known(pane: &PaneRef) -> bool {
 /// Worktree path for a pane row: prefer the mux-reported cwd when it is
 /// non-empty, then fall back to Rimz's supervised agent wrapper manifest from
 /// the spawn command and finally the foreground command. Used by both process
-/// rows and the lazy-agent pane ladder so empty-cwd races do not diverge
-/// between the two projections.
+/// rows and the agent-pane ladder so empty-cwd races do not diverge between
+/// the two projections.
 pub(crate) fn pane_worktree_path(pane: &PaneRef) -> Option<&str> {
     pane.cwd
         .as_deref()

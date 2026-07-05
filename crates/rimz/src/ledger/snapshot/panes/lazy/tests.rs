@@ -1,8 +1,9 @@
 use super::*;
 
-use crate::agents::AgentStatus;
+use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MuxName, PaneId};
 use crate::ledger::snapshot::testkit::{AgentStateFx, agent, ago, pane};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> PaneRef {
     PaneRef {
@@ -67,6 +68,49 @@ fn live_stamped_agent_stays_out_of_lazy_pairings() {
             .pairings
             .contains_key(&PaneId::from_parts(MuxName::Tmux, "%0"))
     );
+}
+
+#[test]
+fn wired_non_lazy_pane_synthesizes_idle_row() {
+    let pane = pane("term1", "claude", "/repo/main");
+    let agents: Vec<AgentState> = Vec::new();
+    let pairings = LazyAgentPairingResult {
+        pairings: HashMap::new(),
+        diagnostics: Vec::new(),
+    };
+    let bound = BTreeSet::new();
+    let default_models = BTreeMap::new();
+
+    assert!(
+        agent_pane_for_pane(
+            &pane,
+            &agents,
+            &pairings,
+            &bound,
+            &[],
+            &default_models,
+            ago(0),
+        )
+        .is_none(),
+        "unwired panes stay process rows",
+    );
+
+    match agent_pane_for_pane(
+        &pane,
+        &agents,
+        &pairings,
+        &bound,
+        &["claude".to_owned()],
+        &default_models,
+        ago(0),
+    ) {
+        Some(AgentPaneRow::Idle(row)) => {
+            assert_eq!(row.name, "claude");
+            assert_eq!(row.status(), Some(AgentStatus::Idle));
+            assert!(row.as_agent().is_some());
+        }
+        _ => panic!("wired sessionless Claude should synthesize idle row"),
+    }
 }
 
 #[test]

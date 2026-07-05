@@ -30,7 +30,7 @@ use std::{
 
 use crate::ids::{MuxName, PaneId};
 use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
-use crate::sidebar::enrich::{FoldOpts, enrich, wired_lazy_default_models, wired_lazy_kinds};
+use crate::sidebar::enrich::{FoldOpts, enrich, wired_default_models, wired_kinds};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::{RefreshedLanes, refresh_heavy_lanes};
 use crate::sidebar::timing::unix_now_ms;
@@ -144,9 +144,10 @@ pub fn produce_snapshot_with_refresh(
 }
 
 /// Produce the resolution snapshot: event-fresh rollup plus the live pane frame,
-/// and no render spine. Talk/resolve commands need bound and lazy pane targets;
-/// they do not read group roots, spending, accounts, provider dashboards, or git
-/// facts, so this path pays one pane enumeration and stops there.
+/// and no render spine. Talk/resolve commands need bound and sessionless agent
+/// pane targets; they do not read group roots, spending, accounts, provider
+/// dashboards, or git facts, so this path pays one pane enumeration and stops
+/// there.
 pub fn produce_resolution_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,
@@ -159,8 +160,8 @@ pub fn produce_resolution_snapshot(
         snapshot,
         frame,
         opts.exclude.as_ref(),
-        wired_lazy_kinds(),
-        wired_lazy_default_models(),
+        wired_kinds(),
+        wired_default_models(),
     ))
 }
 
@@ -323,11 +324,11 @@ fn fold_resolution_frame(
     mut snapshot: SidebarSnapshot,
     frame: PaneFrame,
     exclude: Option<&PaneId>,
-    lazy_kinds: Vec<String>,
-    lazy_default_models: BTreeMap<String, String>,
+    wired_kinds: Vec<String>,
+    wired_default_models: BTreeMap<String, String>,
 ) -> SidebarSnapshot {
-    snapshot.wired_lazy_kinds = lazy_kinds;
-    snapshot.lazy_agent_default_models = lazy_default_models;
+    snapshot.wired_kinds = wired_kinds;
+    snapshot.wired_default_models = wired_default_models;
     snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
     snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
     snapshot.with_live_panes(frame.to_pane_refs(), exclude)
@@ -512,7 +513,7 @@ mod tests {
             .agent_panes
             .iter()
             .find(|pane| pane.agent_id.is_none())
-            .expect("lazy pane");
+            .expect("sessionless pane");
         assert_eq!(lazy.kind.as_str(), "codex");
         assert_eq!(lazy.pane_id.raw(), "lazy");
         assert_eq!(snapshot.panes_produced_at_ms, Some(123));

@@ -52,16 +52,16 @@ fn paneless_codex_cwd_fallback_binds_only_the_exact_codex_worktree_pane() {
 }
 
 #[test]
-fn supervised_codex_uses_wrapper_worktree_path_for_lazy_and_process_rows() {
+fn supervised_codex_uses_wrapper_worktree_path_for_idle_and_process_rows() {
     // A first mux read can know the command before it knows the pane cwd. The
     // wrapper carries the same worktree path Rimz used to launch the pane, so
-    // both the lazy-agent and process-row paths use it as their grouping
+    // both the idle-agent and process-row paths use it as their grouping
     // fallback instead of flashing the row under external.
     let root = "/repo/rimz";
     let worktree = "/repo/rimz/.claude/worktrees/feature-x";
 
-    for (label, cwd, wired_lazy, expect_agent) in [
-        ("missing cwd renders lazy idle agent", None, true, true),
+    for (label, cwd, wired_agent, expect_agent) in [
+        ("missing cwd renders idle agent", None, true, true),
         (
             "empty cwd renders process row",
             Some(String::new()),
@@ -78,8 +78,8 @@ fn supervised_codex_uses_wrapper_worktree_path_for_lazy_and_process_rows() {
 
         let mut snapshot =
             room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from(root)));
-        if wired_lazy {
-            snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+        if wired_agent {
+            snapshot.wired_kinds = vec!["codex".to_owned()];
         }
         let snapshot = snapshot.with_live_panes(vec![pane], None);
 

@@ -196,30 +196,29 @@ pub(crate) fn classify_trunk_sync(
     Some(WorktreeTrunkSync::Diverged)
 }
 
-/// The lazy-registering agent kinds whose Rimz hooks are installed — the gate for
-/// the idle-instance synthesis on a wired-but-unbound agent pane. Filtered to lazy
-/// agents (not a broad any-agent hook check), so a Claude-only install
-/// never promotes an unwired Codex pane to an idle agent (it would otherwise read
-/// as a forever-idle agent Rimz can report no status for). Environment, not ledger.
-pub fn wired_lazy_kinds() -> Vec<String> {
+/// The wired agent kinds whose Rimz hooks are installed — the gate for idle
+/// synthesis on a pane no session has claimed yet. Per-agent hook checks keep an
+/// unwired pane as a process row, where it cannot become a forever-idle agent
+/// Rimz can report no status for. Environment, not ledger.
+pub fn wired_kinds() -> Vec<String> {
     crate::agents::ADAPTERS
         .iter()
         .filter(|agent| {
             let capabilities = agent.descriptor().capabilities;
-            capabilities.registers_lazily && capabilities.hook_install && agent.hooks_installed()
+            capabilities.hook_install && agent.hooks_installed()
         })
         .map(|agent| agent.descriptor().kind.to_owned())
         .collect()
 }
 
-/// Launch-model defaults for wired lazy-registering agents, used only for
-/// synthesized idle rows before a real session reports its model.
-pub fn wired_lazy_default_models() -> BTreeMap<String, String> {
+/// Launch-model defaults for wired agents, used only for synthesized idle rows
+/// before a real session reports its model.
+pub fn wired_default_models() -> BTreeMap<String, String> {
     crate::agents::ADAPTERS
         .iter()
         .filter(|agent| {
             let capabilities = agent.descriptor().capabilities;
-            capabilities.registers_lazily && capabilities.hook_install && agent.hooks_installed()
+            capabilities.hook_install && agent.hooks_installed()
         })
         .filter_map(|agent| {
             agent
@@ -341,10 +340,10 @@ pub fn enrich(
         snapshot = snapshot.with_agent_activity(&activity);
     }
 
-    // Wiring state gates the live-pane fold (the idle-instance synthesis), so
-    // set it before folding panes, not after.
-    snapshot.wired_lazy_kinds = wired_lazy_kinds();
-    snapshot.lazy_agent_default_models = wired_lazy_default_models();
+    // Wiring state gates the live-pane fold (idle synthesis), so set it before
+    // folding panes, not after.
+    snapshot.wired_kinds = wired_kinds();
+    snapshot.wired_default_models = wired_default_models();
     let episodes = super::unread::UnreadEpisodes::load(runtime);
     let read_marks = super::read_marks::ReadMarks::load_merged(runtime);
     let unread_row_ids = episodes.unread_row_ids(&read_marks);

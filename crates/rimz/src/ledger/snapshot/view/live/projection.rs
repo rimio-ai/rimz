@@ -132,8 +132,8 @@ pub(super) fn rows_from_panes(
                     if let Some(ask) = standalone_ask {
                         fold_ask_onto_row(&mut row, ask);
                     }
-                    // A lazy pane carries only its kind and pane — no session,
-                    // pet name, or ordinal until its first turn binds one.
+                    // A wired pane carries only its kind and pane — no session,
+                    // pet name, or ordinal until a lifecycle hook binds one.
                     agent_panes.push(PaneAgent {
                         kind: AgentKind::new_unchecked(row.name.clone()),
                         kind_ordinal: None,

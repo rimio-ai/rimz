@@ -66,7 +66,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 4;
+pub const SNAPSHOT_VERSION: u32 = 5;
 
 /// Sidebar view-model. The pane frame admits every rendered card; ledger,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
@@ -123,33 +123,28 @@ pub struct SidebarSnapshot {
     pub needs_attention: Vec<FeedItem>,
     pub resolver_working: Vec<FeedItem>,
     pub agents: Vec<AgentState>,
-    /// The lazy-registering agent kinds whose Rimz hooks are wired
-    /// ([`crate::agents::Capabilities::registers_lazily`] ∩ installed). Gates the
-    /// idle-instance synthesis in `rows_from_panes`: a launched-but-unbound pane
-    /// of such an agent has no ledger session yet (it registers lazily on the
-    /// first turn), and only a wired agent can ever report status, so only a
-    /// wired lazy agent's bare pane is promoted from a process row to an idle
-    /// agent. Cwd binding for an existing paneless session is separate and can
-    /// also recover a non-lazy agent after a mux rebirth clears pane stamps.
-    /// Codex is the only lazy-registering agent today. Environment, not ledger
-    /// — the pure reducer leaves it empty; the `rimz sidebar snapshot` CLI and
-    /// consumer enrichment fill it before folding live panes. The
-    /// placeholder/persisted snapshot keeps it empty (a process row).
+    /// The wired agent kinds whose Rimz hooks are installed. Gates the idle
+    /// synthesis in `rows_from_panes`: a launched-but-unbound pane for a wired
+    /// agent has a row Rimz can later enrich, while an unwired pane stays a
+    /// process row. Cwd binding for an existing paneless session is separate and
+    /// remains gated by [`crate::agents::Capabilities::registers_lazily`].
+    /// Environment, not ledger — the pure reducer leaves it empty; the
+    /// `rimz sidebar snapshot` CLI and consumer enrichment fill it before
+    /// folding live panes. The placeholder/persisted snapshot keeps it empty
+    /// (a process row).
     #[serde(default)]
-    pub wired_lazy_kinds: Vec<String>,
-    /// Per-kind launch model defaults for idle synthesized lazy-agent rows,
-    /// filled from adapter-owned config reads before the live-pane fold. Codex
-    /// uses this to show the configured model beside the context window before
-    /// its first session event; the pure reducer leaves it empty and falls
-    /// back to descriptor defaults.
+    pub wired_kinds: Vec<String>,
+    /// Per-kind launch model defaults for idle synthesized agent rows, filled
+    /// from adapter-owned config reads before the live-pane fold. The pure
+    /// reducer leaves it empty and falls back to descriptor defaults.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub lazy_agent_default_models: BTreeMap<String, String>,
+    pub wired_default_models: BTreeMap<String, String>,
     /// Every live agent pane the producer bound during the pane fold, uncapped
     /// and built at the binding site — the authoritative source for command
     /// resolution (`message --steer`), so a target reaches exactly the agent panes the
     /// producer saw rather than the capped, display-shaped `worktree_groups`
     /// rows. Holds bound sessions (with their pane, even when the session's own
-    /// `agent_id` carries no stamped pane) and lazy panes with no session yet.
+    /// `agent_id` carries no stamped pane) and wired panes with no session yet.
     /// Frame-derived: the pure rollup leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_panes: Vec<PaneAgent>,
@@ -357,8 +352,8 @@ impl SidebarSnapshot {
             needs_attention,
             resolver_working,
             agents,
-            wired_lazy_kinds: Vec::new(),
-            lazy_agent_default_models: BTreeMap::new(),
+            wired_kinds: Vec::new(),
+            wired_default_models: BTreeMap::new(),
             agent_panes: Vec::new(),
             own_view: None,
             only_daemon_view_remains: false,

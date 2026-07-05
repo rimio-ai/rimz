@@ -53,8 +53,8 @@ pub struct AgentDescriptor {
     /// card before a richer runtime source reports the exact value.
     pub default_context_window: Option<u64>,
     /// Provider-owned default model slug. Used as the idle-row display
-    /// fallback before a lazy-registering agent reports a session model and as
-    /// the launch `--model` default when `rimz agents` has no configured model.
+    /// fallback before a wired agent reports a session model and as the launch
+    /// `--model` default when `rimz agents` has no configured model.
     pub default_model: Option<&'static str>,
     /// Maximum time a blocking hook may hold the bridge open before falling
     /// back to the neutral no-op. Set from the upstream's published deadline,
@@ -299,7 +299,7 @@ impl HookCoverage {
 /// declares it here instead of leaving an inferable absence. Several flags
 /// gate behavior today: `rich_context` (the provider-owned live context
 /// transport), `context_usage` and `account_spend` (the token/cost read
-/// paths), `registers_lazily` (cwd pane binding and synthesized idle rows),
+/// paths), `registers_lazily` (cwd session binding),
 /// `hook_install` (the install and doctor surfaces), and `native_ask_ui`
 /// (whether an unresolved blocking ask becomes a `native_ui` feed item). The
 /// rest state the adapter contract up front — pinned by each adapter's tests,
@@ -333,9 +333,8 @@ pub struct Capabilities {
     /// Has a notion of parking a turn on still-in-flight background work.
     pub background_tasks: bool,
     /// Registers its session lazily and/or routes hooks through a daemon, so
-    /// an instance can be present without a stamped session. The sidebar
-    /// binds such a session to its pane by cwd and synthesizes an idle row
-    /// for a wired-but-unbound pane.
+    /// an instance can be present without a stamped session. The sidebar binds
+    /// such a session to its pane by cwd.
     pub registers_lazily: bool,
     /// Sessions route hooks through a per-user daemon that outlives any one
     /// conversation, so a new session may succeed another in the same pane

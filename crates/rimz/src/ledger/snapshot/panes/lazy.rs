@@ -20,7 +20,7 @@ use crate::pane::PaneRef;
 pub(crate) enum AgentPaneRow<'a> {
     /// An unstamped session bound to this pane by exact worktree cwd.
     Agent(&'a AgentState),
-    /// A wired lazy-registering instance with no session bound yet.
+    /// A wired instance with no session bound yet.
     Idle(Box<SidebarRow>),
     /// This pane resolves to a session already bound to another pane. It folds
     /// no row; the projection emits the diagnostic.
@@ -37,8 +37,8 @@ pub(crate) fn agent_pane_for_pane<'a>(
     agents: &'a [AgentState],
     pairings: &LazyAgentPairingResult,
     bound: &BTreeSet<(AgentKind, AgentSessionId)>,
-    wired_lazy_kinds: &[String],
-    lazy_agent_default_models: &BTreeMap<String, String>,
+    wired_kinds: &[String],
+    wired_default_models: &BTreeMap<String, String>,
     now: Timestamp,
 ) -> Option<AgentPaneRow<'a>> {
     let (kind, descriptor, cwd) = agent_pane_identity(pane)?;
@@ -56,15 +56,12 @@ pub(crate) fn agent_pane_for_pane<'a>(
         }
         return Some(AgentPaneRow::Agent(agent));
     }
-    if !descriptor.capabilities.registers_lazily {
-        return None;
-    }
-    wired_lazy_kinds.iter().any(|wired| wired == kind).then(|| {
+    wired_kinds.iter().any(|wired| wired == kind).then(|| {
         AgentPaneRow::Idle(Box::new(idle_agent_row(
             pane,
             descriptor,
             cwd,
-            lazy_agent_default_models
+            wired_default_models
                 .get(kind)
                 .map(String::as_str)
                 .or(descriptor.default_model),
@@ -340,8 +337,8 @@ fn agent_pane_identity(pane: &PaneRef) -> Option<(&'static str, &'static AgentDe
     Some((kind, descriptor, worktree_path))
 }
 
-/// The resting row for a wired lazy-agent pane that no session claimed: `○
-/// <kind>` with adapter-owned model/window defaults when known.
+/// The resting row for a wired agent pane that no session claimed: `○ <kind>`
+/// with adapter-owned model/window defaults when known.
 fn idle_agent_row(
     pane: &PaneRef,
     descriptor: &AgentDescriptor,
@@ -401,22 +398,21 @@ fn idle_agent_row(
 
 /// Project a realtime command overlay for an already frame-admitted pane. This
 /// uses the same agent-pane identity gate as the verified pull path, but only
-/// synthesizes the unbound idle row for lazy-registering agents.
+/// synthesizes the unbound idle row for wired agents.
 pub(crate) fn row_from_frame_pane(
     pane: &PaneRef,
-    wired_lazy_kinds: &[String],
-    lazy_agent_default_models: &BTreeMap<String, String>,
+    wired_kinds: &[String],
+    wired_default_models: &BTreeMap<String, String>,
     now: Timestamp,
 ) -> Option<SidebarRow> {
     if let Some((kind, descriptor, worktree_path)) = agent_pane_identity(pane)
-        && descriptor.capabilities.registers_lazily
-        && wired_lazy_kinds.iter().any(|wired| wired == kind)
+        && wired_kinds.iter().any(|wired| wired == kind)
     {
         return Some(idle_agent_row(
             pane,
             descriptor,
             worktree_path,
-            lazy_agent_default_models
+            wired_default_models
                 .get(kind)
                 .map(String::as_str)
                 .or(descriptor.default_model),

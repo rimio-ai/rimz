@@ -104,11 +104,11 @@ fn codex_render_preset_maps_effort_and_system_prompt_file_to_config_overrides() 
 }
 
 #[test]
-fn codex_descriptor_declares_lazy_registration_and_idle_card_fallbacks() {
+fn codex_descriptor_declares_lazy_registration() {
     // Codex's instances can be present before a session binds (lazy
-    // `SessionStart`, daemon-routed unstamped hooks), so it opts into the
-    // sidebar's cwd-bind + idle-instance synthesis. Claude declares the
-    // opposite (it stamps a pane on every session).
+    // `SessionStart`, daemon-routed unstamped hooks), so it opts into cwd
+    // session binding. Idle synthesis is gated on wired hooks for every kind;
+    // Claude stays out of cwd binding because it stamps every session.
     assert!(CodexAdapter.descriptor().capabilities.registers_lazily);
     assert!(
         !crate::agents::ClaudeAdapter

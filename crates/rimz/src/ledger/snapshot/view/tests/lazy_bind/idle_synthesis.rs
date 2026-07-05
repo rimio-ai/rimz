@@ -18,10 +18,10 @@ fn wired_unprompted_codex_panes_render_idle_agent_rows() {
         ),
     ] {
         let mut snapshot = room(Vec::new(), Vec::new());
-        snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+        snapshot.wired_kinds = vec!["codex".to_owned()];
         if let Some(model) = configured_model {
             snapshot
-                .lazy_agent_default_models
+                .wired_default_models
                 .insert("codex".to_owned(), model.to_owned());
         }
         let snapshot = snapshot.with_live_panes(vec![pane("term1", command, "/repo/main")], None);
@@ -40,12 +40,7 @@ fn wired_unprompted_codex_panes_render_idle_agent_rows() {
 
 #[test]
 fn idle_synthesis_gates_leave_unqualified_panes_as_process_rows() {
-    for (label, command, wired_lazy_kinds) in [
-        (
-            "non-lazy claude remains a process even if listed as wired",
-            "claude",
-            vec!["claude".to_owned(), "codex".to_owned()],
-        ),
+    for (label, command, wired_kinds) in [
         ("unwired codex remains a process", "codex", Vec::new()),
         (
             "unbound claude remains a process while codex is wired",
@@ -54,7 +49,7 @@ fn idle_synthesis_gates_leave_unqualified_panes_as_process_rows() {
         ),
     ] {
         let mut snapshot = room(Vec::new(), Vec::new());
-        snapshot.wired_lazy_kinds = wired_lazy_kinds;
+        snapshot.wired_kinds = wired_kinds;
         let snapshot = snapshot.with_live_panes(vec![pane("term1", command, "/repo/main")], None);
 
         let rows = &snapshot.worktree_groups[0].rows;
@@ -74,7 +69,7 @@ fn two_codex_panes_one_agent_yields_one_real_one_idle() {
         Vec::new(),
         vec![paneless_codex("sess-1", "/repo/main", 1_000)],
     );
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot.wired_kinds = vec!["codex".to_owned()];
     let snapshot = snapshot.with_live_panes(
         vec![
             pane("term1", "codex", "/repo/main"),

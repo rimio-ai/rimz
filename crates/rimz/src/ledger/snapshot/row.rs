@@ -185,8 +185,8 @@ impl SidebarRow {
 /// CLI and the pane it occupies. Built uncapped at the binding site, so command
 /// resolution (`message --steer`) addresses exactly the live agent panes the producer saw
 /// — not the capped, display-shaped [`SidebarRow`]s. A bound session carries its
-/// `agent_id`, pet name, and ordinal; a lazy-registering agent before its first
-/// turn carries only its kind and pane.
+/// `agent_id`, pet name, and ordinal; a wired pane before its session binds
+/// carries only its kind and pane.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneAgent {
     pub kind: AgentKind,
@@ -195,13 +195,13 @@ pub struct PaneAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// The `[agents.profiles]` profile the bound session launched as, copied from the
-    /// rollup so a bound agent answers to `@<profile>` through its pane. `None` for
-    /// a lazy pane or a bare-kind launch.
+    /// rollup so a bound agent answers to `@<profile>` through its pane. `None`
+    /// for a sessionless pane or a bare-kind launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// The `[agents.teams]` role the bound session launched as, copied from the
-    /// rollup so a bound agent answers to `@<role>` through its pane. `None` for
-    /// a lazy pane or a roleless launch.
+    /// rollup so a bound agent answers to `@<role>` through its pane. `None`
+    /// for a sessionless pane or a roleless launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// The `[agents.teams]` team the bound session launched under, copied from
@@ -211,7 +211,7 @@ pub struct PaneAgent {
     /// Named channel copied from the bound session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
-    /// The bound session, or `None` for a lazy pane with no session yet.
+    /// The bound session, or `None` for a wired pane with no session yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
     pub pane_id: PaneId,

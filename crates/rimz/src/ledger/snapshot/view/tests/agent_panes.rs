@@ -15,7 +15,7 @@ fn cwd_bound_session_lists_its_producer_bound_pane() {
         Vec::new(),
         vec![paneless_codex("sess-1", "/repo/main", 1_000)],
     );
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot.wired_kinds = vec!["codex".to_owned()];
     let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
 
     assert_eq!(snapshot.agent_panes.len(), 1);
@@ -41,7 +41,7 @@ fn cwd_bound_session_binds_wrapper_pane_hosting_agent_process() {
         Vec::new(),
         vec![paneless_codex("sess-1", "/repo/main", 1_000)],
     );
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot.wired_kinds = vec!["codex".to_owned()];
     let snapshot = snapshot.with_live_panes(vec![live], None);
 
     let rows = rows(&snapshot);
@@ -54,14 +54,30 @@ fn cwd_bound_session_binds_wrapper_pane_hosting_agent_process() {
 
 #[test]
 fn lazy_pane_lists_without_a_session() {
-    // An unprompted wired codex lists as a lazy pane: kind and pane, no session.
+    // An unprompted wired codex lists as an agent pane: kind and pane, no session.
     let mut snapshot = room(Vec::new(), Vec::new());
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot.wired_kinds = vec!["codex".to_owned()];
     let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
 
     assert_eq!(rows(&snapshot).len(), 1);
     assert_eq!(snapshot.agent_panes.len(), 1);
     assert_eq!(snapshot.agent_panes[0].kind.as_str(), "codex");
+    assert_eq!(snapshot.agent_panes[0].agent_id, None);
+    assert_eq!(snapshot.agent_panes[0].pane_id.raw(), "term1");
+}
+
+#[test]
+fn claude_pane_lists_without_a_session() {
+    let mut snapshot = room(Vec::new(), Vec::new());
+    snapshot.wired_kinds = vec!["claude".to_owned()];
+    let snapshot = snapshot.with_live_panes(vec![pane("term1", "claude", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "claude");
+    assert_eq!(rows[0].status(), Some(AgentStatus::Idle));
+    assert_eq!(snapshot.agent_panes.len(), 1);
+    assert_eq!(snapshot.agent_panes[0].kind.as_str(), "claude");
     assert_eq!(snapshot.agent_panes[0].agent_id, None);
     assert_eq!(snapshot.agent_panes[0].pane_id.raw(), "term1");
 }
@@ -74,7 +90,7 @@ fn floating_agent_pane_stays_addressable_without_room_row() {
         Vec::new(),
         vec![paneless_codex("sess-1", "/repo/main", 1_000)],
     );
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot.wired_kinds = vec!["codex".to_owned()];
     let snapshot = snapshot.with_live_panes(vec![floating], None);
 
     assert!(rows(&snapshot).is_empty());
@@ -100,7 +116,7 @@ fn agent_panes_are_uncapped() {
     // Worktree rows cap at WORKTREE_ROW_CAP idle rows, but agent_panes lists every
     // live agent pane so a command never misses one hidden behind `+K more`.
     let mut snapshot = room(Vec::new(), Vec::new());
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot.wired_kinds = vec!["codex".to_owned()];
     let panes: Vec<_> = (0..9)
         .map(|i| pane(&format!("term{i}"), "codex", "/repo/main"))
         .collect();
@@ -219,7 +235,7 @@ fn plain_shell_pane_is_not_an_agent_pane() {
     // floating shells. Only panes running a known agent command enter
     // agent_panes.
     let mut snapshot = room(Vec::new(), Vec::new());
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot.wired_kinds = vec!["codex".to_owned()];
     let snapshot = snapshot.with_live_panes(vec![pane("term1", "zsh", "/repo/main")], None);
 
     assert!(

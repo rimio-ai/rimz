@@ -100,8 +100,8 @@ impl SidebarSnapshot {
             &self.resolver_working,
             panes,
             LazyAgentPaneProjection {
-                wired_kinds: &self.wired_lazy_kinds,
-                default_models: &self.lazy_agent_default_models,
+                wired_kinds: &self.wired_kinds,
+                default_models: &self.wired_default_models,
                 pairings: lazy_pairings,
             },
             self.panes_observed_at_ms.or(self.panes_produced_at_ms),
@@ -166,8 +166,8 @@ impl SidebarSnapshot {
                 pane.pane_process_start = None;
                 if let Some(next) = row_from_frame_pane(
                     pane,
-                    &self.wired_lazy_kinds,
-                    &self.lazy_agent_default_models,
+                    &self.wired_kinds,
+                    &self.wired_default_models,
                     self.now,
                 ) {
                     let worktree_path = row

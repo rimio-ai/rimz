@@ -145,7 +145,7 @@ fn standalone_ask_on_a_wired_idle_lazy_pane_folds_onto_the_idle_row() {
     let item = script_ask_for_pane(Some(pane("term1", "codex", "/repo/main")));
     let request_id = item.request_id.clone();
     let mut snapshot = room(vec![item], Vec::new());
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    snapshot.wired_kinds = vec!["codex".to_owned()];
 
     let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
 
