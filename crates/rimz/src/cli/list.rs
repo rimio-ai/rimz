@@ -189,14 +189,7 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
     ]);
     for row in rows {
         let running = row.running_on.as_deref().unwrap_or("-");
-        let activity = row
-            .last_activity
-            .as_ref()
-            .map(|ts| ts.strftime("%Y-%m-%d %H:%M").to_string());
-        let seen = match (&row.running_on, &row.last_death) {
-            (None, Some(death)) => death.as_str(),
-            _ => activity.as_deref().unwrap_or("-"),
-        };
+        let seen = last_seen(row);
         let running_style = if row.running_on.is_some() {
             render::palette::GOOD
         } else {
@@ -211,6 +204,17 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
         ]);
     }
     table.render(&mut render::out())
+}
+
+fn last_seen(row: &WorkspaceRow) -> String {
+    let activity = row
+        .last_activity
+        .as_ref()
+        .map(|ts| ts.strftime("%Y-%m-%d %H:%M").to_string());
+    match (&row.running_on, &row.last_death) {
+        (None, Some(death)) => death.clone(),
+        _ => activity.unwrap_or_else(|| "-".to_owned()),
+    }
 }
 
 #[cfg(test)]
@@ -264,6 +268,21 @@ mod tests {
         assert!(!summary.contains("died"), "{summary}");
     }
 
+    #[test]
+    fn last_seen_prefers_running_activity_over_stale_death_marker() {
+        let death = "crashed · 2 agents · 1970-01-01 00:00";
+        let mut row = row(Some("tmux"), Some(death), Some(Timestamp::UNIX_EPOCH));
+
+        assert_eq!(last_seen(&row), "1970-01-01 00:00");
+
+        row.running_on = None;
+        assert_eq!(last_seen(&row), death);
+
+        row.last_death = None;
+        row.last_activity = None;
+        assert_eq!(last_seen(&row), "-");
+    }
+
     fn marker(cause: SessionDeathCause, agents: usize) -> LastDeathMarker {
         LastDeathMarker {
             cause,
@@ -275,6 +294,21 @@ mod tests {
                 })
                 .collect(),
             at: Timestamp::UNIX_EPOCH,
+        }
+    }
+
+    fn row(
+        running_on: Option<&str>,
+        last_death: Option<&str>,
+        last_activity: Option<Timestamp>,
+    ) -> WorkspaceRow {
+        WorkspaceRow {
+            workspace_id: "ws_000000000000000000000000".to_owned(),
+            project_root: "/repo".to_owned(),
+            session_name: "rimz-repo-000000".to_owned(),
+            running_on: running_on.map(str::to_owned),
+            last_activity,
+            last_death: last_death.map(str::to_owned),
         }
     }
 }
