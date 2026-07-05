@@ -5,9 +5,13 @@ fn ts(raw: &str) -> jiff::Timestamp {
 }
 
 fn agent_key() -> AgentKey {
+    agent_key_for("claude", "sess-1")
+}
+
+fn agent_key_for(kind: &str, session_id: &str) -> AgentKey {
     (
-        AgentKind::new_unchecked("claude"),
-        AgentSessionId::from("sess-1"),
+        AgentKind::new_unchecked(kind),
+        AgentSessionId::from(session_id),
     )
 }
 
@@ -56,16 +60,20 @@ fn described_ask_option(label: &str, description: &str) -> AskOption {
 }
 
 fn render(entries: &[RenderEntry], today: Date) -> String {
+    render_with_archive(entries, 0, today)
+}
+
+fn render_with_archive(entries: &[RenderEntry], archive_prefix: usize, today: Date) -> String {
     let tz = TimeZone::get("America/New_York").expect("timezone");
     let mut out = anstream::StripStream::new(Vec::new());
-    render_chat_to(&mut out, None, entries, &tz, today).expect("render");
+    render_chat_to(&mut out, None, entries, archive_prefix, &tz, today).expect("render");
     String::from_utf8(out.into_inner()).expect("utf8")
 }
 
 fn render_raw(entries: &[RenderEntry], today: Date) -> String {
     let tz = TimeZone::get("America/New_York").expect("timezone");
     let mut out = Vec::new();
-    render_chat_to(&mut out, None, entries, &tz, today).expect("render");
+    render_chat_to(&mut out, None, entries, 0, &tz, today).expect("render");
     String::from_utf8(out).expect("utf8")
 }
 
@@ -444,4 +452,98 @@ fn timestamped_asks_advance_day_delimiter() {
     let ask = out.find("Approve tool?").expect("ask");
     assert!(yesterday < today);
     assert!(today < ask);
+}
+
+#[test]
+fn archive_prefix_renders_archive_and_live_markers() {
+    let out = render_with_archive(
+        &[
+            entry("2026-06-28T14:00:00Z", "prior life"),
+            entry("2026-06-28T15:00:00Z", "current life"),
+        ],
+        1,
+        jiff::civil::date(2026, 6, 28),
+    );
+
+    let archive = out
+        .find("History archive · earlier today · 10:00")
+        .expect("archive marker");
+    let live = out
+        .find("Live session · earlier today · 11:00")
+        .expect("live marker");
+    assert!(archive < live, "{out}");
+    assert!(out.contains("prior life"), "{out}");
+    assert!(out.contains("current life"), "{out}");
+}
+
+#[test]
+fn archive_prefix_zero_keeps_plain_chat_shape() {
+    let out = render_with_archive(
+        &[entry("2026-06-28T04:30:00Z", "same day")],
+        0,
+        jiff::civil::date(2026, 6, 28),
+    );
+
+    assert_eq!(out, "user → @claude  00:30\n  same day\n");
+}
+
+#[test]
+fn format_marker_when_uses_time_today_and_full_date_otherwise() {
+    let tz = TimeZone::get("America/New_York").expect("timezone");
+    let today = jiff::civil::date(2026, 6, 28);
+
+    assert_eq!(
+        format_marker_when(ts("2026-06-28T14:05:00Z"), &tz, today),
+        "earlier today · 10:05"
+    );
+    assert_eq!(
+        format_marker_when(ts("2026-06-27T14:05:00Z"), &tz, today),
+        "Sat, Jun 27 2026"
+    );
+}
+
+#[test]
+fn live_boundary_uses_channel_cohort_or_focus_key() {
+    let channel_a = agent_key_for("claude", "sess-a");
+    let channel_b = agent_key_for("codex", "sess-b");
+    let other = agent_key_for("claude", "sess-other");
+    let live = vec![
+        LiveRootAgent {
+            key: channel_a.clone(),
+            channel: Some("chat".to_owned()),
+            registered_at: Some(ts("2026-06-01T00:03:00Z")),
+        },
+        LiveRootAgent {
+            key: channel_b,
+            channel: Some("chat".to_owned()),
+            registered_at: Some(ts("2026-06-01T00:02:00Z")),
+        },
+        LiveRootAgent {
+            key: other.clone(),
+            channel: Some("elsewhere".to_owned()),
+            registered_at: Some(ts("2026-06-01T00:01:00Z")),
+        },
+    ];
+
+    assert_eq!(
+        live_boundary(&single_channel_scope("chat".to_owned()), &live),
+        Some(ts("2026-06-01T00:02:00Z"))
+    );
+    assert_eq!(
+        live_boundary(
+            &Scope {
+                channel: Some("chat".to_owned()),
+                channel_filter: Some("chat".to_owned()),
+                focus: Some("@claude".to_owned()),
+                focus_keys: Some(BTreeSet::from([other])),
+                include_channel: false,
+            },
+            &live,
+        ),
+        Some(ts("2026-06-01T00:01:00Z"))
+    );
+    assert_eq!(
+        live_boundary(&single_channel_scope("missing".to_owned()), &live),
+        None
+    );
 }

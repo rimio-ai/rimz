@@ -571,6 +571,114 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
 }
 
 #[test]
+fn transcript_defaults_to_live_session_and_archives_prior_life() {
+    let env = Env::new();
+    let branch = "living-transcript";
+    append_transcript(
+        &env,
+        entry(
+            "sess-prior-life",
+            branch,
+            ChatKind::Prompt,
+            "prior prompt",
+            "2020-01-01T00:00:00Z",
+        ),
+    );
+    let mut owner = register_live_codex_turn(
+        &env,
+        "sess-current-life",
+        branch,
+        "current prompt",
+        "current answer",
+    );
+
+    let output = env
+        .rimz()
+        .args(["transcript", &format!("#{branch}")])
+        .output()
+        .expect("spawn transcript");
+    assert!(
+        output.status.success(),
+        "command failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("current prompt"), "{stdout}");
+    assert!(stdout.contains("current answer"), "{stdout}");
+    assert!(!stdout.contains("prior prompt"), "{stdout}");
+    assert!(
+        stderr.contains("1 earlier line from a prior session"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rimz transcript --all"), "{stderr}");
+
+    let all = run_ok(
+        env.rimz()
+            .args(["transcript", &format!("#{branch}"), "--all"]),
+    );
+    assert!(all.contains("History archive"), "{all}");
+    assert!(all.contains("Live session"), "{all}");
+    assert!(all.contains("prior prompt"), "{all}");
+    assert!(all.contains("current prompt"), "{all}");
+
+    let json = run_ok(
+        env.rimz()
+            .args(["transcript", &format!("#{branch}"), "--json"]),
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("transcript json");
+    assert_eq!(parsed["archived_count"], json!(1));
+    let entries = parsed["entries"].as_array().expect("entries");
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["text"] == "current prompt")
+    );
+    assert!(entries.iter().all(|entry| entry["text"] != "prior prompt"));
+
+    let _ = owner.kill();
+    let _ = owner.wait();
+}
+
+#[test]
+fn transcript_empty_scope_exits_zero_with_note_or_empty_json() {
+    let env = Env::new();
+    append_transcript(
+        &env,
+        entry(
+            "sess-other-scope",
+            "other-scope",
+            ChatKind::Prompt,
+            "other prompt",
+            "2026-06-01T00:00:00Z",
+        ),
+    );
+
+    let output = env
+        .rimz()
+        .args(["transcript", "#missing-scope"])
+        .output()
+        .expect("spawn transcript");
+    assert!(
+        output.status.success(),
+        "command failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No conversation for #missing-scope yet."),
+        "{stderr}"
+    );
+
+    let json = run_ok(env.rimz().args(["transcript", "#missing-scope", "--json"]));
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("empty transcript json");
+    assert_eq!(parsed, json!({ "entries": [] }));
+}
+
+#[test]
 fn transcript_details_flag_is_gone() {
     let env = Env::new();
     let output = env
@@ -735,6 +843,53 @@ fn register_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &str, 
     );
 }
 
+fn register_live_codex_turn(
+    env: &Env,
+    session_id: &str,
+    branch: &str,
+    prompt: &str,
+    answer: &str,
+) -> std::process::Child {
+    let worktree_path = env.home_root.join(branch).display().to_string();
+    let owner = dummy_agent_process();
+    run_hook_for_owner(
+        env,
+        "codex",
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": session_id,
+            "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
+        }),
+        owner.id(),
+    );
+    run_hook_for_owner(
+        env,
+        "codex",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": prompt,
+            "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
+        }),
+        owner.id(),
+    );
+    run_hook_for_owner(
+        env,
+        "codex",
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": session_id,
+            "last_assistant_message": answer,
+            "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
+        }),
+        owner.id(),
+    );
+    owner
+}
+
 fn bridge_permission_to_allow(
     env: &Env,
     session_id: &str,
@@ -779,20 +934,24 @@ fn bridge_permission_to_allow(
 }
 
 fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
+    let mut owner = dummy_agent_process();
+    run_hook_for_owner(env, source, payload, owner.id());
+    let _ = owner.kill();
+    let _ = owner.wait();
+}
+
+fn run_hook_for_owner(env: &Env, source: &str, payload: serde_json::Value, owner_pid: u32) {
     let mut payload = payload;
     stamp_worktree_path(env, &mut payload);
     let payload = serde_json::to_string(&payload).expect("payload");
     let mut cmd = env.hook_command(source);
     scrub_launch_identity(&mut cmd);
-    let mut owner = dummy_agent_process();
-    cmd.env("RIMZ_AGENT_PID", owner.id().to_string());
+    cmd.env("RIMZ_AGENT_PID", owner_pid.to_string());
     cmd.env(rimz::harness::run::ENV_AGENT_ROLE, source);
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()
         .expect("wait hook");
-    let _ = owner.kill();
-    let _ = owner.wait();
     assert!(
         output.status.success(),
         "hook failed\nstdout={}\nstderr={}",

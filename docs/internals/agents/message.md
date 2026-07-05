@@ -282,6 +282,8 @@ A delivery becomes a `Message` entry when the receiver's turn-start hook parses 
 
 `rimz transcript` projects these entries into one timestamp-ordered chat log. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) shows every agent in the lane; a single-agent target filters to that agent's sent and received lines. Exact session ids resolve across channels; handle targets prefer live sessions in the current room, then the most recent transcript activity. The command surface, flags, and rendered appearance are [cli/agents.md → Inspect transcripts](../../reference/cli/agents.md#inspect-transcripts).
 
+The transcript reader computes the current-life boundary at read time from the live cohort in scope: the earliest `registered_at` among the matching root agents. Entries before that timestamp are prior-session archive; the default view hides them when a live cohort exists, `--all` renders them under a dated archive marker, and a scope with no live cohort renders the whole log as archive. The JSONL buckets stay append-only and unmutated.
+
 Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](./agent.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
 
 Domain types: [`chat.rs`](../../../crates/rimz/src/chat.rs) for the durable log, [`cli/transcript/`](../../../crates/rimz/src/cli/transcript/) for the chat projection.

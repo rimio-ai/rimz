@@ -1,7 +1,15 @@
 use super::chat::render_handle;
 use super::*;
+use anyhow::bail;
 
-pub(super) fn live_root_agent_keys(workspace: &rimz::ResolvedWorkspace) -> BTreeSet<AgentKey> {
+#[derive(Clone, Debug)]
+pub(super) struct LiveRootAgent {
+    pub(super) key: AgentKey,
+    pub(super) channel: Option<String>,
+    pub(super) registered_at: Option<jiff::Timestamp>,
+}
+
+pub(super) fn live_root_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveRootAgent> {
     crate::cli::open_ledger(workspace)
         .ok()
         .and_then(|ledger| ledger.snapshot_cached().ok())
@@ -10,10 +18,31 @@ pub(super) fn live_root_agent_keys(workspace: &rimz::ResolvedWorkspace) -> BTree
                 .agents
                 .into_iter()
                 .filter(|agent| agent.parent_agent_id.is_none())
-                .map(|agent| (agent.kind, agent.agent_id))
+                .map(|agent| {
+                    let channel = rimz::harness::target::agent_channel(&agent);
+                    LiveRootAgent {
+                        key: (agent.kind, agent.agent_id),
+                        channel,
+                        registered_at: agent.registered_at,
+                    }
+                })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+pub(super) fn live_boundary(scope: &Scope, live: &[LiveRootAgent]) -> Option<jiff::Timestamp> {
+    live.iter()
+        .filter(|agent| live_agent_in_scope(agent, scope))
+        .filter_map(|agent| agent.registered_at)
+        .min()
+}
+
+fn live_agent_in_scope(agent: &LiveRootAgent, scope: &Scope) -> bool {
+    match &scope.focus_keys {
+        Some(keys) => keys.contains(&agent.key),
+        None => channel_matches(agent.channel.as_deref(), scope.channel_filter.as_deref()),
+    }
 }
 
 pub(super) fn entry_in_scope(entry: &ChatEntry, scope: &Scope) -> bool {

@@ -144,21 +144,24 @@ pub(super) fn display_handle(handle: &str, grouped: bool) -> &str {
 pub(super) fn render_chat(
     channel: Option<&str>,
     entries: &[RenderEntry],
+    archive_prefix: usize,
     tz: &TimeZone,
 ) -> Result<()> {
     let mut out = render::out();
     let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();
-    render_chat_to(&mut out, channel, entries, tz, today)
+    render_chat_to(&mut out, channel, entries, archive_prefix, tz, today)
 }
 
 pub(super) fn render_chat_to(
     out: &mut impl Write,
     channel: Option<&str>,
     entries: &[RenderEntry],
+    archive_prefix: usize,
     tz: &TimeZone,
     today: Date,
 ) -> Result<()> {
     write_header(out, channel)?;
+    let archive_prefix = archive_prefix.min(entries.len());
     let grouped = channel.is_some();
     let folded = pair_answers(entries);
     let mut tones = AgentTones::default();
@@ -166,11 +169,27 @@ pub(super) fn render_chat_to(
     let mut first_entry = true;
     let mut follows_day_delimiter = false;
     let mut last_group: Option<GroupState> = None;
+    let mut wrote_live_divider = archive_prefix == 0 || archive_prefix >= entries.len();
+    if archive_prefix > 0
+        && let Some(at) = entries[archive_prefix - 1].chat.at
+    {
+        write_archive_banner(out, at, tz, today)?;
+        follows_day_delimiter = true;
+    }
     for (index, entry) in entries.iter().enumerate() {
         if folded.suppressed_answers.contains(&index) {
             continue;
         }
         let entry_date = entry.chat.at.map(|at| at.to_zoned(tz.clone()).date());
+        if !wrote_live_divider && index >= archive_prefix {
+            if let Some(at) = entry.chat.at {
+                write_live_divider(out, at, tz, today)?;
+            }
+            last_date = entry_date;
+            last_group = None;
+            follows_day_delimiter = true;
+            wrote_live_divider = true;
+        }
         if let Some(date) = entry_date
             && Some(date) != last_date
         {
@@ -432,12 +451,50 @@ pub(super) fn is_mention_char(ch: char) -> bool {
 }
 
 pub(super) fn write_day_delimiter(out: &mut impl Write, date: Date, today: Date) -> Result<()> {
-    const WIDTH: usize = 26;
     let label = if date == today {
         "Today".to_owned()
     } else {
         date.strftime("%a, %b %-d %Y").to_string()
     };
+    write_faint_rule(out, &label)
+}
+
+pub(super) fn write_archive_banner(
+    out: &mut impl Write,
+    at: jiff::Timestamp,
+    tz: &TimeZone,
+    today: Date,
+) -> Result<()> {
+    write_faint_rule(
+        out,
+        &format!("History archive · {}", format_marker_when(at, tz, today)),
+    )
+}
+
+pub(super) fn write_live_divider(
+    out: &mut impl Write,
+    at: jiff::Timestamp,
+    tz: &TimeZone,
+    today: Date,
+) -> Result<()> {
+    write_faint_rule(
+        out,
+        &format!("Live session · {}", format_marker_when(at, tz, today)),
+    )
+}
+
+pub(super) fn format_marker_when(at: jiff::Timestamp, tz: &TimeZone, today: Date) -> String {
+    let zoned = at.to_zoned(tz.clone());
+    let date = zoned.date();
+    if date == today {
+        format!("earlier today · {}", zoned.strftime("%H:%M"))
+    } else {
+        date.strftime("%a, %b %-d %Y").to_string()
+    }
+}
+
+fn write_faint_rule(out: &mut impl Write, label: &str) -> Result<()> {
+    const WIDTH: usize = 26;
     let mut rule = format!("──── {label} ");
     while rule.chars().count() < WIDTH {
         rule.push('─');

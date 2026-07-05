@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Args;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -27,6 +27,9 @@ pub struct TranscriptArgs {
     /// Keep the last N chat lines.
     #[arg(short = 'n', long)]
     last: Option<usize>,
+    /// Include prior-session history archived before the current live cohort.
+    #[arg(long)]
+    all: bool,
     /// Emit JSON.
     #[arg(long)]
     json: bool,
@@ -49,6 +52,8 @@ struct ChatView {
     #[serde(skip_serializing_if = "Option::is_none")]
     focus: Option<String>,
     entries: Vec<ChatLine>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    archived_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -108,10 +113,10 @@ mod chat;
 mod layout;
 mod scope;
 
-use chat::{render_chat, render_entry_for_log_entry};
+use chat::{format_marker_when, render_chat, render_entry_for_log_entry};
 use scope::{
     build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_matches_focus,
-    keep_last, live_root_agent_keys, resolve_scope,
+    keep_last, live_boundary, live_root_agents, resolve_scope,
 };
 #[cfg(test)]
 use {chat::*, scope::*};
@@ -122,10 +127,11 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let current = current_channel(&workspace);
     let entries = dedup_asks(rimz::chat::read_all(&paths)?);
     if entries.is_empty() {
-        bail!("no transcripts on disk yet");
+        return write_empty_chat(args.json, "No conversation recorded yet.");
     }
     let identities = build_identities(&entries);
-    let live_root_keys = live_root_agent_keys(&workspace);
+    let live_agents = live_root_agents(&workspace);
+    let live_root_keys = live_agents.iter().map(|agent| agent.key.clone()).collect();
     let scope = resolve_scope(
         args.target.as_deref(),
         args.worktree.as_deref(),
@@ -138,7 +144,8 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         .filter(|entry| entry_in_scope(entry, &scope))
         .collect();
     if filtered.is_empty() {
-        bail!("no transcripts on disk for this scope yet");
+        let message = empty_scope_message(&scope, args.target.as_deref());
+        return write_empty_chat(args.json, &message);
     }
 
     let mut entries: Vec<_> = filtered
@@ -151,20 +158,104 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     entries.sort_by(|left, right| compare_optional_timestamps(left.chat.at, right.chat.at));
 
     if entries.is_empty() {
-        bail!("no transcripts on disk for this scope yet");
+        let message = empty_scope_message(&scope, args.target.as_deref());
+        return write_empty_chat(args.json, &message);
     }
-    keep_last(&mut entries, args.last);
+
+    let boundary = live_boundary(&scope, &live_agents);
+    let split = match boundary {
+        Some(boundary) => {
+            entries.partition_point(|entry| entry.chat.at.is_some_and(|at| at < boundary))
+        }
+        None => entries.len(),
+    };
+    let show_archive = args.all || split == entries.len();
+    let mut archived_hidden = 0;
+    let mut newest_archived_at = None;
+    let (shown, archive_prefix) = if show_archive {
+        keep_last(&mut entries, args.last);
+        let archive_prefix = archive_prefix(&entries, boundary);
+        (entries, archive_prefix)
+    } else {
+        archived_hidden = split;
+        newest_archived_at = split
+            .checked_sub(1)
+            .and_then(|index| entries[index].chat.at);
+        let mut current = entries.split_off(split);
+        keep_last(&mut current, args.last);
+        (current, 0)
+    };
 
     if args.json {
         print_json(&ChatView {
-            channel: scope.channel,
-            focus: scope.focus,
-            entries: entries.iter().map(|entry| entry.chat.clone()).collect(),
+            channel: scope.channel.clone(),
+            focus: scope.focus.clone(),
+            entries: shown.iter().map(|entry| entry.chat.clone()).collect(),
+            archived_count: (archived_hidden > 0).then_some(archived_hidden),
         })?;
     } else {
         let tz = super::machine_config().time_zone();
-        render_chat(scope.channel.as_deref(), &entries, &tz)?;
+        render_chat(scope.channel.as_deref(), &shown, archive_prefix, &tz)?;
+        if archived_hidden > 0 {
+            write_archive_hint(archived_hidden, newest_archived_at, &tz)?;
+        }
     }
+    Ok(())
+}
+
+fn archive_prefix(entries: &[RenderEntry], boundary: Option<jiff::Timestamp>) -> usize {
+    match boundary {
+        Some(boundary) => entries
+            .iter()
+            .take_while(|entry| entry.chat.at.is_some_and(|at| at < boundary))
+            .count(),
+        None => entries.len(),
+    }
+}
+
+fn write_empty_chat(json: bool, message: &str) -> Result<()> {
+    if json {
+        print_json(&serde_json::json!({ "entries": [] }))?;
+    } else {
+        let mut out = render::err();
+        writeln!(out, "{}", render::paint(render::palette::FAINT, message))?;
+    }
+    Ok(())
+}
+
+fn empty_scope_message(scope: &Scope, target: Option<&str>) -> String {
+    let label = scope
+        .channel
+        .as_ref()
+        .map(|channel| format!("#{channel}"))
+        .or_else(|| target.map(ToOwned::to_owned))
+        .unwrap_or_else(|| "this room".to_owned());
+    format!("No conversation for {label} yet.")
+}
+
+fn write_archive_hint(
+    hidden: usize,
+    newest_archived_at: Option<jiff::Timestamp>,
+    tz: &TimeZone,
+) -> Result<()> {
+    let line = if hidden == 1 { "line" } else { "lines" };
+    let when = newest_archived_at
+        .map(|at| {
+            let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();
+            format!(" ({})", format_marker_when(at, tz, today))
+        })
+        .unwrap_or_default();
+    let mut out = render::err();
+    writeln!(
+        out,
+        "{}",
+        render::paint(
+            render::palette::FAINT,
+            &format!(
+                "⋯ {hidden} earlier {line} from a prior session{when} — rimz transcript --all"
+            ),
+        )
+    )?;
     Ok(())
 }
 
