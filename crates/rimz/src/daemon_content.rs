@@ -230,12 +230,15 @@ fn watch_config(config_path: &Path) -> Option<ConfigWatch> {
         );
         return None;
     };
-    let target = config_path.to_path_buf();
+    let watched_parent = parent.to_path_buf();
     let (event_tx, event_rx) = mpsc::channel();
     let mut watcher =
         match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res
-                && event.paths.iter().any(|path| path == &target)
+                && event
+                    .paths
+                    .iter()
+                    .any(|path| path.parent() == Some(watched_parent.as_path()))
             {
                 let _ = event_tx.send(());
             }
