@@ -114,7 +114,9 @@ impl FramePainter {
     ) -> io::Result<()> {
         terminal.backend_mut().write_all(BEGIN_SYNC)?;
         let body_result = (|| {
-            self.ensure_pixel_transmitted(terminal.backend_mut(), ui)?;
+            let now_ms = u64::from(snapshot.theme.display.resolved_refresh_ms())
+                .saturating_mul(ui.animation_phase);
+            self.ensure_pixel_transmitted(terminal.backend_mut(), ui, now_ms)?;
             render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
             Ok(())
         })();
@@ -127,11 +129,13 @@ impl FramePainter {
         &mut self,
         writer: &mut W,
         ui: &UiState,
+        now_ms: u64,
     ) -> io::Result<()> {
         if let Some(PetBody::Pixel(pixel)) = ui.pet.as_ref().and_then(|view| view.body.as_ref())
             && let Some(frame) = self.assets.pixel_frame(&pixel.pet_id, pixel.sprite_index)
         {
-            self.painter.ensure_transmitted(writer, pixel, frame)?;
+            self.painter
+                .ensure_transmitted(writer, pixel, frame, now_ms)?;
         }
         Ok(())
     }

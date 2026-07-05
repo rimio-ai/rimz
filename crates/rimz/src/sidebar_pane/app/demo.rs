@@ -91,6 +91,7 @@ pub fn serve_gallery(
 
     loop {
         let phase = super::timing::wall_clock_phase(anim_start, refresh_ms);
+        let now_ms = u64::from(refresh_ms).saturating_mul(phase);
         for state in &mut states {
             state.ui.animation_phase = phase;
             state
@@ -102,7 +103,7 @@ pub fn serve_gallery(
             for state in &mut states {
                 state
                     .paint
-                    .ensure_pixel_transmitted(terminal.backend_mut(), &state.ui)?;
+                    .ensure_pixel_transmitted(terminal.backend_mut(), &state.ui, now_ms)?;
             }
             draw_gallery_to_terminal(&mut terminal, &mut states)?;
             Ok(())

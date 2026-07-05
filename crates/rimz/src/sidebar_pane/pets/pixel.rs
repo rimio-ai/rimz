@@ -1,9 +1,9 @@
 //! Emits kitty graphics payloads for pixel pets and tracks pane-local image
-//! placement so sprites stay resident until renderer teardown.
+//! placement so dropped or evicted sprites self-heal during renderer lifetime.
 
 pub(crate) mod probe;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,6 +18,8 @@ pub(crate) const END_SYNC: &[u8] = b"\x1b[?2026l";
 const CHUNK_SIZE: usize = 4096;
 const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
 const PLACEHOLDER: char = '\u{10eeee}';
+const RESIDENT_REFRESH_MS: u64 = 2000;
+const MIN_RESEND_SPACING_MS: u64 = 250;
 
 const ROW_COLUMN_DIACRITICS: [char; 32] = [
     '\u{0305}', '\u{030d}', '\u{030e}', '\u{0310}', '\u{0312}', '\u{033d}', '\u{033e}', '\u{033f}',
@@ -31,8 +33,9 @@ pub(crate) struct PixelPainter {
     id_base: u32,
     wrap: bool,
     pet_id: Option<String>,
-    transmitted: BTreeSet<usize>,
+    transmitted: BTreeMap<usize, u64>,
     resident: BTreeSet<usize>,
+    last_resend_ms: Option<u64>,
 }
 
 impl Default for PixelPainter {
@@ -51,8 +54,9 @@ impl PixelPainter {
             id_base: id_base & IMAGE_ID_COLOR_MASK,
             wrap,
             pet_id: None,
-            transmitted: BTreeSet::new(),
+            transmitted: BTreeMap::new(),
             resident: BTreeSet::new(),
+            last_resend_ms: None,
         }
     }
 
@@ -69,6 +73,7 @@ impl PixelPainter {
         writer: &mut W,
         pixel: &PetPixelView,
         frame: &RgbaImage,
+        now_ms: u64,
     ) -> io::Result<()> {
         let pet_changed = self.pet_id.as_deref() != Some(pixel.pet_id.as_str());
         if pet_changed {
@@ -80,19 +85,33 @@ impl PixelPainter {
 
         let image_id = pixel.image_id;
         debug_assert_eq!(image_id, self.image_id(pixel.sprite_index));
-        if self.transmitted.insert(pixel.sprite_index) {
+        let first = !self.transmitted.contains_key(&pixel.sprite_index);
+        let stale = self
+            .transmitted
+            .get(&pixel.sprite_index)
+            .is_some_and(|last| now_ms.saturating_sub(*last) >= RESIDENT_REFRESH_MS);
+        let resend = stale
+            && self
+                .last_resend_ms
+                .is_none_or(|last| now_ms.saturating_sub(last) >= MIN_RESEND_SPACING_MS);
+        if first || resend {
             self.resident.insert(pixel.sprite_index);
             for chunk in transmit_chunks(image_id, frame) {
                 writer.write_all(&self.wrap_payload(&chunk))?;
             }
-            // Kitty virtual placements persist; placeholder cells re-materialize the
-            // image on redraw, so per-frame placement APCs only add cursor flicker.
+            // Kitty virtual placements persist; sprite data re-transmits on a
+            // bounded cadence so dropped or evicted images self-heal without
+            // per-frame placement APCs that add cursor flicker.
             writer.write_all(&self.wrap_payload(&virtual_place(
                 image_id,
                 pixel.size.cols,
                 pixel.size.rows,
                 2,
             )))?;
+            self.transmitted.insert(pixel.sprite_index, now_ms);
+            if resend {
+                self.last_resend_ms = Some(now_ms);
+            }
         }
         Ok(())
     }
@@ -385,7 +404,7 @@ mod tests {
     fn clear_deletes_cached_images_without_blanking_cells() {
         let mut painter = PixelPainter::with_id_base(0x120000, true);
         painter.pet_id = Some("codex".to_owned());
-        painter.transmitted.insert(3);
+        painter.transmitted.insert(3, 0);
         painter.resident.insert(3);
         let mut bytes = Vec::new();
 
@@ -408,7 +427,7 @@ mod tests {
 
         let mut first = Vec::new();
         painter
-            .ensure_transmitted(&mut first, &pixel, &frame)
+            .ensure_transmitted(&mut first, &pixel, &frame, 0)
             .expect("first transmit");
         assert_not_sync_bracketed(&first);
         let text = String::from_utf8(first).expect("utf8 first transmit");
@@ -419,9 +438,109 @@ mod tests {
 
         let mut repeat = Vec::new();
         painter
-            .ensure_transmitted(&mut repeat, &pixel, &frame)
+            .ensure_transmitted(&mut repeat, &pixel, &frame, 0)
             .expect("repeat transmit");
         assert!(repeat.is_empty());
+    }
+
+    #[test]
+    fn stale_resident_sprite_retransmits_image_and_virtual_placement() {
+        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let pixel = pixel_view("codex", 0, 3, 2);
+        let frame = image(vec![0, 1, 2, 3]);
+
+        painter
+            .ensure_transmitted(&mut Vec::new(), &pixel, &frame, 0)
+            .expect("first transmit");
+
+        let mut stale = Vec::new();
+        painter
+            .ensure_transmitted(&mut stale, &pixel, &frame, RESIDENT_REFRESH_MS)
+            .expect("stale transmit");
+        let text = String::from_utf8(stale).expect("utf8 stale transmit");
+
+        assert!(text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
+        assert!(text.contains("a=p,U=1,i=1179648,c=3,r=2,q=2"));
+    }
+
+    #[test]
+    fn stale_sprite_retransmits_are_globally_spaced() {
+        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let pixel = pixel_view("codex", 0, 2, 1);
+        let other_pixel = pixel_view("codex", 1, 2, 1);
+        let frame = image(vec![0, 1, 2, 3]);
+
+        painter
+            .ensure_transmitted(&mut Vec::new(), &pixel, &frame, 0)
+            .expect("first transmit");
+        painter
+            .ensure_transmitted(&mut Vec::new(), &other_pixel, &frame, 0)
+            .expect("other first transmit");
+
+        let mut first_stale = Vec::new();
+        painter
+            .ensure_transmitted(&mut first_stale, &pixel, &frame, RESIDENT_REFRESH_MS)
+            .expect("first stale transmit");
+        assert!(bytes_contains(
+            &first_stale,
+            b"a=t,f=32,s=1,v=1,i=1179648,q=2"
+        ));
+
+        let mut too_soon = Vec::new();
+        painter
+            .ensure_transmitted(
+                &mut too_soon,
+                &other_pixel,
+                &frame,
+                RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS - 1,
+            )
+            .expect("too soon transmit");
+        assert!(too_soon.is_empty());
+
+        let mut spaced = Vec::new();
+        painter
+            .ensure_transmitted(
+                &mut spaced,
+                &other_pixel,
+                &frame,
+                RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS,
+            )
+            .expect("spaced transmit");
+        assert!(bytes_contains(&spaced, b"a=t,f=32,s=1,v=1,i=1179649,q=2"));
+    }
+
+    #[test]
+    fn new_sprite_transmit_ignores_resend_spacing() {
+        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let pixel = pixel_view("codex", 0, 2, 1);
+        let other_pixel = pixel_view("codex", 1, 2, 1);
+        let frame = image(vec![0, 1, 2, 3]);
+
+        painter
+            .ensure_transmitted(&mut Vec::new(), &pixel, &frame, 0)
+            .expect("first transmit");
+        painter
+            .ensure_transmitted(&mut Vec::new(), &pixel, &frame, RESIDENT_REFRESH_MS)
+            .expect("stale transmit");
+
+        let mut first_time = Vec::new();
+        painter
+            .ensure_transmitted(
+                &mut first_time,
+                &other_pixel,
+                &frame,
+                RESIDENT_REFRESH_MS + 1,
+            )
+            .expect("first-time transmit");
+
+        assert!(bytes_contains(
+            &first_time,
+            b"a=t,f=32,s=1,v=1,i=1179649,q=2"
+        ));
+        assert!(bytes_contains(
+            &first_time,
+            b"a=p,U=1,i=1179649,c=2,r=1,q=2"
+        ));
     }
 
     #[test]
@@ -433,14 +552,14 @@ mod tests {
         let frame = image(vec![0, 1, 2, 3]);
 
         painter
-            .ensure_transmitted(&mut Vec::new(), &codex, &frame)
+            .ensure_transmitted(&mut Vec::new(), &codex, &frame, 0)
             .expect("first sprite");
         painter
-            .ensure_transmitted(&mut Vec::new(), &codex_other_sprite, &frame)
+            .ensure_transmitted(&mut Vec::new(), &codex_other_sprite, &frame, 0)
             .expect("second sprite");
         let mut bytes = Vec::new();
         painter
-            .ensure_transmitted(&mut bytes, &claude, &frame)
+            .ensure_transmitted(&mut bytes, &claude, &frame, 0)
             .expect("pet changed");
         let text = String::from_utf8(bytes).expect("utf8 pet change");
 
@@ -448,8 +567,8 @@ mod tests {
         assert!(!text.contains("a=d,d=i"));
         assert!(text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
         assert!(text.contains("a=p,U=1,i=1179648,c=2,r=1,q=2"));
-        assert!(painter.transmitted.contains(&0));
-        assert!(!painter.transmitted.contains(&1));
+        assert!(painter.transmitted.contains_key(&0));
+        assert!(!painter.transmitted.contains_key(&1));
         assert!(painter.resident.contains(&0));
         assert!(painter.resident.contains(&1));
 
@@ -468,18 +587,18 @@ mod tests {
         let frame = image(vec![0, 1, 2, 3]);
 
         painter
-            .ensure_transmitted(&mut Vec::new(), &pixel, &frame)
+            .ensure_transmitted(&mut Vec::new(), &pixel, &frame, 0)
             .expect("first transmit");
 
         let mut steady = Vec::new();
         painter
-            .ensure_transmitted(&mut steady, &pixel, &frame)
+            .ensure_transmitted(&mut steady, &pixel, &frame, 0)
             .expect("steady transmit");
         assert!(steady.is_empty());
 
         let mut new_sprite = Vec::new();
         painter
-            .ensure_transmitted(&mut new_sprite, &other_pixel, &frame)
+            .ensure_transmitted(&mut new_sprite, &other_pixel, &frame, 0)
             .expect("new sprite transmit");
         assert!(bytes_contains(
             &new_sprite,
@@ -492,7 +611,7 @@ mod tests {
 
         let mut reused_sprite = Vec::new();
         painter
-            .ensure_transmitted(&mut reused_sprite, &pixel, &frame)
+            .ensure_transmitted(&mut reused_sprite, &pixel, &frame, 0)
             .expect("reused sprite transmit");
         assert!(reused_sprite.is_empty());
     }
@@ -504,7 +623,7 @@ mod tests {
         let mut bytes = Vec::new();
 
         painter
-            .ensure_transmitted(&mut bytes, &pixel, &image(vec![1; 4096]))
+            .ensure_transmitted(&mut bytes, &pixel, &image(vec![1; 4096]), 0)
             .expect("transmit");
 
         assert_not_sync_bracketed(&bytes);
@@ -525,7 +644,7 @@ mod tests {
         let mut bytes = Vec::new();
 
         painter
-            .ensure_transmitted(&mut bytes, &pixel, &image(vec![0, 1, 2, 3]))
+            .ensure_transmitted(&mut bytes, &pixel, &image(vec![0, 1, 2, 3]), 0)
             .expect("transmit");
         assert_not_sync_bracketed(&bytes);
         let text = String::from_utf8(bytes).expect("utf8 paint");
