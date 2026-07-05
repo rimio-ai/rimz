@@ -44,11 +44,11 @@ fn read_proc_status(pid: u32) -> Option<(String, u32)> {
 
 /// Whether the kernel-reported `comm` is one of the agent's declared process
 /// names — its own binary plus any launcher (Codex ships as a JS bundle, so
-/// its `comm` is `node`). The set lives on the descriptor; an unregistered
-/// kind falls back to the exact-name match.
+/// its `comm` is `node`) or a target-triple release-binary name. The set lives
+/// on the descriptor; an unregistered kind falls back to the exact-name match.
 pub(super) fn matches_agent_kind(comm: &str, source: &str) -> bool {
     match rimz::agents::descriptor_by_kind(source) {
-        Some(descriptor) => descriptor.process_names.contains(&comm),
+        Some(descriptor) => descriptor.runs_as(comm),
         None => comm == source,
     }
 }

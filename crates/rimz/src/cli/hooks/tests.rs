@@ -160,6 +160,7 @@ fn agent_kind_matches_known_launch_shapes() {
     for (comm, source, expected) in [
         ("claude", "claude", true),
         ("codex", "codex", true),
+        ("codex-aarch64-a", "codex", true),
         ("node", "codex", true),
         ("node", "claude", false),
         ("zsh", "claude", false),

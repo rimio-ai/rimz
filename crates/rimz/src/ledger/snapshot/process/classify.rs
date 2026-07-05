@@ -1,3 +1,5 @@
+use crate::agents::program_names_kind;
+
 /// The base name of the program a command runs, seeing past a `sudo` wrapper
 /// and through known wrappers to the real command: `npm` for `sudo npm install
 /// …`, `codex` for `node /usr/bin/codex`, `opencode` for `bun
@@ -136,20 +138,14 @@ pub(crate) fn command_agent_kind_with_comm(
 fn command_agent_kind_from_program(program: EffectiveProgram<'_>) -> Option<&'static str> {
     let label = basename(program.program);
     crate::agents::known_kinds().find(|kind| {
-        label == *kind
+        program_names_kind(label, kind)
             || (program.from_launcher && agent_script_path_names_kind(program.program, kind))
     })
 }
 
 fn command_agent_kind_from_comm(comm: &str) -> Option<&'static str> {
     let comm = basename(comm.trim());
-    let mut matches = crate::agents::known_kinds().filter(|kind| {
-        crate::agents::descriptor_by_kind(kind).is_some_and(|descriptor| {
-            descriptor.process_names.contains(&comm)
-                // Launchers are precise only when their cmdline names the agent script.
-                && (comm == descriptor.kind || !LAUNCHERS.contains(&comm))
-        })
-    });
+    let mut matches = crate::agents::known_kinds().filter(|kind| program_names_kind(comm, kind));
     let kind = matches.next()?;
     matches.next().is_none().then_some(kind)
 }
@@ -179,6 +175,18 @@ mod tests {
         // A real agent under sudo is still that agent; a bare invocation too.
         assert_eq!(command_agent_kind("sudo codex"), Some("codex"));
         assert_eq!(command_agent_kind("codex --foo"), Some("codex"));
+        assert_eq!(
+            command_agent_kind("codex-aarch64-apple-darwin"),
+            Some("codex")
+        );
+        assert_eq!(
+            command_agent_kind("/usr/local/bin/codex-x86_64-apple-darwin"),
+            Some("codex")
+        );
+        assert_eq!(
+            program_label("codex-aarch64-apple-darwin"),
+            "codex-aarch64-apple-darwin"
+        );
         assert_eq!(command_agent_kind("claude"), Some("claude"));
         // A JS launcher runs its script, so `node …/codex` is codex — the script
         // is the program, unlike npm's install *target*.
@@ -226,6 +234,10 @@ mod tests {
         assert_eq!(
             command_agent_kind_with_comm("", Some("claude")),
             Some("claude")
+        );
+        assert_eq!(
+            command_agent_kind_with_comm("", Some("codex-aarch64-a")),
+            Some("codex")
         );
         assert_eq!(command_agent_kind_with_comm("node", Some("node")), None);
         assert_eq!(command_agent_kind_with_comm("bun", Some("bun")), None);

@@ -88,6 +88,47 @@ pub struct AgentDescriptor {
     pub thread_key: ThreadKey,
 }
 
+/// Architecture tokens that open a Rust target triple, so a release binary
+/// named `<kind>-<triple>` (`codex-aarch64-apple-darwin`) still reads as
+/// `<kind>`. Matching the arch, not the full triple, stays correct under the
+/// kernel's 15-char `comm` truncation (`codex-aarch64-a`), where the arch fits
+/// and the vendor/os tail does not.
+const TARGET_ARCHES: &[&str] = &[
+    "x86_64",
+    "aarch64",
+    "arm64",
+    "armv7",
+    "arm",
+    "i686",
+    "i386",
+    "riscv64",
+    "powerpc64",
+    "powerpc",
+    "s390x",
+    "loongarch64",
+];
+
+/// Whether a program `comm`/argv0 basename names `kind`: the bare kind, or the
+/// kind under a target-triple release-binary suffix (`codex-aarch64-apple-darwin`,
+/// or its `comm`-truncated `codex-aarch64-a`).
+pub fn program_names_kind(name: &str, kind: &str) -> bool {
+    if name == kind {
+        return true;
+    }
+    let Some(rest) = name
+        .strip_prefix(kind)
+        .and_then(|rest| rest.strip_prefix('-'))
+    else {
+        return false;
+    };
+    TARGET_ARCHES.iter().any(|arch| {
+        rest == *arch
+            || rest
+                .strip_prefix(arch)
+                .is_some_and(|tail| tail.starts_with('-'))
+    })
+}
+
 /// How a provider's transcript files map to billing threads (sessions), so the
 /// spending pass counts one thread once however many files it spread across.
 #[derive(Clone, Copy, Debug)]
@@ -345,6 +386,13 @@ impl AgentDescriptor {
         self.activity_events.contains(&event_name)
     }
 
+    /// Whether a process `comm`/argv0 basename belongs to this agent: one of
+    /// its declared process names (its own binary plus any launcher), or the
+    /// kind under a target-triple release-binary suffix.
+    pub fn runs_as(&self, name: &str) -> bool {
+        self.process_names.contains(&name) || program_names_kind(name, self.kind)
+    }
+
     /// Whether a tool-use payload names a workspace-mutating tool. The tool
     /// name rides `tool_name` in every provider's payload.
     pub fn tool_mutates(&self, payload: &Value) -> bool {
@@ -377,6 +425,7 @@ impl AgentDescriptor {
 mod tests {
     use serde_json::json;
 
+    use super::program_names_kind;
     use crate::agents::registry::ADAPTERS;
     use crate::feed::FeedKind;
 
@@ -425,6 +474,34 @@ mod tests {
         assert_eq!(codex.blocking_tool_kind(Some("ExitPlanMode")), None);
         assert_eq!(codex.blocking_tool_kind(Some("update_plan")), None);
         assert_eq!(codex.blocking_tool_kind(None), None);
+    }
+
+    #[test]
+    fn target_triple_binary_names_still_name_the_agent_kind() {
+        for name in [
+            "codex",
+            "codex-aarch64-apple-darwin",
+            "codex-x86_64-apple-darwin",
+            "codex-x86_64-unknown-linux-musl",
+            "codex-aarch64-unknown-linux-gnu",
+            "codex-aarch64-a",
+        ] {
+            assert!(program_names_kind(name, "codex"), "{name}");
+        }
+
+        for name in ["codexfoo", "codex-plan", "codex-appserver-stub", "node"] {
+            assert!(!program_names_kind(name, "codex"), "{name}");
+        }
+    }
+
+    #[test]
+    fn descriptor_run_names_include_launchers_and_target_triples() {
+        let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
+
+        assert!(codex.runs_as("codex"));
+        assert!(codex.runs_as("node"));
+        assert!(codex.runs_as("codex-aarch64-a"));
+        assert!(!codex.runs_as("zsh"));
     }
 
     #[test]

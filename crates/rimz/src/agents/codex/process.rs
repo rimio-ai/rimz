@@ -91,7 +91,8 @@ pub fn codex_resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSessi
     while let Some(token) = tokens.next() {
         let is_codex = Path::new(token)
             .file_name()
-            .is_some_and(|file| file == CODEX_BINARY_MARKER);
+            .and_then(|file| file.to_str())
+            .is_some_and(|file| crate::agents::program_names_kind(file, CODEX_BINARY_MARKER));
         if !is_codex {
             continue;
         }
@@ -160,6 +161,11 @@ mod tests {
     fn codex_resume_cmdline_yields_session_id() {
         assert_eq!(
             codex_resumed_session_id_from_cmdline("codex resume 019ea276").as_deref(),
+            Some("019ea276")
+        );
+        assert_eq!(
+            codex_resumed_session_id_from_cmdline("codex-aarch64-apple-darwin resume 019ea276")
+                .as_deref(),
             Some("019ea276")
         );
         assert_eq!(

@@ -61,6 +61,7 @@ pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe, ResetCred
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
     PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    program_names_kind,
 };
 pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
