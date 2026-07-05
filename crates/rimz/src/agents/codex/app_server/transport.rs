@@ -12,6 +12,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use tungstenite::error::ProtocolError;
 use tungstenite::handshake::{HandshakeError, client::ClientHandshake};
 use tungstenite::{Message, WebSocket};
 
@@ -156,6 +157,21 @@ fn map_ws_err(err: tungstenite::Error) -> AppServerErr {
             ) =>
         {
             AppServerErr::Timeout
+        }
+        tungstenite::Error::Io(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::InvalidInput
+                    | std::io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            AppServerErr::Closed
+        }
+        tungstenite::Error::Protocol(ProtocolError::ResetWithoutClosingHandshake) => {
+            AppServerErr::Closed
         }
         tungstenite::Error::Io(err) => AppServerErr::Io(err),
         err => AppServerErr::Protocol(err.to_string()),
@@ -307,14 +323,9 @@ impl JsonRpcTransport for WsTransport {
         self.next_id += 1;
         self.send_value(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
         loop {
-            let remaining = self
-                .deadline
-                .checked_duration_since(Instant::now())
-                .ok_or(AppServerErr::Timeout)?;
-            self.ws
-                .get_ref()
-                .set_read_timeout(Some(remaining))
-                .map_err(AppServerErr::Io)?;
+            if Instant::now() >= self.deadline {
+                return Err(AppServerErr::Timeout);
+            }
             match self.ws.read().map_err(map_ws_err)? {
                 Message::Text(text) => {
                     let Ok(value) = serde_json::from_str::<Value>(&text) else {
@@ -443,7 +454,10 @@ mod tests {
         let mut transport = WsTransport::from_stream(client, Duration::from_secs(1)).unwrap();
 
         let err = transport.request("closing", Value::Null).unwrap_err();
-        assert!(matches!(err, AppServerErr::Closed));
+        assert!(
+            matches!(err, AppServerErr::Closed),
+            "expected closed transport, got {err:?}"
+        );
         handle.join().unwrap();
     }
 }

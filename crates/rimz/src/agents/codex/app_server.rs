@@ -109,7 +109,7 @@ enum ConnectAttempt {
 
 pub(crate) enum Transport {
     Framed(FramedTransport),
-    Ws(WsTransport),
+    Ws(Box<WsTransport>),
 }
 
 impl JsonRpcTransport for Transport {
@@ -141,9 +141,9 @@ impl CodexAppServer<Transport> {
                 ConnectAttempt::Broker(path) => {
                     FramedTransport::connect(path, DAEMON_PROBE_DEADLINE).map(Transport::Framed)
                 }
-                ConnectAttempt::DaemonWs(path) => {
-                    WsTransport::connect(path, DAEMON_PROBE_DEADLINE).map(Transport::Ws)
-                }
+                ConnectAttempt::DaemonWs(path) => WsTransport::connect(path, DAEMON_PROBE_DEADLINE)
+                    .map(Box::new)
+                    .map(Transport::Ws),
                 ConnectAttempt::Spawn(args, deadline) => {
                     FramedTransport::spawn(&bin, args, *deadline).map(Transport::Framed)
                 }
