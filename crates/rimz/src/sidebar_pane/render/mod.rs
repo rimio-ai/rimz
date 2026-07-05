@@ -363,9 +363,10 @@ pub(crate) fn unread_pet_row_ids(snapshot: &SidebarSnapshot) -> impl Iterator<It
 }
 
 /// The provider kind whose block the dashboard shows: the manual tab pick while
-/// its panel is still on the dashboard, else the selection-derived kind
-/// ([`selected_agent_kind`]) when a panel exists for it, else the first panel.
-/// `None` only when the dashboard is empty.
+/// its panel is still on the dashboard, else the live selection-derived kind
+/// ([`selected_agent_kind`]) when a panel exists for it, else the last agent
+/// kind the dashboard followed while its panel is still present, else the
+/// first panel. `None` only when the dashboard is empty.
 pub(crate) fn active_dashboard_tab(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
     let panels = &snapshot.providers;
     let has_panel = |kind: &str| panels.iter().any(|panel| panel.kind == kind);
@@ -378,6 +379,11 @@ pub(crate) fn active_dashboard_tab(snapshot: &SidebarSnapshot, ui: &UiState) -> 
         && has_panel(&kind)
     {
         return Some(kind);
+    }
+    if let Some(kind) = &ui.last_agent_kind
+        && has_panel(kind)
+    {
+        return Some(kind.clone());
     }
     panels.first().map(|panel| panel.kind.clone())
 }

@@ -108,6 +108,14 @@ pub struct UiState {
     /// changes from the value captured at pick time (a `None` derivation — a
     /// process row — holds it), or when its target leaves the dashboard.
     pub(crate) dashboard_tab: Option<DashboardTab>,
+    /// The last selection-derived agent kind the dashboard followed — its
+    /// hold-last, one level finer than `baseline_pane`. Reconciliation
+    /// advances it on an agent selection that has a dashboard panel and holds
+    /// it across a non-agent selection, so focusing a shell row keeps the last
+    /// agent's provider block instead of snapping to the first-panel default.
+    /// Read by `active_dashboard_tab` below the live derivation and re-guarded
+    /// against the panel still being on the dashboard.
+    pub(crate) last_agent_kind: Option<String>,
     /// The current pet dashboard view, folded by the serve loop from the latest
     /// snapshot and the renderer-local asset cache before drawing. Render reads
     /// this data only; it never fetches, decodes, or slices pet assets.

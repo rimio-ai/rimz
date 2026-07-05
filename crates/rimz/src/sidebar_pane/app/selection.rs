@@ -584,7 +584,10 @@ fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// 3. **Follow the baseline** — the steady state.
 /// 4. **Reanchor.** State whose pane left the room is dropped, and
 ///    `anchor_selection` re-derives `selected_index` by identity.
-/// 5. **Dashboard tab.** A manual tab pick ends when the selection-derived
+/// 5. **Dashboard hold-last.** A selection-derived provider kind with a
+///    dashboard panel advances the remembered dashboard default; non-agent
+///    rows hold it.
+/// 6. **Dashboard tab.** A manual tab pick ends when the selection-derived
 ///    provider kind genuinely changes from the value captured at pick time —
 ///    the dashboard's twin of the browse end-condition.
 pub(super) fn reconcile_selection(
@@ -652,24 +655,34 @@ pub(super) fn reconcile_selection(
         ui.manual_scroll = None;
     }
 
-    // 6. The manual dashboard-tab pick ends like a browse: a selection-derived
+    // 6. Dashboard hold-last: a selection-derived provider kind with a
+    //    dashboard panel advances the remembered default. A process row
+    //    derives no kind and holds it, so the dashboard keeps the last agent's
+    //    block when focus lands on a shell. active_dashboard_tab re-guards it
+    //    against the panel leaving.
+    let derived_kind = selected_agent_kind(snapshot, ui);
+    let tabs = dashboard_tabs(snapshot);
+    if let Some(kind) = &derived_kind
+        && tabs.iter().any(|tab| tab == kind)
+    {
+        ui.last_agent_kind = Some(kind.clone());
+    }
+
+    // 7. The manual dashboard-tab pick ends like a browse: a selection-derived
     //    provider kind that *genuinely* changed from the value captured at pick
     //    time hands the tab back to the derived default. A `None` derivation —
     //    a process row, an empty room — holds the pick, so jumping through a
     //    shell pane never loses it; a pick whose panel left the dashboard is
     //    dropped too.
     if let Some(tab) = &ui.dashboard_tab {
-        let derived = selected_agent_kind(snapshot, ui);
-        let derived_moved = derived.is_some() && derived != tab.derived_at_start;
-        let tab_gone = !dashboard_tabs(snapshot)
-            .iter()
-            .any(|kind| kind == &tab.kind);
+        let derived_moved = derived_kind.is_some() && derived_kind != tab.derived_at_start;
+        let tab_gone = !tabs.iter().any(|kind| kind == &tab.kind);
         if derived_moved || tab_gone {
             ui.dashboard_tab = None;
         }
     }
 
-    // 7. Unread focus: a freshly-arrived actionable unread snaps the viewport to
+    // 8. Unread focus: a freshly-arrived actionable unread snaps the viewport to
     //    it with priority over following the selection, holding there until the
     //    user engages (any input clears it) or it stops being the lead. A manual
     //    scroll pin is respected — a new unread arriving mid-browse never yanks

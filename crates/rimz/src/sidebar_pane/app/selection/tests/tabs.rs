@@ -149,6 +149,55 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
         Some("pi")
     );
 }
+
+#[test]
+fn dashboard_holds_the_last_agent_across_a_non_agent_selection() {
+    let ws = workspace();
+    let mut snapshot = tabbed_snapshot(&ws);
+    snapshot.worktree_groups[0].rows[0].name = "codex".to_owned();
+    let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let process_pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    let mut ui = UiState::default();
+
+    reconcile_selection(&mut ui, &snapshot, Some(agent_pane));
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        Some("codex")
+    );
+
+    reconcile_selection(&mut ui, &snapshot, Some(process_pane));
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        Some("codex"),
+        "a non-agent selection holds the last agent's tab"
+    );
+}
+
+#[test]
+fn dashboard_ignores_agent_kinds_without_a_panel_for_hold_last() {
+    let ws = workspace();
+    let mut snapshot = tabbed_snapshot(&ws);
+    snapshot.worktree_groups[0].rows[0].name = "codex".to_owned();
+    let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let mut ui = UiState::default();
+
+    reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        Some("codex")
+    );
+
+    let mut unpanelled = tabbed_snapshot(&ws);
+    unpanelled.worktree_groups[0].rows[0].name = "opencode".to_owned();
+    reconcile_selection(&mut ui, &unpanelled, Some(agent_pane));
+
+    assert_eq!(
+        render::active_dashboard_tab(&unpanelled, &ui).as_deref(),
+        Some("codex"),
+        "only an agent kind with a dashboard panel advances the remembered tab"
+    );
+}
+
 #[test]
 fn tab_pick_drops_when_its_panel_leaves_the_dashboard() {
     let ws = workspace();
