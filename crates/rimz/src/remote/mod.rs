@@ -305,7 +305,7 @@ fn guarded_snippet(
         rimz.push_str(&format!(" --mux {mux}"));
     }
     let not_found = sh_quote(&format!(
-        "rimz not found on {} — install: cargo install rimz",
+        "rimz not found on {} — install: cargo install --locked rimz",
         target.host,
     ));
     format!(

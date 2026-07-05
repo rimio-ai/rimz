@@ -53,7 +53,7 @@ fn one_shot_spec(target: &RemoteTarget, rimz: &str) -> CommandSpec {
 
 fn web_snippet(target: &RemoteTarget, rimz: &str) -> String {
     let not_found = sh_quote(&format!(
-        "rimz not found on {} — install: cargo install rimz",
+        "rimz not found on {} — install: cargo install --locked rimz",
         target.host_display(),
     ));
     format!(

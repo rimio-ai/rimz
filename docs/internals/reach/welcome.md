@@ -164,7 +164,7 @@ Selecting a host — or running `rimz remote connect pluto-xterm` — builds the
  ↵ attach   h back   r refresh   ? help                          q quit
 ```
 
-While the host is being reached, the body carries a `⠙ listing rooms on pluto-xterm…` line. A host that cannot answer states the fix in place and holds the lobby open — `! pluto-xterm: rimz not found on host · install: cargo install rimz` — the fail-fast precondition rendered where you can act on it, never a half-built remote attach. The link badge follows the same tone ramp as the sidebar footer's: calm gray warming to red as RTT and loss climb.
+While the host is being reached, the body carries a `⠙ listing rooms on pluto-xterm…` line. A host that cannot answer states the fix in place and holds the lobby open — `! pluto-xterm: rimz not found on host · install: cargo install --locked rimz` — the fail-fast precondition rendered where you can act on it, never a half-built remote attach. The link badge follows the same tone ramp as the sidebar footer's: calm gray warming to red as RTT and loss climb.
 
 ## Keys
 

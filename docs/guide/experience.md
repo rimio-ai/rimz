@@ -13,7 +13,7 @@ Discovery happens before the terminal. The reader reads the Hacker News post, cl
 ```sh
 # one of:
 brew tap rimio/rimz && brew install rimz
-cargo install rimz
+cargo install --locked rimz
 curl -fsSL https://rimz.sh/install | sh
 
 cd ~/code/query-engine   # a real, small project they already have

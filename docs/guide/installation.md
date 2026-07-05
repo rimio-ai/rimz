@@ -4,7 +4,7 @@ Rimz builds from source into one binary that runs inside the Zellij or tmux you 
 
 The source install also builds a small Zellij plugin that ships embedded in the binary. The plugin compiles to WebAssembly, so the build needs Rust's `wasm32-wasip1` target — and the repo installs it for you: [rust-toolchain.toml](../../rust-toolchain.toml) pins the stable channel, the components, and that target, and `rustup` applies the file the first time you build in the repo. There is no manual target setup.
 
-`cargo install rimz` installs the binary-only crate from crates.io with the presence plugin embedded from a vendored WebAssembly artifact. Zellij uses the poll-mode freshness path only on Zellij older than 0.44, after a denied plugin permission, or when `RIMZ_PRESENCE_PLUGIN` points at an unusable override; `cargo xtask install` from a source checkout builds and embeds a fresh plugin artifact.
+`cargo install --locked rimz` installs the binary-only crate from crates.io with the presence plugin embedded from a vendored WebAssembly artifact. Zellij uses the poll-mode freshness path only on Zellij older than 0.44, after a denied plugin permission, or when `RIMZ_PRESENCE_PLUGIN` points at an unusable override; `cargo xtask install` from a source checkout builds and embeds a fresh plugin artifact.
 
 ## Prerequisites
 
