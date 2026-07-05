@@ -63,7 +63,7 @@ An agent launched through `sudo`, `su`, or `doas` as another real uid is visible
 
 ## Forge status probes
 
-The sidebar's PR marker is best-effort enrichment: the producer runs `gh` for GitHub remotes or `tea` for Gitea/Forgejo/Codeberg remotes, in the worktree, on a long TTL. The CLI uses your existing forge login and contacts the repository's own forge to list PR state for the current branch; unsupported forges and branches without PRs publish an empty cache. The probe reads no Rimz secrets and adds no project config field, so it stays outside the project trust hash.
+The sidebar's PR marker is best-effort enrichment: the producer runs `gh` for GitHub remotes or `tea` for Gitea/Forgejo/Codeberg remotes, in the worktree, on a repo-tier TTL. The CLI uses your existing forge login and contacts the repository's own forge to list the repo's open PRs, then matches branch names locally; an open PR that disappears from that set gets one targeted branch lookup to resolve closed versus merged. Unsupported forges and branches without PRs publish an empty cache. The probe reads no Rimz secrets and adds no project config field, so it stays outside the project trust hash.
 
 ## CI build cache
 

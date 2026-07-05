@@ -48,7 +48,7 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 | Lane | Scope | Carries |
 | --- | --- | --- |
 | `diff-stats.json` | room | per-worktree git facts split into edit-sensitive stats (`added`/`removed`, dirty/untracked state, branch, merge/rebase state) and commit/PR-shaped stats (ahead/behind counts, landed markers, did-work marker), each with its own stamp, plus the group-root set |
-| `pr-state.json` | room | producer-only `gh`/`tea` pull-request state by worktree path, absent when no PR or unsupported forge |
+| `pr-state.json` | room | producer-only `gh`/`tea` pull-request state by worktree path, plus per-repo probe stamps, path-to-repo metadata, and last-seen HEAD SHAs; absent when no PR or unsupported forge |
 | `metrics-sample.json` | room (producer-only) | per-pane resource samples and pane→root-pid bindings; figures publish on the pane frame |
 | `workspace-spending.<hash>.json` | room | the room's cockpit spend tally, live carry, and per-row cost baselines |
 | `link-stats.json` | room | the latest remote-SSH probe stats for the footer link badge ([remote.md](../reach/remote.md)) |
@@ -121,7 +121,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | Presence stamp | `PRESENCE_STAMP_FRESH` | Switches the producer between poll and event-mode pane TTLs |
 | Presence sample | `PRESENCE_SAMPLE_TTL` while tmux reports attached clients and input-idle timestamps | AFK badge clear after fresh input |
 | Git diff stats | focused: `DIFF_STATS_FOCUSED_LOCAL_TTL` local/edit facts and `DIFF_STATS_FOCUSED_COMMIT_TTL` commit/PR facts; background: `DIFF_STATS_TTL` hot and `DIFF_STATS_IDLE_TTL` idle | Worktree header churn, ahead/behind counts, landed markers, trunk-sync classification |
-| PR state | `PR_STATE_TTL` success; escalating failure backoff starts at `PR_STATE_RETRY_TTL` and caps at `PR_STATE_TTL` | Worktree header PR glyphs after diverged stats; failed paths keep last-known-good state |
+| PR state | `PR_STATE_HOT_TTL` for hot/focused repos, `PR_STATE_TTL` for idle repos; escalating failure backoff starts at `PR_STATE_RETRY_TTL` and caps at the repo tier; HEAD changes bypass the TTL | Worktree header PR glyphs after diverged stats; each due repo enumerates open PRs once, and failed repos keep last-known-good state |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
 | `/proc` metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
 | Spending walk | `SPENDING_TTL` | Provider dashboard, fleet ledger, and the floor under the live cockpit spend |

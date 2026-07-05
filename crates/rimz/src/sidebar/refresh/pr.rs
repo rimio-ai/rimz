@@ -3,8 +3,8 @@
 //! The probe shells out to the repo's forge CLI on a long TTL, publishes
 //! `pr-state.json`, and lets consumers project the cached map without forking.
 
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -12,49 +12,68 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::forge::{self, ForgeCli};
-use crate::sidebar::refresh::git_stats::needed_worktree_paths;
-use crate::sidebar::timing::{PR_STATE_RETRY_TTL, PR_STATE_TTL, unix_now_ms};
+use crate::sidebar::refresh::git_stats::{
+    DiffStatsCache, focused_worktree_paths, hot_worktree_paths, needed_worktree_paths,
+    read_diff_stats_cache,
+};
+use crate::sidebar::timing::{PR_STATE_HOT_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL, unix_now_ms};
 use crate::{SidebarSnapshot, WorktreePrState};
 
 const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
 const PR_STATE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PARALLEL_PR_PROBES: usize = 8;
+const UNSUPPORTED_REPO_KEY: &str = "";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PrStateCache {
-    pub refreshed_at_ms: u64,
-    /// Whether the last PR-state probe completed without an infrastructure
-    /// failure. A logged-in repo with no PR is a success and keeps an empty map.
-    #[serde(default = "pr_state_probe_ok_default")]
-    pub ok: bool,
-    /// Consecutive failed sweeps, for escalating retry backoff on deterministic
-    /// forge CLI failures.
-    #[serde(default)]
-    pub consecutive_failures: u32,
     /// PR state by absolute worktree path.
     #[serde(default)]
     pub states: BTreeMap<String, crate::WorktreePrState>,
+    /// Probe freshness by origin repo key.
+    #[serde(default)]
+    pub repos: BTreeMap<String, RepoProbe>,
+    /// Last HEAD SHA observed when a worktree's repo was probed.
+    #[serde(default)]
+    pub head_seen: BTreeMap<String, String>,
+    /// Last repo classification seen for a worktree. Supported repos store
+    /// their repo key; unsupported/undiscoverable paths store an empty marker.
+    /// This preserves the no-fork fresh path: per-repo TTL can be evaluated
+    /// before shelling out for branch/remote metadata.
+    #[serde(default)]
+    pub path_repos: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoProbe {
+    pub refreshed_at_ms: u64,
+    /// Whether the last repo probe completed without an infrastructure
+    /// failure. A logged-in repo with no PR is a success and keeps an empty map.
+    #[serde(default = "pr_state_probe_ok_default")]
+    pub ok: bool,
+    /// Consecutive failed probes, for escalating retry backoff on deterministic
+    /// forge CLI failures.
+    #[serde(default)]
+    pub consecutive_failures: u32,
+}
+
+impl Default for RepoProbe {
+    fn default() -> Self {
+        Self {
+            refreshed_at_ms: 0,
+            ok: true,
+            consecutive_failures: 0,
+        }
+    }
 }
 
 fn pr_state_probe_ok_default() -> bool {
     true
 }
 
-impl PrStateCache {
-    pub(crate) fn is_fresh(&self, now_ms: u64) -> bool {
-        let ttl = if self.ok {
-            PR_STATE_TTL
-        } else {
-            pr_state_failure_ttl(self.consecutive_failures)
-        };
-        now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
-    }
-}
-
-fn pr_state_failure_ttl(consecutive_failures: u32) -> Duration {
+fn pr_state_failure_ttl(consecutive_failures: u32, cap: Duration) -> Duration {
     let retry_ms = PR_STATE_RETRY_TTL.as_millis() as u64;
-    let cap_ms = PR_STATE_TTL.as_millis() as u64;
+    let cap_ms = cap.as_millis() as u64;
     let shift = consecutive_failures.saturating_sub(1).min(63);
     let factor = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
     Duration::from_millis(retry_ms.saturating_mul(factor).min(cap_ms))
@@ -67,14 +86,31 @@ pub(crate) fn produce_pr_states(
     let path = runtime.pr_state_path();
     let cache = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
-    if cache.is_fresh(now_ms) {
+    let needed = needed_worktree_paths(snapshot);
+    let diff_cache = read_diff_stats_cache(&runtime.diff_stats_path());
+    let hot = hot_worktree_paths(snapshot);
+    let focused = focused_worktree_paths(snapshot);
+    if let Some(due) = cached_due_repo_keys(&cache, &needed, &diff_cache, &hot, &focused, now_ms)
+        && due.is_empty()
+    {
+        return cache.states;
+    }
+
+    let targets = build_targets(&needed, &diff_cache);
+    let groups = group_targets(targets);
+    let target_paths = current_target_paths(&groups);
+    let due = due_repo_keys(&groups, &cache, &hot, &focused, now_ms);
+    let needs_reconcile = needs_target_reconcile(&cache, &needed, &diff_cache, &target_paths);
+    if due.is_empty() && !needs_reconcile {
         return cache.states;
     }
 
     let lock_path = runtime.root.join("pr-state.lock");
     let fresh = || {
         let cache = read_pr_state_cache(&path);
-        cache.is_fresh(unix_now_ms()).then_some(cache)
+        let due = due_repo_keys(&groups, &cache, &hot, &focused, unix_now_ms());
+        let needs_reconcile = needs_target_reconcile(&cache, &needed, &diff_cache, &target_paths);
+        (due.is_empty() && !needs_reconcile).then_some(cache)
     };
     match crate::ledger::single_flight::coalesce(
         &lock_path,
@@ -85,116 +121,501 @@ pub(crate) fn produce_pr_states(
         crate::ledger::single_flight::Coalesced::Shared(cache) => cache.states,
         crate::ledger::single_flight::Coalesced::Produce(_guard) => {
             let prior = read_pr_state_cache(&path);
-            let result = probe_pr_states(snapshot, &prior.states);
-            let (states, ok) = merge_probe_results(&prior.states, result);
-            let cache = PrStateCache {
-                refreshed_at_ms: unix_now_ms(),
-                ok,
-                consecutive_failures: next_consecutive_failures(&prior, ok),
-                states,
-            };
+            let due = due_repo_keys(&groups, &prior, &hot, &focused, unix_now_ms());
+            let needs_reconcile =
+                needs_target_reconcile(&prior, &needed, &diff_cache, &target_paths);
+            if due.is_empty() && !needs_reconcile {
+                return prior.states;
+            }
+            let cache = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, unix_now_ms());
             write_pr_state_cache(&path, &cache);
             cache.states
         }
         crate::ledger::single_flight::Coalesced::ProduceLocal => {
             let prior = read_pr_state_cache(&path);
-            merge_probe_results(&prior.states, probe_pr_states(snapshot, &prior.states)).0
+            let due = due_repo_keys(&groups, &prior, &hot, &focused, unix_now_ms());
+            let needs_reconcile =
+                needs_target_reconcile(&prior, &needed, &diff_cache, &target_paths);
+            if due.is_empty() && !needs_reconcile {
+                prior.states
+            } else {
+                probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, unix_now_ms()).states
+            }
         }
     }
 }
 
-fn next_consecutive_failures(prior: &PrStateCache, ok: bool) -> u32 {
+fn next_consecutive_failures(prior: Option<&RepoProbe>, ok: bool) -> u32 {
     if ok {
         0
     } else {
-        prior.consecutive_failures.saturating_add(1)
+        prior
+            .map(|probe| probe.consecutive_failures)
+            .unwrap_or_default()
+            .saturating_add(1)
     }
 }
 
-struct ProbeBatch {
+#[derive(Default)]
+struct RepoDueInputs {
+    hot: bool,
+    nudged: bool,
+    has_uncached: bool,
+}
+
+fn cached_due_repo_keys(
+    cache: &PrStateCache,
+    needed: &[String],
+    diff_cache: &DiffStatsCache,
+    hot: &BTreeSet<String>,
+    focused: &BTreeSet<String>,
+    now_ms: u64,
+) -> Option<BTreeSet<String>> {
+    let mut inputs = BTreeMap::<String, RepoDueInputs>::new();
+    for path in needed {
+        let head_sha = target_head_sha(diff_cache, path);
+        let has_uncached = !cache.head_seen.contains_key(path);
+        let Some(repo_key) = cache.path_repos.get(path) else {
+            if has_uncached || head_nudged(&cache.head_seen, path, head_sha) {
+                return None;
+            }
+            continue;
+        };
+        if repo_key == UNSUPPORTED_REPO_KEY {
+            if has_uncached {
+                return None;
+            }
+            continue;
+        }
+        let input = inputs.entry(repo_key.clone()).or_default();
+        input.hot |= hot.contains(path) || focused.contains(path);
+        input.nudged |= head_nudged(&cache.head_seen, path, head_sha);
+        input.has_uncached |= has_uncached;
+    }
+    Some(
+        inputs
+            .into_iter()
+            .filter_map(|(repo_key, input)| {
+                let ttl = repo_tier_ttl(input.hot);
+                repo_due(
+                    cache.repos.get(&repo_key),
+                    ttl,
+                    now_ms,
+                    input.nudged,
+                    input.has_uncached,
+                )
+                .then_some(repo_key)
+            })
+            .collect(),
+    )
+}
+
+fn target_head_sha<'a>(diff_cache: &'a DiffStatsCache, path: &str) -> Option<&'a str> {
+    diff_cache
+        .entries
+        .get(path)
+        .and_then(|entry| entry.head_sha.as_deref())
+}
+
+fn head_nudged(head_seen: &BTreeMap<String, String>, path: &str, head_sha: Option<&str>) -> bool {
+    head_sha.is_some_and(|head_sha| head_seen.get(path).is_none_or(|seen| seen != head_sha))
+}
+
+fn due_repo_keys(
+    groups: &BTreeMap<String, RepoGroup>,
+    cache: &PrStateCache,
+    hot: &BTreeSet<String>,
+    focused: &BTreeSet<String>,
+    now_ms: u64,
+) -> BTreeSet<String> {
+    groups
+        .iter()
+        .filter_map(|(repo_key, group)| {
+            let repo_hot = group
+                .targets
+                .iter()
+                .any(|target| hot.contains(&target.path) || focused.contains(&target.path));
+            let nudged = group.targets.iter().any(|target| {
+                head_nudged(&cache.head_seen, &target.path, target.head_sha.as_deref())
+            });
+            let has_uncached = group
+                .targets
+                .iter()
+                .any(|target| !cache.head_seen.contains_key(&target.path));
+            repo_due(
+                cache.repos.get(repo_key),
+                repo_tier_ttl(repo_hot),
+                now_ms,
+                nudged,
+                has_uncached,
+            )
+            .then(|| repo_key.clone())
+        })
+        .collect()
+}
+
+fn repo_tier_ttl(repo_hot: bool) -> Duration {
+    if repo_hot {
+        PR_STATE_HOT_TTL
+    } else {
+        PR_STATE_TTL
+    }
+}
+
+fn repo_due(
+    probe: Option<&RepoProbe>,
+    ttl: Duration,
+    now_ms: u64,
+    nudged: bool,
+    has_uncached: bool,
+) -> bool {
+    if nudged || has_uncached {
+        return true;
+    }
+    let Some(probe) = probe else {
+        return true;
+    };
+    let ttl = if probe.ok {
+        ttl
+    } else {
+        pr_state_failure_ttl(probe.consecutive_failures, ttl)
+    };
+    now_ms.saturating_sub(probe.refreshed_at_ms) > ttl.as_millis() as u64
+}
+
+#[derive(Clone, Debug)]
+struct Target {
+    path: String,
+    branch: String,
+    remote: String,
+    forge_cli: ForgeCli,
+    repo_key: String,
+    repo_slug: Option<String>,
+    worktree: PathBuf,
+    head_sha: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RepoGroup {
+    forge_cli: ForgeCli,
+    repo_slug: Option<String>,
+    worktree: PathBuf,
+    targets: Vec<Target>,
+}
+
+fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> {
+    let mut targets = Vec::new();
+    for path in needed {
+        let worktree = Path::new(path);
+        let Some(branch) = git_branch(worktree) else {
+            continue;
+        };
+        let Some(remote) = git_line(worktree, &["remote", "get-url", "origin"]) else {
+            continue;
+        };
+        let Some(forge_cli) = forge::forge_cli_for_remote(&remote) else {
+            continue;
+        };
+        let repo_slug = forge::remote_repo_slug(&remote);
+        targets.push(Target {
+            path: path.clone(),
+            branch,
+            remote: remote.clone(),
+            forge_cli,
+            repo_key: repo_key(forge_cli, &remote, repo_slug.as_deref()),
+            repo_slug,
+            worktree: worktree.to_path_buf(),
+            head_sha: target_head_sha(diff_cache, path).map(str::to_owned),
+        });
+    }
+    targets
+}
+
+fn repo_key(forge_cli: ForgeCli, remote: &str, repo_slug: Option<&str>) -> String {
+    let host = forge::remote_host(remote).to_ascii_lowercase();
+    let repo = repo_slug.unwrap_or_else(|| remote.trim());
+    format!("{}:{host}:{repo}", forge_cli_key(forge_cli))
+}
+
+fn forge_cli_key(forge_cli: ForgeCli) -> &'static str {
+    match forge_cli {
+        ForgeCli::Gh => "gh",
+        ForgeCli::Tea => "tea",
+    }
+}
+
+fn group_targets(targets: Vec<Target>) -> BTreeMap<String, RepoGroup> {
+    let mut groups = BTreeMap::<String, RepoGroup>::new();
+    for target in targets {
+        let entry = groups
+            .entry(target.repo_key.clone())
+            .or_insert_with(|| RepoGroup {
+                forge_cli: target.forge_cli,
+                repo_slug: target.repo_slug.clone(),
+                worktree: target.worktree.clone(),
+                targets: Vec::new(),
+            });
+        entry.targets.push(target);
+    }
+    groups
+}
+
+fn current_target_paths(groups: &BTreeMap<String, RepoGroup>) -> BTreeSet<String> {
+    groups
+        .values()
+        .flat_map(|group| group.targets.iter().map(|target| target.path.clone()))
+        .collect()
+}
+
+fn needs_target_reconcile(
+    cache: &PrStateCache,
+    needed: &[String],
+    diff_cache: &DiffStatsCache,
+    target_paths: &BTreeSet<String>,
+) -> bool {
+    needed
+        .iter()
+        .filter(|path| !target_paths.contains(*path))
+        .any(|path| {
+            cache.states.contains_key(path)
+                || cache.path_repos.get(path).map(String::as_str) != Some(UNSUPPORTED_REPO_KEY)
+                || cache
+                    .head_seen
+                    .get(path)
+                    .map(String::as_str)
+                    .unwrap_or_default()
+                    != target_head_sha(diff_cache, path).unwrap_or_default()
+        })
+}
+
+fn reconcile_target_bookkeeping(
+    mut cache: PrStateCache,
+    needed: &[String],
+    diff_cache: &DiffStatsCache,
+    target_paths: &BTreeSet<String>,
+) -> PrStateCache {
+    let current_needed_paths = needed.iter().cloned().collect::<BTreeSet<_>>();
+    cache
+        .states
+        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
+    cache
+        .head_seen
+        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
+    cache
+        .path_repos
+        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
+    for path in needed.iter().filter(|path| !target_paths.contains(*path)) {
+        cache.states.remove(path);
+        cache
+            .path_repos
+            .insert(path.clone(), UNSUPPORTED_REPO_KEY.to_owned());
+        cache.head_seen.insert(
+            path.clone(),
+            target_head_sha(diff_cache, path)
+                .unwrap_or_default()
+                .to_owned(),
+        );
+    }
+    cache
+}
+
+struct AssignedStates {
     states: BTreeMap<String, WorktreePrState>,
-    failed_paths: Vec<String>,
+    transitions: Vec<Target>,
 }
 
-impl ProbeBatch {
-    fn ok(&self) -> bool {
-        self.failed_paths.is_empty()
-    }
-}
-
-fn probe_pr_states(
-    snapshot: &SidebarSnapshot,
+fn assign_states(
+    targets: &[Target],
+    open_map: &BTreeMap<String, WorktreePrState>,
     prior: &BTreeMap<String, WorktreePrState>,
-) -> ProbeBatch {
-    let paths = needed_worktree_paths(snapshot);
-    let (pinned, to_probe) = probe_targets(&paths, prior);
+) -> AssignedStates {
     let mut states = BTreeMap::new();
-    for path in pinned {
-        states.insert(path.clone(), WorktreePrState::Merged);
+    let mut transitions = Vec::new();
+    for target in targets {
+        if open_map.contains_key(&target.branch) {
+            states.insert(target.path.clone(), WorktreePrState::Open);
+            continue;
+        }
+        match prior.get(&target.path) {
+            Some(WorktreePrState::Merged) => {
+                states.insert(target.path.clone(), WorktreePrState::Merged);
+            }
+            Some(WorktreePrState::Open) => transitions.push(target.clone()),
+            Some(WorktreePrState::Closed) => {
+                states.insert(target.path.clone(), WorktreePrState::Closed);
+            }
+            None => {}
+        }
     }
-    let mut failed_paths = Vec::new();
-    for chunk in to_probe.chunks(MAX_PARALLEL_PR_PROBES) {
+    AssignedStates {
+        states,
+        transitions,
+    }
+}
+
+fn probe_due_repos(
+    groups: &BTreeMap<String, RepoGroup>,
+    due: &BTreeSet<String>,
+    prior: &PrStateCache,
+    needed: &[String],
+    diff_cache: &DiffStatsCache,
+    now_ms: u64,
+) -> PrStateCache {
+    let target_paths = current_target_paths(groups);
+    let mut cache = reconcile_target_bookkeeping(prior.clone(), needed, diff_cache, &target_paths);
+
+    let due_groups = groups
+        .iter()
+        .filter(|(repo_key, _)| due.contains(*repo_key))
+        .collect::<Vec<_>>();
+    for chunk in due_groups.chunks(MAX_PARALLEL_PR_PROBES) {
         std::thread::scope(|scope| {
             let handles = chunk
                 .iter()
-                .map(|path| scope.spawn(move || probe_worktree(path.as_str())))
+                .map(|(repo_key, group)| {
+                    scope.spawn(move || probe_repo_group(repo_key, group, &prior.states))
+                })
                 .collect::<Vec<_>>();
             for handle in handles {
                 if let Ok(result) = handle.join() {
-                    if !result.ok {
-                        failed_paths.push(result.path.clone());
+                    for target in &result.targets {
+                        cache.states.remove(&target.path);
+                        cache.head_seen.insert(
+                            target.path.clone(),
+                            target.head_sha.clone().unwrap_or_default(),
+                        );
+                        cache
+                            .path_repos
+                            .insert(target.path.clone(), target.repo_key.clone());
                     }
-                    if let Some(state) = result.state {
-                        states.insert(result.path, state);
+                    for (path, state) in result.states {
+                        cache.states.insert(path, state);
                     }
+                    let repo_key = result.repo_key.clone();
+                    cache.repos.insert(
+                        repo_key.clone(),
+                        RepoProbe {
+                            refreshed_at_ms: now_ms,
+                            ok: result.ok,
+                            consecutive_failures: next_consecutive_failures(
+                                prior.repos.get(&repo_key),
+                                result.ok,
+                            ),
+                        },
+                    );
                 }
             }
         });
     }
-    ProbeBatch {
-        states,
-        failed_paths,
-    }
+    cache
 }
 
-/// Split the worktrees due for a sweep into terminal cached verdicts that can
-/// be carried forward and worktrees that still need a forge probe.
-fn probe_targets<'a>(
-    paths: &'a [String],
-    prior: &BTreeMap<String, WorktreePrState>,
-) -> (Vec<&'a String>, Vec<&'a String>) {
-    paths
-        .iter()
-        .partition(|path| prior.get(*path) == Some(&WorktreePrState::Merged))
-}
-
-fn merge_probe_results(
-    prior: &BTreeMap<String, WorktreePrState>,
-    mut result: ProbeBatch,
-) -> (BTreeMap<String, WorktreePrState>, bool) {
-    let ok = result.ok();
-    for path in result.failed_paths {
-        if let Some(state) = prior.get(&path).cloned() {
-            result.states.insert(path, state);
-        }
-    }
-    (result.states, ok)
-}
-
-struct ProbeResult {
-    path: String,
-    state: Option<WorktreePrState>,
+struct RepoGroupProbe {
+    repo_key: String,
+    targets: Vec<Target>,
+    states: BTreeMap<String, WorktreePrState>,
     ok: bool,
 }
 
-fn probe_worktree(path: &str) -> ProbeResult {
-    let worktree = Path::new(path);
-    let result = probe_worktree_state(worktree);
-    ProbeResult {
-        path: path.to_owned(),
-        state: result.state,
-        ok: result.ok,
+fn probe_repo_group(
+    repo_key: &str,
+    group: &RepoGroup,
+    prior: &BTreeMap<String, WorktreePrState>,
+) -> RepoGroupProbe {
+    let open_map = match query_open_prs(group) {
+        Some(open_map) => open_map,
+        None => {
+            return RepoGroupProbe {
+                repo_key: repo_key.to_owned(),
+                targets: group.targets.clone(),
+                states: carry_prior_states(&group.targets, prior),
+                ok: false,
+            };
+        }
+    };
+    let assigned = assign_states(&group.targets, &open_map, prior);
+    let mut states = assigned.states;
+    let mut ok = true;
+    for target in assigned.transitions {
+        let result = probe_transition(&target);
+        if !result.ok {
+            ok = false;
+            if let Some(state) = prior.get(&target.path).copied() {
+                states.insert(target.path.clone(), state);
+            }
+            continue;
+        }
+        if let Some(state) = result.state {
+            states.insert(target.path.clone(), state);
+        }
     }
+    RepoGroupProbe {
+        repo_key: repo_key.to_owned(),
+        targets: group.targets.clone(),
+        states,
+        ok,
+    }
+}
+
+fn carry_prior_states(
+    targets: &[Target],
+    prior: &BTreeMap<String, WorktreePrState>,
+) -> BTreeMap<String, WorktreePrState> {
+    targets
+        .iter()
+        .filter_map(|target| {
+            prior
+                .get(&target.path)
+                .copied()
+                .map(|state| (target.path.clone(), state))
+        })
+        .collect()
+}
+
+fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, WorktreePrState>> {
+    let output = match group.forge_cli {
+        ForgeCli::Gh => command_stdout(
+            &group.worktree,
+            "gh",
+            &[
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--json",
+                "number,state,headRefName",
+                "--limit",
+                "500",
+            ],
+        )?,
+        ForgeCli::Tea => {
+            let mut args = vec![
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--output",
+                "json",
+                "--fields",
+                "index,state,head",
+                "--limit",
+                "500",
+            ];
+            if let Some(repo) = group.repo_slug.as_deref() {
+                args.extend_from_slice(&["--repo", repo]);
+            }
+            command_stdout(&group.worktree, "tea", &args)?
+        }
+    };
+    match group.forge_cli {
+        ForgeCli::Gh => forge::parse_gh_pr_list_states(&output),
+        ForgeCli::Tea => forge::parse_tea_pr_list_states(&output),
+    }
+    .map_err(|err| {
+        tracing::debug!(error = %err, "forge PR open-set parse failed");
+        err
+    })
+    .ok()
 }
 
 struct ProbeState {
@@ -202,28 +623,10 @@ struct ProbeState {
     ok: bool,
 }
 
-fn probe_worktree_state(worktree: &Path) -> ProbeState {
-    let Some(branch) = git_branch(worktree) else {
-        return ProbeState {
-            state: None,
-            ok: true,
-        };
-    };
-    let Some(remote) = git_line(worktree, &["remote", "get-url", "origin"]) else {
-        return ProbeState {
-            state: None,
-            ok: true,
-        };
-    };
-    let Some(cli) = forge::forge_cli_for_remote(&remote) else {
-        return ProbeState {
-            state: None,
-            ok: true,
-        };
-    };
-    match cli {
-        ForgeCli::Gh => probe_github(worktree, &branch),
-        ForgeCli::Tea => probe_tea(worktree, &branch, &remote),
+fn probe_transition(target: &Target) -> ProbeState {
+    match target.forge_cli {
+        ForgeCli::Gh => probe_github(&target.worktree, &target.branch),
+        ForgeCli::Tea => probe_tea(&target.worktree, &target.branch, &target.remote),
     }
 }
 
@@ -365,87 +768,305 @@ fn write_pr_state_cache(path: &Path, cache: &PrStateCache) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 
     #[test]
     fn failure_ttl_escalates_to_success_ttl_cap() {
-        assert_eq!(pr_state_failure_ttl(0), PR_STATE_RETRY_TTL);
-        assert_eq!(pr_state_failure_ttl(1), PR_STATE_RETRY_TTL);
-        assert_eq!(pr_state_failure_ttl(2), Duration::from_secs(60));
-        assert_eq!(pr_state_failure_ttl(3), Duration::from_secs(120));
-        assert_eq!(pr_state_failure_ttl(4), Duration::from_secs(240));
-        assert_eq!(pr_state_failure_ttl(5), PR_STATE_TTL);
-        assert_eq!(pr_state_failure_ttl(u32::MAX), PR_STATE_TTL);
+        assert_eq!(pr_state_failure_ttl(0, PR_STATE_TTL), PR_STATE_RETRY_TTL);
+        assert_eq!(pr_state_failure_ttl(1, PR_STATE_TTL), PR_STATE_RETRY_TTL);
+        assert_eq!(
+            pr_state_failure_ttl(2, PR_STATE_TTL),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            pr_state_failure_ttl(3, PR_STATE_TTL),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            pr_state_failure_ttl(4, PR_STATE_TTL),
+            Duration::from_secs(240)
+        );
+        assert_eq!(pr_state_failure_ttl(5, PR_STATE_TTL), PR_STATE_TTL);
+        assert_eq!(pr_state_failure_ttl(u32::MAX, PR_STATE_TTL), PR_STATE_TTL);
+        assert_eq!(pr_state_failure_ttl(1, PR_STATE_HOT_TTL), PR_STATE_HOT_TTL);
     }
 
     #[test]
     fn failure_counter_resets_on_success_and_saturates_on_failure() {
-        let mut prior = PrStateCache {
-            refreshed_at_ms: 0,
+        let mut prior = RepoProbe {
             ok: false,
             consecutive_failures: 7,
-            states: BTreeMap::new(),
+            ..RepoProbe::default()
         };
 
-        assert_eq!(next_consecutive_failures(&prior, true), 0);
-        assert_eq!(next_consecutive_failures(&prior, false), 8);
+        assert_eq!(next_consecutive_failures(Some(&prior), true), 0);
+        assert_eq!(next_consecutive_failures(Some(&prior), false), 8);
+        assert_eq!(next_consecutive_failures(None, false), 1);
 
         prior.consecutive_failures = u32::MAX;
-        assert_eq!(next_consecutive_failures(&prior, false), u32::MAX);
+        assert_eq!(next_consecutive_failures(Some(&prior), false), u32::MAX);
     }
 
     #[test]
-    fn failed_probe_path_keeps_prior_state_while_successful_absence_drops() {
-        let mut prior = BTreeMap::new();
-        prior.insert("/repo/failed".to_owned(), WorktreePrState::Open);
-        prior.insert("/repo/gone".to_owned(), WorktreePrState::Closed);
-        let mut states = BTreeMap::new();
-        states.insert("/repo/merged".to_owned(), WorktreePrState::Merged);
-        let result = ProbeBatch {
-            states,
-            failed_paths: vec!["/repo/failed".to_owned()],
+    fn repo_due_tracks_fresh_stale_nudge_uncached_and_failure_backoff() {
+        let ttl = Duration::from_secs(20);
+        let ttl_ms = ttl.as_millis() as u64;
+        let probe = RepoProbe {
+            refreshed_at_ms: 1_000,
+            ok: true,
+            consecutive_failures: 0,
         };
 
-        let (merged, ok) = merge_probe_results(&prior, result);
+        assert!(!repo_due(Some(&probe), ttl, 1_000 + ttl_ms, false, false));
+        assert!(repo_due(Some(&probe), ttl, 1_001 + ttl_ms, false, false));
+        assert!(repo_due(None, ttl, 1_000, false, false));
+        assert!(repo_due(Some(&probe), ttl, 1_000, true, false));
+        assert!(repo_due(Some(&probe), ttl, 1_000, false, true));
 
-        assert!(!ok);
-        assert_eq!(merged.get("/repo/failed"), Some(&WorktreePrState::Open));
-        assert_eq!(merged.get("/repo/merged"), Some(&WorktreePrState::Merged));
-        assert!(
-            !merged.contains_key("/repo/gone"),
-            "paths absent from this probe are not kept just because they existed before"
+        let failed = RepoProbe {
+            refreshed_at_ms: 1_000,
+            ok: false,
+            consecutive_failures: 1,
+        };
+        assert!(!repo_due(Some(&failed), ttl, 1_000 + ttl_ms, false, false));
+        assert!(repo_due(Some(&failed), ttl, 1_001 + ttl_ms, false, false));
+    }
+
+    #[test]
+    fn assign_states_handles_open_terminal_transition_closed_and_absent() {
+        let targets = vec![
+            target("/repo/open", "open"),
+            target("/repo/merged", "merged"),
+            target("/repo/transition", "transition"),
+            target("/repo/closed", "closed"),
+            target("/repo/none", "none"),
+        ];
+        let mut open_map = BTreeMap::new();
+        open_map.insert("open".to_owned(), WorktreePrState::Open);
+        let mut prior = BTreeMap::new();
+        prior.insert("/repo/merged".to_owned(), WorktreePrState::Merged);
+        prior.insert("/repo/transition".to_owned(), WorktreePrState::Open);
+        prior.insert("/repo/closed".to_owned(), WorktreePrState::Closed);
+
+        let assigned = assign_states(&targets, &open_map, &prior);
+
+        assert_eq!(
+            assigned.states.get("/repo/open"),
+            Some(&WorktreePrState::Open)
+        );
+        assert_eq!(
+            assigned.states.get("/repo/merged"),
+            Some(&WorktreePrState::Merged)
+        );
+        assert_eq!(
+            assigned.states.get("/repo/closed"),
+            Some(&WorktreePrState::Closed)
+        );
+        assert!(!assigned.states.contains_key("/repo/none"));
+        assert_eq!(
+            assigned
+                .transitions
+                .iter()
+                .map(|target| target.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/repo/transition"]
         );
     }
 
     #[test]
-    fn merged_worktrees_are_pinned_not_reprobed() {
-        let paths = vec![
-            "/repo/a".to_owned(),
-            "/repo/b".to_owned(),
-            "/repo/c".to_owned(),
-            "/repo/d".to_owned(),
-        ];
-        let mut prior = BTreeMap::new();
-        prior.insert("/repo/a".to_owned(), WorktreePrState::Merged);
-        prior.insert("/repo/b".to_owned(), WorktreePrState::Open);
-        prior.insert("/repo/c".to_owned(), WorktreePrState::Closed);
+    fn legacy_cache_reads_states_and_leaves_repos_due() {
+        let cache: PrStateCache = serde_json::from_str(
+            r#"{
+                "refreshed_at_ms": 1000,
+                "ok": true,
+                "consecutive_failures": 0,
+                "states": {"/repo/a": "open"}
+            }"#,
+        )
+        .unwrap();
+        let groups = group_targets(vec![target("/repo/a", "a")]);
 
-        let (pinned, to_probe) = probe_targets(&paths, &prior);
-
-        assert_eq!(pinned, vec![&paths[0]]);
-        assert_eq!(to_probe, vec![&paths[1], &paths[2], &paths[3]]);
+        assert_eq!(cache.states.get("/repo/a"), Some(&WorktreePrState::Open));
+        assert!(cache.repos.is_empty());
+        assert!(cache.head_seen.is_empty());
+        assert!(
+            due_repo_keys(&groups, &cache, &BTreeSet::new(), &BTreeSet::new(), 1_000)
+                .contains("gh:github.com:org/repo")
+        );
     }
 
     #[test]
-    fn old_failure_cache_without_counter_uses_initial_retry_ttl() {
-        let cache = PrStateCache {
-            refreshed_at_ms: 1_000,
-            ok: false,
-            consecutive_failures: 0,
-            states: BTreeMap::new(),
-        };
-        let retry_ttl = PR_STATE_RETRY_TTL.as_millis() as u64;
+    fn cached_due_uses_head_nudge_without_git_metadata() {
+        let mut cache = PrStateCache::default();
+        cache.repos.insert(
+            "gh:github.com:org/repo".to_owned(),
+            RepoProbe {
+                refreshed_at_ms: 1_000,
+                ok: true,
+                consecutive_failures: 0,
+            },
+        );
+        cache
+            .head_seen
+            .insert("/repo/a".to_owned(), "old".to_owned());
+        cache
+            .path_repos
+            .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());
+        let mut diff = DiffStatsCache::default();
+        diff.entries.insert(
+            "/repo/a".to_owned(),
+            DiffStatsCacheEntry {
+                head_sha: Some("old".to_owned()),
+                ..DiffStatsCacheEntry::default()
+            },
+        );
+        let needed = vec!["/repo/a".to_owned()];
 
-        assert!(cache.is_fresh(1_000 + retry_ttl));
-        assert!(!cache.is_fresh(1_001 + retry_ttl));
+        assert!(
+            cached_due_repo_keys(
+                &cache,
+                &needed,
+                &diff,
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                1_000 + PR_STATE_TTL.as_millis() as u64
+            )
+            .unwrap()
+            .is_empty()
+        );
+
+        diff.entries.get_mut("/repo/a").unwrap().head_sha = Some("new".to_owned());
+
+        assert!(
+            cached_due_repo_keys(
+                &cache,
+                &needed,
+                &diff,
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                1_000
+            )
+            .unwrap()
+            .contains("gh:github.com:org/repo")
+        );
+    }
+
+    #[test]
+    fn uncached_path_requires_target_assembly() {
+        let cache = PrStateCache::default();
+        let needed = vec!["/repo/a".to_owned()];
+        let mut diff = DiffStatsCache::default();
+        diff.entries.insert(
+            "/repo/a".to_owned(),
+            DiffStatsCacheEntry {
+                head_sha: Some("new".to_owned()),
+                ..DiffStatsCacheEntry::default()
+            },
+        );
+
+        assert!(
+            cached_due_repo_keys(
+                &cache,
+                &needed,
+                &diff,
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                1_000
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn unsupported_reconcile_drops_state_and_marks_head_seen() {
+        let mut cache = PrStateCache::default();
+        cache
+            .states
+            .insert("/repo/a".to_owned(), WorktreePrState::Open);
+        cache
+            .path_repos
+            .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());
+        cache
+            .head_seen
+            .insert("/repo/a".to_owned(), "old".to_owned());
+        let needed = vec!["/repo/a".to_owned()];
+        let mut diff = DiffStatsCache::default();
+        diff.entries.insert(
+            "/repo/a".to_owned(),
+            DiffStatsCacheEntry {
+                head_sha: Some("new".to_owned()),
+                ..DiffStatsCacheEntry::default()
+            },
+        );
+        let target_paths = BTreeSet::new();
+
+        assert!(needs_target_reconcile(
+            &cache,
+            &needed,
+            &diff,
+            &target_paths
+        ));
+
+        let cache = reconcile_target_bookkeeping(cache, &needed, &diff, &target_paths);
+
+        assert!(!cache.states.contains_key("/repo/a"));
+        assert_eq!(
+            cache.path_repos.get("/repo/a").map(String::as_str),
+            Some(UNSUPPORTED_REPO_KEY)
+        );
+        assert_eq!(
+            cache.head_seen.get("/repo/a").map(String::as_str),
+            Some("new")
+        );
+        assert!(!needs_target_reconcile(
+            &cache,
+            &needed,
+            &diff,
+            &target_paths
+        ));
+    }
+
+    #[test]
+    fn unsupported_cached_path_does_not_reassemble_on_head_nudge() {
+        let mut cache = PrStateCache::default();
+        cache
+            .path_repos
+            .insert("/repo/a".to_owned(), UNSUPPORTED_REPO_KEY.to_owned());
+        cache.head_seen.insert("/repo/a".to_owned(), String::new());
+        let needed = vec!["/repo/a".to_owned()];
+        let mut diff = DiffStatsCache::default();
+        diff.entries.insert(
+            "/repo/a".to_owned(),
+            DiffStatsCacheEntry {
+                head_sha: Some("new".to_owned()),
+                ..DiffStatsCacheEntry::default()
+            },
+        );
+
+        assert!(
+            cached_due_repo_keys(
+                &cache,
+                &needed,
+                &diff,
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                1_000
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    fn target(path: &str, branch: &str) -> Target {
+        Target {
+            path: path.to_owned(),
+            branch: branch.to_owned(),
+            remote: "https://github.com/org/repo.git".to_owned(),
+            forge_cli: ForgeCli::Gh,
+            repo_key: "gh:github.com:org/repo".to_owned(),
+            repo_slug: Some("org/repo".to_owned()),
+            worktree: PathBuf::from("/repo"),
+            head_sha: Some("sha".to_owned()),
+        }
     }
 }

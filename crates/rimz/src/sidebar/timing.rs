@@ -169,10 +169,16 @@ pub const ACCOUNTS_TTL: Duration = Duration::from_secs(10 * 60);
 /// pinning an empty dashboard for the full success window.
 pub const ACCOUNTS_RETRY_TTL: Duration = Duration::from_secs(10);
 
-/// How long the producer trusts a successful worktree PR-state probe before it
-/// asks the forge CLI again. Pull-request state changes on human time and the
-/// probe may hit the network, so it rides a long producer-only TTL.
+/// How long the producer trusts a successful idle-tier repo PR-state probe
+/// before it asks the forge CLI again. Pull-request state changes on human
+/// time and the probe may hit the network, so idle repos ride a long
+/// producer-only TTL.
 pub const PR_STATE_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// How long the producer trusts a successful hot/focused repo PR-state probe.
+/// A hot sweep is affordable because it enumerates open PRs once per repo, not
+/// once per worktree.
+pub const PR_STATE_HOT_TTL: Duration = Duration::from_secs(20);
 
 /// Retry cadence after the PR-state probe cannot run (missing CLI, logged out,
 /// non-zero command, or malformed output). Short enough to recover after login,

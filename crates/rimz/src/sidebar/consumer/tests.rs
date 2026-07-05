@@ -10,7 +10,6 @@ use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
 use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot, SidebarWorktreeKind, StatePaths};
 use jiff::Timestamp;
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 fn cached_opts() -> FoldOpts<'static> {
@@ -219,12 +218,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
         },
     );
     atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &diff).unwrap();
-    let mut pr = PrStateCache {
-        refreshed_at_ms: unix_now_ms(),
-        ok: true,
-        consecutive_failures: 0,
-        states: BTreeMap::new(),
-    };
+    let mut pr = PrStateCache::default();
     pr.states.insert(wt.clone(), crate::WorktreePrState::Open);
     atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &pr).unwrap();
 

@@ -4,6 +4,8 @@
 //! here identify PR numbers, ref shapes, host families, and status JSON emitted
 //! by forge CLIs.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -143,7 +145,7 @@ fn clean_segment(segment: &str) -> &str {
     segment.split(['?', '#']).next().unwrap_or(segment).trim()
 }
 
-fn remote_host(remote_url: &str) -> &str {
+pub(crate) fn remote_host(remote_url: &str) -> &str {
     let trimmed = remote_url.trim();
     let without_scheme = trimmed
         .split_once("://")
@@ -173,6 +175,31 @@ pub fn parse_gh_pr_state_json(raw: &str) -> Result<Option<WorktreePrState>, Stri
         .fold(None, prefer_pr_state))
 }
 
+pub fn parse_gh_pr_list_states(raw: &str) -> Result<BTreeMap<String, WorktreePrState>, String> {
+    #[derive(Deserialize)]
+    struct Pull {
+        state: String,
+        #[serde(rename = "headRefName")]
+        head_ref_name: String,
+    }
+
+    let pulls: Vec<Pull> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    let mut states = BTreeMap::new();
+    for pull in pulls {
+        let branch = pull.head_ref_name.trim();
+        let Some(state) = parse_pr_state(&pull.state) else {
+            continue;
+        };
+        if branch.is_empty() {
+            continue;
+        }
+        if let Some(preferred) = prefer_pr_state(states.get(branch).copied(), state) {
+            states.insert(branch.to_owned(), preferred);
+        }
+    }
+    Ok(states)
+}
+
 pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<TeaPrCandidate>, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let pulls = value
@@ -188,6 +215,26 @@ pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<TeaPrCan
             })
         })
         .fold(None, prefer_tea_candidate))
+}
+
+pub fn parse_tea_pr_list_states(raw: &str) -> Result<BTreeMap<String, WorktreePrState>, String> {
+    let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    let pulls = value
+        .as_array()
+        .ok_or_else(|| "tea PR list output must be a JSON array".to_owned())?;
+    let mut states = BTreeMap::new();
+    for pull in pulls {
+        let Some(branch) = pr_head_branch(pull) else {
+            continue;
+        };
+        let Some(state) = pr_state_from_value(pull) else {
+            continue;
+        };
+        if let Some(preferred) = prefer_pr_state(states.get(&branch).copied(), state) {
+            states.insert(branch, preferred);
+        }
+    }
+    Ok(states)
 }
 
 pub fn parse_tea_pr_detail_json(raw: &str) -> Result<Option<WorktreePrState>, String> {
@@ -272,6 +319,10 @@ fn pr_number(value: &Value) -> Option<u64> {
 }
 
 fn pr_head_matches(value: &Value, branch: &str) -> bool {
+    pr_head_branch(value).is_some_and(|head| ref_name_matches(&head, branch))
+}
+
+fn pr_head_branch(value: &Value) -> Option<String> {
     [
         "head",
         "head_branch",
@@ -280,25 +331,36 @@ fn pr_head_matches(value: &Value, branch: &str) -> bool {
         "sourceBranch",
     ]
     .iter()
-    .any(|field| head_value_matches(value.get(field), branch))
+    .find_map(|field| head_branch_from_value(value.get(field)))
 }
 
-fn head_value_matches(value: Option<&Value>, branch: &str) -> bool {
-    let Some(value) = value else {
-        return false;
-    };
+fn head_branch_from_value(value: Option<&Value>) -> Option<String> {
+    let value = value?;
     if let Some(raw) = value.as_str() {
-        return ref_name_matches(raw, branch);
+        return ref_name_branch(raw);
     }
     if let Some(object) = value.as_object() {
-        return ["ref", "name", "branch", "label"].iter().any(|field| {
+        return ["ref", "name", "branch", "label"].iter().find_map(|field| {
             object
                 .get(*field)
                 .and_then(Value::as_str)
-                .is_some_and(|raw| ref_name_matches(raw, branch))
+                .and_then(ref_name_branch)
         });
     }
-    false
+    None
+}
+
+fn ref_name_branch(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(
+        raw.rsplit_once(':')
+            .map(|(_, name)| name)
+            .unwrap_or(raw)
+            .to_owned(),
+    )
 }
 
 fn ref_name_matches(raw: &str, branch: &str) -> bool {
@@ -446,6 +508,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_gh_pr_list_states_by_head_branch_with_priority() {
+        let states = parse_gh_pr_list_states(
+            r#"[
+                {"number":1,"state":"CLOSED","headRefName":"feature"},
+                {"number":2,"state":"OPEN","headRefName":"feature"},
+                {"number":3,"state":"OPEN","headRefName":"other"}
+            ]"#,
+        )
+        .unwrap();
+
+        assert_eq!(states.get("feature"), Some(&WorktreePrState::Open));
+        assert_eq!(states.get("other"), Some(&WorktreePrState::Open));
+        assert!(parse_gh_pr_list_states("{").is_err());
+    }
+
+    #[test]
     fn parses_tea_pr_list_and_detail_json() {
         let list = r#"[
             {"index": 7, "head": {"label": "me:feature"}, "state": "closed"},
@@ -465,6 +543,22 @@ mod tests {
         );
         assert_eq!(parse_tea_pr_list_json("[]", "feature").unwrap(), None);
         assert!(parse_tea_pr_list_json("{}", "feature").is_err());
+    }
+
+    #[test]
+    fn parses_tea_pr_list_states_by_head_branch() {
+        let states = parse_tea_pr_list_states(
+            r#"[
+                {"index": 7, "head": {"label": "me:feature"}, "state": "closed"},
+                {"index": 8, "head": {"branch": "feature"}, "state": "open"},
+                {"index": 9, "source_branch": "other", "state": "open"}
+            ]"#,
+        )
+        .unwrap();
+
+        assert_eq!(states.get("feature"), Some(&WorktreePrState::Open));
+        assert_eq!(states.get("other"), Some(&WorktreePrState::Open));
+        assert!(parse_tea_pr_list_states("{}").is_err());
     }
 
     #[test]

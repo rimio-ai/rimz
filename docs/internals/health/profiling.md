@@ -58,7 +58,7 @@ The symfs tree mirrors the original install path and the filename keeps the lite
 
 The producer's published caches and the diagnostics log answer many questions before any profiler attaches:
 
-- `$XDG_RUNTIME_DIR/rimz/ws_<id>/pr-state.json` — `"ok": false` with a `refreshed_at_ms` advancing on the short cadence means the PR probe is climbing its failure backoff; `states` shows which per-path results survived, and terminal `merged` states are pinned rather than re-probed.
+- `$XDG_RUNTIME_DIR/rimz/ws_<id>/pr-state.json` — a repo entry with `"ok": false` and an advancing `refreshed_at_ms` means the PR probe is climbing its failure backoff; `repos` shows per-repo stamps, `states` shows which per-path results survived, and terminal `merged` states are pinned rather than re-probed.
 - `$XDG_RUNTIME_DIR/rimz/ws_<id>/diff-stats.json` — the root count is the git sweep's input size, and the per-root stamps show the hot/idle tiering in effect.
 - `~/.local/state/rimz/shared/credits.json` — cache-level `refreshed_at_ms` plus per-provider `observed_at_ms` show the account-usage cadence; a provider stuck at `"ok": false` is a failing account-usage probe on the short retry TTL.
 - `~/.local/state/rimz/shared/pricing-cache.json` — `fetched_at_secs` and `last_attempt_secs` show the weekly baseline refresh; `unknown_attempt_secs`, `unknown_backoff_secs`, and `unknown_seen` show the unpriced-model chase.
@@ -69,7 +69,7 @@ The producer's published caches and the diagnostics log answer many questions be
 
 The first-look checklist, ranked by what has paid off:
 
-1. **Fork/exec rate and outcome.** A steady per-second exec rate at idle is a retry loop or a cache that never goes fresh; failures matter as much as rate (a deterministic forge-CLI error, an `ENOENT` self-exec). `strace -e trace=execve` plus the runtime caches above localize it in minutes; cross-check cache stamps to name the lane (forge PR state per worktree, account usage per provider) and confirm terminal PR states are not re-probing.
+1. **Fork/exec rate and outcome.** A steady per-second exec rate at idle is a retry loop or a cache that never goes fresh; failures matter as much as rate (a deterministic forge-CLI error, an `ENOENT` self-exec). `strace -e trace=execve` plus the runtime caches above localize it in minutes; cross-check cache stamps to name the lane (forge PR state per repo, account usage per provider) and confirm terminal PR states are not re-probing.
 2. **Refold rate versus event rate.** Compare ledger events/s against per-renderer fold rate: every renderer folding at the writer's full event rate multiplies one room's cost by its tab count. Only the watched tab and the producer need full rate.
 3. **Producer versus consumer split.** Sum thread-level CPU per process across the workspace. Producer-heavy cost points at the external-read lanes (panes, git, PR, spend); consumer-heavy cost points at fold/render work multiplied by renderer count.
 4. **Allocation share.** `malloc`/`memmove`/clone frames above ~10–15% of samples in fold/enrich paths mean deep clones on a hot path; the parse-cache `Arc` returns came from exactly this signal.

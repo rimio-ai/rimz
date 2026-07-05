@@ -3,15 +3,12 @@ use crate::ids::WorkspaceId;
 use crate::ledger::atomic;
 use crate::sidebar::FRESH_PANE_GRACE;
 use crate::sidebar::frame::assemble_frame;
-use crate::sidebar::refresh::PrStateCache;
 use crate::sidebar::refresh::git_stats::{DiffStats, DiffStatsCacheEntry, WorktreeRootsCache};
 use crate::sidebar::test_support::pane;
 use crate::sidebar::timing::{
-    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL,
-    PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL, unix_now_ms,
+    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL,
+    WORKTREE_ROOTS_TTL, unix_now_ms,
 };
-use std::collections::BTreeMap;
-
 #[test]
 fn pane_topology_cache_freshness_honors_requested_floor() {
     let cache = PaneTopologyCache {
@@ -315,27 +312,4 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     assert!(!cache.is_fresh(1_001 + ttl));
     // A clock that ran backwards reads fresh (saturating).
     assert!(cache.is_fresh(500));
-}
-
-#[test]
-fn pr_state_cache_uses_success_and_retry_ttls() {
-    let ok = PrStateCache {
-        refreshed_at_ms: 1_000,
-        ok: true,
-        consecutive_failures: 0,
-        states: BTreeMap::new(),
-    };
-    let retry = PrStateCache {
-        refreshed_at_ms: 1_000,
-        ok: false,
-        consecutive_failures: 1,
-        states: BTreeMap::new(),
-    };
-    let ok_ttl = PR_STATE_TTL.as_millis() as u64;
-    let retry_ttl = PR_STATE_RETRY_TTL.as_millis() as u64;
-
-    assert!(ok.is_fresh(1_000 + ok_ttl));
-    assert!(!ok.is_fresh(1_001 + ok_ttl));
-    assert!(retry.is_fresh(1_000 + retry_ttl));
-    assert!(!retry.is_fresh(1_001 + retry_ttl));
 }
