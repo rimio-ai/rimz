@@ -227,6 +227,10 @@ mod parse {
             .expect("parse cohort resume");
         assert!(parsed.args.resume);
 
+        let parsed = AgentsHarness::try_parse_from(["rimz", "pcr", "--continue"])
+            .expect("parse cohort resume alias");
+        assert!(parsed.args.resume);
+
         let parsed = AgentsHarness::try_parse_from([
             "rimz",
             "pcr",
@@ -277,6 +281,7 @@ mod parse {
             &["rimz", "wait", "codex", "--stream", "--json"],
             &["rimz", "claude", "--new-pane", "--new-tab"],
             &["rimz", "claude", "hi", "--resume"],
+            &["rimz", "claude", "hi", "--continue"],
             &["rimz", "claude", "--resume", "--channel=design"],
             &["rimz", "claude", "--resume", "--from-pr", "1"],
             &["rimz", "claude", "--resume", "--name", "swift-otter"],

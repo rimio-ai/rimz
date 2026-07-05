@@ -8,11 +8,12 @@
 //! `#channel` tab per worktree, with one resume pane per prior root agent, so
 //! the next birth can recover where the user left off instead of empty.
 //!
-//! Pure over its inputs: the caller supplies the rollup, the set of cleanly
-//! ended sessions, and a worktree-exists predicate, so every filtering rule is
-//! unit-tested without a multiplexer or the filesystem. The launcher
-//! ([`crate::mux::MuxBackend`]) seeds the resulting [`ResumeTab`]s at birth and
-//! stays ignorant of agents and the ledger.
+//! Pure over its inputs: the caller supplies the rollup and a worktree-exists
+//! predicate, and the flat rebirth planner also supplies the set of cleanly
+//! ended sessions, so every filtering rule is unit-tested without a multiplexer
+//! or the filesystem. The launcher ([`crate::mux::MuxBackend`]) seeds the
+//! resulting [`ResumeTab`]s at birth and stays ignorant of agents and the
+//! ledger.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -239,14 +240,13 @@ pub fn plan_resume(
 /// and worktree existence so the matching rules stay pure and testable.
 pub fn plan_cohort_resume(
     agents: &[AgentState],
-    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
     liveness: impl Fn(&AgentState) -> AgentLiveness,
     cells: &[CohortCell],
     team: Option<&str>,
     worktree_exists: impl Fn(&Path) -> bool,
 ) -> Result<CohortResumePlan, CohortResumeErr> {
     let spec = cohort_spec_label(cells, team);
-    let candidates = cohort_candidates(agents, ended, worktree_exists);
+    let candidates = cohort_candidates(agents, worktree_exists);
     let matches = match (team, cells.len()) {
         (Some(team), _) => match_team_cohort(&candidates, cells, team),
         (None, 1) => match_single_cohort(&candidates, &cells[0]),
@@ -336,16 +336,14 @@ fn cohort_spec_label(cells: &[CohortCell], team: Option<&str>) -> String {
     }
 }
 
-fn cohort_candidates<'a>(
-    agents: &'a [AgentState],
-    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
+fn cohort_candidates(
+    agents: &[AgentState],
     worktree_exists: impl Fn(&Path) -> bool,
-) -> Vec<&'a AgentState> {
+) -> Vec<&AgentState> {
     let mut candidates = agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
-        .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .filter(|agent| agent_worktree(agent).is_some_and(|path| worktree_exists(&path)))
         .collect::<Vec<_>>();
     candidates.sort_by(cohort_newest_cmp);

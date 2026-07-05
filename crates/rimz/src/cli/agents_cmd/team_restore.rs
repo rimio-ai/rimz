@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -6,7 +6,6 @@ use jiff::Timestamp;
 use rimz::agents::AgentState;
 use rimz::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use rimz::harness::spec::LayoutSpec;
-use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::ledger::AgentLaunchAppend;
 use rimz::ledger::event::AgentLaunchState;
 use rimz::ledger::runtime::AgentLiveness;
@@ -29,7 +28,6 @@ pub(crate) struct PlannedTeamTab {
 
 pub(crate) fn plan_team_restore_tabs(
     agents: &[AgentState],
-    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -64,7 +62,6 @@ pub(crate) fn plan_team_restore_tabs(
         let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
         let Ok(cohort) = rimz::harness::resume::plan_cohort_resume(
             &group_agents,
-            ended,
             |_| AgentLiveness::Dead,
             &cells,
             Some(&team),
@@ -182,7 +179,7 @@ mod tests {
     use rimz::agents::AgentStatus;
     use rimz::agents::lifecycle::TurnPhase;
     use rimz::config::{Profile, RoleBinding, Team};
-    use rimz::ids::{MuxName, PaneId};
+    use rimz::ids::{AgentKind, MuxName, PaneId};
     use rimz::pane::PaneRef;
 
     fn pane(raw: &str) -> PaneRef {
@@ -321,14 +318,8 @@ mod tests {
         let planner = agent("claude", "planner", "planner", "/repo/pcr", 3);
         let coder = agent("codex", "coder", "coder", "/repo/pcr", 5);
 
-        let tabs = plan_team_restore_tabs(
-            &[coder, planner],
-            &BTreeSet::new(),
-            &teams,
-            &profiles,
-            &commands,
-            |_| true,
-        );
+        let tabs =
+            plan_team_restore_tabs(&[coder, planner], &teams, &profiles, &commands, |_| true);
 
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs[0].label, "#pcr");
@@ -348,14 +339,7 @@ mod tests {
         let (teams, profiles, commands) = configs();
         let planner = agent("claude", "planner", "planner", "/repo/pcr", 3);
 
-        let tabs = plan_team_restore_tabs(
-            &[planner],
-            &BTreeSet::new(),
-            &teams,
-            &profiles,
-            &commands,
-            |_| true,
-        );
+        let tabs = plan_team_restore_tabs(&[planner], &teams, &profiles, &commands, |_| true);
 
         assert_eq!(tabs.len(), 1);
         assert!(matches!(
@@ -375,7 +359,6 @@ mod tests {
 
         let tabs = plan_team_restore_tabs(
             &[planner],
-            &BTreeSet::new(),
             &TeamsConfig::default(),
             &profiles,
             &commands,

@@ -285,7 +285,6 @@ fn launch_resume_layout(
     let scope = worktree_filter.and_then(worktree_scope_label);
     let plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
-        &projection.ended,
         rimz::ledger::runtime::agent_liveness,
         &cells,
         team_name.as_deref(),

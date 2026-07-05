@@ -127,7 +127,6 @@ fn cohort_resume_selects_newest_team_member_per_role() {
 
     let plan = plan_cohort_resume(
         &[old_planner, planner, coder],
-        &no_ended(),
         dead,
         &cells,
         Some("pcr"),
@@ -180,7 +179,7 @@ fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere
         cohort_cell("codex", Some("coder")),
     ];
 
-    let plan = plan_cohort_resume(&scoped, &no_ended(), dead, &cells, Some("forge"), |_| true)
+    let plan = plan_cohort_resume(&scoped, dead, &cells, Some("forge"), |_| true)
         .expect("filtered cohort plan");
 
     assert_eq!(
@@ -191,28 +190,23 @@ fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere
 }
 
 #[test]
-fn cohort_resume_excludes_ended_members() {
+fn cohort_resume_includes_cleanly_ended_members() {
     let mut ended_agent = agent("claude", "ended", "/code/pcr", Some("pcr"), 1);
     ended_agent.team = Some("pcr".to_owned());
     ended_agent.role = Some("planner".to_owned());
-    let ended = [(AgentKind::new_unchecked("claude"), "ended".into())]
-        .into_iter()
-        .collect();
-    let err = plan_cohort_resume(
+
+    let plan = plan_cohort_resume(
         &[ended_agent],
-        &ended,
         dead,
         &[cohort_cell("claude", Some("planner"))],
         Some("pcr"),
         |_| true,
     )
-    .expect_err("ended member is not resumable");
+    .expect("closed team member remains a cohort candidate");
 
     assert_eq!(
-        err,
-        CohortResumeErr::NothingToResume {
-            spec: "pcr".to_owned()
-        }
+        plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
+        [Some("ended")]
     );
 }
 
@@ -224,7 +218,6 @@ fn cohort_resume_refuses_a_still_live_member() {
     planner.name = Some("swift-otter".to_owned());
     let err = plan_cohort_resume(
         &[planner],
-        &no_ended(),
         |_| AgentLiveness::Live { pid: 42 },
         &[cohort_cell("claude", Some("planner"))],
         Some("pcr"),
@@ -243,14 +236,9 @@ fn cohort_resume_refuses_a_still_live_member() {
 #[test]
 fn cohort_resume_refuses_when_nothing_matches() {
     let agents = vec![agent("codex", "c1", "/code/query-engine", Some("main"), 1)];
-    let err = plan_cohort_resume(
-        &agents,
-        &no_ended(),
-        dead,
-        &[cohort_cell("claude", None)],
-        None,
-        |_| true,
-    )
+    let err = plan_cohort_resume(&agents, dead, &[cohort_cell("claude", None)], None, |_| {
+        true
+    })
     .expect_err("no matching kind");
 
     assert_eq!(
@@ -264,15 +252,8 @@ fn cohort_resume_refuses_when_nothing_matches() {
 #[test]
 fn cohort_resume_starts_fresh_for_kind_without_resume_cli() {
     let agents = vec![agent("ghost", "g1", "/code/query-engine", None, 1)];
-    let plan = plan_cohort_resume(
-        &agents,
-        &no_ended(),
-        dead,
-        &[cohort_cell("ghost", None)],
-        None,
-        |_| true,
-    )
-    .expect("unsupported kind still matched prior cohort");
+    let plan = plan_cohort_resume(&agents, dead, &[cohort_cell("ghost", None)], None, |_| true)
+        .expect("unsupported kind still matched prior cohort");
 
     assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
     assert_eq!(plan.fresh, vec!["ghost:query-engine".to_owned()]);
@@ -293,7 +274,6 @@ fn cohort_resume_starts_fresh_for_provisional_launch_placeholder() {
 
     let plan = plan_cohort_resume(
         &[coder],
-        &no_ended(),
         dead,
         &[cohort_cell("codex", Some("coder"))],
         Some("forge"),
@@ -319,15 +299,8 @@ fn cohort_resume_matches_inline_group_by_launch_ordinal() {
     second.launch_ordinal = Some(1);
     let cells = vec![cohort_cell("claude", None), cohort_cell("codex", None)];
 
-    let plan = plan_cohort_resume(
-        &[old, first, second],
-        &no_ended(),
-        dead,
-        &cells,
-        None,
-        |_| true,
-    )
-    .expect("inline cohort plan");
+    let plan = plan_cohort_resume(&[old, first, second], dead, &cells, None, |_| true)
+        .expect("inline cohort plan");
 
     assert_eq!(
         plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
@@ -339,14 +312,9 @@ fn cohort_resume_matches_inline_group_by_launch_ordinal() {
 #[test]
 fn cohort_resume_drops_members_whose_worktree_is_gone() {
     let agents = vec![agent("claude", "a1", "/code/gone", None, 1)];
-    let err = plan_cohort_resume(
-        &agents,
-        &no_ended(),
-        dead,
-        &[cohort_cell("claude", None)],
-        None,
-        |_| false,
-    )
+    let err = plan_cohort_resume(&agents, dead, &[cohort_cell("claude", None)], None, |_| {
+        false
+    })
     .expect_err("missing worktree drops candidate");
 
     assert_eq!(

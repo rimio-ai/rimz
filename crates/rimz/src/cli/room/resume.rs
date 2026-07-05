@@ -246,14 +246,9 @@ fn plan_agent_resume_at(
     let ledger = Ledger::open(paths.clone(), runtime.clone())?;
     let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
     let rimz_bin = rimz::proc::rimz_exe();
-    let team = plan_team_restore_tabs(
-        &projection.agents,
-        &projection.ended,
-        teams,
-        profiles,
-        commands,
-        |path| path.is_dir(),
-    );
+    let team = plan_team_restore_tabs(&projection.agents, teams, profiles, commands, |path| {
+        path.is_dir()
+    });
     let flat_agents = projection
         .agents
         .iter()
