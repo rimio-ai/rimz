@@ -149,7 +149,22 @@ fn linux_process_stat_is_live(stat: &str, expected_start: Option<&str>) -> bool 
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_is_live(pid: u32, _expected_start: Option<&str>) -> bool {
+    use nix::errno::Errno;
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    matches!(kill(Pid::from_raw(pid), None), Ok(()) | Err(Errno::EPERM))
+}
+
+#[cfg(not(unix))]
 fn process_is_live(_pid: u32, _expected_start: Option<&str>) -> bool {
     true
 }
@@ -247,7 +262,7 @@ mod tests {
                 ),
                 item(Surface::Script, None),
                 item(Surface::Bridge, None),
-                #[cfg(target_os = "linux")]
+                #[cfg(unix)]
                 item(
                     Surface::Script,
                     Some(RuntimeOwner::new(
@@ -291,14 +306,18 @@ mod tests {
 
     #[test]
     fn runtime_projection_keeps_unknown_agents_and_drops_known_dead_ones() {
-        let mut agents = vec![agent(None)];
-        #[cfg(target_os = "linux")]
-        agents.push(agent(Some(RuntimeOwner::new(
-            RuntimeOwnerKind::Agent,
-            "sess-dead",
-            u32::MAX,
-            None,
-        ))));
+        let agents = vec![agent(None)];
+        #[cfg(unix)]
+        let agents = {
+            let mut agents = agents;
+            agents.push(agent(Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "sess-dead",
+                u32::MAX,
+                None,
+            ))));
+            agents
+        };
 
         let projection = RuntimeProjection::from_parts(
             Vec::new(),
@@ -337,22 +356,25 @@ mod tests {
         assert_eq!(agent_liveness(&agent(None)), AgentLiveness::Unknown);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[test]
     fn agent_liveness_reports_dead_for_missing_or_wrong_process() {
         let missing = RuntimeOwner::new(RuntimeOwnerKind::Agent, "sess-missing", u32::MAX, None);
         assert_eq!(agent_liveness(&agent(Some(missing))), AgentLiveness::Dead);
 
-        let wrong_start = RuntimeOwner::new(
-            RuntimeOwnerKind::Agent,
-            "sess-wrong-start",
-            std::process::id(),
-            Some("definitely-not-this-process".to_owned()),
-        );
-        assert_eq!(
-            agent_liveness(&agent(Some(wrong_start))),
-            AgentLiveness::Dead
-        );
+        #[cfg(target_os = "linux")]
+        {
+            let wrong_start = RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "sess-wrong-start",
+                std::process::id(),
+                Some("definitely-not-this-process".to_owned()),
+            );
+            assert_eq!(
+                agent_liveness(&agent(Some(wrong_start))),
+                AgentLiveness::Dead
+            );
+        }
 
         let daemon = RuntimeOwner::new(RuntimeOwnerKind::Daemon, "sess-daemon", u32::MAX, None);
         assert_eq!(agent_liveness(&agent(Some(daemon))), AgentLiveness::Dead);
