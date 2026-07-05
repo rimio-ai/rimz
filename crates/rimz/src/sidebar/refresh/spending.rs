@@ -357,6 +357,7 @@ fn walk_fleet_spending(
         pricing::PriceBook::embedded()
     };
     let origin_overrides = codex_origin_overrides(snapshot);
+    let automation_signature = run_log::automation_signature();
     let automation_files = run_log::automation_transcripts();
     let req = WalkRequest {
         files: &files,
@@ -364,7 +365,7 @@ fn walk_fleet_spending(
         now_secs,
         origin_overrides: &origin_overrides,
         automation_files: &automation_files,
-        automation_signature: run_log::automation_signature(),
+        automation_signature,
         scope: Some(&scope),
         spec,
     };
