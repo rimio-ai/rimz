@@ -82,7 +82,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     if !prep.stderr.is_empty() {
         std::io::stderr().lock().write_all(&prep.stderr)?;
     }
-    relay_web_token(remote);
+    relay_web_token(remote, &payload.session);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
     let tunnel_spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
@@ -107,8 +107,8 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     guard.wait()
 }
 
-fn relay_web_token(remote: &RemoteConnect) {
-    let spec = rimz::remote::web::web_token_create_spec(&remote.target);
+fn relay_web_token(remote: &RemoteConnect, session: &str) {
+    let spec = rimz::remote::web::web_token_ensure_spec(&remote.target, session);
     let output = match spec.to_command().output() {
         Ok(output) => output,
         Err(err) => {
@@ -129,6 +129,14 @@ fn relay_web_token(remote: &RemoteConnect) {
         let _ = writeln!(
             stderr,
             "rimz: could not mint a Zellij web login token on {} ({detail}); create one with `rimz web token create` on the remote host.",
+            remote.target.host_display(),
+        );
+        return;
+    }
+    if output.stdout.is_empty() {
+        let _ = writeln!(
+            stderr,
+            "rimz: web login token already provisioned on {}; run `rimz web token create` there for a fresh one.",
             remote.target.host_display(),
         );
         return;

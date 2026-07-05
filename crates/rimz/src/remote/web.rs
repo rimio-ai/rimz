@@ -20,8 +20,11 @@ pub fn web_prep_spec(target: &RemoteTarget) -> CommandSpec {
     one_shot_spec(target, &format!("rimz web {rimz_args}"))
 }
 
-pub fn web_token_create_spec(target: &RemoteTarget) -> CommandSpec {
-    one_shot_spec(target, "rimz web token create")
+pub fn web_token_ensure_spec(target: &RemoteTarget, session: &str) -> CommandSpec {
+    one_shot_spec(
+        target,
+        &format!("rimz web token ensure {}", sh_quote(session)),
+    )
 }
 
 pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16) -> CommandSpec {
@@ -121,6 +124,16 @@ mod tests {
                 "--",
                 "dev-box"
             ]
+        );
+    }
+
+    #[test]
+    fn web_token_ensure_builds_session_one_shot() {
+        let spec = web_token_ensure_spec(&parse("dev-box:query-engine"), "rimz-project-a1b2c3");
+        assert!(
+            spec.args[4].contains("exec rimz web token ensure 'rimz-project-a1b2c3'"),
+            "{}",
+            spec.args[4]
         );
     }
 }

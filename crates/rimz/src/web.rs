@@ -328,11 +328,21 @@ pub fn parse_status(stdout: &[u8]) -> ParsedWebStatus {
 }
 
 pub fn parse_token_count(stdout: &[u8]) -> usize {
+    parse_token_names(stdout).len()
+}
+
+pub fn parse_token_names(stdout: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(stdout)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .count()
+        .map(|line| {
+            line.split_once(':')
+                .map_or(line, |(name, _)| name)
+                .trim()
+                .to_owned()
+        })
+        .collect()
 }
 
 pub fn parse_web_open_payload(stdout: &[u8]) -> Result<WebOpenPayload, serde_json::Error> {
@@ -603,6 +613,17 @@ mod tests {
             parse_status(b"something else\n"),
             ParsedWebStatus::Unrecognized { .. }
         ));
+    }
+
+    #[test]
+    fn parses_token_names_from_zellij_list_output() {
+        let stdout = b"rimz-project-a1b2c3: created at 2026-07-05 09:00:00\nwatch: created at 2026-07-05 10:11:12\nlegacy-token\n\n";
+
+        assert_eq!(
+            parse_token_names(stdout),
+            ["rimz-project-a1b2c3", "watch", "legacy-token"]
+        );
+        assert_eq!(parse_token_count(stdout), 3);
     }
 
     #[test]

@@ -374,6 +374,65 @@ fn web_open_human_mints_and_shows_login_token() {
     assert!(stderr.contains("rimz-tok-123"), "{stderr}");
     let log = std::fs::read_to_string(log).expect("read zellij log");
     assert!(log.contains("web\t--create-token"), "{log}");
+    assert!(
+        log.contains(&format!(
+            "--create-token\t--token-name\t{}",
+            workspace.session_name
+        )),
+        "{log}"
+    );
+}
+
+#[test]
+fn web_open_skips_mint_when_room_token_exists() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let log = env.project_root.join("zellij-web-open-token-exists.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .arg("--print")
+        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 0s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
+            "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            materialized_room_panes_json(),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_TOKENS",
+            format!(
+                "{}: created at 2026-07-05 09:00:00\n",
+                workspace.session_name
+            ),
+        )
+        .bounded_output()
+        .expect("run rimz web open");
+
+    assert!(
+        output.status.success(),
+        "human open succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("http://127.0.0.1:8082/{}\n", workspace.session_name)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("already provisioned"), "{stderr}");
+    let log = std::fs::read_to_string(log).expect("read zellij log");
+    assert!(log.contains("web\t--list-tokens"), "{log}");
+    assert!(!log.contains("web\t--create-token"), "{log}");
 }
 
 #[test]
