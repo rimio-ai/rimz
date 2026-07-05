@@ -538,6 +538,8 @@ fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
         args,
         vec![
             "--append".to_owned(),
+            "--model".to_owned(),
+            "sonnet".to_owned(),
             "--effort".to_owned(),
             "low".to_owned()
         ]
@@ -611,7 +613,12 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             .rows[0],
         Cell::Agent {
             kind: AgentKind::new_unchecked("claude"),
-            args: vec!["--effort".to_owned(), "low".to_owned()],
+            args: vec![
+                "--model".to_owned(),
+                "sonnet".to_owned(),
+                "--effort".to_owned(),
+                "low".to_owned()
+            ],
             mode: None,
             system_prompt_file: None,
             append_system_prompt_file: None,

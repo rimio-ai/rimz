@@ -443,7 +443,13 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn ping_args(&self) -> Option<Vec<String>> {
-        Some(vec!["--effort".to_owned(), "low".to_owned()])
+        // Pin Sonnet so window primers do not inherit a flagship account default.
+        Some(vec![
+            "--model".to_owned(),
+            "sonnet".to_owned(),
+            "--effort".to_owned(),
+            "low".to_owned(),
+        ])
     }
 
     fn compact_command(&self) -> Option<&'static str> {
