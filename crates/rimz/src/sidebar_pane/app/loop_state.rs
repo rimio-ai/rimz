@@ -9,9 +9,9 @@ use super::paint::FramePainter;
 use super::remind::RemindState;
 use super::selection::{reconcile_selection, row_index_of_pane};
 use super::state::{
-    ApplyOutcome, FetchDiagnostics, apply_manual_unread_guard, compute_next_state,
-    emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row, read_receipts_for_tab,
-    row_id_of_pane, session_focus_baseline, set_rows_unread,
+    ApplyOutcome, FetchDiagnostics, ReadClear, apply_manual_unread_guard, compute_next_state,
+    emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row, read_receipts_for_all,
+    read_receipts_for_tab, row_id_of_pane, session_focus_baseline, set_rows_unread,
 };
 use super::*;
 use crate::diag::record::RendererExitCause;
@@ -149,6 +149,7 @@ struct InputApply {
     focused: Option<PaneId>,
     mark_read: Option<String>,
     mark_unread: Option<String>,
+    mark_all_read: bool,
 }
 
 pub(super) fn handle_wakeup(
@@ -659,7 +660,8 @@ impl LoopState {
         let interacted = applied.painted
             || applied.focused.is_some()
             || applied.mark_read.is_some()
-            || applied.mark_unread.is_some();
+            || applied.mark_unread.is_some()
+            || applied.mark_all_read;
         if interacted {
             order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
         }
@@ -674,10 +676,13 @@ impl LoopState {
             spawn_pane_focus(pane, &config.session_name);
         }
         if let Some(row_id) = applied.mark_read {
-            self.mark_row_read(config, fetch, &row_id, diag);
+            self.mark_row_read(fetch, &row_id, diag);
         }
         if let Some(row_id) = applied.mark_unread {
-            self.mark_row_unread(config, fetch, &row_id, diag);
+            self.mark_row_unread(fetch, &row_id, diag);
+        }
+        if applied.mark_all_read {
+            self.mark_all_read(fetch, diag);
         }
         Ok(())
     }
@@ -722,11 +727,12 @@ impl LoopState {
         Ok(InputApply {
             painted: outcome.redraw,
             focused: outcome.focus,
-            // The `m`/`M` keys name a row to mark read/unread; the loop does
-            // the durable write and repaint (`on_input`), which owns the
-            // runtime paths.
+            // The read-state keys name row/global work; the loop does the
+            // durable write and repaint (`on_input`), which owns the runtime
+            // paths.
             mark_read: outcome.mark_read,
             mark_unread: outcome.mark_unread,
+            mark_all_read: outcome.mark_all_read,
         })
     }
 
@@ -737,7 +743,6 @@ impl LoopState {
     /// already read.
     fn mark_row_read(
         &mut self,
-        config: &ServeConfig,
         fetch: &mut FetchDispatcher,
         row_id: &str,
         diag: &crate::diag::DiagSink,
@@ -745,9 +750,7 @@ impl LoopState {
         if self.ui.unread_guard.as_deref() == Some(row_id) {
             self.ui.unread_guard = None;
         }
-        let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone()) else {
-            return;
-        };
+        let runtime = self.read_marks.runtime().clone();
         let now = jiff::Timestamp::now();
         let marks = self.read_marks.load_merged();
         let clear = read_receipt_for_row(
@@ -757,36 +760,56 @@ impl LoopState {
             &marks,
             now,
         );
+        self.apply_read_clear(&runtime, clear, now, fetch, diag);
+    }
+
+    fn apply_read_clear(
+        &mut self,
+        runtime: &RuntimePaths,
+        clear: ReadClear,
+        now: jiff::Timestamp,
+        fetch: &mut FetchDispatcher,
+        diag: &crate::diag::DiagSink,
+    ) {
         if clear.ids.is_empty() {
             return;
         }
-        if let Err(err) = write_manual_read_marks(&runtime, clear.ids.clone(), now.as_millisecond())
+        if let Err(err) = write_manual_read_marks(runtime, clear.ids.clone(), now.as_millisecond())
         {
             warn!(error = %err, "mark-read receipt write failed");
             return;
         }
         set_rows_unread(&mut self.current, &clear.ids, false);
         emit_unread_cleared_trace(diag, &clear.trace);
-        wake_room(&runtime);
+        wake_room(runtime);
         self.dirty = true;
         self.next_frame = Instant::now();
         fetch.request(FetchRequest::default(), true);
     }
 
-    /// Re-flag a row unread without jumping (`M`): open a durable episode through
-    /// the shared mark-unread path, set the row locally for an instant repaint,
-    /// trace the open, wake the room, and refetch so the episode lands in the
-    /// pulled snapshot. A no-op when the row has left the room.
+    /// Mark every readable row read without jumping (`M`): write manual receipts
+    /// for every unread or needs-a-look row, clear local unread bits, and refetch
+    /// so peers converge through the producer.
+    fn mark_all_read(&mut self, fetch: &mut FetchDispatcher, diag: &crate::diag::DiagSink) {
+        self.ui.unread_guard = None;
+        let runtime = self.read_marks.runtime().clone();
+        let now = jiff::Timestamp::now();
+        let marks = self.read_marks.load_merged();
+        let clear = read_receipts_for_all(&self.current, UnreadClearCause::MarkRead, &marks, now);
+        self.apply_read_clear(&runtime, clear, now, fetch, diag);
+    }
+
+    /// Re-flag a row unread without jumping (`m` on a read row): open a durable
+    /// episode through the shared mark-unread path, set the row locally for an
+    /// instant repaint, trace the open, wake the room, and refetch so the episode
+    /// lands in the pulled snapshot. A no-op when the row has left the room.
     fn mark_row_unread(
         &mut self,
-        config: &ServeConfig,
         fetch: &mut FetchDispatcher,
         row_id: &str,
         diag: &crate::diag::DiagSink,
     ) {
-        let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone()) else {
-            return;
-        };
+        let runtime = self.read_marks.runtime().clone();
         let Some(row) = self
             .current
             .worktree_groups

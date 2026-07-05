@@ -133,8 +133,8 @@ fn draw_into(
             snapshot.sidebar.focus_key_label(),
             &snapshot.sidebar.keys,
             area,
-            top_height,
-            bottom_height,
+            (top_height, bottom_height),
+            ui.animation_phase,
         );
     }
 }
@@ -145,14 +145,15 @@ fn draw_help_overlay(
     focus_key: Option<&str>,
     keys: &crate::config::SidebarKeys,
     area: Rect,
-    top_height: usize,
-    bottom_height: usize,
+    chrome_heights: (usize, usize),
+    animation_phase: u64,
 ) {
     if area.width == 0 {
         return;
     }
 
     let area_bottom = area.bottom();
+    let (top_height, bottom_height) = chrome_heights;
     let region_top = area
         .y
         .saturating_add(top_height.min(usize::from(u16::MAX)) as u16)
@@ -168,7 +169,13 @@ fn draw_help_overlay(
         return;
     }
 
-    let lines = help_lines(theme, focus_key, keys, usize::from(area.width));
+    let lines = help_lines(
+        theme,
+        focus_key,
+        keys,
+        usize::from(area.width),
+        animation_phase,
+    );
     let box_w = lines
         .iter()
         .map(|line| line.width())
@@ -180,28 +187,20 @@ fn draw_help_overlay(
         return;
     }
 
-    let x = area.x.saturating_add(area.width.saturating_sub(box_w) / 2);
-    let y = region_top.saturating_add(region_h.saturating_sub(box_h) / 2);
+    let x = area.right().saturating_sub(box_w).max(area.x);
+    let y = region_bottom.saturating_sub(box_h).max(region_top);
     let width = box_w.min(area.right().saturating_sub(x));
     if width == 0 {
         return;
     }
 
-    frame.render_widget(
-        Clear,
-        Rect {
-            x: area.x,
-            y: region_top,
-            width: area.width,
-            height: region_h,
-        },
-    );
     let rect = Rect {
         x,
         y,
         width,
         height: box_h,
     };
+    frame.render_widget(Clear, rect);
     frame.render_widget(Paragraph::new(Text::from(lines)), rect);
 }
 

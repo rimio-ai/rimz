@@ -320,7 +320,7 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 - `↑`/`↓` or `k`/`j` select a row; `K`/`J` select the previous or next worktree's first visible row; `g`/`G` select the first or last row; `↵` or `l` jumps to the selected pane.
 - `n`/`N` jump to the **next/previous thing that needs you** — unread needs-a-look rows first, oldest episode first, then read waiting/failed rows oldest first — and focus it to read. `␣` is an alias for `n`. One key tames a fleet; `N` walks back.
 - `1`–`9` jump by the row's visible position.
-- `m`/`M` mark the selected row read / unread **without jumping** — clear a finished card from the inbox, or re-flag one to keep it on your radar.
+- `m` toggles the selected row read/unread **without jumping**; `M` marks every row read.
 - `u`, `q`, `!`/`e`, `p`, `d`, `w`, and `o` filter the body to unread/waiting/attention/paused/done/working/idle; the active filter key toggles back to all, and `a` clears to all directly.
 - `←/→` switch the provider dashboard's tab when the dashboard is tabbed — a provider pick in place, never a jump.
 - A click anywhere in a card's block jumps to it.
@@ -428,24 +428,27 @@ When the renderer is holding a successful-but-regressive fetch behind the last g
 
 These notices clear when the next accepted pane frame lands. A health alert takes over the bottom line while a fetch failure is active.
 
-**Help overlay** (`?`). The legend and keys replace the card body as a centered floating block in the faint chrome tier — summoned reference, not live state. The cockpit and footer/dashboard rails stay pinned, the cleared card-body zone gives the modal a clean backdrop, legend glyphs carry their semantic status colors, and any key or focus leaving the sidebar closes it.
+**Help overlay** (`?`). The legend and keys float over the bottom-right of the card body, next to the footer hint, while uncovered cards stay visible. Key chords use the cool accent tone, the motion legend animates live, and any key or focus leaving the sidebar closes it.
 
 ```
 ╭ keys & legend ─────────────────────────────────────────╮
 │ keys                                                   │
 │ ↕ j/k rows                    ↕ J/K worktrees          │
-│ ↕ g/G ends                    ↕ ^f/^b page  H/L screen │
-│ ⏎ l focus                     ⏎ 1-9 direct             │
-│ ␣ n/N needs-you  (Space = n)  ✉ m/M read / unread      │
+│ ↕ g/G ends                    ↕ ^f/^b page             │
+│ ↕ H/L screen                  ⏎ l focus                │
+│ ⏎ 1-9 direct                  ␣ n/N needs-you          │
+│ ✉ m read/unread               ✉ M read all             │
 │ ↔ ←/→ account tabs            ⟳ r reload               │
-│ ✕ x dismiss                   Alt+p sidebar (toggle)   │
+│ ✕ x dismiss                   Alt+p sidebar            │
 │ filter                                                 │
 │ ? q waiting  ! e attention                             │
 │ ⏸︎ p paused   ✓ d done                                  │
 │ ⢿ w working  ○ o idle                                  │
 │ u unread     a all                                     │
 │ legend                                                 │
-│ ⠁ thinking  ⢄ delegating                               │
+│ ⠁ thinking  ⣾ working                                  │
+│ ▇ compacting  ⢄ delegating                             │
+│ ⠙ resolving                                             │
 ╰─────────────────── any key to close ───────────────────╯
 ```
 

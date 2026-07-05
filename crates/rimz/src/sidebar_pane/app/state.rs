@@ -399,6 +399,24 @@ pub(super) fn read_receipts_for_tab(
     clear
 }
 
+/// Read receipts for every row a manual "mark all read" sweep covers.
+pub(super) fn read_receipts_for_all(
+    snapshot: &SidebarSnapshot,
+    cause: UnreadClearCause,
+    marks: &crate::sidebar::read_marks::ReadMarks,
+    now: Timestamp,
+) -> ReadClear {
+    let mut clear = ReadClear::default();
+    for row in snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+    {
+        clear.merge(read_receipt_for_row_ref(row, cause, marks, now));
+    }
+    clear
+}
+
 /// Set the `unread` bit on the named rows in place — the instant local feedback
 /// for a focus/mark-read clear (`false`) or a mark-unread re-flag (`true`),
 /// ahead of the durable write the next produce re-derives.

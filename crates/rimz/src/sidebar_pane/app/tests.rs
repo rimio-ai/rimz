@@ -182,6 +182,23 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
 }
 
 #[test]
+fn help_popup_keeps_animation_grid_hot() {
+    let ws = workspace();
+    let snapshot = snapshot(&ws);
+    let mut ui = UiState {
+        help_visible: true,
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    assert_eq!(
+        frame_interval(&snapshot, &ui, false),
+        crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
+    );
+}
+
+#[test]
 fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     let ws = workspace();
     let mut snapshot = snapshot(&ws);

@@ -479,7 +479,7 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
         let p = theme.palette;
         for &component in Component::ALL {
             let expected = match component {
-                Sessions | Output | WindowHuge => p.accent,
+                Sessions | Output | HelpKey | WindowHuge => p.accent,
                 LaneSpine => p.selection,
                 WorktreeHeader | BranchDelta => p.body,
                 WorktreePristine | WindowSmall => p.faint,

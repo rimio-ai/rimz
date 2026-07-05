@@ -36,7 +36,7 @@ fn render_footer_and_help_overlay() {
             ..Default::default()
         },
         80,
-        28,
+        36,
     );
     assert!(help.contains("keys & legend"));
     assert!(help.contains("╭"), "{help}");
@@ -45,22 +45,26 @@ fn render_footer_and_help_overlay() {
     assert!(help.contains("keys"), "{help}");
     assert!(help.contains("filter"), "{help}");
     assert!(help.contains("legend"), "{help}");
-    assert!(help.contains("j/k rows"));
-    assert!(help.contains("J/K worktrees"));
-    assert!(help.contains("g/G ends"));
-    assert!(help.contains("^f/^b page"));
-    assert!(help.contains("H/L screen"));
-    assert!(help.contains("n/N needs-you"));
-    assert!(help.contains("l focus"));
-    assert!(help.contains("m/M read / unread"));
-    assert!(help.contains("Alt+p sidebar (toggle)"));
-    assert!(help.contains("? q waiting"));
-    assert!(help.contains("! e attention"));
-    assert!(help.contains("○ o idle"));
+    let compact = help.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("j/k rows"));
+    assert!(compact.contains("J/K worktrees"));
+    assert!(compact.contains("g/G ends"));
+    assert!(compact.contains("^f/^b page"));
+    assert!(compact.contains("H/L screen"));
+    assert!(compact.contains("n/N needs-you"));
+    assert!(compact.contains("l focus"));
+    assert!(compact.contains("m read/unread"));
+    assert!(compact.contains("M read all"));
+    assert!(compact.contains("Alt+p sidebar"));
+    assert!(compact.contains("? q waiting"));
+    assert!(compact.contains("! e attention"));
+    assert!(compact.contains("○ o idle"));
+    assert!(help.contains("compacting"));
+    assert!(help.contains("resolving"));
     assert!(help.contains("any key to close"));
     assert!(
-        !help.contains("allow?"),
-        "the card body clears behind the modal"
+        help.contains("allow?"),
+        "the floating overlay leaves uncovered cards visible"
     );
     assert!(
         !help.contains("? close"),
@@ -93,10 +97,48 @@ fn chrome_rebuilds_carry_line_level_styles() {
         Some("Alt+p"),
         &crate::config::SidebarKeys::default(),
         80,
+        0,
     ) {
         assert_eq!(line.style, theme.body());
     }
 }
+
+fn help_text(theme: &Theme, phase: u64) -> String {
+    help_lines(
+        theme,
+        Some("Alt+p"),
+        &crate::config::SidebarKeys::default(),
+        80,
+        phase,
+    )
+    .into_iter()
+    .map(|line| {
+        line.spans
+            .into_iter()
+            .map(|span| span.content.into_owned())
+            .collect::<String>()
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+#[test]
+fn help_legend_animates_across_phases() {
+    let theme = Theme::fixed(false);
+    let phase_0 = help_text(&theme, 0);
+    let phase_1 = help_text(&theme, 1);
+    let legend = |text: &str| {
+        text.lines()
+            .skip_while(|line| !line.contains("legend"))
+            .skip(1)
+            .take_while(|line| !line.contains("any key to close"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    assert_ne!(legend(&phase_0), legend(&phase_1));
+}
+
 #[test]
 fn help_overlay_falls_back_borderless_when_too_narrow() {
     let theme = Theme::fixed(false);
@@ -105,6 +147,7 @@ fn help_overlay_falls_back_borderless_when_too_narrow() {
         Some("Alt+p"),
         &crate::config::SidebarKeys::default(),
         20,
+        0,
     );
     let text_lines = lines
         .iter()
@@ -150,7 +193,7 @@ fn help_overlay_names_configured_motion_keys() {
         screen_bottom: "L".to_owned(),
         ..Default::default()
     };
-    let text = help_lines(&theme, Some("Alt+p"), &keys, 80)
+    let text = help_lines(&theme, Some("Alt+p"), &keys, 80, 0)
         .into_iter()
         .map(|line| {
             line.spans
@@ -161,9 +204,10 @@ fn help_overlay_names_configured_motion_keys() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("^n/^p rows"), "{text}");
-    assert!(text.contains("^v/M-v page"), "{text}");
-    assert!(text.contains("Home/End ends"), "{text}");
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("^n/^p rows"), "{text}");
+    assert!(compact.contains("^v/M-v page"), "{text}");
+    assert!(compact.contains("Home/End ends"), "{text}");
 }
 
 #[test]

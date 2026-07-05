@@ -11,6 +11,7 @@ pub(super) fn is_animating(
     };
     render::animation_cadence(snapshot, &theme.animations) != render::AnimationCadence::None
         || render::selection_awaiting_first_prompt(snapshot, ui)
+        || ui.help_visible
         || pet_frame_interval(
             snapshot,
             ui,
@@ -76,6 +77,9 @@ pub(super) fn frame_interval(
     let Some(theme) = ui.cached_theme(&snapshot.theme) else {
         return base;
     };
+    if ui.help_visible {
+        return base;
+    }
     // A scrollbar fade needs the fast grid to read as motion; it is brief and
     // self-terminating, so the cost is bounded to the settle window. Continuous
     // row pulse rides the breath cadence below.

@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use super::fmt::age_short;
 use super::labels::{role_glyph, status_glyph, status_rest_style};
 use super::layout;
-use super::theme::Theme;
+use super::theme::{Component, Theme};
 use super::{Alert, GateNotice};
 use crate::remote::link::link_badge_heat;
 
@@ -313,17 +313,18 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
 }
 
 /// The `?` popup: a which-key style block with action glyphs and the status
-/// legend merged into the filter rows.
+/// legend on one shared grid.
 pub(super) fn help_lines(
     theme: &Theme,
     focus_key: Option<&str>,
     keys: &SidebarKeys,
     width: usize,
+    phase: u64,
 ) -> Vec<Line<'static>> {
     const TITLE: &str = "keys & legend";
     const MIN_FRAME_WIDTH: usize = 22;
 
-    let rows = help_body_rows(theme, focus_key, keys);
+    let rows = help_body_rows(theme, focus_key, keys, phase);
     if width < MIN_FRAME_WIDTH {
         return rows
             .into_iter()
@@ -347,19 +348,24 @@ fn help_body_rows(
     theme: &Theme,
     focus_key: Option<&str>,
     keys: &SidebarKeys,
+    phase: u64,
 ) -> Vec<Line<'static>> {
-    let key_rows = vec![
+    let movement = |key: String, label| {
+        key_entry(
+            theme,
+            Some(key_icon(theme, GlyphRole::KeysMove)),
+            key,
+            label,
+        )
+    };
+    let keys_section = vec![
         (
-            key_cell(
-                theme,
-                Some(key_icon(theme, GlyphRole::KeysMove)),
-                &format!("{}/{}", chord_label(&keys.down), chord_label(&keys.up)),
+            movement(
+                format!("{}/{}", chord_label(&keys.down), chord_label(&keys.up)),
                 "rows",
             ),
-            Some(key_cell(
-                theme,
-                Some(key_icon(theme, GlyphRole::KeysMove)),
-                &format!(
+            Some(movement(
+                format!(
                     "{}/{}",
                     chord_label(&keys.worktree_down),
                     chord_label(&keys.worktree_up)
@@ -368,76 +374,71 @@ fn help_body_rows(
             )),
         ),
         (
-            key_cell(
-                theme,
-                Some(key_icon(theme, GlyphRole::KeysMove)),
-                &format!("{}/{}", chord_label(&keys.top), chord_label(&keys.bottom)),
+            movement(
+                format!("{}/{}", chord_label(&keys.top), chord_label(&keys.bottom)),
                 "ends",
             ),
-            Some(
-                key_cell(
-                    theme,
-                    Some(key_icon(theme, GlyphRole::KeysMove)),
-                    &format!(
-                        "{}/{}",
-                        chord_label(&keys.page_down),
-                        chord_label(&keys.page_up)
-                    ),
-                    "page",
-                )
-                .into_iter()
-                .chain([
-                    Span::raw("  "),
-                    Span::styled(
-                        format!(
-                            "{}/{}",
-                            chord_label(&keys.screen_top),
-                            chord_label(&keys.screen_bottom)
-                        ),
-                        theme.body().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(" "),
-                    Span::styled("screen".to_owned(), theme.faint()),
-                ])
-                .collect(),
-            ),
+            Some(movement(
+                format!(
+                    "{}/{}",
+                    chord_label(&keys.page_down),
+                    chord_label(&keys.page_up)
+                ),
+                "page",
+            )),
         ),
         (
-            key_cell(
+            movement(
+                format!(
+                    "{}/{}",
+                    chord_label(&keys.screen_top),
+                    chord_label(&keys.screen_bottom)
+                ),
+                "screen",
+            ),
+            Some(key_entry(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysFocus)),
                 "l",
                 "focus",
-            ),
-            Some(key_cell(
+            )),
+        ),
+        (
+            key_entry(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysFocus)),
                 "1-9",
                 "direct",
-            )),
-        ),
-        (
-            key_cell(
+            ),
+            Some(key_entry(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysInbox)),
                 "n/N",
-                "needs-you  (Space = n)",
-            ),
-            Some(key_cell(
-                theme,
-                Some(key_icon(theme, GlyphRole::KeysRead)),
-                "m/M",
-                "read / unread",
+                "needs-you",
             )),
         ),
         (
-            key_cell(
+            key_entry(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysRead)),
+                "m",
+                "read/unread",
+            ),
+            Some(key_entry(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysRead)),
+                "M",
+                "read all",
+            )),
+        ),
+        (
+            key_entry(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysAccounts)),
                 "←/→",
                 "account tabs",
             ),
-            Some(key_cell(
+            Some(key_entry(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysReload)),
                 "r",
@@ -445,53 +446,69 @@ fn help_body_rows(
             )),
         ),
         (
-            key_cell(
+            key_entry(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysDismiss)),
                 "x",
                 "dismiss",
             ),
-            focus_key.map(|key| key_cell(theme, None, key, "sidebar (toggle)")),
+            focus_key.map(|key| key_entry(theme, None, key, "sidebar")),
         ),
     ];
-
-    let mut lines = vec![subheader(theme, "keys")];
-    lines.extend(two_column(theme, key_rows));
-    lines.push(subheader(theme, "filter"));
-    lines.extend(two_column(
+    help_grid(
         theme,
         vec![
+            ("keys", keys_section),
             (
-                status_cell(theme, AgentStatus::Waiting, "q", "waiting"),
-                Some(status_cell(theme, AgentStatus::Failed, "e", "attention")),
+                "filter",
+                vec![
+                    (
+                        status_entry(theme, AgentStatus::Waiting, "q", "waiting"),
+                        Some(status_entry(theme, AgentStatus::Failed, "e", "attention")),
+                    ),
+                    (
+                        status_entry(theme, AgentStatus::Paused, "p", "paused"),
+                        Some(status_entry(theme, AgentStatus::Success, "d", "done")),
+                    ),
+                    (
+                        status_entry(theme, AgentStatus::Running, "w", "working"),
+                        Some(status_entry(theme, AgentStatus::Idle, "o", "idle")),
+                    ),
+                    (
+                        key_entry(theme, None, "u", "unread"),
+                        Some(key_entry(theme, None, "a", "all")),
+                    ),
+                ],
             ),
             (
-                status_cell(theme, AgentStatus::Paused, "p", "paused"),
-                Some(status_cell(theme, AgentStatus::Success, "d", "done")),
-            ),
-            (
-                status_cell(theme, AgentStatus::Running, "w", "working"),
-                Some(status_cell(theme, AgentStatus::Idle, "o", "idle")),
-            ),
-            (
-                key_cell(theme, None, "u", "unread"),
-                Some(key_cell(theme, None, "a", "all")),
+                "legend",
+                vec![
+                    (
+                        animation_entry(theme, AnimationRole::Thinking, phase, "thinking"),
+                        Some(animation_entry(
+                            theme,
+                            AnimationRole::Working,
+                            phase,
+                            "working",
+                        )),
+                    ),
+                    (
+                        animation_entry(theme, AnimationRole::Compacting, phase, "compacting"),
+                        Some(animation_entry(
+                            theme,
+                            AnimationRole::Delegating,
+                            phase,
+                            "delegating",
+                        )),
+                    ),
+                    (
+                        animation_entry(theme, AnimationRole::Resolving, phase, "resolving"),
+                        None,
+                    ),
+                ],
             ),
         ],
-    ));
-    lines.push(subheader(theme, "legend"));
-    lines.extend(two_column(
-        theme,
-        vec![(
-            animation_cell(theme, AnimationRole::Thinking, "thinking"),
-            Some(animation_cell(
-                theme,
-                AnimationRole::Delegating,
-                "delegating",
-            )),
-        )],
-    ));
-    lines
+    )
 }
 
 fn chord_label(spec: &str) -> String {
@@ -531,60 +548,111 @@ fn key_label(base: &str) -> String {
     }
 }
 
-fn two_column(
-    theme: &Theme,
-    rows: Vec<(Vec<Span<'static>>, Option<Vec<Span<'static>>>)>,
-) -> Vec<Line<'static>> {
-    const GAP: usize = 2;
-
-    let left_w = rows
-        .iter()
-        .filter_map(|(left, right)| right.as_ref().map(|_| layout::spans_width(left)))
-        .max()
-        .unwrap_or(0);
-
-    rows.into_iter()
-        .map(|(mut left, right)| {
-            if let Some(right) = right {
-                let pad = left_w.saturating_sub(layout::spans_width(&left)) + GAP;
-                left.push(Span::raw(" ".repeat(pad)));
-                left.extend(right);
-            }
-            Line::from(left).style(theme.body())
-        })
-        .collect()
+#[derive(Clone)]
+struct Entry {
+    icon: Option<Span<'static>>,
+    key: String,
+    label: String,
+    key_style: Style,
 }
 
-fn key_cell(
-    theme: &Theme,
-    glyph: Option<Span<'static>>,
-    keys: &str,
-    label: &str,
-) -> Vec<Span<'static>> {
-    let mut spans = Vec::with_capacity(5);
-    if let Some(glyph) = glyph {
-        spans.push(glyph);
-        spans.push(Span::raw(" "));
+type HelpRow = (Entry, Option<Entry>);
+type HelpSection = (&'static str, Vec<HelpRow>);
+
+fn help_grid(theme: &Theme, sections: Vec<HelpSection>) -> Vec<Line<'static>> {
+    const GAP: usize = 2;
+    const ICON_W: usize = 1;
+
+    let left_key_w = sections
+        .iter()
+        .flat_map(|(_, rows)| rows.iter().map(|(left, _)| layout::text_width(&left.key)))
+        .max()
+        .unwrap_or(0);
+    let left_label_w = sections
+        .iter()
+        .flat_map(|(_, rows)| rows.iter().map(|(left, _)| layout::text_width(&left.label)))
+        .max()
+        .unwrap_or(0);
+    let right_key_w = sections
+        .iter()
+        .flat_map(|(_, rows)| {
+            rows.iter()
+                .filter_map(|(_, right)| right.as_ref().map(|entry| layout::text_width(&entry.key)))
+        })
+        .max()
+        .unwrap_or(0);
+    let left_half_w = ICON_W + 1 + left_key_w + 1 + left_label_w;
+
+    let mut lines = Vec::new();
+    for (section, rows) in sections {
+        lines.push(subheader(theme, section));
+        lines.extend(rows.into_iter().map(|(left, right)| {
+            let mut spans = render_entry(theme, left, left_key_w);
+            let left_w = layout::spans_width(&spans);
+            if let Some(right) = right {
+                spans.push(Span::raw(
+                    " ".repeat(left_half_w.saturating_sub(left_w) + GAP),
+                ));
+                spans.extend(render_entry(theme, right, right_key_w));
+            }
+            Line::from(spans).style(theme.body())
+        }));
     }
-    spans.push(Span::styled(
-        keys.to_owned(),
-        theme.body().add_modifier(Modifier::BOLD),
-    ));
+    lines
+}
+
+fn render_entry(theme: &Theme, entry: Entry, key_w: usize) -> Vec<Span<'static>> {
+    const ICON_W: usize = 1;
+
+    let mut spans = Vec::with_capacity(5);
+    if let Some(icon) = entry.icon {
+        let icon_w = layout::spans_width(std::slice::from_ref(&icon));
+        spans.push(icon);
+        if icon_w < ICON_W {
+            spans.push(Span::raw(" ".repeat(ICON_W - icon_w)));
+        }
+    } else {
+        spans.push(Span::raw(" ".repeat(ICON_W)));
+    }
     spans.push(Span::raw(" "));
-    spans.push(Span::styled(label.to_owned(), theme.faint()));
+    let key_w_actual = layout::text_width(&entry.key);
+    spans.push(Span::styled(entry.key, entry.key_style));
+    if key_w_actual < key_w {
+        spans.push(Span::raw(" ".repeat(key_w - key_w_actual)));
+    }
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(entry.label, theme.faint()));
     spans
 }
 
-fn status_cell(theme: &Theme, status: AgentStatus, keys: &str, label: &str) -> Vec<Span<'static>> {
-    key_cell(theme, Some(status_icon(theme, status)), keys, label)
+fn key_entry(
+    theme: &Theme,
+    icon: Option<Span<'static>>,
+    key: impl Into<String>,
+    label: &str,
+) -> Entry {
+    Entry {
+        icon,
+        key: key.into(),
+        label: label.to_owned(),
+        key_style: theme.styled(Component::HelpKey, Modifier::BOLD),
+    }
 }
 
-fn animation_cell(theme: &Theme, role: AnimationRole, label: &str) -> Vec<Span<'static>> {
-    vec![
-        Span::styled(role_glyph(theme, role, 0), animation_style(theme, role)),
-        Span::raw(" "),
-        Span::styled(label.to_owned(), theme.faint()),
-    ]
+fn status_entry(theme: &Theme, status: AgentStatus, keys: &str, label: &str) -> Entry {
+    key_entry(theme, Some(status_icon(theme, status)), keys, label)
+}
+
+fn animation_entry(theme: &Theme, role: AnimationRole, phase: u64, label: &str) -> Entry {
+    Entry {
+        icon: Some(Span::styled(
+            role_glyph(theme, role, phase),
+            animation_style(theme, role),
+        )),
+        key: String::new(),
+        label: label.to_owned(),
+        key_style: theme.body(),
+    }
 }
 
 fn subheader(theme: &Theme, text: &str) -> Line<'static> {

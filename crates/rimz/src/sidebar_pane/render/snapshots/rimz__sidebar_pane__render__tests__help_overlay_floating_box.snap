@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
-assertion_line: 155
 expression: screen
 ---
  ⌘ query-engine
@@ -10,22 +9,30 @@ expression: screen
  ──────────────────────────────────────────────────────────────────────────────
  ? 1   ! 0   ⏸︎ 0   ✓ 0                                                ⢿ 0   ○ 0
 
-           ╭ keys & legend ─────────────────────────────────────────╮
-           │ keys                                                   │
-           │ ↕ j/k rows                    ↕ J/K worktrees          │
-           │ ↕ g/G ends                    ↕ ^f/^b page  H/L screen │
-           │ ⏎ l focus                     ⏎ 1-9 direct             │
-           │ ␣ n/N needs-you  (Space = n)  ✉ m/M read / unread      │
-           │ ↔ ←/→ account tabs            ⟳ r reload               │
-           │ ✕ x dismiss                   Alt+p sidebar (toggle)   │
-           │ filter                                                 │
-           │ ? q waiting  ! e attention                             │
-           │ ⏸︎ p paused   ✓ d done                                  │
-           │ ⢿ w working  ○ o idle                                  │
-           │ u unread     a all                                     │
-           │ legend                                                 │
-           │ ⠁ thinking  ⢄ delegating                               │
-           ╰─────────────────── any key to close ───────────────────╯
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌? codex                                                                       ▐
+▌  allow?                                                                      ▐
+▌  ▢ ────────────────────────────────────────────────────────────────────    0%▐
+
+                                      ╭ keys & legend ─────────────────────────╮
+                                      │ keys                                   │
+                                      │ ↕ j/k rows          ↕ J/K   worktrees  │
+                                      │ ↕ g/G ends          ↕ ^f/^b page       │
+                                      │ ↕ H/L screen        ⏎ l     focus      │
+                                      │ ⏎ 1-9 direct        ␣ n/N   needs-you  │
+                                      │ ✉ m   read/unread   ✉ M     read all   │
+                                      │ ↔ ←/→ account tabs  ⟳ r     reload     │
+                                      │ ✕ x   dismiss         Alt+p sidebar    │
+                                      │ filter                                 │
+                                      │ ? q   waiting       ! e     attention  │
+                                      │ ⏸︎ p   paused        ✓ d     done       │
+                                      │ ⢿ w   working       ○ o     idle       │
+                                      │   u   unread          a     all        │
+                                      │ legend                                 │
+                                      │ ⠁     thinking      ⣾       working    │
+                                      │ ▁     compacting    ⢄       delegating │
+                                      │ ⠋     resolving                        │
+                                      ╰─────────── any key to close ───────────╯
  ──────────────────────────────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00

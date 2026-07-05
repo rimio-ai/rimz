@@ -516,12 +516,12 @@ fn page_and_screen_edge_keys_noop_before_first_paint() {
 
 #[test]
 fn mark_keys_name_the_selected_agent_row_without_focus() {
-    // `m`/`M` name the selected agent row's id for the loop to mark read /
-    // unread. They never focus, and they don't redraw here — the loop clears the
+    // `m` toggles the selected agent row's read state, and `M` names the global
+    // mark-all path. They never focus, and they don't redraw here — the loop clears the
     // row and repaints once after the durable write, so the frame never flashes
     // the pre-clear state.
     let ws = workspace();
-    let snapshot = filterable_snapshot(&ws);
+    let mut snapshot = filterable_snapshot(&ws);
     // Index 0 is the running `claude` agent row (the inbox participant).
     let mut ui = UiState {
         selected_index: 0,
@@ -529,21 +529,28 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
     };
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
 
-    let outcome = handle_key(KeyAction::MarkRead, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
+    assert_eq!(outcome.mark_unread, Some(row_id.clone()));
+    assert_eq!(outcome.focus, None);
+    assert!(!outcome.redraw, "the loop owns the repaint after the write");
+    assert_eq!(ui.selected_index, 0, "marking unread moves no selection");
+
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
     assert_eq!(outcome.mark_read, Some(row_id.clone()));
     assert_eq!(outcome.focus, None);
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
     assert_eq!(ui.selected_index, 0, "marking read moves no selection");
 
-    let outcome = handle_key(KeyAction::MarkUnread, &mut ui, &snapshot);
-    assert_eq!(outcome.mark_unread, Some(row_id));
+    let outcome = handle_key(KeyAction::MarkAllRead, &mut ui, &snapshot);
+    assert!(outcome.mark_all_read);
     assert_eq!(outcome.focus, None);
 }
 
 #[test]
 fn mark_keys_ignore_process_rows() {
-    // A process row has no status and can never be unread, so `m`/`M` on one are
-    // no-ops — never naming the row. This guards the downstream `opened_unread`
+    // A process row has no status and can never be unread, so `m` on one is a
+    // no-op — never naming the row. This guards the downstream `opened_unread`
     // invariant: were the id passed through, the unread write would panic on a
     // statusless row. (Regression: R1-01.)
     let ws = workspace();
@@ -558,11 +565,8 @@ fn mark_keys_ignore_process_rows() {
         ..Default::default()
     };
 
-    let outcome = handle_key(KeyAction::MarkRead, &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
     assert_eq!(outcome.mark_read, None, "no read mark on a process row");
-    assert_eq!(outcome, InputOutcome::default());
-
-    let outcome = handle_key(KeyAction::MarkUnread, &mut ui, &snapshot);
     assert_eq!(outcome.mark_unread, None, "no unread mark on a process row");
     assert_eq!(outcome, InputOutcome::default());
 }

@@ -64,10 +64,10 @@ pub(super) enum KeyAction {
     /// walks the same inbox in reverse. The fleet-scale triage keys.
     InboxNext,
     InboxPrev,
-    /// `m`/`M` — mark the selected row read / unread without jumping, the
-    /// email-inbox hygiene keys.
-    MarkRead,
-    MarkUnread,
+    /// `m` — toggle the selected row read/unread without jumping.
+    MarkToggle,
+    /// `M` — mark every row read without jumping.
+    MarkAllRead,
     Help,
     Dismiss,
     Filter(FilterAction),
@@ -118,8 +118,8 @@ pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) 
         // `N` walks it in reverse.
         KeyCode::Char('n') | KeyCode::Char(' ') => "key:inbox_next",
         KeyCode::Char('N') => "key:inbox_prev",
-        KeyCode::Char('m') => "key:mark_read",
-        KeyCode::Char('M') => "key:mark_unread",
+        KeyCode::Char('m') => "key:mark_toggle",
+        KeyCode::Char('M') => "key:mark_all_read",
         KeyCode::Char('?') => "key:help",
         KeyCode::Char('a') => "key:filter:all",
         KeyCode::Char('u') => "key:filter:unread",
@@ -191,8 +191,8 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "key:enter" => Wakeup::Key(KeyAction::Enter),
         "key:inbox_next" => Wakeup::Key(KeyAction::InboxNext),
         "key:inbox_prev" => Wakeup::Key(KeyAction::InboxPrev),
-        "key:mark_read" => Wakeup::Key(KeyAction::MarkRead),
-        "key:mark_unread" => Wakeup::Key(KeyAction::MarkUnread),
+        "key:mark_toggle" => Wakeup::Key(KeyAction::MarkToggle),
+        "key:mark_all_read" => Wakeup::Key(KeyAction::MarkAllRead),
         "key:help" => Wakeup::Key(KeyAction::Help),
         "key:filter:all" => Wakeup::Key(KeyAction::Filter(FilterAction::All)),
         "key:filter:unread" => Wakeup::Key(KeyAction::Filter(FilterAction::Unread)),
@@ -477,18 +477,18 @@ mod tests {
                 KeyModifiers::SHIFT,
                 Wakeup::Key(KeyAction::InboxPrev),
             ),
-            // mark read / unread without jumping
+            // read-state hygiene without jumping
             (
-                "m → mark read",
+                "m → toggle read",
                 KeyCode::Char('m'),
                 KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::MarkRead),
+                Wakeup::Key(KeyAction::MarkToggle),
             ),
             (
-                "M → mark unread",
+                "M → mark all read",
                 KeyCode::Char('M'),
                 KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::MarkUnread),
+                Wakeup::Key(KeyAction::MarkAllRead),
             ),
             // filter keys
             (

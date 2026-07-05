@@ -74,6 +74,8 @@ pub(crate) enum Component {
     SubagentHeader,
     /// The `⇅ rc` remote-control flag.
     RemoteControl,
+    /// Which-key chord text inside the help overlay.
+    HelpKey,
     /// The unknown-provider fallback for an agent card's name.
     UnknownBrand,
     /// The capability-line window token, by size class: a neutral→cool→accent
@@ -116,6 +118,7 @@ impl Component {
         Component::Compaction,
         Component::SubagentHeader,
         Component::RemoteControl,
+        Component::HelpKey,
         Component::UnknownBrand,
         Component::WindowSmall,
         Component::WindowMedium,
@@ -129,7 +132,7 @@ impl Component {
     pub(crate) fn resolve(self, palette: &Palette) -> Color {
         use Component::*;
         match self {
-            Sessions | Output | WindowHuge => palette.accent,
+            Sessions | Output | HelpKey | WindowHuge => palette.accent,
             LaneSpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
             WorktreePristine | WindowSmall => palette.faint,

@@ -864,6 +864,55 @@ fn input_browse_arms_order_hold_before_next_fold() {
 }
 
 #[test]
+fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (_dir, mut state) = loop_state(&ws);
+    let mut snapshot = agent_snapshot(&ws);
+    let mut second = snapshot.worktree_groups[0].rows[0].clone();
+    snapshot.worktree_groups[0].rows[0].id = "agent-1".to_owned();
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    second.id = "agent-2".to_owned();
+    second.unread = true;
+    snapshot.worktree_groups[0].rows.push(second);
+    state.current = snapshot;
+    state.ui.unread_guard = Some("agent-1".to_owned());
+    state.ui.last_order = super::super::order_hold::capture_order(&state.current);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    let mut terminal = fixed_terminal();
+
+    state
+        .on_input(
+            &config,
+            Wakeup::Key(KeyAction::MarkAllRead),
+            &mut terminal,
+            &mut fetch,
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("mark all read");
+
+    assert!(
+        state
+            .current
+            .worktree_groups
+            .iter()
+            .flat_map(|group| group.rows.iter())
+            .all(|row| !row.unread),
+        "all unread bits clear locally"
+    );
+    assert_eq!(state.ui.unread_guard, None);
+    let marks = state.read_marks.load_merged();
+    assert!(marks.cleared_at_ms("agent-1").is_some());
+    assert!(marks.cleared_at_ms("agent-2").is_some());
+    assert!(state.dirty);
+    assert!(
+        request_rx.try_recv().is_ok(),
+        "mark-all schedules a convergence refetch"
+    );
+}
+
+#[test]
 fn focus_anchor_write_carries_current_scroll_offset() {
     let ws = workspace();
     let (dir, mut state) = loop_state(&ws);

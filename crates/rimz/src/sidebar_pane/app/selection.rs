@@ -27,11 +27,12 @@ pub(super) struct InputOutcome {
     pub(super) focus: Option<PaneId>,
     pub(super) dismiss: bool,
     /// The row id to mark read / unread without jumping — `Some` only on the
-    /// `m`/`M` keys. The durable receipt write, the instant local clear, and
-    /// the re-derive live in the loop (`on_input`), which owns the read-mark
+    /// selected-row toggle path. The durable receipt write, instant local clear,
+    /// and re-derive live in the loop (`on_input`), which owns the read-mark
     /// store and the runtime paths; the handler only names the target row.
     pub(super) mark_read: Option<String>,
     pub(super) mark_unread: Option<String>,
+    pub(super) mark_all_read: bool,
 }
 
 impl InputOutcome {
@@ -70,6 +71,13 @@ impl InputOutcome {
     fn mark_unread(row_id: String) -> Self {
         Self {
             mark_unread: Some(row_id),
+            ..Self::default()
+        }
+    }
+
+    fn mark_all_read() -> Self {
+        Self {
+            mark_all_read: true,
             ..Self::default()
         }
     }
@@ -216,18 +224,14 @@ pub(super) fn handle_key(
         }
         KeyAction::InboxNext => inbox_jump(ui, snapshot, true),
         KeyAction::InboxPrev => inbox_jump(ui, snapshot, false),
-        KeyAction::MarkRead => {
-            match agent_row_id_at(snapshot, ui.make_up_filter, ui.selected_index) {
-                Some(row_id) => InputOutcome::mark_read(row_id),
+        KeyAction::MarkToggle => {
+            match agent_row_mark_target_at(snapshot, ui.make_up_filter, ui.selected_index) {
+                Some(target) if target.unread => InputOutcome::mark_read(target.row_id),
+                Some(target) => InputOutcome::mark_unread(target.row_id),
                 None => InputOutcome::default(),
             }
         }
-        KeyAction::MarkUnread => {
-            match agent_row_id_at(snapshot, ui.make_up_filter, ui.selected_index) {
-                Some(row_id) => InputOutcome::mark_unread(row_id),
-                None => InputOutcome::default(),
-            }
-        }
+        KeyAction::MarkAllRead => InputOutcome::mark_all_read(),
         KeyAction::Help => {
             ui.help_visible = true;
             InputOutcome::redraw()
@@ -516,20 +520,28 @@ fn pane_at_row(
         .map(|pane| pane.pane_id.clone())
 }
 
-/// The id of the visible agent row at `index` — the read/unread mark target
-/// (the receipt key), unlike the jump target, which is the row's pane. `m`/`M`
-/// act on inbox rows only, so a process row (no status) and an out-of-range
+/// The id and unread bit of the visible agent row at `index` — the read/unread
+/// toggle target, unlike the jump target, which is the row's pane. `m` acts on
+/// inbox rows only, so a process row (no status) and an out-of-range
 /// index both yield `None`, making the key a no-op rather than a durable write
 /// the unread path would have to reject.
-fn agent_row_id_at(
+struct RowMarkTarget {
+    row_id: String,
+    unread: bool,
+}
+
+fn agent_row_mark_target_at(
     snapshot: &SidebarSnapshot,
     filter: Option<BodyFilter>,
     index: usize,
-) -> Option<String> {
+) -> Option<RowMarkTarget> {
     visible_rows(snapshot, filter)
         .nth(index)
         .filter(|row| row.status().is_some())
-        .map(|row| row.id.clone())
+        .map(|row| RowMarkTarget {
+            row_id: row.id.clone(),
+            unread: row.unread,
+        })
 }
 
 /// Pin the just-selected pane as the arrow-browse pick. The first arrow of a
