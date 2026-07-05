@@ -134,7 +134,7 @@ fn render_worktree_channel_keeps_hash_label_and_git_cluster() {
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(Vec::new(), vec![design]);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
-    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Pristine);
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Merged);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
@@ -142,16 +142,16 @@ fn render_worktree_channel_keeps_hash_label_and_git_cluster() {
     assert!(rendered.contains("# codex-resets"), "header:\n{rendered}");
     assert!(rendered.contains("✓ main"), "header:\n{rendered}");
     assert!(
+        !rendered.contains("≡ main"),
+        "merged PR outranks pristine equal marker:\n{rendered}"
+    );
+    assert!(
         !rendered.contains("⑂ codex-resets"),
         "channel keeps hash identity:\n{rendered}"
     );
 }
 
-#[test]
-fn render_worktree_equal_to_trunk() {
-    // A worktree that IS the trunk tip — zero ahead, zero behind, zero diff,
-    // and a proven-clean working tree — collapses the header's git cluster
-    // to `≡ <trunk>`: this checkout is `main`, nothing of its own anywhere.
+fn pristine_worktree_with_pr_state(pr_state: Option<crate::WorktreePrState>) -> SidebarSnapshot {
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -170,15 +170,60 @@ fn render_worktree_equal_to_trunk() {
     snapshot.worktree_groups[0].clean = Some(true);
     snapshot.worktree_groups[0].landed = Some(true);
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Pristine);
+    snapshot.worktree_groups[0].pr_state = pr_state;
+    snapshot
+}
+
+#[test]
+fn render_worktree_equal_to_trunk() {
+    // A worktree that IS the trunk tip — zero ahead, zero behind, zero diff,
+    // and a proven-clean working tree — collapses the header's git cluster
+    // to `≡ <trunk>`: this checkout is `main`, nothing of its own anywhere.
+    let snapshot = pristine_worktree_with_pr_state(None);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
     assert!(rendered.contains("≡ main"), "header:\n{rendered}");
     assert!(
+        rendered.contains("⑂ feature-migration"),
+        "PR-less pristine branch keeps branch prefix:\n{rendered}"
+    );
+    assert!(
         !rendered.contains("+0 -0"),
         "the landed marker replaces the zero diff"
     );
 }
+
+#[test]
+fn render_pr_merged_pristine_worktree_uses_merge_glyphs() {
+    let snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Merged));
+
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+
+    assert!(
+        rendered.contains("⮌ feature-migration"),
+        "merged PR swaps the left prefix:\n{rendered}"
+    );
+    assert!(rendered.contains("✓ main"), "header:\n{rendered}");
+    assert!(
+        !rendered.contains("≡ main"),
+        "merged PR outranks pristine equal marker:\n{rendered}"
+    );
+}
+
+#[test]
+fn render_pristine_worktree_pr_state_outranks_equal_marker() {
+    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+    assert!(rendered.contains("⊙ main"), "header:\n{rendered}");
+    assert!(!rendered.contains("≡ main"), "header:\n{rendered}");
+
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+    assert!(rendered.contains("✕ main"), "header:\n{rendered}");
+    assert!(!rendered.contains("≡ main"), "header:\n{rendered}");
+}
+
 #[test]
 fn render_worktree_clear_safe_to_remove() {
     // A content-landed worktree with a clean status whose trunk has moved on
@@ -381,9 +426,11 @@ fn render_diverged_worktree_uses_pr_state_marker() {
     let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    snapshot.worktree_groups[0].commits_ahead = Some(2);
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
 
     let rendered = snapshot_to_screen(&snapshot, 42, 14);
+    assert!(rendered.contains("⇡2"), "header:\n{rendered}");
     assert!(rendered.contains("⊙ main"), "header:\n{rendered}");
 
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);

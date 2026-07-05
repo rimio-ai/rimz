@@ -137,10 +137,11 @@ fn group_header(
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's git story pins right: pristine collapses to `≡ <trunk>`,
-    // merged collapses to `<merge> <trunk>`, and diverged/reconciling shows
-    // the `⇡/⇣` commit delta, `+/-` churn, then the highest-priority trunk
-    // glyph (local reconciling > merged PR > closed PR > open PR > branch).
+    // The worktree's git story pins right: a PR verdict takes precedence over
+    // pristine `≡ <trunk>`, merged collapses to `<merge> <trunk>`, and
+    // diverged/reconciling shows the `⇡/⇣` commit delta, `+/-` churn, then the
+    // highest-priority trunk glyph (local reconciling > merged PR > closed PR >
+    // open PR > branch).
     // A worktree channel keeps its `#` lane label on the left and carries this
     // same right-pinned story.
     // The per-worktree status tally is gone: the cockpit owns the fleet
@@ -163,7 +164,9 @@ fn group_header(
             format!("{} {}", theme.glyph(GlyphRole::ChannelHash), group.label)
         }
         _ => {
-            let role = if group.trunk_sync == Some(WorktreeTrunkSync::Merged) {
+            let role = if group.trunk_sync == Some(WorktreeTrunkSync::Merged)
+                || group.pr_state == Some(WorktreePrState::Merged)
+            {
                 GlyphRole::WorktreeMerge
             } else {
                 GlyphRole::WorktreeBranch
@@ -211,18 +214,27 @@ fn group_header(
     Line::from(spans)
 }
 
-/// The header's right-pinned git cluster. Pristine (`≡`) is quiet, merged
-/// (`<merge>`) is bright and removable, and diverged/reconciling keeps the
-/// numeric work stats before a trunk glyph chosen by the priority ladder:
-/// reconciling > PR merged > PR closed > PR open > branch. Worktree channels
-/// share this cluster while keeping their `#` label. Empty when no git read
-/// reached this group.
+/// The header's right-pinned git cluster. PR merged/closed/open glyphs outrank
+/// pristine (`≡`) even when the tree is even with trunk; PR-less pristine stays
+/// quiet. Merged (`<merge>`) is bright and removable, and
+/// diverged/reconciling keeps the numeric work stats before a trunk glyph
+/// chosen by the priority ladder: reconciling > PR merged > PR closed > PR
+/// open > branch. Worktree channels share this cluster while keeping their `#`
+/// label. Empty when no git read reached this group.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
     let Some(trunk) = group.trunk.as_deref() else {
         return plain_git_spans(theme, group);
     };
     match group.trunk_sync {
-        Some(WorktreeTrunkSync::Pristine) => return trunk_equal_spans(theme, trunk),
+        Some(WorktreeTrunkSync::Pristine) => {
+            return match group.pr_state {
+                Some(state) => {
+                    let (role, component) = pr_state_marker(state);
+                    trunk_glyph_spans(theme, role, trunk, component)
+                }
+                None => trunk_equal_spans(theme, trunk),
+            };
+        }
         Some(WorktreeTrunkSync::Merged) => {
             return trunk_glyph_spans(
                 theme,
@@ -262,6 +274,14 @@ fn plain_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
     spans
 }
 
+fn pr_state_marker(state: WorktreePrState) -> (GlyphRole, Component) {
+    match state {
+        WorktreePrState::Merged => (GlyphRole::WorktreeTrunkMerge, Component::WorktreeMerged),
+        WorktreePrState::Closed => (GlyphRole::WorktreePrClosed, Component::WorktreePrClosed),
+        WorktreePrState::Open => (GlyphRole::WorktreePrOpen, Component::WorktreePrOpen),
+    }
+}
+
 fn trunk_ladder_marker(group: &SidebarWorktreeGroup) -> (GlyphRole, Component) {
     if group.trunk_sync == Some(WorktreeTrunkSync::Reconciling) {
         return (
@@ -270,9 +290,7 @@ fn trunk_ladder_marker(group: &SidebarWorktreeGroup) -> (GlyphRole, Component) {
         );
     }
     match group.pr_state {
-        Some(WorktreePrState::Merged) => (GlyphRole::WorktreeTrunkMerge, Component::WorktreeMerged),
-        Some(WorktreePrState::Closed) => (GlyphRole::WorktreePrClosed, Component::WorktreePrClosed),
-        Some(WorktreePrState::Open) => (GlyphRole::WorktreePrOpen, Component::WorktreePrOpen),
+        Some(state) => pr_state_marker(state),
         None => (GlyphRole::WorktreeTrunkBranch, Component::BranchDelta),
     }
 }
