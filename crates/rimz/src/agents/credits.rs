@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::AgentRateLimits;
@@ -107,11 +108,13 @@ pub(crate) fn oauth_http_get(
 }
 
 /// A provider account-usage reading normalized from a local out-of-band source:
-/// included subscription windows plus the optional paid extra/API balance.
+/// included subscription windows plus optional paid extra/API and reset-credit
+/// balances.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AccountUsageSnapshot {
     pub rate_limits: Option<AgentRateLimits>,
     pub extra_credits: Option<ExtraCredits>,
+    pub reset_credits: Option<ResetCredits>,
 }
 
 /// A provider's raw OAuth usage response, normalized to the shared snapshot.
@@ -137,6 +140,16 @@ pub enum ExtraCredits {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit_usd: Option<f64>,
     },
+}
+
+/// Codex rate-limit reset credits: redeemable 100%/7-day usage-window resets.
+/// A credit that expires unredeemed is wasted, so the dashboard shows the
+/// available count and colors the marker by the soonest expiry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResetCredits {
+    pub count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soonest_expiry: Option<Timestamp>,
 }
 
 impl ExtraCredits {

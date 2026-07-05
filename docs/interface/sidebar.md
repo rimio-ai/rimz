@@ -102,7 +102,8 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `⑂ main` / `⊙ main` / `✕ main` / `⟳ main` | trunk state marker after diverged stats: plain branch, PR open, PR closed, or local rebase/merge/cherry-pick in progress |
 | `$1.27`           | spend — dollar green, two decimals; omitted while a session's cost rounds to zero |
 | `▰▱` / `▱▱` / `ex` / `api` | provider account bar: included-window budget (`5h`/`7d`/`30d`, fill = left), unknown budget as a dim empty track, paid extra usage as `ex`, API-key spend as `api`; `∞` means uncapped or not reported |
-| `↻ 2h06m`         | when a provider budget resets; soft at a sustainable burn pace, heating toward red as spend outruns the window (the bare-integer `↻ N` above is the compaction count — same glyph, told apart by duration vs. count) |
+| `↻ 2h06m`         | when a provider budget resets; soft at a sustainable burn pace, heating toward red as spend outruns the window |
+| `↻ N`             | a compact count: on a card context line, completed compactions; in the Codex provider header, available rate-limit reset credits, with the glyph colored by soonest expiry |
 
 **Structure and chrome.**
 
@@ -379,7 +380,7 @@ An **unmetered** account (an API key) shows an `api` bar: trailing-month transcr
 
 A **Pi block** names its version and the backing account it runs on — `Pi v0.78.1 · Anthropic OAuth`. Pi keeps its budget readings under the `pi` provider: live sessions publish response-header windows, idle OAuth accounts refresh out-of-band, and an API key gets the `api` paid-usage row instead ([provider.md → Per-provider mapping](../internals/agents/provider.md#per-provider-mapping)).
 
-Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — host infrastructure, never its own row. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[theme.providers.<kind>]`, see [theme.md](../reference/theme.md#provider-styling)).
+Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — host infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[theme.providers.<kind>]`, see [theme.md](../reference/theme.md#provider-styling)).
 
 ### The fleet ledger
 

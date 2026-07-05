@@ -117,6 +117,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
             year: spend_window(960.0 + index as f64),
         }),
         extra_credits: None,
+        reset_credits: None,
         // Two budget windows per panel so the mana bars and the fleet ledger's
         // W/M columns pay their real per-window cost at provider scale.
         windows: vec![

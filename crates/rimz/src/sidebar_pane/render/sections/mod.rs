@@ -37,6 +37,8 @@ pub(super) use fleet::{fleet_header_lines, fleet_size};
 pub(super) use process::proc_stats_spans;
 pub(crate) use provider::ProviderTabHit;
 pub(super) use provider::dashboard_panel_lines_with_footer;
+#[cfg(test)]
+pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
 pub(super) use provider::{fleet_ledger_lines, fleet_total_lines};
 pub(super) use worktree::worktree_group_lines;
 

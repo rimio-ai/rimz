@@ -147,6 +147,7 @@ impl SidebarSnapshot {
                 remote_control,
                 spending,
                 extra_credits: None,
+                reset_credits: None,
                 windows,
             });
         }

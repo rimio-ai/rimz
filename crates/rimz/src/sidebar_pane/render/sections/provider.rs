@@ -55,6 +55,10 @@ const PROVIDER_VALUE_WIDTH: usize = 8;
 const PROVIDER_RESET_COUNTDOWN_WIDTH: usize = 6;
 const PROVIDER_RESET_MARKER_PAD: usize =
     PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
+const RESET_RED_H: f64 = 24.0;
+const RESET_AMBER_H: f64 = 48.0;
+const RESET_YELLOW_H: f64 = 72.0;
+const RESET_GREEN_H: f64 = 168.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProviderLayout {
@@ -600,6 +604,7 @@ fn single_block_lines(
         width,
         false,
         layout.inline_art(),
+        now,
     )];
     if layout == ProviderLayout::Wide {
         // Wide stacked blocks keep the historical identity/body breathing room.
@@ -631,6 +636,7 @@ fn active_provider_block_lines(
         width,
         true,
         layout.inline_art(),
+        now,
     )];
     lines.extend(provider_body_lines(theme, panel, width, layout, zones, now));
     if options.include_totals {
@@ -837,15 +843,18 @@ fn provider_header_line(
     width: usize,
     tabbed: bool,
     inline_art: bool,
+    now: Timestamp,
 ) -> Line<'static> {
-    let right = if panel.remote_control {
-        vec![Span::styled(
+    let mut right = reset_header_spans(theme, panel, now);
+    if panel.remote_control {
+        if !right.is_empty() {
+            right.push(Span::raw("  "));
+        }
+        right.push(Span::styled(
             format!("{} rc", theme.glyph(GlyphRole::ChromeRemoteControl)),
             theme.styled(Component::RemoteControl, Modifier::BOLD),
-        )]
-    } else {
-        Vec::new()
-    };
+        ));
+    }
     let full = provider_header_left(theme, panel, width, tabbed, inline_art, true);
     let left = if spans_width(&full) + spans_width(&right) <= width {
         full
@@ -853,6 +862,58 @@ fn provider_header_line(
         provider_header_left(theme, panel, width, tabbed, inline_art, false)
     };
     pin_right(left, right, width)
+}
+
+/// Heat amount (0.0 green … 1.0 red) for the reset marker at `hours` until the
+/// soonest credit expires, or `None` at/after 7d for the default grey.
+pub(in crate::sidebar_pane::render) fn reset_expiry_heat_amount(hours: f64) -> Option<f32> {
+    let lerp = |h: f64, a: f64, b: f64, amt_a: f32, amt_b: f32| -> f32 {
+        let t = ((a - h) / (a - b)).clamp(0.0, 1.0) as f32;
+        amt_a + (amt_b - amt_a) * t
+    };
+    if hours >= RESET_GREEN_H {
+        None
+    } else if hours < RESET_RED_H {
+        Some(1.0)
+    } else if hours < RESET_AMBER_H {
+        Some(lerp(hours, RESET_AMBER_H, RESET_RED_H, 2.0 / 3.0, 1.0))
+    } else if hours < RESET_YELLOW_H {
+        Some(lerp(
+            hours,
+            RESET_YELLOW_H,
+            RESET_AMBER_H,
+            1.0 / 3.0,
+            2.0 / 3.0,
+        ))
+    } else {
+        Some(lerp(hours, RESET_GREEN_H, RESET_YELLOW_H, 0.0, 1.0 / 3.0))
+    }
+}
+
+fn reset_header_spans(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    now: Timestamp,
+) -> Vec<Span<'static>> {
+    if panel.kind != "codex" {
+        return Vec::new();
+    }
+    let Some(reset_credits) = panel.reset_credits.as_ref() else {
+        return Vec::new();
+    };
+    if reset_credits.count == 0 {
+        return Vec::new();
+    }
+    let style = reset_credits
+        .soonest_expiry
+        .map(|at| at.duration_since(now).as_secs() as f64 / 3600.0)
+        .and_then(reset_expiry_heat_amount)
+        .map(|amount| theme.style(theme.heat_tone(amount), Modifier::empty()))
+        .unwrap_or_else(|| theme.body());
+    vec![
+        Span::styled(theme.glyph(GlyphRole::MeterReset).to_owned(), style),
+        Span::styled(format!(" {}", reset_credits.count), theme.body()),
+    ]
 }
 
 fn provider_header_left(

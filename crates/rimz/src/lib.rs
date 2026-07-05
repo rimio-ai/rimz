@@ -48,7 +48,8 @@ pub mod workspace;
 pub mod worktree;
 
 pub use crate::agents::{
-    AccountUsageSnapshot, ExtraCredits, HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode,
+    AccountUsageSnapshot, ExtraCredits, HeadlineSpec, ResetCredits, SpendTally, SpendWindow,
+    SpendWindowMode,
 };
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
 pub use crate::feed::{

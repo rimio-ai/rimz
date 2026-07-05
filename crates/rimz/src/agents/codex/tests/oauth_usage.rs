@@ -35,6 +35,81 @@ fn usage_url_respects_backend_api_base_and_codex_api_base() {
         usage_url(Some("https://chatgpt.com")),
         "https://chatgpt.com/api/codex/usage"
     );
+    assert_eq!(
+        reset_credits_url(None),
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+    );
+    assert_eq!(
+        reset_credits_url(Some("http://127.0.0.1:1234/backend-api/")),
+        "http://127.0.0.1:1234/backend-api/wham/rate-limit-reset-credits"
+    );
+    assert_eq!(
+        reset_credits_url(Some("https://chatgpt.com")),
+        "https://chatgpt.com/api/codex/rate-limit-reset-credits"
+    );
+}
+
+#[test]
+fn reset_credits_parse_available_count_and_soonest_expiry() {
+    let credits = parse_reset_credits(
+        r#"{
+            "available_count": 4,
+            "credits": [
+                {
+                    "status": "available",
+                    "expires_at": "2026-07-06T12:00:00Z",
+                    "title": "Rate limit reset"
+                },
+                {
+                    "status": "redeemed",
+                    "expires_at": "2026-07-05T12:00:00Z"
+                },
+                {
+                    "status": "available",
+                    "expires_at": "2026-07-06T06:30:00Z"
+                },
+                {
+                    "status": "available",
+                    "expires_at": "not-a-timestamp"
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(credits.count, 4);
+    assert_eq!(
+        credits.soonest_expiry,
+        Some("2026-07-06T06:30:00Z".parse::<Timestamp>().unwrap())
+    );
+}
+
+#[test]
+fn reset_credits_falls_back_to_available_entries() {
+    let credits = parse_reset_credits(
+        r#"{
+            "credits": [
+                { "status": "available", "expires_at": "2026-07-08T00:00:00Z" },
+                { "status": "expired", "expires_at": "2026-07-01T00:00:00Z" },
+                { "status": "available", "expires_at": null }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(credits.count, 2);
+    assert_eq!(
+        credits.soonest_expiry,
+        Some("2026-07-08T00:00:00Z".parse::<Timestamp>().unwrap())
+    );
+}
+
+#[test]
+fn reset_credits_parse_empty_or_bad_payloads() {
+    assert!(parse_reset_credits(r#"{"credits":[]}"#).is_ok());
+    assert!(parse_reset_credits("").is_err());
+    assert!(parse_reset_credits("null").is_err());
+    assert!(parse_reset_credits("{").is_err());
 }
 
 #[test]

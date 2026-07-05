@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::{OauthUsageResponse, oauth_http_get};
-use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
+use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, ResetCredits};
 
 use super::app_server::codex_home;
 
@@ -107,8 +107,10 @@ pub(crate) fn fetch_usage() -> Result<AccountUsageSnapshot> {
     let home = codex_home().ok_or(CodexOauthUsageErr::NoCredentials)?;
     let credentials = load_credentials_from(&home.join("auth.json"))?;
     let base_url = configured_base_url(&home)?;
-    let url = usage_url(base_url.as_deref());
-    fetch_usage_with_url(&url, &credentials)
+    let mut snapshot = fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials)?;
+    snapshot.reset_credits =
+        fetch_reset_credits(&reset_credits_url(base_url.as_deref()), &credentials).ok();
+    Ok(snapshot)
 }
 
 pub(crate) fn fetch_usage_with_token(
@@ -171,15 +173,23 @@ fn configured_base_url(home: &Path) -> std::io::Result<Option<String>> {
 }
 
 pub(crate) fn usage_url(chatgpt_base_url: Option<&str>) -> String {
+    endpoint_url(chatgpt_base_url, "usage")
+}
+
+pub(crate) fn reset_credits_url(chatgpt_base_url: Option<&str>) -> String {
+    endpoint_url(chatgpt_base_url, "rate-limit-reset-credits")
+}
+
+fn endpoint_url(chatgpt_base_url: Option<&str>, endpoint: &str) -> String {
     let base = chatgpt_base_url
         .map(str::trim)
         .filter(|base| !base.is_empty())
         .unwrap_or(DEFAULT_BASE_URL)
         .trim_end_matches('/');
     if base.ends_with("/backend-api") || base.contains("/backend-api/") {
-        format!("{base}/wham/usage")
+        format!("{base}/wham/{endpoint}")
     } else {
-        format!("{base}/api/codex/usage")
+        format!("{base}/api/codex/{endpoint}")
     }
 }
 
@@ -210,6 +220,48 @@ pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
     Ok(serde_json::from_str::<UsageWire>(body)?.into_account_usage())
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ResetCreditsWire {
+    credits: Vec<ResetCreditWire>,
+    available_count: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ResetCreditWire {
+    status: Option<String>,
+    expires_at: Option<String>,
+}
+
+pub(crate) fn parse_reset_credits(body: &str) -> Result<ResetCredits> {
+    let wire = serde_json::from_str::<ResetCreditsWire>(body)?;
+    let mut available_count = 0u32;
+    let mut expiries = Vec::new();
+    for credit in wire.credits {
+        if credit.status.as_deref() != Some("available") {
+            continue;
+        }
+        available_count = available_count.saturating_add(1);
+        if let Some(expiry) = credit
+            .expires_at
+            .as_deref()
+            .and_then(|expires_at| expires_at.parse::<Timestamp>().ok())
+        {
+            expiries.push(expiry);
+        }
+    }
+    Ok(ResetCredits {
+        count: wire.available_count.unwrap_or(available_count),
+        soonest_expiry: expiries.into_iter().min(),
+    })
+}
+
+fn fetch_reset_credits(url: &str, credentials: &CodexOauthCredentials) -> Result<ResetCredits> {
+    let body = http_get(url, credentials)?;
+    parse_reset_credits(&body)
+}
+
 impl OauthUsageResponse for UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
         AccountUsageSnapshot {
@@ -225,6 +277,7 @@ impl OauthUsageResponse for UsageWire {
                     credits.balance.as_ref().and_then(parse_balance),
                 )
             }),
+            reset_credits: None,
         }
     }
 }

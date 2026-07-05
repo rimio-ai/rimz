@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use super::chrome::abbreviate_under;
 use super::sections::{
-    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_ledger_lines, worktree_group_lines,
+    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_ledger_lines,
+    reset_expiry_heat_amount, worktree_group_lines,
 };
 
 mod agent_card;
@@ -566,6 +567,7 @@ fn provider_panel(
             ..Default::default()
         }),
         extra_credits: None,
+        reset_credits: None,
         windows: windows
             .map(|(five, seven)| {
                 vec![

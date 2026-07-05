@@ -52,6 +52,7 @@ fn provider(
         remote_control: false,
         spending,
         extra_credits: None,
+        reset_credits: None,
         windows: vec![crate::agents::RateLimitWindow {
             used_percentage: Some(used_percentage),
             duration_mins: Some(300),

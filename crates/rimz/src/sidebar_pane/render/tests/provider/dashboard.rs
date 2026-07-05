@@ -119,6 +119,78 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
 }
 
 #[test]
+fn render_provider_dashboard_shows_codex_reset_credit_header() {
+    let theme = Theme::fixed(false);
+    let mut codex = provider_panel("codex", "Codex", 33, false, false, None);
+    codex.reset_credits = Some(crate::ResetCredits {
+        count: 3,
+        soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
+    });
+
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[codex],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+
+    assert!(rendered.contains("↻ 3"), "{rendered}");
+}
+
+#[test]
+fn render_provider_dashboard_hides_reset_credit_header_when_not_actionable() {
+    let theme = Theme::fixed(false);
+    let mut non_codex = provider_panel("claude", "Claude", 173, false, false, None);
+    non_codex.reset_credits = Some(crate::ResetCredits {
+        count: 3,
+        soonest_expiry: None,
+    });
+    let mut zero = provider_panel("codex", "Codex", 33, false, false, None);
+    zero.reset_credits = Some(crate::ResetCredits {
+        count: 0,
+        soonest_expiry: None,
+    });
+    let absent = provider_panel("codex", "Codex", 33, false, false, None);
+
+    for panel in [non_codex, zero, absent] {
+        let (lines, _) = provider_panel_lines(
+            &theme,
+            &[panel],
+            None,
+            false,
+            54,
+            &crate::config::BudgetBarConfig::default(),
+            fixed_now(),
+        );
+        let rendered = line_texts(&lines).join("\n");
+        assert!(!rendered.contains('↻'), "{rendered}");
+    }
+}
+
+#[test]
+fn reset_expiry_heat_amount_matches_expiry_boundaries() {
+    fn assert_amount(hours: f64, expected: f32) {
+        let actual = reset_expiry_heat_amount(hours).expect("heat amount");
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "{hours}h => {actual}, expected {expected}"
+        );
+    }
+
+    assert_amount(0.0, 1.0);
+    assert_amount(24.0, 1.0);
+    assert_amount(48.0, 2.0 / 3.0);
+    assert_amount(72.0, 1.0 / 3.0);
+    assert_amount(167.999, 0.0);
+    assert_eq!(reset_expiry_heat_amount(168.0), None);
+    assert_amount(-1.0, 1.0);
+}
+
+#[test]
 fn render_pets_dashboard_body_uses_pet_view() {
     let theme = Theme::fixed(false);
     let pet = crate::sidebar_pane::pets::PetView {

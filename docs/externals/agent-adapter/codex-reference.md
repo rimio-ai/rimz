@@ -301,7 +301,7 @@ The plan tier rides the app-server (`account/rateLimits/read` `plan_type`), not 
 
 [`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage fallback. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`.
 
-The default URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. The parsed fallback response shape:
+The default usage URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. The parsed fallback response shape:
 
 ```jsonc
 {
@@ -337,3 +337,20 @@ The default URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_
 ```
 
 Each window's `limit_window_seconds` maps to `duration_mins`; primary/secondary order is not semantic. Codex credits map in this order: `overage_limit_reached: true` → exhausted `ExtraCredits::Known { remaining_usd: 0 }`, `unlimited: true` → usable `ExtraCredits::Known` with unknown remaining balance, numeric/string `balance` → `ExtraCredits::Known { remaining_usd }`, `has_credits: false` → `ExtraCredits::Disabled`, and omitted/unknown fields → no extra-credit reading.
+
+Rate-limit reset credits use the same OAuth token and optional `ChatGPT-Account-Id` header, fetched from `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`; with a non-`/backend-api` base the path is `/api/codex/rate-limit-reset-credits`. The parsed response shape:
+
+```jsonc
+{
+  "available_count": 2, // mapped to ResetCredits.count when present
+  "credits": [
+    {
+      "status": "available",             // only available credits affect the fallback count and expiry
+      "expires_at": "2026-07-06T12:00:00Z", // parsed for soonest_expiry
+      "title": "Rate Limit Reset"        // present, ignored
+    }
+  ]
+}
+```
+
+The usage response's `rate_limit_reset_credits` field remains ignored; the dedicated endpoint is the per-credit source. A reset-credit fetch failure leaves the prior dashboard value in place when the primary usage fetch succeeds.

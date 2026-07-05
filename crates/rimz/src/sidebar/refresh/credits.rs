@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::ExtraCredits;
+use crate::agents::{ExtraCredits, ResetCredits};
 use crate::config::AccountsConfig;
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{CREDITS_DISPLAY_MAX_AGE, CREDITS_RETRY_TTL, CREDITS_TTL};
@@ -22,6 +22,8 @@ pub struct ProviderCreditsEntry {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_credits: Option<ExtraCredits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<ResetCredits>,
 }
 
 pub(crate) fn read_credits_cache(path: &Path) -> CreditsCache {
@@ -56,6 +58,7 @@ pub fn merge_provider_credits(
             observed_at_ms: unix_now_ms(),
             ok: extra_credits.is_some(),
             extra_credits,
+            reset_credits: None,
         },
     );
 }
@@ -79,7 +82,15 @@ pub fn merge_provider_credits_entry_if_due(
     {
         return None;
     }
-    let entry = entry();
+    let mut entry = entry();
+    if entry.reset_credits.is_none() {
+        // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
+        // and failed writes must not erase the last successful reset read.
+        entry.reset_credits = cache
+            .entries
+            .get(kind)
+            .and_then(|entry| entry.reset_credits.clone());
+    }
     cache.refreshed_at_ms = unix_now_ms();
     cache.entries.insert(kind.to_owned(), entry.clone());
     write_credits_cache(&path, &cache);
@@ -105,6 +116,15 @@ pub(crate) fn merge_provider_credits_entry(
         return;
     };
     let mut cache = read_credits_cache(&path);
+    let mut entry = entry;
+    if entry.reset_credits.is_none() {
+        // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
+        // and failed writes must not erase the last successful reset read.
+        entry.reset_credits = cache
+            .entries
+            .get(kind)
+            .and_then(|entry| entry.reset_credits.clone());
+    }
     cache.refreshed_at_ms = unix_now_ms();
     cache.entries.insert(kind.to_owned(), entry);
     write_credits_cache(&path, &cache);
@@ -167,11 +187,17 @@ fn apply_credits_cache_with(
                 .and_then(|entry| entry.extra_credits.clone())
                 .map(|credits| credits.with_limit_if_missing(ceiling))
                 .or_else(|| ceiling.map(|limit| ExtraCredits::known(None, None, Some(limit))));
+            panel.reset_credits = cache
+                .entries
+                .get(&panel.kind)
+                .filter(|entry| entry_is_displayable(entry, now_ms))
+                .and_then(|entry| entry.reset_credits.clone());
             continue;
         }
 
         let used = panel.spending.as_ref().map(|spending| spending.month.usd);
         panel.extra_credits = Some(ExtraCredits::known(used, None, ceiling));
+        panel.reset_credits = None;
     }
 }
 
@@ -202,6 +228,7 @@ mod tests {
                 ..Default::default()
             }),
             extra_credits: None,
+            reset_credits: None,
             windows: Vec::new(),
         }
     }
@@ -214,6 +241,7 @@ mod tests {
                 observed_at_ms: now - 1_000,
                 ok: true,
                 extra_credits: None,
+                reset_credits: None,
             },
             now
         ));
@@ -222,6 +250,7 @@ mod tests {
                 observed_at_ms: now - CREDITS_TTL.as_millis() as u64 - 1,
                 ok: true,
                 extra_credits: None,
+                reset_credits: None,
             },
             now
         ));
@@ -230,6 +259,7 @@ mod tests {
                 observed_at_ms: now - CREDITS_RETRY_TTL.as_millis() as u64 - 1,
                 ok: false,
                 extra_credits: None,
+                reset_credits: None,
             },
             now
         ));
@@ -251,6 +281,7 @@ mod tests {
                 observed_at_ms: 100,
                 ok: true,
                 extra_credits: Some(ExtraCredits::known(Some(7.0), None, None)),
+                reset_credits: None,
             },
         );
         let mut accounts = AccountsConfig::default();
@@ -293,5 +324,130 @@ mod tests {
         let cache = read_credits_cache(&runtime.shared_credits_path());
         assert!(cache.entries.contains_key("claude"));
         assert!(cache.entries.contains_key("codex"));
+    }
+
+    #[test]
+    fn extra_credits_only_merge_preserves_prior_reset_credits() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("runtime");
+        runtime.ensure_dirs().unwrap();
+        let reset_credits = ResetCredits {
+            count: 2,
+            soonest_expiry: jiff::Timestamp::from_second(1_800_000_000).ok(),
+        };
+
+        merge_provider_credits_entry(
+            &runtime,
+            "codex",
+            ProviderCreditsEntry {
+                observed_at_ms: 1,
+                ok: true,
+                extra_credits: None,
+                reset_credits: Some(reset_credits.clone()),
+            },
+        );
+        merge_provider_credits(
+            &runtime,
+            "codex",
+            Some(ExtraCredits::known(None, Some(5.0), None)),
+        );
+
+        let cache = read_credits_cache(&runtime.shared_credits_path());
+        assert_eq!(
+            cache
+                .entries
+                .get("codex")
+                .and_then(|entry| entry.reset_credits.clone()),
+            Some(reset_credits)
+        );
+    }
+
+    #[test]
+    fn genuine_zero_reset_credits_replaces_prior_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("runtime");
+        runtime.ensure_dirs().unwrap();
+
+        merge_provider_credits_entry(
+            &runtime,
+            "codex",
+            ProviderCreditsEntry {
+                observed_at_ms: 1,
+                ok: true,
+                extra_credits: None,
+                reset_credits: Some(ResetCredits {
+                    count: 2,
+                    soonest_expiry: jiff::Timestamp::from_second(1_800_000_000).ok(),
+                }),
+            },
+        );
+        merge_provider_credits_entry(
+            &runtime,
+            "codex",
+            ProviderCreditsEntry {
+                observed_at_ms: 2,
+                ok: true,
+                extra_credits: None,
+                reset_credits: Some(ResetCredits {
+                    count: 0,
+                    soonest_expiry: None,
+                }),
+            },
+        );
+
+        let cache = read_credits_cache(&runtime.shared_credits_path());
+        assert_eq!(
+            cache
+                .entries
+                .get("codex")
+                .and_then(|entry| entry.reset_credits.as_ref())
+                .map(|credits| credits.count),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn fold_applies_displayable_reset_credits_to_metered_panel() {
+        let mut snapshot = SidebarSnapshot::build(
+            crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            Vec::new(),
+            Vec::new(),
+            jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+        );
+        snapshot.providers = vec![panel("codex", true), panel("claude", true)];
+        let reset_credits = ResetCredits {
+            count: 1,
+            soonest_expiry: jiff::Timestamp::from_second(1_800_000_000).ok(),
+        };
+        let mut cache = CreditsCache::default();
+        let now_ms = CREDITS_DISPLAY_MAX_AGE.as_millis() as u64 + 100;
+        cache.entries.insert(
+            "codex".to_owned(),
+            ProviderCreditsEntry {
+                observed_at_ms: now_ms,
+                ok: true,
+                extra_credits: None,
+                reset_credits: Some(reset_credits.clone()),
+            },
+        );
+        cache.entries.insert(
+            "claude".to_owned(),
+            ProviderCreditsEntry {
+                observed_at_ms: 0,
+                ok: true,
+                extra_credits: None,
+                reset_credits: Some(ResetCredits {
+                    count: 3,
+                    soonest_expiry: None,
+                }),
+            },
+        );
+
+        apply_credits_cache_with(&mut snapshot, &cache, &AccountsConfig::default(), now_ms);
+
+        assert_eq!(snapshot.providers[0].reset_credits, Some(reset_credits));
+        assert_eq!(snapshot.providers[1].reset_credits, None);
     }
 }

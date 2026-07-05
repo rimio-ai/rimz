@@ -311,6 +311,7 @@ fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
         remote_control: false,
         spending: None,
         extra_credits: None,
+        reset_credits: None,
         color_role: None,
         windows: Vec::new(),
     };

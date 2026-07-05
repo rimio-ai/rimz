@@ -72,6 +72,7 @@ pub(crate) fn provider_panel(
         remote_control: false,
         spending: None,
         extra_credits: None,
+        reset_credits: None,
         windows,
     }
 }

@@ -78,6 +78,7 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
                     observed_at_ms: unix_now_ms(),
                     ok: true,
                     extra_credits: usage.extra_credits,
+                    reset_credits: usage.reset_credits,
                 }
             }
             OauthUsageProbe::NoCredentials
@@ -86,6 +87,7 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
                 observed_at_ms: unix_now_ms(),
                 ok: false,
                 extra_credits: None,
+                reset_credits: None,
             },
         });
     let written = entry.is_some();

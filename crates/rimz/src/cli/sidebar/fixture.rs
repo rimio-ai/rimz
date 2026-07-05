@@ -2134,6 +2134,7 @@ fn provider_panel(
         remote_control,
         spending: Some(spending),
         extra_credits: None,
+        reset_credits: None,
         windows,
     }
 }

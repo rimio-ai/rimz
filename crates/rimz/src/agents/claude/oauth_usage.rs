@@ -224,6 +224,7 @@ impl OauthUsageResponse for UsageWire {
         AccountUsageSnapshot {
             rate_limits: collect_rate_limits(self.five_hour, self.seven_day),
             extra_credits: collect_extra_usage(self.extra_usage),
+            reset_credits: None,
         }
     }
 }

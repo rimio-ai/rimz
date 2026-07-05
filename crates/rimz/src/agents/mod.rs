@@ -57,7 +57,7 @@ pub use context::{
     TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
-pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe};
+pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe, ResetCredits};
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
     PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
