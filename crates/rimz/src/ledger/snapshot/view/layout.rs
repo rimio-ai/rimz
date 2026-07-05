@@ -7,7 +7,9 @@ use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
 use super::score::{self, GitRung};
-use super::{SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
+use super::{
+    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
+};
 
 pub(super) const WORKTREE_ROW_CAP: usize = 6;
 
@@ -747,11 +749,11 @@ fn group_sort_key<'a>(
 }
 
 fn group_git_rung(group: &SidebarWorktreeGroup) -> GitRung {
-    if group.kind == SidebarWorktreeKind::Worktree {
-        score::git_rung(group.clean, group.landed)
-    } else {
-        GitRung::Unknown
-    }
+    let pr_finished = matches!(
+        group.pr_state,
+        Some(WorktreePrState::Merged | WorktreePrState::Closed)
+    );
+    score::git_rung(group.clean, group.landed, pr_finished)
 }
 
 fn group_member_urgency(facts: &RankFacts<'_>) -> u32 {

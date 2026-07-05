@@ -49,7 +49,7 @@ A co-launched team is one line of work, so it holds one contiguous block and tak
 
 ### Git decides among the calm
 
-Attention always outranks git: a worktree with a blocked agent leads whatever its diff looks like. Among worktrees whose agents are all calm, the git verdict answers *is this work landed?* **Dirty** leads, because uncommitted changes are unfinished business; **clean** follows, committed but still to land; **merged** sinks, because content on trunk with every agent resting means the work is done. A worktree with no git verdict sits between clean and merged: no evidence of pending work, and no proof it landed.
+Attention always outranks git: a git-backed group with a blocked agent leads whatever its diff looks like. Among git-backed groups whose agents are all calm, the git verdict answers *is this work landed?* **Dirty** leads, because uncommitted changes are unfinished business; **clean** follows, committed but still to land; **done** sinks, because content on trunk or a merged or closed PR with every agent resting means the work is finished. Worktree-channel team lanes use the same verdict, so co-launched teams whose PR finished sink alongside plain checkouts. A group with no git verdict sits between clean and done: no evidence of pending work, and no proof it landed.
 
 ### The shape that always holds
 

@@ -92,14 +92,15 @@ pub(super) enum GitRung {
     Dirty,
     Clean,
     Unknown,
-    Merged,
+    /// Finished: landed on trunk, or a merged/closed PR.
+    Done,
 }
 
-pub(super) fn git_rung(clean: Option<bool>, landed: Option<bool>) -> GitRung {
+pub(super) fn git_rung(clean: Option<bool>, landed: Option<bool>, pr_finished: bool) -> GitRung {
     if clean == Some(false) {
         GitRung::Dirty
-    } else if landed == Some(true) {
-        GitRung::Merged
+    } else if landed == Some(true) || pr_finished {
+        GitRung::Done
     } else if clean == Some(true) {
         GitRung::Clean
     } else {
@@ -160,14 +161,17 @@ mod tests {
     }
 
     #[test]
-    fn git_rung_orders_dirty_clean_unknown_merged() {
-        assert_eq!(git_rung(Some(false), Some(true)), GitRung::Dirty);
-        assert_eq!(git_rung(Some(true), Some(false)), GitRung::Clean);
-        assert_eq!(git_rung(None, None), GitRung::Unknown);
-        assert_eq!(git_rung(Some(true), Some(true)), GitRung::Merged);
+    fn git_rung_orders_dirty_clean_unknown_done() {
+        assert_eq!(git_rung(Some(false), Some(true), false), GitRung::Dirty);
+        assert_eq!(git_rung(Some(true), Some(false), false), GitRung::Clean);
+        assert_eq!(git_rung(None, None, false), GitRung::Unknown);
+        assert_eq!(git_rung(Some(true), Some(true), false), GitRung::Done);
+        assert_eq!(git_rung(Some(true), Some(false), true), GitRung::Done);
+        assert_eq!(git_rung(None, None, true), GitRung::Done);
+        assert_eq!(git_rung(Some(false), Some(false), true), GitRung::Dirty);
         assert!(GitRung::Dirty < GitRung::Clean);
         assert!(GitRung::Clean < GitRung::Unknown);
-        assert!(GitRung::Unknown < GitRung::Merged);
+        assert!(GitRung::Unknown < GitRung::Done);
     }
 
     #[test]

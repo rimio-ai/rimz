@@ -102,6 +102,94 @@ fn git_rung_orders_calm_worktree_groups() {
 }
 
 #[test]
+fn merged_pr_sinks_calm_worktree_group() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
+        agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        group.clean = Some(true);
+        group.landed = Some(false);
+        match group.label.as_str() {
+            "done" => group.pr_state = Some(WorktreePrState::Merged),
+            "working" => {}
+            label => panic!("unexpected group {label}"),
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["working", "done"]);
+}
+
+#[test]
+fn closed_pr_sinks_calm_worktree_group() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
+        agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        group.clean = Some(true);
+        group.landed = Some(false);
+        match group.label.as_str() {
+            "done" => group.pr_state = Some(WorktreePrState::Closed),
+            "working" => {}
+            label => panic!("unexpected group {label}"),
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["working", "done"]);
+}
+
+#[test]
+fn open_pr_does_not_sink_calm_worktree_group() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("open-idle", "/repo/open", AgentStatus::Idle, 1_000),
+        agent_in("working-idle", "/repo/working", AgentStatus::Idle, 1_000),
+        agent_in("done-idle", "/repo/done", AgentStatus::Idle, 1_000),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        group.clean = Some(true);
+        group.landed = Some(false);
+        match group.label.as_str() {
+            "open" => group.pr_state = Some(WorktreePrState::Open),
+            "working" => {}
+            "done" => group.pr_state = Some(WorktreePrState::Merged),
+            label => panic!("unexpected group {label}"),
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["open", "working", "done"]);
+}
+
+#[test]
+fn merged_pr_sinks_git_backed_channel_group() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("done-idle", "/repo/done-channel", AgentStatus::Idle, 1_000),
+        agent_in(
+            "working-idle",
+            "/repo/working-channel",
+            AgentStatus::Idle,
+            1_000,
+        ),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        group.kind = SidebarWorktreeKind::Channel;
+        group.clean = Some(true);
+        group.landed = Some(false);
+        match group.label.as_str() {
+            "done-channel" => group.pr_state = Some(WorktreePrState::Merged),
+            "working-channel" => {}
+            label => panic!("unexpected group {label}"),
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["working-channel", "done-channel"]);
+}
+
+#[test]
 fn attention_member_overrides_git_rung() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("dirty-idle", "/repo/dirty", AgentStatus::Idle, 1_000),

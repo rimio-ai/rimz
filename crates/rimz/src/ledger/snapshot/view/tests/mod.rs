@@ -25,7 +25,7 @@ use super::aggregate::{attach_sub_agents, sub_agent_from_state};
 use super::providers::fresh_windows;
 use super::reap::GHOST_SESSION_TTL_SECS;
 use super::rows::row_from_agent;
-use super::{SidebarSnapshot, SidebarWorktreeKind, row_identity_violations};
+use super::{SidebarSnapshot, SidebarWorktreeKind, WorktreePrState, row_identity_violations};
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::{LifecycleSignal, TurnPhase};
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally, SpendWindow};
