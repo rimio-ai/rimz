@@ -110,9 +110,10 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         account_spend: true,
         subagents: true,
         background_tasks: true,
-        // Claude stamps a live pane on every session, so it needs no cwd
-        // rebinding. A pane with no session, such as the login screen before
-        // SessionStart, is idle-synthesized like any wired agent.
+        // Claude stamps a live pane on every session, so it opts out of the
+        // lazy dead-stamp rebind. A genuinely paneless session can still be
+        // recovered by cwd, and a pane with no session, such as the login
+        // screen before SessionStart, is idle-synthesized like any wired agent.
         registers_lazily: false,
         daemon_hooked_sessions: false,
         hook_install: true,
