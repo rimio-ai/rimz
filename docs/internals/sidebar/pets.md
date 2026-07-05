@@ -91,9 +91,11 @@ The `pet` selector resolves to one of four sources, tried in order: a built-in c
 
 Built-ins are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`; each maps to `<id>-spritesheet-v4.webp` under `https://persistent.oaistatic.com/codex/pets/v1/`. The cache path is `$XDG_CACHE_HOME/rimz/pets/v1/assets/<file>`, falling back to `$HOME/.cache/rimz/pets/v1/assets/<file>` or a temp cache root. Writes use temp-file plus rename.
 
-Remote URLs use HTTPS, the same timeout, the same 16 MiB byte cap, the same geometry check, and a cache key derived from the URL. Plain `http://` is rejected with a clear message.
+Remote URLs use HTTPS, the same staged connect, response-header, and body-read timeouts as built-ins, the same 16 MiB byte cap, the same geometry check, and a cache key derived from the URL. A failed fetch retries up to three total attempts, so a slow large sheet can finish while a dead host still fails fast. Plain `http://` is rejected with a clear message.
 
 Petdex pets live under `~/.codex/pets/<name>/` with a `pet.json` manifest beside a `spritesheet.webp` or `spritesheet.png`. Rimz reads `spritesheetPath` and loads that sheet through the same decode pipeline. `rimz list-pets` scans petdex manifests after the built-ins and labels them by selectable slug.
+
+`rimz list-pets` loads previews at most two at a time on a cold cache. A failed pet fetch leaves no cache entry, so a re-run serves successful pets from disk and re-fetches only pets still missing.
 
 Local sheets are read directly, geometry-checked, decoded, and left untouched on decode failure. A local path that points at a directory is treated as a petdex directory.
 

@@ -12,6 +12,8 @@ use super::cellart::{self, PetCell};
 use super::frames::RgbaImage;
 use super::model;
 
+const PREVIEW_FETCH_CONCURRENCY: usize = 2;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreviewCell {
     pub ch: char,
@@ -58,34 +60,36 @@ pub fn listable_ids() -> Vec<String> {
 }
 
 fn load_preview_results<T>(
-    load: impl Fn(PetSource) -> Result<T, String> + Copy + Send + 'static,
+    sources: Vec<(String, PetSource)>,
+    load: impl Fn(PetSource) -> Result<T, String> + Sync,
 ) -> Vec<(String, Result<T, String>)>
 where
-    T: Send + 'static,
+    T: Send,
 {
-    let sources = listable_sources();
-    let handles = sources
-        .iter()
-        .map(|(_id, source)| {
-            let source = source.clone();
-            thread::spawn(move || load(source))
-        })
-        .collect::<Vec<_>>();
-
-    sources
-        .into_iter()
-        .zip(handles)
-        .map(|((id, _source), handle)| {
-            let result = handle
-                .join()
-                .unwrap_or_else(|_| Err("pet preview loader stopped".to_owned()));
-            (id, result)
-        })
-        .collect()
+    let load = &load;
+    let mut out = Vec::with_capacity(sources.len());
+    for batch in sources.chunks(PREVIEW_FETCH_CONCURRENCY) {
+        thread::scope(|scope| {
+            let handles = batch
+                .iter()
+                .map(|(id, source)| {
+                    let source = source.clone();
+                    (id.clone(), scope.spawn(move || load(source)))
+                })
+                .collect::<Vec<_>>();
+            for (id, handle) in handles {
+                let result = handle
+                    .join()
+                    .unwrap_or_else(|_| Err("pet preview loader stopped".to_owned()));
+                out.push((id, result));
+            }
+        });
+    }
+    out
 }
 
 pub fn load_cell_previews(size: PetGridSize) -> Vec<PetPreview> {
-    load_preview_results(move |source| {
+    load_preview_results(listable_sources(), move |source| {
         super::load_pet(source)
             .map_err(|err| err.to_string())
             .map(|frames| render_sprite(&frames, size))
@@ -96,7 +100,7 @@ pub fn load_cell_previews(size: PetGridSize) -> Vec<PetPreview> {
 }
 
 pub fn load_pixel_previews() -> Vec<PetPixelPreview> {
-    load_preview_results(|source| {
+    load_preview_results(listable_sources(), |source| {
         super::load_pet(source)
             .map_err(|err| err.to_string())
             .and_then(|frames| {
@@ -161,6 +165,36 @@ fn rgb(color: Color) -> Option<(u8, u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_preview_results_bounds_concurrency_and_preserves_order() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let sources: Vec<(String, PetSource)> = (0..6)
+            .map(|i| (format!("p{i}"), PetSource::Petdex(format!("p{i}"))))
+            .collect();
+
+        let results = load_preview_results(sources.clone(), |_source| {
+            let now = inflight.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            inflight.fetch_sub(1, Ordering::SeqCst);
+            Ok::<(), String>(())
+        });
+
+        assert_eq!(
+            results.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+            sources.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+            "results follow source order",
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) <= PREVIEW_FETCH_CONCURRENCY,
+            "never more than two fetches in flight",
+        );
+    }
 
     #[test]
     fn preview_cell_maps_rgb_and_reset() {

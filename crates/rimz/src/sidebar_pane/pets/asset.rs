@@ -12,7 +12,11 @@ use super::catalog::{Pet, pet_by_id};
 use super::frames;
 
 const CDN_BASE: &str = "https://persistent.oaistatic.com/codex/pets/v1";
-const TIMEOUT_SECS: u64 = 5;
+const TIMEOUT_CONNECT_SECS: u64 = 5;
+const TIMEOUT_RESPONSE_SECS: u64 = 10;
+const TIMEOUT_BODY_SECS: u64 = 30;
+const MAX_FETCH_ATTEMPTS: u32 = 3;
+const RETRY_BACKOFF_MS: u64 = 250;
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -274,9 +278,19 @@ pub(crate) fn builtin_pet_url(pet: Pet) -> String {
 
 fn fetch_url(url: &str) -> Result<Vec<u8>, AssetErr> {
     let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
+        .timeout_connect(Some(Duration::from_secs(TIMEOUT_CONNECT_SECS)))
+        .timeout_recv_response(Some(Duration::from_secs(TIMEOUT_RESPONSE_SECS)))
+        .timeout_recv_body(Some(Duration::from_secs(TIMEOUT_BODY_SECS)))
         .build()
         .new_agent();
+    retrying(
+        MAX_FETCH_ATTEMPTS,
+        Duration::from_millis(RETRY_BACKOFF_MS),
+        || fetch_once(&agent, url),
+    )
+}
+
+fn fetch_once(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, AssetErr> {
     let mut response = agent
         .get(url)
         .call()
@@ -293,6 +307,28 @@ fn fetch_url(url: &str) -> Result<Vec<u8>, AssetErr> {
         .limit(MAX_BYTES)
         .read_to_vec()
         .map_err(|err| AssetErr::Fetch(err.to_string()))
+}
+
+/// Run `op` up to `attempts` times and return the first success. Failed
+/// attempts sleep with linear backoff; the final error returns when the attempt
+/// budget is spent.
+fn retrying<T>(
+    attempts: u32,
+    backoff: Duration,
+    mut op: impl FnMut() -> Result<T, AssetErr>,
+) -> Result<T, AssetErr> {
+    let attempts = attempts.max(1);
+    let mut attempt = 1;
+    loop {
+        match op() {
+            Ok(value) => return Ok(value),
+            Err(err) if attempt >= attempts => return Err(err),
+            Err(_) => {
+                std::thread::sleep(backoff * attempt);
+                attempt += 1;
+            }
+        }
+    }
 }
 
 fn offline() -> bool {
@@ -447,6 +483,43 @@ mod tests {
             Err(AssetErr::Decode(_))
         ));
         assert!(!path.exists(), "corrupt cache entry is removed");
+    }
+
+    #[test]
+    fn retrying_returns_first_success_and_stops() {
+        let calls = std::cell::Cell::new(0);
+        let out = retrying(3, Duration::ZERO, || {
+            calls.set(calls.get() + 1);
+            if calls.get() < 2 {
+                Err(AssetErr::Fetch("transient".to_owned()))
+            } else {
+                Ok(7)
+            }
+        });
+        assert!(matches!(out, Ok(7)));
+        assert_eq!(calls.get(), 2, "stops retrying once it succeeds");
+    }
+
+    #[test]
+    fn retrying_gives_up_after_the_attempt_budget() {
+        let calls = std::cell::Cell::new(0);
+        let out: Result<(), AssetErr> = retrying(3, Duration::ZERO, || {
+            calls.set(calls.get() + 1);
+            Err(AssetErr::Fetch("down".to_owned()))
+        });
+        assert!(matches!(out, Err(AssetErr::Fetch(_))));
+        assert_eq!(calls.get(), 3, "exactly the attempt budget");
+    }
+
+    #[test]
+    fn failed_fetch_leaves_no_cache_entry_so_reruns_retry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sheet.webp");
+        let result = resolve_cached(path.clone(), false, || {
+            Err(AssetErr::Fetch("boom".to_owned()))
+        });
+        assert!(matches!(result, Err(AssetErr::Fetch(_))));
+        assert!(!path.exists(), "a failed fetch writes no cache entry");
     }
 
     #[test]
