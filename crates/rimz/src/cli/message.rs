@@ -780,7 +780,10 @@ fn list_messages(
         let mut out = render::out();
         table.render(&mut out)?;
         if hidden > 0 {
-            writeln!(out, "... {hidden} older hidden (--limit 0 for all)")?;
+            writeln!(
+                out,
+                "... {hidden} older messages hidden (--limit 0 for all)"
+            )?;
         }
     }
     Ok(())

@@ -273,7 +273,7 @@ fn message_list_matches_channel_lanes_and_limits_rows() {
     );
     let all_table = String::from_utf8_lossy(&all_table.stdout);
     assert!(all_table.contains("CHANNEL"));
-    assert!(all_table.contains("1 older hidden (--limit 0 for all)"));
+    assert!(all_table.contains("1 older messages hidden (--limit 0 for all)"));
 
     let scoped_table = env
         .rimz()
