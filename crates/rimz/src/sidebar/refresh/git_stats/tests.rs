@@ -1,4 +1,6 @@
 use super::*;
+use crate::sidebar::test_support::activity_row;
+use jiff::Timestamp;
 use std::process::Command;
 
 struct GitFixture {
@@ -57,9 +59,13 @@ fn runtime_for(path: &Path) -> (tempfile::TempDir, crate::RuntimePaths) {
 }
 
 fn write_rimz_worktree_marker(repo: &GitFixture, base_ref: &str) {
+    write_rimz_worktree_marker_named(repo, "feature", base_ref);
+}
+
+fn write_rimz_worktree_marker_named(repo: &GitFixture, name: &str, base_ref: &str) {
     let marker = crate::worktree::WorktreeMarker {
         version: 1,
-        name: "feature".to_owned(),
+        name: name.to_owned(),
         branch: "feature".to_owned(),
         base_branch: Some("main".to_owned()),
         base_ref: base_ref.to_owned(),
@@ -72,6 +78,62 @@ fn write_rimz_worktree_marker(repo: &GitFixture, base_ref: &str) {
         &marker,
     )
     .unwrap();
+}
+
+fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
+    SidebarWorktreeGroup {
+        key: format!("channel:{label}"),
+        label: label.to_owned(),
+        kind: SidebarWorktreeKind::Channel,
+        status_counts: Vec::new(),
+        rows: vec![activity_row(false, None, Timestamp::now(), path)],
+        hidden_count: 0,
+        diff_added: None,
+        diff_removed: None,
+        commits_ahead: None,
+        commits_behind: None,
+        trunk: None,
+        clean: None,
+        landed: None,
+        trunk_sync: None,
+        pr_state: None,
+    }
+}
+
+#[test]
+fn git_backed_worktree_path_accepts_worktrees_and_marked_channels() {
+    let repo = GitFixture::init(&["init", "-q"]);
+    let worktree = crate::sidebar::test_support::worktree_group(repo.path(), Vec::new());
+    assert_eq!(
+        git_backed_worktree_path(&worktree).as_deref(),
+        Some(repo.path_str())
+    );
+
+    let mut root = worktree.clone();
+    root.kind = SidebarWorktreeKind::Root;
+    assert_eq!(git_backed_worktree_path(&root), None);
+
+    let mut external = worktree.clone();
+    external.kind = SidebarWorktreeKind::External;
+    assert_eq!(git_backed_worktree_path(&external), None);
+
+    let unmarked = channel_group("feature", repo.path());
+    assert_eq!(git_backed_worktree_path(&unmarked), None);
+
+    if !repo.initialized {
+        return;
+    }
+
+    write_rimz_worktree_marker_named(&repo, "feature", "HEAD");
+    assert_eq!(
+        git_backed_worktree_path(&channel_group("feature", repo.path())).as_deref(),
+        Some(repo.path_str())
+    );
+    assert_eq!(
+        git_backed_worktree_path(&channel_group("design", repo.path())),
+        None,
+        "named channels inside a Rimz worktree do not borrow the worktree story"
+    );
 }
 
 #[test]

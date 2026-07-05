@@ -399,6 +399,45 @@ pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {
     }
 }
 
+/// Read a Rimz marker by following the checkout's `.git` metadata only. This
+/// keeps sidebar projection code off the git subprocess path.
+pub fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<WorktreeMarker>> {
+    let Some(marker) = marker_path_from_checkout_metadata(path)? else {
+        return Ok(None);
+    };
+    match std::fs::read_to_string(&marker) {
+        Ok(text) => serde_json::from_str(&text).map(Some).map_err(Into::into),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn marker_path_from_checkout_metadata(worktree: &Path) -> Result<Option<PathBuf>> {
+    let dot_git = worktree.join(".git");
+    if dot_git.is_dir() {
+        return Ok(Some(dot_git.join(MARKER_FILE)));
+    }
+    let text = match std::fs::read_to_string(&dot_git) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let Some(git_dir) = text.trim().strip_prefix("gitdir:") else {
+        return Ok(None);
+    };
+    let git_dir = git_dir.trim();
+    if git_dir.is_empty() {
+        return Ok(None);
+    }
+    let git_dir = PathBuf::from(git_dir);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        worktree.join(git_dir)
+    };
+    Ok(Some(git_dir.join(MARKER_FILE)))
+}
+
 pub fn marker_path(worktree: &Path) -> Result<PathBuf> {
     let git_dir = git_stdout(worktree, ["rev-parse", "--git-dir"])?;
     let path = PathBuf::from(git_dir.trim());
@@ -1002,5 +1041,33 @@ branch refs/heads/swift-otter
 
         assert_eq!(marker.version, 2);
         assert_eq!(marker.base_branch, None);
+    }
+
+    #[test]
+    fn checkout_metadata_marker_reader_follows_relative_gitdir_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("wt");
+        let admin = dir.path().join("admin/wt");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: ../admin/wt\n").unwrap();
+        let marker = WorktreeMarker {
+            version: 1,
+            name: "feature".to_owned(),
+            branch: "feature".to_owned(),
+            base_branch: Some("main".to_owned()),
+            base_ref: "HEAD".to_owned(),
+            repo_root: dir.path().to_path_buf(),
+            worktree_path: worktree.clone(),
+            created_at: jiff::Timestamp::now(),
+        };
+        crate::ledger::atomic::write_temp_then_rename(&admin.join(MARKER_FILE), &marker).unwrap();
+
+        assert_eq!(
+            read_marker_from_checkout_metadata(&worktree)
+                .unwrap()
+                .map(|marker| marker.name),
+            Some("feature".to_owned())
+        );
     }
 }

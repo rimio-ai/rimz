@@ -194,23 +194,45 @@ pub(crate) fn worktree_group_path(group: &SidebarWorktreeGroup) -> Option<&str> 
         })
 }
 
-/// The live worktree paths this snapshot needs git facts for: a `Worktree`-kind
+/// The live worktree paths this snapshot needs git facts for: a git-backed
 /// group whose recovered path is a live directory, de-duplicated so two
 /// branch-split groups for one dir share a single git read.
 pub(crate) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
     let mut needed: Vec<String> = Vec::new();
     for group in &snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group) else {
+        let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
-        if Path::new(path).is_dir() && !needed.iter().any(|known| known == path) {
-            needed.push(path.to_owned());
+        if !needed.iter().any(|known| known == &path) {
+            needed.push(path);
         }
     }
     needed
+}
+
+/// The checkout path a worktree-like group reads git facts from. Ordinary
+/// worktree groups trust their path; channel groups must carry the Rimz
+/// worktree marker whose name matches the lane label before they inherit that
+/// checkout's git story.
+pub(crate) fn git_backed_worktree_path(group: &SidebarWorktreeGroup) -> Option<String> {
+    let path = worktree_group_path(group)?;
+    if !Path::new(path).is_dir() {
+        return None;
+    }
+    match group.kind {
+        SidebarWorktreeKind::Worktree => Some(path.to_owned()),
+        SidebarWorktreeKind::Channel => {
+            is_worktree_channel(path, &group.label).then(|| path.to_owned())
+        }
+        SidebarWorktreeKind::Root | SidebarWorktreeKind::External => None,
+    }
+}
+
+fn is_worktree_channel(path: &str, label: &str) -> bool {
+    worktree::read_marker_from_checkout_metadata(Path::new(path))
+        .ok()
+        .flatten()
+        .is_some_and(|marker| marker.name == label)
 }
 
 /// The worktree paths whose git facts refresh on the fast [`DIFF_STATS_TTL`].
@@ -219,22 +241,16 @@ pub(crate) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String>
         .unwrap_or(SignedDuration::MAX);
     let mut hot = BTreeSet::new();
     for group in &snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group) else {
+        let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
-        if !Path::new(path).is_dir() {
-            continue;
-        }
         let any_hot = group.rows.iter().any(|row| {
             row.is_agent()
                 && (row.status() == Some(AgentStatus::Running)
                     || snapshot.now.duration_since(row.last_activity) <= window)
         });
         if any_hot {
-            hot.insert(path.to_owned());
+            hot.insert(path);
         }
     }
     hot
@@ -246,21 +262,15 @@ pub(crate) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<Str
     let viewed: HashSet<&PaneId> = snapshot.viewed_panes.iter().collect();
     let mut focused = BTreeSet::new();
     for group in &snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group) else {
+        let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
-        if !Path::new(path).is_dir() {
-            continue;
-        }
         if group.rows.iter().any(|row| {
             row.pane
                 .as_ref()
                 .is_some_and(|pane| viewed.contains(&pane.pane_id))
         }) {
-            focused.insert(path.to_owned());
+            focused.insert(path);
         }
     }
     focused

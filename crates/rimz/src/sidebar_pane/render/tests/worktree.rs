@@ -122,6 +122,32 @@ fn render_named_channel_header_uses_hash_glyph_and_bare_label() {
 }
 
 #[test]
+fn render_worktree_channel_keeps_hash_label_and_git_cluster() {
+    let mut design = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/worktrees/codex-resets"),
+        Some("codex-resets"),
+        Some("reset flow"),
+    );
+    design.channel = Some("codex-resets".to_owned());
+    let mut snapshot = snapshot_with(Vec::new(), vec![design]);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Merged);
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 14);
+
+    assert!(rendered.contains("# codex-resets"), "header:\n{rendered}");
+    assert!(rendered.contains("✓ main"), "header:\n{rendered}");
+    assert!(
+        !rendered.contains("⑂ codex-resets"),
+        "channel keeps hash identity:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_worktree_equal_to_trunk() {
     // A worktree that IS the trunk tip — zero ahead, zero behind, zero diff,
     // and a proven-clean working tree — collapses the header's git cluster

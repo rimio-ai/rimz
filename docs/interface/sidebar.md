@@ -263,6 +263,8 @@ Worktrees stack as bounded blocks under quiet neutral headings, so the names org
 
 The worktree header carries the worktree's git story on the right: pristine worktrees collapse to `≡ main`, merged worktrees collapse to `✓ main`, and diverged worktrees show the `⇡`/`⇣` commit delta against the trunk, then the total diff, then a trunk marker. The marker ladder is local reconciling (`⟳`) over PR merged (`✓`), PR closed (`✕`), PR open (`⊙`), then plain branch (`⑂`). The `+/-` churn counts committed, staged, unstaged, and untracked file content, so work `git diff` cannot see still reads as work. The trunk worktree itself wears no pristine/merged verdict — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#sidebar-rendering)).
 
+A worktree channel keeps its `# name` header and carries the same right-pinned git story: commit delta, churn, and the PR or merge glyph.
+
 ```
 ▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23  ⊙ main    ← diverged with an open PR
 ▎⑂ fresh-fork ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← pristine: no worktree-owned commits

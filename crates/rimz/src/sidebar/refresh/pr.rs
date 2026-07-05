@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::forge::{self, ForgeCli};
-use crate::sidebar::refresh::git_stats::{needed_worktree_paths, worktree_group_path};
+use crate::sidebar::refresh::git_stats::needed_worktree_paths;
 use crate::sidebar::timing::{PR_STATE_RETRY_TTL, PR_STATE_TTL, unix_now_ms};
-use crate::{SidebarSnapshot, SidebarWorktreeKind, WorktreePrState};
+use crate::{SidebarSnapshot, WorktreePrState};
 
 const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
@@ -126,7 +126,7 @@ fn probe_pr_states(
     snapshot: &SidebarSnapshot,
     prior: &BTreeMap<String, WorktreePrState>,
 ) -> ProbeBatch {
-    let paths = needed_pr_worktree_paths(snapshot);
+    let paths = needed_worktree_paths(snapshot);
     let (pinned, to_probe) = probe_targets(&paths, prior);
     let mut states = BTreeMap::new();
     for path in pinned {
@@ -179,22 +179,6 @@ fn merge_probe_results(
         }
     }
     (result.states, ok)
-}
-
-fn needed_pr_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
-    let mut paths = needed_worktree_paths(snapshot);
-    for group in &snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group) else {
-            continue;
-        };
-        if Path::new(path).is_dir() && !paths.iter().any(|known| known == path) {
-            paths.push(path.to_owned());
-        }
-    }
-    paths
 }
 
 struct ProbeResult {

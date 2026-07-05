@@ -141,6 +141,8 @@ fn group_header(
     // merged collapses to `<merge> <trunk>`, and diverged/reconciling shows
     // the `⇡/⇣` commit delta, `+/-` churn, then the highest-priority trunk
     // glyph (local reconciling > merged PR > closed PR > open PR > branch).
+    // A worktree channel keeps its `#` lane label on the left and carries this
+    // same right-pinned story.
     // The per-worktree status tally is gone: the cockpit owns the fleet
     // make-up and each row carries its own status glyph, so repeating it here
     // was noise. The label clips to whatever's left after the stats claim
@@ -150,7 +152,7 @@ fn group_header(
     // A non-repo room's root pod is name-only: a plain directory has no fork
     // and no git story, so it drops the `⑂` prefix and pins nothing right.
     let right = match group.kind {
-        SidebarWorktreeKind::Root | SidebarWorktreeKind::Channel => Vec::new(),
+        SidebarWorktreeKind::Root => Vec::new(),
         _ => group_git_spans(theme, group),
     };
     let right_width = spans_width(&right);
@@ -212,8 +214,9 @@ fn group_header(
 /// The header's right-pinned git cluster. Pristine (`≡`) is quiet, merged
 /// (`<merge>`) is bright and removable, and diverged/reconciling keeps the
 /// numeric work stats before a trunk glyph chosen by the priority ladder:
-/// reconciling > PR merged > PR closed > PR open > branch. Empty when no git
-/// read reached this group.
+/// reconciling > PR merged > PR closed > PR open > branch. Worktree channels
+/// share this cluster while keeping their `#` label. Empty when no git read
+/// reached this group.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
     let Some(trunk) = group.trunk.as_deref() else {
         return plain_git_spans(theme, group);

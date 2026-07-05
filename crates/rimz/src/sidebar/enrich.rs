@@ -28,7 +28,7 @@ use super::refresh::accounts::{cached_accounts_for_snapshot, read_accounts_cache
 use super::refresh::credits::apply_credits_cache;
 use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
-    DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache, worktree_group_path,
+    DiffStatsCache, DiffStatsCacheEntry, git_backed_worktree_path, read_diff_stats_cache,
 };
 use super::refresh::live_spend::apply_live_today_spend;
 use super::refresh::pr::read_pr_state_cache;
@@ -106,15 +106,9 @@ pub fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, n
 /// projects whatever the elder last published.
 pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
     for group in &mut snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group).map(ToOwned::to_owned) else {
+        let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
-        if !Path::new(&path).is_dir() {
-            continue;
-        }
         let Some(entry) = cache.entries.get(&path).cloned() else {
             continue;
         };
@@ -139,7 +133,15 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         if let Some(display) = display_trunk.as_ref() {
             group.trunk = Some(display.clone());
         }
-        if let Some(branch) = entry.branch.as_ref().filter(|branch| !branch.is_empty()) {
+        let branch_label = entry
+            .branch
+            .as_deref()
+            .filter(|branch| !branch.is_empty())
+            .unwrap_or(&group.label)
+            .to_owned();
+        if group.kind == SidebarWorktreeKind::Worktree
+            && let Some(branch) = entry.branch.as_ref().filter(|branch| !branch.is_empty())
+        {
             group.label = branch.clone();
         }
         if let Some(clean) = entry.clean {
@@ -148,7 +150,7 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         group.landed = entry.landed;
         group.trunk_sync = display_trunk
             .as_deref()
-            .and_then(|trunk| classify_trunk_sync(&entry, &group.label, trunk));
+            .and_then(|trunk| classify_trunk_sync(&entry, &branch_label, trunk));
     }
 }
 
@@ -157,15 +159,9 @@ pub fn project_pr_state_map(
     states: &BTreeMap<String, WorktreePrState>,
 ) {
     for group in &mut snapshot.worktree_groups {
-        if group.kind != SidebarWorktreeKind::Worktree {
-            continue;
-        }
-        let Some(path) = worktree_group_path(group).map(ToOwned::to_owned) else {
+        let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
-        if !Path::new(&path).is_dir() {
-            continue;
-        }
         group.pr_state = states.get(&path).copied();
     }
 }

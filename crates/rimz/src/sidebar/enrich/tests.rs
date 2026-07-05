@@ -68,6 +68,33 @@ fn diff_entry(
     }
 }
 
+fn write_worktree_marker(path: &Path, name: &str) {
+    let git_dir = path.join(".git");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    let marker = crate::worktree::WorktreeMarker {
+        version: 1,
+        name: name.to_owned(),
+        branch: name.to_owned(),
+        base_branch: Some("main".to_owned()),
+        base_ref: "HEAD".to_owned(),
+        repo_root: path.to_path_buf(),
+        worktree_path: path.to_path_buf(),
+        created_at: Timestamp::now(),
+    };
+    atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker).unwrap();
+}
+
+fn channel_group(label: &str, path: &Path) -> crate::SidebarWorktreeGroup {
+    let mut group = worktree_group(
+        path,
+        vec![activity_row(false, None, Timestamp::now(), path)],
+    );
+    group.key = format!("channel:{label}");
+    group.label = label.to_owned();
+    group.kind = SidebarWorktreeKind::Channel;
+    group
+}
+
 #[test]
 fn trunk_sync_classifier_uses_marker_and_local_git_state() {
     assert_eq!(
@@ -143,6 +170,83 @@ fn pr_state_projection_uses_the_given_map() {
 
     project_pr_state_map(&mut snapshot, &BTreeMap::new());
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
+}
+
+#[test]
+fn pr_state_projection_reaches_marked_worktree_channels() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("feature");
+    std::fs::create_dir_all(&worktree).unwrap();
+    write_worktree_marker(&worktree, "feature");
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(dir.path()),
+        Vec::new(),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    snapshot.worktree_groups = vec![channel_group("feature", &worktree)];
+
+    let mut states = BTreeMap::new();
+    states.insert(
+        worktree.display().to_string(),
+        crate::WorktreePrState::Merged,
+    );
+    project_pr_state_map(&mut snapshot, &states);
+    assert_eq!(
+        snapshot.worktree_groups[0].pr_state,
+        Some(crate::WorktreePrState::Merged)
+    );
+}
+
+#[test]
+fn pr_state_projection_leaves_unmarked_channels_plain() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("feature");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(dir.path()),
+        Vec::new(),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    snapshot.worktree_groups = vec![channel_group("feature", &worktree)];
+
+    let mut states = BTreeMap::new();
+    states.insert(
+        worktree.display().to_string(),
+        crate::WorktreePrState::Merged,
+    );
+    project_pr_state_map(&mut snapshot, &states);
+    assert_eq!(snapshot.worktree_groups[0].pr_state, None);
+}
+
+#[test]
+fn diff_projection_keeps_worktree_channel_label_and_uses_live_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("codex-resets");
+    std::fs::create_dir_all(&worktree).unwrap();
+    write_worktree_marker(&worktree, "codex-resets");
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(dir.path()),
+        Vec::new(),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    snapshot.worktree_groups = vec![channel_group("codex-resets", &worktree)];
+
+    let mut cache = DiffStatsCache::default();
+    let mut entry = diff_entry(true, true, Some(true), 0, 0);
+    entry.branch = Some("main".to_owned());
+    cache.entries.insert(worktree.display().to_string(), entry);
+
+    project_diff_stats(&mut snapshot, &cache);
+
+    let group = &snapshot.worktree_groups[0];
+    assert_eq!(group.label, "codex-resets");
+    assert_eq!(
+        group.trunk_sync, None,
+        "trunk detection uses the live branch, not the channel label"
+    );
 }
 
 #[test]
