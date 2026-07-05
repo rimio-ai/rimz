@@ -323,10 +323,7 @@ fn price_tokens(
         let Some(price) = prices.price(&candidate) else {
             continue;
         };
-        let cost = input as f64 * price.input
-            + cache_read as f64 * price.cache_read
-            + cache_write as f64 * price.cache_create
-            + output as f64 * price.output;
+        let cost = price.cost(input, output, cache_write, 0, cache_read, false);
         return Some(cost);
     }
     None

@@ -169,9 +169,14 @@ pub(super) fn transcript_enrichment(
             let price_book = PriceBook::embedded();
             price_book.price(model_id).and_then(|price| {
                 let uncached = total_input.saturating_sub(usage.cumulative_cached_tokens);
-                let cost = uncached as f64 * price.input
-                    + usage.cumulative_cached_tokens as f64 * price.cache_read
-                    + total_output as f64 * price.output;
+                let cost = price.cost(
+                    uncached,
+                    total_output,
+                    0,
+                    0,
+                    usage.cumulative_cached_tokens,
+                    false,
+                );
                 (cost > 0.0).then_some(AgentCost {
                     total_cost_usd: Some(cost),
                     ..AgentCost::default()

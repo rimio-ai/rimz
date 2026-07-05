@@ -7,6 +7,37 @@ fn price_field(fields: &Map<String, Value>, name: &str) -> f64 {
 }
 
 #[test]
+fn litellm_compaction_keeps_tiers_and_provider_fast_only() {
+    let table = compact_litellm(
+        r#"{
+            "claude-x": {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000015,
+                "input_cost_per_token_above_200k_tokens": 0.000006,
+                "max_input_tokens": 1000000,
+                "provider_specific_entry": {"fast": 2.0, "other": "drop"},
+                "source": "drop"
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let fields = table.get("claude-x").and_then(Value::as_object).unwrap();
+    assert!((price_field(fields, "input_cost_per_token_above_200k_tokens") - 6e-6).abs() < 1e-18);
+    assert_eq!(
+        fields.get("max_input_tokens").and_then(Value::as_u64),
+        Some(1_000_000)
+    );
+    let provider = fields
+        .get("provider_specific_entry")
+        .and_then(Value::as_object)
+        .unwrap();
+    assert_eq!(provider.len(), 1);
+    assert_eq!(provider.get("fast").and_then(Value::as_f64), Some(2.0));
+    assert!(!fields.contains_key("source"));
+}
+
+#[test]
 fn models_dev_compaction_converts_per_million_costs() {
     let table = compact_models_dev(
         r#"{

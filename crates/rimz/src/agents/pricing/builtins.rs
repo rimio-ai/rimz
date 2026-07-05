@@ -1,113 +1,185 @@
-//! Tier 3a: hardcoded prices for the models Rimz must get right.
+//! Tier 2: hardcoded fallback prices for models Rimz must price offline.
 //!
-//! Applied **last**, after the embedded snapshot and any remote refresh, so the
-//! team's values always win — a stale or missing remote entry never mis-prices
-//! a model we ship support for. The set is deliberately the OpenAI / Codex
-//! family: Codex needs a guaranteed fallback model; Claude resolves through the
-//! generated or runtime LiteLLM table when available, and Pi reports `costUSD`
-//! directly.
-//!
-//! `gpt-5` is mandatory: it is the Codex parser's fallback model
-//! (`codex::spend`), so a Codex event with no resolvable model still prices.
-//!
-//! Values are USD per token, taken from the upstream LiteLLM table; refresh them
-//! alongside `cargo xtask pricing-refresh` when OpenAI changes prices.
+//! Builtins overwrite the embedded snapshot, then the live LiteLLM cache may
+//! overwrite them. That matches ccusage precedence: local fallbacks cover stale
+//! snapshots and absent rows, while fresh upstream pricing wins as it drifts.
+//! `gpt-5` is mandatory because the Codex parser falls back to it when a log has
+//! no model.
 
 use std::collections::HashMap;
 
-use super::Pricing;
+use super::{Pricing, overrides};
 
-/// Overlay the guaranteed model prices, overwriting any embedded/remote entry.
+/// Overlay guaranteed fallback model prices, overwriting the embedded snapshot.
 pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
-    // gpt-5 tier: $1.25 / $10 per 1M, cache-read $0.125 per 1M.
-    let gpt_5 = Pricing {
-        input: 1.25e-6,
-        output: 1.0e-5,
-        cache_read: 1.25e-7,
-        cache_create: 0.0,
-    };
-    for key in [
-        "gpt-5",
-        "gpt-5-codex",
-        "gpt-5.1",
-        "gpt-5.1-codex",
-        "gpt-5.1-codex-max",
-    ] {
-        entries.insert(key.to_owned(), gpt_5);
-    }
-
-    // 5.2 / 5.3 codex tier: $1.75 / $14 per 1M, cache-read $0.175 per 1M.
-    let codex_5_2 = Pricing {
-        input: 1.75e-6,
-        output: 1.4e-5,
-        cache_read: 1.75e-7,
-        cache_create: 0.0,
-    };
-    for key in ["gpt-5.2-codex", "gpt-5.3-codex"] {
-        entries.insert(key.to_owned(), codex_5_2);
-    }
-
-    // GPT-5.5 tier: $5 / $30 per 1M, cache-read $0.50 per 1M.
-    let gpt_5_5 = Pricing {
-        input: 5.0e-6,
-        output: 3.0e-5,
-        cache_read: 5.0e-7,
-        cache_create: 0.0,
-    };
-    for key in ["gpt-5.5", "gpt-5.5-codex"] {
-        entries.insert(key.to_owned(), gpt_5_5);
-    }
-
-    // mini tier: $0.25 / $2 per 1M, cache-read $0.025 per 1M.
-    let mini = Pricing {
-        input: 2.5e-7,
-        output: 2.0e-6,
-        cache_read: 2.5e-8,
-        cache_create: 0.0,
-    };
-    for key in ["gpt-5-mini", "gpt-5.1-codex-mini"] {
-        entries.insert(key.to_owned(), mini);
-    }
-
-    // nano tier: $0.05 / $0.40 per 1M, cache-read $0.005 per 1M.
     entries.insert(
-        "gpt-5-nano".to_owned(),
+        "claude-opus-4-5".to_owned(),
+        p(5e-6, 25e-6, 6.25e-6, 0.5e-6),
+    );
+    entries.insert(
+        "claude-opus-4-6".to_owned(),
+        with_fast("claude-opus-4-6", p(5e-6, 25e-6, 6.25e-6, 0.5e-6)),
+    );
+    entries.insert(
+        "claude-opus-4-7".to_owned(),
+        with_fast("claude-opus-4-7", p(5e-6, 25e-6, 6.25e-6, 0.5e-6)),
+    );
+    entries.insert(
+        "claude-opus-4-8".to_owned(),
+        with_fast("claude-opus-4-8", p(5e-6, 25e-6, 6.25e-6, 0.5e-6)),
+    );
+    entries.insert(
+        "claude-haiku-4-5".to_owned(),
+        p(1e-6, 5e-6, 1.25e-6, 0.1e-6),
+    );
+    entries.insert(
+        "claude-opus-4".to_owned(),
+        p(15e-6, 75e-6, 18.75e-6, 1.5e-6),
+    );
+    entries.insert(
+        "claude-sonnet-4-6".to_owned(),
+        p(3e-6, 15e-6, 3.75e-6, 0.3e-6),
+    );
+    entries.insert(
+        "claude-sonnet-4".to_owned(),
         Pricing {
-            input: 5.0e-8,
-            output: 4.0e-7,
-            cache_read: 5.0e-9,
-            cache_create: 0.0,
+            input_above_200k: Some(6e-6),
+            output_above_200k: Some(22.5e-6),
+            cache_create_above_200k: Some(7.5e-6),
+            cache_read_above_200k: Some(0.6e-6),
+            ..p(3e-6, 15e-6, 3.75e-6, 0.3e-6)
         },
     );
 
-    // reasoning models.
+    let claude_3_5_haiku = p(0.8e-6, 4e-6, 1.0e-6, 0.08e-6);
+    entries.insert("claude-3-5-haiku".to_owned(), claude_3_5_haiku);
+    entries.insert("claude-3-5-haiku-20241022".to_owned(), claude_3_5_haiku);
     entries.insert(
-        "o3".to_owned(),
+        "claude-3-opus".to_owned(),
+        p(15e-6, 75e-6, 18.75e-6, 1.5e-6),
+    );
+    entries.insert(
+        "claude-3-sonnet".to_owned(),
+        p(3e-6, 15e-6, 3.75e-6, 0.3e-6),
+    );
+    entries.insert(
+        "claude-3-haiku".to_owned(),
+        p(0.25e-6, 1.25e-6, 0.3e-6, 0.03e-6),
+    );
+
+    entries.insert("gpt-5".to_owned(), p(1.25e-6, 10e-6, 1.25e-6, 0.125e-6));
+    entries.insert(
+        "gpt-5.5".to_owned(),
+        with_fast("gpt-5.5", p(5e-6, 30e-6, 5e-6, 0.5e-6)),
+    );
+    entries.insert(
+        "grok-4.3".to_owned(),
         Pricing {
-            input: 2.0e-6,
-            output: 8.0e-6,
-            cache_read: 5.0e-7,
-            cache_create: 0.0,
+            cache_read_explicit: false,
+            ..p(1.25e-6, 2.5e-6, 1.25e-6, 0.125e-6)
+        },
+    );
+
+    entries.insert(
+        "moonshot/kimi-k2.5".to_owned(),
+        p(0.6e-6, 3e-6, 0.75e-6, 0.1e-6),
+    );
+    entries.insert(
+        "moonshot/kimi-k2.6".to_owned(),
+        p(0.95e-6, 4e-6, 1.1875e-6, 0.16e-6),
+    );
+
+    let gpt_5_1 = p(1.25e-6, 10e-6, 1.25e-6, 0.125e-6);
+    entries.insert("gpt-5.1".to_owned(), gpt_5_1);
+    entries.insert("gpt-5.1-codex".to_owned(), gpt_5_1);
+
+    let gpt_5_codex = p(1.75e-6, 14e-6, 1.75e-6, 0.175e-6);
+    entries.insert("gpt-5.2-codex".to_owned(), gpt_5_codex);
+    entries.insert(
+        "gpt-5.3-codex".to_owned(),
+        with_fast("gpt-5.3-codex", gpt_5_codex),
+    );
+    entries.insert("gpt-5.2".to_owned(), gpt_5_codex);
+    entries.insert(
+        "gpt-5.4".to_owned(),
+        with_fast("gpt-5.4", p(2.5e-6, 15e-6, 2.5e-6, 0.25e-6)),
+    );
+    entries.insert(
+        "gpt-5.4-mini".to_owned(),
+        p(0.75e-6, 4.5e-6, 0.75e-6, 0.075e-6),
+    );
+    entries.insert(
+        "gpt-5.4-nano".to_owned(),
+        p(0.2e-6, 1.25e-6, 0.2e-6, 0.02e-6),
+    );
+
+    let glm = |input: f64, output: f64, cache_read: f64| Pricing {
+        input,
+        output,
+        cache_create: 0.0,
+        cache_read,
+        cache_read_explicit: true,
+        ..Pricing::empty()
+    };
+    let glm_base = glm(0.6e-6, 2.2e-6, 0.11e-6);
+    entries.insert("glm-4.5".to_owned(), glm_base);
+    entries.insert("zai/glm-4.5".to_owned(), glm_base);
+    entries.insert("zai/glm-4.5-x".to_owned(), glm(2.2e-6, 8.9e-6, 0.45e-6));
+    entries.insert("zai/glm-4.5-air".to_owned(), glm(0.2e-6, 1.1e-6, 0.03e-6));
+    entries.insert("zai/glm-4.5-airx".to_owned(), glm(1.1e-6, 4.5e-6, 0.22e-6));
+    entries.insert("zai/glm-4.5v".to_owned(), glm(0.6e-6, 1.8e-6, 0.11e-6));
+    entries.insert(
+        "zai/glm-4-32b-0414-128k".to_owned(),
+        glm(0.1e-6, 0.1e-6, 0.0),
+    );
+    entries.insert("zai/glm-4.5-flash".to_owned(), glm(0.0, 0.0, 0.0));
+    entries.insert("glm-4.6".to_owned(), glm_base);
+    entries.insert("glm-4.7".to_owned(), glm_base);
+    entries.insert(
+        "glm-5".to_owned(),
+        Pricing {
+            input: 1.0e-6,
+            output: 3.2e-6,
+            cache_read: 0.2e-6,
+            ..glm_base
         },
     );
     entries.insert(
-        "o4-mini".to_owned(),
+        "glm-5-turbo".to_owned(),
         Pricing {
-            input: 1.1e-6,
+            input: 1.2e-6,
+            output: 4.0e-6,
+            cache_read: 0.24e-6,
+            ..glm_base
+        },
+    );
+    entries.insert(
+        "glm-5.1".to_owned(),
+        Pricing {
+            input: 1.4e-6,
             output: 4.4e-6,
-            cache_read: 2.75e-7,
-            cache_create: 0.0,
+            cache_read: 0.26e-6,
+            ..glm_base
         },
     );
-    entries.insert(
-        "codex-mini-latest".to_owned(),
-        Pricing {
-            input: 1.5e-6,
-            output: 6.0e-6,
-            cache_read: 3.75e-7,
-            cache_create: 0.0,
-        },
-    );
+}
+
+fn p(input: f64, output: f64, cache_create: f64, cache_read: f64) -> Pricing {
+    Pricing {
+        input,
+        output,
+        cache_create,
+        cache_read,
+        cache_read_explicit: true,
+        ..Pricing::empty()
+    }
+}
+
+fn with_fast(model: &str, price: Pricing) -> Pricing {
+    Pricing {
+        fast_multiplier: overrides::multiplier_for(model).unwrap_or(1.0),
+        ..price
+    }
 }
 
 #[cfg(test)]
@@ -115,7 +187,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtins_overwrite_prior_entries_and_guarantee_the_codex_fallback() {
+    fn builtins_overwrite_embedded_fallbacks_and_carry_ccusage_fields() {
         let mut entries = HashMap::from([(
             "gpt-5".to_owned(),
             Pricing {
@@ -123,14 +195,17 @@ mod tests {
                 output: 999.0,
                 cache_read: 999.0,
                 cache_create: 999.0,
+                fast_multiplier: 999.0,
+                ..Pricing::empty()
             },
         )]);
         put_builtins(&mut entries);
-        // gpt-5 is the Codex parser's mandatory fallback; builtins win over any
-        // stale prior entry. Indexing also asserts the fallback is present.
+
         assert!((entries["gpt-5"].input - 1.25e-6).abs() < 1e-18);
-        assert!((entries["gpt-5.5"].input - 5.0e-6).abs() < 1e-18);
-        assert!((entries["gpt-5.5"].cache_read - 5.0e-7).abs() < 1e-18);
-        assert!((entries["gpt-5.5"].output - 3.0e-5).abs() < 1e-18);
+        assert!((entries["gpt-5"].cache_create - 1.25e-6).abs() < 1e-18);
+        assert_eq!(entries["gpt-5.5"].fast_multiplier, 2.5);
+        assert_eq!(entries["claude-opus-4-8"].fast_multiplier, 2.0);
+        assert_eq!(entries["claude-sonnet-4"].input_above_200k, Some(6e-6));
+        assert!((entries["moonshot/kimi-k2.6"].cache_read - 0.16e-6).abs() < 1e-18);
     }
 }

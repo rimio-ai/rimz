@@ -44,8 +44,10 @@ use super::aggregate::{
 /// dedups retry writes within each parsed chunk before storing, and reshapes
 /// compaction rollup keys around that per-file origin. v12 shortens on-disk
 /// field keys and skips default values; a v11 cache would otherwise read under
-/// the new keys as zeroed entries, so it cold-rebuilds.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 12;
+/// the new keys as zeroed entries, so it cold-rebuilds. v13 aligns token-priced
+/// costs with ccusage: Claude 1h cache creation prices at 2x input, 200k tiers
+/// apply per token class, and fast-mode turns apply the model multiplier.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 13;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///

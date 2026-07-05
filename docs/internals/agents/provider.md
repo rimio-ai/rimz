@@ -200,23 +200,24 @@ A room with a missing workspace cache derives `workspace-spending.<scope_hash>.j
 
 Claude and Codex log token counts, so converting their turns to dollars needs a per-model price table; Pi logs `costUSD` directly (as did older Claude transcripts, which still use that figure when present). This section owns that table: where prices come from, how a model resolves to a price, and how the table stays fresh. Pricing is **enrichment, never correctness** — a failed fetch, a missing snapshot, an unknown model each degrades to stale-but-usable prices or zero-dollar token usage, never a hard failure.
 
-The table lives in [`agents/pricing/`](../../../crates/rimz/src/agents/pricing/mod.rs): per-token [`Pricing`](../../../crates/rimz/src/agents/pricing/mod.rs) keyed by model in a [`PriceBook`](../../../crates/rimz/src/agents/pricing/mod.rs). Lookups are pure and network-free; the only network is the gated refresh in `load_for_spending`.
+The table lives in [`agents/pricing/`](../../../crates/rimz/src/agents/pricing/mod.rs): per-token [`Pricing`](../../../crates/rimz/src/agents/pricing/mod.rs) keyed by model in a [`PriceBook`](../../../crates/rimz/src/agents/pricing/mod.rs). A price row carries input, output, cache-create, cache-read, optional 200k-tier rates for each class, `cache_read_explicit`, and the fast-mode multiplier. Lookups are pure and network-free; the only network is the gated refresh in `load_for_spending`.
 
-### Three layers
+### Price table precedence
 
-The book is assembled from three sources, the later ones winning, so a stale or missing remote entry never overrides a price the team maintains:
+The book is assembled from four ordered passes. Builtins are an offline fallback under the live LiteLLM refresh, and models.dev only fills rows the other sources still lack:
 
 | Layer | When | Source |
 | --- | --- | --- |
-| 1. Embedded snapshot | always, at process start | the ignored generated LiteLLM-shaped snapshot, produced from all priced LiteLLM rows plus authoritative models.dev fillers, compacted and gzipped into the binary by [`build.rs`](../../../crates/rimz/build.rs) and `include_bytes!`-ed ([`embedded.rs`](../../../crates/rimz/src/agents/pricing/embedded.rs)); release builds and the published crate ship the refreshed snapshot, forced into the crate via Cargo's `include`, while a fresh clone with no generated snapshot embeds an empty table plus builtins |
-| 2. Remote refresh | once per TTL, on disk | a fresh full LiteLLM pull once per weekly TTL, plus authoritative models.dev entries fetched only during the unknown-model chase, filling models LiteLLM lacks ([`remote.rs`](../../../crates/rimz/src/agents/pricing/remote.rs)) |
-| 3. Builtins | always, applied last | hardcoded prices for the OpenAI/Codex family ([`builtins.rs`](../../../crates/rimz/src/agents/pricing/builtins.rs)) |
+| 1. Embedded snapshot | always, at process start | the ignored generated LiteLLM-shaped snapshot, produced from all priced LiteLLM rows plus authoritative models.dev fillers, compacted and gzipped into the binary by [`build.rs`](../../../crates/rimz/build.rs) and `include_bytes!`-ed ([`embedded.rs`](../../../crates/rimz/src/agents/pricing/embedded.rs)); release builds and the published crate ship the refreshed snapshot, forced into the crate via Cargo's `include`, while a fresh clone with no generated snapshot embeds an empty table |
+| 2. Builtins | always, before cached refresh rows | hardcoded fallback prices ported from ccusage for Claude, OpenAI/Codex, GLM, Kimi, and Grok families ([`builtins.rs`](../../../crates/rimz/src/agents/pricing/builtins.rs)) |
+| 3. LiteLLM refresh | once per TTL, on disk | a fresh full LiteLLM pull once per weekly TTL, overwriting builtins when upstream publishes the row ([`remote.rs`](../../../crates/rimz/src/agents/pricing/remote.rs)) |
+| 4. models.dev fill | unknown-model chase only | authoritative Anthropic/OpenAI models.dev entries fetched only when an unknown priceable model persists, inserted only for models LiteLLM and builtins lack |
 
 `gpt-5` is mandatory in the builtins: it is the Codex parser's fallback model, so a Codex event with no resolvable model still prices.
 
 ### The refresh
 
-`rimz sidebar snapshot` is a one-shot process, so the refresh is disk-cached at `$XDG_STATE_HOME/rimz/shared/pricing-cache.json` rather than held in memory: the spending producer reads the embedded snapshot plus the cache instantly while it holds the shared runtime spending lock, and re-fetches when the cache is older than a week. A failed fetch records its attempt time and backs off an hour, so a persistent outage never re-fetches on every snapshot. `RIMZ_PRICING_OFFLINE` skips every fetch path.
+`rimz sidebar snapshot` is a one-shot process, so the refresh is disk-cached at `$XDG_STATE_HOME/rimz/shared/pricing-cache.json` rather than held in memory: the spending producer reads the embedded snapshot plus the cache instantly while it holds the shared runtime spending lock, and re-fetches when the cache is older than a week. The pricing cache carries a schema stamp; a stale cache shape is dropped so tierless rows cannot override the embedded snapshot and builtins after a formula upgrade. A failed fetch records its attempt time and backs off an hour, so a persistent outage never re-fetches on every snapshot. `RIMZ_PRICING_OFFLINE` skips every fetch path.
 
 An unknown-model chase rides the same producer walk, with no timer of its own. When the [cost-history pass](#cost-history) records a priceable model name that the assembled book still cannot price, the pricing cache may fetch early on a standalone 30-minute gate, and this chase is the only path that fetches models.dev. While the same unknowns persist, that gate doubles to 1h, 2h, and onward to the 24h cap; a newly seen unknown resets the gate to 30m. The chase also observes a 30-minute floor after any fetch attempt, so a just-refreshed source has time to catch up before Rimz asks again. Failed chase attempts escalate the same way as successful ones; when every recorded unknown resolves, the chase state clears.
 
@@ -228,7 +229,7 @@ An unknown-model chase rides the same producer walk, with no timer of its own. W
 
 ### Computing token-priced cost
 
-The spending walk prices the token-only providers per turn. **Codex** multiplies each [`CodexTokenEvent`](../../../crates/rimz/src/agents/codex/spend.rs): uncached input at the input rate, the cached slice at the cache-read rate, and output (which already includes reasoning tokens) at the output rate. **Claude** prices each `message.usage` the same way and adds the cache-creation slice at the cache-creation (prompt-cache write) rate, since its transcripts now omit `costUSD`; an older Claude turn that still logs a positive `costUSD` keeps that figure instead. A turn whose model has no known price keeps its tokens and sessions with zero dollars while the pricing chase looks for a price.
+The spending walk prices the token-only providers per turn with one shared helper. Input, output, 5-minute cache creation, 1-hour cache creation, and cache read are each tiered at the first 200,000 tokens per class when the model publishes an above-200k rate. The 5-minute cache-creation slice bills at the cache-create rate; the 1-hour cache-creation slice bills at 2x the input rate, including 200k tiers; fast or priority turns multiply the finished cost by the model's fast multiplier. **Codex** passes uncached input, output, and cached input as cache-read. **Claude** splits `message.usage.cache_creation` into 5-minute and 1-hour cache creation when present, falling back to the flat `cache_creation_input_tokens` as 5-minute cache creation otherwise; an older Claude turn that still logs a positive `costUSD` keeps that figure instead. A turn whose model has no known price keeps its tokens and sessions with zero dollars while the pricing chase looks for a price.
 
 ## Adding a provider
 

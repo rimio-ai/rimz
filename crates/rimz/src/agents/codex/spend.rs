@@ -125,11 +125,14 @@ pub(crate) fn parse_codex_spend(
             continue;
         };
         let cost = match prices.price(model) {
-            Some(price) => {
-                uncached_input as f64 * price.input
-                    + event.cached_input_tokens as f64 * price.cache_read
-                    + event.output_tokens as f64 * price.output
-            }
+            Some(price) => price.cost(
+                uncached_input,
+                event.output_tokens,
+                0,
+                0,
+                event.cached_input_tokens,
+                false,
+            ),
             None => {
                 record_unknown_model(&mut unknown_models, model, ts_secs);
                 0.0

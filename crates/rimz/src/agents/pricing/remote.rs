@@ -80,9 +80,11 @@ fn fetch(url: &str) -> Option<String> {
 ///
 /// Shape: `{ provider: { models: { id: { cost: { input, output, cache_read,
 /// cache_write } } } } }`, with costs quoted **per 1M tokens** — divided here to
-/// per-token to match [`Pricing`]. Only authoritative provider IDs are read, so
-/// gateway markups cannot overwrite direct Anthropic/OpenAI prices. Defensive:
-/// any entry missing input/output is skipped rather than failing the whole parse.
+/// per-token to match [`Pricing`]. Missing cache costs follow ccusage defaults:
+/// cache-write is 1.25× input and cache-read is 0.1× input. Only authoritative
+/// provider IDs are read, so gateway markups cannot overwrite direct
+/// Anthropic/OpenAI prices. Defensive: any entry missing input/output is skipped
+/// rather than failing the whole parse.
 pub(super) fn parse_models_dev(json: &str) -> BTreeMap<String, Pricing> {
     let mut out = BTreeMap::new();
     let Ok(Value::Object(providers)) = serde_json::from_str::<Value>(json) else {
@@ -103,13 +105,19 @@ pub(super) fn parse_models_dev(json: &str) -> BTreeMap<String, Pricing> {
             let (Some(input), Some(output)) = (per_million("input"), per_million("output")) else {
                 continue;
             };
+            let input = input / 1e6;
+            let output = output / 1e6;
+            let cache_read = per_million("cache_read").map(|cost| cost / 1e6);
+            let cache_create = per_million("cache_write").map(|cost| cost / 1e6);
             out.insert(
                 model_id.clone(),
                 Pricing {
-                    input: input / 1e6,
-                    output: output / 1e6,
-                    cache_read: per_million("cache_read").unwrap_or(0.0) / 1e6,
-                    cache_create: per_million("cache_write").unwrap_or(0.0) / 1e6,
+                    input,
+                    output,
+                    cache_read: cache_read.unwrap_or(input * 0.1),
+                    cache_create: cache_create.unwrap_or(input * 1.25),
+                    cache_read_explicit: cache_read.is_some(),
+                    ..Pricing::empty()
                 },
             );
         }
@@ -131,16 +139,24 @@ mod tests {
             "openai": {"models": {
                 "gpt-x": {"cost": {"input": 1.25, "output": 10.0, "cache_read": 0.125}}
             }},
+            "anthropic": {"models": {
+                "claude-x": {"cost": {"input": 3.0, "output": 15.0}}
+            }},
             "gateway": {"models": {
                 "gpt-x": {"cost": {"input": 99.0, "output": 99.0}}
             }},
             "bad": {"models": {"y": {"cost": {"input": 1.0}}}}
         }"#;
         let table = parse_models_dev(json);
-        assert_eq!(table.len(), 1);
+        assert_eq!(table.len(), 2);
         let p = table.get("gpt-x").unwrap();
         assert!((p.input - 1.25e-6).abs() < 1e-18);
         assert!((p.output - 1.0e-5).abs() < 1e-18);
         assert!((p.cache_read - 1.25e-7).abs() < 1e-18);
+        assert!(p.cache_read_explicit);
+        let p = table.get("claude-x").unwrap();
+        assert!((p.cache_read - 3e-7).abs() < 1e-18);
+        assert!((p.cache_create - 3.75e-6).abs() < 1e-18);
+        assert!(!p.cache_read_explicit);
     }
 }

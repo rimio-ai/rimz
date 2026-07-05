@@ -34,11 +34,16 @@ const PRESENCE_PLUGIN_ENV: &str = "RIMZ_EMBED_PRESENCE_PLUGIN";
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
 const PRESENCE_PLUGIN_VENDOR_DIR: &str = "presence";
 const PRESENCE_PLUGIN_OUT: &str = "rimz-presence-zellij.wasm";
-const KEPT_FIELDS: [&str; 4] = [
+const KEPT_FIELDS: [&str; 9] = [
     "input_cost_per_token",
     "output_cost_per_token",
     "cache_read_input_token_cost",
     "cache_creation_input_token_cost",
+    "input_cost_per_token_above_200k_tokens",
+    "output_cost_per_token_above_200k_tokens",
+    "cache_read_input_token_cost_above_200k_tokens",
+    "cache_creation_input_token_cost_above_200k_tokens",
+    "max_input_tokens",
 ];
 
 fn main() {
@@ -284,11 +289,28 @@ fn compact(json: &str) -> Option<String> {
                 kept.insert(field.to_owned(), value.clone());
             }
         }
+        if let Some(provider_specific_entry) = compact_provider_specific_entry(&fields) {
+            kept.insert(
+                "provider_specific_entry".to_owned(),
+                provider_specific_entry,
+            );
+        }
         if kept.contains_key("input_cost_per_token") && kept.contains_key("output_cost_per_token") {
             out.insert(model, Value::Object(kept));
         }
     }
     serde_json::to_string(&out).ok()
+}
+
+fn compact_provider_specific_entry(fields: &Map<String, Value>) -> Option<Value> {
+    let fast = fields
+        .get("provider_specific_entry")
+        .and_then(Value::as_object)
+        .and_then(|entry| entry.get("fast"))
+        .filter(|value| !value.is_null())?;
+    let mut out = Map::new();
+    out.insert("fast".to_owned(), fast.clone());
+    Some(Value::Object(out))
 }
 
 fn gzip(json: &str) -> Option<Vec<u8>> {

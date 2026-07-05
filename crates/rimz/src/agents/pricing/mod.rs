@@ -6,16 +6,17 @@
 //! counts rather than a `costUSD`. Pi reports `costUSD` directly and never
 //! consults the table.
 //!
-//! Three layers feed one [`PriceBook`], the later ones winning:
+//! Ordered pricing passes feed one [`PriceBook`], with builtins acting as a
+//! fallback below the live LiteLLM refresh:
 //!
 //! 1. **Embedded snapshot** ([`embedded`]) — the generated LiteLLM table
 //!    `build.rs` compacts and gzips into release binaries. Fresh clones without
 //!    the generated file embed an empty table.
-//! 2. **Remote refresh** ([`remote`]) — a weekly LiteLLM pull; the models.dev
-//!    catalogue is fetched only during an unknown-model chase, filling models
-//!    LiteLLM lacks.
-//! 3. **Builtins** ([`builtins`]) — hardcoded prices applied last, so the team's
-//!    values always win over a stale or missing remote entry.
+//! 2. **Builtins** ([`builtins`]) — hardcoded fallback prices for models that
+//!    must price before a refresh.
+//! 3. **Remote refresh** ([`remote`]) — a weekly LiteLLM pull overwrites older
+//!    fallback rows; the models.dev catalogue is fetched only during an
+//!    unknown-model chase and fills models LiteLLM lacks.
 //!
 //! Lookups are pure and network-free: the merged book is assembled once per
 //! process from the embedded data and the on-disk cache, and
@@ -26,6 +27,7 @@
 
 mod builtins;
 mod embedded;
+mod overrides;
 mod remote;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -37,8 +39,10 @@ use serde::{Deserialize, Serialize};
 
 use super::spending::is_priceable_model_name;
 
+pub(crate) const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
+
 /// Per-token costs in USD for one model.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pricing {
     /// Cost per (uncached) input token.
     pub input: f64,
@@ -47,9 +51,73 @@ pub struct Pricing {
     /// Cost per cache-read (prompt-cache-hit) input token.
     #[serde(default)]
     pub cache_read: f64,
-    /// Cost per cache-creation input token (unused by OpenAI; kept for parity).
+    /// Cost per cache-creation input token.
     #[serde(default)]
     pub cache_create: f64,
+    /// Whether `cache_read` came from source data rather than the input-rate
+    /// default. Kept for cache compatibility with ccusage's pricing shape.
+    #[serde(default)]
+    pub cache_read_explicit: bool,
+    /// Cost per uncached input token above the 200k tier threshold.
+    #[serde(default)]
+    pub input_above_200k: Option<f64>,
+    /// Cost per output token above the 200k tier threshold.
+    #[serde(default)]
+    pub output_above_200k: Option<f64>,
+    /// Cost per 5-minute cache-creation token above the 200k tier threshold.
+    #[serde(default)]
+    pub cache_create_above_200k: Option<f64>,
+    /// Cost per cache-read token above the 200k tier threshold.
+    #[serde(default)]
+    pub cache_read_above_200k: Option<f64>,
+    /// Multiplier applied when the provider records a fast/priority turn.
+    #[serde(default = "one")]
+    pub fast_multiplier: f64,
+}
+
+impl Pricing {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            input: 0.0,
+            output: 0.0,
+            cache_read: 0.0,
+            cache_create: 0.0,
+            cache_read_explicit: false,
+            input_above_200k: None,
+            output_above_200k: None,
+            cache_create_above_200k: None,
+            cache_read_above_200k: None,
+            fast_multiplier: 1.0,
+        }
+    }
+
+    pub(crate) fn cost(
+        self,
+        input: u64,
+        output: u64,
+        cache_5m: u64,
+        cache_1h: u64,
+        cache_read: u64,
+        fast: bool,
+    ) -> f64 {
+        let cache_1h_cost = self.input * CACHE_CREATE_1H_INPUT_MULTIPLIER;
+        let cache_1h_above = self
+            .input_above_200k
+            .map(|cost| cost * CACHE_CREATE_1H_INPUT_MULTIPLIER);
+        let multiplier = if fast { self.fast_multiplier } else { 1.0 };
+        (tiered_cost(input, self.input, self.input_above_200k)
+            + tiered_cost(output, self.output, self.output_above_200k)
+            + tiered_cost(cache_5m, self.cache_create, self.cache_create_above_200k)
+            + tiered_cost(cache_1h, cache_1h_cost, cache_1h_above)
+            + tiered_cost(cache_read, self.cache_read, self.cache_read_above_200k))
+            * multiplier
+    }
+}
+
+impl Default for Pricing {
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 /// A resolved model → price table.
@@ -67,24 +135,25 @@ impl PriceBook {
     }
 
     /// Build a book from an arbitrary LiteLLM-shaped document (tests, tooling).
-    /// Builtins still win, matching the production assembly order.
+    /// Builtins still win here, matching the embedded no-cache path.
     pub fn from_litellm_json(json: &str) -> Self {
         let mut entries = embedded::parse(json);
         builtins::put_builtins(&mut entries);
         Self { entries }
     }
 
-    /// Assemble the merged book: embedded snapshot, then models.dev for models it
-    /// lacks, then the LiteLLM refresh (overwriting), then builtins (winning).
+    /// Assemble the merged book: embedded snapshot, then builtins as ccusage's
+    /// fallback layer, then the LiteLLM refresh (overwriting), then models.dev
+    /// for models both sources lack.
     fn assembled(cache: &PricingCache) -> Self {
         let mut entries = embedded::load();
-        for (model, price) in &cache.models_dev {
-            entries.entry(model.clone()).or_insert(*price);
-        }
+        builtins::put_builtins(&mut entries);
         for (model, price) in &cache.litellm {
             entries.insert(model.clone(), *price);
         }
-        builtins::put_builtins(&mut entries);
+        for (model, price) in &cache.models_dev {
+            entries.entry(model.clone()).or_insert(*price);
+        }
         Self { entries }
     }
 
@@ -208,11 +277,14 @@ const RETRY_BACKOFF_SECS: u64 = 60 * 60;
 /// 24-hour cap while the same unknown set persists.
 const UNKNOWN_REFRESH_TTL_SECS: u64 = 30 * 60;
 const UNKNOWN_BACKOFF_CAP_SECS: u64 = 24 * 60 * 60;
+const PRICING_CACHE_SCHEMA: u32 = 2;
 
 /// On-disk pricing cache at persistent shared `pricing-cache.json`. Sorted maps
 /// keep the file diff-stable.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct PricingCache {
+    #[serde(default)]
+    schema: u32,
     #[serde(default)]
     fetched_at_secs: u64,
     #[serde(default)]
@@ -227,6 +299,38 @@ struct PricingCache {
     unknown_backoff_secs: u64,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     unknown_seen: BTreeSet<String>,
+}
+
+impl Default for PricingCache {
+    fn default() -> Self {
+        Self {
+            schema: PRICING_CACHE_SCHEMA,
+            fetched_at_secs: 0,
+            last_attempt_secs: 0,
+            litellm: BTreeMap::new(),
+            models_dev: BTreeMap::new(),
+            unknown_attempt_secs: 0,
+            unknown_backoff_secs: 0,
+            unknown_seen: BTreeSet::new(),
+        }
+    }
+}
+
+pub(crate) fn tiered_cost(tokens: u64, base: f64, above: Option<f64>) -> f64 {
+    const THRESHOLD: u64 = 200_000;
+    if tokens == 0 {
+        return 0.0;
+    }
+    if let Some(above) = above
+        && tokens > THRESHOLD
+    {
+        return THRESHOLD as f64 * base + (tokens - THRESHOLD) as f64 * above;
+    }
+    tokens as f64 * base
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 fn should_refresh(
@@ -302,12 +406,19 @@ fn read_cache(path: &Path) -> PricingCache {
     let Ok(bytes) = fs::read(path) else {
         return PricingCache::default();
     };
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    let cache = serde_json::from_slice::<PricingCache>(&bytes).unwrap_or_default();
+    if cache.schema == PRICING_CACHE_SCHEMA {
+        cache
+    } else {
+        PricingCache::default()
+    }
 }
 
 /// Atomic write: temp file + rename, matching the ledger durability contract.
 fn write_cache(path: &Path, cache: &PricingCache) {
-    let Ok(bytes) = serde_json::to_vec_pretty(cache) else {
+    let mut cache = cache.clone();
+    cache.schema = PRICING_CACHE_SCHEMA;
+    let Ok(bytes) = serde_json::to_vec_pretty(&cache) else {
         return;
     };
     let tmp = path.with_extension("json.tmp");
@@ -621,6 +732,45 @@ mod tests {
     }
 
     #[test]
+    fn assembly_uses_builtins_as_fallback_under_litellm_and_models_dev_fill() {
+        let cache = PricingCache {
+            litellm: BTreeMap::from([(
+                "gpt-5".to_owned(),
+                Pricing {
+                    input: 9e-6,
+                    output: 9e-6,
+                    ..Pricing::empty()
+                },
+            )]),
+            models_dev: BTreeMap::from([
+                (
+                    "gpt-5".to_owned(),
+                    Pricing {
+                        input: 8e-6,
+                        output: 8e-6,
+                        ..Pricing::empty()
+                    },
+                ),
+                (
+                    "models-dev-only".to_owned(),
+                    Pricing {
+                        input: 7e-6,
+                        output: 7e-6,
+                        ..Pricing::empty()
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+
+        let book = PriceBook::assembled(&cache);
+
+        assert!((book.price("gpt-5").unwrap().input - 9e-6).abs() < 1e-18);
+        assert!((book.price("models-dev-only").unwrap().input - 7e-6).abs() < 1e-18);
+        assert!(book.price("claude-opus-4-8").is_some());
+    }
+
+    #[test]
     fn cached_spending_loader_reads_shared_cache_without_refresh() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pricing-cache.json");
@@ -633,6 +783,7 @@ mod tests {
                     output: 15e-6,
                     cache_read: 3e-7,
                     cache_create: 3.75e-6,
+                    ..Pricing::empty()
                 },
             )]),
             ..Default::default()
@@ -644,5 +795,22 @@ mod tests {
 
         assert!((price.input - 3e-6).abs() < f64::EPSILON);
         assert!((price.output - 15e-6).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn stale_pricing_cache_schema_drops_cached_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pricing-cache.json");
+        std::fs::write(
+            &path,
+            r#"{"schema":1,"litellm":{"rimz-test-stale-model":{"input":999.0,"output":999.0}}}"#,
+        )
+        .unwrap();
+
+        let cache = read_cache(&path);
+
+        assert_eq!(cache.schema, PRICING_CACHE_SCHEMA);
+        assert!(cache.litellm.is_empty());
+        assert!(cache.models_dev.is_empty());
     }
 }

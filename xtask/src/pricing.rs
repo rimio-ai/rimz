@@ -12,11 +12,16 @@ use crate::files::write_atomically;
 const LITELLM_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/refs/heads/main/model_prices_and_context_window.json";
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const GENERATED_SNAPSHOT: &str = "crates/rimz/pricing/litellm-pricing.json";
-const KEPT_FIELDS: [&str; 4] = [
+const KEPT_FIELDS: [&str; 9] = [
     "input_cost_per_token",
     "output_cost_per_token",
     "cache_read_input_token_cost",
     "cache_creation_input_token_cost",
+    "input_cost_per_token_above_200k_tokens",
+    "output_cost_per_token_above_200k_tokens",
+    "cache_read_input_token_cost_above_200k_tokens",
+    "cache_creation_input_token_cost_above_200k_tokens",
+    "max_input_tokens",
 ];
 
 /// Regenerate the ignored pricing snapshot that `crates/rimz/build.rs` embeds
@@ -100,11 +105,28 @@ fn compact_litellm(json: &str) -> Result<BTreeMap<String, Value>> {
                 kept.insert(field.to_owned(), value.clone());
             }
         }
+        if let Some(provider_specific_entry) = compact_provider_specific_entry(&fields) {
+            kept.insert(
+                "provider_specific_entry".to_owned(),
+                provider_specific_entry,
+            );
+        }
         if kept.contains_key("input_cost_per_token") && kept.contains_key("output_cost_per_token") {
             out.insert(model, Value::Object(kept));
         }
     }
     Ok(out)
+}
+
+fn compact_provider_specific_entry(fields: &Map<String, Value>) -> Option<Value> {
+    let fast = fields
+        .get("provider_specific_entry")
+        .and_then(Value::as_object)
+        .and_then(|entry| entry.get("fast"))
+        .filter(|value| !value.is_null())?;
+    let mut out = Map::new();
+    out.insert("fast".to_owned(), fast.clone());
+    Some(Value::Object(out))
 }
 
 fn compact_models_dev(json: &str) -> Result<BTreeMap<String, Value>> {

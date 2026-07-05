@@ -77,6 +77,17 @@ struct ClaudeUsage {
     output_tokens: Option<u64>,
     cache_creation_input_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
+    speed: Option<String>,
+    #[serde(default)]
+    cache_creation: Option<CacheCreation>,
+}
+
+#[derive(Default, Deserialize)]
+struct CacheCreation {
+    #[serde(default)]
+    ephemeral_5m_input_tokens: u64,
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -267,7 +278,17 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         let usage = &entry.message.usage;
         let input = usage.input_tokens.unwrap_or(0);
         let output = usage.output_tokens.unwrap_or(0);
-        let cache_creation = usage.cache_creation_input_tokens.unwrap_or(0);
+        let (cache_5m, cache_1h) = usage
+            .cache_creation
+            .as_ref()
+            .map(|breakdown| {
+                (
+                    breakdown.ephemeral_5m_input_tokens,
+                    breakdown.ephemeral_1h_input_tokens,
+                )
+            })
+            .unwrap_or((usage.cache_creation_input_tokens.unwrap_or(0), 0));
+        let cache_creation = cache_5m + cache_1h;
         let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
         if input == 0 && output == 0 && cache_creation == 0 && cache_read == 0 {
             continue;
@@ -280,26 +301,28 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         // pricing for the next producer pass.
         let cost = match entry.cost_usd {
             Some(cost) if cost > 0.0 => cost,
-            _ => match price_usage(
-                prices,
-                entry.message.model.as_deref(),
-                input,
-                output,
-                cache_creation,
-                cache_read,
-            ) {
-                Some(cost) => cost,
-                None => {
-                    let Some(model) = entry.message.model.as_deref() else {
-                        continue;
-                    };
-                    if !is_priceable_model_name(model) {
-                        continue;
+            _ => {
+                let Some(model) = entry.message.model.as_deref() else {
+                    continue;
+                };
+                match prices.price(model) {
+                    Some(price) => price.cost(
+                        input,
+                        output,
+                        cache_5m,
+                        cache_1h,
+                        cache_read,
+                        usage.speed.as_deref() == Some("fast"),
+                    ),
+                    None => {
+                        if !is_priceable_model_name(model) {
+                            continue;
+                        }
+                        record_unknown_model(&mut unknown_models, model, ts_secs);
+                        0.0
                     }
-                    record_unknown_model(&mut unknown_models, model, ts_secs);
-                    0.0
                 }
-            },
+            }
         };
         // Claude reports the four token components separately; `input_tokens` is
         // already the fresh (uncached) slice. Window aggregation folds cache
@@ -332,30 +355,6 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         },
         unknown_models,
     }
-}
-
-/// Price a Claude usage record through the model table, in dollars.
-///
-/// Each token class bills at its own rate — uncached input, output,
-/// cache-creation (prompt-cache write), and cache-read (prompt-cache hit) — the
-/// same decomposition Codex spend uses. Returns `None` when the model is absent
-/// or unpriced; the caller records a priceable unknown model and keeps the token
-/// usage with zero dollars.
-fn price_usage(
-    prices: &PriceBook,
-    model: Option<&str>,
-    input: u64,
-    output: u64,
-    cache_creation: u64,
-    cache_read: u64,
-) -> Option<f64> {
-    let price = model.and_then(|model| prices.price(model))?;
-    Some(
-        input as f64 * price.input
-            + output as f64 * price.output
-            + cache_creation as f64 * price.cache_create
-            + cache_read as f64 * price.cache_read,
-    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -470,6 +469,94 @@ mod tests {
         assert_eq!(entries[0].output, 50);
         assert_eq!(entries[0].cache_write, 200);
         assert_eq!(entries[0].cache_read, 800);
+    }
+
+    #[test]
+    fn one_hour_cache_creation_uses_twice_input_rate() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":20,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":20},"cache_read_input_tokens":0}}}"#,
+            ],
+        );
+        let prices = PriceBook::from_litellm_json(
+            r#"{"test-model": {"input_cost_per_token": 1.0, "output_cost_per_token": 10.0,
+                                "cache_creation_input_token_cost": 1.25,
+                                "cache_read_input_token_cost": 0.1}}"#,
+        );
+
+        let entries = parse_claude_spend(&file, 0, &prices).entries;
+
+        assert_eq!(entries.len(), 1);
+        assert!((entries[0].cost_usd - 40.0).abs() < f64::EPSILON);
+        assert_eq!(entries[0].cache_write, 20);
+    }
+
+    #[test]
+    fn mixed_cache_creation_breakdown_matches_ccusage_formula() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":999,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20},"cache_read_input_tokens":30}}}"#,
+            ],
+        );
+        let prices = PriceBook::from_litellm_json(
+            r#"{"test-model": {"input_cost_per_token": 1.0, "output_cost_per_token": 10.0,
+                                "cache_creation_input_token_cost": 1.25,
+                                "cache_read_input_token_cost": 0.1}}"#,
+        );
+
+        let entries = parse_claude_spend(&file, 0, &prices).entries;
+
+        assert_eq!(entries.len(), 1);
+        assert!((entries[0].cost_usd - 55.5).abs() < f64::EPSILON);
+        assert_eq!(entries[0].cache_write, 30);
+    }
+
+    #[test]
+    fn pricing_applies_200k_tiers() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":200001,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
+            ],
+        );
+        let prices = PriceBook::from_litellm_json(
+            r#"{"test-model": {"input_cost_per_token": 1.0, "output_cost_per_token": 10.0,
+                                "input_cost_per_token_above_200k_tokens": 2.0}}"#,
+        );
+
+        let entries = parse_claude_spend(&file, 0, &prices).entries;
+
+        assert_eq!(entries.len(), 1);
+        assert!((entries[0].cost_usd - 200_002.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn pricing_applies_fast_multiplier() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"speed":"fast"}}}"#,
+            ],
+        );
+        let prices = PriceBook::from_litellm_json(
+            r#"{"test-model": {"input_cost_per_token": 1.0, "output_cost_per_token": 10.0,
+                                "provider_specific_entry": {"fast": 2.5}}}"#,
+        );
+
+        let entries = parse_claude_spend(&file, 0, &prices).entries;
+
+        assert_eq!(entries.len(), 1);
+        assert!((entries[0].cost_usd - 25.0).abs() < f64::EPSILON);
     }
 
     #[test]
