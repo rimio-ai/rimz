@@ -522,6 +522,77 @@ fn warm_unchanged_refs_skip_trunk_base_and_head_forks() {
 }
 
 #[test]
+fn warm_unchanged_head_skips_commit_forks() {
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        return;
+    }
+    repo.write("base.txt", "base\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    let base_ref = git_line(repo.path(), &["rev-parse", "HEAD"]).unwrap();
+    write_rimz_worktree_marker(&repo, &base_ref);
+
+    assert!(repo.git(&["checkout", "-q", "-b", "feature"]));
+    repo.write("feature.txt", "feature\n");
+    let _ = repo.git(&["add", "feature.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "feature"]);
+
+    let cold = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+    assert_eq!(cold.clean, Some(true));
+    assert_eq!(cold.commits, Some(1));
+    assert_eq!(cold.behind, Some(0));
+    assert_eq!(cold.landed, Some(false));
+    assert_eq!(cold.did_work, Some(true));
+    assert!(cold.head_sha.is_some());
+    assert!(cold.trunk_sha.is_some());
+    assert!(cold.merge_base.is_some());
+
+    let before = crate::proc::testkit::spawn_count();
+    let warm = refresh_entry(repo.path_str(), Some(&cold), DueFacts::all(), None);
+    assert_eq!(
+        crate::proc::testkit::spawn_count() - before,
+        2,
+        "unchanged HEAD pays only diff and status; commit facts carry forward"
+    );
+    assert_eq!(warm.commits, cold.commits);
+    assert_eq!(warm.behind, cold.behind);
+    assert_eq!(warm.landed, cold.landed);
+    assert_eq!(warm.did_work, cold.did_work);
+
+    repo.write("dirty.txt", "dirty\n");
+    let before = crate::proc::testkit::spawn_count();
+    let dirty = refresh_entry(repo.path_str(), Some(&warm), DueFacts::all(), None);
+    assert!(
+        crate::proc::testkit::spawn_count() - before > 2,
+        "changed clean verdict re-probes commit facts even with stable HEAD"
+    );
+    assert_eq!(dirty.commits, Some(1));
+    assert_eq!(dirty.landed, None);
+
+    let before = crate::proc::testkit::spawn_count();
+    let dirty_warm = refresh_entry(repo.path_str(), Some(&dirty), DueFacts::all(), None);
+    assert_eq!(
+        crate::proc::testkit::spawn_count() - before,
+        2,
+        "unchanged dirty HEAD still carries forward commit facts"
+    );
+    assert_eq!(dirty_warm.commits, dirty.commits);
+    assert_eq!(dirty_warm.landed, dirty.landed);
+
+    repo.write("second.txt", "second\n");
+    let _ = repo.git(&["add", "dirty.txt", "second.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "second"]);
+    let before = crate::proc::testkit::spawn_count();
+    let moved = refresh_entry(repo.path_str(), Some(&dirty_warm), DueFacts::all(), None);
+    assert!(
+        crate::proc::testkit::spawn_count() - before > 2,
+        "moved HEAD re-probes commit facts"
+    );
+    assert_eq!(moved.commits, Some(2));
+}
+
+#[test]
 fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
     let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
     // `-b main` needs Git >= 2.28; an older git fails init and the helper

@@ -6,8 +6,8 @@
 //! across the fleet: one elected producer forks git and writes the shared
 //! `diff-stats.json` cache; the rest read it back.
 //!
-//! No live mux needed. We point `RIMZ_TEST_PANE_LIST` at a one-pane fixture
-//! whose `cwd` is a real on-disk git worktree (bypassing `list-panes` while
+//! No live mux needed. We point `RIMZ_TEST_PANE_LIST` at a pane fixture
+//! whose `cwd`s are real on-disk git worktrees (bypassing `list-panes` while
 //! keeping the git path), and put a `git`-shaped trace shim
 //! (`tests/fixtures/git-trace`) first on the snapshot process's PATH. The cached
 //! git path resolves to that shim; the shim logs each `git` argv then execs the
@@ -27,7 +27,7 @@ use crate::common::Env;
 
 const SESSION: &str = "rimz-diff-stats";
 
-/// One snapshot process's worktree, pane fixture, and git-shim wiring, layered
+/// One snapshot process's worktrees, pane fixture, and git-shim wiring, layered
 /// over the shared [`Env`] (XDG roots + workspace id). Shared with the
 /// enrichment-cadence guards (`performance/enrichment_cadence.rs`), which
 /// drive the same produce path against the same shim.
@@ -43,42 +43,54 @@ impl Fixture {
     /// Build the fixture, or `None` when git is unavailable (the test self-skips
     /// like the mux-binary suites).
     pub(crate) fn new() -> Option<Self> {
+        Self::with_worktrees(1)
+    }
+
+    /// Build a fixture with `count` independent git worktrees.
+    pub(crate) fn with_worktrees(count: usize) -> Option<Self> {
+        assert!(count > 0, "fixture needs at least one worktree");
         let env = Env::new();
         let real_git = find_git()?;
 
-        let worktree = env.project_root.join("worktree");
-        std::fs::create_dir_all(&worktree).expect("mkdir worktree");
-        if !init_git_worktree(&worktree, &real_git) {
-            eprintln!("git init failed; skipping diff-stats single-flight test");
-            return None;
+        // Pane cwd is the worktree. With no recorded workspace, the snapshot's
+        // project root is `None`, so each cwd groups as a `Worktree` and the git
+        // probes run against it.
+        let mut panes = Vec::with_capacity(count);
+        for idx in 0..count {
+            let worktree = if count == 1 {
+                env.project_root.join("worktree")
+            } else {
+                env.project_root.join(format!("worktree-{idx:02}"))
+            };
+            std::fs::create_dir_all(&worktree).expect("mkdir worktree");
+            if !init_git_worktree(&worktree, &real_git) {
+                eprintln!("git init failed; skipping diff-stats single-flight test");
+                return None;
+            }
+            panes.push(PaneRef {
+                pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{idx}")),
+                session_name: SESSION.to_owned(),
+                view_id: None,
+                view_kind: None,
+                view_name: None,
+                is_focused: false,
+                is_floating: false,
+                command: Some("bash".to_owned()),
+                spawn_command: None,
+                cwd: Some(worktree.to_string_lossy().into_owned()),
+                pane_pid: None,
+                pane_process_start: None,
+                hosted_agent_kind: None,
+                hosted_agent_process_start: None,
+                resumed_session_id: None,
+                elevated_agent: None,
+                first_seen_at_ms: None,
+            });
         }
-
-        // One pane whose cwd is the worktree. With no recorded workspace, the
-        // snapshot's project root is `None`, so the cwd groups as a `Worktree`
-        // and the git probes run against it.
-        let pane = PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_0"),
-            session_name: SESSION.to_owned(),
-            view_id: None,
-            view_kind: None,
-            view_name: None,
-            is_focused: false,
-            is_floating: false,
-            command: Some("bash".to_owned()),
-            spawn_command: None,
-            cwd: Some(worktree.to_string_lossy().into_owned()),
-            pane_pid: None,
-            pane_process_start: None,
-            hosted_agent_kind: None,
-            hosted_agent_process_start: None,
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
-        };
         let panes_path = env.project_root.join("panes.json");
         std::fs::write(
             &panes_path,
-            serde_json::to_vec(&[pane]).expect("serialize panes"),
+            serde_json::to_vec(&panes).expect("serialize panes"),
         )
         .expect("write panes fixture");
 
@@ -178,13 +190,9 @@ impl Fixture {
             .expect("spawn rimz sidebar snapshot --no-produce")
     }
 
-    /// Trace-log lines mentioning the per-worktree `git` forks, by marker.
+    /// Trace-log commands mentioning the per-worktree `git` forks, by marker.
     pub(crate) fn git_forks(&self, marker: &str) -> usize {
-        std::fs::read_to_string(&self.git_log)
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| line.contains(marker))
-            .count()
+        self.git_log_contents().matches(marker).count()
     }
 
     pub(crate) fn git_log_len(&self) -> usize {
@@ -198,6 +206,59 @@ impl Fixture {
     pub(crate) fn git_log_contents(&self) -> String {
         std::fs::read_to_string(&self.git_log).unwrap_or_default()
     }
+}
+
+/// A cold producer probes every live worktree once, then warm concurrent tabs
+/// read the shared cache without adding forks.
+#[test]
+fn diff_stats_single_flights_across_many_worktrees() {
+    const WORKTREES: usize = 32;
+    const TABS: usize = 4;
+
+    let Some(fixture) = Fixture::with_worktrees(WORKTREES) else {
+        return;
+    };
+
+    let cold = fixture.run_snapshot();
+    assert!(
+        cold.status.success(),
+        "cold snapshot failed:\n{}",
+        String::from_utf8_lossy(&cold.stderr),
+    );
+    assert_eq!(
+        fixture.git_forks("numstat"),
+        WORKTREES,
+        "the cold producer probes each worktree exactly once:\n{}",
+        fixture.git_log_contents(),
+    );
+    assert_eq!(
+        fixture.git_forks("merge-base"),
+        WORKTREES,
+        "the cold producer resolves each worktree's merge-base exactly once:\n{}",
+        fixture.git_log_contents(),
+    );
+    let after_cold = fixture.git_log_len();
+
+    let children: Vec<_> = (0..TABS)
+        .map(|_| fixture.snapshot_command().spawn().expect("spawn snapshot"))
+        .collect();
+    let outputs: Vec<Output> = children
+        .into_iter()
+        .map(|child| child.wait_with_output().expect("wait snapshot"))
+        .collect();
+    for output in &outputs {
+        assert!(
+            output.status.success(),
+            "warm snapshot failed:\n{}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    assert_eq!(
+        fixture.git_log_len(),
+        after_cold,
+        "warm concurrent snapshots must read the cache without new git forks:\n{}",
+        fixture.git_log_contents(),
+    );
 }
 
 /// Across a burst of concurrent snapshot processes, one producer forks git and

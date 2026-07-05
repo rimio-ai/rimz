@@ -1,11 +1,14 @@
 //! The per-worktree git facts: the activity-tiered, single-flighted diff-stats
 //! refresh (trunk ref → merge-base → numstat + status → one folded `rev-parse`
 //! for head/branch/merge state → landed verdict + one `rev-list --left-right`),
-//! and their parsers. An unborn HEAD makes the folded `rev-parse` fail, so
-//! head/branch/merge facts publish as absent until the first commit.
+//! and their parsers. Commit-tier facts (ahead/behind, landed, did_work) carry
+//! forward while HEAD/trunk and the clean verdict stay unchanged. An unborn HEAD
+//! makes the folded `rev-parse` fail, so head/branch/merge facts publish as
+//! absent until the first commit.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use jiff::SignedDuration;
@@ -422,9 +425,9 @@ struct HeadFacts {
     merge_in_progress: Option<bool>,
 }
 
-/// Most worktrees probed concurrently. Each worktree's own chain stays
-/// sequential (merge-base needs the trunk ref), but independent worktrees run in
-/// parallel; the cap keeps a many-worktree fleet from bursting a fork storm.
+/// Most worktrees probed concurrently. A bounded worker pool keeps independent
+/// worktrees saturated while each worktree's own chain stays sequential; the cap
+/// keeps a many-worktree fleet from bursting a fork storm.
 const MAX_PARALLEL_GIT: usize = 8;
 
 /// Refresh several worktrees' due diff-stats facts concurrently, returning each
@@ -437,30 +440,40 @@ fn refresh_entries(
     cache: &DiffStatsCache,
     configured_trunk: Option<&str>,
 ) -> Vec<(String, DiffStatsCacheEntry)> {
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let lane = crate::lane::current();
+    let next = AtomicUsize::new(0);
+    let workers = MAX_PARALLEL_GIT.min(paths.len());
     let mut out = Vec::with_capacity(paths.len());
-    for chunk in paths.chunks(MAX_PARALLEL_GIT) {
-        let lane = crate::lane::current();
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = chunk
-                .iter()
-                .map(|(path, due)| {
-                    let prior = cache.entries.get(path.as_str()).cloned();
-                    scope.spawn(move || {
-                        crate::lane::set(lane);
-                        (
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    crate::lane::set(lane);
+                    let mut local = Vec::new();
+                    loop {
+                        let idx = next.fetch_add(1, Ordering::Relaxed);
+                        let Some((path, due)) = paths.get(idx) else {
+                            break;
+                        };
+                        let prior = cache.entries.get(path.as_str()).cloned();
+                        local.push((
                             path.clone(),
                             refresh_entry(path, prior.as_ref(), *due, configured_trunk),
-                        )
-                    })
+                        ));
+                    }
+                    local
                 })
-                .collect();
-            for handle in handles {
-                if let Ok(entry) = handle.join() {
-                    out.push(entry);
-                }
+            })
+            .collect();
+        for handle in handles {
+            if let Ok(local) = handle.join() {
+                out.extend(local);
             }
-        });
-    }
+        }
+    });
     out
 }
 
@@ -510,18 +523,24 @@ fn refresh_entry(
         entry.merge_in_progress = local.merge_in_progress;
     }
     if due.commit {
-        let commit = refresh_commit_facts(
-            worktree,
-            base.as_deref(),
-            trunk.as_deref(),
-            entry.clean,
-            head.head_sha.as_deref(),
-        );
-        entry.commits = commit.commits;
-        entry.behind = commit.behind;
-        entry.trunk = commit.trunk;
-        entry.landed = commit.landed;
-        entry.did_work = commit.did_work;
+        let reuse = refs
+            .as_ref()
+            .zip(prior)
+            .is_some_and(|(refs, prior)| cached_commit_facts_match(prior, refs, entry.clean));
+        if !reuse {
+            let commit = refresh_commit_facts(
+                worktree,
+                base.as_deref(),
+                trunk.as_deref(),
+                entry.clean,
+                head.head_sha.as_deref(),
+            );
+            entry.commits = commit.commits;
+            entry.behind = commit.behind;
+            entry.trunk = commit.trunk;
+            entry.landed = commit.landed;
+            entry.did_work = commit.did_work;
+        }
     }
     if let Some(refs) = refs {
         entry.head_sha = Some(refs.head_sha);
@@ -548,6 +567,29 @@ fn cached_refs_match(prior: &DiffStatsCacheEntry, refs: &super::git_refs::GitRef
         && prior.trunk_sha.as_deref() == Some(refs.trunk_sha.as_str())
         && prior.trunk.as_deref() == Some(refs.trunk_name.as_str())
         && prior.merge_base.is_some()
+}
+
+fn cached_commit_facts_match(
+    prior: &DiffStatsCacheEntry,
+    refs: &super::git_refs::GitRefs,
+    clean: Option<bool>,
+) -> bool {
+    cached_refs_match(prior, refs)
+        && prior.commit_refreshed_at_ms.is_some()
+        && prior.clean == clean
+        && prior.commits.is_some()
+        && prior.behind.is_some()
+        && prior.trunk.as_deref() == Some(refs.trunk_name.as_str())
+        && landed_fact_reusable(prior)
+}
+
+fn landed_fact_reusable(prior: &DiffStatsCacheEntry) -> bool {
+    matches!(
+        (prior.commits, prior.clean, prior.landed),
+        (Some(0), _, Some(true))
+            | (Some(_), Some(true), Some(_))
+            | (Some(_), Some(false) | None, None)
+    )
 }
 
 fn refresh_local_facts(

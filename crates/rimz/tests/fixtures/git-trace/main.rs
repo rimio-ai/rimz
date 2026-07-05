@@ -21,17 +21,19 @@ fn main() {
     let real_git = env::var_os("RIMZ_TEST_REAL_GIT").expect("RIMZ_TEST_REAL_GIT unset");
     let args: Vec<String> = env::args().skip(1).collect();
 
-    let line = std::iter::once("git")
+    let mut line = std::iter::once("git")
         .chain(args.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join("\t");
+    line.push('\n');
     {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log_path)
             .expect("open git trace log");
-        writeln!(file, "{line}").expect("write git trace line");
+        file.write_all(line.as_bytes())
+            .expect("write git trace line");
     }
 
     // exec replaces this process image with the real git, preserving stdio and
