@@ -276,7 +276,8 @@ fn pr_state_marker(state: WorktreePrState) -> (GlyphRole, Component) {
 /// diverged branch `⑂`). `None` for the trunk worktree itself (`trunk_sync`
 /// `None`), whose header keeps the plain cluster.
 fn trunk_marker(group: &SidebarWorktreeGroup) -> Option<(GlyphRole, Component)> {
-    if group.trunk_sync == Some(WorktreeTrunkSync::Reconciling) {
+    let sync = group.trunk_sync?;
+    if sync == WorktreeTrunkSync::Reconciling {
         return Some((
             GlyphRole::WorktreeReconciling,
             Component::WorktreeReconciling,
@@ -285,7 +286,7 @@ fn trunk_marker(group: &SidebarWorktreeGroup) -> Option<(GlyphRole, Component)> 
     if let Some(state) = group.pr_state {
         return Some(pr_state_marker(state));
     }
-    Some(match group.trunk_sync? {
+    Some(match sync {
         WorktreeTrunkSync::Merged => (GlyphRole::WorktreeTrunkMerge, Component::WorktreeMerged),
         WorktreeTrunkSync::Pristine => (GlyphRole::WorktreeTrunkEqual, Component::WorktreePristine),
         WorktreeTrunkSync::Diverged => (GlyphRole::WorktreeTrunkBranch, Component::BranchDelta),

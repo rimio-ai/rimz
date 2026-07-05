@@ -403,6 +403,36 @@ fn render_trunk_worktree_skips_the_landed_marker() {
 }
 
 #[test]
+fn render_trunk_worktree_pr_state_keeps_plain_cluster() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine"),
+        Some("main"),
+        None,
+    );
+    codex.last_activity = fixed_now() - Duration::from_secs(30);
+    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let group = &mut snapshot.worktree_groups[0];
+    group.diff_added = Some(3);
+    group.diff_removed = Some(1);
+    group.commits_ahead = Some(2);
+    group.trunk = Some("main".to_owned());
+    group.trunk_sync = None;
+    group.pr_state = Some(crate::WorktreePrState::Open);
+
+    let rendered = snapshot_to_screen(&snapshot, 42, 14);
+
+    assert!(rendered.contains("⇡2"), "header:\n{rendered}");
+    assert!(rendered.contains("+3 -1"), "header:\n{rendered}");
+    assert!(
+        !rendered.contains("⊙ main"),
+        "trunk worktree keeps the plain cluster:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_merged_worktree_uses_merge_glyph_on_left() {
     let codex = agent(
         "codex-1",
