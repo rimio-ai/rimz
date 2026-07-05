@@ -6,6 +6,10 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/rimio/rimz"
+# True floor for the current lock: libsqlite3-sys 0.38.1 (via rusqlite 0.40,
+# bundled sqlite) uses the cfg_select! macro, stable since Rust 1.95 — above the
+# let-chains/dep-declared 1.88. Verify with `cargo +1.95 check --locked`.
+rust-version = "1.95"
 version = "0.1.0"
 
 [workspace.lints.clippy]

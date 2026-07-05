@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 description = "The control room for your coding agents: a realtime tmux/Zellij dashboard for fleets of Claude Code, Codex, and Pi agents."
 homepage = "https://github.com/rimio/rimz"
 readme = "../../README.md"
