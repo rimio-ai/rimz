@@ -76,10 +76,12 @@ Every `rimz web open` enables browser sharing at runtime. Rimz first seeds Zelli
 The local process first runs a non-PTY prep command on the remote host:
 
 ```text
-ssh -o ConnectTimeout=10 -- <host> '<PATH repair>; exec rimz web open --print --json ...'
+ssh -o ConnectTimeout=10 -- <host> '<PATH repair>; export TERM=xterm-256color; exec rimz web open --print --json ...'
 ```
 
 That remote `rimz web open` resolves or verifies the workspace, births the Rimz room when the target is a path, enables sharing through the presence plugin, starts the remote Zellij web server when allowed, relays its stderr notes through the local tunnel command, and returns `rimz.web.v1` without minting a token. A project whose room is already live under tmux, old remote Rimz, old Zellij, or disabled web capability fails here before browser access opens.
+
+The prep command births browser panes under `xterm-256color`, the xterm.js-compatible terminfo, because Zellij's session server forks their `TERM` from this non-PTY command and would otherwise leave ncurses apps with the unusable `unknown` default.
 
 Remote web creates and relays a one-time Zellij login token under a short banner before opening the browser. Local `rimz web open` also mints and shows a one-time token for human output. `token_count` remains in `rimz.web.v1` as server state, not as proof this browser is logged in or that the user still holds a token value. Rimz never stores the token and never puts it in the URL.
 

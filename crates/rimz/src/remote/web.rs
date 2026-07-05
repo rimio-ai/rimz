@@ -59,7 +59,7 @@ fn web_snippet(target: &RemoteTarget, rimz: &str) -> String {
     format!(
         "{}; \
          command -v rimz >/dev/null 2>&1 || {{ echo {not_found} >&2; exit {code}; }}; \
-         exec {rimz}",
+         export TERM=xterm-256color; exec {rimz}",
         remote_path_prefix(),
         code = REMOTE_RIMZ_MISSING_EXIT,
     )
@@ -81,6 +81,11 @@ mod tests {
         assert!(
             session.args[4]
                 .contains("exec rimz web open --print --json --session 'rimz-project-a1b2c3'"),
+            "{}",
+            session.args[4]
+        );
+        assert!(
+            session.args[4].contains("export TERM=xterm-256color; exec rimz web open"),
             "{}",
             session.args[4]
         );

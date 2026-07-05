@@ -93,6 +93,14 @@ impl ZellijBackend {
         for (key, value) in crate::workspace::pin_env(&opts.workspace_id, &opts.project_root) {
             spec = spec.env(key, value);
         }
+        // Zellij fixes each pane's TERM at server birth from this process's
+        // environment and never re-asserts it. A non-PTY birth carries no TERM,
+        // so ncurses apps in the room see the compiled default `unknown` and
+        // shell line editing breaks. Stamp the xterm.js-compatible baseline
+        // when the birth env has none; a real terminal's TERM rides through.
+        if let Some(term) = birth_term(std::env::var("TERM").ok().as_deref()) {
+            spec = spec.env("TERM", term);
+        }
         let spawn = || -> Result<bool> {
             let output = spec.clone().cwd(opts.cwd.clone()).output_raw()?;
             if output.status.success() {
@@ -747,11 +755,18 @@ fn stable_client_present(probes: &[BTreeSet<u32>]) -> bool {
     !common.is_empty()
 }
 
+fn birth_term(current: Option<&str>) -> Option<&'static str> {
+    match current {
+        Some(term) if !term.is_empty() => None,
+        _ => Some("xterm-256color"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::stable_client_present;
+    use super::{birth_term, stable_client_present};
 
     #[test]
     fn stable_client_present_requires_one_id_across_every_probe() {
@@ -784,5 +799,13 @@ mod tests {
             !stable_client_present(&[BTreeSet::from([1]), BTreeSet::new()]),
             "drained roster is detached"
         );
+    }
+
+    #[test]
+    fn birth_term_fills_only_a_missing_value() {
+        assert_eq!(birth_term(None), Some("xterm-256color"));
+        assert_eq!(birth_term(Some("")), Some("xterm-256color"));
+        assert_eq!(birth_term(Some("xterm-ghostty")), None);
+        assert_eq!(birth_term(Some("alacritty")), None);
     }
 }
