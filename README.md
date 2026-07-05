@@ -72,7 +72,7 @@ Rimz is a realtime dashboard for harnessing agentic coding: one human and tens o
 
 ```sh
 # 1 — Install
-cargo install rimz                          # or a Homebrew tap (see Install)
+cargo install --locked rimz                 # or a Homebrew tap (see Install)
 
 # 2 — Open the room
 cd ~/code/query-engine
@@ -134,7 +134,7 @@ Adapters are thin layers over the same hook and transcript primitives ([agents i
 ## Install
 
 ```sh
-cargo install rimz
+cargo install --locked rimz
 
 # or via a Homebrew tap — tap once, then install:
 brew tap rimio/rimz

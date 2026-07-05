@@ -113,6 +113,15 @@ required-features = ["testkit"]
 [lints]
 workspace = true
 
+# Duplicated from the workspace root: profiles apply only from the build root,
+# so a standalone `cargo install rimz` build ignores the workspace profile and
+# would lose fail-fast release arithmetic. Keeping this here preserves
+# overflow-checks for published-crate builds. Cost: workspace builds emit one
+# "profiles for the non-root package `rimz` will be ignored" warning — expected,
+# not a failure.
+[profile.release]
+overflow-checks = true
+
 [dependencies]
 anstream.workspace = true
 anstyle.workspace = true

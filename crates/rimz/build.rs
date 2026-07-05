@@ -71,6 +71,15 @@ fn emit_build_profile() {
 fn emit_build_version() {
     let package_version = env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION set by cargo");
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let vcs_info = manifest.join(".cargo_vcs_info.json");
+    println!("cargo:rerun-if-changed={}", vcs_info.display());
+    // Packaged/registry builds carry `.cargo_vcs_info.json` (cargo writes it even
+    // under --allow-dirty). The crate dir isn't a git repo but an enclosing dir
+    // might be, so skip the git walk and use the crate version verbatim.
+    if vcs_info.exists() {
+        println!("cargo:rustc-env=RIMZ_VERSION={package_version}");
+        return;
+    }
     emit_git_rerun_paths(&manifest);
     let version =
         git_build_version(&manifest, &package_version).unwrap_or_else(|| package_version.clone());
