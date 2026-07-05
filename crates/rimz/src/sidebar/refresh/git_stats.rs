@@ -579,7 +579,6 @@ fn cached_commit_facts_match(
         && prior.clean == clean
         && prior.commits.is_some()
         && prior.behind.is_some()
-        && prior.trunk.as_deref() == Some(refs.trunk_name.as_str())
         && landed_fact_reusable(prior)
 }
 
