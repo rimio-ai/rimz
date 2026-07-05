@@ -7,7 +7,9 @@ use super::*;
 /// that brand hue muted to the body tier, so a calm unselected card still reads
 /// as its provider; an unread row carries the chosen unread effect — a single
 /// styled span for blink/bright, one span per character for the flowing shimmer.
-/// Unknown providers fall back to mid-gray chrome.
+/// The tone resolves from a matched provider panel, then the registered kind's
+/// descriptor brand, then mid-gray chrome for a kind with no registered
+/// descriptor.
 pub(super) fn attention_name_spans(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
@@ -19,6 +21,11 @@ pub(super) fn attention_name_spans(
         .iter()
         .find(|panel| panel.kind == kind)
         .map(|panel| theme.brand_tone(panel))
+        .or_else(|| {
+            crate::agents::descriptor_by_kind(kind).map(|descriptor| {
+                theme.brand_rgb_tone(descriptor.brand.color, Some(descriptor.brand.color_rgb))
+            })
+        })
         .unwrap_or_else(|| theme.component(Component::UnknownBrand));
     let text = ellipsize(display, NAME_MAX);
     match attention.emphasis {
@@ -181,8 +188,8 @@ pub(super) fn agent_identity_line(
     // metadata, a step under the soft stat figures — over `·` seams of the
     // same weight. The glyph holds its fixed status tone; the unread attention
     // effect supplies any motion. The display handle reads at normal weight in
-    // the provider's brand color (or mid-gray chrome for unknown kinds); the
-    // bright slot is saved for the task below.
+    // the provider's brand color (or mid-gray chrome for kinds with no
+    // registered descriptor); the bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
         agent_lead_cell(theme, row, status, attention, animation_phase),
         Span::raw(" "),
@@ -244,4 +251,54 @@ pub(super) fn display_context_window(row: &SidebarRow) -> Option<u64> {
                 })
         })
         .filter(|window| *window > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ThemeConfig, ThemeMode};
+
+    fn normal_attention() -> CardAttention {
+        CardAttention {
+            emphasis: CardEmphasis::Normal,
+            anim: None,
+        }
+    }
+
+    fn truecolor_theme() -> Theme {
+        Theme::fixed_for_theme(
+            false,
+            &ThemeConfig {
+                mode: ThemeMode::Truecolor,
+                ..ThemeConfig::default()
+            },
+        )
+    }
+
+    #[test]
+    fn attention_name_registered_kind_uses_descriptor_brand_without_provider_panel() {
+        let theme = truecolor_theme();
+
+        let spans = attention_name_spans(&theme, &[], "claude", "claude", normal_attention());
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].style.fg, Some(theme.clay()));
+        assert_ne!(
+            spans[0].style.fg,
+            Some(theme.component(Component::UnknownBrand))
+        );
+    }
+
+    #[test]
+    fn attention_name_unregistered_kind_without_provider_panel_uses_unknown_brand() {
+        let theme = truecolor_theme();
+
+        let spans = attention_name_spans(&theme, &[], "nope", "nope", normal_attention());
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            spans[0].style.fg,
+            Some(theme.component(Component::UnknownBrand))
+        );
+    }
 }

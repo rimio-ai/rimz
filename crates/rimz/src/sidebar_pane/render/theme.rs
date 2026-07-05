@@ -438,14 +438,20 @@ impl Theme {
         self.style(VALUE_FLASH_INK, Modifier::BOLD)
     }
 
+    /// A brand tone from its 256-color index plus optional truecolor RGB,
+    /// resolved at the active depth.
+    pub(crate) fn brand_rgb_tone(&self, color: u8, color_rgb: Option<(u8, u8, u8)>) -> Color {
+        match (self.depth, color_rgb) {
+            (ColorDepth::Truecolor, Some((red, green, blue))) => Color::Rgb(red, green, blue),
+            _ => Color::Indexed(color),
+        }
+    }
+
     pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
         if let Some(role) = panel.color_role {
             return self.palette.role_tone(role);
         }
-        match (self.depth, panel.color_rgb) {
-            (ColorDepth::Truecolor, Some((red, green, blue))) => Color::Rgb(red, green, blue),
-            _ => Color::Indexed(panel.color),
-        }
+        self.brand_rgb_tone(panel.color, panel.color_rgb)
     }
 }
 
