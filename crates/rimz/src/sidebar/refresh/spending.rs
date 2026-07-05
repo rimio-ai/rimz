@@ -13,6 +13,7 @@ use crate::agents::spending::{
     compute_scoped_spending, discover_spending_files, read_provider_spending_cache,
     read_spending_cache, unix_secs_now,
 };
+use crate::harness::schedule::run_log;
 use crate::ledger::parse_cache::FileStamp;
 use crate::sidebar::timing::SPENDING_STALE_GRACE;
 use crate::sidebar::timing::unix_now_ms;
@@ -190,10 +191,12 @@ fn derive_workspace_spending(
     spec: &HeadlineSpec,
 ) -> WorkspaceSpendingCache {
     let cursor_path = runtime.shared_spending_cursor_path();
+    let automation_signature = run_log::automation_signature();
     let key = WorkspaceDeriveKey {
         cursor_path: cursor_path.clone(),
         cursor_stamp: FileStamp::of(&cursor_path),
         files_signature: discovered_files_signature(files),
+        automation_signature,
         scope_hash: scope_hash.clone(),
         source_refreshed_at_ms,
         headline: spec.clone(),
@@ -206,7 +209,15 @@ fn derive_workspace_spending(
     }
 
     let cursor = read_spending_cache(&cursor_path);
-    let scoped = compute_scoped_spending(files, &cursor, scope, unix_secs_now(), spec);
+    let automation_files = run_log::automation_transcripts();
+    let scoped = compute_scoped_spending(
+        files,
+        &cursor,
+        &automation_files,
+        scope,
+        unix_secs_now(),
+        spec,
+    );
     let workspace = WorkspaceSpendingCache {
         version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
         refreshed_at_ms: source_refreshed_at_ms,
@@ -236,6 +247,7 @@ struct WorkspaceDeriveKey {
     cursor_path: PathBuf,
     cursor_stamp: FileStamp,
     files_signature: u64,
+    automation_signature: u64,
     scope_hash: String,
     source_refreshed_at_ms: u64,
     headline: HeadlineSpec,
@@ -345,11 +357,14 @@ fn walk_fleet_spending(
         pricing::PriceBook::embedded()
     };
     let origin_overrides = codex_origin_overrides(snapshot);
+    let automation_files = run_log::automation_transcripts();
     let req = WalkRequest {
         files: &files,
         prices: &prices,
         now_secs,
         origin_overrides: &origin_overrides,
+        automation_files: &automation_files,
+        automation_signature: run_log::automation_signature(),
         scope: Some(&scope),
         spec,
     };
@@ -358,6 +373,7 @@ fn walk_fleet_spending(
             runtime,
             provider_path: provider_path.clone(),
             files: &files,
+            automation_files: &automation_files,
             now_secs,
             scope: Some(&scope),
             scope_hash: scope_hash.clone(),
@@ -418,6 +434,7 @@ struct PublishingWalkObserver<'a> {
     runtime: &'a RuntimePaths,
     provider_path: PathBuf,
     files: &'a [(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    automation_files: &'a std::collections::HashSet<PathBuf>,
     now_secs: u64,
     scope: Option<&'a crate::agents::spending::SpendScope>,
     scope_hash: Option<String>,
@@ -430,6 +447,7 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
         let result = crate::agents::spending::aggregate_walk_publish(
             self.files,
             cache,
+            self.automation_files,
             self.now_secs,
             self.scope,
             self.spec,
@@ -513,6 +531,7 @@ fn workspace_cache_from_shared_entries(
         return Some(Default::default());
     };
     let cache = read_spending_cache(&runtime.shared_spending_cursor_path());
+    let automation_files = run_log::automation_transcripts();
     let has_discovered_cache = files.iter().any(|(_, file)| {
         cache
             .files
@@ -521,7 +540,14 @@ fn workspace_cache_from_shared_entries(
     if !provider.spending.total.is_zero() && !has_discovered_cache {
         return None;
     }
-    let scoped = compute_scoped_spending(files, &cache, scope, unix_secs_now(), spec);
+    let scoped = compute_scoped_spending(
+        files,
+        &cache,
+        &automation_files,
+        scope,
+        unix_secs_now(),
+        spec,
+    );
     let workspace = reconciled_workspace_cache(
         runtime,
         scope_hash,

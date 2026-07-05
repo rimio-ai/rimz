@@ -21,7 +21,7 @@ mod time;
 use std::cell::Cell;
 #[cfg(test)]
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -178,6 +178,7 @@ struct SpendingMemo {
 struct SpendingMemoKey {
     generation: u64,
     files_signature: u64,
+    automation_signature: u64,
 }
 
 pub struct WalkRequest<'a> {
@@ -185,6 +186,8 @@ pub struct WalkRequest<'a> {
     pub prices: &'a PriceBook,
     pub now_secs: u64,
     pub origin_overrides: &'a HashMap<PathBuf, PathBuf>,
+    pub automation_files: &'a HashSet<PathBuf>,
+    pub automation_signature: u64,
     pub scope: Option<&'a SpendScope>,
     pub spec: &'a HeadlineSpec,
 }
@@ -313,11 +316,13 @@ impl SpendingWalker {
         let key = SpendingMemoKey {
             generation: self.cache.generation,
             files_signature: spending_files_signature(req.files),
+            automation_signature: req.automation_signature,
         };
         if self.memo.as_ref().is_none_or(|memo| memo.key != key) {
             self.memo = Some(SpendingMemo {
                 key,
-                counted: dedup_cached_entries_owned(req.files, &self.cache).into_counted(),
+                counted: dedup_cached_entries_owned(req.files, &self.cache, req.automation_files)
+                    .into_counted(),
             });
             stats.dedup_passes = 1;
         }
@@ -417,11 +422,12 @@ pub fn session_cost_usd(
 pub(crate) fn aggregate_walk_publish(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
+    automation_files: &HashSet<PathBuf>,
     now_secs: u64,
     scope: Option<&SpendScope>,
     spec: &HeadlineSpec,
 ) -> SpendingWalkResult {
-    let counted = dedup_cached_entries(files, cache).into_counted();
+    let counted = dedup_cached_entries(files, cache, automation_files).into_counted();
     aggregate_walk_publish_from_counted(
         files,
         cache,
@@ -465,6 +471,7 @@ pub struct ScopedSpending {
 pub fn compute_scoped_spending(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
+    automation_files: &HashSet<PathBuf>,
     scope: &SpendScope,
     now_secs: u64,
     spec: &HeadlineSpec,
@@ -472,7 +479,7 @@ pub fn compute_scoped_spending(
     if scope.is_empty() {
         return ScopedSpending::default();
     }
-    let deduped = dedup_cached_entries(files, cache);
+    let deduped = dedup_cached_entries(files, cache, automation_files);
     let counted = deduped.into_counted();
     let aggregate =
         aggregate_counted_rollups(files, cache, &counted, Some(scope), now_secs, spec, false);

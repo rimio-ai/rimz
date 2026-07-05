@@ -74,7 +74,7 @@ fn token_windows_and_native_sessions_populate_public_tallies() {
         ..Default::default()
     };
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(opencode_adapter(), native_file)];
-    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
     assert_eq!(spending.total.headline.sessions, 1);
     assert_eq!(spending.total.week.sessions, 2);
@@ -117,7 +117,7 @@ fn headline_cutoffs_are_global_scoped_and_provider_local() {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
     };
-    let counted = dedup_cached_entries(&files, &today_cache).into_counted();
+    let counted = dedup_cached_entries(&files, &today_cache, &HashSet::new()).into_counted();
     let global = aggregate_spending(&files, &today_cache, &counted, NOW_SECS, &today_spec);
     let scoped = compute_scoped_tally(
         &files,
@@ -183,6 +183,97 @@ fn headline_cutoffs_are_global_scoped_and_provider_local() {
     );
     assert_eq!(scoped.headline.usd, 0.0);
     assert!((scoped.week.usd - 5.0).abs() < 1e-9);
+}
+
+#[test]
+fn automation_entries_do_not_bridge_session_idle_gaps() {
+    const HOUR: u64 = 3_600;
+    let first_file = PathBuf::from("/tmp/rimz/first.jsonl");
+    let automation_file = PathBuf::from("/tmp/rimz/automation.jsonl");
+    let second_file = PathBuf::from("/tmp/rimz/second.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+        (claude_adapter(), first_file.clone()),
+        (claude_adapter(), automation_file.clone()),
+        (claude_adapter(), second_file.clone()),
+    ];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file(
+                &first_file,
+                vec![cached_entry(NOW_SECS - 9 * HOUR, 1.0, "session")],
+            ),
+            cached_file(
+                &automation_file,
+                vec![cached_entry(NOW_SECS - 4 * HOUR - HOUR / 2, 0.5, "session")],
+            ),
+            cached_file(&second_file, vec![cached_entry(NOW_SECS, 2.0, "session")]),
+        ]),
+        ..Default::default()
+    };
+    let automation_files = HashSet::from([automation_file]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Session,
+        timezone: None,
+    };
+    let baseline_counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let tagged_counted = dedup_cached_entries(&files, &cache, &automation_files).into_counted();
+
+    let baseline = aggregate_spending(&files, &cache, &baseline_counted, NOW_SECS, &spec);
+    let tagged = aggregate_spending(&files, &cache, &tagged_counted, NOW_SECS, &spec);
+
+    assert!((baseline.total.headline.usd - 3.5).abs() < 1e-9);
+    assert!((tagged.total.headline.usd - 2.0).abs() < 1e-9);
+    assert_eq!(tagged.total.headline.tokens, 15);
+    assert!((tagged.total.week.usd - 3.5).abs() < 1e-9);
+    assert!((tagged.total.month.usd - 3.5).abs() < 1e-9);
+    assert!((tagged.total.year.usd - 3.5).abs() < 1e-9);
+    assert_eq!(tagged.total.year.tokens, 45);
+    assert_eq!(
+        tagged.total.headline.sessions,
+        baseline.total.headline.sessions
+    );
+}
+
+#[test]
+fn automation_inside_human_burst_stays_in_session_window() {
+    const HOUR: u64 = 3_600;
+    let first_file = PathBuf::from("/tmp/rimz/burst-first.jsonl");
+    let automation_file = PathBuf::from("/tmp/rimz/burst-automation.jsonl");
+    let second_file = PathBuf::from("/tmp/rimz/burst-second.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+        (claude_adapter(), first_file.clone()),
+        (claude_adapter(), automation_file.clone()),
+        (claude_adapter(), second_file.clone()),
+    ];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file(
+                &first_file,
+                vec![cached_entry(NOW_SECS - HOUR, 1.0, "human-a")],
+            ),
+            cached_file(
+                &automation_file,
+                vec![cached_entry(NOW_SECS - HOUR / 2, 0.5, "automation")],
+            ),
+            cached_file(&second_file, vec![cached_entry(NOW_SECS, 2.0, "human-b")]),
+        ]),
+        ..Default::default()
+    };
+    let automation_files = HashSet::from([automation_file]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Session,
+        timezone: None,
+    };
+    let baseline_counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let tagged_counted = dedup_cached_entries(&files, &cache, &automation_files).into_counted();
+
+    let baseline = aggregate_spending(&files, &cache, &baseline_counted, NOW_SECS, &spec);
+    let tagged = aggregate_spending(&files, &cache, &tagged_counted, NOW_SECS, &spec);
+
+    assert_eq!(tagged.total.headline, baseline.total.headline);
+    assert!((tagged.total.headline.usd - 3.5).abs() < 1e-9);
+    assert_eq!(tagged.total.headline.tokens, 45);
+    assert_eq!(tagged.total.headline.sessions, 3);
 }
 
 #[test]

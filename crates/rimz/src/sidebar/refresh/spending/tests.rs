@@ -16,7 +16,7 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{SPENDING_STALE_GRACE, SPENDING_TTL};
 
 use jiff::Timestamp;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -415,10 +415,12 @@ fn publishing_walk_observer_checkpoints_workspace_carry_and_baselines() {
     };
     let live_costs = vec![("agent".to_owned(), 7.0, Some(1_000))];
     let provider_path = runtime.shared_provider_spending_path();
+    let automation_files = HashSet::new();
     let mut observer = super::PublishingWalkObserver {
         runtime: &runtime,
         provider_path,
         files: &files,
+        automation_files: &automation_files,
         now_secs,
         scope: Some(&scope),
         scope_hash: Some(scope_hash.clone()),
@@ -573,8 +575,14 @@ fn workspace_cache_from_shared_entries_reconciles_carry_and_baselines() {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
     };
-    let scoped =
-        crate::agents::spending::compute_scoped_spending(&files, &raw, &scope, now_secs, &spec);
+    let scoped = crate::agents::spending::compute_scoped_spending(
+        &files,
+        &raw,
+        &Default::default(),
+        &scope,
+        now_secs,
+        &spec,
+    );
     let mut previous_tally = crate::agents::spending::SpendTally::default();
     previous_tally.headline.usd = 1.0;
     write_workspace_spending_cache(

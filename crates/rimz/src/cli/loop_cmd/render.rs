@@ -510,6 +510,7 @@ mod tests {
             error: None,
             check: None,
             run_id: None,
+            transcript_path: None,
             last_message: None,
             target: None,
         }

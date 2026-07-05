@@ -72,7 +72,7 @@ fn compute_spending_with_origins_and_scope(
             tick: &mut tick,
         },
     );
-    let counted = dedup_cached_entries(files, cache).into_counted();
+    let counted = dedup_cached_entries(files, cache, &HashSet::new()).into_counted();
     let aggregate = aggregate_counted_rollups(files, cache, &counted, scope, now_secs, spec, false);
     (aggregate.spending, aggregate.workspace_tally)
 }
@@ -91,7 +91,7 @@ fn compute_daily_spend(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
 ) -> BTreeMap<i64, DaySpend> {
-    let counted = dedup_cached_entries(files, cache).into_counted();
+    let counted = dedup_cached_entries(files, cache, &HashSet::new()).into_counted();
     aggregate_counted_rollups(
         files,
         cache,
@@ -109,7 +109,7 @@ fn compute_model_breakdown(
     cache: &SpendingDiskCache,
     now_secs: u64,
 ) -> BTreeMap<String, SpendTally> {
-    let counted = dedup_cached_entries(files, cache).into_counted();
+    let counted = dedup_cached_entries(files, cache, &HashSet::new()).into_counted();
     aggregate_counted_rollups(
         files,
         cache,
@@ -129,19 +129,22 @@ fn compute_scoped_tally(
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> SpendTally {
-    compute_scoped_spending(files, cache, scope, now_secs, spec).tally
+    compute_scoped_spending(files, cache, &HashSet::new(), scope, now_secs, spec).tally
 }
 
 macro_rules! walk_spending {
     ($walker:expr, $cache_path:expr, $files:expr, $prices:expr, $now_secs:expr, $observer:expr) => {{
         let prices = $prices;
         let origin_overrides = HashMap::new();
+        let automation_files = HashSet::new();
         let spec = HeadlineSpec::default();
         let req = WalkRequest {
             files: $files,
             prices: &prices,
             now_secs: $now_secs,
             origin_overrides: &origin_overrides,
+            automation_files: &automation_files,
+            automation_signature: 0,
             scope: None,
             spec: &spec,
         };

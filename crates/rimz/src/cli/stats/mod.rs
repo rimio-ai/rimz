@@ -307,12 +307,15 @@ fn compute_stats_from_files(
         pricing::load_cached_for_spending(&paths.shared_pricing_cache_path())
     };
     let origin_overrides = HashMap::new();
+    let automation_files = rimz::harness::schedule::run_log::automation_transcripts();
     let spec = HeadlineSpec::default();
     let req = WalkRequest {
         files: &files,
         prices: &prices,
         now_secs,
         origin_overrides: &origin_overrides,
+        automation_files: &automation_files,
+        automation_signature: rimz::harness::schedule::run_log::automation_signature(),
         scope: None,
         spec: &spec,
     };

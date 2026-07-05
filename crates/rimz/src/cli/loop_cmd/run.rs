@@ -60,6 +60,7 @@ pub(super) fn run_one(
                 error: None,
                 check: None,
                 run_id: None,
+                transcript_path: None,
                 last_message: None,
                 target: None,
             });
@@ -104,6 +105,7 @@ fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &an
         error: Some(error.clone()),
         check: None,
         run_id: None,
+        transcript_path: None,
         last_message: None,
         target: None,
     });
@@ -350,6 +352,7 @@ fn loop_record(
         error: None,
         check: outcome.check.clone(),
         run_id: outcome.run_id.clone(),
+        transcript_path: outcome.transcript_path.clone(),
         last_message: outcome.last_message.clone(),
         target: outcome.target.clone(),
     }
@@ -534,5 +537,18 @@ mod tests {
         assert!(out.contains("run: run_0123456789abcdef01234567"));
         assert!(out.contains("transcript: /tmp/transcript.jsonl"));
         assert!(out.contains("see: rimz loop show wake"));
+    }
+
+    #[test]
+    fn loop_record_copies_transcript_path() {
+        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
+        outcome.transcript_path = Some("/tmp/rimz/session.jsonl".to_owned());
+
+        let record = loop_record("wake", LoopRunMode::Manual, 123, &outcome);
+
+        assert_eq!(
+            record.transcript_path.as_deref(),
+            Some("/tmp/rimz/session.jsonl")
+        );
     }
 }

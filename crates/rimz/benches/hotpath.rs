@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
 
@@ -226,12 +226,15 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
     let mut walker = rimz::agents::spending::SpendingWalker::new();
     if warm {
         let origin_overrides = HashMap::new();
+        let automation_files = HashSet::new();
         let spec = rimz::agents::spending::HeadlineSpec::default();
         let req = rimz::agents::spending::WalkRequest {
             files: &files,
             prices: &prices,
             now_secs: SPENDING_NOW_SECS,
             origin_overrides: &origin_overrides,
+            automation_files: &automation_files,
+            automation_signature: 0,
             scope: None,
             spec: &spec,
         };
@@ -274,12 +277,15 @@ fn spending_walk_cold(bencher: Bencher) {
         .with_inputs(|| spending_fixture(false))
         .bench_local_values(|mut fixture| {
             let origin_overrides = HashMap::new();
+            let automation_files = HashSet::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
                 files: &fixture.files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
                 origin_overrides: &origin_overrides,
+                automation_files: &automation_files,
+                automation_signature: 0,
                 scope: None,
                 spec: &spec,
             };
@@ -297,12 +303,15 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
         .with_inputs(|| spending_fixture(true))
         .bench_local_values(|mut fixture| {
             let origin_overrides = HashMap::new();
+            let automation_files = HashSet::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
                 files: &fixture.files,
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
                 origin_overrides: &origin_overrides,
+                automation_files: &automation_files,
+                automation_signature: 0,
                 scope: None,
                 spec: &spec,
             };

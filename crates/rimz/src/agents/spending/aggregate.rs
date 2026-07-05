@@ -1,6 +1,6 @@
 //! Window aggregation, scoped tallies, and cross-file deduplication for spending walks.
 
-use std::collections::{BTreeMap, HashMap, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -72,7 +72,9 @@ pub enum SpendWindowMode {
     Trailing24h,
     /// The local calendar day, using the global `timezone` when set.
     Today,
-    /// The current activity burst since the last five-hour idle gap.
+    /// The current human activity burst since the last five-hour idle gap.
+    /// Loop-fired turns count in spend totals, but do not define the burst
+    /// boundary.
     #[default]
     Session,
 }
@@ -253,6 +255,9 @@ impl CountedCutoffs {
         let mut provider_timestamps: HashMap<&'static str, Vec<u64>> = HashMap::new();
         let mut scoped_timestamps = Vec::new();
         for counted in counted {
+            if counted.is_automation() {
+                continue;
+            }
             let ts_secs = counted.entry().ts_secs;
             total_timestamps.push(ts_secs);
             provider_timestamps
@@ -456,6 +461,7 @@ pub(crate) trait DedupPayload {
 pub(crate) trait CountedPayload: DedupPayload {
     fn kind(&self) -> &'static str;
     fn origin(&self) -> Option<&Path>;
+    fn is_automation(&self) -> bool;
 }
 
 pub(crate) struct SidechainDedup<P> {
@@ -526,6 +532,7 @@ pub(crate) struct Counted<'a> {
     kind: &'static str,
     origin: Option<&'a Path>,
     entry: &'a CachedEntry,
+    is_automation: bool,
 }
 
 impl DedupPayload for Counted<'_> {
@@ -542,6 +549,10 @@ impl CountedPayload for Counted<'_> {
     fn origin(&self) -> Option<&Path> {
         self.origin
     }
+
+    fn is_automation(&self) -> bool {
+        self.is_automation
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -549,6 +560,7 @@ pub(crate) struct OwnedCounted {
     kind: &'static str,
     origin: Option<PathBuf>,
     entry: CachedEntry,
+    is_automation: bool,
 }
 
 impl DedupPayload for OwnedCounted {
@@ -565,34 +577,53 @@ impl CountedPayload for OwnedCounted {
     fn origin(&self) -> Option<&Path> {
         self.origin.as_deref()
     }
+
+    fn is_automation(&self) -> bool {
+        self.is_automation
+    }
 }
 
 pub(crate) fn dedup_cached_entries<'a>(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &'a SpendingDiskCache,
+    automation_files: &HashSet<PathBuf>,
 ) -> SidechainDedup<Counted<'a>> {
-    dedup_cached_entries_with(files, cache, |kind, cached_file, entry| Counted {
-        kind,
-        origin: cached_file.origin_path.as_deref(),
-        entry,
-    })
+    dedup_cached_entries_with(
+        files,
+        cache,
+        automation_files,
+        |kind, cached_file, entry, is_automation| Counted {
+            kind,
+            origin: cached_file.origin_path.as_deref(),
+            entry,
+            is_automation,
+        },
+    )
 }
 
 pub(crate) fn dedup_cached_entries_owned(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
+    automation_files: &HashSet<PathBuf>,
 ) -> SidechainDedup<OwnedCounted> {
-    dedup_cached_entries_with(files, cache, |kind, cached_file, entry| OwnedCounted {
-        kind,
-        origin: cached_file.origin_path.clone(),
-        entry: entry.clone(),
-    })
+    dedup_cached_entries_with(
+        files,
+        cache,
+        automation_files,
+        |kind, cached_file, entry, is_automation| OwnedCounted {
+            kind,
+            origin: cached_file.origin_path.clone(),
+            entry: entry.clone(),
+            is_automation,
+        },
+    )
 }
 
 fn dedup_cached_entries_with<'a, P: DedupPayload>(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &'a SpendingDiskCache,
-    make: impl Fn(&'static str, &'a FileCacheEntry, &'a CachedEntry) -> P,
+    automation_files: &HashSet<PathBuf>,
+    make: impl Fn(&'static str, &'a FileCacheEntry, &'a CachedEntry, bool) -> P,
 ) -> SidechainDedup<P> {
     let mut deduped = SidechainDedup::default();
     for (adapter, file) in files {
@@ -601,8 +632,10 @@ fn dedup_cached_entries_with<'a, P: DedupPayload>(
         let Some(cached_file) = cache.files.get(&key) else {
             continue;
         };
+        let is_automation = !automation_files.is_empty()
+            && automation_files.contains(&crate::worktree::normalize_path_lexical(file));
         for entry in &cached_file.entries {
-            deduped.insert(make(kind, cached_file, entry));
+            deduped.insert(make(kind, cached_file, entry, is_automation));
         }
     }
     deduped

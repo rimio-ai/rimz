@@ -6,7 +6,8 @@
 //! folds the current and rotated files for summary columns; `rimz loop show`
 //! reads the same records for per-task inspection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::harness::run::RunStatus;
+use crate::ledger::parse_cache::FileStamp;
 use crate::ledger::paths::state_home;
 
 const NAME: &str = "loop-runs.log.jsonl";
@@ -37,6 +39,8 @@ pub struct LoopRunRecord {
     pub check: Option<CheckRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,6 +153,30 @@ pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
     records
 }
 
+pub fn automation_transcripts() -> HashSet<PathBuf> {
+    automation_transcripts_in(&state_home())
+}
+
+pub(crate) fn automation_transcripts_in(state_root: &Path) -> HashSet<PathBuf> {
+    let path = log_path(state_root);
+    let mut transcripts = HashSet::new();
+    append_automation_transcripts(&rotated_path(&path), &mut transcripts);
+    append_automation_transcripts(&path, &mut transcripts);
+    transcripts
+}
+
+pub fn automation_signature() -> u64 {
+    automation_signature_in(&state_home())
+}
+
+pub(crate) fn automation_signature_in(state_root: &Path) -> u64 {
+    let path = log_path(state_root);
+    let mut hasher = DefaultHasher::new();
+    FileStamp::of(&rotated_path(&path)).hash(&mut hasher);
+    FileStamp::of(&path).hash(&mut hasher);
+    hasher.finish()
+}
+
 fn fold_file(path: &Path, stats: &mut BTreeMap<String, LoopRunStats>) {
     let Ok(file) = std::fs::File::open(path) else {
         return;
@@ -190,6 +218,25 @@ fn append_task_records(path: &Path, task: &str, records: &mut Vec<LoopRunRecord>
         };
         if record.task == task {
             records.push(record);
+        }
+    }
+}
+
+fn append_automation_transcripts(path: &Path, transcripts: &mut HashSet<PathBuf>) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    let lines = std::io::BufReader::new(file).lines();
+    for line in lines.map_while(Result::ok) {
+        let Ok(record) = serde_json::from_str::<LoopRunRecord>(&line) else {
+            continue;
+        };
+        let Some(transcript_path) = record.transcript_path.as_deref() else {
+            continue;
+        };
+        let transcript_path = crate::worktree::normalize_path_lexical(Path::new(transcript_path));
+        if transcript_path.is_absolute() {
+            transcripts.insert(transcript_path);
         }
     }
 }
@@ -237,6 +284,7 @@ mod tests {
             error: None,
             check: None,
             run_id: None,
+            transcript_path: None,
             last_message: None,
             target: None,
         }
@@ -317,6 +365,7 @@ mod tests {
             output: "missing command".to_owned(),
         });
         with_detail.run_id = Some("run_0123456789abcdef0123456789abcdef".to_owned());
+        with_detail.transcript_path = Some("/tmp/rimz/sessions/wake.jsonl".to_owned());
         with_detail.last_message = Some("last words".to_owned());
         with_detail.target = Some("@coder".to_owned());
         append_to(dir.path(), &with_detail);
@@ -333,6 +382,43 @@ mod tests {
         assert_eq!(record.result, LoopRunResult::Completed);
         assert_eq!(record.mode, None);
         assert_eq!(record.check, None);
+        assert_eq!(record.transcript_path, None);
+    }
+
+    #[test]
+    fn automation_transcripts_fold_current_and_rotated_logs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = log_path(dir.path());
+        std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
+        let mut rotated = record("codex-ping", 10, LoopRunResult::Completed);
+        rotated.transcript_path = Some("/tmp/rimz/../rimz/codex.jsonl".to_owned());
+        let mut current = record("claude-ping", 20, LoopRunResult::Completed);
+        current.transcript_path = Some("/tmp/rimz/claude.jsonl".to_owned());
+        let mut relative = record("relative", 30, LoopRunResult::Completed);
+        relative.transcript_path = Some("relative.jsonl".to_owned());
+        std::fs::write(
+            rotated_path(&path),
+            serde_json::to_string(&rotated).expect("json") + "\n",
+        )
+        .expect("write rotated");
+        std::fs::write(
+            path,
+            serde_json::to_string(&current).expect("json")
+                + "\n"
+                + &serde_json::to_string(&relative).expect("json")
+                + "\nnot json\n",
+        )
+        .expect("write current");
+
+        let transcripts = automation_transcripts_in(dir.path());
+
+        assert_eq!(
+            transcripts,
+            HashSet::from([
+                PathBuf::from("/tmp/rimz/codex.jsonl"),
+                PathBuf::from("/tmp/rimz/claude.jsonl")
+            ])
+        );
     }
 
     #[test]

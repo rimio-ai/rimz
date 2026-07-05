@@ -14,7 +14,7 @@
 //! `SPENDING_TTL` of the published stamp serves the cache verbatim and runs
 //! zero transcript IO — no discovery, no stat, no parse.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -132,12 +132,15 @@ fn modified(path: &std::path::Path) -> SystemTime {
 macro_rules! walk_spending {
     ($walker:expr, $method:ident, $cache_path:expr, $files:expr, $prices:expr, $now_secs:expr) => {{
         let origin_overrides = HashMap::new();
+        let automation_files = HashSet::new();
         let spec = HeadlineSpec::default();
         let req = WalkRequest {
             files: $files,
             prices: $prices,
             now_secs: $now_secs,
             origin_overrides: &origin_overrides,
+            automation_files: &automation_files,
+            automation_signature: 0,
             scope: None,
             spec: &spec,
         };
