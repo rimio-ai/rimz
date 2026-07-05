@@ -1534,7 +1534,7 @@ mod render {
         rimz::ledger::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
             .unwrap();
 
-        super::commands::apply_cached_daemon_reap(&mut snapshot, &runtime, "rimz-test");
+        crate::cli::apply_cached_daemon_reap(&mut snapshot, &runtime, "rimz-test");
 
         let ids = snapshot
             .agents

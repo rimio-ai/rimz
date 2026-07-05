@@ -119,9 +119,8 @@ pub(super) fn show_agent(
     // Fold the rich statusline context so the shown card — and the `--json`
     // payload — carries the real token window, not the carried-forward
     // `context_pct`.
-    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    apply_cached_daemon_reap(&mut snapshot, &runtime, &workspace.session_name);
-    let snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    let snapshot = crate::cli::alive_snapshot(&ledger, &runtime, &workspace.session_name)?
+        .with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
     let agent_result = crate::cli::resolve_agent_one(
         &snapshot,
         &reference,
@@ -269,23 +268,6 @@ pub(super) fn show_agent(
         write!(out, "{}", capture.raw_text)?;
     }
     Ok(())
-}
-
-pub(super) fn apply_cached_daemon_reap(
-    snapshot: &mut rimz::SidebarSnapshot,
-    runtime: &rimz::RuntimePaths,
-    session: &str,
-) {
-    let cache = rimz::sidebar::refresh::read_codex_daemon_reap(runtime).unwrap_or_default();
-    let frame_panes =
-        rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
-            .map(|frame| frame.to_pane_refs());
-    snapshot.reap_runtime(rimz::ledger::snapshot::RuntimeReapInputs {
-        daemon_pids: &cache.daemon_pids,
-        loaded: cache.loaded.as_ref(),
-        frame_panes: frame_panes.as_deref(),
-        exclude_pane: None,
-    });
 }
 
 fn resolve_audit_agent(

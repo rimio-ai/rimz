@@ -606,6 +606,38 @@ pub(crate) fn open_ledger(workspace: &rimz::ResolvedWorkspace) -> Result<Ledger>
     Ok(ledger)
 }
 
+/// The agent roster the sidebar shows: the cached rollup with the daemon-mode
+/// reap applied, so paneless Codex ghosts the app-server no longer holds drop
+/// exactly as `rimz agents list` and the sidebar drop them. Best-effort and
+/// fail-safe — an absent daemon-reap cache keeps every session
+/// (see `SidebarSnapshot::reap_runtime`).
+pub(crate) fn alive_snapshot(
+    ledger: &Ledger,
+    runtime: &RuntimePaths,
+    session: &str,
+) -> Result<rimz::SidebarSnapshot> {
+    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    apply_cached_daemon_reap(&mut snapshot, runtime, session);
+    Ok(snapshot)
+}
+
+pub(crate) fn apply_cached_daemon_reap(
+    snapshot: &mut rimz::SidebarSnapshot,
+    runtime: &RuntimePaths,
+    session: &str,
+) {
+    let cache = rimz::sidebar::refresh::read_codex_daemon_reap(runtime).unwrap_or_default();
+    let frame_panes =
+        rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
+            .map(|frame| frame.to_pane_refs());
+    snapshot.reap_runtime(rimz::ledger::snapshot::RuntimeReapInputs {
+        daemon_pids: &cache.daemon_pids,
+        loaded: cache.loaded.as_ref(),
+        frame_panes: frame_panes.as_deref(),
+        exclude_pane: None,
+    });
+}
+
 pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()> {
     open_ledger(workspace).map(|_| ())
 }
@@ -629,6 +661,94 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             mux_hint: None,
         }
+    }
+
+    fn test_agent(
+        id: &str,
+        worktree_path: &str,
+        last_seen: jiff::Timestamp,
+    ) -> rimz::agents::AgentState {
+        rimz::agents::AgentState {
+            agent_id: id.into(),
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            name: Some(id.to_owned()),
+            kind_ordinal: None,
+            profile: None,
+            role: None,
+            team: None,
+            launch_group: None,
+            launch_ordinal: None,
+            channel: None,
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            pane: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: Some(worktree_path.to_owned()),
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            description: None,
+            transcript_path: None,
+            origin: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_compact_command_tokens: None,
+            last_seen,
+            last_activity: last_seen,
+            registered_at: Some(last_seen),
+        }
+    }
+
+    #[test]
+    fn cached_daemon_reap_drops_paneless_codex_ghost_before_worktree_pins() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = rimz::ids::WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let daemon_pid = std::process::id();
+        rimz::sidebar::refresh::write_codex_daemon_reap(
+            &runtime,
+            &rimz::sidebar::refresh::CodexDaemonReap {
+                produced_at_ms: 1,
+                daemon_pids: std::collections::BTreeSet::from([daemon_pid]),
+                loaded: Some(std::collections::BTreeSet::new()),
+            },
+        )
+        .unwrap();
+
+        let worktree_path = "/repo-worktrees/ghost";
+        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        let mut ghost = test_agent("ghost", worktree_path, now);
+        ghost.runtime_owner = Some(rimz::ledger::runtime::current_process_owner(
+            rimz::RuntimeOwnerKind::Daemon,
+            "ghost",
+        ));
+        let mut snapshot =
+            rimz::SidebarSnapshot::build_with_agents(workspace_id, Vec::new(), vec![ghost], now);
+        assert_eq!(
+            super::worktree::agent_pinned_paths(&snapshot.agents, None),
+            vec![PathBuf::from(worktree_path)]
+        );
+
+        apply_cached_daemon_reap(&mut snapshot, &runtime, "rimz-test");
+
+        assert!(snapshot.agents.is_empty());
+        assert!(super::worktree::agent_pinned_paths(&snapshot.agents, None).is_empty());
     }
 
     #[test]

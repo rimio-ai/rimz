@@ -171,16 +171,17 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
             return WorktreeSweep::default();
         }
     };
-    let snapshot = match ledger.snapshot_cached() {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            tracing::debug!(
-                error = %err,
-                "agent roster unavailable; worktree gc skipped"
-            );
-            return WorktreeSweep::default();
-        }
-    };
+    let snapshot =
+        match super::alive_snapshot(&ledger, ledger.runtime_paths(), &workspace.session_name) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    "agent roster unavailable; worktree gc skipped"
+                );
+                return WorktreeSweep::default();
+            }
+        };
     let mut protected_paths = match rimz::mux::auto_detect_backend(globals.mux) {
         Ok(mux) => rimz::mux::backend_for(mux)
             .list_panes(rimz::mux::PaneListOptions::default())

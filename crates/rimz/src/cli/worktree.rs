@@ -367,9 +367,9 @@ fn roster_binds_worktree_from_ledger(
             return false;
         }
     };
-    let snapshot = match super::open_ledger(&workspace)
-        .and_then(|ledger| ledger.snapshot_cached().map_err(Into::into))
-    {
+    let snapshot = match super::open_ledger(&workspace).and_then(|ledger| {
+        super::alive_snapshot(&ledger, ledger.runtime_paths(), &workspace.session_name)
+    }) {
         Ok(snapshot) => snapshot,
         Err(err) => {
             tracing::debug!(
