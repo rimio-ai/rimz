@@ -22,7 +22,7 @@ use tracing::warn;
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::ids::MuxName;
-use rimz::ledger::event::LastDeathMarker;
+use rimz::ledger::event::{LastDeathMarker, SessionDeathCause};
 use rimz::ledger::paths::workspaces_dir;
 
 /// Workspaces idle longer than this are hidden from the default view; `--all`
@@ -46,7 +46,7 @@ struct WorkspaceRow {
     project_root: String,
     session_name: String,
     running_on: Option<String>,
-    last_activity: Option<String>,
+    last_activity: Option<Timestamp>,
     last_death: Option<String>,
 }
 
@@ -94,9 +94,7 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
                 project_root: known.project_root.display().to_string(),
                 session_name: known.session_name,
                 running_on,
-                last_activity: last_activity
-                    .and_then(|at| Timestamp::try_from(at).ok())
-                    .map(|ts| ts.to_string()),
+                last_activity: last_activity.and_then(|at| Timestamp::try_from(at).ok()),
                 last_death,
             })
         })
@@ -118,17 +116,20 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
 fn death_for(workspace_dir: &std::path::Path) -> Option<String> {
     let marker: LastDeathMarker =
         serde_json::from_slice(&std::fs::read(workspace_dir.join("last-death.json")).ok()?).ok()?;
-    Some(format!(
-        "died: {} · {} agent{} · {}",
-        marker.cause,
-        marker.lost_agents.len(),
-        if marker.lost_agents.len() == 1 {
-            ""
-        } else {
-            "s"
-        },
-        marker.at.strftime("%Y-%m-%d %H:%M"),
-    ))
+    Some(death_summary(&marker))
+}
+
+fn death_summary(marker: &LastDeathMarker) -> String {
+    let verb = match marker.cause {
+        SessionDeathCause::Crash => "crashed",
+        SessionDeathCause::Reboot => "rebooted",
+    };
+    let at = marker.at.strftime("%Y-%m-%d %H:%M");
+    match marker.lost_agents.len() {
+        0 => format!("{verb} · {at}"),
+        1 => format!("{verb} · 1 agent · {at}"),
+        n => format!("{verb} · {n} agents · {at}"),
+    }
 }
 
 /// Best-effort "last activity" instant — newest mtime across the files that
@@ -184,13 +185,18 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
         "SESSION",
         "PROJECT_ROOT",
         "RUNNING",
-        "LAST_ACTIVITY",
-        "LAST_DEATH",
+        "LAST_SEEN",
     ]);
     for row in rows {
         let running = row.running_on.as_deref().unwrap_or("-");
-        let last = row.last_activity.as_deref().unwrap_or("-");
-        let death = row.last_death.as_deref().unwrap_or("-");
+        let activity = row
+            .last_activity
+            .as_ref()
+            .map(|ts| ts.strftime("%Y-%m-%d %H:%M").to_string());
+        let seen = match (&row.running_on, &row.last_death) {
+            (None, Some(death)) => death.as_str(),
+            _ => activity.as_deref().unwrap_or("-"),
+        };
         let running_style = if row.running_on.is_some() {
             render::palette::GOOD
         } else {
@@ -201,8 +207,7 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
             render::cell(row.session_name.as_str()),
             render::cell(row.project_root.as_str()).fg(render::palette::BODY),
             render::cell(running).fg(running_style),
-            render::cell(last).dash(),
-            render::cell(death).dash(),
+            render::cell(seen).dash(),
         ]);
     }
     table.render(&mut render::out())
@@ -211,6 +216,8 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::ids::AgentKind;
+    use rimz::ledger::event::SessionDeathAgent;
 
     #[test]
     fn recency_window_bounds() {
@@ -229,5 +236,45 @@ mod tests {
             is_recent(Some(now + Duration::from_secs(60)), now),
             "future mtime (clock skew) counts as recent"
         );
+    }
+
+    #[test]
+    fn death_summary_reports_crash_with_plural_agents() {
+        let summary = death_summary(&marker(SessionDeathCause::Crash, 8));
+
+        assert_eq!(summary, "crashed · 8 agents · 1970-01-01 00:00");
+        assert!(!summary.contains("died"), "{summary}");
+    }
+
+    #[test]
+    fn death_summary_reports_singular_agent() {
+        let summary = death_summary(&marker(SessionDeathCause::Crash, 1));
+
+        assert!(summary.contains("1 agent · "), "{summary}");
+        assert!(!summary.contains("1 agents"), "{summary}");
+        assert!(!summary.contains("died"), "{summary}");
+    }
+
+    #[test]
+    fn death_summary_omits_empty_agent_count_for_reboot() {
+        let summary = death_summary(&marker(SessionDeathCause::Reboot, 0));
+
+        assert_eq!(summary, "rebooted · 1970-01-01 00:00");
+        assert!(!summary.contains("agent"), "{summary}");
+        assert!(!summary.contains("died"), "{summary}");
+    }
+
+    fn marker(cause: SessionDeathCause, agents: usize) -> LastDeathMarker {
+        LastDeathMarker {
+            cause,
+            lost_agents: (0..agents)
+                .map(|index| SessionDeathAgent {
+                    kind: AgentKind::new_unchecked("claude"),
+                    agent_id: format!("sess-{index}").into(),
+                    name: None,
+                })
+                .collect(),
+            at: Timestamp::UNIX_EPOCH,
+        }
     }
 }
