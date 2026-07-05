@@ -148,21 +148,30 @@ pub(crate) fn apply_rate_limit_cache(
 
     let path = runtime.shared_rate_limits_path();
     if persist {
-        let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {
+        let reset_kinds = {
+            let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock())
+            else {
+                let cached = read_rate_limits_cache(&path);
+                let _ = apply_rate_limit_cache_with(snapshot, &cached, false, None);
+                return;
+            };
             let cached = read_rate_limits_cache(&path);
-            apply_rate_limit_cache_with(snapshot, &cached, false, None);
-            return;
+            let trace = rate_limits_trace_path(runtime);
+            let (next, reset_kinds) =
+                apply_rate_limit_cache_with(snapshot, &cached, true, trace.as_deref());
+            if let Some(next) = next {
+                write_rate_limits_cache(&path, &next);
+            }
+            reset_kinds
         };
-        let cached = read_rate_limits_cache(&path);
-        let trace = rate_limits_trace_path(runtime);
-        if let Some(next) = apply_rate_limit_cache_with(snapshot, &cached, true, trace.as_deref()) {
-            write_rate_limits_cache(&path, &next);
+        for kind in reset_kinds {
+            crate::sidebar::refresh::usage::invalidate_oauth_usage_throttle(runtime, &kind);
         }
         return;
     }
 
     let cached = read_rate_limits_cache(&path);
-    apply_rate_limit_cache_with(snapshot, &cached, false, None);
+    let _ = apply_rate_limit_cache_with(snapshot, &cached, false, None);
 }
 
 /// Clear the published cache once every provider has logged out, so a later
@@ -207,7 +216,7 @@ fn apply_rate_limit_cache_with(
     cached: &RateLimitsCache,
     persist: bool,
     trace: Option<&Path>,
-) -> Option<RateLimitsCache> {
+) -> (Option<RateLimitsCache>, Vec<String>) {
     // The snapshot's single projection clock, so the idle-window reset
     // projection agrees with the dashboard windows resolved on the same frame.
     let now = snapshot.now;
@@ -216,6 +225,7 @@ fn apply_rate_limit_cache_with(
         windows: BTreeMap::new(),
         pending: BTreeMap::new(),
     };
+    let mut reset_kinds = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
         // Index this kind's live (this-frame) and cached (last-known) readings by
@@ -245,6 +255,7 @@ fn apply_rate_limit_cache_with(
         // prior truth is carried unchanged for the idle projection below.
         let mut truth: BTreeMap<Option<u32>, RateLimitWindow> = BTreeMap::new();
         let mut pending: Vec<PendingRefill> = Vec::new();
+        let mut kind_reset_advanced = false;
         for duration in &durations {
             let (window, refill) = fuse_window(
                 prev.get(duration),
@@ -257,6 +268,13 @@ fn apply_rate_limit_cache_with(
                 trace_rate_limits(path, &panel.kind, live.get(duration), window, now);
             }
             if let Some(window) = window {
+                if persist
+                    && prev
+                        .get(duration)
+                        .is_some_and(|prev| reset_advanced(prev.resets_at, window.resets_at))
+                {
+                    kind_reset_advanced = true;
+                }
                 truth.insert(*duration, window);
             }
             if let Some(refill) = refill {
@@ -264,6 +282,9 @@ fn apply_rate_limit_cache_with(
             }
         }
         let cache_unknown = live.is_empty() && longest_cached_window_expired(&truth, now);
+        if persist && !cache_unknown && kind_reset_advanced {
+            reset_kinds.insert(panel.kind.clone());
+        }
 
         // Persist ground truth only: the fused readings and any in-flight refill.
         // The synthesized full or unknown windows below are never written — they
@@ -301,7 +322,7 @@ fn apply_rate_limit_cache_with(
         panel.windows = display;
     }
 
-    persist.then_some(next)
+    (persist.then_some(next), reset_kinds.into_iter().collect())
 }
 
 /// Fuse one window duration's prior truth with this frame's live reading into

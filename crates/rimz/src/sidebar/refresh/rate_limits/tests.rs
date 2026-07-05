@@ -76,6 +76,61 @@ fn producer_persists_live_windows_for_idle_fallback() {
 }
 
 #[test]
+fn producer_reset_advance_invalidates_oauth_usage_throttle() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let old_reset = Timestamp::from_second(2_000_000_000).unwrap();
+    let new_reset = old_reset + SignedDuration::from_secs(7_200);
+    write_rate_limits_cache(
+        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache {
+            refreshed_at_ms: 1,
+            windows: BTreeMap::from([(
+                "codex".to_owned(),
+                AgentRateLimits {
+                    windows: vec![rl_window(80, Some(old_reset))],
+                },
+            )]),
+            pending: BTreeMap::new(),
+        },
+    );
+    crate::sidebar::refresh::credits::merge_provider_credits_entry(
+        &runtime,
+        "codex",
+        crate::sidebar::refresh::credits::ProviderCreditsEntry {
+            observed_at_ms: 1,
+            oauth_read_at_ms: 1234,
+            ok: true,
+            extra_credits: Some(crate::agents::ExtraCredits::known(None, Some(4.0), None)),
+            reset_credits: None,
+        },
+    );
+    let marker = crate::sidebar::refresh::usage::usage_probe_marker(&runtime, "codex");
+    std::fs::write(&marker, b"").unwrap();
+
+    let mut frame = snapshot_with_panels(
+        workspace,
+        vec![provider_panel("codex", vec![rl_window(1, Some(new_reset))])],
+    );
+    apply_rate_limit_cache(&mut frame, &runtime, true);
+
+    assert!(
+        !marker.exists(),
+        "new budget epoch removes the producer spawn throttle"
+    );
+    assert_eq!(
+        crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path())
+            .entries
+            .get("codex")
+            .map(|entry| entry.oauth_read_at_ms),
+        Some(0),
+        "new budget epoch clears the helper-side OAuth gate"
+    );
+}
+
+#[test]
 fn producer_write_then_reader_merge_is_value_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

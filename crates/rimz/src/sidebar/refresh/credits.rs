@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents::{ExtraCredits, ResetCredits};
 use crate::config::AccountsConfig;
 use crate::sidebar::timing::unix_now_ms;
-use crate::sidebar::timing::{CREDITS_DISPLAY_MAX_AGE, CREDITS_RETRY_TTL, CREDITS_TTL};
+use crate::sidebar::timing::{CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_TTL};
 use crate::{RuntimePaths, SidebarSnapshot};
 
 /// Shared provider extra-credits cache, keyed by agent kind.
@@ -19,6 +19,10 @@ pub struct CreditsCache {
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderCreditsEntry {
     pub observed_at_ms: u64,
+    /// Last OAuth account-usage attempt. App-server/realtime credit writes
+    /// preserve this stamp and never advance the OAuth cadence.
+    #[serde(default)]
+    pub oauth_read_at_ms: u64,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_credits: Option<ExtraCredits>,
@@ -56,6 +60,7 @@ pub fn merge_provider_credits(
         kind,
         ProviderCreditsEntry {
             observed_at_ms: unix_now_ms(),
+            oauth_read_at_ms: 0,
             ok: extra_credits.is_some(),
             extra_credits,
             reset_credits: None,
@@ -75,35 +80,33 @@ pub fn merge_provider_credits_entry_if_due(
     let _guard = try_credits_cache_lock(&runtime.shared_credits_lock())?;
     let mut cache = read_credits_cache(&path);
     let now_ms = unix_now_ms();
-    if cache
-        .entries
-        .get(kind)
-        .is_some_and(|entry| entry_is_fresh(entry, now_ms))
+    let prior = cache.entries.get(kind).cloned();
+    if prior
+        .as_ref()
+        .is_some_and(|entry| oauth_read_is_fresh(entry, now_ms))
     {
         return None;
     }
     let mut entry = entry();
-    if entry.reset_credits.is_none() {
+    if entry.oauth_read_at_ms == 0 {
+        entry.oauth_read_at_ms = unix_now_ms();
+    }
+    if !entry.ok {
+        if let Some(prior) = prior.as_ref() {
+            entry.observed_at_ms = prior.observed_at_ms;
+            entry.ok = prior.ok;
+            entry.extra_credits = prior.extra_credits.clone();
+            entry.reset_credits = prior.reset_credits.clone();
+        }
+    } else if entry.reset_credits.is_none() {
         // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
         // and failed writes must not erase the last successful reset read.
-        entry.reset_credits = cache
-            .entries
-            .get(kind)
-            .and_then(|entry| entry.reset_credits.clone());
+        entry.reset_credits = prior.as_ref().and_then(|entry| entry.reset_credits.clone());
     }
     cache.refreshed_at_ms = unix_now_ms();
     cache.entries.insert(kind.to_owned(), entry.clone());
     write_credits_cache(&path, &cache);
     Some(entry)
-}
-
-pub fn provider_credits_entry_fresh(runtime: &RuntimePaths, kind: &str) -> bool {
-    let cache = read_credits_cache(&runtime.shared_credits_path());
-    let now_ms = unix_now_ms();
-    cache
-        .entries
-        .get(kind)
-        .is_some_and(|entry| entry_is_fresh(entry, now_ms))
 }
 
 pub(crate) fn merge_provider_credits_entry(
@@ -117,26 +120,37 @@ pub(crate) fn merge_provider_credits_entry(
     };
     let mut cache = read_credits_cache(&path);
     let mut entry = entry;
+    let prior = cache.entries.get(kind);
+    if entry.oauth_read_at_ms == 0 {
+        entry.oauth_read_at_ms = prior.map_or(0, |entry| entry.oauth_read_at_ms);
+    }
     if entry.reset_credits.is_none() {
         // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
         // and failed writes must not erase the last successful reset read.
-        entry.reset_credits = cache
-            .entries
-            .get(kind)
-            .and_then(|entry| entry.reset_credits.clone());
+        entry.reset_credits = prior.and_then(|entry| entry.reset_credits.clone());
     }
     cache.refreshed_at_ms = unix_now_ms();
     cache.entries.insert(kind.to_owned(), entry);
     write_credits_cache(&path, &cache);
 }
 
-pub(crate) fn entry_is_fresh(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {
-    let ttl = if entry.ok {
-        CREDITS_TTL
-    } else {
-        CREDITS_RETRY_TTL
+pub fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {
+    let path = runtime.shared_credits_path();
+    let Some(_guard) = try_credits_cache_lock(&runtime.shared_credits_lock()) else {
+        return;
     };
-    now_ms.saturating_sub(entry.observed_at_ms) <= ttl.as_millis() as u64
+    let mut cache = read_credits_cache(&path);
+    let Some(entry) = cache.entries.get_mut(kind) else {
+        return;
+    };
+    entry.oauth_read_at_ms = 0;
+    cache.refreshed_at_ms = unix_now_ms();
+    write_credits_cache(&path, &cache);
+}
+
+fn oauth_read_is_fresh(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {
+    entry.oauth_read_at_ms != 0
+        && now_ms.saturating_sub(entry.oauth_read_at_ms) <= OAUTH_USAGE_TTL.as_millis() as u64
 }
 
 fn entry_is_displayable(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {
@@ -234,35 +248,66 @@ mod tests {
     }
 
     #[test]
-    fn freshness_uses_success_and_failure_ttls() {
-        let now = CREDITS_TTL.as_millis() as u64 + 10_000;
-        assert!(entry_is_fresh(
-            &ProviderCreditsEntry {
-                observed_at_ms: now - 1_000,
-                ok: true,
-                extra_credits: None,
-                reset_credits: None,
+    fn oauth_read_stamp_throttles_oauth_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("runtime");
+        runtime.ensure_dirs().unwrap();
+        let path = runtime.shared_credits_path();
+        let now = unix_now_ms();
+        write_credits_cache(
+            &path,
+            &CreditsCache {
+                refreshed_at_ms: now,
+                entries: BTreeMap::from([(
+                    "codex".to_owned(),
+                    ProviderCreditsEntry {
+                        observed_at_ms: 10,
+                        oauth_read_at_ms: now,
+                        ok: true,
+                        extra_credits: Some(ExtraCredits::known(None, Some(1.0), None)),
+                        reset_credits: None,
+                    },
+                )]),
             },
-            now
-        ));
-        assert!(!entry_is_fresh(
-            &ProviderCreditsEntry {
-                observed_at_ms: now - CREDITS_TTL.as_millis() as u64 - 1,
-                ok: true,
-                extra_credits: None,
-                reset_credits: None,
-            },
-            now
-        ));
-        assert!(!entry_is_fresh(
-            &ProviderCreditsEntry {
-                observed_at_ms: now - CREDITS_RETRY_TTL.as_millis() as u64 - 1,
-                ok: false,
-                extra_credits: None,
-                reset_credits: None,
-            },
-            now
-        ));
+        );
+
+        let mut calls = 0;
+        assert!(
+            merge_provider_credits_entry_if_due(&runtime, "codex", || {
+                calls += 1;
+                ProviderCreditsEntry {
+                    observed_at_ms: unix_now_ms(),
+                    oauth_read_at_ms: unix_now_ms(),
+                    ok: true,
+                    extra_credits: Some(ExtraCredits::known(None, Some(2.0), None)),
+                    reset_credits: None,
+                }
+            })
+            .is_none()
+        );
+        assert_eq!(calls, 0, "fresh OAuth attempt stamp skips the fetch");
+
+        let stale = unix_now_ms() - OAUTH_USAGE_TTL.as_millis() as u64 - 1;
+        let mut cache = read_credits_cache(&path);
+        cache.entries.get_mut("codex").unwrap().oauth_read_at_ms = stale;
+        write_credits_cache(&path, &cache);
+
+        let mut calls = 0;
+        assert!(
+            merge_provider_credits_entry_if_due(&runtime, "codex", || {
+                calls += 1;
+                ProviderCreditsEntry {
+                    observed_at_ms: unix_now_ms(),
+                    oauth_read_at_ms: unix_now_ms(),
+                    ok: true,
+                    extra_credits: Some(ExtraCredits::known(None, Some(2.0), None)),
+                    reset_credits: None,
+                }
+            })
+            .is_some()
+        );
+        assert_eq!(calls, 1, "stale OAuth attempt stamp allows the fetch");
     }
 
     #[test]
@@ -279,6 +324,7 @@ mod tests {
             "claude".to_owned(),
             ProviderCreditsEntry {
                 observed_at_ms: 100,
+                oauth_read_at_ms: 0,
                 ok: true,
                 extra_credits: Some(ExtraCredits::known(Some(7.0), None, None)),
                 reset_credits: None,
@@ -342,6 +388,7 @@ mod tests {
             "codex",
             ProviderCreditsEntry {
                 observed_at_ms: 1,
+                oauth_read_at_ms: 1234,
                 ok: true,
                 extra_credits: None,
                 reset_credits: Some(reset_credits.clone()),
@@ -361,6 +408,86 @@ mod tests {
                 .and_then(|entry| entry.reset_credits.clone()),
             Some(reset_credits)
         );
+        assert_eq!(
+            cache
+                .entries
+                .get("codex")
+                .map(|entry| entry.oauth_read_at_ms),
+            Some(1234)
+        );
+    }
+
+    #[test]
+    fn failed_oauth_merge_preserves_prior_displayable_credits() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("runtime");
+        runtime.ensure_dirs().unwrap();
+        let reset_credits = ResetCredits {
+            count: 4,
+            soonest_expiry: jiff::Timestamp::from_second(1_800_000_000).ok(),
+        };
+        merge_provider_credits_entry(
+            &runtime,
+            "codex",
+            ProviderCreditsEntry {
+                observed_at_ms: 42,
+                oauth_read_at_ms: 1,
+                ok: true,
+                extra_credits: Some(ExtraCredits::known(None, Some(5.0), None)),
+                reset_credits: Some(reset_credits.clone()),
+            },
+        );
+
+        merge_provider_credits_entry_if_due(&runtime, "codex", || ProviderCreditsEntry {
+            observed_at_ms: unix_now_ms(),
+            oauth_read_at_ms: unix_now_ms(),
+            ok: false,
+            extra_credits: None,
+            reset_credits: None,
+        });
+
+        let entry = read_credits_cache(&runtime.shared_credits_path())
+            .entries
+            .remove("codex")
+            .expect("codex entry");
+        assert!(entry.ok);
+        assert_eq!(entry.observed_at_ms, 42);
+        assert_eq!(
+            entry.extra_credits,
+            Some(ExtraCredits::known(None, Some(5.0), None))
+        );
+        assert_eq!(entry.reset_credits, Some(reset_credits));
+        assert!(entry.oauth_read_at_ms > 1);
+    }
+
+    #[test]
+    fn invalidate_oauth_read_zeroes_attempt_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("runtime");
+        runtime.ensure_dirs().unwrap();
+        merge_provider_credits_entry(
+            &runtime,
+            "codex",
+            ProviderCreditsEntry {
+                observed_at_ms: 1,
+                oauth_read_at_ms: 1234,
+                ok: true,
+                extra_credits: Some(ExtraCredits::known(None, Some(5.0), None)),
+                reset_credits: None,
+            },
+        );
+
+        invalidate_oauth_read(&runtime, "codex");
+
+        assert_eq!(
+            read_credits_cache(&runtime.shared_credits_path())
+                .entries
+                .get("codex")
+                .map(|entry| entry.oauth_read_at_ms),
+            Some(0)
+        );
     }
 
     #[test]
@@ -375,6 +502,7 @@ mod tests {
             "codex",
             ProviderCreditsEntry {
                 observed_at_ms: 1,
+                oauth_read_at_ms: 0,
                 ok: true,
                 extra_credits: None,
                 reset_credits: Some(ResetCredits {
@@ -388,6 +516,7 @@ mod tests {
             "codex",
             ProviderCreditsEntry {
                 observed_at_ms: 2,
+                oauth_read_at_ms: 0,
                 ok: true,
                 extra_credits: None,
                 reset_credits: Some(ResetCredits {
@@ -427,6 +556,7 @@ mod tests {
             "codex".to_owned(),
             ProviderCreditsEntry {
                 observed_at_ms: now_ms,
+                oauth_read_at_ms: 0,
                 ok: true,
                 extra_credits: None,
                 reset_credits: Some(reset_credits.clone()),
@@ -436,6 +566,7 @@ mod tests {
             "claude".to_owned(),
             ProviderCreditsEntry {
                 observed_at_ms: 0,
+                oauth_read_at_ms: 0,
                 ok: true,
                 extra_credits: None,
                 reset_credits: Some(ResetCredits {

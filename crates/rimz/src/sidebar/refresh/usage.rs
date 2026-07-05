@@ -20,16 +20,16 @@ use std::time::SystemTime;
 
 use crate::RuntimePaths;
 use crate::agents::OauthUsageProbe;
-use crate::sidebar::timing::CREDITS_TTL;
 use crate::sidebar::timing::unix_now_ms;
+use crate::sidebar::timing::{CREDITS_TTL, OAUTH_USAGE_TTL};
 
 use super::credits::{ProviderCreditsEntry, merge_provider_credits_entry_if_due};
 use super::{SidebarSnapshot, merge_account_rate_limits};
 
 /// Schedule each metered, logged-in provider's API-query account-usage refresh.
-/// One uniform loop: gate on the offline override, skip a kind whose credits cache
-/// is still fresh or whose throttle marker has not aged out, then spawn the
-/// detached helper. Producer-only; the network read runs in the child.
+/// One uniform loop: gate on the offline override and the OAuth-attempt
+/// throttle marker, then spawn the detached helper. Producer-only; the network
+/// read runs in the child and single-flights on the shared credits cache.
 pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     if crate::agents::credits::oauth_usage_offline() {
         return;
@@ -39,18 +39,7 @@ pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &Runtim
             continue;
         }
         let kind = panel.kind.as_str();
-        let Some(descriptor) = crate::agents::descriptor_by_kind(kind) else {
-            continue;
-        };
-        if descriptor
-            .capabilities
-            .realtime_usage
-            .covers_account_while_live
-            && has_live_root_session(snapshot, kind)
-        {
-            continue;
-        }
-        if super::credits::provider_credits_entry_fresh(runtime, kind) {
+        if crate::agents::descriptor_by_kind(kind).is_none() {
             continue;
         }
         if !usage_probe_due(runtime, kind) {
@@ -76,6 +65,7 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
                 fetched_windows = usage.rate_limits.clone();
                 ProviderCreditsEntry {
                     observed_at_ms: unix_now_ms(),
+                    oauth_read_at_ms: unix_now_ms(),
                     ok: true,
                     extra_credits: usage.extra_credits,
                     reset_credits: usage.reset_credits,
@@ -85,6 +75,7 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
             | OauthUsageProbe::Failed
             | OauthUsageProbe::Unsupported => ProviderCreditsEntry {
                 observed_at_ms: unix_now_ms(),
+                oauth_read_at_ms: unix_now_ms(),
                 ok: false,
                 extra_credits: None,
                 reset_credits: None,
@@ -133,14 +124,8 @@ fn has_fresh_realtime_windows(snapshot: &SidebarSnapshot, kind: &str) -> bool {
     })
 }
 
-fn has_live_root_session(snapshot: &SidebarSnapshot, kind: &str) -> bool {
-    snapshot.agents.iter().any(|agent| {
-        agent.kind == kind && agent.parent_agent_id.is_none() && !agent.agent_id.is_empty()
-    })
-}
-
 /// Throttle one kind's API-query refresh via a marker file under the runtime
-/// root: skip when the last attempt is younger than the credits TTL, touch it
+/// root: skip when the last attempt is younger than the OAuth TTL, touch it
 /// before spawning so a fetch that never publishes still backs off this kind.
 pub(crate) fn usage_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
     let path = usage_probe_marker(runtime, kind);
@@ -148,11 +133,16 @@ pub(crate) fn usage_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
         .and_then(|meta| meta.modified())
         .ok()
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_none_or(|age| age >= CREDITS_TTL);
+        .is_none_or(|age| age >= OAUTH_USAGE_TTL);
     if due {
         let _ = std::fs::write(&path, b"");
     }
     due
+}
+
+pub(crate) fn invalidate_oauth_usage_throttle(runtime: &RuntimePaths, kind: &str) {
+    let _ = std::fs::remove_file(usage_probe_marker(runtime, kind));
+    crate::sidebar::refresh::credits::invalidate_oauth_read(runtime, kind);
 }
 
 pub(crate) fn usage_probe_marker(runtime: &RuntimePaths, kind: &str) -> PathBuf {
@@ -223,7 +213,7 @@ mod tests {
         assert!(usage_probe_due(&runtime, "pi"));
 
         let old = SystemTime::now()
-            .checked_sub(CREDITS_TTL + Duration::from_secs(1))
+            .checked_sub(OAUTH_USAGE_TTL + Duration::from_secs(1))
             .unwrap();
         std::fs::File::open(usage_probe_marker(&runtime, "opencode"))
             .unwrap()
@@ -283,19 +273,29 @@ mod tests {
     }
 
     #[test]
-    fn codex_with_live_root_session_is_skipped() {
+    fn codex_with_live_root_session_still_schedules_oauth_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
         let now = Timestamp::now();
-        let snapshot = snapshot_with_agent(codex_agent("codex-1", now));
-        assert!(has_live_root_session(&snapshot, "codex"));
-        // A pi session does not satisfy the codex guard.
-        assert!(!has_live_root_session(&snapshot, "pi"));
-        let empty = SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(std::path::Path::new("/tmp/usage-refresh")),
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            workspace,
             Vec::new(),
-            Vec::new(),
+            vec![codex_agent("codex-1", now)],
             now,
         );
-        assert!(!has_live_root_session(&empty, "codex"));
+        snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
+            "codex",
+            Vec::new(),
+        )];
+
+        refresh_account_usage(&snapshot, &runtime);
+
+        assert!(
+            usage_probe_marker(&runtime, "codex").exists(),
+            "a live root session no longer suppresses the OAuth usage helper"
+        );
     }
 
     fn snapshot_with_agent(agent: AgentState) -> SidebarSnapshot {

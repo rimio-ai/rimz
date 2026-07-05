@@ -299,9 +299,9 @@ Unlike Claude (raw tokens, window derived from the payload model), Codex carries
 
 The plan tier rides the app-server (`account/rateLimits/read` `plan_type`), not the idle file. The semantics are in [adapter/codex.md → Account and balance](../../internals/agents/adapter/codex.md#account-and-balance).
 
-[`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage fallback. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`.
+[`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`.
 
-The default usage URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. The parsed fallback response shape:
+The default usage URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. The parsed usage response shape:
 
 ```jsonc
 {
@@ -345,7 +345,7 @@ Rate-limit reset credits use the same OAuth token and optional `ChatGPT-Account-
   "available_count": 2, // mapped to ResetCredits.count when present
   "credits": [
     {
-      "status": "available",             // only available credits affect the fallback count and expiry
+      "status": "available",             // only available credits affect the count and expiry
       "expires_at": "2026-07-06T12:00:00Z", // parsed for soonest_expiry
       "title": "Rate Limit Reset"        // present, ignored
     }
@@ -353,4 +353,4 @@ Rate-limit reset credits use the same OAuth token and optional `ChatGPT-Account-
 }
 ```
 
-The usage response's `rate_limit_reset_credits` field remains ignored; the dedicated endpoint is the per-credit source. A reset-credit fetch failure leaves the prior dashboard value in place when the primary usage fetch succeeds.
+The usage response's `rate_limit_reset_credits` field remains ignored; the dedicated endpoint is the per-credit source and rides the standard OAuth usage cadence. A reset-credit fetch failure leaves the prior dashboard value in place when the primary usage fetch succeeds.

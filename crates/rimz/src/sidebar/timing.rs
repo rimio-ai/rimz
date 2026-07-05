@@ -191,12 +191,13 @@ pub const PR_STATE_RETRY_TTL: Duration = Duration::from_secs(30);
 /// balance as current.
 pub const CREDITS_DISPLAY_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// How long a successful account-usage reading is considered fresh by detached
-/// helpers that can publish credits.
+/// How recently a realtime account-usage reading may defer merging OAuth
+/// windows for kinds whose live transport owns fresh bars.
 pub const CREDITS_TTL: Duration = Duration::from_secs(60);
 
-/// Retry cadence after a failed account-usage reading.
-pub const CREDITS_RETRY_TTL: Duration = ACCOUNTS_RETRY_TTL;
+/// Cadence for the authoritative OAuth account-usage probe, independent of the
+/// realtime/app-server credits freshness.
+pub const OAUTH_USAGE_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// How often the producer samples a pane attached clients are currently
 /// viewing. Focus, not process activity, buys the fast `/proc` lane so the

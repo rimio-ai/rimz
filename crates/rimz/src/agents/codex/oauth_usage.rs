@@ -1,10 +1,10 @@
 //! Direct Codex OAuth account-usage probe.
 //!
-//! Codex's app-server is the preferred account source when it is reachable. This
-//! module supplies the credential-file OAuth fallback: read `~/.codex/auth.json`
-//! (honoring `CODEX_HOME`), call the ChatGPT usage endpoint, and normalize the
-//! response into Rimz's account-window and paid-usage types. It never writes
-//! auth files or refreshes tokens.
+//! Codex's app-server is the low-latency realtime account source. This module
+//! supplies the credential-file OAuth account-usage probe: read
+//! `~/.codex/auth.json` (honoring `CODEX_HOME`), call the ChatGPT usage
+//! endpoint, and normalize the response into Rimz's account-window and
+//! paid-usage types. It never writes auth files or refreshes tokens.
 
 use jiff::Timestamp;
 use serde::Deserialize;

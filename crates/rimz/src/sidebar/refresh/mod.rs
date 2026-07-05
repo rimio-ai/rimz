@@ -28,8 +28,7 @@ pub mod usage;
 
 pub use accounts::AccountsCache;
 pub use credits::{
-    CreditsCache, ProviderCreditsEntry, merge_provider_credits,
-    merge_provider_credits_entry_if_due, provider_credits_entry_fresh,
+    CreditsCache, ProviderCreditsEntry, merge_provider_credits, merge_provider_credits_entry_if_due,
 };
 pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
 pub use live_spend::{apply_live_today_spend, live_row_costs};

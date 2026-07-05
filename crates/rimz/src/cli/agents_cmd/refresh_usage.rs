@@ -6,7 +6,7 @@
 //! [`AgentAdapter::probe_oauth_usage`](rimz::agents::AgentAdapter::probe_oauth_usage),
 //! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
 //! caches. An adapter may expose a pollable realtime account channel; the helper
-//! reads it first and falls back to OAuth only for fields it did not return.
+//! reads it first, then runs the OAuth channel on its own shared cadence.
 //! Best-effort and quiet: every provider-side failure exits successfully with
 //! the shared cache recording the retry state.
 
@@ -67,7 +67,6 @@ fn refresh_usage(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> boo
     };
     let mut wrote = false;
     let windows_missing = usage.rate_limits.is_none();
-    let credits_missing = usage.extra_credits.is_none();
     if let Some(extra_credits) = usage.extra_credits {
         merge_provider_credits(runtime, kind, Some(extra_credits));
         wrote = true;
@@ -76,8 +75,6 @@ fn refresh_usage(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> boo
         merge_account_rate_limits(runtime, kind, rate_limits);
         wrote = true;
     }
-    if windows_missing || credits_missing {
-        wrote |= merge_oauth_usage_if_due(runtime, kind, windows_missing);
-    }
+    wrote |= merge_oauth_usage_if_due(runtime, kind, windows_missing);
     wrote
 }
