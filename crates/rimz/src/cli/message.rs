@@ -62,6 +62,9 @@ enum MessageSubcmd {
         /// Filter by channel name.
         #[arg(long, value_name = "NAME")]
         channel: Option<String>,
+        /// Max rows to show, newest first. 0 lists all.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
         /// Optional target filter.
         target: Option<String>,
     },
@@ -95,8 +98,9 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
             all,
             status,
             channel,
+            limit,
             target,
-        }) => list_messages(json, all, status, channel, target, globals),
+        }) => list_messages(json, all, status, channel, limit, target, globals),
         Some(MessageSubcmd::Status { message_id }) => status_message(message_id, globals),
         Some(MessageSubcmd::Remove { message_id }) => remove_message(message_id, globals),
         Some(MessageSubcmd::Clear {
@@ -119,6 +123,8 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
 }
+
+const DEFAULT_MESSAGE_LIST_LIMIT: usize = 200;
 
 /// Shared enqueue for parked messages: resolve the prompt from inline argv or
 /// `--file`, then split the mirrored `SendFlags` into the delivery spec and the
@@ -667,6 +673,7 @@ fn list_messages(
     all: bool,
     status: Option<MessageStatus>,
     channel: Option<String>,
+    limit: Option<usize>,
     target: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
@@ -680,7 +687,12 @@ fn list_messages(
     };
     let filter_channel = channel.as_deref().or(default_channel);
     if let Some(filter) = filter_channel {
-        messages.retain(|message| message.channel.as_deref() == Some(filter));
+        messages.retain(|message| {
+            message
+                .channel
+                .as_deref()
+                .is_some_and(|channel| rimz::harness::target::channel_in_lane(channel, filter))
+        });
     }
     if let Some(status) = status {
         messages.retain(|message| message.status == status);
@@ -697,6 +709,15 @@ fn list_messages(
             .cmp(&a.enqueued_at)
             .then_with(|| b.message_id.as_str().cmp(a.message_id.as_str()))
     });
+    let limit = limit.unwrap_or(DEFAULT_MESSAGE_LIST_LIMIT);
+    let hidden = if limit == 0 {
+        0
+    } else {
+        messages.len().saturating_sub(limit)
+    };
+    if limit != 0 {
+        messages.truncate(limit);
+    }
     if json {
         let rendered = serde_json::to_string_pretty(&messages)?;
         #[expect(clippy::print_stdout, reason = "json emitter")]
@@ -708,7 +729,8 @@ fn list_messages(
         // whose agent has since left falls back to the durable `kind:id`.
         let agents: Vec<&AgentState> = snapshot.root_agents().collect();
         let now = Timestamp::now();
-        let mut table = render::Table::new([
+        let show_channel = filter_channel.is_none();
+        let mut headers = vec![
             "ID",
             "STATUS",
             "TARGET",
@@ -716,10 +738,14 @@ fn list_messages(
             "CREATED",
             "DELIVERED",
             "TEXT",
-        ]);
+        ];
+        if show_channel {
+            headers.insert(4, "CHANNEL");
+        }
+        let mut table = render::Table::new(headers);
         for message in messages {
             let target = message_target(&message, &agents);
-            table.row([
+            let mut row = vec![
                 render::cell(message.message_id.to_string()).fg(render::palette::ACCENT),
                 render::cell(message.status.as_str()).fg(render::status::message(message.status)),
                 render::cell(target).fg(render::palette::META),
@@ -740,9 +766,22 @@ fn list_messages(
                         .unwrap_or_else(|| "-".to_owned()),
                 )
                 .dash(),
-            ]);
+            ];
+            if show_channel {
+                row.insert(
+                    4,
+                    render::cell(message.channel.as_deref().unwrap_or("-"))
+                        .fg(render::palette::META)
+                        .dash(),
+                );
+            }
+            table.row(row);
         }
-        table.render(&mut render::out())?;
+        let mut out = render::out();
+        table.render(&mut out)?;
+        if hidden > 0 {
+            writeln!(out, "... {hidden} older hidden (--limit 0 for all)")?;
+        }
     }
     Ok(())
 }

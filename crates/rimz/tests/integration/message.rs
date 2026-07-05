@@ -208,6 +208,88 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
 }
 
 #[test]
+fn message_list_matches_channel_lanes_and_limits_rows() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-docs", "docs", &[]);
+
+    let docs = queue_direct_channel_message(&env, "docs", "docs task");
+    std::thread::sleep(Duration::from_millis(2));
+    let docs_team = queue_direct_channel_message(&env, "docs/forge", "forge task");
+    std::thread::sleep(Duration::from_millis(2));
+    let ops = queue_direct_channel_message(&env, "ops", "ops task");
+
+    let scoped = env
+        .rimz()
+        .args(["message", "list", "--channel", "docs", "--json"])
+        .output()
+        .expect("scoped lane list");
+    assert!(
+        scoped.status.success(),
+        "scoped lane list failed: {}",
+        String::from_utf8_lossy(&scoped.stderr)
+    );
+    let scoped: serde_json::Value = serde_json::from_slice(&scoped.stdout).expect("json");
+    let scoped = scoped.as_array().unwrap();
+    assert_eq!(scoped.len(), 2);
+    assert!(scoped.iter().any(|row| row["message_id"] == docs));
+    assert!(scoped.iter().any(|row| row["message_id"] == docs_team));
+    assert!(!scoped.iter().any(|row| row["message_id"] == ops));
+
+    let limited = env
+        .rimz()
+        .args(["message", "list", "--all", "--limit", "2", "--json"])
+        .output()
+        .expect("limited json list");
+    assert!(
+        limited.status.success(),
+        "limited json list failed: {}",
+        String::from_utf8_lossy(&limited.stderr)
+    );
+    let limited: serde_json::Value = serde_json::from_slice(&limited.stdout).expect("json");
+    assert_eq!(limited.as_array().unwrap().len(), 2);
+
+    let unlimited = env
+        .rimz()
+        .args(["message", "list", "--all", "--limit", "0", "--json"])
+        .output()
+        .expect("unlimited json list");
+    assert!(
+        unlimited.status.success(),
+        "unlimited json list failed: {}",
+        String::from_utf8_lossy(&unlimited.stderr)
+    );
+    let unlimited: serde_json::Value = serde_json::from_slice(&unlimited.stdout).expect("json");
+    assert_eq!(unlimited.as_array().unwrap().len(), 3);
+
+    let all_table = env
+        .rimz()
+        .args(["message", "list", "--all", "--limit", "2"])
+        .output()
+        .expect("limited table list");
+    assert!(
+        all_table.status.success(),
+        "limited table list failed: {}",
+        String::from_utf8_lossy(&all_table.stderr)
+    );
+    let all_table = String::from_utf8_lossy(&all_table.stdout);
+    assert!(all_table.contains("CHANNEL"));
+    assert!(all_table.contains("1 older hidden (--limit 0 for all)"));
+
+    let scoped_table = env
+        .rimz()
+        .args(["message", "list", "--channel", "ops"])
+        .output()
+        .expect("scoped table list");
+    assert!(
+        scoped_table.status.success(),
+        "scoped table list failed: {}",
+        String::from_utf8_lossy(&scoped_table.stderr)
+    );
+    let scoped_table = String::from_utf8_lossy(&scoped_table.stdout);
+    assert!(!scoped_table.contains("CHANNEL"));
+}
+
+#[test]
 fn receiver_end_archives_open_messages() {
     let env = Env::new();
     env.install_agent_hooks("claude");

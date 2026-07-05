@@ -248,6 +248,15 @@ fn in_place_team_channel_uses_directory_and_team() {
 }
 
 #[test]
+fn channel_in_lane_accepts_team_sublanes() {
+    assert!(channel_in_lane("message-list/forge", "message-list"));
+    assert!(channel_in_lane("message-list", "message-list"));
+    assert!(!channel_in_lane("message-list-2/forge", "message-list"));
+    assert!(!channel_in_lane("ops", "docs"));
+    assert!(!channel_in_lane("dir/forge", "dir/other"));
+}
+
+#[test]
 fn agent_channel_and_in_worktree_use_directory_not_branch() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
     team_agent.team = Some("pcr".to_owned());
