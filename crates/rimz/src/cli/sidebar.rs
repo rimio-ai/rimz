@@ -105,11 +105,17 @@ enum SidebarSubcmd {
     /// Open a live sidebar feature gallery. Hidden — contributor visual review
     /// tool, not a user-facing sidebar verb.
     #[command(hide = true)]
-    Gallery,
+    Gallery {
+        #[arg(long)]
+        pets: bool,
+    },
     /// Render the live sidebar gallery compositor. Hidden — launched by
     /// `sidebar gallery`, not a user-facing sidebar verb.
     #[command(hide = true)]
-    GalleryRender,
+    GalleryRender {
+        #[arg(long)]
+        pets: bool,
+    },
     /// Presence poke from the Zellij presence plugin: refresh the liveness
     /// stamp and wake the sidebar fleet through either an exact-cache shortcut
     /// or a producer refetch. Hidden — plugin infrastructure, not a human verb.
@@ -218,8 +224,8 @@ impl SidebarArgs {
             SidebarSubcmd::Serve { .. } => "sidebar serve",
             SidebarSubcmd::Render { .. } => "sidebar render",
             SidebarSubcmd::Fixture { .. } => "sidebar fixture",
-            SidebarSubcmd::Gallery => "sidebar gallery",
-            SidebarSubcmd::GalleryRender => "sidebar gallery-render",
+            SidebarSubcmd::Gallery { .. } => "sidebar gallery",
+            SidebarSubcmd::GalleryRender { .. } => "sidebar gallery-render",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
             SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
@@ -282,8 +288,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             theme_mode,
             theme_scheme,
         ),
-        SidebarSubcmd::Gallery => gallery(globals),
-        SidebarSubcmd::GalleryRender => gallery_render(),
+        SidebarSubcmd::Gallery { pets } => gallery(globals, pets),
+        SidebarSubcmd::GalleryRender { pets } => gallery_render(pets),
         SidebarSubcmd::Wake {
             workspace_id,
             reason,
@@ -631,7 +637,7 @@ fn fixture(
         .context("rendering sidebar fixture")
 }
 
-fn gallery(globals: &GlobalFlags) -> Result<()> {
+fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
@@ -651,9 +657,11 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
         refresh_ms: None,
     };
     let rimz_bin = rimz_cli_program().to_string_lossy().into_owned();
-    let gallery_pane = rimz::mux::PaneCmd {
-        argv: vec![rimz_bin, "sidebar".to_owned(), "gallery-render".to_owned()],
-    };
+    let mut argv = vec![rimz_bin, "sidebar".to_owned(), "gallery-render".to_owned()];
+    if pets {
+        argv.push("--pets".to_owned());
+    }
+    let gallery_pane = rimz::mux::PaneCmd { argv };
     backend
         .open_tab(&rimz::mux::TabOptions {
             session_name: workspace.session_name.clone(),
@@ -672,25 +680,38 @@ fn gallery(globals: &GlobalFlags) -> Result<()> {
         .context("opening sidebar gallery")
 }
 
-fn gallery_render() -> Result<()> {
+const GALLERY_PETS: [&str; 4] = ["rocky", "seedy", "fireball", "bsod"];
+
+fn gallery_render(pets: bool) -> Result<()> {
     let machine_config = super::machine_config();
     let refresh_ms = machine_config.theme.display.resolved_refresh_ms();
-    let columns = gallery_fixture_columns()
-        .into_iter()
-        .map(|(state, selector)| {
-            let mut snapshot = sidebar_fixture_snapshot(state)?;
-            snapshot.theme.mode = machine_config.theme.mode;
-            snapshot.theme.glyphs = machine_config.theme.glyphs.clone();
-            snapshot.theme.pets.glyphs = machine_config.theme.pets.glyphs;
-            let selected_index = gallery_selected_index(&snapshot, selector);
-            Ok((snapshot, selected_index))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let columns = gallery_render_columns(pets, &machine_config.theme)?;
     let workspace =
         WorkspaceResolver::resolve_participant(".", None).context("resolving gallery workspace")?;
     let mux = rimz::mux::auto_detect_backend(None)?;
     rimz::sidebar_pane::app::serve_gallery(columns, refresh_ms, mux, &workspace.session_name)
         .context("serving sidebar gallery")
+}
+
+fn gallery_render_columns(
+    pets: bool,
+    theme: &rimz::config::ThemeConfig,
+) -> Result<Vec<(SidebarSnapshot, usize)>> {
+    let columns = gallery_fixture_columns()
+        .into_iter()
+        .enumerate()
+        .map(|(index, (state, selector))| {
+            let mut snapshot = sidebar_fixture_snapshot(state)?;
+            snapshot.theme.mode = theme.mode;
+            snapshot.theme.glyphs = theme.glyphs.clone();
+            snapshot.theme.pets.glyphs = theme.pets.glyphs;
+            snapshot.theme.pets.enabled = pets;
+            snapshot.theme.pets.pet = GALLERY_PETS[index].to_owned();
+            let selected_index = gallery_selected_index(&snapshot, selector);
+            Ok((snapshot, selected_index))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(columns)
 }
 
 fn gallery_selected_index(
@@ -714,7 +735,7 @@ fn gallery_fixture_columns() -> [(SidebarFixtureState, GallerySelector); 4] {
             (|row: &rimz::SidebarRow| row.id == "agent:claude:compacting") as GallerySelector,
         ),
         (SidebarFixtureState::Focus, |row: &rimz::SidebarRow| {
-            row.as_agent().and_then(|card| card.handle.as_deref()) == Some("planner")
+            row.id == "agent:codex:coder"
         }),
         (SidebarFixtureState::Reach, |row: &rimz::SidebarRow| {
             row.id == "agent:pi:reach"

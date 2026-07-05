@@ -35,6 +35,16 @@ fn plugin_focus_argv_parses_without_workspace_id() {
     );
 }
 
+#[test]
+fn gallery_argv_parses_pets_flag() {
+    use clap::Parser;
+
+    crate::cli::Cli::try_parse_from(["rimz", "sidebar", "gallery", "--pets"])
+        .expect("sidebar gallery --pets must parse");
+    crate::cli::Cli::try_parse_from(["rimz", "sidebar", "gallery-render", "--pets"])
+        .expect("sidebar gallery-render --pets must parse");
+}
+
 fn strip_sgr(ansi: &[u8]) -> String {
     let text = String::from_utf8_lossy(ansi);
     let mut stripped = String::new();
@@ -83,7 +93,7 @@ fn gallery_columns_follow_requested_order_and_selection() {
 
     for ((state, selector), (expected_id, expected_kind)) in columns.into_iter().zip([
         ("agent:claude:compacting", "claude"),
-        ("agent:claude:planner", "claude"),
+        ("agent:codex:coder", "codex"),
         ("agent:pi:reach", "pi"),
         ("agent:opencode:credits", "opencode"),
     ]) {
@@ -104,6 +114,35 @@ fn gallery_columns_follow_requested_order_and_selection() {
 }
 
 #[test]
+fn gallery_render_columns_apply_pets_override() {
+    let columns =
+        super::gallery_render_columns(true, &rimz::config::ThemeConfig::default()).unwrap();
+    assert_eq!(
+        columns
+            .iter()
+            .map(|(snapshot, _)| (
+                snapshot.theme.pets.enabled,
+                snapshot.theme.pets.pet.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (true, "rocky"),
+            (true, "seedy"),
+            (true, "fireball"),
+            (true, "bsod")
+        ],
+    );
+
+    let disabled =
+        super::gallery_render_columns(false, &rimz::config::ThemeConfig::default()).unwrap();
+    assert!(
+        disabled
+            .iter()
+            .all(|(snapshot, _)| !snapshot.theme.pets.enabled)
+    );
+}
+
+#[test]
 fn gallery_fixture_states_carry_feature_flags() {
     let states = [
         SidebarFixtureState::Cockpit,
@@ -116,20 +155,13 @@ fn gallery_fixture_states_carry_feature_flags() {
     .collect::<Vec<_>>();
     assert!(states.iter().all(|snapshot| !snapshot.providers.is_empty()));
 
-    assert_eq!(
-        states[0].theme.display.provider_tabs,
-        rimz::config::ProviderTabsMode::Never,
-    );
-    for snapshot in &states[1..] {
+    for snapshot in &states {
         assert_eq!(
             snapshot.theme.display.provider_tabs,
             rimz::config::ProviderTabsMode::Always,
         );
     }
-    assert_eq!(states[2].theme.pets.pet, "seedy");
-    assert!(states[2].theme.pets.enabled);
-    assert_eq!(states[3].theme.pets.pet, "rocky");
-    assert!(states[3].theme.pets.enabled);
+    assert!(states.iter().all(|snapshot| !snapshot.theme.pets.enabled));
     assert!(states.iter().any(|snapshot| {
         snapshot
             .worktree_groups
@@ -140,12 +172,7 @@ fn gallery_fixture_states_carry_feature_flags() {
     let lead_kinds = states.iter().map(top_agent_kind).collect::<Vec<_>>();
     assert_eq!(
         lead_kinds,
-        vec![
-            Some("claude"),
-            Some("codex"),
-            Some("opencode"),
-            Some("claude")
-        ]
+        vec![Some("claude"), Some("pi"), Some("opencode"), Some("claude")]
     );
 
     let focus = sidebar_fixture_snapshot(SidebarFixtureState::Focus).unwrap();
@@ -179,10 +206,7 @@ fn gallery_fixture_states_carry_feature_flags() {
     assert!(planner.sub_agents.iter().any(|child| {
         child.name == "Plan" && child.status == rimz::agents::AgentStatus::Running
     }));
-    let coder = cards
-        .iter()
-        .find(|card| card.handle.as_deref() == Some("coder"))
-        .expect("coder card");
+    let coder = agent_card_by_id(&focus, "agent:codex:coder");
     assert_eq!(coder.sub_agents.len(), 2);
     assert_eq!(
         coder
@@ -222,7 +246,7 @@ fn gallery_fixture_states_carry_feature_flags() {
     assert!(handles.contains(&"sre"));
 
     let cockpit = &states[0];
-    assert_eq!(cockpit.presence, Some(rimz::SidebarPresence::Detached));
+    assert_eq!(cockpit.presence, None);
     assert!(cockpit.link.is_some());
     assert!(cockpit.worktree_groups.iter().any(|group| {
         group.landed == Some(true)
@@ -332,8 +356,9 @@ fn gallery_fixture_states_carry_feature_flags() {
 fn gallery_fixture_frames_render_decisive_markers() {
     assert_fixture_frame_contains(
         SidebarFixtureState::Cockpit,
-        &["stabilize render diff", "away", "48ms"],
+        &["stabilize render diff", "48ms", "pnpm serve"],
     );
+    assert_fixture_frame_lacks(SidebarFixtureState::Cockpit, &["away"]);
     assert_fixture_frame_contains(
         SidebarFixtureState::Focus,
         &["planner", "coder", "reviewer"],
@@ -360,6 +385,18 @@ fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {
         .collect()
 }
 
+fn agent_card_by_id<'a>(snapshot: &'a rimz::SidebarSnapshot, id: &str) -> &'a rimz::AgentCard {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .find_map(|row| match &row.card {
+            rimz::RowCard::Agent(card) if row.id == id => Some(card.as_ref()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("agent card {id}"))
+}
+
 fn top_agent_kind(snapshot: &rimz::SidebarSnapshot) -> Option<&str> {
     snapshot
         .worktree_groups
@@ -380,6 +417,19 @@ fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {
         assert!(
             frame.contains(marker),
             "fixture {state:?} missing marker {marker:?}:\n{frame}",
+        );
+    }
+}
+
+fn assert_fixture_frame_lacks(state: SidebarFixtureState, markers: &[&str]) {
+    let snapshot = sidebar_fixture_snapshot(state).unwrap();
+    let mut ansi = Vec::new();
+    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 80, 42).unwrap();
+    let frame = strip_sgr(&ansi);
+    for marker in markers {
+        assert!(
+            !frame.contains(marker),
+            "fixture {state:?} unexpectedly contains marker {marker:?}:\n{frame}",
         );
     }
 }

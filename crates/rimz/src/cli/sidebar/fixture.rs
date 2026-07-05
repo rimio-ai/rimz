@@ -177,7 +177,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
 
 fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
-    snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Never;
+    snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
     let claude = agent_row_with(
         "agent:claude:main",
         "claude",
@@ -211,6 +211,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         AgentRowOptions {
             age_secs: Some(4 * 60),
             cost_usd: Some(6.75),
+            compaction_count: 1,
             sub_agents: Some(Vec::new()),
             ..AgentRowOptions::default()
         },
@@ -275,6 +276,33 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             command_detail: Some("integration::backend".to_owned()),
             cpu_pct: Some(37),
             rss_kb: Some(412_000),
+            io_bps: Some(8 * 1_048_576),
+            ..rimz::ProcessCard::default()
+        }),
+    };
+    let pnpm = rimz::SidebarRow {
+        id: "process:pnpm-serve".to_owned(),
+        name: "pnpm serve".to_owned(),
+        pane: Some(pane_ref(
+            "terminal_30",
+            "pnpm serve",
+            "/srv/code/query-engine",
+            false,
+        )),
+        worktree_path: Some("/srv/code/query-engine".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        channel: None,
+        unread: false,
+        inactive: false,
+        archived: false,
+        attention_score: 0,
+        last_activity: now,
+        card: rimz::RowCard::Process(rimz::ProcessCard {
+            state: rimz::ProcessState::Busy,
+            command_detail: Some("vite dev :5173".to_owned()),
+            cpu_pct: Some(12),
+            rss_kb: Some(268_000),
+            io_bps: Some(450 * 1_024),
             ..rimz::ProcessCard::default()
         }),
     };
@@ -447,7 +475,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             label: "main".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![claude, opencode, compacting, idle, process],
+            rows: vec![claude, compacting, process, pnpm],
             hidden_count: 14,
             diff_added: Some(1840),
             diff_removed: Some(620),
@@ -532,7 +560,13 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             label: "observer-lag".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![pi_observer, codex_observer, claude_budget_idle],
+            rows: vec![
+                opencode,
+                idle,
+                pi_observer,
+                codex_observer,
+                claude_budget_idle,
+            ],
             hidden_count: 9,
             diff_added: Some(980),
             diff_removed: Some(360),
@@ -552,7 +586,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             Some("Claude Max"),
             true,
             true,
-            budget_windows(44, 68),
+            budget_windows(40, 20),
             spend_tally(612.0, 42_600_000, 28),
             now,
         ),
@@ -561,16 +595,35 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             Some("0.135.0"),
             Some("ChatGPT Pro"),
             true,
-            false,
+            true,
             budget_windows(58, 73),
             spend_tally(428.0, 31_200_000, 24),
+            now,
+        ),
+        provider_panel(
+            "pi",
+            Some("0.11.4"),
+            Some("OpenAI OAuth"),
+            true,
+            false,
+            budget_windows(21, 34),
+            spend_tally(318.0, 18_400_000, 18),
+            now,
+        ),
+        provider_panel(
+            "opencode",
+            Some("0.7.2"),
+            Some("OpenAI OAuth"),
+            true,
+            false,
+            budget_windows(18, 32),
+            spend_tally(156.0, 9_800_000, 14),
             now,
         ),
     ];
     snapshot.value_tally = Some(spend_tally(1_425.0, 91_100_000, 96));
     snapshot.workspace_value_tally = Some(spend_tally(1_168.0, 68_100_000, 78));
     snapshot.today_spend_live_usd = Some(392.0);
-    snapshot.presence = Some(rimz::SidebarPresence::Detached);
     snapshot.link = Some(rimz::SidebarLinkHealth {
         rtt_ms: Some(48),
         miss_pct: 2,
@@ -583,17 +636,17 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
 fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    let mut lead = agent_row_with(
-        "agent:claude:auth-router",
-        "claude",
+    let coder = agent_row_with(
+        "agent:codex:coder",
+        "codex",
         "terminal_41",
         "/srv/code/query-engine/.rimz/worktrees/auth-router",
         "feature/auth-router",
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "wire auth router migration",
-        "Opus 4.1",
-        Some((72, 200_000, 151_900)),
+        "GPT-5.1-Codex",
+        Some((72, 272_000, 151_900)),
         now,
         AgentRowOptions {
             handle: Some("coder".to_owned()),
@@ -629,7 +682,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
-    lead.unread = true;
     let planner = agent_row_with(
         "agent:claude:planner",
         "claude",
@@ -712,16 +764,16 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         },
     );
     let mut reviewer = agent_row_with(
-        "agent:codex:reviewer",
-        "codex",
+        "agent:pi:reviewer",
+        "pi",
         "terminal_43",
         "/srv/code/query-engine/.rimz/worktrees/auth-router",
         "feature/auth-router",
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::TurnPhase::Idle,
         "review auth router diff",
-        "GPT-5.1-Codex",
-        Some((45, 272_000, 86_700)),
+        "GPT-5.5",
+        Some((45, 400_000, 86_700)),
         now,
         AgentRowOptions {
             handle: Some("reviewer".to_owned()),
@@ -731,45 +783,29 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         },
     );
     reviewer.unread = true;
-    let docs = agent_row_with(
-        "agent:pi:auth-docs",
-        "pi",
-        "terminal_44",
-        "/srv/code/query-engine/.rimz/worktrees/auth-docs",
-        "auth-docs",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "summarize OAuth drift",
-        "GPT-5.5",
-        Some((27, 400_000, 96_300)),
-        now,
-        AgentRowOptions {
-            age_secs: Some(37 * 60),
-            cost_usd: Some(2.80),
-            ..AgentRowOptions::default()
-        },
-    );
-    let lint = agent_row_with(
-        "agent:codex:auth-docs",
+    let rollout_coder = agent_row_with(
+        "agent:codex:rollout-coder",
         "codex",
-        "terminal_45",
-        "/srv/code/query-engine/.rimz/worktrees/auth-docs",
-        "auth-docs",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "wait for reviewer notes",
+        "terminal_44",
+        "/srv/code/query-engine/.rimz/worktrees/rollout-guard",
+        "rollout-guard",
+        rimz::agents::AgentStatus::Running,
+        rimz::agents::TurnPhase::Acting,
+        "patch rollout smoke harness",
         "GPT-5.1-Codex",
-        Some((24, 272_000, 64_200)),
+        Some((42, 272_000, 67_300)),
         now,
         AgentRowOptions {
-            age_secs: Some(58 * 60),
+            handle: Some("coder".to_owned()),
+            age_secs: Some(5 * 60),
+            cost_usd: Some(6.30),
             ..AgentRowOptions::default()
         },
     );
-    let rollout = agent_row_with(
-        "agent:claude:rollout",
+    let rollout_reviewer = agent_row_with(
+        "agent:claude:rollout-reviewer",
         "claude",
-        "terminal_46",
+        "terminal_45",
         "/srv/code/query-engine/.rimz/worktrees/rollout-guard",
         "rollout-guard",
         rimz::agents::AgentStatus::Waiting,
@@ -779,26 +815,10 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         Some((64, 200_000, 142_800)),
         now,
         AgentRowOptions {
+            handle: Some("reviewer".to_owned()),
             age_secs: Some(17 * 60),
             cost_usd: Some(18.70),
-            ..AgentRowOptions::default()
-        },
-    );
-    let opencode_rollout = agent_row_with(
-        "agent:opencode:rollout",
-        "opencode",
-        "terminal_47",
-        "/srv/code/query-engine/.rimz/worktrees/rollout-guard",
-        "rollout-guard",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "patch rollout smoke harness",
-        "GPT-5.5",
-        Some((42, 128_000, 67_300)),
-        now,
-        AgentRowOptions {
-            age_secs: Some(5 * 60),
-            cost_usd: Some(6.30),
+            compaction_count: 1,
             ..AgentRowOptions::default()
         },
     );
@@ -900,7 +920,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             label: "feature/auth-router".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![lead, planner, reviewer],
+            rows: vec![planner, coder, reviewer],
             hidden_count: 8,
             diff_added: Some(1520),
             diff_removed: Some(470),
@@ -913,28 +933,11 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             pr_state: None,
         },
         rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/auth-docs".to_owned(),
-            label: "auth-docs".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
-            rows: vec![docs, lint],
-            hidden_count: 0,
-            diff_added: Some(640),
-            diff_removed: Some(180),
-            commits_ahead: Some(1),
-            commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            clean: Some(false),
-            landed: Some(false),
-            trunk_sync: None,
-            pr_state: Some(rimz::WorktreePrState::Open),
-        },
-        rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/rollout-guard".to_owned(),
             label: "rollout-guard".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![rollout, opencode_rollout],
+            rows: vec![rollout_coder, rollout_reviewer],
             hidden_count: 0,
             diff_added: Some(1180),
             diff_removed: Some(390),
@@ -981,6 +984,20 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             pr_state: Some(rimz::WorktreePrState::Open),
         },
     ];
+    let mut codex_panel = provider_panel(
+        "codex",
+        Some("0.135.0"),
+        Some("ChatGPT Pro"),
+        true,
+        true,
+        budget_windows_timed(45, 60, 16_200, 518_400),
+        spend_tally(401.0, 26_600_000, 21),
+        now,
+    );
+    codex_panel.reset_credits = Some(rimz::ResetCredits {
+        count: 2,
+        soonest_expiry: Some(now + std::time::Duration::from_secs(30 * 60 * 60)),
+    });
     snapshot.providers = vec![
         provider_panel(
             "claude",
@@ -992,16 +1009,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             spend_tally(506.0, 38_200_000, 25),
             now,
         ),
-        provider_panel(
-            "codex",
-            Some("0.135.0"),
-            Some("ChatGPT Pro"),
-            true,
-            false,
-            budget_windows(47, 61),
-            spend_tally(401.0, 26_600_000, 21),
-            now,
-        ),
+        codex_panel,
         provider_panel(
             "pi",
             Some("0.11.4"),
@@ -1031,11 +1039,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
 fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    snapshot.theme.pets = rimz::config::PetsConfig {
-        enabled: true,
-        pet: "seedy".to_owned(),
-        ..rimz::config::PetsConfig::default()
-    };
     let opencode = agent_row_with(
         "agent:opencode:economy",
         "opencode",
@@ -1344,7 +1347,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         Some("0.135.0"),
         Some("ChatGPT Pro"),
         true,
-        false,
+        true,
         budget_windows_timed(15, 47, 4 * 60 * 60 + 30 * 60, 6 * 24 * 60 * 60),
         spend_tally(447.0, 32_200_000, 26),
         now,
@@ -1382,7 +1385,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             Some("OpenAI OAuth"),
             true,
             false,
-            budget_windows_timed(30, 58, 4 * 60 * 60 + 30 * 60, 6 * 24 * 60 * 60),
+            budget_windows_timed(60, 99, 7_200, 3_600),
             spend_tally(516.0, 28_400_000, 29),
             now,
         ),
@@ -1394,11 +1397,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
 
 fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    snapshot.theme.pets = rimz::config::PetsConfig {
-        enabled: true,
-        pet: "rocky".to_owned(),
-        ..rimz::config::PetsConfig::default()
-    };
     let claude = agent_row_with(
         "agent:claude:reach",
         "claude",
@@ -1414,6 +1412,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         AgentRowOptions {
             age_secs: Some(35),
             cost_usd: Some(16.80),
+            compaction_count: 2,
             ..AgentRowOptions::default()
         },
     );
@@ -1698,8 +1697,8 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             trunk: Some("main".to_owned()),
             clean: Some(false),
             landed: Some(false),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
-            pr_state: Some(rimz::WorktreePrState::Open),
+            trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
+            pr_state: Some(rimz::WorktreePrState::Closed),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/stats-relay".to_owned(),
@@ -1708,15 +1707,15 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             status_counts: Vec::new(),
             rows: vec![opencode_stats, claude_stats_idle],
             hidden_count: 3,
-            diff_added: Some(1320),
-            diff_removed: Some(450),
-            commits_ahead: Some(2),
+            diff_added: Some(0),
+            diff_removed: Some(0),
+            commits_ahead: Some(0),
             commits_behind: Some(0),
             trunk: Some("main".to_owned()),
-            clean: Some(false),
+            clean: Some(true),
             landed: Some(false),
-            trunk_sync: None,
-            pr_state: Some(rimz::WorktreePrState::Open),
+            trunk_sync: Some(rimz::WorktreeTrunkSync::Pristine),
+            pr_state: None,
         },
     ];
     snapshot.providers = vec![
@@ -1735,7 +1734,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             Some("0.135.0"),
             Some("ChatGPT Pro"),
             true,
-            false,
+            true,
             budget_windows(36, 54),
             spend_tally(286.0, 19_100_000, 16),
             now,
@@ -1746,7 +1745,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             Some("OpenAI OAuth"),
             true,
             false,
-            budget_windows(16, 28),
+            budget_windows_timed(100, 20, 2_400, 172_800),
             spend_tally(144.0, 8_900_000, 9),
             now,
         ),
