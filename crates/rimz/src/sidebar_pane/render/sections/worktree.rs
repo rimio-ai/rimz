@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::labels::{
-    branch_delta_spans, diff_spans, status_glyph, trunk_equal_spans, trunk_glyph_spans,
+    branch_delta_spans, diff_spans, status_glyph, trunk_glyph_spans,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::row_passes_filter;
@@ -137,11 +137,9 @@ fn group_header(
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's git story pins right: a PR verdict takes precedence over
-    // pristine `≡ <trunk>`, merged collapses to `<merge> <trunk>`, and
-    // diverged/reconciling shows the `⇡/⇣` commit delta, `+/-` churn, then the
-    // highest-priority trunk glyph (local reconciling > merged PR > closed PR >
-    // open PR > branch).
+    // The worktree's git story pins right: live local reconciling leads, then a
+    // PR verdict, then the local trunk verdict; diverged/reconciling keeps the
+    // `⇡/⇣` commit delta and `+/-` churn before the marker.
     // A worktree channel keeps its `#` lane label on the left and carries this
     // same right-pinned story.
     // The per-worktree status tally is gone: the cockpit owns the fleet
@@ -214,45 +212,35 @@ fn group_header(
     Line::from(spans)
 }
 
-/// The header's right-pinned git cluster. PR merged/closed/open glyphs outrank
-/// pristine (`≡`) even when the tree is even with trunk; PR-less pristine stays
-/// quiet. Merged (`<merge>`) is bright and removable, and
-/// diverged/reconciling keeps the numeric work stats before a trunk glyph
-/// chosen by the priority ladder: reconciling > PR merged > PR closed > PR
-/// open > branch. Worktree channels share this cluster while keeping their `#`
-/// label. Empty when no git read reached this group.
+/// The header's right-pinned git cluster. A known PR verdict (merged/closed/open)
+/// outranks the local trunk relationship, so a pristine or locally-landed
+/// worktree still shows its forge state; a live local rebase/merge (`⟳`) stays
+/// on top as the one actionable working-tree state. Diverged and reconciling
+/// worktrees keep the numeric `⇡/⇣ +/-` stats before the marker; every other
+/// state collapses to the marker alone. Worktree channels share this cluster
+/// while keeping their `#` label. Empty when no git read reached this group or
+/// the group is the trunk worktree itself.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
     let Some(trunk) = group.trunk.as_deref() else {
         return plain_git_spans(theme, group);
     };
-    match group.trunk_sync {
-        Some(WorktreeTrunkSync::Pristine) => {
-            return match group.pr_state {
-                Some(state) => {
-                    let (role, component) = pr_state_marker(state);
-                    trunk_glyph_spans(theme, role, trunk, component)
-                }
-                None => trunk_equal_spans(theme, trunk),
-            };
+    let Some((role, component)) = trunk_marker(group) else {
+        return plain_git_spans(theme, group);
+    };
+    // Diverged and reconciling worktrees carry the numeric work stats before the
+    // marker; pristine, merged, and PR-clean worktrees collapse to the marker.
+    if matches!(
+        group.trunk_sync,
+        Some(WorktreeTrunkSync::Diverged | WorktreeTrunkSync::Reconciling)
+    ) {
+        let mut spans = plain_git_spans(theme, group);
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
         }
-        Some(WorktreeTrunkSync::Merged) => {
-            return trunk_glyph_spans(
-                theme,
-                GlyphRole::WorktreeTrunkMerge,
-                trunk,
-                Component::WorktreeMerged,
-            );
-        }
-        Some(WorktreeTrunkSync::Diverged | WorktreeTrunkSync::Reconciling) => {}
-        None => return plain_git_spans(theme, group),
+        spans.extend(trunk_glyph_spans(theme, role, trunk, component));
+        return spans;
     }
-    let mut spans = plain_git_spans(theme, group);
-    let (role, component) = trunk_ladder_marker(group);
-    if !spans.is_empty() {
-        spans.push(Span::raw("  "));
-    }
-    spans.extend(trunk_glyph_spans(theme, role, trunk, component));
-    spans
+    trunk_glyph_spans(theme, role, trunk, component)
 }
 
 fn plain_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
@@ -282,17 +270,27 @@ fn pr_state_marker(state: WorktreePrState) -> (GlyphRole, Component) {
     }
 }
 
-fn trunk_ladder_marker(group: &SidebarWorktreeGroup) -> (GlyphRole, Component) {
+/// The trunk marker glyph and tone, by descending priority: a live local
+/// rebase/merge (`⟳`), then the forge PR verdict (merged `✓` / closed `✕` /
+/// open `⊙`), then the local trunk relationship (merged `✓` / pristine `≡` /
+/// diverged branch `⑂`). `None` for the trunk worktree itself (`trunk_sync`
+/// `None`), whose header keeps the plain cluster.
+fn trunk_marker(group: &SidebarWorktreeGroup) -> Option<(GlyphRole, Component)> {
     if group.trunk_sync == Some(WorktreeTrunkSync::Reconciling) {
-        return (
+        return Some((
             GlyphRole::WorktreeReconciling,
             Component::WorktreeReconciling,
-        );
+        ));
     }
-    match group.pr_state {
-        Some(state) => pr_state_marker(state),
-        None => (GlyphRole::WorktreeTrunkBranch, Component::BranchDelta),
+    if let Some(state) = group.pr_state {
+        return Some(pr_state_marker(state));
     }
+    Some(match group.trunk_sync? {
+        WorktreeTrunkSync::Merged => (GlyphRole::WorktreeTrunkMerge, Component::WorktreeMerged),
+        WorktreeTrunkSync::Pristine => (GlyphRole::WorktreeTrunkEqual, Component::WorktreePristine),
+        WorktreeTrunkSync::Diverged => (GlyphRole::WorktreeTrunkBranch, Component::BranchDelta),
+        WorktreeTrunkSync::Reconciling => unreachable!("reconciling handled above"),
+    })
 }
 
 /// The `external` catch-all (untethered scripts/CI and out-of-project shells)

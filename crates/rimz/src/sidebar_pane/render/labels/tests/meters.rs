@@ -56,7 +56,15 @@ fn branch_delta_omits_zero_components() {
     assert_eq!(text(&branch_delta_spans(&theme, 3, 0)), "⇡3");
     assert_eq!(text(&branch_delta_spans(&theme, 0, 5)), "⇣5");
     assert_eq!(text(&branch_delta_spans(&theme, 0, 0)), "");
-    assert_eq!(text(&trunk_equal_spans(&theme, "main")), "≡ main");
+    assert_eq!(
+        text(&trunk_glyph_spans(
+            &theme,
+            GlyphRole::WorktreeTrunkEqual,
+            "main",
+            Component::WorktreePristine
+        )),
+        "≡ main"
+    );
     assert_eq!(
         text(&trunk_glyph_spans(
             &theme,

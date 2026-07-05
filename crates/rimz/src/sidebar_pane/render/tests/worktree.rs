@@ -262,6 +262,46 @@ fn render_worktree_clear_safe_to_remove() {
 }
 
 #[test]
+fn render_merged_worktree_pr_open_or_closed_outranks_merge_marker() {
+    let codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let group = &mut snapshot.worktree_groups[0];
+    group.trunk = Some("main".to_owned());
+    group.clean = Some(true);
+    group.landed = Some(true);
+    group.trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
+    group.pr_state = Some(crate::WorktreePrState::Open);
+
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+    assert!(
+        rendered.contains("⊙ main"),
+        "open PR outranks local merge:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("✓ main"),
+        "local merge marker is gone:\n{rendered}"
+    );
+
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+    assert!(
+        rendered.contains("✕ main"),
+        "closed PR outranks local merge:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("✓ main"),
+        "local merge marker is gone:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_content_landed_worktree_uses_marker_over_ancestry_delta() {
     // Content, not raw ancestry, drives the landed marker: a clean branch can
     // still be commits ahead of the trunk by ancestry after squash/rebase/merge

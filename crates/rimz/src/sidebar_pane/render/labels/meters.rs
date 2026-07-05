@@ -643,21 +643,6 @@ pub(in crate::sidebar_pane::render) fn branch_delta_spans(
     spans
 }
 
-/// `≡ main` — the worktree is clean, has done no work of its own, and sits at
-/// the trunk tip. Faint baseline chrome: a quiet "nothing to remove" marker,
-/// distinct from the bright merged action tone.
-pub(in crate::sidebar_pane::render) fn trunk_equal_spans(
-    theme: &Theme,
-    trunk: &str,
-) -> Vec<Span<'static>> {
-    trunk_glyph_spans(
-        theme,
-        GlyphRole::WorktreeTrunkEqual,
-        trunk,
-        Component::WorktreePristine,
-    )
-}
-
 /// Render a trunk marker as `<glyph> <trunk>` in the component tone named by
 /// the caller. Used by the trunk-state ladder after branch/diff stats.
 pub(in crate::sidebar_pane::render) fn trunk_glyph_spans(
