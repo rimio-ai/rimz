@@ -58,6 +58,18 @@ pub(super) fn sidebar_fixture_snapshot(
     for group in &mut snapshot.worktree_groups {
         group.status_counts = status_counts_from_rows(&group.rows, group.hidden_count);
     }
+    if state == SidebarFixtureState::Cockpit {
+        // A fleet larger than the visible cards: five idle agents rolled off the
+        // card list still count in the cockpit make-up (¤). hidden_count stays
+        // 0, so no "+N more" tail renders.
+        if let Some(group) = snapshot
+            .worktree_groups
+            .iter_mut()
+            .find(|group| group.label == "observer-lag")
+        {
+            group.status_counts = status_counts_from_rows(&group.rows, 5);
+        }
+    }
     snapshot.sort_groups_for_presentation();
     Ok(snapshot)
 }
@@ -78,8 +90,8 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "port auth watcher",
-        "Opus 4.1",
-        Some((67, 200_000, 128_400)),
+        "Opus 4.8",
+        Some((341_700, 12.40)),
         now,
     );
     let codex = agent_row(
@@ -91,8 +103,8 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::TurnPhase::Idle,
         "approve pricing cache write",
-        "GPT-5.1-Codex",
-        Some((41, 272_000, 96_200)),
+        "GPT-5.5",
+        Some((193_480, 4.36)),
         now,
     );
     let pi = agent_row(
@@ -105,7 +117,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::TurnPhase::Idle,
         "debug zellij health probe",
         "GPT-5.5",
-        Some((57, 400_000, 176_500)),
+        Some((258_610, 2.18)),
         now,
     );
     let process = rimz::SidebarRow {
@@ -176,6 +188,9 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
 }
 
 fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+    snapshot.display_name = "flightdeck".to_owned();
+    snapshot.project_root = Some(PathBuf::from("/srv/code/flightdeck"));
+    snapshot.worktree_roots = vec![PathBuf::from("/srv/code/flightdeck")];
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
     let claude = agent_row_with(
@@ -187,12 +202,11 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "stabilize render diff",
-        "Opus 4.1",
-        Some((58, 200_000, 118_400)),
+        "Opus 4.8",
+        Some((247_310, 8.64)),
         now,
         AgentRowOptions {
             age_secs: Some(45),
-            cost_usd: Some(18.40),
             ..AgentRowOptions::default()
         },
     );
@@ -206,11 +220,10 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Reasoning,
         "trace tmux layout parity",
         "GPT-5.5",
-        Some((32, 128_000, 44_200)),
+        Some((103_970, 3.07)),
         now,
         AgentRowOptions {
             age_secs: Some(4 * 60),
-            cost_usd: Some(6.75),
             compaction_count: 1,
             sub_agents: Some(Vec::new()),
             ..AgentRowOptions::default()
@@ -225,12 +238,11 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Reasoning,
         "compact provider trace",
-        "Opus 4.1",
-        Some((91, 200_000, 182_300)),
+        "Opus 4.8",
+        Some((797_420, 28.90)),
         now,
         AgentRowOptions {
             age_secs: Some(8 * 60),
-            cost_usd: Some(29.80),
             compacting: true,
             compaction_count: 3,
             sub_agents: Some(Vec::new()),
@@ -247,7 +259,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Idle,
         "park sidebar notes",
         "GPT-5.5",
-        Some((12, 400_000, 38_400)),
+        None,
         now,
         AgentRowOptions {
             age_secs: Some(65 * 60),
@@ -280,52 +292,24 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             ..rimz::ProcessCard::default()
         }),
     };
-    let pnpm = rimz::SidebarRow {
-        id: "process:pnpm-serve".to_owned(),
-        name: "pnpm serve".to_owned(),
-        pane: Some(pane_ref(
-            "terminal_30",
-            "pnpm serve",
-            "/srv/code/query-engine",
-            false,
-        )),
-        worktree_path: Some("/srv/code/query-engine".to_owned()),
-        worktree_branch: Some("main".to_owned()),
-        channel: None,
-        unread: false,
-        inactive: false,
-        archived: false,
-        attention_score: 0,
-        last_activity: now,
-        card: rimz::RowCard::Process(rimz::ProcessCard {
-            state: rimz::ProcessState::Busy,
-            command_detail: Some("vite dev :5173".to_owned()),
-            cpu_pct: Some(12),
-            rss_kb: Some(268_000),
-            io_bps: Some(450 * 1_024),
-            ..rimz::ProcessCard::default()
-        }),
-    };
-    let mut codex = agent_row_with(
+    let codex = agent_row_with(
         "agent:codex:pricing",
         "codex",
-        "terminal_34",
+        "terminal_09",
         "/srv/code/query-engine/.rimz/worktrees/pricing-refresh",
         "pricing-refresh",
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::TurnPhase::Idle,
         "approve pricing cache write",
-        "GPT-5.1-Codex",
-        Some((41, 272_000, 96_200)),
+        "GPT-5.5",
+        Some((158_210, 4.82)),
         now,
         AgentRowOptions {
             age_secs: Some(18 * 60),
-            cost_usd: Some(4.60),
             ..AgentRowOptions::default()
         },
     );
-    codex.unread = true;
-    let pi = agent_row_with(
+    let mut pi = agent_row_with(
         "agent:pi:zellij",
         "pi",
         "terminal_35",
@@ -335,11 +319,10 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Idle,
         "debug zellij health probe",
         "GPT-5.5",
-        Some((64, 400_000, 224_800)),
+        Some((228_540, 5.76)),
         now,
         AgentRowOptions {
             age_secs: Some(42 * 60),
-            cost_usd: Some(12.20),
             ..AgentRowOptions::default()
         },
     );
@@ -352,35 +335,36 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Success,
         rimz::agents::TurnPhase::Idle,
         "land tmux hook fix",
-        "Sonnet 4.6",
-        Some((18, 200_000, 28_000)),
+        "Opus 4.8",
+        Some((132_770, 2.41)),
         now,
         AgentRowOptions {
             age_secs: Some(2 * 60 * 60),
-            cost_usd: Some(3.15),
             ..AgentRowOptions::default()
         },
     );
     success.unread = true;
-    let paused = agent_row_with(
-        "agent:codex:mux-merge",
-        "codex",
+    let mut paused = agent_row_with(
+        "agent:claude:mux-merge-paused",
+        "claude",
         "terminal_37",
         "/srv/code/query-engine/.rimz/worktrees/mux-merge",
         "mux-merge",
         rimz::agents::AgentStatus::Paused,
         rimz::agents::TurnPhase::Idle,
-        "wait for provider window",
-        "GPT-5.1-Codex",
-        Some((77, 272_000, 205_100)),
+        "holding the tmux hook fix mid-land",
+        "Opus 4.8",
+        Some((469_180, 15.38)),
         now,
         AgentRowOptions {
             age_secs: Some(75 * 60),
-            cost_usd: Some(21.90),
+            turn_error_label: Some("API Error: Overloaded".to_owned()),
             ..AgentRowOptions::default()
         },
     );
-    let opencode_theme = agent_row_with(
+    paused.unread = true;
+    pi.unread = true;
+    let mut opencode_theme = agent_row_with(
         "agent:opencode:theme",
         "opencode",
         "terminal_40",
@@ -390,11 +374,10 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Idle,
         "pick gallery color ramp",
         "GPT-5.5",
-        Some((53, 128_000, 71_600)),
+        Some((42_130, 0.68)),
         now,
         AgentRowOptions {
-            age_secs: Some(25 * 60),
-            cost_usd: Some(5.20),
+            age_secs: Some(60 * 60),
             ..AgentRowOptions::default()
         },
     );
@@ -407,48 +390,47 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "verify 256-color fallback",
-        "Sonnet 4.6",
-        Some((36, 200_000, 74_800)),
+        "Opus 4.8",
+        Some((314_260, 6.95)),
         now,
         AgentRowOptions {
             age_secs: Some(6 * 60),
-            cost_usd: Some(11.60),
             ..AgentRowOptions::default()
         },
     );
     let pi_observer = agent_row_with(
-        "agent:pi:observer",
-        "pi",
+        "agent:claude:observer",
+        "claude",
         "terminal_47",
         "/srv/code/query-engine/.rimz/worktrees/observer-lag",
         "observer-lag",
         rimz::agents::AgentStatus::Paused,
         rimz::agents::TurnPhase::Idle,
-        "wait out OpenAI window",
-        "GPT-5.5",
-        Some((88, 400_000, 318_000)),
+        "frozen on the stale-pane triage",
+        "Opus 4.8",
+        Some((853_690, 29.84)),
         now,
         AgentRowOptions {
             age_secs: Some(93 * 60),
-            cost_usd: Some(33.10),
+            turn_error_label: Some("API Error: Overloaded".to_owned()),
             ..AgentRowOptions::default()
         },
     );
+    opencode_theme.unread = true;
     let codex_observer = agent_row_with(
         "agent:codex:observer",
         "codex",
         "terminal_48",
         "/srv/code/query-engine/.rimz/worktrees/observer-lag",
         "observer-lag",
-        rimz::agents::AgentStatus::Failed,
-        rimz::agents::TurnPhase::Idle,
+        rimz::agents::AgentStatus::Running,
+        rimz::agents::TurnPhase::Acting,
         "triage stale pane sample",
-        "GPT-5.1-Codex",
-        Some((61, 272_000, 149_200)),
+        "GPT-5.5",
+        Some((185_730, 3.83)),
         now,
         AgentRowOptions {
             age_secs: Some(54 * 60),
-            cost_usd: Some(9.80),
             ..AgentRowOptions::default()
         },
     );
@@ -461,8 +443,8 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Idle,
         rimz::agents::TurnPhase::Idle,
         "hold perf notes",
-        "Sonnet 4.6",
-        Some((14, 200_000, 31_400)),
+        "Opus 4.8",
+        None,
         now,
         AgentRowOptions {
             age_secs: Some(3 * 60 * 60),
@@ -475,8 +457,8 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             label: "main".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![claude, compacting, process, pnpm],
-            hidden_count: 14,
+            rows: vec![claude, compacting, process],
+            hidden_count: 0,
             diff_added: Some(1840),
             diff_removed: Some(620),
             commits_ahead: Some(3),
@@ -544,7 +526,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![opencode_theme, claude_theme],
-            hidden_count: 6,
+            hidden_count: 0,
             diff_added: Some(1320),
             diff_removed: Some(540),
             commits_ahead: Some(2),
@@ -567,7 +549,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
                 codex_observer,
                 claude_budget_idle,
             ],
-            hidden_count: 9,
+            hidden_count: 0,
             diff_added: Some(980),
             diff_removed: Some(360),
             commits_ahead: Some(1),
@@ -579,6 +561,20 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             pr_state: None,
         },
     ];
+    let mut codex_panel = provider_panel(
+        "codex",
+        Some("0.135.0"),
+        Some("ChatGPT Pro"),
+        true,
+        true,
+        budget_windows_timed(70, 90, 7_200, 423_360),
+        spend_tally(428.0, 31_200_000, 24),
+        now,
+    );
+    codex_panel.reset_credits = Some(rimz::ResetCredits {
+        count: 2,
+        soonest_expiry: None,
+    });
     snapshot.providers = vec![
         provider_panel(
             "claude",
@@ -586,20 +582,11 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             Some("Claude Max"),
             true,
             true,
-            budget_windows(40, 20),
+            budget_windows(30, 50),
             spend_tally(612.0, 42_600_000, 28),
             now,
         ),
-        provider_panel(
-            "codex",
-            Some("0.135.0"),
-            Some("ChatGPT Pro"),
-            true,
-            true,
-            budget_windows(58, 73),
-            spend_tally(428.0, 31_200_000, 24),
-            now,
-        ),
+        codex_panel,
         provider_panel(
             "pi",
             Some("0.11.4"),
@@ -624,16 +611,12 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
     snapshot.value_tally = Some(spend_tally(1_425.0, 91_100_000, 96));
     snapshot.workspace_value_tally = Some(spend_tally(1_168.0, 68_100_000, 78));
     snapshot.today_spend_live_usd = Some(392.0);
-    snapshot.link = Some(rimz::SidebarLinkHealth {
-        rtt_ms: Some(48),
-        miss_pct: 2,
-        tier: rimz::remote::link::LinkTier::Good,
-        freshness: rimz::SidebarLinkFreshness::Fresh,
-        sampled_at_ms: now.as_millisecond() as u64,
-    });
 }
 
 fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+    snapshot.display_name = "huddle".to_owned();
+    snapshot.project_root = Some(PathBuf::from("/srv/code/huddle"));
+    snapshot.worktree_roots = vec![PathBuf::from("/srv/code/huddle")];
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
     let coder = agent_row_with(
@@ -645,12 +628,13 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "wire auth router migration",
-        "GPT-5.1-Codex",
-        Some((72, 272_000, 151_900)),
+        "GPT-5.5",
+        Some((207_110, 11.84)),
         now,
         AgentRowOptions {
             handle: Some("coder".to_owned()),
-            cost_usd: Some(37.25),
+            launch_group: Some("auth-router-team".to_owned()),
+            launch_ordinal: Some(1),
             sub_agents: Some(vec![
                 sub_agent(
                     "child:general:test",
@@ -688,16 +672,17 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         "terminal_42",
         "/srv/code/query-engine/.rimz/worktrees/auth-router",
         "feature/auth-router",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Reasoning,
+        rimz::agents::AgentStatus::Success,
+        rimz::agents::TurnPhase::Idle,
         "plan router cutover",
-        "Opus 4.1",
-        Some((22, 200_000, 36_400)),
+        "Opus 4.8",
+        Some((183_450, 14.72)),
         now,
         AgentRowOptions {
             handle: Some("planner".to_owned()),
+            launch_group: Some("auth-router-team".to_owned()),
+            launch_ordinal: Some(0),
             age_secs: Some(22 * 60),
-            cost_usd: Some(8.35),
             sub_agents: Some(vec![
                 sub_agent(
                     "child:explore:routes",
@@ -738,8 +723,8 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                 sub_agent(
                     "child:plan:rollout",
                     "Plan",
-                    rimz::agents::AgentStatus::Running,
-                    rimz::agents::TurnPhase::Reasoning,
+                    rimz::agents::AgentStatus::Success,
+                    rimz::agents::TurnPhase::Idle,
                     Some("sequence rollout guard"),
                     Some("Haiku"),
                     Some("write migration runbook"),
@@ -750,8 +735,8 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
                 sub_agent(
                     "child:plan:review",
                     "Plan",
-                    rimz::agents::AgentStatus::Running,
-                    rimz::agents::TurnPhase::Reasoning,
+                    rimz::agents::AgentStatus::Success,
+                    rimz::agents::TurnPhase::Idle,
                     Some("stage review gates"),
                     Some("Haiku"),
                     Some("split blocking checks"),
@@ -763,26 +748,26 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             ..AgentRowOptions::default()
         },
     );
-    let mut reviewer = agent_row_with(
+    let reviewer = agent_row_with(
         "agent:pi:reviewer",
         "pi",
         "terminal_43",
         "/srv/code/query-engine/.rimz/worktrees/auth-router",
         "feature/auth-router",
-        rimz::agents::AgentStatus::Waiting,
+        rimz::agents::AgentStatus::Idle,
         rimz::agents::TurnPhase::Idle,
         "review auth router diff",
         "GPT-5.5",
-        Some((45, 400_000, 86_700)),
+        None,
         now,
         AgentRowOptions {
             handle: Some("reviewer".to_owned()),
+            launch_group: Some("auth-router-team".to_owned()),
+            launch_ordinal: Some(2),
             age_secs: Some(9 * 60),
-            cost_usd: Some(5.95),
             ..AgentRowOptions::default()
         },
     );
-    reviewer.unread = true;
     let rollout_coder = agent_row_with(
         "agent:codex:rollout-coder",
         "codex",
@@ -792,17 +777,16 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "patch rollout smoke harness",
-        "GPT-5.1-Codex",
-        Some((42, 272_000, 67_300)),
+        "GPT-5.5",
+        Some((142_260, 2.93)),
         now,
         AgentRowOptions {
             handle: Some("coder".to_owned()),
             age_secs: Some(5 * 60),
-            cost_usd: Some(6.30),
             ..AgentRowOptions::default()
         },
     );
-    let rollout_reviewer = agent_row_with(
+    let mut rollout_reviewer = agent_row_with(
         "agent:claude:rollout-reviewer",
         "claude",
         "terminal_45",
@@ -811,18 +795,18 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::TurnPhase::Idle,
         "approve staged migration",
-        "Opus 4.1",
-        Some((64, 200_000, 142_800)),
+        "Opus 4.8",
+        Some((347_890, 9.04)),
         now,
         AgentRowOptions {
             handle: Some("reviewer".to_owned()),
-            age_secs: Some(17 * 60),
-            cost_usd: Some(18.70),
+            age_secs: Some(52 * 60),
             compaction_count: 1,
             ..AgentRowOptions::default()
         },
     );
-    let ci_failed = agent_row_with(
+    rollout_reviewer.unread = true;
+    let mut ci_failed = agent_row_with(
         "agent:codex:ci",
         "codex",
         "terminal_48",
@@ -831,49 +815,48 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Failed,
         rimz::agents::TurnPhase::Idle,
         "fix flaky hook replay",
-        "GPT-5.1-Codex",
-        Some((58, 272_000, 133_500)),
+        "GPT-5.5",
+        Some((167_440, 4.58)),
         now,
         AgentRowOptions {
             age_secs: Some(44 * 60),
-            cost_usd: Some(10.25),
             ..AgentRowOptions::default()
         },
     );
+    ci_failed.unread = true;
     let pi_paused = agent_row_with(
-        "agent:pi:ci",
-        "pi",
+        "agent:claude:ci-paused",
+        "claude",
         "terminal_49",
         "/srv/code/query-engine/.rimz/worktrees/ci-retry",
         "ci-retry",
         rimz::agents::AgentStatus::Paused,
         rimz::agents::TurnPhase::Idle,
-        "resume after OpenAI cap",
-        "GPT-5.5",
-        Some((91, 400_000, 329_600)),
+        "parked mid hook-replay repair",
+        "Opus 4.8",
+        Some((823_560, 26.75)),
         now,
         AgentRowOptions {
             age_secs: Some(86 * 60),
-            cost_usd: Some(27.40),
+            turn_error_label: Some("API Error: Overloaded".to_owned()),
             ..AgentRowOptions::default()
         },
     );
-    let pi_tokens = agent_row_with(
-        "agent:pi:token-budget",
-        "pi",
+    let architect_tokens = agent_row_with(
+        "agent:claude:token-budget",
+        "claude",
         "terminal_50",
         "/srv/code/query-engine/.rimz/worktrees/token-budget",
         "token-budget",
         rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Reasoning,
+        rimz::agents::TurnPhase::Acting,
         "model OAuth token budget",
-        "GPT-5.5",
-        Some((37, 400_000, 138_400)),
+        "Opus 4.8",
+        Some((74_330, 1.26)),
         now,
         AgentRowOptions {
             handle: Some("architect".to_owned()),
             age_secs: Some(12 * 60),
-            cost_usd: Some(7.85),
             ..AgentRowOptions::default()
         },
     );
@@ -887,26 +870,25 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::TurnPhase::Idle,
         "land budget doc example",
         "GPT-5.5",
-        Some((26, 128_000, 35_900)),
+        Some((33_210, 0.54)),
         now,
         AgentRowOptions {
             handle: Some("developer".to_owned()),
             age_secs: Some(49 * 60),
-            cost_usd: Some(2.10),
             ..AgentRowOptions::default()
         },
     );
-    let claude_token_idle = agent_row_with(
-        "agent:claude:token-budget",
-        "claude",
+    let sre_tokens = agent_row_with(
+        "agent:codex:token-budget",
+        "codex",
         "terminal_57",
         "/srv/code/query-engine/.rimz/worktrees/token-budget",
         "token-budget",
         rimz::agents::AgentStatus::Idle,
         rimz::agents::TurnPhase::Idle,
         "wait for spend review",
-        "Sonnet 4.6",
-        Some((16, 200_000, 33_700)),
+        "GPT-5.5",
+        None,
         now,
         AgentRowOptions {
             handle: Some("sre".to_owned()),
@@ -921,7 +903,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![planner, coder, reviewer],
-            hidden_count: 8,
+            hidden_count: 0,
             diff_added: Some(1520),
             diff_removed: Some(470),
             commits_ahead: Some(2),
@@ -971,8 +953,8 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             label: "token-budget".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![pi_tokens, opencode_tokens, claude_token_idle],
-            hidden_count: 7,
+            rows: vec![architect_tokens, opencode_tokens, sre_tokens],
+            hidden_count: 0,
             diff_added: Some(1420),
             diff_removed: Some(520),
             commits_ahead: Some(1),
@@ -990,13 +972,13 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         Some("ChatGPT Pro"),
         true,
         true,
-        budget_windows_timed(45, 60, 16_200, 518_400),
+        budget_windows_timed(70, 90, 7_200, 423_360),
         spend_tally(401.0, 26_600_000, 21),
         now,
     );
     codex_panel.reset_credits = Some(rimz::ResetCredits {
         count: 2,
-        soonest_expiry: Some(now + std::time::Duration::from_secs(30 * 60 * 60)),
+        soonest_expiry: None,
     });
     snapshot.providers = vec![
         provider_panel(
@@ -1005,7 +987,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             Some("Claude Max"),
             true,
             true,
-            budget_windows(39, 52),
+            budget_windows(30, 50),
             spend_tally(506.0, 38_200_000, 25),
             now,
         ),
@@ -1034,12 +1016,22 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     snapshot.value_tally = Some(spend_tally(1_125.0, 76_200_000, 88));
     snapshot.workspace_value_tally = Some(spend_tally(1_125.0, 76_200_000, 88));
     snapshot.today_spend_live_usd = Some(268.0);
+    snapshot.link = Some(rimz::SidebarLinkHealth {
+        rtt_ms: Some(48),
+        miss_pct: 2,
+        tier: rimz::remote::link::LinkTier::Good,
+        freshness: rimz::SidebarLinkFreshness::Fresh,
+        sampled_at_ms: now.as_millisecond() as u64,
+    });
 }
 
 fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+    snapshot.display_name = "abacus".to_owned();
+    snapshot.project_root = Some(PathBuf::from("/srv/code/abacus"));
+    snapshot.worktree_roots = vec![PathBuf::from("/srv/code/abacus")];
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    let opencode = agent_row_with(
+    let mut opencode = agent_row_with(
         "agent:opencode:economy",
         "opencode",
         "terminal_51",
@@ -1049,14 +1041,14 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Acting,
         "rebalance metered sessions",
         "GPT-5.5",
-        Some((46, 128_000, 58_400)),
+        Some((175_350, 7.44)),
         now,
         AgentRowOptions {
             age_secs: Some(55),
-            cost_usd: Some(14.20),
             ..AgentRowOptions::default()
         },
     );
+    opencode.unread = true;
     let mut claude = agent_row_with(
         "agent:claude:economy",
         "claude",
@@ -1066,16 +1058,41 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Reasoning,
         "audit provider spend",
-        "Sonnet 4.6",
-        Some((38, 200_000, 75_400)),
+        "Opus 4.8",
+        Some((296_430, 12.62)),
         now,
         AgentRowOptions {
             age_secs: Some(6 * 60),
-            cost_usd: Some(22.45),
             ..AgentRowOptions::default()
         },
     );
     claude.unread = true;
+    let pnpm = rimz::SidebarRow {
+        id: "process:pnpm-serve".to_owned(),
+        name: "pnpm serve".to_owned(),
+        pane: Some(pane_ref(
+            "terminal_30",
+            "pnpm serve",
+            "/srv/code/query-engine",
+            false,
+        )),
+        worktree_path: Some("/srv/code/query-engine".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        channel: None,
+        unread: false,
+        inactive: false,
+        archived: false,
+        attention_score: 0,
+        last_activity: now,
+        card: rimz::RowCard::Process(rimz::ProcessCard {
+            state: rimz::ProcessState::Busy,
+            command_detail: Some("vite dev :5173".to_owned()),
+            cpu_pct: Some(12),
+            rss_kb: Some(268_000),
+            io_bps: Some(450 * 1_024),
+            ..rimz::ProcessCard::default()
+        }),
+    };
     let codex = agent_row_with(
         "agent:codex:economy",
         "codex",
@@ -1085,16 +1102,15 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::TurnPhase::Idle,
         "approve price snapshot",
-        "GPT-5.1-Codex",
-        Some((49, 272_000, 101_200)),
+        "GPT-5.5",
+        Some((118_620, 3.29)),
         now,
         AgentRowOptions {
             age_secs: Some(14 * 60),
-            cost_usd: Some(7.10),
             ..AgentRowOptions::default()
         },
     );
-    let pi = agent_row_with(
+    let mut pi = agent_row_with(
         "agent:pi:budget",
         "pi",
         "terminal_54",
@@ -1104,14 +1120,14 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Idle,
         "publish budget notes",
         "GPT-5.5",
-        Some((33, 400_000, 118_900)),
+        Some((96_840, 1.74)),
         now,
         AgentRowOptions {
             age_secs: Some(31 * 60),
-            cost_usd: Some(3.25),
             ..AgentRowOptions::default()
         },
     );
+    pi.unread = true;
     let codex_idle = agent_row_with(
         "agent:codex:budget",
         "codex",
@@ -1121,15 +1137,15 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Idle,
         rimz::agents::TurnPhase::Idle,
         "hold weekly spend cap",
-        "GPT-5.1-Codex",
-        Some((19, 272_000, 45_200)),
+        "GPT-5.5",
+        None,
         now,
         AgentRowOptions {
             age_secs: Some(83 * 60),
             ..AgentRowOptions::default()
         },
     );
-    let mut opencode_limit = agent_row_with(
+    let opencode_limit = agent_row_with(
         "agent:opencode:limit",
         "opencode",
         "terminal_56",
@@ -1139,48 +1155,47 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Idle,
         "approve burst throttle",
         "GPT-5.5",
-        Some((61, 128_000, 84_200)),
+        Some((216_700, 5.18)),
         now,
         AgentRowOptions {
             age_secs: Some(19 * 60),
-            cost_usd: Some(8.45),
             ..AgentRowOptions::default()
         },
     );
-    opencode_limit.unread = true;
-    let pi_limit = agent_row_with(
-        "agent:pi:limit",
-        "pi",
+    let mut pi_limit = agent_row_with(
+        "agent:claude:limit-paused",
+        "claude",
         "terminal_57",
         "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
         "usage-alerts",
         rimz::agents::AgentStatus::Paused,
         rimz::agents::TurnPhase::Idle,
-        "wait for weekly cap reset",
-        "GPT-5.5",
-        Some((100, 400_000, 386_000)),
+        "staged the budget-alert fix, idling",
+        "Opus 4.8",
+        Some((856_120, 29.36)),
         now,
         AgentRowOptions {
             age_secs: Some(2 * 60 * 60),
-            cost_usd: Some(39.80),
+            turn_error_label: Some("API Error: rate limit exceeded".to_owned()),
             ..AgentRowOptions::default()
         },
     );
+    pi_limit.unread = true;
     let claude_limit = agent_row_with(
         "agent:claude:limit",
         "claude",
         "terminal_58",
         "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
         "usage-alerts",
-        rimz::agents::AgentStatus::Failed,
-        rimz::agents::TurnPhase::Idle,
+        rimz::agents::AgentStatus::Running,
+        rimz::agents::TurnPhase::Acting,
         "repair budget alert webhook",
-        "Sonnet 4.6",
-        Some((69, 200_000, 154_400)),
+        "Opus 4.8",
+        Some((372_640, 8.91)),
         now,
         AgentRowOptions {
             age_secs: Some(48 * 60),
-            cost_usd: Some(17.35),
+            compacting: true,
             ..AgentRowOptions::default()
         },
     );
@@ -1190,15 +1205,14 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         "terminal_59",
         "/srv/code/query-engine/.rimz/worktrees/credit-ledger",
         "credit-ledger",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
+        rimz::agents::AgentStatus::Success,
+        rimz::agents::TurnPhase::Idle,
         "fold extra-credit API",
-        "GPT-5.1-Codex",
-        Some((44, 272_000, 104_800)),
+        "GPT-5.5",
+        Some((158_930, 2.67)),
         now,
         AgentRowOptions {
             age_secs: Some(7 * 60),
-            cost_usd: Some(6.95),
             ..AgentRowOptions::default()
         },
     );
@@ -1212,15 +1226,14 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Idle,
         "land credit ledger docs",
         "GPT-5.5",
-        Some((22, 128_000, 30_100)),
+        Some((29_250, 0.42)),
         now,
         AgentRowOptions {
             age_secs: Some(55 * 60),
-            cost_usd: Some(1.90),
             ..AgentRowOptions::default()
         },
     );
-    let claude_credit = agent_row_with(
+    let mut claude_credit = agent_row_with(
         "agent:claude:credits",
         "claude",
         "terminal_66",
@@ -1229,15 +1242,15 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::AgentStatus::Success,
         rimz::agents::TurnPhase::Idle,
         "summarize metered tradeoffs",
-        "Sonnet 4.6",
-        Some((28, 200_000, 52_600)),
+        "Opus 4.8",
+        Some((165_880, 4.08)),
         now,
         AgentRowOptions {
             age_secs: Some(71 * 60),
-            cost_usd: Some(4.25),
             ..AgentRowOptions::default()
         },
     );
+    claude_credit.unread = true;
     let pi_credit_idle = agent_row_with(
         "agent:pi:credits",
         "pi",
@@ -1248,7 +1261,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         rimz::agents::TurnPhase::Idle,
         "watch credit refill",
         "GPT-5.5",
-        Some((9, 400_000, 22_100)),
+        None,
         now,
         AgentRowOptions {
             age_secs: Some(3 * 60 * 60),
@@ -1261,7 +1274,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             label: "provider-ledger".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![opencode, claude],
+            rows: vec![opencode, claude, pnpm],
             hidden_count: 0,
             diff_added: Some(1580),
             diff_removed: Some(520),
@@ -1313,7 +1326,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![opencode_limit, pi_limit, claude_limit],
-            hidden_count: 11,
+            hidden_count: 0,
             diff_added: Some(1980),
             diff_removed: Some(740),
             commits_ahead: Some(2),
@@ -1330,16 +1343,16 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![codex_credit, opencode_credit, claude_credit, pi_credit_idle],
-            hidden_count: 10,
-            diff_added: Some(1340),
-            diff_removed: Some(480),
-            commits_ahead: Some(3),
+            hidden_count: 0,
+            diff_added: Some(0),
+            diff_removed: Some(0),
+            commits_ahead: Some(0),
             commits_behind: Some(0),
             trunk: Some("main".to_owned()),
-            clean: Some(false),
-            landed: Some(false),
-            trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
-            pr_state: Some(rimz::WorktreePrState::Open),
+            clean: Some(true),
+            landed: Some(true),
+            trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
+            pr_state: Some(rimz::WorktreePrState::Merged),
         },
     ];
     let mut codex_panel = provider_panel(
@@ -1385,7 +1398,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             Some("OpenAI OAuth"),
             true,
             false,
-            budget_windows_timed(60, 99, 7_200, 3_600),
+            budget_windows_timed(100, 100, 7_200, 345_600),
             spend_tally(516.0, 28_400_000, 29),
             now,
         ),
@@ -1396,8 +1409,11 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
 }
 
 fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
+    snapshot.display_name = "farlink".to_owned();
+    snapshot.project_root = Some(PathBuf::from("/srv/code/farlink"));
+    snapshot.worktree_roots = vec![PathBuf::from("/srv/code/farlink")];
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    let claude = agent_row_with(
+    let mut claude = agent_row_with(
         "agent:claude:reach",
         "claude",
         "terminal_61",
@@ -1406,17 +1422,17 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "verify remote attach",
-        "Sonnet 4.6",
-        Some((35, 200_000, 71_400)),
+        "Opus 4.8",
+        Some((333_710, 13.56)),
         now,
         AgentRowOptions {
             age_secs: Some(35),
-            cost_usd: Some(16.80),
             compaction_count: 2,
             ..AgentRowOptions::default()
         },
     );
-    let codex = agent_row_with(
+    claude.unread = true;
+    let mut codex = agent_row_with(
         "agent:codex:reach",
         "codex",
         "terminal_62",
@@ -1425,15 +1441,15 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::TurnPhase::Idle,
         "approve SSH link retry",
-        "GPT-5.1-Codex",
-        Some((52, 272_000, 112_200)),
+        "GPT-5.5",
+        Some((153_560, 3.71)),
         now,
         AgentRowOptions {
             age_secs: Some(11 * 60),
-            cost_usd: Some(4.90),
             ..AgentRowOptions::default()
         },
     );
+    codex.unread = true;
     let pi = agent_row_with(
         "agent:pi:reach",
         "pi",
@@ -1444,29 +1460,27 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::TurnPhase::Reasoning,
         "trace ControlMaster jitter",
         "GPT-5.5",
-        Some((44, 400_000, 162_700)),
+        Some((185_910, 4.44)),
         now,
         AgentRowOptions {
             age_secs: Some(19 * 60),
-            cost_usd: Some(9.40),
             ..AgentRowOptions::default()
         },
     );
     let mut opencode = agent_row_with(
         "agent:opencode:edge-cache",
         "opencode",
-        "terminal_64",
+        "terminal_67",
         "/srv/code/query-engine/.rimz/worktrees/edge-cache",
         "edge-cache",
         rimz::agents::AgentStatus::Success,
         rimz::agents::TurnPhase::Idle,
         "land offline cache probe",
         "GPT-5.5",
-        Some((29, 128_000, 41_600)),
+        Some((61_170, 0.91)),
         now,
         AgentRowOptions {
             age_secs: Some(46 * 60),
-            cost_usd: Some(2.65),
             ..AgentRowOptions::default()
         },
     );
@@ -1474,75 +1488,73 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     let claude_idle = agent_row_with(
         "agent:claude:edge-cache",
         "claude",
-        "terminal_65",
+        "terminal_68",
         "/srv/code/query-engine/.rimz/worktrees/edge-cache",
         "edge-cache",
         rimz::agents::AgentStatus::Idle,
         rimz::agents::TurnPhase::Idle,
         "wait for laptop reconnect",
-        "Sonnet 4.6",
-        Some((17, 200_000, 33_200)),
+        "Opus 4.8",
+        None,
         now,
         AgentRowOptions {
             age_secs: Some(94 * 60),
             ..AgentRowOptions::default()
         },
     );
-    let mut pi_vpn = agent_row_with(
-        "agent:pi:vpn",
+    let pi_netcheck = agent_row_with(
+        "agent:pi:netcheck",
         "pi",
-        "terminal_66",
-        "/srv/code/query-engine/.rimz/worktrees/vpn-check",
-        "vpn-check",
-        rimz::agents::AgentStatus::Failed,
-        rimz::agents::TurnPhase::Idle,
+        "terminal_64",
+        "/srv/code/query-engine/.rimz/worktrees/network-check",
+        "network-check",
+        rimz::agents::AgentStatus::Running,
+        rimz::agents::TurnPhase::Acting,
         "debug jump-host DNS",
         "GPT-5.5",
-        Some((73, 400_000, 246_800)),
+        Some((251_620, 6.24)),
         now,
         AgentRowOptions {
             age_secs: Some(51 * 60),
-            cost_usd: Some(13.55),
             ..AgentRowOptions::default()
         },
     );
-    pi_vpn.unread = true;
-    let opencode_vpn = agent_row_with(
-        "agent:opencode:vpn",
-        "opencode",
-        "terminal_67",
-        "/srv/code/query-engine/.rimz/worktrees/vpn-check",
-        "vpn-check",
+    let claude_netcheck_paused = agent_row_with(
+        "agent:claude:netcheck-paused",
+        "claude",
+        "terminal_65",
+        "/srv/code/query-engine/.rimz/worktrees/network-check",
+        "network-check",
         rimz::agents::AgentStatus::Paused,
         rimz::agents::TurnPhase::Idle,
-        "wait for remote tunnel quota",
-        "GPT-5.5",
-        Some((82, 128_000, 104_900)),
+        "halfway through the jump-host DNS fix",
+        "Opus 4.8",
+        Some((414_390, 10.76)),
         now,
         AgentRowOptions {
             age_secs: Some(73 * 60),
-            cost_usd: Some(18.30),
+            turn_error_label: Some("API Error: rate limit exceeded".to_owned()),
             ..AgentRowOptions::default()
         },
     );
-    let claude_vpn = agent_row_with(
-        "agent:claude:vpn",
+    let mut claude_netcheck = agent_row_with(
+        "agent:claude:netcheck",
         "claude",
-        "terminal_68",
-        "/srv/code/query-engine/.rimz/worktrees/vpn-check",
-        "vpn-check",
+        "terminal_66",
+        "/srv/code/query-engine/.rimz/worktrees/network-check",
+        "network-check",
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::TurnPhase::Idle,
-        "approve VPN key rotation",
-        "Sonnet 4.6",
-        Some((46, 200_000, 82_300)),
+        "approve firewall rule change",
+        "Opus 4.8",
+        Some((236_510, 6.88)),
         now,
         AgentRowOptions {
             age_secs: Some(24 * 60),
-            cost_usd: Some(6.45),
             ..AgentRowOptions::default()
         },
     );
+    claude_netcheck.unread = true;
     let codex_web = agent_row_with(
         "agent:codex:web",
         "codex",
@@ -1552,16 +1564,15 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Running,
         rimz::agents::TurnPhase::Acting,
         "exercise browser handoff",
-        "GPT-5.1-Codex",
-        Some((39, 272_000, 93_700)),
+        "GPT-5.5",
+        Some((129_080, 2.36)),
         now,
         AgentRowOptions {
             age_secs: Some(8 * 60),
-            cost_usd: Some(5.35),
             ..AgentRowOptions::default()
         },
     );
-    let pi_web = agent_row_with(
+    let mut pi_web = agent_row_with(
         "agent:pi:web",
         "pi",
         "terminal_70",
@@ -1571,14 +1582,14 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::TurnPhase::Idle,
         "document OAuth browser path",
         "GPT-5.5",
-        Some((21, 400_000, 74_600)),
+        Some((50_190, 0.73)),
         now,
         AgentRowOptions {
             age_secs: Some(64 * 60),
-            cost_usd: Some(2.75),
             ..AgentRowOptions::default()
         },
     );
+    pi_web.unread = true;
     let opencode_stats = agent_row_with(
         "agent:opencode:stats",
         "opencode",
@@ -1589,11 +1600,10 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::TurnPhase::Reasoning,
         "profile stats relay latency",
         "GPT-5.5",
-        Some((31, 128_000, 47_900)),
+        Some((85_470, 1.58)),
         now,
         AgentRowOptions {
             age_secs: Some(13 * 60),
-            cost_usd: Some(4.70),
             ..AgentRowOptions::default()
         },
     );
@@ -1606,8 +1616,8 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         rimz::agents::AgentStatus::Idle,
         rimz::agents::TurnPhase::Idle,
         "hold remote stats notes",
-        "Sonnet 4.6",
-        Some((11, 200_000, 25_800)),
+        "Opus 4.8",
+        None,
         now,
         AgentRowOptions {
             age_secs: Some(2 * 60 * 60),
@@ -1667,12 +1677,12 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             pr_state: Some(rimz::WorktreePrState::Open),
         },
         rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/vpn-check".to_owned(),
-            label: "vpn-check".to_owned(),
+            key: "/srv/code/query-engine/.rimz/worktrees/network-check".to_owned(),
+            label: "network-check".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![pi_vpn, opencode_vpn, claude_vpn],
-            hidden_count: 4,
+            rows: vec![pi_netcheck, claude_netcheck_paused, claude_netcheck],
+            hidden_count: 0,
             diff_added: Some(1680),
             diff_removed: Some(610),
             commits_ahead: Some(1),
@@ -1706,7 +1716,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![opencode_stats, claude_stats_idle],
-            hidden_count: 3,
+            hidden_count: 0,
             diff_added: Some(0),
             diff_removed: Some(0),
             commits_ahead: Some(0),
@@ -1745,7 +1755,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             Some("OpenAI OAuth"),
             true,
             false,
-            budget_windows_timed(100, 20, 2_400, 172_800),
+            budget_windows_timed(100, 76, 10_800, 172_800),
             spend_tally(144.0, 8_900_000, 9),
             now,
         ),
@@ -1776,7 +1786,7 @@ fn agent_row(
     phase: rimz::agents::TurnPhase,
     task: &str,
     model: &str,
-    context: Option<(u8, u64, u64)>,
+    context: Option<(u64, f64)>,
     now: jiff::Timestamp,
 ) -> rimz::SidebarRow {
     agent_row_with(
@@ -1798,10 +1808,12 @@ fn agent_row(
 #[derive(Default)]
 struct AgentRowOptions {
     handle: Option<String>,
+    launch_group: Option<String>,
+    launch_ordinal: Option<u32>,
     sub_agents: Option<Vec<rimz::SidebarSubAgent>>,
     age_secs: Option<i64>,
-    cost_usd: Option<f64>,
     account_sub_provider: Option<&'static str>,
+    turn_error_label: Option<String>,
     compacting: bool,
     compaction_count: u32,
 }
@@ -1817,37 +1829,61 @@ fn agent_row_with(
     phase: rimz::agents::TurnPhase,
     task: &str,
     model: &str,
-    context: Option<(u8, u64, u64)>,
+    context: Option<(u64, f64)>,
     now: jiff::Timestamp,
     options: AgentRowOptions,
 ) -> rimz::SidebarRow {
-    let (context_pct, context_window, total_tokens) = context
-        .map_or((None, None, None), |(pct, window, total)| {
-            (Some(pct), Some(window), Some(total))
-        });
+    let is_idle = status == rimz::agents::AgentStatus::Idle;
+    // context = (live context-window tokens for the bar/breakdown, cumulative
+    // session cost in USD). The two are independent: fill is a snapshot, cost is
+    // lifetime spend and does not track the current fill.
+    let (context_pct, context_window, total_tokens, cost_usd) = if is_idle {
+        (None, None, None, None)
+    } else {
+        context.map_or((None, None, None, None), |(total, cost)| {
+            let window = context_window_for_kind(name);
+            let used = total.min(window - 1);
+            let pct = used.saturating_mul(100).div_euclid(window).min(100) as u8;
+            (Some(pct), Some(window), Some(used), Some(cost))
+        })
+    };
     let activity_at = options.age_secs.map_or(now, |secs| {
         now - std::time::Duration::from_secs(secs.max(0) as u64)
     });
     let account_sub_provider = options
         .account_sub_provider
         .or_else(|| openai_sub_provider(name));
+    // Cache-heavy, realistic split: the first three fields sum to the window fill,
+    // with cache_read taking the remainder for an exact sum; output rides separately
+    // and lands in the window next turn. Fresh input is a small slice of the cached
+    // context. Only Claude reports explicit cache-creation tokens — GPT/Codex caching
+    // is implicit, so those cards carry none.
+    let split = total_tokens.map(|tokens| {
+        let fresh_input = tokens / 25;
+        let cache_write = if name == "claude" { tokens / 10 } else { 0 };
+        let cache_read = tokens - cache_write - fresh_input;
+        let output = tokens / 8;
+        (cache_read, cache_write, fresh_input, output)
+    });
     let mut card = rimz::AgentCard {
         status,
         phase,
         surface: Some(rimz::Surface::NativeUi),
-        task: Some(task.to_owned()),
+        task: (!is_idle).then(|| task.to_owned()),
         model: Some(model.to_owned()),
+        effort: Some("xhigh".to_owned()),
         handle: options.handle,
         team: None,
-        launch_group: None,
-        launch_ordinal: None,
+        launch_group: options.launch_group,
+        launch_ordinal: options.launch_ordinal,
 
         context_pct,
         context_window,
         total_tokens,
-        cache_read_input_tokens: Some(total_tokens.unwrap_or_default() / 3),
-        fresh_input_tokens: Some(total_tokens.unwrap_or_default() / 5),
-        output_tokens: Some(total_tokens.unwrap_or_default() / 8),
+        cache_read_input_tokens: split.map(|tokens| tokens.0),
+        cache_write_input_tokens: split.map(|tokens| tokens.1),
+        fresh_input_tokens: split.map(|tokens| tokens.2),
+        output_tokens: split.map(|tokens| tokens.3),
         context_severity: context_pct.map(|pct| {
             rimz::agents::ContextSeverity::classify(
                 pct,
@@ -1860,17 +1896,12 @@ fn agent_row_with(
         compaction_count: options.compaction_count,
         ..rimz::AgentCard::default()
     };
-    if options.cost_usd.is_some() || account_sub_provider.is_some() {
-        card.context = Some(agent_context(
-            name,
-            now,
-            options.cost_usd,
-            account_sub_provider,
-        ));
+    if !is_idle && (cost_usd.is_some() || account_sub_provider.is_some()) {
+        card.context = Some(agent_context(name, now, cost_usd, account_sub_provider));
     }
-    if status == rimz::agents::AgentStatus::Failed {
-        card.turn_error_label = Some("API error".to_owned());
-    }
+    card.turn_error_label = options
+        .turn_error_label
+        .or_else(|| (status == rimz::agents::AgentStatus::Failed).then(|| "API error".to_owned()));
     match options.sub_agents {
         Some(sub_agents) => card.sub_agents = sub_agents,
         None if status == rimz::agents::AgentStatus::Running => {
@@ -1893,6 +1924,10 @@ fn agent_row_with(
         last_activity: activity_at,
         card: rimz::RowCard::Agent(Box::new(card)),
     }
+}
+
+fn context_window_for_kind(kind: &str) -> u64 {
+    if kind == "claude" { 1_000_000 } else { 272_000 }
 }
 
 fn openai_sub_provider(kind: &str) -> Option<&'static str> {
@@ -1988,7 +2023,7 @@ fn sub_agent(
         phase,
         task: task.map(ToOwned::to_owned),
         model: model.map(ToOwned::to_owned),
-        effort: None,
+        effort: Some("xhigh".to_owned()),
         description: description.map(ToOwned::to_owned),
         total_tokens,
         elapsed_secs,
@@ -2132,7 +2167,7 @@ fn provider_panel(
         metered,
         remote_control,
         spending: Some(spending),
-        extra_credits: None,
+        extra_credits: matches!(kind, "pi" | "opencode").then_some(rimz::ExtraCredits::Disabled),
         reset_credits: None,
         windows,
     }

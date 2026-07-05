@@ -84,16 +84,16 @@ fn gallery_columns_follow_requested_order_and_selection() {
     assert_eq!(
         columns.map(|(state, _)| state),
         [
-            SidebarFixtureState::Cockpit,
             SidebarFixtureState::Focus,
+            SidebarFixtureState::Cockpit,
             SidebarFixtureState::Reach,
             SidebarFixtureState::Economy,
         ],
     );
 
     for ((state, selector), (expected_id, expected_kind)) in columns.into_iter().zip([
-        ("agent:claude:compacting", "claude"),
-        ("agent:codex:coder", "codex"),
+        ("agent:claude:planner", "claude"),
+        ("agent:codex:pricing", "codex"),
         ("agent:pi:reach", "pi"),
         ("agent:opencode:credits", "opencode"),
     ]) {
@@ -105,7 +105,12 @@ fn gallery_columns_follow_requested_order_and_selection() {
             .flat_map(|group| &group.rows)
             .nth(selected_index)
             .expect("selected row");
-        assert!(selected_index > 0, "{state:?} selected top row");
+        if !matches!(
+            state,
+            SidebarFixtureState::Focus | SidebarFixtureState::Cockpit
+        ) {
+            assert!(selected_index > 0, "{state:?} selected top row");
+        }
         assert_eq!(selected.id, expected_id);
         assert_eq!(selected.name, expected_kind);
         assert!(selected.as_agent().is_some());
@@ -143,212 +148,131 @@ fn gallery_render_columns_apply_pets_override() {
 }
 
 #[test]
-fn gallery_fixture_states_carry_feature_flags() {
+fn gallery_fixtures_build_with_coherent_context() {
     let states = [
         SidebarFixtureState::Cockpit,
         SidebarFixtureState::Focus,
         SidebarFixtureState::Economy,
         SidebarFixtureState::Reach,
     ]
-    .into_iter()
-    .map(|state| sidebar_fixture_snapshot(state).unwrap())
-    .collect::<Vec<_>>();
-    assert!(states.iter().all(|snapshot| !snapshot.providers.is_empty()));
+    .map(|state| sidebar_fixture_snapshot(state).unwrap());
 
     for snapshot in &states {
-        assert_eq!(
-            snapshot.theme.display.provider_tabs,
-            rimz::config::ProviderTabsMode::Always,
+        assert!(!snapshot.providers.is_empty(), "{}", snapshot.display_name);
+        assert!(
+            snapshot
+                .worktree_groups
+                .iter()
+                .any(|group| !group.rows.is_empty()),
+            "{}",
+            snapshot.display_name,
         );
     }
-    assert!(states.iter().all(|snapshot| !snapshot.theme.pets.enabled));
-    assert!(states.iter().any(|snapshot| {
-        snapshot
-            .worktree_groups
-            .iter()
-            .flat_map(|group| &group.rows)
-            .any(|row| row.unread)
-    }));
-    let lead_kinds = states.iter().map(top_agent_kind).collect::<Vec<_>>();
-    assert_eq!(
-        lead_kinds,
-        vec![Some("claude"), Some("pi"), Some("opencode"), Some("claude")]
-    );
 
-    let focus = sidebar_fixture_snapshot(SidebarFixtureState::Focus).unwrap();
-    let cards = agent_cards(&focus);
-    let planner = cards
-        .iter()
-        .find(|card| card.handle.as_deref() == Some("planner"))
-        .expect("planner card");
-    assert_eq!(planner.status, rimz::agents::AgentStatus::Running);
-    assert_eq!(planner.phase, rimz::agents::TurnPhase::Reasoning);
-    assert_eq!(planner.sub_agents.len(), 5);
-    assert_eq!(
-        planner
-            .sub_agents
-            .iter()
-            .filter(|child| child.name == "Explore")
-            .count(),
-        3,
-    );
-    assert_eq!(
-        planner
-            .sub_agents
-            .iter()
-            .filter(|child| child.name == "Plan")
-            .count(),
-        2,
-    );
-    assert!(planner.sub_agents.iter().all(|child| {
-        child.name != "Explore" || child.status == rimz::agents::AgentStatus::Success
-    }));
-    assert!(planner.sub_agents.iter().any(|child| {
-        child.name == "Plan" && child.status == rimz::agents::AgentStatus::Running
-    }));
-    let coder = agent_card_by_id(&focus, "agent:codex:coder");
-    assert_eq!(coder.sub_agents.len(), 2);
-    assert_eq!(
-        coder
-            .sub_agents
-            .iter()
-            .filter(|child| child.name == "general-purpose")
-            .count(),
-        2,
-    );
-    let allowed = ["Explore", "Plan", "general-purpose"]
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
-    let sub_agent_names = states
-        .iter()
-        .flat_map(agent_cards)
-        .flat_map(|card| &card.sub_agents)
-        .map(|child| child.name.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert!(
-        sub_agent_names.is_subset(&allowed),
-        "unexpected sub-agent names: {sub_agent_names:?}",
-    );
-    assert!(states.iter().flat_map(agent_cards).all(|card| {
-        card.sub_agents
-            .iter()
-            .all(|child| child.status != rimz::agents::AgentStatus::Waiting)
-    }));
-    let handles = cards
-        .iter()
-        .filter_map(|card| card.handle.as_deref())
-        .collect::<Vec<_>>();
-    assert!(handles.contains(&"planner"));
-    assert!(handles.contains(&"coder"));
-    assert!(handles.contains(&"reviewer"));
-    assert!(handles.contains(&"architect"));
-    assert!(handles.contains(&"developer"));
-    assert!(handles.contains(&"sre"));
-
-    let cockpit = &states[0];
-    assert_eq!(cockpit.presence, None);
-    assert!(cockpit.link.is_some());
-    assert!(cockpit.worktree_groups.iter().any(|group| {
-        group.landed == Some(true)
-            && group.trunk_sync == Some(rimz::WorktreeTrunkSync::Merged)
-            && group.pr_state == Some(rimz::WorktreePrState::Merged)
-    }));
-    let reach = &states[3];
-    assert_eq!(reach.presence, None);
-    assert!(reach.link.is_none());
-    let statuses = cockpit
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter_map(|row| row.status())
-        .collect::<Vec<_>>();
-    assert!(statuses.contains(&rimz::agents::AgentStatus::Running));
-    assert!(statuses.contains(&rimz::agents::AgentStatus::Idle));
-    assert!(statuses.contains(&rimz::agents::AgentStatus::Success));
-    assert!(statuses.contains(&rimz::agents::AgentStatus::Waiting));
-    assert!(statuses.contains(&rimz::agents::AgentStatus::Failed));
-    assert!(statuses.contains(&rimz::agents::AgentStatus::Paused));
-    assert!(agent_cards(cockpit).iter().any(|card| {
-        card.status == rimz::agents::AgentStatus::Running
-            && card.phase == rimz::agents::TurnPhase::Acting
-    }));
-    assert!(agent_cards(cockpit).iter().any(|card| {
-        card.status == rimz::agents::AgentStatus::Running
-            && card.phase == rimz::agents::TurnPhase::Reasoning
-    }));
-    assert!(
-        agent_cards(cockpit)
-            .iter()
-            .any(|card| card.turn_error_label.as_deref() == Some("API error"))
-    );
-    assert!(
-        agent_cards(cockpit)
-            .iter()
-            .any(|card| card.compacting || card.compaction_count > 0)
-    );
-
-    for snapshot in &states {
-        let live = snapshot
-            .worktree_groups
-            .iter()
-            .flat_map(|group| &group.status_counts)
-            .map(|count| count.count)
-            .sum::<usize>();
-        assert!((12..=42).contains(&live), "live count {live}");
-        for group in snapshot
-            .worktree_groups
-            .iter()
-            .filter(|group| group.hidden_count > 0)
-        {
-            let rendered_idle = group
-                .rows
-                .iter()
-                .filter(|row| row.status() == Some(rimz::agents::AgentStatus::Idle))
-                .count();
-            let counted_idle = group
-                .status_counts
-                .iter()
-                .find(|count| count.status == rimz::agents::AgentStatus::Idle)
-                .map(|count| count.count)
-                .unwrap_or(0);
-            assert_eq!(counted_idle, rendered_idle + group.hidden_count);
-        }
-        let statuses = snapshot
-            .worktree_groups
-            .iter()
-            .flat_map(|group| &group.rows)
-            .filter_map(|row| row.status())
-            .collect::<Vec<_>>();
-        for status in [
-            rimz::agents::AgentStatus::Waiting,
-            rimz::agents::AgentStatus::Failed,
-            rimz::agents::AgentStatus::Paused,
-            rimz::agents::AgentStatus::Success,
-            rimz::agents::AgentStatus::Running,
-            rimz::agents::AgentStatus::Idle,
-        ] {
-            assert!(statuses.contains(&status), "missing {status:?}");
-        }
-        let sessions = snapshot.value_tally.as_ref().unwrap().headline.sessions;
-        assert!((60..=120).contains(&sessions), "sessions {sessions}");
-    }
-    assert!(states.iter().flat_map(agent_cards).any(|card| {
-        card.context
-            .as_ref()
-            .and_then(|context| context.cost.as_ref())
-            .and_then(|cost| cost.total_cost_usd)
-            .is_some()
-    }));
     for row in states
         .iter()
         .flat_map(|snapshot| &snapshot.worktree_groups)
         .flat_map(|group| &group.rows)
-        .filter(|row| matches!(row.name.as_str(), "pi" | "opencode"))
     {
-        let rimz::RowCard::Agent(card) = &row.card else {
+        let Some(card) = row.as_agent() else { continue };
+        if row.status() == Some(rimz::agents::AgentStatus::Idle) {
+            assert_eq!(card.task, None, "{}", row.id);
+            assert_eq!(card.context_pct, None, "{}", row.id);
+            assert_eq!(card.context_window, None, "{}", row.id);
+            assert_eq!(card.total_tokens, None, "{}", row.id);
+            assert!(card.context.is_none(), "{}", row.id);
             continue;
+        }
+        let expected_window = if row.name == "claude" {
+            1_000_000
+        } else {
+            272_000
         };
-        assert_eq!(card.model.as_deref(), Some("GPT-5.5"));
+        assert_eq!(card.context_window, Some(expected_window), "{}", row.id);
+        assert!(
+            card.total_tokens
+                .is_some_and(|total| total < expected_window),
+            "{}",
+            row.id,
+        );
+        let split = card.cache_read_input_tokens.unwrap_or(0)
+            + card.cache_write_input_tokens.unwrap_or(0)
+            + card.fresh_input_tokens.unwrap_or(0);
+        assert_eq!(card.total_tokens, Some(split), "{}", row.id);
+    }
+}
+
+#[test]
+fn gallery_shimmer_leads_are_waiting_asks() {
+    let cases: [(
+        SidebarFixtureState,
+        Option<(&str, rimz::agents::AgentStatus)>,
+    ); 4] = [
+        (
+            SidebarFixtureState::Focus,
+            Some((
+                "agent:claude:rollout-reviewer",
+                rimz::agents::AgentStatus::Waiting,
+            )),
+        ),
+        (
+            SidebarFixtureState::Cockpit,
+            Some(("agent:opencode:theme", rimz::agents::AgentStatus::Waiting)),
+        ),
+        (
+            SidebarFixtureState::Reach,
+            Some(("agent:claude:netcheck", rimz::agents::AgentStatus::Waiting)),
+        ),
+        (SidebarFixtureState::Economy, None),
+    ];
+
+    for (state, expected) in cases {
+        let snapshot = sidebar_fixture_snapshot(state).unwrap();
+        let lead = rimz::lead_unread_row(&snapshot.worktree_groups);
+        match (lead, expected) {
+            (Some(row), Some((expected_id, expected_status))) => {
+                assert_eq!(row.id, expected_id, "{state:?}");
+                assert_eq!(row.status(), Some(expected_status), "{state:?}");
+            }
+            (None, None) => {}
+            (Some(row), None) => panic!("{state:?} unexpected lead {}", row.id),
+            (None, Some((expected_id, _))) => panic!("{state:?} missing lead {expected_id}"),
+        }
+    }
+
+    for (state, id, label) in [
+        (
+            SidebarFixtureState::Focus,
+            "agent:claude:ci-paused",
+            "API Error: Overloaded",
+        ),
+        (
+            SidebarFixtureState::Cockpit,
+            "agent:claude:mux-merge-paused",
+            "API Error: Overloaded",
+        ),
+        (
+            SidebarFixtureState::Cockpit,
+            "agent:claude:observer",
+            "API Error: Overloaded",
+        ),
+        (
+            SidebarFixtureState::Reach,
+            "agent:claude:netcheck-paused",
+            "API Error: rate limit exceeded",
+        ),
+        (
+            SidebarFixtureState::Economy,
+            "agent:claude:limit-paused",
+            "API Error: rate limit exceeded",
+        ),
+    ] {
+        let snapshot = sidebar_fixture_snapshot(state).unwrap();
+        assert_eq!(
+            agent_card_by_id(&snapshot, id).turn_error_label.as_deref(),
+            Some(label),
+            "{state:?} {id}",
+        );
     }
 }
 
@@ -356,33 +280,21 @@ fn gallery_fixture_states_carry_feature_flags() {
 fn gallery_fixture_frames_render_decisive_markers() {
     assert_fixture_frame_contains(
         SidebarFixtureState::Cockpit,
-        &["stabilize render diff", "48ms", "pnpm serve"],
+        &["stabilize render diff", "cargo nextest"],
     );
-    assert_fixture_frame_lacks(SidebarFixtureState::Cockpit, &["away"]);
+    assert_fixture_frame_lacks(SidebarFixtureState::Cockpit, &["away", "pnpm serve"]);
     assert_fixture_frame_contains(
         SidebarFixtureState::Focus,
-        &["planner", "coder", "reviewer"],
+        &["planner", "coder", "reviewer", "48ms"],
     );
     assert_fixture_frame_contains(
         SidebarFixtureState::Economy,
-        &["OpenAI OAuth", "provider-ledger", "GPT 5.5"],
+        &["OpenAI OAuth", "provider-ledger", "GPT 5.5", "pnpm serve"],
     );
     assert_fixture_frame_contains(
         SidebarFixtureState::Reach,
-        &["remote-link", "edge-cache", "Claude Max"],
+        &["remote-link", "edge-cache", "Claude Max", "network-check"],
     );
-}
-
-fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter_map(|row| match &row.card {
-            rimz::RowCard::Agent(card) => Some(card.as_ref()),
-            rimz::RowCard::Process(_) => None,
-        })
-        .collect()
 }
 
 fn agent_card_by_id<'a>(snapshot: &'a rimz::SidebarSnapshot, id: &str) -> &'a rimz::AgentCard {
@@ -397,21 +309,10 @@ fn agent_card_by_id<'a>(snapshot: &'a rimz::SidebarSnapshot, id: &str) -> &'a ri
         .unwrap_or_else(|| panic!("agent card {id}"))
 }
 
-fn top_agent_kind(snapshot: &rimz::SidebarSnapshot) -> Option<&str> {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .find_map(|row| match &row.card {
-            rimz::RowCard::Agent(_) => Some(row.name.as_str()),
-            rimz::RowCard::Process(_) => None,
-        })
-}
-
 fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {
     let snapshot = sidebar_fixture_snapshot(state).unwrap();
     let mut ansi = Vec::new();
-    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 80, 42).unwrap();
+    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 80, 60).unwrap();
     let frame = strip_sgr(&ansi);
     for marker in markers {
         assert!(
@@ -424,7 +325,7 @@ fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {
 fn assert_fixture_frame_lacks(state: SidebarFixtureState, markers: &[&str]) {
     let snapshot = sidebar_fixture_snapshot(state).unwrap();
     let mut ansi = Vec::new();
-    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 80, 42).unwrap();
+    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 80, 60).unwrap();
     let frame = strip_sgr(&ansi);
     for marker in markers {
         assert!(

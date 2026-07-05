@@ -63,7 +63,7 @@ pub fn serve_gallery(
     session_name: &str,
 ) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
-    let _input_mode = TerminalModeGuard::enable(MouseCapture::Off)?;
+    let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;

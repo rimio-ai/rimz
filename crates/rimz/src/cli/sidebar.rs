@@ -731,12 +731,13 @@ type GallerySelector = fn(&rimz::SidebarRow) -> bool;
 fn gallery_fixture_columns() -> [(SidebarFixtureState, GallerySelector); 4] {
     [
         (
-            SidebarFixtureState::Cockpit,
-            (|row: &rimz::SidebarRow| row.id == "agent:claude:compacting") as GallerySelector,
+            SidebarFixtureState::Focus,
+            (|row: &rimz::SidebarRow| row.id == "agent:claude:planner") as GallerySelector,
         ),
-        (SidebarFixtureState::Focus, |row: &rimz::SidebarRow| {
-            row.id == "agent:codex:coder"
-        }),
+        (
+            SidebarFixtureState::Cockpit,
+            (|row: &rimz::SidebarRow| row.id == "agent:codex:pricing") as GallerySelector,
+        ),
         (SidebarFixtureState::Reach, |row: &rimz::SidebarRow| {
             row.id == "agent:pi:reach"
         }),
