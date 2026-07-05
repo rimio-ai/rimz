@@ -79,18 +79,18 @@ The sidebar meters producer ticks against the budgets declared in [`sidebar/mete
 
 The deterministic CI gates own exact integer budgets. `ledger_fsync.rs` pins the warm write path's fsync count, `ledger_bytes.rs` pins a lifecycle frame below 1KiB, `produce_budget.rs` pins zero subprocess spawns for warm produce with fresh inputs, and the incremental fold guards pin O(new bytes). The benches own wall-clock and allocation figures, which stay out of `ci` so a busy runner never fails a build on timing.
 
-Current local baseline from `cargo xtask perf` on July 3, 2026, captured on an AMD Ryzen 9 9950X host with 32 logical CPUs present / 28 online, governor `performance`, and `perf_event_paranoid=4`. The capture ran inside a loaded LXC, and the prior June 28 baseline did not record its host, so wall-clock deltas across that boundary are host/environment-sensitive; allocation deltas remain the steadier regression signal.
+Current local baseline from `cargo xtask perf` on July 5, 2026, captured on `xlab-term`, a loaded LXC on an AMD Ryzen 9 9950X host with 32 logical CPUs present / 28 online, governor `performance`, and `perf_event_paranoid=4`. Wall-clock medians are host- and load-sensitive, so allocation-per-op is the steadier regression signal.
 
 | Bench | Median | Alloc/op |
 | --- | ---: | ---: |
-| `fleet::produce_cold` 20 / 50 / 100 agents | 13.93ms / 13.03ms / 17.83ms | 4.77MB / 9.49MB / 17.57MB |
-| `fleet::produce_warm` 20 / 50 / 100 agents | 695µs / 955µs / 1.42ms | 1.50MB / 2.04MB / 2.92MB |
-| `hotpath::fuse` 40 agents | 159µs | 80.8KB |
-| `hotpath::rollup_fold_warm` 40 agents | 180µs | 637.1KB |
-| `hotpath::enrich_cached` 40 agents | 858µs | 1.17MB |
-| `hotpath::render_fixed` 40 agents | 500µs | 1.09MB |
-| `hotpath::spending_walk_cold` 20k retained entries | 26.56ms | 40.30MB |
-| `hotpath::spending_walk_warm_no_change` 20k retained entries | 13.31ms | 8.06MB |
+| `fleet::produce_cold` 20 / 50 / 100 agents | 4.65ms / 7.61ms / 13.45ms | 4.52MB / 9.26MB / 17.36MB |
+| `fleet::produce_warm` 20 / 50 / 100 agents | 520µs / 792µs / 1.32ms | 1.53MB / 2.09MB / 2.98MB |
+| `hotpath::fuse` 40 agents | 99.9µs | 80.9KB |
+| `hotpath::rollup_fold_warm` 40 agents | 129µs | 637.1KB |
+| `hotpath::enrich_cached` 40 agents | 610µs | 1.21MB |
+| `hotpath::render_fixed` 40 agents | 413µs | 1.09MB |
+| `hotpath::spending_walk_cold` 20k retained entries | 26.87ms | 41.14MB |
+| `hotpath::spending_walk_warm_no_change` 20k retained entries | 10.65ms | 8.06MB |
 
 ## Profiling
 
@@ -198,6 +198,9 @@ The mistakes worth not re-introducing, because each looked reasonable:
 - **Zellij session-metadata churn** kept a disabled-resurrection room writing metadata and running command discovery anyway; Rimz now passes the separate `disable_session_metadata` room option so serialization and metadata both follow the clean-rebirth contract.
 - **Unwatched delta refold storms** let identity-free ledger wakeups refold every renderer in every tab at the writer's event rate; unwatched non-producer renderers now coalesce those nudges behind `UNWATCHED_FOLD_CLAMP`, while watched panes and the producer remain immediate.
 - **Binding-log write amplification** appended the same lazy-pairing ambiguity on every producer fold for resumed panes with unknown process-start timestamps; the producer now keeps a process-local signature per workspace and agent, so `binding.log.jsonl` records the first distinct ambiguity and every genuine change, not each fold.
+- **Cold-produce git fork storm.** A cold producer snapshot forked `git` per group root end to end (≈2400 `execve` attempts / 240 execs on a 20-worktree fixture) because every root re-derived its merge-base; in-process `.git` ref reads now reuse the cached HEAD/trunk merge-base and skip the ancestry forks when the pair is unchanged, and the `sidebar_diff_stats` perf guard plus the git-trace shim pin the fork count.
+- **Forge PR-probe retry loop that wiped last-known-good.** A deterministic `gh`/`tea` list failure retried on the hot TTL with no command deadline and erased the cached open-PR map on each failure, so a forge outage became a permanent per-worktree fork/network loop; the probe now backs off on consecutive failures while retaining the last-known-good map, bounds each call, and pins terminal `merged` states — `merged_worktrees_are_pinned_not_reprobed` guards the terminal case.
+- **Deleted-inode processes after reinstall.** An atomic reinstall left long-lived renderers resolving `current_exe()` to `rimz (deleted)` — self-spawn helpers failed `execve`, and sidebar supervisor parents held the deleted binary inode until session end while orphaning stray children as long-lived zombies; the shared `rimz_exe` resolver repairs the ` (deleted)` suffix for helper self-spawns, and supervisor-owned reload convergence with stable sidebar instance ids re-execs the parents onto the new binary while supervisor-side stray-child reaping clears the orphans.
 
 ## Bottlenecks and deferred work
 
