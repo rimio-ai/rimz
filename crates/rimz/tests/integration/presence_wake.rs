@@ -61,7 +61,10 @@ struct WakeEnv {
 
 impl WakeEnv {
     fn new() -> Self {
-        let tempdir = TempDir::new().expect("tempdir");
+        let tempdir = tempfile::Builder::new()
+            .prefix("rw")
+            .tempdir_in("/tmp")
+            .expect("short tempdir");
         let project_root = tempdir.path().join("project");
         let state_root = tempdir.path().join("state");
         let runtime_root = tempdir.path().join("runtime");
@@ -71,6 +74,7 @@ impl WakeEnv {
         std::fs::create_dir_all(&state_root).expect("mkdir state");
         std::fs::create_dir_all(&runtime_root).expect("mkdir runtime");
         std::fs::create_dir_all(&home_root).expect("mkdir home");
+        let project_root = project_root.canonicalize().expect("canonical project");
 
         let workspace_id = WorkspaceId::from_project_root(&project_root);
         let runtime =
@@ -829,7 +833,12 @@ fn wake_without_live_sidebars_still_stamps_via_cwd_resolution() {
 fn event_mode_stamp_controls_stale_cache_polling() {
     let event_env = WakeEnv::new();
     let wake = event_env.wake("alive", false);
-    assert!(wake.status.success(), "stamp write must succeed");
+    assert!(
+        wake.status.success(),
+        "stamp write must succeed: status={:?}, stderr={}",
+        wake.status,
+        String::from_utf8_lossy(&wake.stderr),
+    );
     event_env.seed_pane_cache(Duration::from_secs(5));
     let output = event_env.snapshot();
     assert!(

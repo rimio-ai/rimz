@@ -1353,7 +1353,10 @@ mod runs {
     #[tokio::test(flavor = "current_thread")]
     async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
         let state = tempfile::tempdir().expect("state dir");
-        let runtime_root = tempfile::tempdir().expect("runtime dir");
+        let runtime_root = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .expect("runtime dir");
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
         let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).expect("paths");
         let runtime =

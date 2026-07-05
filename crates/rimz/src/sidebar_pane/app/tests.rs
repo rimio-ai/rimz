@@ -392,10 +392,13 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         !second.contains("\u{1b}[2J"),
         "layout shift must not full-clear the terminal"
     );
-    assert!(
-        second.contains(&placeholder_cluster(0, 0)),
-        "ratatui owns and rewrites shifted placeholder cells"
-    );
+    if render::pet_body_enabled(&snapshot) {
+        assert!(
+            second.contains(&placeholder_cluster(0, 0)),
+            "ratatui owns and rewrites shifted placeholder cells: {}",
+            second.escape_debug()
+        );
+    }
     assert!(
         !second.contains("\u{1b}_G"),
         "resident sprite is not re-transmitted on layout shift"

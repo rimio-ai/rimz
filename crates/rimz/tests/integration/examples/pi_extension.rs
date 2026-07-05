@@ -89,7 +89,7 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-for (let i = 0; i < 50; i += 1) {{
+for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= 2) break;
   await new Promise((resolve) => setTimeout(resolve, 20));

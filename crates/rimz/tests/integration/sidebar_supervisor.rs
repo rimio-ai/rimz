@@ -2,10 +2,14 @@
 
 #![cfg(unix)]
 
+#[cfg(target_os = "linux")]
 use std::path::Path;
+#[cfg(target_os = "linux")]
 use std::process::{Child, ExitStatus, Stdio};
+#[cfg(target_os = "linux")]
 use std::thread;
 use std::time::Duration;
+#[cfg(target_os = "linux")]
 use std::time::Instant;
 
 use rimz::diag::record::{DiagEnvelope, DiagEvent};

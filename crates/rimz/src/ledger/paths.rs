@@ -557,6 +557,13 @@ mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
 
+    fn short_tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("r")
+            .tempdir_in("/tmp")
+            .expect("short tempdir")
+    }
+
     #[test]
     fn state_paths_resolve_under_state_home() {
         let id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
@@ -609,7 +616,7 @@ mod tests {
 
     #[test]
     fn production_runtime_paths_persist_shared_data_and_keep_locks_runtime() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = short_tempdir();
         let state_root = temp.path().join("state");
         let runtime_root = temp.path().join("runtime");
         let persistent_shared_root = state_root.join("rimz").join("shared");

@@ -430,7 +430,6 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
     #[cfg(not(target_os = "linux"))]
     {
         tracing::warn!("skipping: /proc recovery is Linux-only");
-        return;
     }
     #[cfg(target_os = "linux")]
     {

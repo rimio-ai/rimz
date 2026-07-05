@@ -327,6 +327,13 @@ mod tests {
     use crate::ids::WorkspaceId;
     use tokio::net::UnixDatagram;
 
+    fn short_runtime_root() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("r")
+            .tempdir_in("/tmp")
+            .expect("short runtime tempdir")
+    }
+
     /// The precondition fires before `bind(2)` ever sees the path, so the
     /// user gets the named fix (shorten the runtime dir) instead of an
     /// opaque `EINVAL` — and the test needs no real socket or filesystem.
@@ -350,7 +357,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn run_completion_wakeup_round_trips_and_ignores_wrong_run() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = short_runtime_root();
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
         let rt = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
         rt.ensure_dirs().expect("runtime dirs");
@@ -395,7 +402,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn run_completion_wait_times_out_neutral() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = short_runtime_root();
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
         let rt = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
         rt.ensure_dirs().expect("runtime dirs");

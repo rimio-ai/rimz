@@ -15,7 +15,10 @@ pub struct Harness {
 
 impl Harness {
     pub fn new() -> Self {
-        let tempdir = TempDir::new().expect("tempdir");
+        let tempdir = tempfile::Builder::new()
+            .prefix("rh")
+            .tempdir_in("/tmp")
+            .expect("short tempdir");
         let state_root = tempdir.path().join("state");
         let runtime_root = tempdir.path().join("runtime");
         let workspace_id = WorkspaceId::from_project_root(tempdir.path());

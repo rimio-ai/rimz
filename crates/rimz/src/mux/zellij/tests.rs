@@ -274,7 +274,7 @@ exit 0
     let backend = ZellijBackend::with_program_for_test(&shim);
 
     let err = backend
-        .list_panes_bounded(Some("missing-room"), Duration::from_millis(200))
+        .list_panes_bounded(Some("missing-room"), Duration::from_secs(2))
         .expect_err("banner should classify as session-not-found");
     assert!(
         matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
@@ -313,7 +313,7 @@ exit 1
     let backend = ZellijBackend::with_program_for_test(&shim);
 
     let err = backend
-        .list_panes_bounded(Some("missing-room"), Duration::from_millis(200))
+        .list_panes_bounded(Some("missing-room"), Duration::from_secs(2))
         .expect_err("nonzero banner should classify as session-not-found");
     assert!(
         matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),

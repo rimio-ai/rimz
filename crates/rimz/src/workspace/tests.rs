@@ -116,12 +116,12 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     assert_eq!(known.len(), 1);
     assert_eq!(known[0].workspace_id, workspace_id);
     assert_eq!(known[0].project_root, canonical_root);
-    assert_eq!(known[0].session_name, session_name_for(&project_root));
+    assert_eq!(known[0].session_name, session_name_for(&canonical_root));
 
     let repaired = workspace_record::read(&paths.workspace_record).expect("read repaired");
     assert_eq!(repaired.workspace_id, workspace_id);
     assert_eq!(repaired.project_root, project_root.canonicalize().unwrap());
-    assert_eq!(repaired.session_name, session_name_for(&project_root));
+    assert_eq!(repaired.session_name, session_name_for(&canonical_root));
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
     assert_eq!(known.len(), 1);
     assert_eq!(known[0].workspace_id, canonical_id);
     assert_eq!(known[0].project_root, canonical_root);
-    assert_eq!(known[0].session_name, session_name_for(&project_root));
+    assert_eq!(known[0].session_name, session_name_for(&canonical_root));
 }
 
 #[test]

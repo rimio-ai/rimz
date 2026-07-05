@@ -54,6 +54,7 @@ pub fn tmux_pane(raw: &str, command: &str, cwd: &Path) -> PaneRef {
 /// configured `rimz` command builder.
 pub struct Env {
     _home: TempDir,
+    _runtime: TempDir,
     /// The harness `$HOME`: per-user agent config (`.claude/`, `.codex/`) and
     /// the XDG roots live here.
     pub home_root: PathBuf,
@@ -67,16 +68,21 @@ pub struct Env {
 impl Env {
     pub fn new() -> Self {
         let home = TempDir::new().expect("tempdir");
+        let runtime = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .expect("short runtime tempdir");
         let home_root = canonical(home.path());
         let project_root = home_root.join("project");
         std::fs::create_dir_all(&project_root).expect("mkdir project root");
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        let runtime_root = home_root.join("runtime");
-        for dir in ["state", "runtime", "config"] {
+        let runtime_root = runtime.path().to_path_buf();
+        for dir in ["state", "config"] {
             std::fs::create_dir_all(home_root.join(dir)).expect("mkdir env root");
         }
         let env = Env {
             _home: home,
+            _runtime: runtime,
             home_root,
             project_root,
             workspace_id,

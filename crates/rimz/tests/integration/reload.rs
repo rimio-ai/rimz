@@ -17,13 +17,15 @@ use rimz::ledger::RuntimePaths;
 use rimz::ledger::wakeup::reload_sidebars;
 use rimz::sidebar::events::RELOAD_CONTROL_WORD;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
-use tempfile::TempDir;
 
 const SESSION_NAME: &str = "rimz-reload-test";
 
 #[test]
 fn reload_signals_fresh_sidebars_and_skips_stale() {
-    let tempdir = TempDir::new().expect("tempdir");
+    let tempdir = tempfile::Builder::new()
+        .prefix("rl")
+        .tempdir_in("/tmp")
+        .expect("short tempdir");
     let project_root = tempdir.path().join("project");
     let runtime_root = tempdir.path().join("runtime");
     std::fs::create_dir_all(&project_root).expect("mkdir project");

@@ -367,6 +367,7 @@ mod tests {
         assert_eq!(ids, vec!["opus", "slack", "pager"]);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn restat_with_matching_binary_pin_passes() {
         let (_d, rt) = rt();

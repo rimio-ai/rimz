@@ -83,7 +83,10 @@ fn assert_trace_shim_exists(trace_bin: &Path) {
 }
 
 fn wakeup_fixture() -> Option<WakeupFixture> {
-    let tempdir = TempDir::new().expect("tempdir");
+    let tempdir = tempfile::Builder::new()
+        .prefix("wp")
+        .tempdir_in("/tmp")
+        .expect("short tempdir");
     let project_root = tempdir.path().join("project");
     let state_root = tempdir.path().join("state");
     let runtime_root = tempdir.path().join("runtime");
@@ -91,6 +94,7 @@ fn wakeup_fixture() -> Option<WakeupFixture> {
     std::fs::create_dir_all(&project_root).expect("mkdir project");
     std::fs::create_dir_all(&state_root).expect("mkdir state");
     std::fs::create_dir_all(&runtime_root).expect("mkdir runtime");
+    let project_root = project_root.canonicalize().expect("canonical project");
     let workspace_id = WorkspaceId::from_project_root(&project_root);
     let runtime =
         RuntimePaths::under(workspace_id.clone(), &runtime_root).expect("RuntimePaths::under");

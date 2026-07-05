@@ -146,7 +146,10 @@ struct RunFixture {
 
 impl RunFixture {
     fn new(status: RunStatus) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("rs")
+            .tempdir_in("/tmp")
+            .unwrap();
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
         let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();

@@ -48,7 +48,7 @@ live-tmux = { max-threads = 4 }
 rendered-journey = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
+filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::zellij/))'
 test-group = 'live-zellij'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
@@ -73,14 +73,14 @@ retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s",
 # and fast. Escalate to the full suite (`cargo xtask ci` / explicit filters)
 # when a change touches the excluded surfaces.
 [profile.gate]
-default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::/)))'
+default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::/)))'
 
 # `live` runs both mux backends in one nextest process, letting tmux and Zellij
 # co-schedule on 64-core CI while each stays bounded by its per-backend group.
 # Together, `live` and `journey` are the exact complement of `gate`.
 # Inherits the live-server groups and the retry budget from `default`.
 [profile.live]
-default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^journey::deep::/))'
+default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::/))'
 
 # CI runs `journey` as its own step after `live`; the deep mux smokes ride in
 # `live` so the per-backend groups bound their real-server load.
