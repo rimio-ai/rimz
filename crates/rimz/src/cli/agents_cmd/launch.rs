@@ -122,6 +122,12 @@ pub(super) fn launch_layout(
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(ledger.paths(), channel)?;
     }
+    let room_channel = rimz::harness::target::resolve_room_channel(
+        &workspace.project_root,
+        &launch.cwd,
+        team_name.as_deref(),
+        args.channel.as_deref(),
+    );
     let launch_requests = launch_identity_requests(
         &layout,
         args.name.as_deref(),
@@ -131,7 +137,7 @@ pub(super) fn launch_layout(
             .as_deref()
             .and_then(|name| teams.0.get(name))
             .map(|team| team.roles.as_slice()),
-        args.channel.as_deref(),
+        room_channel.as_deref(),
     )?;
     let launch_identities = ledger.append_agent_launches_allocating(
         &launch_requests,
@@ -140,7 +146,7 @@ pub(super) fn launch_layout(
             session_name: workspace.session_name.clone(),
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
-            channel: args.channel.clone(),
+            channel: room_channel.clone(),
             prompt: args.prompt.clone(),
             description: args.description.clone(),
             state: rimz::ledger::event::AgentLaunchState::Starting,
@@ -149,7 +155,7 @@ pub(super) fn launch_layout(
     )?;
     let worktree_name = launch.worktree_name.clone();
     let cwd = launch.cwd;
-    let title = args.channel.as_deref().map_or_else(
+    let title = room_channel.as_deref().map_or_else(
         || {
             rimz::harness::spec::default_tab_title(
                 &layout,
@@ -179,7 +185,7 @@ pub(super) fn launch_layout(
             cleanup_worktree: worktree_launch,
             in_place,
             team: team_name.as_deref(),
-            channel: args.channel.as_deref(),
+            channel: room_channel.as_deref(),
             resume_seeds: None,
         },
         &launch_identities,
@@ -210,7 +216,7 @@ pub(super) fn launch_layout(
                     command: Some(single_pane_argv(&panes)?),
                     env: agents_launch::launch_identity_env(
                         &workspace,
-                        args.channel.as_deref(),
+                        room_channel.as_deref(),
                         !worktree_launch,
                     ),
                     direction,
@@ -227,7 +233,7 @@ pub(super) fn launch_layout(
                 &argv,
                 agents_launch::launch_identity_env(
                     &workspace,
-                    args.channel.as_deref(),
+                    room_channel.as_deref(),
                     !worktree_launch,
                 ),
                 &cwd,
@@ -243,7 +249,7 @@ pub(super) fn launch_layout(
             LaunchEventParams {
                 cwd: &cwd,
                 worktree_name: worktree_name.as_deref(),
-                channel: args.channel.as_deref(),
+                channel: room_channel.as_deref(),
                 prompt: args.prompt.as_deref(),
                 state: rimz::ledger::event::AgentLaunchState::Failed,
                 pane_id: None,
@@ -283,7 +289,7 @@ fn launch_resume_layout(
     let cells = cohort_cells(&layout);
     let spec = args.spec.as_deref().unwrap_or("<spec>");
     let scope = worktree_filter.and_then(worktree_scope_label);
-    let plan = rimz::harness::resume::plan_cohort_resume(
+    let mut plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
         rimz::ledger::runtime::agent_liveness,
         &cells,
@@ -295,7 +301,13 @@ fn launch_resume_layout(
         .cwd
         .clone()
         .context("cohort resume matched no working directory")?;
-    let channel = plan.channel.clone();
+    let channel = rimz::harness::target::resolve_room_channel(
+        &workspace.project_root,
+        &cwd,
+        team_name.as_deref(),
+        plan.channel.as_deref(),
+    );
+    plan.channel = channel.clone();
     let scoped_resume =
         channel.is_some() || (cwd != workspace.project_root && cwd != workspace.worktree_root);
     let placement = if single_cell {
@@ -1365,7 +1377,11 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
         } => {
             if let Some(rimz::harness::resume::CohortSeed::Resume(agent)) = options.resume_seed {
                 return Ok(PaneCmd {
-                    argv: rimz::harness::resume::resume_command(options.rimz_bin, agent),
+                    argv: rimz::harness::resume::resume_command_with_channel(
+                        options.rimz_bin,
+                        agent,
+                        options.channel,
+                    ),
                 });
             }
             if let Some(launch) = options.launch {

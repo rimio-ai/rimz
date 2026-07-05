@@ -248,6 +248,61 @@ fn in_place_team_channel_uses_directory_and_team() {
 }
 
 #[test]
+fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
+    assert_eq!(
+        resolve_room_channel(
+            std::path::Path::new("/code/project"),
+            std::path::Path::new("/code/project-wt/auth"),
+            Some("pcr"),
+            None,
+        )
+        .as_deref(),
+        Some("auth")
+    );
+    assert_eq!(
+        resolve_room_channel(
+            std::path::Path::new("/code/project"),
+            std::path::Path::new("/code/project"),
+            Some("pcr"),
+            None,
+        )
+        .as_deref(),
+        Some("project/pcr")
+    );
+    assert_eq!(
+        resolve_room_channel(
+            std::path::Path::new("/code/project"),
+            std::path::Path::new("/code/project"),
+            None,
+            None,
+        ),
+        None
+    );
+    assert_eq!(
+        resolve_room_channel(
+            std::path::Path::new("/code/project"),
+            std::path::Path::new("/code/project-wt/auth"),
+            Some("pcr"),
+            Some("design"),
+        )
+        .as_deref(),
+        Some("design")
+    );
+}
+
+#[test]
+fn launch_stamped_worktree_team_channel_renders_flat_worktree() {
+    let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
+    team_agent.team = Some("pcr".to_owned());
+    team_agent.channel = Some("auth".to_owned());
+
+    assert_eq!(agent_channel(&team_agent).as_deref(), Some("auth"));
+    assert_eq!((&team_agent).channel_label(), "auth");
+    assert!((&team_agent).in_worktree("auth"));
+    assert!(!(&team_agent).in_worktree("auth/pcr"));
+}
+
+#[test]
 fn channel_in_lane_accepts_team_sublanes() {
     assert!(channel_in_lane("message-list/forge", "message-list"));
     assert!(channel_in_lane("message-list", "message-list"));

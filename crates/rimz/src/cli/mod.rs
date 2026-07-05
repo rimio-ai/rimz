@@ -225,18 +225,12 @@ fn current_channel_for_team(
     workspace: &rimz::ResolvedWorkspace,
     team: Option<&str>,
 ) -> Option<String> {
-    if workspace.worktree_root != workspace.project_root {
-        return workspace
-            .worktree_root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned());
-    }
-    let team = team.filter(|value| !value.is_empty())?;
-    let dir = workspace
-        .project_root
-        .file_name()
-        .map(|name| name.to_string_lossy());
-    rimz::harness::target::compose_channel(None, dir.as_deref(), Some(team))
+    rimz::harness::target::resolve_room_channel(
+        &workspace.project_root,
+        &workspace.worktree_root,
+        team,
+        None,
+    )
 }
 
 /// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<profile>`

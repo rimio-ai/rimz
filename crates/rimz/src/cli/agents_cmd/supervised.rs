@@ -80,6 +80,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
     pub(super) agent_name: Option<&'a str>,
     pub(super) agent_profile: Option<&'a str>,
     pub(super) agent_role: Option<&'a str>,
+    pub(super) agent_channel: Option<&'a str>,
     pub(super) agent_model: Option<&'a str>,
     pub(super) agent_effort: Option<&'a str>,
     pub(super) launch_id: Option<&'a rimz::ids::AgentSessionId>,
@@ -109,6 +110,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
                 launch_id: args.launch_id.map(rimz::ids::AgentSessionId::as_str),
                 profile: args.agent_profile,
                 role: args.agent_role,
+                channel: args.agent_channel,
                 model: args.agent_model,
                 effort: args.agent_effort,
                 ..rimz::harness::launch::ExecIdentity::default()

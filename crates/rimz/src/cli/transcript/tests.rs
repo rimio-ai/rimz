@@ -547,3 +547,18 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
         None
     );
 }
+
+#[test]
+fn channel_filter_matches_legacy_team_sublanes() {
+    assert!(channel_matches(Some("web-token"), Some("web-token")));
+    assert!(channel_matches(Some("web-token/forge"), Some("web-token")));
+    assert!(!channel_matches(
+        Some("web-token-other/forge"),
+        Some("web-token")
+    ));
+    assert!(!channel_matches(
+        Some("web-token/forge"),
+        Some("web-token/ops")
+    ));
+    assert!(channel_matches(Some("web-token/forge"), None));
+}

@@ -551,6 +551,12 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(ledger.paths(), channel)?;
     }
+    let room_channel = rimz::harness::target::resolve_room_channel(
+        &workspace.project_root,
+        &launch.cwd,
+        None,
+        args.channel.as_deref(),
+    );
     backend.ensure_session(&rimz::mux::SessionOptions {
         session_name: workspace.session_name.clone(),
         workspace_id: workspace.workspace_id.clone(),
@@ -601,7 +607,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         generated_worktree_name(&launch),
         None,
         None,
-        args.channel.as_deref(),
+        room_channel.as_deref(),
     )?;
     let launch_requests = launch_requests
         .into_iter()
@@ -617,7 +623,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             session_name: workspace.session_name.clone(),
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
-            channel: args.channel.clone(),
+            channel: room_channel.clone(),
             prompt: Some(prompt.clone()),
             description: args.description.clone(),
             state: rimz::ledger::event::AgentLaunchState::Starting,
@@ -634,6 +640,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         agent_name: Some(&launch_identity.name),
         agent_profile: agent_cell.profile,
         agent_role: agent_cell.role,
+        agent_channel: room_channel.as_deref(),
         agent_model: agent_cell.model,
         agent_effort: agent_cell.effort,
         launch_id: Some(&launch_identity.agent_id),
@@ -663,7 +670,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             command: Some(pane.argv.clone()),
             env: crate::cli::agents_launch::launch_identity_env(
                 &workspace,
-                args.channel.as_deref(),
+                room_channel.as_deref(),
                 args.worktree.is_none() && args.from_pr.is_none(),
             ),
             direction,
@@ -693,7 +700,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             LaunchEventParams {
                 cwd: &launch.cwd,
                 worktree_name: launch.worktree_name.as_deref(),
-                channel: args.channel.as_deref(),
+                channel: room_channel.as_deref(),
                 prompt: Some(&prompt),
                 state: rimz::ledger::event::AgentLaunchState::Failed,
                 pane_id: None,

@@ -31,6 +31,7 @@ pub(crate) fn plan_team_restore_tabs(
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
+    project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
 ) -> Vec<PlannedTeamTab> {
     let mut groups: BTreeMap<(String, PathBuf), Vec<&AgentState>> = BTreeMap::new();
@@ -60,7 +61,7 @@ pub(crate) fn plan_team_restore_tabs(
         };
         let cells = cohort_cells(&layout);
         let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
-        let Ok(cohort) = rimz::harness::resume::plan_cohort_resume(
+        let Ok(mut cohort) = rimz::harness::resume::plan_cohort_resume(
             &group_agents,
             |_| AgentLiveness::Dead,
             &cells,
@@ -72,7 +73,17 @@ pub(crate) fn plan_team_restore_tabs(
         let Some(newest) = newest_agent(&group) else {
             continue;
         };
-        let channel = cohort.channel.clone();
+        let channel = project_root
+            .and_then(|project_root| {
+                rimz::harness::target::resolve_room_channel(
+                    project_root,
+                    &cwd,
+                    Some(&team),
+                    cohort.channel.as_deref(),
+                )
+            })
+            .or_else(|| cohort.channel.clone());
+        cohort.channel = channel.clone();
         let label = rimz::harness::resume::channel_label(channel.as_deref(), &cwd);
         tabs.push(PlannedTeamTab {
             label,
@@ -318,8 +329,14 @@ mod tests {
         let planner = agent("claude", "planner", "planner", "/repo/pcr", 3);
         let coder = agent("codex", "coder", "coder", "/repo/pcr", 5);
 
-        let tabs =
-            plan_team_restore_tabs(&[coder, planner], &teams, &profiles, &commands, |_| true);
+        let tabs = plan_team_restore_tabs(
+            &[coder, planner],
+            &teams,
+            &profiles,
+            &commands,
+            Some(Path::new("/repo")),
+            |_| true,
+        );
 
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs[0].label, "#pcr");
@@ -339,7 +356,14 @@ mod tests {
         let (teams, profiles, commands) = configs();
         let planner = agent("claude", "planner", "planner", "/repo/pcr", 3);
 
-        let tabs = plan_team_restore_tabs(&[planner], &teams, &profiles, &commands, |_| true);
+        let tabs = plan_team_restore_tabs(
+            &[planner],
+            &teams,
+            &profiles,
+            &commands,
+            Some(Path::new("/repo")),
+            |_| true,
+        );
 
         assert_eq!(tabs.len(), 1);
         assert!(matches!(
@@ -362,6 +386,7 @@ mod tests {
             &TeamsConfig::default(),
             &profiles,
             &commands,
+            Some(Path::new("/repo")),
             |_| true,
         );
 

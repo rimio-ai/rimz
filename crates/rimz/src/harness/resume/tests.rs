@@ -684,3 +684,40 @@ fn named_channel_groups_by_explicit_channel_and_replays_identity() {
         first_argv(&plan.tabs[0])
     );
 }
+
+#[test]
+fn worktree_team_resume_replays_flat_worktree_channel() {
+    let mut planner = agent(
+        "claude",
+        "planner",
+        "/code/project-wt/auth",
+        Some("feature/auth"),
+        1,
+    );
+    planner.team = Some("pcr".to_owned());
+    planner.role = Some("planner".to_owned());
+    let plan = plan_resume_with_project(
+        &[planner],
+        &no_ended(),
+        DEFAULT_RESUME_MAX,
+        Path::new("/code/project"),
+        |_| true,
+        Path::new("/bin/rimz"),
+    );
+
+    assert_eq!(plan.tabs[0].label, "#auth");
+    assert!(
+        first_argv(&plan.tabs[0])
+            .windows(2)
+            .any(|pair| { pair[0].as_str() == "--agent-channel" && pair[1].as_str() == "auth" }),
+        "resume argv re-stamps the worktree channel: {:?}",
+        first_argv(&plan.tabs[0])
+    );
+    assert!(
+        first_argv(&plan.tabs[0])
+            .windows(2)
+            .any(|pair| { pair[0].as_str() == "--agent-team" && pair[1].as_str() == "pcr" }),
+        "resume argv keeps the team identity: {:?}",
+        first_argv(&plan.tabs[0])
+    );
+}

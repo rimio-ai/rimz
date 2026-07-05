@@ -375,7 +375,18 @@ pub(super) fn candidate_label(key: &AgentKey, identity: &Identity) -> String {
 }
 
 pub(super) fn channel_matches(entry_channel: Option<&str>, filter: Option<&str>) -> bool {
-    filter.is_none_or(|filter| entry_channel == Some(filter))
+    match filter {
+        None => true,
+        Some(filter) => {
+            entry_channel == Some(filter)
+                || entry_channel.is_some_and(|entry| {
+                    entry
+                        .strip_prefix(filter)
+                        .and_then(|rest| rest.strip_prefix('/'))
+                        .is_some()
+                })
+        }
+    }
 }
 
 pub(super) fn entry_key(entry: &ChatEntry) -> AgentKey {

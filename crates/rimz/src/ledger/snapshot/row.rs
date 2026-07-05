@@ -233,9 +233,9 @@ impl PaneAgent {
         }
     }
 
-    /// The channel this pane participates in: explicit named lane, else
-    /// worktree directory basename plus team when present. `None` means the
-    /// pane is outside a known worktree and team.
+    /// The channel this pane participates in: stamped lane, else worktree
+    /// directory basename plus team when present. `None` means the pane is
+    /// outside a known worktree and team.
     pub fn channel(&self) -> Option<String> {
         compose_channel(
             self.channel.as_deref(),
@@ -247,8 +247,8 @@ impl PaneAgent {
     }
 }
 
-/// Compose a routing channel from launch identity. An explicit named lane wins,
-/// then an in-place named team extends the directory channel as `<dir>/<team>`.
+/// Compose a routing channel from launch identity. A stamped lane wins, then an
+/// in-place named team extends the directory channel as `<dir>/<team>`.
 pub fn compose_channel(
     explicit: Option<&str>,
     dir_basename: Option<&str>,

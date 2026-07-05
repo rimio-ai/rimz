@@ -633,7 +633,8 @@ pub struct AgentState {
     pub role: Option<String>,
     /// The `[agents.teams]` team this agent launched under, stamped by the
     /// launch event and carried forward like `role`. In-place team launches use
-    /// it as the channel suffix after the worktree directory name.
+    /// it as the channel suffix after the directory name; worktree team launches
+    /// use the worktree name without a team suffix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     /// Inline multi-agent launch cohort, stamped by `RIMZ_LAUNCH_GROUP` and

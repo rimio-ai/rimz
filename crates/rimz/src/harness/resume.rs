@@ -141,6 +141,37 @@ pub fn plan_resume(
     worktree_exists: impl Fn(&Path) -> bool,
     rimz_bin: &Path,
 ) -> ResumePlan {
+    plan_resume_inner(agents, ended, max, None, worktree_exists, rimz_bin)
+}
+
+/// Plan a resume with workspace-root context, so worktree-backed teams converge
+/// to the worktree channel while in-place teams keep `<dir>/<team>`.
+pub fn plan_resume_with_project(
+    agents: &[AgentState],
+    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
+    max: usize,
+    project_root: &Path,
+    worktree_exists: impl Fn(&Path) -> bool,
+    rimz_bin: &Path,
+) -> ResumePlan {
+    plan_resume_inner(
+        agents,
+        ended,
+        max,
+        Some(project_root),
+        worktree_exists,
+        rimz_bin,
+    )
+}
+
+fn plan_resume_inner(
+    agents: &[AgentState],
+    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
+    max: usize,
+    project_root: Option<&Path>,
+    worktree_exists: impl Fn(&Path) -> bool,
+    rimz_bin: &Path,
+) -> ResumePlan {
     // Root agents that were bound to a pane in the dead incarnation, still
     // identified, and not cleanly ended. A subagent is paneless and rides its
     // parent, so it is filtered out here and never resumed standalone.
@@ -188,7 +219,8 @@ pub fn plan_resume(
         }
         let worktree = agent.worktree_path.clone().unwrap_or_default();
         let cwd = PathBuf::from(&worktree);
-        let label = build_label(&agent.kind, agent.channel.as_deref(), &cwd);
+        let channel = agent_room_channel(project_root, agent, &cwd);
+        let label = build_label(&agent.kind, channel.as_deref(), &cwd);
         if !worktree_exists(&cwd) {
             plan.tombstone
                 .push((agent.kind.clone(), agent.agent_id.clone()));
@@ -214,9 +246,9 @@ pub fn plan_resume(
         // which replays the durable launch identity, applies trusted
         // `[[agents]]` env and the adapter's launch pins before spawning the
         // resume argv.
-        let command = resume_command(rimz_bin, agent);
-        let tab_label = channel_label(agent.channel.as_deref(), &cwd);
-        let identity = resume_tab_identity(agent.channel.as_deref(), &cwd);
+        let command = resume_command_with_channel(rimz_bin, agent, channel.as_deref());
+        let tab_label = channel_label(channel.as_deref(), &cwd);
+        let identity = resume_tab_identity(channel.as_deref(), &cwd);
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
                 column.panes.push(crate::mux::PaneCmd { argv: command });
@@ -231,6 +263,26 @@ pub fn plan_resume(
     disambiguate_resume_tab_labels(&mut tabs);
     plan.tabs = tabs.into_iter().map(|planned| planned.tab).collect();
     plan
+}
+
+fn agent_room_channel(
+    project_root: Option<&Path>,
+    agent: &AgentState,
+    cwd: &Path,
+) -> Option<String> {
+    match project_root {
+        Some(project_root) => crate::harness::target::resolve_room_channel(
+            project_root,
+            cwd,
+            agent.team.as_deref(),
+            agent.channel.as_deref(),
+        ),
+        None => agent
+            .channel
+            .as_deref()
+            .filter(|channel| !channel.is_empty())
+            .map(ToOwned::to_owned),
+    }
 }
 
 /// Plan one explicit cohort relaunch from the durable agent rollup.
@@ -568,6 +620,19 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
 /// Wrapper argv for resuming one prior provider-native session with its durable
 /// Rimz launch identity.
 pub fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
+    resume_command_with_channel(rimz_bin, agent, agent.channel.as_deref())
+}
+
+pub fn resume_command_with_channel(
+    rimz_bin: &Path,
+    agent: &AgentState,
+    channel: Option<&str>,
+) -> Vec<String> {
+    let channel = agent
+        .channel
+        .as_deref()
+        .filter(|channel| !channel.is_empty())
+        .or_else(|| channel.filter(|channel| !channel.is_empty()));
     crate::harness::launch::exec_argv(
         rimz_bin,
         &crate::harness::launch::ExecInvocation {
@@ -586,7 +651,7 @@ pub fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
                 team: agent.team.as_deref(),
                 launch_group: agent.launch_group.as_deref(),
                 launch_ordinal: agent.launch_ordinal,
-                channel: agent.channel.as_deref(),
+                channel,
                 // Resume did not replay model/effort before the wrapper grammar
                 // moved here; keep argv behavior stable.
                 model: None,

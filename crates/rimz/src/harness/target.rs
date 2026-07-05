@@ -13,13 +13,15 @@
 //! agent.
 //!
 //! The channel is the workspace segment the room groups by — an explicit named
-//! lane, else a directory basename, with an in-place named team appended as
-//! `<dir>/<team>`. Callers pass the *current* channel; an explicit `#name`,
-//! `--channel name`, or `--worktree name` overrides it. A
+//! lane, else a worktree name, else an in-place named team appended as
+//! `<dir>/<team>`, else a directory basename. Callers pass the *current*
+//! channel; an explicit `#name`, `--channel name`, or `--worktree name` overrides it. A
 //! `None` current channel means **all
 //! channels** — it never silently narrows to "only worktree-less agents", so
 //! addressing the room from a bare directory workspace still reaches every
 //! agent.
+
+use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, PaneId};
@@ -101,8 +103,8 @@ trait Candidate<'a>: Copy {
     fn worktree_path(self) -> Option<&'a str>;
     fn pane_id(self) -> Option<&'a PaneId>;
 
-    /// The channel label: explicit named lane, else worktree-directory basename
-    /// plus team when present, else a placeholder.
+    /// The channel label: stamped lane, else worktree-directory basename plus
+    /// team when present, else a placeholder.
     fn channel_label(self) -> String {
         compose_channel(
             self.channel(),
@@ -630,7 +632,33 @@ pub fn path_basename(path: &str) -> Option<&str> {
     path.rsplit('/').next().filter(|value| !value.is_empty())
 }
 
-/// The agent's channel — the lane it cooperates in: explicit named lane, else
+/// The room channel a launch runs in: an explicit named lane wins, else a
+/// separate worktree's directory name, else an in-place `<dir>/<team>`, else
+/// `None`. This is the launch-side peer of the CLI's current-channel
+/// resolution, so stamped agent identity and human commands agree.
+pub fn resolve_room_channel(
+    project_root: &Path,
+    cwd: &Path,
+    team: Option<&str>,
+    explicit: Option<&str>,
+) -> Option<String> {
+    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
+        return Some(channel.to_owned());
+    }
+    if cwd != project_root {
+        return cwd
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+    }
+    let team = team.filter(|team| !team.is_empty())?;
+    compose_channel(
+        None,
+        project_root.file_name().and_then(|name| name.to_str()),
+        Some(team),
+    )
+}
+
+/// The agent's channel — the lane it cooperates in: stamped lane, else
 /// worktree directory basename plus in-place team when present.
 /// `None` when the agent runs outside any channel context.
 /// The display-side `Option` peer of the resolver's [`Candidate::channel_label`].
