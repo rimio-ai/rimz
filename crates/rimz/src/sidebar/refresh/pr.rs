@@ -23,7 +23,7 @@ const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
 const PR_STATE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PARALLEL_PR_PROBES: usize = 8;
-const UNSUPPORTED_REPO_KEY: &str = "";
+const UNSUPPORTED_REPO_KEY: &str = "<unsupported>";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PrStateCache {
@@ -100,7 +100,8 @@ pub(crate) fn produce_pr_states(
     let groups = group_targets(targets);
     let target_paths = current_target_paths(&groups);
     let due = due_repo_keys(&groups, &cache, &hot, &focused, now_ms);
-    let needs_reconcile = needs_target_reconcile(&cache, &needed, &diff_cache, &target_paths);
+    let needs_reconcile = needs_target_reconcile(&cache, &needed, &diff_cache, &target_paths)
+        || unsupported_probe_due(&cache, &needed, &hot, &focused, now_ms);
     if due.is_empty() && !needs_reconcile {
         return cache.states;
     }
@@ -108,8 +109,10 @@ pub(crate) fn produce_pr_states(
     let lock_path = runtime.root.join("pr-state.lock");
     let fresh = || {
         let cache = read_pr_state_cache(&path);
-        let due = due_repo_keys(&groups, &cache, &hot, &focused, unix_now_ms());
-        let needs_reconcile = needs_target_reconcile(&cache, &needed, &diff_cache, &target_paths);
+        let now_ms = unix_now_ms();
+        let due = due_repo_keys(&groups, &cache, &hot, &focused, now_ms);
+        let needs_reconcile = needs_target_reconcile(&cache, &needed, &diff_cache, &target_paths)
+            || unsupported_probe_due(&cache, &needed, &hot, &focused, now_ms);
         (due.is_empty() && !needs_reconcile).then_some(cache)
     };
     match crate::ledger::single_flight::coalesce(
@@ -121,25 +124,29 @@ pub(crate) fn produce_pr_states(
         crate::ledger::single_flight::Coalesced::Shared(cache) => cache.states,
         crate::ledger::single_flight::Coalesced::Produce(_guard) => {
             let prior = read_pr_state_cache(&path);
-            let due = due_repo_keys(&groups, &prior, &hot, &focused, unix_now_ms());
+            let now_ms = unix_now_ms();
+            let due = due_repo_keys(&groups, &prior, &hot, &focused, now_ms);
             let needs_reconcile =
-                needs_target_reconcile(&prior, &needed, &diff_cache, &target_paths);
+                needs_target_reconcile(&prior, &needed, &diff_cache, &target_paths)
+                    || unsupported_probe_due(&prior, &needed, &hot, &focused, now_ms);
             if due.is_empty() && !needs_reconcile {
                 return prior.states;
             }
-            let cache = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, unix_now_ms());
+            let cache = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms);
             write_pr_state_cache(&path, &cache);
             cache.states
         }
         crate::ledger::single_flight::Coalesced::ProduceLocal => {
             let prior = read_pr_state_cache(&path);
-            let due = due_repo_keys(&groups, &prior, &hot, &focused, unix_now_ms());
+            let now_ms = unix_now_ms();
+            let due = due_repo_keys(&groups, &prior, &hot, &focused, now_ms);
             let needs_reconcile =
-                needs_target_reconcile(&prior, &needed, &diff_cache, &target_paths);
+                needs_target_reconcile(&prior, &needed, &diff_cache, &target_paths)
+                    || unsupported_probe_due(&prior, &needed, &hot, &focused, now_ms);
             if due.is_empty() && !needs_reconcile {
                 prior.states
             } else {
-                probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, unix_now_ms()).states
+                probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms).states
             }
         }
     }
@@ -182,9 +189,9 @@ fn cached_due_repo_keys(
             continue;
         };
         if repo_key == UNSUPPORTED_REPO_KEY {
-            if has_uncached {
-                return None;
-            }
+            let input = inputs.entry(repo_key.clone()).or_default();
+            input.hot |= hot.contains(path) || focused.contains(path);
+            input.has_uncached |= has_uncached;
             continue;
         }
         let input = inputs.entry(repo_key.clone()).or_default();
@@ -388,11 +395,38 @@ fn needs_target_reconcile(
         })
 }
 
+fn unsupported_probe_due(
+    cache: &PrStateCache,
+    needed: &[String],
+    hot: &BTreeSet<String>,
+    focused: &BTreeSet<String>,
+    now_ms: u64,
+) -> bool {
+    let mut has_unsupported = false;
+    let mut unsupported_hot = false;
+    for path in needed {
+        if cache.path_repos.get(path).map(String::as_str) != Some(UNSUPPORTED_REPO_KEY) {
+            continue;
+        }
+        has_unsupported = true;
+        unsupported_hot |= hot.contains(path) || focused.contains(path);
+    }
+    has_unsupported
+        && repo_due(
+            cache.repos.get(UNSUPPORTED_REPO_KEY),
+            repo_tier_ttl(unsupported_hot),
+            now_ms,
+            false,
+            false,
+        )
+}
+
 fn reconcile_target_bookkeeping(
     mut cache: PrStateCache,
     needed: &[String],
     diff_cache: &DiffStatsCache,
     target_paths: &BTreeSet<String>,
+    now_ms: u64,
 ) -> PrStateCache {
     let current_needed_paths = needed.iter().cloned().collect::<BTreeSet<_>>();
     cache
@@ -404,7 +438,9 @@ fn reconcile_target_bookkeeping(
     cache
         .path_repos
         .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
+    let mut saw_unsupported = false;
     for path in needed.iter().filter(|path| !target_paths.contains(*path)) {
+        saw_unsupported = true;
         cache.states.remove(path);
         cache
             .path_repos
@@ -414,6 +450,16 @@ fn reconcile_target_bookkeeping(
             target_head_sha(diff_cache, path)
                 .unwrap_or_default()
                 .to_owned(),
+        );
+    }
+    if saw_unsupported {
+        cache.repos.insert(
+            UNSUPPORTED_REPO_KEY.to_owned(),
+            RepoProbe {
+                refreshed_at_ms: now_ms,
+                ok: true,
+                consecutive_failures: 0,
+            },
         );
     }
     cache
@@ -462,7 +508,8 @@ fn probe_due_repos(
     now_ms: u64,
 ) -> PrStateCache {
     let target_paths = current_target_paths(groups);
-    let mut cache = reconcile_target_bookkeeping(prior.clone(), needed, diff_cache, &target_paths);
+    let mut cache =
+        reconcile_target_bookkeeping(prior.clone(), needed, diff_cache, &target_paths, now_ms);
 
     let due_groups = groups
         .iter()
@@ -1007,7 +1054,7 @@ mod tests {
             &target_paths
         ));
 
-        let cache = reconcile_target_bookkeeping(cache, &needed, &diff, &target_paths);
+        let cache = reconcile_target_bookkeeping(cache, &needed, &diff, &target_paths, 1_000);
 
         assert!(!cache.states.contains_key("/repo/a"));
         assert_eq!(
@@ -1017,6 +1064,13 @@ mod tests {
         assert_eq!(
             cache.head_seen.get("/repo/a").map(String::as_str),
             Some("new")
+        );
+        assert_eq!(
+            cache
+                .repos
+                .get(UNSUPPORTED_REPO_KEY)
+                .map(|probe| probe.refreshed_at_ms),
+            Some(1_000)
         );
         assert!(!needs_target_reconcile(
             &cache,
@@ -1033,6 +1087,14 @@ mod tests {
             .path_repos
             .insert("/repo/a".to_owned(), UNSUPPORTED_REPO_KEY.to_owned());
         cache.head_seen.insert("/repo/a".to_owned(), String::new());
+        cache.repos.insert(
+            UNSUPPORTED_REPO_KEY.to_owned(),
+            RepoProbe {
+                refreshed_at_ms: 1_000,
+                ok: true,
+                consecutive_failures: 0,
+            },
+        );
         let needed = vec!["/repo/a".to_owned()];
         let mut diff = DiffStatsCache::default();
         diff.entries.insert(
@@ -1054,6 +1116,18 @@ mod tests {
             )
             .unwrap()
             .is_empty()
+        );
+        assert!(
+            cached_due_repo_keys(
+                &cache,
+                &needed,
+                &diff,
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                1_001 + PR_STATE_TTL.as_millis() as u64
+            )
+            .unwrap()
+            .contains(UNSUPPORTED_REPO_KEY)
         );
     }
 
