@@ -134,7 +134,6 @@ fn draw_into(
             &snapshot.sidebar.keys,
             area,
             (top_height, bottom_height),
-            ui.animation_phase,
         );
     }
 }
@@ -146,7 +145,6 @@ fn draw_help_overlay(
     keys: &crate::config::SidebarKeys,
     area: Rect,
     chrome_heights: (usize, usize),
-    animation_phase: u64,
 ) {
     if area.width == 0 {
         return;
@@ -169,13 +167,7 @@ fn draw_help_overlay(
         return;
     }
 
-    let lines = help_lines(
-        theme,
-        focus_key,
-        keys,
-        usize::from(area.width),
-        animation_phase,
-    );
+    let lines = help_lines(theme, focus_key, keys, usize::from(area.width));
     let box_w = lines
         .iter()
         .map(|line| line.width())

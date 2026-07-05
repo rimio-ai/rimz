@@ -148,9 +148,12 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::KeysFocus => "⏎",
         GlyphRole::KeysInbox => "␣",
         GlyphRole::KeysRead => "✉",
+        GlyphRole::KeysUnread => "●",
+        GlyphRole::KeysAll => "≡",
         GlyphRole::KeysAccounts => "↔",
         GlyphRole::KeysReload => "⟳",
         GlyphRole::KeysDismiss => "✕",
+        GlyphRole::KeysSidebar => "▐",
         GlyphRole::ChromeAlert => "⚠",
         GlyphRole::ChromePresenceAway => "zᶻ",
         GlyphRole::ChromeRemoteLink => "⇄",
@@ -251,9 +254,12 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         GlyphRole::KeysFocus => "\u{f05b}",    // nf-fa-crosshairs
         GlyphRole::KeysInbox => "\u{f01c}",    // nf-fa-inbox
         GlyphRole::KeysRead => "\u{f0e0}",     // nf-fa-envelope
+        GlyphRole::KeysUnread => "\u{f111}",   // nf-fa-circle
+        GlyphRole::KeysAll => "\u{f03a}",      // nf-fa-list
         GlyphRole::KeysAccounts => "\u{f07e}", // nf-fa-arrows_h
         GlyphRole::KeysReload => "\u{f021}",   // nf-fa-refresh
         GlyphRole::KeysDismiss => "\u{f00d}",  // nf-fa-times
+        GlyphRole::KeysSidebar => "\u{f0db}",  // nf-fa-columns
         // chrome: the presence, network link, and infinity badges iconify; framing stays drawn.
         GlyphRole::ChromePresenceAway => "\u{f186}", // nf-fa-moon_o
         GlyphRole::ChromeRemoteLink => "\u{ede3}",   // nf-fa-tower_broadcast
@@ -371,6 +377,9 @@ mod tests {
             GlyphRole::WorktreeReconciling,
             GlyphRole::MeterReset,
             GlyphRole::KeysFocus,
+            GlyphRole::KeysUnread,
+            GlyphRole::KeysAll,
+            GlyphRole::KeysSidebar,
             GlyphRole::ChromePresenceAway,
             GlyphRole::ChromeInfinity,
         ] {

@@ -14,25 +14,25 @@ expression: screen
 ▌  allow?                                                                      ▐
 ▌  ▢ ────────────────────────────────────────────────────────────────────    0%▐
 
-                                      ╭ keys & legend ─────────────────────────╮
-                                      │ keys                                   │
-                                      │ ↕ j/k rows          ↕ J/K   worktrees  │
-                                      │ ↕ g/G ends          ↕ ^f/^b page       │
-                                      │ ↕ H/L screen        ⏎ l     focus      │
-                                      │ ⏎ 1-9 direct        ␣ n/N   needs-you  │
-                                      │ ✉ m   read/unread   ✉ M     read all   │
-                                      │ ↔ ←/→ account tabs  ⟳ r     reload     │
-                                      │ ✕ x   dismiss         Alt+p sidebar    │
-                                      │ filter                                 │
-                                      │ ? q   waiting       ! e     attention  │
-                                      │ ⏸︎ p   paused        ✓ d     done       │
-                                      │ ⢿ w   working       ○ o     idle       │
-                                      │   u   unread          a     all        │
-                                      │ legend                                 │
-                                      │ ⠁     thinking      ⣾       working    │
-                                      │ ▁     compacting    ⢄       delegating │
-                                      │ ⠋     resolving                        │
-                                      ╰─────────── any key to close ───────────╯
+
+                                       ╭ help ─────────────────────────────────╮
+                                       │ keys                                  │
+                                       │ ↕ j/k rows          ↕ J/K   worktrees │
+                                       │ ↕ g/G ends          ↕ ^f/^b page      │
+                                       │ ↕ H/L screen        ⏎ l     focus     │
+                                       │ ⏎ 1-9 direct        ␣ n/N   needs-you │
+                                       │ ✉ m   read/unread   ✉ M     read all  │
+                                       │ ↔ ←/→ account tabs  ⟳ r     reload    │
+                                       │ ✕ x   dismiss                         │
+                                       │                                       │
+                                       │ filter                                │
+                                       │ ? q   waiting       ! e     attention │
+                                       │ ⏸︎ p   paused        ✓ d     done      │
+                                       │ ⢿ w   working       ○ o     idle      │
+                                       │ ● u   unread        ≡ a     all       │
+                                       │                                       │
+                                       │ ▐ alt p sidebar                       │
+                                       ╰────────── any key to close ───────────╯
  ──────────────────────────────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00

@@ -203,9 +203,12 @@
 ## focus = "⏎"
 ## inbox = "␣"
 ## read = "✉"
+## unread = "●"
+## all = "≡"
 ## accounts = "↔"
 ## reload = "⟳"
 ## dismiss = "✕"
+## sidebar = "▐"
 
 [theme.glyphs.unicode.chrome]
 ## alert = "⚠"
@@ -298,9 +301,12 @@
 ## focus = ""
 ## inbox = ""
 ## read = ""
+## unread = ""
+## all = ""
 ## accounts = ""
 ## reload = ""
 ## dismiss = ""
+## sidebar = ""
 
 [theme.glyphs.nerd_font.chrome]
 ## alert = "⚠"

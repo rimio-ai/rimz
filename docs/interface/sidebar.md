@@ -49,7 +49,7 @@ The rest of this doc reads that frame zone by zone.
 
 ## Reading the glyphs
 
-One vocabulary runs through the whole sidebar: a shape carries the meaning, color reinforces it. This is the complete legend, and the canonical home for it — every other doc points here, and the `?` overlay inside the app shows a short version in place.
+One vocabulary runs through the whole sidebar: a shape carries the meaning, color reinforces it. This is the complete legend, and the canonical home for it — every other doc points here.
 
 The tables show the default Unicode set. `[theme.glyphs]` can select Nerd Font or override either shipped inline set without changing the meanings; see [theme.md → Glyphs](../reference/theme.md#glyphs).
 
@@ -167,7 +167,7 @@ The body: one card per pane, grouped under the worktree it lives in. A worktree 
 
 While a [make-up bucket](#zone-1--the-cockpit) or the unread lens is picked, the body shows only the matching cards: non-matching rows, process rows, worktree groups left empty, and the `+K more` line all step aside until the pick clears.
 
-**The cards scroll between the pinned zones.** When the cards outgrow the pane they scroll between the cockpit and the dashboard — both stay put — and the right-margin scrollbar (`▐` thumb, `▕` track) appears while the viewport moves. The viewport follows the **selection**: picking any row brings its card, expanded subagent list included, fully into view, pinning a too-tall card's first line to the top. The mouse wheel scrolls freely without moving the selection — peek anywhere, and the next selection change snaps the view back. `?` swaps the card body for the keys-and-legend overlay while the cockpit, footer, and alert rails stay pinned.
+**The cards scroll between the pinned zones.** When the cards outgrow the pane they scroll between the cockpit and the dashboard — both stay put — and the right-margin scrollbar (`▐` thumb, `▕` track) appears while the viewport moves. The viewport follows the **selection**: picking any row brings its card, expanded subagent list included, fully into view, pinning a too-tall card's first line to the top. The mouse wheel scrolls freely without moving the selection — peek anywhere, and the next selection change snaps the view back. `?` swaps the card body for the keys-and-filter overlay while the cockpit, footer, and alert rails stay pinned.
 
 ### The card
 
@@ -428,28 +428,27 @@ When the renderer is holding a successful-but-regressive fetch behind the last g
 
 These notices clear when the next accepted pane frame lands. A health alert takes over the bottom line while a fetch failure is active.
 
-**Help overlay** (`?`). The legend and keys float over the bottom-right of the card body, next to the footer hint, while uncovered cards stay visible. Key chords use the cool accent tone, the motion legend animates live, and any key or focus leaving the sidebar closes it.
+**Help overlay** (`?`). The keys, status filters, and standalone sidebar-focus chord float over the bottom-right of the card body, next to the footer hint, while uncovered cards stay visible. Key chords use the cool accent tone, and any key or focus leaving the sidebar closes it.
 
 ```
-╭ keys & legend ─────────────────────────────────────────╮
-│ keys                                                   │
-│ ↕ j/k rows                    ↕ J/K worktrees          │
-│ ↕ g/G ends                    ↕ ^f/^b page             │
-│ ↕ H/L screen                  ⏎ l focus                │
-│ ⏎ 1-9 direct                  ␣ n/N needs-you          │
-│ ✉ m read/unread               ✉ M read all             │
-│ ↔ ←/→ account tabs            ⟳ r reload               │
-│ ✕ x dismiss                   Alt+p sidebar            │
-│ filter                                                 │
-│ ? q waiting  ! e attention                             │
-│ ⏸︎ p paused   ✓ d done                                  │
-│ ⢿ w working  ○ o idle                                  │
-│ u unread     a all                                     │
-│ legend                                                 │
-│ ⠁ thinking  ⣾ working                                  │
-│ ▇ compacting  ⢄ delegating                             │
-│ ⠙ resolving                                             │
-╰─────────────────── any key to close ───────────────────╯
+╭ help ──────────────────────────────────╮
+│ keys                                   │
+│ ↕ j/k rows          ↕ J/K   worktrees  │
+│ ↕ g/G ends          ↕ ^f/^b page       │
+│ ↕ H/L screen        ⏎ l     focus      │
+│ ⏎ 1-9 direct        ␣ n/N   needs-you  │
+│ ✉ m   read/unread   ✉ M     read all   │
+│ ↔ ←/→ account tabs  ⟳ r     reload     │
+│ ✕ x   dismiss                          │
+│                                        │
+│ filter                                 │
+│ ? q   waiting       ! e     attention  │
+│ ⏸︎ p   paused        ✓ d     done       │
+│ ⢿ w   working       ○ o     idle       │
+│ ● u   unread        ≡ a     all        │
+│                                        │
+│ ▐ alt p sidebar                        │
+╰─────────── any key to close ───────────╯
 ```
 
 **Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:

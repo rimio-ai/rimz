@@ -1,12 +1,12 @@
 use crate::agents::AgentStatus;
-use crate::config::{AnimationRole, GlyphRole, SidebarKeys};
+use crate::config::{GlyphRole, SidebarKeys};
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::fmt::age_short;
-use super::labels::{role_glyph, status_glyph, status_rest_style};
+use super::labels::{status_glyph, status_rest_style};
 use super::layout;
 use super::theme::{Component, Theme};
 use super::{Alert, GateNotice};
@@ -312,19 +312,18 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
     Span::styled(text, style)
 }
 
-/// The `?` popup: a which-key style block with action glyphs and the status
-/// legend on one shared grid.
+/// The `?` popup: a which-key style block with action keys, status filters, and
+/// the standalone sidebar-focus chord.
 pub(super) fn help_lines(
     theme: &Theme,
     focus_key: Option<&str>,
     keys: &SidebarKeys,
     width: usize,
-    phase: u64,
 ) -> Vec<Line<'static>> {
-    const TITLE: &str = "keys & legend";
+    const TITLE: &str = "help";
     const MIN_FRAME_WIDTH: usize = 22;
 
-    let rows = help_body_rows(theme, focus_key, keys, phase);
+    let rows = help_body_rows(theme, focus_key, keys);
     if width < MIN_FRAME_WIDTH {
         return rows
             .into_iter()
@@ -348,7 +347,6 @@ fn help_body_rows(
     theme: &Theme,
     focus_key: Option<&str>,
     keys: &SidebarKeys,
-    phase: u64,
 ) -> Vec<Line<'static>> {
     let movement = |key: String, label| {
         key_entry(
@@ -452,63 +450,53 @@ fn help_body_rows(
                 "x",
                 "dismiss",
             ),
-            focus_key.map(|key| key_entry(theme, None, key, "sidebar")),
+            None,
         ),
     ];
-    help_grid(
+    let filter_section = vec![
+        (
+            status_entry(theme, AgentStatus::Waiting, "q", "waiting"),
+            Some(status_entry(theme, AgentStatus::Failed, "e", "attention")),
+        ),
+        (
+            status_entry(theme, AgentStatus::Paused, "p", "paused"),
+            Some(status_entry(theme, AgentStatus::Success, "d", "done")),
+        ),
+        (
+            status_entry(theme, AgentStatus::Running, "w", "working"),
+            Some(status_entry(theme, AgentStatus::Idle, "o", "idle")),
+        ),
+        (
+            key_entry(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysUnread)),
+                "u",
+                "unread",
+            ),
+            Some(key_entry(
+                theme,
+                Some(key_icon(theme, GlyphRole::KeysAll)),
+                "a",
+                "all",
+            )),
+        ),
+    ];
+    let mut lines = help_grid(
         theme,
-        vec![
-            ("keys", keys_section),
-            (
-                "filter",
-                vec![
-                    (
-                        status_entry(theme, AgentStatus::Waiting, "q", "waiting"),
-                        Some(status_entry(theme, AgentStatus::Failed, "e", "attention")),
-                    ),
-                    (
-                        status_entry(theme, AgentStatus::Paused, "p", "paused"),
-                        Some(status_entry(theme, AgentStatus::Success, "d", "done")),
-                    ),
-                    (
-                        status_entry(theme, AgentStatus::Running, "w", "working"),
-                        Some(status_entry(theme, AgentStatus::Idle, "o", "idle")),
-                    ),
-                    (
-                        key_entry(theme, None, "u", "unread"),
-                        Some(key_entry(theme, None, "a", "all")),
-                    ),
-                ],
-            ),
-            (
-                "legend",
-                vec![
-                    (
-                        animation_entry(theme, AnimationRole::Thinking, phase, "thinking"),
-                        Some(animation_entry(
-                            theme,
-                            AnimationRole::Working,
-                            phase,
-                            "working",
-                        )),
-                    ),
-                    (
-                        animation_entry(theme, AnimationRole::Compacting, phase, "compacting"),
-                        Some(animation_entry(
-                            theme,
-                            AnimationRole::Delegating,
-                            phase,
-                            "delegating",
-                        )),
-                    ),
-                    (
-                        animation_entry(theme, AnimationRole::Resolving, phase, "resolving"),
-                        None,
-                    ),
-                ],
-            ),
-        ],
-    )
+        vec![("keys", keys_section), ("filter", filter_section)],
+    );
+    if let Some(key) = focus_key {
+        lines.push(Line::default());
+        let entry = key_entry(
+            theme,
+            Some(key_icon(theme, GlyphRole::KeysSidebar)),
+            focus_chord_label(key),
+            "sidebar",
+        );
+        let key_w = layout::text_width(&entry.key);
+        lines.push(Line::from(render_entry(theme, entry, key_w)).style(theme.body()));
+    }
+    lines
 }
 
 fn chord_label(spec: &str) -> String {
@@ -548,6 +536,10 @@ fn key_label(base: &str) -> String {
     }
 }
 
+fn focus_chord_label(key: &str) -> String {
+    key.to_ascii_lowercase().replace(['+', '-'], " ")
+}
+
 #[derive(Clone)]
 struct Entry {
     icon: Option<Span<'static>>,
@@ -585,6 +577,9 @@ fn help_grid(theme: &Theme, sections: Vec<HelpSection>) -> Vec<Line<'static>> {
 
     let mut lines = Vec::new();
     for (section, rows) in sections {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
         lines.push(subheader(theme, section));
         lines.extend(rows.into_iter().map(|(left, right)| {
             let mut spans = render_entry(theme, left, left_key_w);
@@ -643,18 +638,6 @@ fn status_entry(theme: &Theme, status: AgentStatus, keys: &str, label: &str) -> 
     key_entry(theme, Some(status_icon(theme, status)), keys, label)
 }
 
-fn animation_entry(theme: &Theme, role: AnimationRole, phase: u64, label: &str) -> Entry {
-    Entry {
-        icon: Some(Span::styled(
-            role_glyph(theme, role, phase),
-            animation_style(theme, role),
-        )),
-        key: String::new(),
-        label: label.to_owned(),
-        key_style: theme.body(),
-    }
-}
-
 fn subheader(theme: &Theme, text: &str) -> Line<'static> {
     Line::styled(text.to_owned(), theme.faint())
 }
@@ -670,13 +653,6 @@ fn status_icon(theme: &Theme, status: AgentStatus) -> Span<'static> {
         status_rest_style(theme, status)
     };
     Span::styled(status_glyph(theme, status), style)
-}
-
-fn animation_style(theme: &Theme, role: AnimationRole) -> Style {
-    theme.animations.natural_color(role).map_or_else(
-        || theme.body(),
-        |color| theme.style(color, Modifier::empty()),
-    )
 }
 
 fn framed_box(

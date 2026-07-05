@@ -38,13 +38,12 @@ fn render_footer_and_help_overlay() {
         80,
         36,
     );
-    assert!(help.contains("keys & legend"));
+    assert!(help.contains("╭ help"));
     assert!(help.contains("╭"), "{help}");
     assert!(help.contains("│"), "{help}");
     assert!(help.contains("╰"), "{help}");
     assert!(help.contains("keys"), "{help}");
     assert!(help.contains("filter"), "{help}");
-    assert!(help.contains("legend"), "{help}");
     let compact = help.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(compact.contains("j/k rows"));
     assert!(compact.contains("J/K worktrees"));
@@ -55,12 +54,13 @@ fn render_footer_and_help_overlay() {
     assert!(compact.contains("l focus"));
     assert!(compact.contains("m read/unread"));
     assert!(compact.contains("M read all"));
-    assert!(compact.contains("Alt+p sidebar"));
+    assert!(compact.contains("alt p sidebar"));
+    assert!(compact.contains("● u unread"));
+    assert!(compact.contains("≡ a all"));
+    assert!(compact.contains("▐ alt p sidebar"));
     assert!(compact.contains("? q waiting"));
     assert!(compact.contains("! e attention"));
     assert!(compact.contains("○ o idle"));
-    assert!(help.contains("compacting"));
-    assert!(help.contains("resolving"));
     assert!(help.contains("any key to close"));
     assert!(
         help.contains("allow?"),
@@ -85,7 +85,7 @@ fn render_footer_and_help_overlay() {
 #[test]
 fn chrome_rebuilds_carry_line_level_styles() {
     let theme = Theme::fixed(false);
-    let padded = pad_chrome(Line::styled("keys & legend", theme.body()));
+    let padded = pad_chrome(Line::styled("help", theme.body()));
     assert_eq!(padded.spans[0].content.as_ref(), " ", "gutter first");
     assert_eq!(padded.spans[1].style, theme.body());
 
@@ -97,46 +97,9 @@ fn chrome_rebuilds_carry_line_level_styles() {
         Some("Alt+p"),
         &crate::config::SidebarKeys::default(),
         80,
-        0,
     ) {
         assert_eq!(line.style, theme.body());
     }
-}
-
-fn help_text(theme: &Theme, phase: u64) -> String {
-    help_lines(
-        theme,
-        Some("Alt+p"),
-        &crate::config::SidebarKeys::default(),
-        80,
-        phase,
-    )
-    .into_iter()
-    .map(|line| {
-        line.spans
-            .into_iter()
-            .map(|span| span.content.into_owned())
-            .collect::<String>()
-    })
-    .collect::<Vec<_>>()
-    .join("\n")
-}
-
-#[test]
-fn help_legend_animates_across_phases() {
-    let theme = Theme::fixed(false);
-    let phase_0 = help_text(&theme, 0);
-    let phase_1 = help_text(&theme, 1);
-    let legend = |text: &str| {
-        text.lines()
-            .skip_while(|line| !line.contains("legend"))
-            .skip(1)
-            .take_while(|line| !line.contains("any key to close"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    assert_ne!(legend(&phase_0), legend(&phase_1));
 }
 
 #[test]
@@ -147,7 +110,6 @@ fn help_overlay_falls_back_borderless_when_too_narrow() {
         Some("Alt+p"),
         &crate::config::SidebarKeys::default(),
         20,
-        0,
     );
     let text_lines = lines
         .iter()
@@ -193,7 +155,7 @@ fn help_overlay_names_configured_motion_keys() {
         screen_bottom: "L".to_owned(),
         ..Default::default()
     };
-    let text = help_lines(&theme, Some("Alt+p"), &keys, 80, 0)
+    let text = help_lines(&theme, Some("Ctrl+s"), &keys, 80)
         .into_iter()
         .map(|line| {
             line.spans
@@ -208,6 +170,7 @@ fn help_overlay_names_configured_motion_keys() {
     assert!(compact.contains("^n/^p rows"), "{text}");
     assert!(compact.contains("^v/M-v page"), "{text}");
     assert!(compact.contains("Home/End ends"), "{text}");
+    assert!(compact.contains("▐ ctrl s sidebar"), "{text}");
 }
 
 #[test]

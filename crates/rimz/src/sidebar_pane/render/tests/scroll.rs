@@ -137,7 +137,7 @@ fn help_overlay_floats_over_cards_with_scrollbar() {
         "footer stays pinned while help is open:\n{rendered}"
     );
     assert!(
-        rendered.contains("keys & legend") && rendered.contains("╭") && rendered.contains("legend"),
+        rendered.contains("╭ help"),
         "the floating help box renders:\n{rendered}"
     );
     assert!(

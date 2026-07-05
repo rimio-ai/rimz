@@ -114,9 +114,12 @@ glyph_roles! {
         KeysFocus => "focus",
         KeysInbox => "inbox",
         KeysRead => "read",
+        KeysUnread => "unread",
+        KeysAll => "all",
         KeysAccounts => "accounts",
         KeysReload => "reload",
         KeysDismiss => "dismiss",
+        KeysSidebar => "sidebar",
     }
     "chrome" {
         ChromeAlert => "alert",
