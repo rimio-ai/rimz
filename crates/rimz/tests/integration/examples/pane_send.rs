@@ -196,7 +196,7 @@ fn stage_bridge_item_with_pane(
 /// halves of the round trip — the pane received the keystrokes (sentinel file)
 /// and the ledger records a `pane_send` resolution from this resolver.
 /// Runs in the live-tmux nextest tier (`.config/nextest.toml`), pinned by name
-/// — a rename must update that filter.
+/// — a rename must update those filters.
 #[test]
 fn pane_send_resolver_completes_full_round_trip() {
     let env = Env::new();
