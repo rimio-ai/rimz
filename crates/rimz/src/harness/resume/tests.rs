@@ -145,6 +145,52 @@ fn cohort_resume_selects_newest_team_member_per_role() {
 }
 
 #[test]
+fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere() {
+    let mut newest_planner = agent("claude", "newest-planner", "/code/newer", Some("newer"), 1);
+    newest_planner.team = Some("forge".to_owned());
+    newest_planner.role = Some("planner".to_owned());
+    let mut newest_coder = agent("codex", "newest-coder", "/code/newer", Some("newer"), 2);
+    newest_coder.team = Some("forge".to_owned());
+    newest_coder.role = Some("coder".to_owned());
+    let mut target_planner = agent(
+        "claude",
+        "target-planner",
+        "/code/restore",
+        Some("restore"),
+        50,
+    );
+    target_planner.team = Some("forge".to_owned());
+    target_planner.role = Some("planner".to_owned());
+    let mut target_coder = agent(
+        "codex",
+        "target-coder",
+        "/code/restore",
+        Some("restore"),
+        60,
+    );
+    target_coder.team = Some("forge".to_owned());
+    target_coder.role = Some("coder".to_owned());
+    let agents = vec![newest_planner, newest_coder, target_planner, target_coder];
+    let scoped = agents
+        .into_iter()
+        .filter(|agent| agent.worktree_path.as_deref() == Some("/code/restore"))
+        .collect::<Vec<_>>();
+    let cells = vec![
+        cohort_cell("claude", Some("planner")),
+        cohort_cell("codex", Some("coder")),
+    ];
+
+    let plan = plan_cohort_resume(&scoped, &no_ended(), dead, &cells, Some("forge"), |_| true)
+        .expect("filtered cohort plan");
+
+    assert_eq!(
+        plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
+        [Some("target-planner"), Some("target-coder")]
+    );
+    assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/restore")));
+}
+
+#[test]
 fn cohort_resume_excludes_ended_members() {
     let mut ended_agent = agent("claude", "ended", "/code/pcr", Some("pcr"), 1);
     ended_agent.team = Some("pcr".to_owned());

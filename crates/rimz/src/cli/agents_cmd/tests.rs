@@ -226,6 +226,16 @@ mod parse {
         let parsed = AgentsHarness::try_parse_from(["rimz", "pcr", "--resume"])
             .expect("parse cohort resume");
         assert!(parsed.args.resume);
+
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz",
+            "pcr",
+            "--worktree=restore-living-team",
+            "--resume",
+        ])
+        .expect("parse worktree-scoped cohort resume");
+        assert!(parsed.args.resume);
+        assert_eq!(parsed.args.worktree.as_deref(), Some("restore-living-team"));
     }
 
     #[test]
@@ -267,7 +277,6 @@ mod parse {
             &["rimz", "wait", "codex", "--stream", "--json"],
             &["rimz", "claude", "--new-pane", "--new-tab"],
             &["rimz", "claude", "hi", "--resume"],
-            &["rimz", "claude", "--resume", "--worktree=docs"],
             &["rimz", "claude", "--resume", "--channel=design"],
             &["rimz", "claude", "--resume", "--from-pr", "1"],
             &["rimz", "claude", "--resume", "--name", "swift-otter"],

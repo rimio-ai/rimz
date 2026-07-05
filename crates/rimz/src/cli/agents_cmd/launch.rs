@@ -38,6 +38,8 @@ pub(super) fn launch_layout(
         .sum::<usize>()
         == 1;
     if args.resume {
+        let worktree_filter =
+            resume_worktree_scope(args.worktree.as_deref(), &workspace, &machine_config)?;
         return launch_resume_layout(
             args,
             globals,
@@ -48,7 +50,7 @@ pub(super) fn launch_layout(
             layout,
             team_name,
             single_cell,
-            None,
+            worktree_filter.as_deref(),
         );
     }
     let worktree_launch = args.worktree.is_some() || args.from_pr.is_some();
@@ -280,6 +282,7 @@ fn launch_resume_layout(
     };
     let cells = cohort_cells(&layout);
     let spec = args.spec.as_deref().unwrap_or("<spec>");
+    let scope = worktree_filter.and_then(worktree_scope_label);
     let plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
         &projection.ended,
@@ -288,7 +291,7 @@ fn launch_resume_layout(
         team_name.as_deref(),
         |path| path.is_dir(),
     )
-    .map_err(|err| cohort_resume_error(err, spec))?;
+    .map_err(|err| cohort_resume_error(err, spec, scope.as_deref()))?;
     let cwd = plan
         .cwd
         .clone()
@@ -441,6 +444,42 @@ fn agent_matches_worktree_filter(agent: &AgentState, target: &Path) -> bool {
     })
 }
 
+fn resume_worktree_scope(
+    worktree_arg: Option<&str>,
+    workspace: &rimz::ResolvedWorkspace,
+    machine_config: &rimz::config::MachineConfig,
+) -> Result<Option<PathBuf>> {
+    resume_worktree_scope_with(
+        worktree_arg,
+        &workspace.worktree_root,
+        &workspace.project_root,
+        |name| {
+            if workspace.root_class != rimz::workspace::RootClass::Repo {
+                bail!("--worktree requires a git repository-backed room");
+            }
+            rimz::worktree::worktree_path(
+                &workspace.project_root,
+                &machine_config.agents.worktree,
+                name,
+            )
+            .map_err(Into::into)
+        },
+    )
+}
+
+fn resume_worktree_scope_with(
+    worktree_arg: Option<&str>,
+    worktree_root: &Path,
+    project_root: &Path,
+    resolve_named: impl FnOnce(&str) -> Result<PathBuf>,
+) -> Result<Option<PathBuf>> {
+    match worktree_arg.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => resolve_named(name).map(Some),
+        None if worktree_root != project_root => Ok(Some(worktree_root.to_owned())),
+        None => Ok(None),
+    }
+}
+
 pub(super) fn cohort_cells(layout: &LayoutSpec) -> Vec<rimz::harness::resume::CohortCell> {
     layout
         .agent_cells()
@@ -454,17 +493,34 @@ pub(super) fn cohort_cells(layout: &LayoutSpec) -> Vec<rimz::harness::resume::Co
         .collect()
 }
 
-fn cohort_resume_error(err: rimz::harness::resume::CohortResumeErr, spec: &str) -> anyhow::Error {
+fn worktree_scope_label(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
+fn cohort_resume_error(
+    err: rimz::harness::resume::CohortResumeErr,
+    spec: &str,
+    scope: Option<&str>,
+) -> anyhow::Error {
+    let subject = cohort_resume_subject(spec, scope);
     match err {
         rimz::harness::resume::CohortResumeErr::NothingToResume { .. } => {
-            anyhow::anyhow!("nothing to resume for `{spec}`; launch without `--resume`")
+            anyhow::anyhow!("nothing to resume for {subject}; launch without `--resume`")
         }
         rimz::harness::resume::CohortResumeErr::MembersStillLive { labels } => {
             anyhow::anyhow!(
-                "cannot resume `{spec}`; still live: {}; close them first or drop `--resume`",
+                "cannot resume {subject}; still live: {}; close them first or drop `--resume`",
                 labels.join(", ")
             )
         }
+    }
+}
+
+fn cohort_resume_subject(spec: &str, scope: Option<&str>) -> String {
+    match scope {
+        Some(scope) => format!("`{spec}` in worktree `{scope}`"),
+        None => format!("`{spec}`"),
     }
 }
 
@@ -1378,6 +1434,70 @@ mod tests {
 
         agent.worktree_path = None;
         assert!(!agent_matches_worktree_filter(&agent, &target));
+    }
+
+    #[test]
+    fn resume_worktree_scope_resolves_named_worktree() {
+        let expected = PathBuf::from("/repo-worktrees/restore-living-team");
+        let called = std::cell::Cell::new(false);
+
+        let scope = resume_worktree_scope_with(
+            Some(" restore-living-team "),
+            Path::new("/repo"),
+            Path::new("/repo"),
+            |name| {
+                called.set(true);
+                assert_eq!(name, "restore-living-team");
+                Ok(expected.clone())
+            },
+        )
+        .expect("named worktree scope");
+
+        assert_eq!(scope, Some(expected));
+        assert!(called.get());
+    }
+
+    #[test]
+    fn resume_worktree_scope_uses_cwd_worktree_when_unnamed() {
+        let worktree = Path::new("/repo-worktrees/restore-living-team");
+
+        let scope = resume_worktree_scope_with(
+            None,
+            worktree,
+            Path::new("/repo"),
+            |_| -> Result<PathBuf> { panic!("unnamed scope must not resolve a worktree name") },
+        )
+        .expect("cwd worktree scope");
+
+        assert_eq!(scope.as_deref(), Some(worktree));
+    }
+
+    #[test]
+    fn resume_worktree_scope_keeps_repo_root_global_when_unnamed() {
+        let scope = resume_worktree_scope_with(
+            None,
+            Path::new("/repo"),
+            Path::new("/repo"),
+            |_| -> Result<PathBuf> { panic!("repo-root scope must stay global") },
+        )
+        .expect("global resume scope");
+
+        assert_eq!(scope, None);
+    }
+
+    #[test]
+    fn resume_worktree_scope_treats_bare_worktree_flag_as_unnamed() {
+        let worktree = Path::new("/repo-worktrees/restore-living-team");
+
+        let scope = resume_worktree_scope_with(
+            Some("  "),
+            worktree,
+            Path::new("/repo"),
+            |_| -> Result<PathBuf> { panic!("bare -w must not resolve a generated worktree name") },
+        )
+        .expect("bare worktree flag scope");
+
+        assert_eq!(scope.as_deref(), Some(worktree));
     }
 
     fn test_agent(id: &str) -> AgentState {

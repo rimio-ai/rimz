@@ -94,12 +94,11 @@ pub struct AgentsArgs {
     /// Create or reuse a Rimz-owned worktree from a pull request number or URL.
     #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "channel")]
     from_pr: Option<rimz::forge::PrTarget>,
-    /// Resume the newest prior cohort matching SPEC.
+    /// Resume a prior cohort matching SPEC, optionally scoped by -w or cwd.
     #[arg(
         long,
         conflicts_with_all = [
             "prompt",
-            "worktree",
             "channel",
             "from_pr",
             "name",
