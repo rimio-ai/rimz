@@ -26,6 +26,13 @@ include = [
     # Must stay AFTER `/src`; negation order decides whether nested docs stay out.
     "!AGENTS.md",
     "!CLAUDE.md",
+    # Test code the whole-`/src` pull would otherwise ship: consumers never
+    # compile it (every `mod tests` is `#[cfg(test)]`-gated), so drop sibling
+    # test files, `tests/` subtrees and their fixtures, and `*_tests.rs`
+    # custom-path modules while keeping production embeds that do not match.
+    "!**/tests.rs",
+    "!**/tests/**",
+    "!**/*_tests.rs",
     "/build.rs",
     "/themes",
     "/pricing/litellm-pricing.json",
@@ -116,12 +123,16 @@ workspace = true
 
 # Duplicated from the workspace root: profiles apply only from the build root,
 # so a standalone `cargo install rimz` build ignores the workspace profile and
-# would lose fail-fast release arithmetic. Keeping this here preserves
-# overflow-checks for published-crate builds. Cost: workspace builds emit one
+# would lose fail-fast release arithmetic plus the release size settings.
+# Keeping this here preserves overflow-checks, stripping, ThinLTO, and one
+# codegen unit for published-crate builds. Cost: workspace builds emit one
 # "profiles for the non-root package `rimz` will be ignored" warning — expected,
 # not a failure.
 [profile.release]
 overflow-checks = true
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
 
 [dependencies]
 anstream.workspace = true

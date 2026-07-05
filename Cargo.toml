@@ -199,15 +199,22 @@ split-debuginfo = "unpacked"
 # Optimized like release but with line-tables debug info, for perf/samply
 # profiling. Built by `cargo xtask profile-build`, output in target/profiling/.
 # force-frame-pointers and symbol-mangling-version=v0 come from xtask RUSTFLAGS.
+# Release strips symbols for shipped artifacts; profiling restores them.
 [profile.profiling]
 inherits = "release"
 debug = "line-tables-only"
+strip = "none"
 
 # Keep release arithmetic fail-fast: a sidebar width/count underflow should
 # panic at the faulting expression and enter the normal recovery/diagnostic
-# path rather than wrap into a huge allocation and abort silently.
+# path rather than wrap into a huge allocation and abort silently. Shipped
+# artifacts are symbol-stripped and thin-LTO'd to keep install size down without
+# switching from the release default speed-oriented opt-level.
 [profile.release]
 overflow-checks = true
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
 
 # The integration suite spawns the `rimz` binary hundreds of times; an
 # unoptimized dependency tree (serde, clap, jiff, ratatui) dominates per-spawn
