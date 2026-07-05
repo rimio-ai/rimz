@@ -102,8 +102,9 @@ pub fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, n
 /// *path*, not of any one agent, so they belong to the group — which also
 /// settles the shared-worktree "whose branch?" ambiguity. Only live-dir paths
 /// carry stats, so a stale entry for a now-missing worktree never resurfaces.
-/// Pure projection (no git): the producer refreshes the cache first, a consumer
-/// projects whatever the elder last published.
+/// Pure projection (no git subprocesses): the producer refreshes the cache
+/// first, a consumer projects whatever the elder last published. Channel
+/// marker checks use checkout metadata reads only.
 pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
     for group in &mut snapshot.worktree_groups {
         let Some(path) = git_backed_worktree_path(group) else {

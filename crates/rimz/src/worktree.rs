@@ -401,7 +401,7 @@ pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {
 
 /// Read a Rimz marker by following the checkout's `.git` metadata only. This
 /// keeps sidebar projection code off the git subprocess path.
-pub fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<WorktreeMarker>> {
+pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<WorktreeMarker>> {
     let Some(marker) = marker_path_from_checkout_metadata(path)? else {
         return Ok(None);
     };
