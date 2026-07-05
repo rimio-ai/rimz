@@ -210,24 +210,7 @@ The grouping matches the reader's mental model. Groups are keyed on worktree iso
 
 The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and always sorts last, below every project group. The room scales past one repo too: `rimz start` in `~/code` lets each git-backed agent group by its own checkout, with the same cockpit, ranking, and jump triage ([the fleet room](./product.md#many-repos-one-room)).
 
-The footer advertises `?`, and pressing it replaces the card body with a centered legend and key block, so the glyph vocabulary is learnable in place without leaving the room.
-
-```
-╭ keys & legend ───────────────────────╮
-│ ↕ j/k rows   J/K worktrees  g/G ends │
-│ ⏎ l focus    1-9 direct              │
-│ ␣ n/N needs-you  (Space = n)         │
-│ ✉ m/M read / unread                  │
-│ ↔ ←/→ account tabs                   │
-│ filter                               │
-│   ? q waiting    ! e attention       │
-│   ⏸︎ p paused     ✓ d done            │
-│   ⢿ w working    ○ o idle            │
-│   u unread       a all               │
-│ ⟳ r reload   ✕ x dismiss   ? close   │
-│   ⠁ thinking     ⢄ delegating        │
-╰──────────────────────────────────────╯
-```
+The footer advertises `?`, and pressing it replaces the card body with the keys-and-filter overlay, so navigation, actions, status filters, and the sidebar-focus chord are learnable in place without leaving the room; [the sidebar interface reference](../interface/sidebar.md#bottom-chrome) shows the exact frame.
 
 Glyph shape carries the meaning and color is a redundant second channel, so every status reads under `NO_COLOR` and to color-blind eyes — twelve agents on one line is the [attention-at-a-glance design](../../DESIGN.md#attention-at-a-glance) carrying a real fleet.
 
