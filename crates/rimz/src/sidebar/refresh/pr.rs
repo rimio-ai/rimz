@@ -554,7 +554,15 @@ fn probe_due_repos(
             }
         });
     }
+    let active_repo_keys = active_repo_keys(&cache);
     cache
+        .repos
+        .retain(|repo_key, _| active_repo_keys.contains(repo_key));
+    cache
+}
+
+fn active_repo_keys(cache: &PrStateCache) -> BTreeSet<String> {
+    cache.path_repos.values().cloned().collect()
 }
 
 struct RepoGroupProbe {
@@ -630,7 +638,7 @@ fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, WorktreePrState>
                 "--state",
                 "open",
                 "--json",
-                "number,state,headRefName",
+                "state,headRefName",
                 "--limit",
                 "500",
             ],
@@ -1129,6 +1137,44 @@ mod tests {
             .unwrap()
             .contains(UNSUPPORTED_REPO_KEY)
         );
+    }
+
+    #[test]
+    fn repo_bookkeeping_prunes_stale_repo_stamps() {
+        let mut prior = PrStateCache::default();
+        prior
+            .path_repos
+            .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());
+        prior.repos.insert(
+            "gh:github.com:org/repo".to_owned(),
+            RepoProbe {
+                refreshed_at_ms: 1_000,
+                ok: true,
+                consecutive_failures: 0,
+            },
+        );
+        prior.repos.insert(
+            "gh:github.com:old/repo".to_owned(),
+            RepoProbe {
+                refreshed_at_ms: 1_000,
+                ok: true,
+                consecutive_failures: 0,
+            },
+        );
+        let groups = group_targets(vec![target("/repo/a", "a")]);
+        let needed = vec!["/repo/a".to_owned()];
+
+        let cache = probe_due_repos(
+            &groups,
+            &BTreeSet::new(),
+            &prior,
+            &needed,
+            &DiffStatsCache::default(),
+            2_000,
+        );
+
+        assert!(cache.repos.contains_key("gh:github.com:org/repo"));
+        assert!(!cache.repos.contains_key("gh:github.com:old/repo"));
     }
 
     fn target(path: &str, branch: &str) -> Target {
