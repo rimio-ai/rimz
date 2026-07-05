@@ -140,8 +140,9 @@ fn group_header(
     // The worktree's git story pins right: live local reconciling leads, then a
     // PR verdict, then the local trunk verdict; diverged/reconciling keeps the
     // `⇡/⇣` commit delta and `+/-` churn before the marker.
-    // A worktree channel keeps its `#` lane label on the left and carries this
-    // same right-pinned story.
+    // A worktree-backed channel leads with the same fork/merge glyph as a
+    // worktree pod and carries this same right-pinned story; only plain lanes
+    // keep the `#` label.
     // The per-worktree status tally is gone: the cockpit owns the fleet
     // make-up and each row carries its own status glyph, so repeating it here
     // was noise. The label clips to whatever's left after the stats claim
@@ -158,7 +159,7 @@ fn group_header(
     let label_width = cw.saturating_sub(right_width + 1).max(1);
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
-        SidebarWorktreeKind::Channel => {
+        SidebarWorktreeKind::Channel if group.trunk.is_none() => {
             format!("{} {}", theme.glyph(GlyphRole::ChannelHash), group.label)
         }
         _ => {
@@ -217,9 +218,9 @@ fn group_header(
 /// worktree still shows its forge state; a live local rebase/merge (`⟳`) stays
 /// on top as the one actionable working-tree state. Diverged and reconciling
 /// worktrees keep the numeric `⇡/⇣ +/-` stats before the marker; every other
-/// state collapses to the marker alone. Worktree channels share this cluster
-/// while keeping their `#` label. Empty when no git read reached this group or
-/// the group is the trunk worktree itself.
+/// state collapses to the marker alone. Worktree-backed channels share this
+/// cluster and lead with the same fork/merge glyph as a worktree pod. Empty when
+/// no git read reached this group or the group is the trunk worktree itself.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
     let Some(trunk) = group.trunk.as_deref() else {
         return plain_git_spans(theme, group);

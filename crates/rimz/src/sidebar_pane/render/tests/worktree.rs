@@ -122,7 +122,7 @@ fn render_named_channel_header_uses_hash_glyph_and_bare_label() {
 }
 
 #[test]
-fn render_worktree_channel_keeps_hash_label_and_git_cluster() {
+fn render_worktree_channel_leads_with_merge_glyph() {
     let mut design = agent(
         "claude-1",
         "claude",
@@ -139,16 +139,37 @@ fn render_worktree_channel_keeps_hash_label_and_git_cluster() {
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
-    assert!(rendered.contains("# codex-resets"), "header:\n{rendered}");
+    assert!(rendered.contains("⮌ codex-resets"), "header:\n{rendered}");
     assert!(rendered.contains("✓ main"), "header:\n{rendered}");
     assert!(
         !rendered.contains("≡ main"),
         "merged PR outranks pristine equal marker:\n{rendered}"
     );
-    assert!(
-        !rendered.contains("⑂ codex-resets"),
-        "channel keeps hash identity:\n{rendered}"
+}
+
+#[test]
+fn render_worktree_channel_leads_with_fork_glyph() {
+    let mut design = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/worktrees/codex-resets"),
+        Some("codex-resets"),
+        Some("reset flow"),
     );
+    design.channel = Some("codex-resets".to_owned());
+    let mut snapshot = snapshot_with(Vec::new(), vec![design]);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    snapshot.worktree_groups[0].pr_state = None;
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 14);
+
+    assert!(
+        rendered.contains("⑂ codex-resets"),
+        "diverged worktree channel keeps fork identity:\n{rendered}"
+    );
+    assert!(rendered.contains("⑂ main"), "header:\n{rendered}");
 }
 
 fn pristine_worktree_with_pr_state(pr_state: Option<crate::WorktreePrState>) -> SidebarSnapshot {
