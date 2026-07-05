@@ -126,12 +126,11 @@ pub struct SidebarSnapshot {
     /// The wired agent kinds whose Rimz hooks are installed. Gates the idle
     /// synthesis in `rows_from_panes`: a launched-but-unbound pane for a wired
     /// agent has a row Rimz can later enrich, while an unwired pane stays a
-    /// process row. Cwd binding for an existing paneless session is separate and
-    /// remains gated by [`crate::agents::Capabilities::registers_lazily`].
-    /// Environment, not ledger — the pure reducer leaves it empty; the
-    /// `rimz sidebar snapshot` CLI and consumer enrichment fill it before
-    /// folding live panes. The placeholder/persisted snapshot keeps it empty
-    /// (a process row).
+    /// process row. Cwd binding for an existing paneless session is separate
+    /// pairing logic and does not read this idle-synthesis set. Environment,
+    /// not ledger — the pure reducer leaves it empty; the `rimz sidebar
+    /// snapshot` CLI and consumer enrichment fill it before folding live panes.
+    /// The placeholder/persisted snapshot keeps it empty (a process row).
     #[serde(default)]
     pub wired_kinds: Vec<String>,
     /// Per-kind launch model defaults for idle synthesized agent rows, filled
