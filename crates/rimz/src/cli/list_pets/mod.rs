@@ -159,8 +159,8 @@ fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
         let Ok(frame) = &preview.frame else {
             continue;
         };
-        for packet in pets::transmit_rgba_chunks(*image_id, frame.width, frame.height, &frame.data)
-        {
+        let png = pets::encode_png(frame.width, frame.height, &frame.data);
+        for packet in pets::transmit_png_chunks(*image_id, &png) {
             out.write_all(&pets::wrap_pixel_payload(&packet, wrap))?;
         }
         let pacing = pacer.as_ref().is_some_and(|pacer| pacer.active());

@@ -13,7 +13,7 @@ The renderer receives a `PetView`: one optional body, caption text, loading stat
 | `mod.rs` | Public pet surface for the sidebar: `PetAssets`, `PetView`, tier resolution, fixed dashboard footprints, asset lifecycle, and animation-frame selection. |
 | `catalog.rs` | Built-in pet ids and the fixed Codex/petdex sheet geometry. |
 | `asset.rs` | Selector resolution, HTTPS fetches, per-machine cache installs, local sheet reads, petdex manifest reads, offline mode, and cache eviction. |
-| `frames.rs` | WebP/PNG sheet decode and slicing into `RgbaImage` frames. |
+| `frames.rs` | WebP/PNG sheet decode, slicing into `RgbaImage` frames, and RGBA-to-PNG encode for kitty transmit. |
 | `cellart.rs` | Sextant downsampling from RGBA frames into terminal cells. |
 | `pixel.rs` | Kitty graphics payloads, tmux passthrough wrapping, image ids, placeholders, and teardown cleanup. |
 | `pixel/probe.rs` | Runtime capability probe for tmux passthrough and standalone kitty-style preview terminals. |
@@ -77,7 +77,7 @@ The pixel tier renders the same decoded frames through the kitty graphics protoc
 
 Ghostty's kitty support covers image placement while animation-frame actions (`a=f`/`a=a`) remain unavailable, so the renderer drives frames by cycling image ids. The frame painter owns synchronized output (DECSET 2026) around the image transmit and ratatui draw so each frame lands as one atomic redraw; Rimz applies `*:sync` during tmux room setup, so tmux buffers the bracketed writes and forwards the window to the terminal by default.
 
-Rimz keeps virtual placements resident for the renderer session and re-transmits sprite image data on a bounded cadence so a dropped tmux passthrough or terminal image-store eviction self-heals. Sprite image ids are stable slots, and a pet change transmits the new sheet through the same ids so terminal image data is replaced in place; rect shifts and frame changes are ordinary ratatui cell diffs. Deletes happen at renderer teardown. Graphics APCs stay bounded because macOS terminals can re-evaluate the mouse pointer on each image update.
+Rimz keeps virtual placements resident for the renderer session and re-transmits sprite image data on a bounded cadence so a dropped tmux passthrough or terminal image-store eviction self-heals. Sprite data is transmitted as PNG (`f=100`), encoded once per sprite and memoized, so the self-heal cadence re-sends compressed image bytes instead of raw RGBA. Sprite image ids are stable slots, and a pet change transmits the new sheet through the same ids so terminal image data is replaced in place; rect shifts and frame changes are ordinary ratatui cell diffs. Deletes happen at renderer teardown. Graphics APCs stay bounded because macOS terminals can re-evaluate the mouse pointer on each image update.
 
 tmux receives every graphics escape through its passthrough DCS wrapper, and placement uses kitty Unicode placeholders so redraws and pane repaints keep ownership in the sidebar pane. The live sidebar and gallery share the ratatui-buffer placeholder path, while `rimz list-pets` keeps its standalone one-shot renderer. All three use the same fixed footprints. Gallery columns paint through separate image-id ranges so one column cannot delete or ghost another column's image.
 

@@ -5,12 +5,13 @@ pub(crate) mod probe;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::style::Color;
 
 use super::PetPixelView;
-use super::frames::RgbaImage;
+use super::frames::{RgbaImage, encode_png};
 
 const ESC: u8 = 0x1b;
 pub(crate) const BEGIN_SYNC: &[u8] = b"\x1b[?2026h";
@@ -34,6 +35,7 @@ pub(crate) struct PixelPainter {
     wrap: bool,
     pet_id: Option<String>,
     transmitted: BTreeMap<usize, u64>,
+    png: BTreeMap<usize, Arc<[u8]>>,
     resident: BTreeSet<usize>,
     last_resend_ms: Option<u64>,
 }
@@ -55,6 +57,7 @@ impl PixelPainter {
             wrap,
             pet_id: None,
             transmitted: BTreeMap::new(),
+            png: BTreeMap::new(),
             resident: BTreeSet::new(),
             last_resend_ms: None,
         }
@@ -80,6 +83,7 @@ impl PixelPainter {
             // The same sprite ids are re-transmitted with the new sheet and
             // replace image data in place; no delete APC is emitted mid-session.
             self.transmitted.clear();
+            self.png.clear();
             self.pet_id = Some(pixel.pet_id.clone());
         }
 
@@ -96,7 +100,12 @@ impl PixelPainter {
                 .is_none_or(|last| now_ms.saturating_sub(last) >= MIN_RESEND_SPACING_MS);
         if first || resend {
             self.resident.insert(pixel.sprite_index);
-            for chunk in transmit_chunks(image_id, frame) {
+            let png = self
+                .png
+                .entry(pixel.sprite_index)
+                .or_insert_with(|| Arc::from(encode_png(frame.width, frame.height, &frame.data)))
+                .clone();
+            for chunk in transmit_png_chunks(image_id, &png) {
                 writer.write_all(&self.wrap_payload(&chunk))?;
             }
             // Kitty virtual placements persist; sprite data re-transmits on a
@@ -128,6 +137,7 @@ impl PixelPainter {
             writer.write_all(&self.wrap_payload(&delete(self.image_id(sprite_index))))?;
         }
         self.transmitted.clear();
+        self.png.clear();
         Ok(())
     }
 
@@ -166,11 +176,11 @@ pub(crate) fn sprite_image_id(id_base: u32, sprite_index: usize) -> u32 {
     id.max(1)
 }
 
-pub fn transmit_rgba_chunks(image_id: u32, width: u32, height: u32, data: &[u8]) -> Vec<Vec<u8>> {
-    let payload = base64(data);
+pub fn transmit_png_chunks(image_id: u32, png: &[u8]) -> Vec<Vec<u8>> {
+    let payload = base64(png);
     if payload.len() <= CHUNK_SIZE {
         return vec![kitty_escape(
-            &format!("a=t,f=32,s={},v={},i={},q=2", width, height, image_id),
+            &format!("a=t,f=100,i={image_id},q=2"),
             payload.as_bytes(),
         )];
     }
@@ -180,20 +190,13 @@ pub fn transmit_rgba_chunks(image_id: u32, width: u32, height: u32, data: &[u8])
     for (index, chunk) in payload.as_bytes().chunks(CHUNK_SIZE).enumerate() {
         let more = usize::from(index + 1 < chunk_count);
         let control = if index == 0 {
-            format!(
-                "a=t,f=32,s={},v={},i={},q=2,m={more}",
-                width, height, image_id
-            )
+            format!("a=t,f=100,i={image_id},q=2,m={more}")
         } else {
             format!("m={more}")
         };
         out.push(kitty_escape(&control, chunk));
     }
     out
-}
-
-fn transmit_chunks(image_id: u32, image: &RgbaImage) -> Vec<Vec<u8>> {
-    transmit_rgba_chunks(image_id, image.width, image.height, &image.data)
 }
 
 pub fn virtual_place(image_id: u32, cols: u16, rows: u16, quiet: u8) -> Vec<u8> {
@@ -344,22 +347,20 @@ mod tests {
     }
 
     #[test]
-    fn transmit_encodes_rgba_image() {
-        let bytes = transmit_chunks(42, &image(vec![0, 1, 2, 3])).concat();
+    fn transmit_encodes_png_image() {
+        let bytes = transmit_png_chunks(42, &encode_png(1, 1, &[0, 1, 2, 3])).concat();
+        let text = String::from_utf8(bytes).expect("ascii kitty escapes");
 
-        assert_eq!(
-            bytes,
-            b"\x1b_Ga=t,f=32,s=1,v=1,i=42,q=2;AAECAw==\x1b\\".to_vec()
-        );
+        assert!(text.contains("a=t,f=100,i=42,q=2;iVBORw0KGgo"));
     }
 
     #[test]
     fn transmit_chunks_large_payload() {
-        let chunks = transmit_chunks(7, &image(vec![1; 4096]));
+        let chunks = transmit_png_chunks(7, &vec![1_u8; 4096]);
         let text = String::from_utf8(chunks.concat()).expect("ascii kitty escapes");
 
         assert_eq!(chunks.len(), 2);
-        assert!(text.contains("a=t,f=32,s=1,v=1,i=7,q=2,m=1;"));
+        assert!(text.contains("a=t,f=100,i=7,q=2,m=1;"));
         assert!(text.contains("\u{1b}_Gm=0;"));
     }
 
@@ -405,6 +406,9 @@ mod tests {
         let mut painter = PixelPainter::with_id_base(0x120000, true);
         painter.pet_id = Some("codex".to_owned());
         painter.transmitted.insert(3, 0);
+        painter
+            .png
+            .insert(3, std::sync::Arc::<[u8]>::from(vec![1_u8]));
         painter.resident.insert(3);
         let mut bytes = Vec::new();
 
@@ -416,6 +420,7 @@ mod tests {
         assert!(!text.contains("\u{10eeee}"));
         assert!(!text.contains("\x1b[3;2H"));
         assert!(painter.transmitted.is_empty());
+        assert!(painter.png.is_empty());
         assert!(painter.resident.is_empty());
     }
 
@@ -431,7 +436,7 @@ mod tests {
             .expect("first transmit");
         assert_not_sync_bracketed(&first);
         let text = String::from_utf8(first).expect("utf8 first transmit");
-        assert!(text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
+        assert!(text.contains("a=t,f=100,i=1179648,q=2"));
         assert!(text.contains("a=p,U=1,i=1179648,c=3,r=2,q=2"));
         assert!(!text.contains("\u{10eeee}"));
         assert!(!text.contains("\x1b["));
@@ -459,7 +464,7 @@ mod tests {
             .expect("stale transmit");
         let text = String::from_utf8(stale).expect("utf8 stale transmit");
 
-        assert!(text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
+        assert!(text.contains("a=t,f=100,i=1179648,q=2"));
         assert!(text.contains("a=p,U=1,i=1179648,c=3,r=2,q=2"));
     }
 
@@ -481,10 +486,7 @@ mod tests {
         painter
             .ensure_transmitted(&mut first_stale, &pixel, &frame, RESIDENT_REFRESH_MS)
             .expect("first stale transmit");
-        assert!(bytes_contains(
-            &first_stale,
-            b"a=t,f=32,s=1,v=1,i=1179648,q=2"
-        ));
+        assert!(bytes_contains(&first_stale, b"a=t,f=100,i=1179648,q=2"));
 
         let mut too_soon = Vec::new();
         painter
@@ -506,7 +508,7 @@ mod tests {
                 RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS,
             )
             .expect("spaced transmit");
-        assert!(bytes_contains(&spaced, b"a=t,f=32,s=1,v=1,i=1179649,q=2"));
+        assert!(bytes_contains(&spaced, b"a=t,f=100,i=1179649,q=2"));
     }
 
     #[test]
@@ -533,10 +535,7 @@ mod tests {
             )
             .expect("first-time transmit");
 
-        assert!(bytes_contains(
-            &first_time,
-            b"a=t,f=32,s=1,v=1,i=1179649,q=2"
-        ));
+        assert!(bytes_contains(&first_time, b"a=t,f=100,i=1179649,q=2"));
         assert!(bytes_contains(
             &first_time,
             b"a=p,U=1,i=1179649,c=2,r=1,q=2"
@@ -565,10 +564,12 @@ mod tests {
 
         assert_not_sync_bracketed(text.as_bytes());
         assert!(!text.contains("a=d,d=i"));
-        assert!(text.contains("a=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
+        assert!(text.contains("a=t,f=100,i=1179648,q=2"));
         assert!(text.contains("a=p,U=1,i=1179648,c=2,r=1,q=2"));
         assert!(painter.transmitted.contains_key(&0));
         assert!(!painter.transmitted.contains_key(&1));
+        assert!(painter.png.contains_key(&0));
+        assert!(!painter.png.contains_key(&1));
         assert!(painter.resident.contains(&0));
         assert!(painter.resident.contains(&1));
 
@@ -577,6 +578,7 @@ mod tests {
         let clear_text = String::from_utf8(clear).expect("utf8 clear");
         assert!(clear_text.contains("a=d,d=i,i=1179648,q=2"));
         assert!(clear_text.contains("a=d,d=i,i=1179649,q=2"));
+        assert!(painter.png.is_empty());
     }
 
     #[test]
@@ -600,10 +602,7 @@ mod tests {
         painter
             .ensure_transmitted(&mut new_sprite, &other_pixel, &frame, 0)
             .expect("new sprite transmit");
-        assert!(bytes_contains(
-            &new_sprite,
-            b"a=t,f=32,s=1,v=1,i=1179649,q=2"
-        ));
+        assert!(bytes_contains(&new_sprite, b"a=t,f=100,i=1179649,q=2"));
         assert!(bytes_contains(
             &new_sprite,
             b"a=p,U=1,i=1179649,c=2,r=1,q=2"
@@ -621,19 +620,43 @@ mod tests {
         let mut painter = PixelPainter::with_id_base(0x120000, true);
         let pixel = pixel_view("codex", 0, 2, 1);
         let mut bytes = Vec::new();
+        let width = 64;
+        let height = 64;
+        let mut state = 0x1234_5678_u32;
+        let data = (0..width * height * 4)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect::<Vec<_>>();
+        let expected =
+            transmit_png_chunks(painter.image_id(0), &encode_png(width, height, &data)).len() + 1;
 
         painter
-            .ensure_transmitted(&mut bytes, &pixel, &image(vec![1; 4096]), 0)
+            .ensure_transmitted(
+                &mut bytes,
+                &pixel,
+                &RgbaImage {
+                    width,
+                    height,
+                    data,
+                },
+                0,
+            )
             .expect("transmit");
 
         assert_not_sync_bracketed(&bytes);
+        assert!(
+            expected >= 3,
+            "test image must span multiple transmit chunks plus placement"
+        );
         assert_eq!(
             bytes
                 .windows(b"\x1bPtmux;".len())
                 .filter(|window| *window == b"\x1bPtmux;")
                 .count(),
-            3,
-            "two transmit chunks plus one virtual placement each get a passthrough wrapper"
+            expected,
+            "each transmit chunk plus virtual placement gets a passthrough wrapper"
         );
     }
 
@@ -650,7 +673,7 @@ mod tests {
         let text = String::from_utf8(bytes).expect("utf8 paint");
 
         assert!(!text.contains("\x1bPtmux;"));
-        assert!(text.contains("\x1b_Ga=t,f=32,s=1,v=1,i=1179648,q=2;AAECAw=="));
+        assert!(text.contains("\x1b_Ga=t,f=100,i=1179648,q=2;"));
         assert!(text.contains("\x1b_Ga=p,U=1,i=1179648,c=2,r=1,q=2;"));
     }
 }

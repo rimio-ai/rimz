@@ -163,6 +163,24 @@ fn decode_png_rgba(bytes: &[u8]) -> Result<RgbaImage, FrameErr> {
     })
 }
 
+pub fn encode_png(width: u32, height: u32, data: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fastest);
+        // Callers pass decoded RGBA frame data into an in-memory Vec sink.
+        let mut writer = encoder
+            .write_header()
+            .expect("encoding in-memory PNG header cannot fail");
+        writer
+            .write_image_data(data)
+            .expect("encoding valid RGBA frame data cannot fail");
+    }
+    bytes
+}
+
 fn png_to_rgba8(data: &[u8], color_type: png::ColorType) -> Result<Vec<u8>, FrameErr> {
     match color_type {
         png::ColorType::Rgba => Ok(data.to_vec()),
@@ -311,20 +329,23 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn encode_png_round_trips_through_decoder() {
+        let data = vec![0, 1, 2, 3, 4, 5, 6, 7];
+
+        let encoded = encode_png(2, 1, &data);
+        let decoded = decode_png_rgba(&encoded).expect("encoded png decodes");
+
+        assert_eq!(decoded.width, 2);
+        assert_eq!(decoded.height, 1);
+        assert_eq!(decoded.data, data);
+    }
+
     fn solid_png(width: u32, height: u32, pixel: [u8; 4]) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut bytes, width, height);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            encoder.set_compression(png::Compression::Fastest);
-            let mut writer = encoder.write_header().unwrap();
-            let mut data = Vec::with_capacity(width as usize * height as usize * 4);
-            for _ in 0..(width * height) {
-                data.extend_from_slice(&pixel);
-            }
-            writer.write_image_data(&data).unwrap();
+        let mut data = Vec::with_capacity(width as usize * height as usize * 4);
+        for _ in 0..(width * height) {
+            data.extend_from_slice(&pixel);
         }
-        bytes
+        encode_png(width, height, &data)
     }
 }
