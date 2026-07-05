@@ -31,6 +31,14 @@ use super::{SidebarSnapshot, merge_account_rate_limits};
 /// throttle marker, then spawn the detached helper. Producer-only; the network
 /// read runs in the child and single-flights on the shared credits cache.
 pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+    refresh_account_usage_with(snapshot, runtime, spawn_usage_refresh);
+}
+
+fn refresh_account_usage_with(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    mut spawn: impl FnMut(&RuntimePaths, &str, bool),
+) {
     if crate::agents::credits::oauth_usage_offline() {
         return;
     }
@@ -45,7 +53,7 @@ pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &Runtim
         if !usage_probe_due(runtime, kind) {
             continue;
         }
-        spawn_usage_refresh(runtime, kind, merge_windows_hint(snapshot, kind));
+        spawn(runtime, kind, merge_windows_hint(snapshot, kind));
     }
 }
 
@@ -290,8 +298,12 @@ mod tests {
             Vec::new(),
         )];
 
-        refresh_account_usage(&snapshot, &runtime);
+        let mut spawned = Vec::new();
+        refresh_account_usage_with(&snapshot, &runtime, |_, kind, merge_windows| {
+            spawned.push((kind.to_owned(), merge_windows));
+        });
 
+        assert_eq!(spawned, vec![("codex".to_owned(), true)]);
         assert!(
             usage_probe_marker(&runtime, "codex").exists(),
             "a live root session no longer suppresses the OAuth usage helper"
