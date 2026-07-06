@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AtomicErr {
@@ -121,7 +123,14 @@ impl Drop for TempFileGuard {
 /// the rename. Caller has already created `path.parent()`.
 #[must_use = "durability barrier; check the result"]
 pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty)
+    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty, false)
+}
+
+/// Like [`write_temp_then_rename`], but the temp file is created and renamed
+/// with mode 0600. Used for plaintext secret caches.
+#[must_use = "durability barrier; check the result"]
+pub fn write_private_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty, true)
 }
 
 /// Like [`write_temp_then_rename`] but skips the temp-file and parent-dir
@@ -134,13 +143,13 @@ pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()
 /// files "survives a power cut" buys nothing — the rename is still atomic,
 /// so a reader never sees a torn file.
 pub fn write_temp_then_rename_cache<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Pretty)
+    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Pretty, false)
 }
 
 /// Like [`write_temp_then_rename_cache`] but emits compact JSON. Use for large
 /// rebuilt caches where human-readable formatting materially affects size.
 pub fn write_temp_then_rename_cache_compact<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Compact)
+    write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Compact, false)
 }
 
 #[derive(Clone, Copy)]
@@ -154,6 +163,7 @@ fn write_temp_then_rename_with<T: Serialize>(
     value: &T,
     fsync: Fsync,
     style: JsonStyle,
+    private: bool,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| AtomicErr::Io {
@@ -164,7 +174,7 @@ fn write_temp_then_rename_with<T: Serialize>(
     let tmp = temp_sibling(path);
     let mut temp_guard = TempFileGuard::new(tmp.clone());
     {
-        let file = File::create(&tmp).map_err(|e| AtomicErr::Io {
+        let file = create_temp_file(&tmp, private).map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
             source: e,
         })?;
@@ -198,6 +208,21 @@ fn write_temp_then_rename_with<T: Serialize>(
         sync_parent_dir(path)?;
     }
     Ok(())
+}
+
+fn create_temp_file(path: &Path, private: bool) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if private {
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    if private {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(file)
 }
 
 /// Append one pre-encoded record to `path` with a single `write()` call.

@@ -156,8 +156,8 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Web Server started on 127.0.0.1 port 8082"),
-        "autostart banner should move to stderr: {stderr}"
+        !stderr.contains("Web Server started"),
+        "autostart banner should stay out of human stderr on success: {stderr}"
     );
 
     let log = std::fs::read_to_string(log).expect("read zellij log");
@@ -260,8 +260,8 @@ fn web_open_assumes_zellij_without_mux_flag() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Web Server started on 127.0.0.1 port 8082"),
-        "autostart banner should move to stderr: {stderr}"
+        !stderr.contains("Web Server started"),
+        "autostart banner should stay out of human stderr on success: {stderr}"
     );
 
     let log = std::fs::read_to_string(log).expect("read zellij log");
@@ -354,7 +354,10 @@ fn web_open_human_mints_and_shows_login_token() {
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
             materialized_room_panes_json(),
         )
-        .env("RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN", "rimz-tok-123")
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN",
+            "Created token successfully\n\ntoken_1: rimz-tok-123\n",
+        )
         .bounded_output()
         .expect("run rimz web open");
 
@@ -368,7 +371,11 @@ fn web_open_human_mints_and_shows_login_token() {
         format!("http://127.0.0.1:8082/{}\n", workspace.session_name)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("shown once"), "{stderr}");
+    assert!(
+        stderr.contains("Zellij web login token (paste into the browser's")
+            && !stderr.contains("shown once"),
+        "{stderr}"
+    );
     assert!(stderr.contains("rimz-tok-123"), "{stderr}");
     let log = std::fs::read_to_string(log).expect("read zellij log");
     assert!(log.contains("web\t--create-token"), "{log}");
@@ -376,55 +383,85 @@ fn web_open_human_mints_and_shows_login_token() {
 }
 
 #[test]
-fn web_open_skips_mint_when_any_token_exists() {
+fn web_token_ensure_caches_and_revoke_clears_login_token() {
     let env = Env::new();
-    env.record(&env.project_root);
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
-    let log = env.project_root.join("zellij-web-open-token-exists.log");
-    let output = env
+    let log = env.project_root.join("zellij-web-token-cache.log");
+    let first = env
         .rimz()
-        .args(["--mux", "zellij", "web", "open", "--session"])
-        .arg(&workspace.session_name)
-        .arg("--print")
+        .args(["--mux", "zellij", "web", "token", "ensure"])
         .env("RIMZ_ZELLIJ_BIN", zellij_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &log)
         .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 0s ago]\n", workspace.session_name),
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
-            "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            materialized_room_panes_json(),
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_WEB_TOKENS",
-            "token_1: created at 2026-07-05 09:00:00\n",
+            "RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN",
+            "Created token successfully\n\ntoken_1: rimz-tok-123\n",
         )
         .bounded_output()
-        .expect("run rimz web open");
+        .expect("run rimz web token ensure");
 
     assert!(
-        output.status.success(),
-        "human open succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+        first.status.success(),
+        "first ensure succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&first.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("http://127.0.0.1:8082/{}\n", workspace.session_name)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(String::from_utf8_lossy(&first.stdout), "rimz-tok-123\n");
+
+    let second = env
+        .rimz()
+        .args(["--mux", "zellij", "web", "token", "ensure"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN",
+            "Created token successfully\n\ntoken_2: rimz-tok-456\n",
+        )
+        .bounded_output()
+        .expect("run rimz web token ensure again");
+
     assert!(
-        stderr.contains("already provisioned on this machine"),
-        "{stderr}"
+        second.status.success(),
+        "second ensure succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&second.stderr)
     );
+    assert_eq!(String::from_utf8_lossy(&second.stdout), "rimz-tok-123\n");
+
+    let revoke = env
+        .rimz()
+        .args(["--mux", "zellij", "web", "token", "revoke", "token_1"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .bounded_output()
+        .expect("run rimz web token revoke");
+
+    assert!(
+        revoke.status.success(),
+        "revoke succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&revoke.stderr)
+    );
+    assert!(!env.state_root().join("rimz/web-login-token.json").exists());
+
+    let third = env
+        .rimz()
+        .args(["--mux", "zellij", "web", "token", "ensure"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN",
+            "Created token successfully\n\ntoken_2: rimz-tok-456\n",
+        )
+        .bounded_output()
+        .expect("run rimz web token ensure after revoke");
+
+    assert!(
+        third.status.success(),
+        "third ensure succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&third.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&third.stdout), "rimz-tok-456\n");
+
     let log = std::fs::read_to_string(log).expect("read zellij log");
-    assert!(log.contains("web\t--list-tokens"), "{log}");
-    assert!(!log.contains("web\t--create-token"), "{log}");
+    assert_eq!(log.matches("web\t--create-token").count(), 2, "{log}");
+    assert!(log.contains("web\t--revoke-token\ttoken_1"), "{log}");
+    assert!(!log.contains("web\t--list-tokens"), "{log}");
 }
 
 #[test]

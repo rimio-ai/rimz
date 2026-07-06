@@ -12,13 +12,13 @@ The print and one-shot paths use a single `ssh -t` invocation. Every attach enab
 
 ## Web Access
 
-`rimz remote connect <target> --web` opens a remote Zellij room in the local browser and stays in the foreground supervising the browser tunnel. The local process runs remote `rimz web open --print --json` as a non-PTY prep command, parses the `rimz.web.v1` payload, provisions and relays the Zellij web token when needed, chooses a stable local port from the session name, starts an SSH `-L 127.0.0.1:<local>:127.0.0.1:<remote>` tunnel, waits for the local port to accept connections, prints `web: http://127.0.0.1:<local>/<session>`, opens the browser best-effort, and then waits until Ctrl-C or tunnel exit.
+`rimz remote connect <target> --web` opens a remote Zellij room in the local browser and stays in the foreground supervising the browser tunnel. The local process runs remote `rimz web open --print --json` as a non-PTY prep command with stdin/stderr inherited for recovery prompts, parses the `rimz.web.v1` payload from stdout, relays the cached Zellij web token from the serving machine, chooses a stable local port from the session name, starts an SSH `-L 127.0.0.1:<local>:127.0.0.1:<remote>` tunnel, waits for the local port to accept connections, prints the bare `http://127.0.0.1:<local>/<session>` URL, opens the browser best-effort, and then waits until Ctrl-C or tunnel exit.
 
-The prep command is the fail-fast boundary. Remote Rimz without `rimz web`, Zellij without the `web` subcommand, a project whose room is already live under tmux, or a remote room error aborts before browser access opens and surfaces the remote diagnostic. Path targets birth the room; path and exact-session targets both load and grant the presence plugin before asking it to enable sharing at runtime, and the local tunnel command relays the prep command's stderr notes.
+The prep command is the fail-fast boundary. Remote Rimz without `rimz web`, Zellij without the `web` subcommand, a project whose room is already live under tmux, or a remote room error aborts before browser access opens and surfaces the remote diagnostic. Path targets birth the room; path and exact-session targets both load and grant the presence plugin before asking it to enable sharing at runtime, and the prep command writes its stderr notes directly to the local terminal.
 
 The tunnel is a separate SSH child with its own reconnect loop using the same gatetime and backoff as the attach supervisor. `--no-reconnect` applies to that tunnel and exits on a lost established link instead of retrying. `--web-port <port>` pins the local browser origin; without it Rimz hashes the session name into `8300..8399` and scans to the next free port on collision. Ctrl-C stops the foreground Rimz process and the tunnel child.
 
-Remote web uses three SSH connections: prep, token provisioning, and tunnel. Key or agent authentication gives the intended no-prompt flow; password authentication prompts per connection.
+Remote web uses three SSH connections: prep, token provisioning, and tunnel. The prep connection carries recovery stdin/stderr; token provisioning prints the cached plaintext token from the serving machine or mints and caches one there. Key or agent authentication gives the intended no-prompt flow; password authentication prompts per connection.
 
 ## Reconnect Policy
 

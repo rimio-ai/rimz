@@ -10,11 +10,24 @@ use super::{
     sh_quote, ssh_program,
 };
 
-pub fn web_prep_spec(target: &RemoteTarget) -> CommandSpec {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WebPrepOptions {
+    pub confirm_resume: bool,
+    pub no_resume: bool,
+}
+
+pub fn web_prep_spec(target: &RemoteTarget, options: WebPrepOptions) -> CommandSpec {
+    let mut flags = String::from("open --print --json");
+    if options.confirm_resume {
+        flags.push_str(" --confirm-resume");
+    }
+    if options.no_resume {
+        flags.push_str(" --no-resume");
+    }
     let rimz_args = match &target.spec {
-        RemoteSpec::Path(path) => format!("open --print --json -- {}", quote_remote_path(path)),
+        RemoteSpec::Path(path) => format!("{flags} -- {}", quote_remote_path(path)),
         RemoteSpec::Session(name) => {
-            format!("open --print --json --session {}", sh_quote(name))
+            format!("{flags} --session {}", sh_quote(name))
         }
     };
     one_shot_spec(target, &format!("rimz web {rimz_args}"))
@@ -75,12 +88,18 @@ mod tests {
 
     #[test]
     fn web_prep_builds_session_and_path_one_shots() {
-        let session = web_prep_spec(&parse("dev-box:rimz-project-a1b2c3"));
+        let session = web_prep_spec(
+            &parse("dev-box:rimz-project-a1b2c3"),
+            WebPrepOptions {
+                confirm_resume: true,
+                no_resume: true,
+            },
+        );
         assert_eq!(session.args[0..3], ["-o", "ConnectTimeout=10", "--"]);
         assert_eq!(session.args[3], "dev-box");
         assert!(
             session.args[4]
-                .contains("exec rimz web open --print --json --session 'rimz-project-a1b2c3'"),
+                .contains("exec rimz web open --print --json --confirm-resume --no-resume --session 'rimz-project-a1b2c3'"),
             "{}",
             session.args[4]
         );
@@ -92,7 +111,10 @@ mod tests {
             session.args[4]
         );
 
-        let path = web_prep_spec(&parse("dev-box:~/code/query-engine"));
+        let path = web_prep_spec(
+            &parse("dev-box:~/code/query-engine"),
+            WebPrepOptions::default(),
+        );
         assert!(
             path.args[4]
                 .contains("exec rimz web open --print --json -- \"$HOME\"'/code/query-engine'"),

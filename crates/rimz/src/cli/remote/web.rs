@@ -1,4 +1,4 @@
-use std::io::{Read as _, Write as _};
+use std::io::{IsTerminal, Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Child, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,8 +67,14 @@ impl RemoteWebGuard {
 }
 
 pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
-    let prep = run_one_shot(
-        &rimz::remote::web::web_prep_spec(&remote.target),
+    let prep = run_web_prep(
+        &rimz::remote::web::web_prep_spec(
+            &remote.target,
+            rimz::remote::web::WebPrepOptions {
+                confirm_resume: std::io::stdin().is_terminal(),
+                no_resume: remote.no_resume,
+            },
+        ),
         "preparing remote Zellij web",
     )?;
     let payload = rimz::web::parse_web_open_payload(&prep.stdout)
@@ -78,9 +84,6 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
             "remote `rimz web open --json` returned schema `{}`; upgrade the remote rimz binary",
             payload.version
         );
-    }
-    if !prep.stderr.is_empty() {
-        std::io::stderr().lock().write_all(&prep.stderr)?;
     }
     relay_web_token(remote);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
@@ -101,7 +104,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
         }
     }
     let (url, _) = super::super::web::local_tunnel_payload(&payload, local_port);
-    super::super::web::print_url(&format!("web: {url}"))?;
+    super::super::web::print_url(&url)?;
     super::super::web::open_browser_best_effort(&url);
     report_web_tunnel_up(remote.target.host_display(), remote.reconnect);
     guard.wait()
@@ -133,38 +136,50 @@ fn relay_web_token(remote: &RemoteConnect) {
         );
         return;
     }
-    if output.stdout.is_empty() {
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if token.is_empty() {
         let _ = writeln!(
             stderr,
-            "rimz: web login token already provisioned on {}; run `rimz web token create` there for a fresh one.",
+            "rimz: could not mint a Zellij web login token on {} (empty token); create one with `rimz web token create` on the remote host.",
             remote.target.host_display(),
         );
         return;
     }
     let _ = writeln!(
         stderr,
-        "Zellij web login token from {} (shown once):",
+        "rimz: login token for {}: {token}",
         remote.target.host_display(),
     );
-    let _ = stderr.write_all(&output.stdout);
-    if !output.stdout.ends_with(b"\n") {
-        let _ = writeln!(stderr);
-    }
-    let _ = stderr.write_all(&output.stderr);
 }
 
-fn run_one_shot(spec: &rimz::mux::CommandSpec, label: &str) -> Result<Output> {
-    let output = spec.to_command().output().with_context(|| {
-        format!(
-            "{label}: running `{}`",
-            rimz::remote::display_ssh_command(spec)
-        )
-    })?;
+fn run_web_prep(spec: &rimz::mux::CommandSpec, label: &str) -> Result<Output> {
+    let mut child = spec
+        .to_command()
+        .stdout(Stdio::piped())
+        .spawn()
+        .with_context(|| {
+            format!(
+                "{label}: running `{}`",
+                rimz::remote::display_ssh_command(spec)
+            )
+        })?;
+    let mut stdout = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)
+            .with_context(|| format!("{label}: reading remote prep stdout"))?;
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("{label}: waiting for remote prep"))?;
+    let output = Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    };
     if output.status.success() {
         return Ok(output);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    bail!("{label} failed: {}", stderr.trim());
+    bail!("{label} failed with {}", output.status);
 }
 
 fn remote_output_context(label: &str, output: &Output) -> String {
@@ -344,15 +359,13 @@ fn wait_for_local_port(port: u16, guard: &RemoteWebGuard) -> Result<PortWait> {
 }
 
 fn report_web_tunnel_up(host: &str, reconnect: bool) {
-    let tail = if reconnect {
-        " (auto-reconnect on; Ctrl-C stops)"
+    let message = if reconnect {
+        "rimz: tunnel up — reconnects automatically; Ctrl-C stops"
     } else {
-        " (Ctrl-C stops)"
+        "rimz: tunnel up — Ctrl-C stops"
     };
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "rimz: web tunnel to {host} up{tail}"
-    );
+    tracing::debug!(host, reconnect, "remote web tunnel established");
+    let _ = writeln!(std::io::stderr().lock(), "{message}");
 }
 
 #[cfg(test)]

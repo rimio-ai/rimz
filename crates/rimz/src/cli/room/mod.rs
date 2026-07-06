@@ -8,6 +8,8 @@ mod resume;
 mod room_recovery;
 mod session_record;
 mod start_notice;
+#[cfg(test)]
+mod tests;
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -59,6 +61,12 @@ pub(crate) enum AttachAction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResumePromptMode {
+    Interactive,
+    Silent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MissingSessionReport {
     Silent,
     Warn,
@@ -73,9 +81,13 @@ enum RoomEntry<'a> {
     StartWeb {
         workspace: rimz::ResolvedWorkspace,
         mux: MuxName,
+        no_resume: bool,
+        confirm_resume: bool,
     },
     WebSession {
         record: &'a WorkspaceRecord,
+        no_resume: bool,
+        confirm_resume: bool,
     },
     AttachCwd {
         workspace: rimz::ResolvedWorkspace,
@@ -104,9 +116,19 @@ impl RoomEntry<'_> {
     fn no_resume(&self) -> bool {
         match self {
             Self::Start { args, .. } => args.no_resume,
-            Self::StartWeb { .. } | Self::WebSession { .. } => false,
+            Self::StartWeb { no_resume, .. } | Self::WebSession { no_resume, .. } => *no_resume,
             Self::AttachCwd { no_resume, .. } | Self::AttachSession { no_resume, .. } => *no_resume,
         }
+    }
+
+    fn resume_prompt_mode(&self) -> ResumePromptMode {
+        let confirm_resume = match self {
+            Self::StartWeb { confirm_resume, .. } | Self::WebSession { confirm_resume, .. } => {
+                *confirm_resume
+            }
+            Self::Start { .. } | Self::AttachCwd { .. } | Self::AttachSession { .. } => false,
+        };
+        resume_prompt_mode(confirm_resume, std::io::stdin().is_terminal())
     }
 
     fn refresh_ms(&self) -> Option<u16> {
@@ -124,9 +146,17 @@ impl RoomEntry<'_> {
             Self::Start { workspace, .. }
             | Self::StartWeb { workspace, .. }
             | Self::AttachCwd { workspace, .. } => &workspace.session_name,
-            Self::WebSession { record } => &record.session_name,
+            Self::WebSession { record, .. } => &record.session_name,
             Self::AttachSession { session, .. } => session,
         }
+    }
+}
+
+fn resume_prompt_mode(confirm_resume: bool, stdin_is_terminal: bool) -> ResumePromptMode {
+    if confirm_resume || stdin_is_terminal {
+        ResumePromptMode::Interactive
+    } else {
+        ResumePromptMode::Silent
     }
 }
 
@@ -175,7 +205,12 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-pub(crate) fn ensure_workspace_room_for_web(path: &Path, globals: &GlobalFlags) -> Result<WebRoom> {
+pub(crate) fn ensure_workspace_room_for_web(
+    path: &Path,
+    globals: &GlobalFlags,
+    no_resume: bool,
+    confirm_resume: bool,
+) -> Result<WebRoom> {
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let mux = MuxName::Zellij;
@@ -193,6 +228,8 @@ pub(crate) fn ensure_workspace_room_for_web(path: &Path, globals: &GlobalFlags) 
         RoomEntry::StartWeb {
             workspace: workspace.clone(),
             mux,
+            no_resume,
+            confirm_resume,
         },
         globals,
     )?;
@@ -202,7 +239,12 @@ pub(crate) fn ensure_workspace_room_for_web(path: &Path, globals: &GlobalFlags) 
     })
 }
 
-pub(crate) fn ensure_session_room_for_web(session: &str, globals: &GlobalFlags) -> Result<WebRoom> {
+pub(crate) fn ensure_session_room_for_web(
+    session: &str,
+    globals: &GlobalFlags,
+    no_resume: bool,
+    confirm_resume: bool,
+) -> Result<WebRoom> {
     let record = workspace_record_for_session(session).context("checking Rimz workspace record")?;
     let Some(record) = record else {
         bail!(
@@ -210,7 +252,14 @@ pub(crate) fn ensure_session_room_for_web(session: &str, globals: &GlobalFlags) 
         );
     };
     ensure_single_backend_room(MuxName::Zellij, session)?;
-    prepare_room(RoomEntry::WebSession { record: &record }, globals)?;
+    prepare_room(
+        RoomEntry::WebSession {
+            record: &record,
+            no_resume,
+            confirm_resume,
+        },
+        globals,
+    )?;
     Ok(WebRoom {
         session_name: record.session_name,
         workspace_id: record.workspace_id,
@@ -362,6 +411,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 room,
                 was_live,
                 no_resume: entry.no_resume(),
+                resume_prompt: entry.resume_prompt_mode(),
                 daemon,
                 remote: Some(RemoteControlLaunch {
                     workspace,
@@ -388,12 +438,13 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 room,
                 was_live,
                 no_resume: entry.no_resume(),
+                resume_prompt: entry.resume_prompt_mode(),
                 daemon: None,
                 remote: None,
             })?;
             attached_workspace_id = Some(workspace.workspace_id.clone());
         }
-        RoomEntry::WebSession { record } => {
+        RoomEntry::WebSession { record, .. } => {
             let room = RoomTarget {
                 workspace_id: &record.workspace_id,
                 project_root: &record.project_root,
@@ -410,6 +461,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 room,
                 was_live,
                 no_resume: entry.no_resume(),
+                resume_prompt: entry.resume_prompt_mode(),
                 daemon: None,
                 remote: None,
             })?;
@@ -437,6 +489,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                     room,
                     was_live,
                     no_resume: entry.no_resume(),
+                    resume_prompt: entry.resume_prompt_mode(),
                     daemon: None,
                     remote: None,
                 })?;
@@ -477,7 +530,7 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
             rimz_socket_environment_preflight(&workspace.workspace_id)?;
             mux_environment_preflight(mux, &workspace.session_name)
         }
-        RoomEntry::WebSession { record } => {
+        RoomEntry::WebSession { record, .. } => {
             rimz_socket_environment_preflight(&record.workspace_id)?;
             mux_environment_preflight(mux, &record.session_name)
         }
@@ -652,9 +705,11 @@ pub(crate) fn register_focus_key(
 fn resume_plan_for_birth(
     was_live: bool,
     recover_agents: bool,
+    death: Option<&rimz::ledger::event::LastDeathMarker>,
     room: &RoomTarget<'_>,
     machine_config: &rimz::config::MachineConfig,
     no_resume: bool,
+    prompt_mode: ResumePromptMode,
 ) -> Result<rimz::harness::resume::ResumePlan> {
     if was_live {
         return Ok(rimz::harness::resume::ResumePlan::default());
@@ -687,7 +742,15 @@ fn resume_plan_for_birth(
         profiles,
         &machine_config.agents.commands,
     );
-    let plan = match prompt_recover_or_fresh(plan)? {
+    let plan = if plan.pane_count() > 0 {
+        if let Some(death) = death {
+            report_previous_session_death(death);
+        }
+        prompt_recover_or_fresh(plan, prompt_mode)?
+    } else {
+        Some(plan)
+    };
+    let plan = match plan {
         Some(plan) => {
             let paths = StatePaths::for_workspace(room.workspace_id.clone());
             let runtime = RuntimePaths::for_workspace(room.workspace_id.clone());
@@ -711,9 +774,12 @@ fn resume_plan_for_birth(
     Ok(plan)
 }
 
-fn prompt_recover_or_fresh(plan: resume::RoomResumePlan) -> Result<Option<resume::RoomResumePlan>> {
+fn prompt_recover_or_fresh(
+    plan: resume::RoomResumePlan,
+    mode: ResumePromptMode,
+) -> Result<Option<resume::RoomResumePlan>> {
     let agents = plan.pane_count();
-    if agents == 0 || !std::io::stdin().is_terminal() {
+    if agents == 0 || mode == ResumePromptMode::Silent {
         return Ok(Some(plan));
     }
     let labels = plan.labels().join(", ");
@@ -736,6 +802,7 @@ struct RoomBirth<'a> {
     room: RoomTarget<'a>,
     was_live: bool,
     no_resume: bool,
+    resume_prompt: ResumePromptMode,
     daemon: Option<&'a DaemonView>,
     remote: Option<RemoteControlLaunch<'a>>,
 }
@@ -754,12 +821,6 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     } else {
         inspect_previous_incarnation(birth.backend, room.workspace_id, room.session_name)
     };
-    if let Some(death) = &recovery.death {
-        report_previous_session_death(
-            death,
-            recovery.recover_agents && machine_config.resume.on_rebirth && !birth.no_resume,
-        );
-    }
     let pre_existed = match birth.backend.list_sessions() {
         Ok(sessions) => sessions
             .iter()
@@ -793,9 +854,11 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     let resume_plan = resume_plan_for_birth(
         birth.was_live,
         recovery.recover_agents,
+        recovery.death.as_ref(),
         room,
         machine_config,
         birth.no_resume,
+        birth.resume_prompt,
     )?;
     launch_sidebar_for_workspace(
         birth.backend,

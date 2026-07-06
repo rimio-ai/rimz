@@ -466,11 +466,11 @@ pub(super) fn report_resume(plan: &rimz::harness::resume::ResumePlan) {
             .collect::<Vec<_>>()
             .join(", ");
         if agents == 0 {
-            let _ = writeln!(std::io::stderr(), "restored channel tab(s): {labels}");
+            let _ = writeln!(std::io::stderr(), "rimz: restored channel tab(s): {labels}");
         } else {
             let _ = writeln!(
                 std::io::stderr(),
-                "resumed {} agent{}: {labels}",
+                "rimz: resumed {} agent{}: {labels}",
                 agents,
                 if agents == 1 { "" } else { "s" },
             );
@@ -483,7 +483,7 @@ pub(super) fn report_resume(plan: &rimz::harness::resume::ResumePlan) {
             .map(|skip| format!("{} ({})", skip.label, resume_skip_reason(skip.reason)))
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = writeln!(std::io::stderr(), "not resumed: {detail}");
+        let _ = writeln!(std::io::stderr(), "rimz: not resumed: {detail}");
     }
 }
 

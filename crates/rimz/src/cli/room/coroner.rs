@@ -80,33 +80,18 @@ pub(super) fn inspect_previous_incarnation(
     }
 }
 
-pub(super) fn report_previous_session_death(death: &LastDeathMarker, offering_recovery: bool) {
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "{}",
-        death_notice(death, offering_recovery)
-    );
+pub(super) fn report_previous_session_death(death: &LastDeathMarker) {
+    let _ = writeln!(std::io::stderr().lock(), "{}", death_notice(death));
 }
 
-fn death_notice(death: &LastDeathMarker, offering_recovery: bool) -> String {
-    let agents = death.lost_agents.len();
-    let action = if offering_recovery {
-        "offering to bring them back"
-    } else {
-        "recovery disabled"
-    };
-    let plural = if agents == 1 { "" } else { "s" };
+fn death_notice(death: &LastDeathMarker) -> String {
     let at = death.at.strftime("%Y-%m-%d %H:%M");
     match death.cause {
         SessionDeathCause::Reboot => {
-            format!(
-                "rimz: machine rebooted since this room was last open; {agents} agent{plural} can be restored ({at}); {action}",
-            )
+            format!("rimz: machine rebooted since this room was last open ({at})")
         }
         SessionDeathCause::Crash => {
-            format!(
-                "rimz: this room's previous session ended with {agents} agent{plural} still running ({at}); {action}",
-            )
+            format!("rimz: this room's previous session ended with agents still running ({at})")
         }
     }
 }
@@ -308,30 +293,27 @@ mod tests {
 
     #[test]
     fn death_notice_uses_neutral_crash_wording() {
-        let notice = death_notice(&death_marker(SessionDeathCause::Crash, 2), true);
+        let notice = death_notice(&death_marker(SessionDeathCause::Crash, 2));
 
-        assert!(notice.contains("still running"), "{notice}");
-        assert!(notice.contains("offering to bring them back"), "{notice}");
+        assert_eq!(
+            notice,
+            "rimz: this room's previous session ended with agents still running (1970-01-01 00:00)"
+        );
         assert!(!notice.contains("crash"), "{notice}");
         assert!(!notice.contains("died"), "{notice}");
+        assert!(!notice.contains("offering"), "{notice}");
     }
 
     #[test]
     fn death_notice_uses_reboot_wording() {
-        let notice = death_notice(&death_marker(SessionDeathCause::Reboot, 1), true);
+        let notice = death_notice(&death_marker(SessionDeathCause::Reboot, 1));
 
-        assert!(notice.contains("rebooted"), "{notice}");
-        assert!(notice.contains("1 agent can be restored"), "{notice}");
+        assert_eq!(
+            notice,
+            "rimz: machine rebooted since this room was last open (1970-01-01 00:00)"
+        );
         assert!(!notice.contains("crash"), "{notice}");
         assert!(!notice.contains("died"), "{notice}");
-    }
-
-    #[test]
-    fn death_notice_reports_recovery_disabled() {
-        let notice = death_notice(&death_marker(SessionDeathCause::Crash, 2), false);
-
-        assert!(notice.contains("recovery disabled"), "{notice}");
-        assert!(!notice.contains("offering to bring them back"), "{notice}");
     }
 
     #[test]

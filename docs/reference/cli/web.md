@@ -3,7 +3,7 @@
 `rimz web` opens a Zellij-backed Rimz room in the browser. Zellij serves the terminal and owns authentication; Rimz resolves the workspace, ensures the normal sidebar room exists, constructs the URL, and reports unsupported backend or version problems before returning a route.
 
 ```sh
-rimz web open [PATH] [--session <name>] [--print] [--no-start] [--json]
+rimz web open [PATH] [--session <name>] [--print] [--no-start] [--no-resume] [--json]
 rimz web url [PATH] [--session <name>] [--json]
 rimz web status [--json]
 rimz web start [--daemonize] [--ip <ip>] [--port <port>] [--cert <path>] [--key <path>]
@@ -14,11 +14,11 @@ rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the Rimz room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and, when the Zellij web server has no login tokens, mints one Zellij login token for the machine; later opens for any room reuse the server-wide token store. `--json` emits the `rimz.web.v1` payload without provisioning a token. `--session <name>` targets an existing Rimz workspace session by exact session name. `--print` skips browser launch, and `--no-start` refuses when `zellij web` is offline.
+`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the Rimz room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and the serving machine's cached Zellij login token; a missing cache mints one token, stores it as plaintext mode 0600 at `$XDG_STATE_HOME/rimz/web-login-token.json`, and prints it. `--json` emits the `rimz.web.v1` payload without provisioning a token. `--session <name>` targets an existing Rimz workspace session by exact session name. `--print` skips browser launch, `--no-start` refuses when `zellij web` is offline, `--no-resume` skips rebirth recovery, and hidden `--confirm-resume` prompts over stdin/stderr for remote prep.
 
 `url` prints the route without birthing a room or starting the server. It requires an existing Rimz workspace record, so a script never receives a URL that would create a bare Zellij session without the Rimz sidebar.
 
-`status`, `start`, `stop`, and `token` delegate to Zellij's web CLI. Token output is Zellij's one-time output; Rimz never stores tokens or embeds them in URLs.
+`status`, `start`, `stop`, and most `token` commands delegate to Zellij's web CLI. Hidden `token ensure` prints the cached token value on stdout, minting and caching one when absent. Successful `token revoke` and `token revoke-all` clear the plaintext cache, so the next `open` or `token ensure` mints fresh. Login tokens stay out of URLs.
 
 Configure reverse-proxy URLs under per-machine config:
 

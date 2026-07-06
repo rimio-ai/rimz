@@ -1,19 +1,21 @@
 //! Zellij web domain logic: URL construction, command argv, status parsing,
-//! JSON payloads, and deterministic local tunnel ports.
+//! JSON payloads, token cache, and deterministic local tunnel ports.
 //!
-//! Process execution and human presentation live in `cli/`; this module is pure
-//! except for the local bind probe and Zellij config-path lookup.
+//! Process execution and human presentation live in `cli/`; this module owns
+//! the structured web data and the machine-local token cache.
 
 use std::env;
 use std::io;
 use std::net::TcpListener;
 use std::ops::RangeInclusive;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use kdl::{KdlDocument, KdlEntry, KdlNode};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{InlinePalette, parse_hex};
+use crate::ledger::{atomic, paths};
 use crate::mux::CommandSpec;
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v1";
@@ -21,9 +23,42 @@ pub const DEFAULT_ZELLIJ_WEB_BASE_URL: &str = "http://127.0.0.1:8082";
 pub const DEFAULT_ZELLIJ_WEB_IP: &str = "127.0.0.1";
 pub const DEFAULT_ZELLIJ_WEB_PORT: u16 = 8082;
 pub const LOCAL_PORT_RANGE: RangeInclusive<u16> = 8300..=8399;
+const WEB_LOGIN_TOKEN_CACHE_FILE: &str = "web-login-token.json";
 
 /// Binary override for tests, mirroring the Zellij backend.
 pub const ZELLIJ_BIN_ENV: &str = "RIMZ_ZELLIJ_BIN";
+
+#[derive(Debug, thiserror::Error)]
+pub enum WebLoginTokenCacheErr {
+    #[error("io error on {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not parse cached web login token at {path}: {source}")]
+    Json {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(transparent)]
+    Atomic(#[from] atomic::AtomicErr),
+}
+
+pub type WebLoginTokenCacheResult<T> = std::result::Result<T, WebLoginTokenCacheErr>;
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum WebLoginTokenParseErr {
+    #[error("`zellij web --create-token` output did not contain a token line")]
+    MissingToken,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct WebLoginTokenCache {
+    token: String,
+    created: Timestamp,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParsedWebStatus {
@@ -204,12 +239,90 @@ pub fn zellij_program() -> String {
     std::env::var(ZELLIJ_BIN_ENV).unwrap_or_else(|_| "zellij".to_owned())
 }
 
+pub fn read_cached_login_token() -> WebLoginTokenCacheResult<Option<String>> {
+    read_cached_login_token_at(&web_login_token_cache_path())
+        .map(|record| record.map(|record| record.token))
+}
+
+pub fn cache_login_token(token: &str) -> WebLoginTokenCacheResult<()> {
+    cache_login_token_at(&web_login_token_cache_path(), token)
+}
+
+pub fn clear_cached_login_token() -> WebLoginTokenCacheResult<()> {
+    clear_cached_login_token_at(&web_login_token_cache_path())
+}
+
+pub fn parse_created_login_token(
+    stdout: &[u8],
+) -> std::result::Result<String, WebLoginTokenParseErr> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .find_map(|line| {
+            let (_, token) = line.split_once(':')?;
+            let token = token.trim();
+            (!token.is_empty()).then(|| token.to_owned())
+        })
+        .ok_or(WebLoginTokenParseErr::MissingToken)
+}
+
 pub fn active_zellij_config_path() -> Option<PathBuf> {
     config_file_from_env()
         .or_else(config_dir_from_env)
         .or_else(home_zellij_config)
         .or_else(platform_zellij_config)
         .or_else(system_zellij_config)
+}
+
+fn web_login_token_cache_path() -> PathBuf {
+    paths::state_home()
+        .join("rimz")
+        .join(WEB_LOGIN_TOKEN_CACHE_FILE)
+}
+
+fn read_cached_login_token_at(path: &Path) -> WebLoginTokenCacheResult<Option<WebLoginTokenCache>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(WebLoginTokenCacheErr::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let record = serde_json::from_slice(&bytes).map_err(|source| WebLoginTokenCacheErr::Json {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(Some(record))
+}
+
+fn cache_login_token_at(path: &Path, token: &str) -> WebLoginTokenCacheResult<()> {
+    let record = WebLoginTokenCache {
+        token: token.to_owned(),
+        created: Timestamp::now(),
+    };
+    atomic::write_private_temp_then_rename(path, &record)?;
+    Ok(())
+}
+
+fn clear_cached_login_token_at(path: &Path) -> WebLoginTokenCacheResult<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            if let Some(parent) = path.parent() {
+                atomic::sync_dir(parent)?;
+            }
+            Ok(())
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(WebLoginTokenCacheErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 pub fn merge_web_client_config(
@@ -616,6 +729,53 @@ mod tests {
             ["rimz-project-a1b2c3", "watch", "legacy-token"]
         );
         assert_eq!(parse_token_count(stdout), 3);
+    }
+
+    #[test]
+    fn parses_created_login_token_from_zellij_output() {
+        let stdout =
+            b"Created token successfully\n\ntoken_1: d2d9a2b9-9861-43b3-960b-b5292ac0407b\n";
+
+        assert_eq!(
+            parse_created_login_token(stdout).expect("token parses"),
+            "d2d9a2b9-9861-43b3-960b-b5292ac0407b"
+        );
+        assert_eq!(
+            parse_created_login_token(b"Created token successfully\n").unwrap_err(),
+            WebLoginTokenParseErr::MissingToken
+        );
+    }
+
+    #[test]
+    fn login_token_cache_round_trips_and_clears() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("rimz/web-login-token.json");
+
+        assert!(
+            read_cached_login_token_at(&path)
+                .expect("missing cache reads")
+                .is_none()
+        );
+
+        cache_login_token_at(&path, "rimz-tok-123").expect("cache token");
+        let record = read_cached_login_token_at(&path)
+            .expect("read cache")
+            .expect("cache exists");
+        assert_eq!(record.token, "rimz-tok-123");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        clear_cached_login_token_at(&path).expect("clear cache");
+        assert!(!path.exists());
+        clear_cached_login_token_at(&path).expect("clearing a missing cache is ok");
     }
 
     #[test]
