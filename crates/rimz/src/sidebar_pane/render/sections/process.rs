@@ -135,11 +135,12 @@ pub(in crate::sidebar_pane::render) fn proc_stats_spans(
     spans
 }
 
-/// Line 2 for an *active* process row: the full foreground command in the
-/// row's [`Theme::soft`] tone, indented under the shell anchor, so a build or
-/// a `sudo` install reads in full while the primary line keeps the stable
-/// shell label. `None` when the producer left no detail (an idle pane, or a
-/// command already shown whole on line 1).
+/// Line 2 for an *active* process row: the foreground command with its program
+/// path trimmed and arguments verbatim in the row's [`Theme::soft`] tone,
+/// indented under the shell anchor, so a build or a `sudo` install reads in
+/// full while the primary line keeps the stable shell label. `None` when the
+/// producer left no detail (an idle pane, or a command already shown whole on
+/// line 1).
 pub(super) fn process_detail_line(
     theme: &Theme,
     row: &SidebarRow,

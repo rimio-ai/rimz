@@ -9,6 +9,28 @@ pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program(command)).to_owned()
 }
 
+/// The command with its program token reduced to a basename: the leading path
+/// trimmed so `target/debug/xtask install-dev` reads as `xtask install-dev`,
+/// while arguments stay verbatim. Sees past a `sudo` wrapper, so the wrapped
+/// program's own path is the one trimmed.
+pub(crate) fn command_program_basename(command: &str) -> String {
+    let Some((program, _)) = effective_program_and_args(command) else {
+        return command.to_owned();
+    };
+    let base = basename(program);
+    if base.len() == program.len() {
+        return command.to_owned();
+    }
+
+    let start = program.as_ptr() as usize - command.as_ptr() as usize;
+    let end = start + program.len();
+    let mut out = String::with_capacity(command.len() - (program.len() - base.len()));
+    out.push_str(&command[..start]);
+    out.push_str(base);
+    out.push_str(&command[end..]);
+    out
+}
+
 /// The file name of a path-or-bare token (`codex` from `/usr/bin/codex`), or
 /// the token itself when it has no path component.
 fn basename(token: &str) -> &str {
@@ -227,6 +249,39 @@ mod tests {
         assert_eq!(command_agent_kind("node /tmp/claude-test/cli.js"), None);
         // A path-qualified program resolves to its basename.
         assert_eq!(program_label("/usr/bin/cargo build"), "cargo");
+    }
+
+    #[test]
+    fn command_program_basename_trims_only_the_program_token() {
+        assert_eq!(
+            command_program_basename("target/debug/xtask install-dev"),
+            "xtask install-dev"
+        );
+        assert_eq!(
+            command_program_basename("/usr/bin/cargo build"),
+            "cargo build"
+        );
+        assert_eq!(
+            command_program_basename("cargo build --release"),
+            "cargo build --release"
+        );
+        assert_eq!(
+            command_program_basename("sudo /usr/bin/cargo build"),
+            "sudo cargo build"
+        );
+        assert_eq!(
+            command_program_basename("sudo -E -u root /usr/bin/npm i -g @openai/codex"),
+            "sudo -E -u root npm i -g @openai/codex"
+        );
+        assert_eq!(
+            command_program_basename("cargo run --manifest-path /a/b/Cargo.toml"),
+            "cargo run --manifest-path /a/b/Cargo.toml"
+        );
+        assert_eq!(
+            command_program_basename("xtask install-dev"),
+            "xtask install-dev"
+        );
+        assert_eq!(command_program_basename(""), "");
     }
 
     #[test]

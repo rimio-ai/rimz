@@ -9,7 +9,9 @@ use crate::pane::PaneRef;
 mod classify;
 
 pub use classify::command_agent_kind;
-pub(crate) use classify::{command_agent_kind_with_comm, program_label, rimz_exec_worktree_path};
+pub(crate) use classify::{
+    command_agent_kind_with_comm, command_program_basename, program_label, rimz_exec_worktree_path,
+};
 
 /// Whether a pane no agent has bound carries enough identity to render a
 /// process row. Foreground display wins, but a spawn command also admits the
@@ -62,11 +64,12 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     } else {
         program.clone()
     };
-    // The full command earns a second line only when it adds something past the
-    // primary label — an active pane whose command isn't already its whole name.
+    // The command earns a second line only when it adds something past the
+    // primary label — the program path trimmed to its basename, arguments
+    // verbatim.
     let command_detail = command
         .filter(|_| state.is_busy() || elevated.is_some())
-        .map(ToOwned::to_owned)
+        .map(command_program_basename)
         .filter(|full| *full != name);
     let worktree_path = pane_worktree_path(pane).map(ToOwned::to_owned);
     let foreign_user = elevated.map(|agent| uid_marker(agent.uid));
@@ -172,8 +175,8 @@ mod tests {
 
     #[test]
     fn process_row_carries_the_full_command_only_when_active() {
-        // Active: line 2 shows the full command; line 1 falls back to the program
-        // when `/proc` can't name the owning shell (no pid in tests).
+        // Active: line 2 shows the command; line 1 falls back to the program when
+        // `/proc` can't name the owning shell (no pid in tests).
         let active = row_from_process(
             &pane("%1", "sudo npm install -g @openai/codex", "/repo"),
             Timestamp::now(),
@@ -186,6 +189,18 @@ mod tests {
                 .as_process()
                 .and_then(|process| process.command_detail.as_deref()),
             Some("sudo npm install -g @openai/codex")
+        );
+
+        let path_active = row_from_process(
+            &pane("%5", "target/debug/xtask install-dev", "/repo"),
+            Timestamp::now(),
+        );
+        assert_eq!(path_active.name, "xtask");
+        assert_eq!(
+            path_active
+                .as_process()
+                .and_then(|process| process.command_detail.as_deref()),
+            Some("xtask install-dev")
         );
 
         // Idle shell: one clean line, no detail.

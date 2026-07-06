@@ -247,7 +247,7 @@ A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs y
 
 ### Process rows
 
-A pane no agent has stamped reads like a slim agent card, one soft step quieter: a hollow `○` for an idle shell or editor, the `⢿` spinner for a pane doing real work (a build, test, install), the program name in the soft middle tier. Inside a worktree group the process rows settle below the agent cards, the recession reading them as the group's command tail rather than more agents. An active pane anchors its primary line on the shell that owns it, so it stays put as commands come and go, and carries the live command in full on a second line; a working or stuck row pins the [resource grid](#reading-the-glyphs) (`C`/`M`/`⇅`) into the same right slot a card gives its `$cost`, while an idle shell stays bare even when values exist.
+A pane no agent has stamped reads like a slim agent card, one soft step quieter: a hollow `○` for an idle shell or editor, the `⢿` spinner for a pane doing real work (a build, test, install), the program name in the soft middle tier. Inside a worktree group the process rows settle below the agent cards, the recession reading them as the group's command tail rather than more agents. An active pane anchors its primary line on the shell that owns it, so it stays put as commands come and go, and carries the live command on a second line with the program trimmed to its name and arguments verbatim; a working or stuck row pins the [resource grid](#reading-the-glyphs) (`C`/`M`/`⇅`) into the same right slot a card gives its `$cost`, while an idle shell stays bare even when values exist.
 
 ```
 ○ zsh
