@@ -133,7 +133,7 @@ The attention buckets hold at `? 0  ! 0`, because running is not a cue to do any
 
 ## The question reaches you
 
-This is the moment Rimz earns its place. Claude hits a permission prompt: a feed item is written to the ledger, the row flips to `? waiting`, rises to the top of its worktree, the cockpit line counts it (`? 1`), and a native notification fires.
+This is the moment Rimz earns its place. Claude hits a permission prompt: the hook lands the waiting signal in the ledger, the row flips to `? waiting`, rises to the top of its worktree, the cockpit line counts it (`? 1`), and a native notification fires.
 
 ```
  ⌘ query-engine
@@ -162,11 +162,11 @@ They select the row, or click the notification, or hit the global triage key fro
 
 The reasons it lands this way are small and deliberate. Every waiting row routes the reader to the agent's UI, where the full context and the safe defaults already live. Notifications are best-effort polish: clicking one focuses the terminal and pre-selects the row, but the ledger is authoritative, so a missed notification loses nothing. Three agents going waiting at once coalesce into one notification, and an agent that stays waiting past a threshold earns a single nudge rather than a stream.
 
-Wire a resolver later (the growing-into-it section below) and this same waiting row may be answered before the reader arrives: the handler types in the agent's pane, records `--by <name>`, and the row clears. Unknown prompts stay `? waiting` and still route to the pane.
+The same waiting state is a hook for automation later (the growing-into-it section below): a notification handler can wake a script that answers a routine prompt right in the agent's pane, and the row clears when the agent moves on. Anything the script skips stays `? waiting` and still routes to the pane.
 
 ## A fleet, and the one key that tames it
 
-The reader does what they came to do: spins up four more agents across two worktrees, plus a deploy script paused at a gate. This is the load the product was built for, and it stays scannable.
+The reader does what they came to do: spins up four more agents across two worktrees, plus a deploy script in a pane of its own. This is the load the product was built for, and it stays scannable.
 
 ```
  ⌘ query-engine
@@ -174,7 +174,7 @@ The reader does what they came to do: spins up four more agents across two workt
  ◎ 12                  ◇ 88k ↘ 24k ↗ 64k ◌ 68k
  ¤ 6                                    $4.20
  ────────────────────────────────────────────
- ? 2   ! 1   ⏸ 0   ✓ 0              ⢿ 2   ○ 1
+ ? 1   ! 1   ⏸ 0   ✓ 0              ⢿ 2   ○ 2
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
@@ -195,14 +195,13 @@ The reader does what they came to do: spins up four more agents across two workt
    —
    ▣ ──────────────────────────────────    0%
 
- ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1
- ? deploy.sh
-   Deploy staging?
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ○ deploy.sh
 
                                  ? for help
 ```
 
-The cockpit line is the first thing the eye lands on: `? 2   ! 1`, two waiting and one failed, summed across every worktree, counting even rows hidden by a per-worktree cap. Above it, the header's token mix and `$4.20` running cost read the day's pace, the at-a-glance form of the provider dashboard. Ranking does the triage automatically: waiting and failed rows rise first, unread rows break ties inside the same status, idle agents and process rows settle below, and each worktree caps that tail with a dim `+K more` while keeping active, blocked, paused, finished, and focused rows on screen.
+The cockpit line is the first thing the eye lands on: `? 1   ! 1`, one waiting and one failed, summed across every worktree, counting even rows hidden by a per-worktree cap. Above it, the header's token mix and `$4.20` running cost read the day's pace, the at-a-glance form of the provider dashboard. Ranking does the triage automatically: waiting and failed rows rise first, unread rows break ties inside the same status, idle agents and process rows settle below, and each worktree caps that tail with a dim `+K more` while keeping active, blocked, paused, finished, and focused rows on screen.
 
 The power move is going straight to the blocked pane. A single session-scoped Space keystroke focuses the next item that needs attention, in ranking order, without the reader ever focusing the sidebar. Twelve agents, one key, straight to the oldest blocked one; press it again for the next. Seeing the blocked pane and getting to it are different actions, and this key collapses them, so triage cost stays flat as the fleet grows. It is bound only inside the Rimz session, so the reader's global mux config is untouched.
 
@@ -259,15 +258,15 @@ The footer steps aside while the alert is active, so a failed fetch reads as mis
 
 The same honesty extends to trust and protocol. An untrusted `.rimz/config.toml` keeps its command-running fields inert until the reader runs `rimz trust grant` after reviewing the diff, and a sidebar whose protocol version drifts after an upgrade gets a `rimz doctor` mismatch report instead of a rail that silently stops updating. Banners, the trust state, and `rimz doctor` are the three places Rimz tells the reader what it cannot currently vouch for.
 
-## Growing into it: resolvers, then everything else
+## Growing into it: building on the room
 
 By now the reader is hooked on the observe-and-route loop, and the product grows with them along paths they discover when they need them.
 
-Resolvers are the morning-after upgrade: tired of approving `cargo check` for the eighth time, the reader wires a resolver handler once — the bundled `pane_send_resolver.py` for well-known terminal prompts, `agent_resolver.sh` for a supervised agent delegate, or a small process of their own wrapping a smarter model. The handler answers routine prompts in the agent's own pane and skips anything outside policy, which is what lets the fleet keep working while they sleep. Mechanics are in [resolvers.md](../internals/agents/resolvers.md).
+Automation over the waiting state is the morning-after upgrade: tired of approving `cargo check` for the eighth time, the reader wires a notification handler that wakes on waiting rows and answers the routine ones in the agent's own pane — a bounded-pattern script over `rimz pane capture` and `rimz pane send`, or a supervised agent delegate launched with `rimz agents <kind> -p`. Anything outside policy stays waiting and routes to the reader as before, which is what lets the fleet keep working while they sleep. Handler wiring is in [notifications.md](../internals/sidebar/notifications.md); the safety posture is in [security.md](./security.md).
 
 Unattended runs are the same idea without waiting on a person, and `rimz agents <kind> "<prompt>" -p` makes the whole shape scriptable; the detail lives in [product.md → Put your pipeline in the room](./product.md#put-your-pipeline-in-the-room).
 
-And because agents and scripts share one CLI, a deploy or migration script can post to the same sidebar and block on its own question, answerable straight from the column ([the pipeline scenario](./product.md#put-your-pipeline-in-the-room)).
+And because agents and scripts share one CLI, a deploy or migration script can steer the same fleet — hand work to a running agent with `rimz message`, run a judgment call as a supervised turn, read back transcripts — straight from the pipeline ([the pipeline scenario](./product.md#put-your-pipeline-in-the-room)).
 
 ## The experience in one screen
 
@@ -276,9 +275,9 @@ And because agents and scripts share one CLI, a deploy or migration script can p
 | First run | installs, consents, lands in the room | config pointer, one hook consent prompt, then `○ zsh` and a hint | reassured, then oriented |
 | The agent shows up | types `claude`, then prompts it | row re-skins to `○ claude`, then `⢿ running` | delight, then calm |
 | The question reaches you | gets notified, jumps to the pane | `? waiting`, an OS notification | the pitch lands |
-| The fleet | presses Space | grouped roster, `? 2  ! 1` | in control |
+| The fleet | presses Space | grouped roster, `? 1  ! 1` | in control |
 | Detach, reattach | closes laptop, ssh back | the column reconstructed from the ledger | relief, then trust |
 | When wrong | hits a failure | a labeled degraded banner | trust through honesty |
-| Growing into it | wires a resolver | routine rows clearing | leverage |
+| Growing into it | wires a notification handler | routine rows clearing | leverage |
 
 The arc runs from curiosity to reassurance to delight to the pitch landing to mastery to trust. If the question moment does not land inside five minutes, nothing after it matters.

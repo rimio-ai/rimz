@@ -2,15 +2,15 @@
 
 Working contract for humans and coding agents contributing to Rimz. Read on entry. Topic detail lives in the leaves linked from the [documentation map](#documentation-map); never duplicate it here.
 
-> **Invariant.** Rimz routes attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI. A resolver you wire explicitly may answer routine prompts in that same UI, and the prompt remains there for you.
+> **Invariant.** Rimz routes attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI.
 
 If a child `AGENTS.md` appears under a subtree, it extends this file with local-only constraints — it never restates parent rules.
 
 ## Tone
 
-Declarative, present tense. State the contract; don't narrate history. Prefer imperatives (`Use Result.`, `Resolvers own pane I/O.`) over prohibitions where the meaning carries.
+Declarative, present tense. State the contract; don't narrate history. Prefer imperatives (`Use Result.`, `Answer in the agent's own UI.`) over prohibitions where the meaning carries.
 
-Say what it is. Describe Rimz by what it does, builds, and offers — lead with the capability. Reader-facing docs especially: open on the value, not the guardrail. Introduce a concept by what it does before you lean on it, so a feature is never explained by negating a term the reader has not met yet (`the default loop answers nothing on your behalf` fails this — it leans on *resolver* before the reader has one; say what the loop *does* — get you to the question fast — instead). Avoid "X is a Y, not a Z" framing and defensive "we don't…" / "it never…" constructions; state a real safety boundary as a positive commitment (`Resolvers own pane I/O.`) rather than a prohibition. Reserve negation for genuine disambiguation a reader would otherwise get wrong.
+Say what it is. Describe Rimz by what it does, builds, and offers — lead with the capability. Reader-facing docs especially: open on the value, not the guardrail. Introduce a concept by what it does before you lean on it, so a feature is never explained by negating a term the reader has not met yet (`a queued message never interrupts a turn` fails this — it leans on *queued* before the reader has it; say what queuing *does* — hold the text for the agent's next open turn — instead). Avoid "X is a Y, not a Z" framing and defensive "we don't…" / "it never…" constructions; state a real safety boundary as a positive commitment (`Hook stdout is the decision channel.`) rather than a prohibition. Reserve negation for genuine disambiguation a reader would otherwise get wrong.
 
 Markdown prose uses one logical line per paragraph, list item, and blockquote paragraph. Do not hard-wrap prose.
 
@@ -27,7 +27,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Ledger first.** Correctness lives in the ledger, CAS rules, nonces, and per-request sockets. Sidebar wakeups are latency, not truth.
 - **Hook stdout is the decision channel.** Logs go to stderr or Rimz state logs. Hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class. Core behaviour never depends on a backend-only feature.
-- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `message` routes human-authored text through the same send path, while pane reads stay in rendering, explicit resolver inspection, and Codex turn-death confirmation.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `message` routes human-authored text through the same send path, while pane reads stay in rendering, explicit `pane capture` calls, and Codex turn-death confirmation.
 - **Sidebar is read-only on the ledger.** Sidebar code reads via `rimz sidebar snapshot`; ledger-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
 - **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, and privacy settings are product behaviour, not implementation details.
@@ -58,7 +58,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 
 **Root**
 - [README.md](./README.md) — product entry point.
-- [DESIGN.md](./DESIGN.md) — the attention problem, the design pillars that answer it, the two feed surfaces, invariants, non-goals.
+- [DESIGN.md](./DESIGN.md) — the attention problem, the design pillars that answer it, invariants, non-goals.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — runtime shape, repository layout, module ownership.
 
 **Guide** — `docs/guide/`
@@ -78,7 +78,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [web.md](./docs/reference/cli/web.md) — open a Zellij room in the browser and manage Zellij web server/token helpers.
   - [agents.md](./docs/reference/cli/agents.md) — run the fleet: `agents` launch and supervised runs, `message`, `transcript`, `pane`, `worktree`, `loop`, and the `@handle`/`#channel` addressing grammar.
   - [channel.md](./docs/reference/cli/channel.md) — durable named-channel commands and the `--channel` launch/send flag.
-  - [feed.md](./docs/reference/cli/feed.md) — decisions, hooks, and trust: `feed`, `event`, `hooks`, and `trust`.
+  - [hooks-trust.md](./docs/reference/cli/hooks-trust.md) — agent hooks and project trust: `hooks` and `trust`.
   - [maintenance.md](./docs/reference/cli/maintenance.md) — machine and room upkeep: `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, and `ping`.
 - [configuration.md](./docs/reference/configuration.md) — config tiers, generated per-machine template, project trust shape, privacy.
 - [theme.md](./docs/reference/theme.md) — sidebar theming: built-in and Ghostty-derived palettes, color depth and slot overrides, custom theme files, status-head animations, provider brand styling, and provider-dashboard pets.
@@ -93,7 +93,6 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
     - [pi.md](./docs/internals/agents/adapter/pi.md) — Pi.
     - [opencode.md](./docs/internals/agents/adapter/opencode.md) — OpenCode.
   - [provider.md](./docs/internals/agents/provider.md) — provider accounts, balances, spend, and pricing: the plan/metered model, the out-of-band account probe, the provider-dashboard aggregation, the full-history cost/spending walk, and the three-layer token price table (embedded snapshot, remote refresh, builtins).
-  - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver pattern, notification handlers, pane primitives.
   - [harness.md](./docs/internals/agents/harness.md) — the agent harness end to end: the layout IR and backend tab/split placement, the agent-address grammar, supervised `rimz agents -p` runs (records, wakeups, output/input formats, posture, shared launch params), the scheduled loop tasks that drive those runs on a clock (calendar, interval, cron, one-shot, poll-until, and window-priming pings), and the `rimz agents exec` wrapper and run-pane cleanup.
   - [message.md](./docs/internals/agents/message.md) — the message system: how Rimz routes text to a running agent, from the send modes, the durable message record and lifecycle, delivery gates and FIFO ordering, the hook-triggered delivery pipeline, scheduling, smart compaction, wait confirmation, and retries, to the channel lanes that scope addressing (named, worktree, team, and directory backings, label precedence, and the registry), the transcript log and its `rimz transcript` read-back, and the audit trail.
   - [worktree.md](./docs/internals/agents/worktree.md) — Rimz-owned Git worktrees as one channel backing: creation and the `[worktree] dir`/base template, the `rimz-worktree.json` ownership marker, `.worktreeinclude` file seeding, `.worktreelink` directory sharing, and the landed-work cleanup decision plus the `rimz gc` sweep.
@@ -101,7 +100,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [sidebar.md](./docs/internals/sidebar/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
   - [state.md](./docs/internals/sidebar/state.md) — sidebar pulled truth, typed realtime events, fusion, process roles, and timing cadences.
   - [notifications.md](./docs/internals/sidebar/notifications.md) — best-effort desktop, bell, and command notifications layered over the sidebar attention model.
-  - [ledger.md](./docs/internals/sidebar/ledger.md) — durable state, feed surfaces, and script-ask bridge.
+  - [ledger.md](./docs/internals/sidebar/ledger.md) — durable state, the event-log durability contract, and the supervised-run wakeup bridge.
   - [multiplexers.md](./docs/internals/sidebar/multiplexers.md) — Zellij and tmux backend contracts.
   - [trust.md](./docs/internals/sidebar/trust.md) — executable-surface hash, trust states, auto-revoke.
   - [pets.md](./docs/internals/sidebar/pets.md) — opt-in provider-dashboard pets: pane-local cell-art rendering, the fleet-status sprite model, canned captions, and the Codex-CDN asset cache.

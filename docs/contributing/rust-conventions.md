@@ -33,7 +33,7 @@ Stdout is the protocol surface. The lint wall lives once in the workspace `Cargo
 A `println!` site is legal only when annotated `#[expect(clippy::print_stdout, reason = "...")]` and its stdout is one of:
 
 - a `--json` event stream or the final user-facing message of a command;
-- a single scripting value (`feed` request ids);
+- a single scripting value (`message` ids, launched agent names);
 - the agent-native decision channel — `rimz hooks <agent> ...` stdout is parsed by the agent, per [agent.md → Hook stdout is the decision channel](../internals/agents/agent.md#hook-stdout-is-the-decision-channel);
 - the `doctor` multi-section diagnostic, a bespoke layout migrated to `render` opportunistically.
 
@@ -55,9 +55,9 @@ The default filter prints warnings and errors only; `RUST_LOG` is the user's opt
 
 ```rust
 let span = tracing::info_span!(
-    "rimz.feed.resolve",
+    "rimz.message.deliver",
     workspace.id = field::Empty,
-    request.id = field::Empty,
+    message.id = field::Empty,
 );
 ```
 
@@ -104,7 +104,7 @@ impl<'de> Deserialize<'de> for RequestId { /* parses from a string */ }
 Conventions:
 
 - Inner value is **never** `pub`. Use `pub(crate)` only if the same crate needs the unwrapped form for an FFI seam.
-- Identifiers minted by Rimz (`RequestId`, `SidebarInstanceId`, and other internal correlation IDs) use **UUIDv7** for monotonic ordering — filenames named after the ID sort chronologically without an external index.
+- Identifiers minted by Rimz (`RunId`, `EventId`, `SidebarInstanceId`, and other internal correlation IDs) use **UUIDv7** for monotonic ordering — filenames named after the ID sort chronologically without an external index.
 - Identifiers derived from external truth use their natural shape: `WorkspaceId` is the SHA-256 of `project_root`; `PaneId` is `"<mux>:<raw_pane_id>"` per [multiplexers.md](../internals/sidebar/multiplexers.md). These types still go through a newtype and a parser — never assembled inline.
 
 ## State machines as types
@@ -114,25 +114,25 @@ Lifecycle states are enums with predicate methods. Booleans are forbidden where 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FeedStatus { Pending, Resolved, TimedOut, Abandoned }
+pub enum MessageStatus { Queued, Claimed, Sent, Delivered, TimedOut, /* … */ }
 
-impl FeedStatus {
-    pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Resolved | Self::TimedOut | Self::Abandoned)
+impl MessageStatus {
+    pub const fn is_open(self) -> bool {
+        matches!(self, Self::Queued | Self::Claimed)
     }
-    pub const fn allows_resolution(self) -> bool {
-        matches!(self, Self::Pending)
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::Queued | Self::Claimed | Self::Sent)
     }
 }
 ```
 
-The CAS rules from [ledger.md](../internals/sidebar/ledger.md) — first valid writer wins — live at the file boundary (`ledger/feed_store.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
+The lifecycle rules from [message.md](../internals/agents/message.md) — record first, claim before send, terminal is final — live at the store boundary (`ledger/message_store.rs`, `ledger/writer/queue.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
 
-`AgentStatus`, `PermissionPosture`, surfaces, resolution methods — same shape.
+`AgentStatus`, `PermissionPosture`, gates, delivery outcomes — same shape.
 
 ## Durable-state handle pattern
 
-Actors are for genuinely long-lived processes with concurrent in-process writers (a future resolver host, a future watcher daemon). For short-lived CLI invocations, the right shape is a `Clone`able handle holding `Arc<Inner>`, where each public method takes the workspace lock for its critical section and does the file work directly. Cross-process serialization is the workspace lock's job; in-process serialization through an actor is redundant when there is one writer process per workspace at a time.
+Actors are for genuinely long-lived processes with concurrent in-process writers (a future watcher daemon, a future scheduler host). For short-lived CLI invocations, the right shape is a `Clone`able handle holding `Arc<Inner>`, where each public method takes the workspace lock for its critical section and does the file work directly. Cross-process serialization is the workspace lock's job; in-process serialization through an actor is redundant when there is one writer process per workspace at a time.
 
 ```rust
 #[derive(Clone, Debug)]
@@ -142,14 +142,14 @@ pub struct Ledger {
 
 impl Ledger {
     #[must_use = "durability barrier; check the result"]
-    pub fn push_feed_item(&self, item: &FeedItem, session_name: &str) -> Result<()> {
+    pub fn queue_message(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
         {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-            feed_store::write(&self.inner.paths.feed_dir, item)?;
+            message_store::write(&self.inner.paths.messages_dir, message)?;
             event_log::append(&self.inner.paths.events_log, /* envelope */)?;
             snapshot::rebuild(&self.inner.paths)?;
         }
-        self.wake_sidebars_best_effort(&item.workspace_id, &item.request_id);
+        self.wake_sidebars_best_effort();
         Ok(())
     }
 }
@@ -158,17 +158,17 @@ impl Ledger {
 Rules:
 
 - Public methods return `Result<...>` and acquire the workspace lock for their critical section.
-- Best-effort wakeups (sidebar fanout, per-request datagram) fire after the lock drops — the ledger commit always observes before notification.
+- Best-effort wakeups (sidebar fanout, the run-socket datagram) fire after the lock drops — the ledger commit always observes before notification.
 - The handle is `Clone` via `Arc<Inner>`; cheap to pass into spawned tasks.
 - Durability barriers carry `#[must_use = "durability barrier; check the result"]` so dropping `Err(Fsync(...))` is a compile-time warning, not a silent data loss.
 
-When a long-lived process *does* arrive (resolver host, watcher daemon), it gets the actor shape: `tokio::mpsc` for commands, `oneshot::Sender` per durability barrier, terminal-failure cell captured behind `Arc<Mutex<Option<Arc<Err>>>>` so subsequent callers learn *why* the actor died. That process will already be async-shaped at every call site.
+When a long-lived process *does* arrive (watcher daemon, scheduler host), it gets the actor shape: `tokio::mpsc` for commands, `oneshot::Sender` per durability barrier, terminal-failure cell captured behind `Arc<Mutex<Option<Arc<Err>>>>` so subsequent callers learn *why* the actor died. That process will already be async-shaped at every call site.
 
 ## Atomic writes
 
 Two write shapes in `ledger/atomic.rs` cover every disk write in the project:
 
-- `write_temp_then_rename(path, value)` for cold-path durable state (trust grants, workspace records, hook installs, the rotation carryover); `write_temp_then_rename_cache` — rename-atomic, no fsync — for feed files, liveness files, and rebuilt-on-next-read caches.
+- `write_temp_then_rename(path, value)` for cold-path durable state (trust grants, workspace records, hook installs, the rotation carryover); `write_temp_then_rename_cache` — rename-atomic, no fsync — for liveness files and rebuilt-on-next-read caches.
 - `append_record_bytes(path, line) -> Result<()>` — the event-log append discipline (one `write()` per record, no fsync — appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync); the frame encoding itself lives beside its decoder in `ledger/event_log.rs`.
 
 Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `ledger/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [ledger.md](../internals/sidebar/ledger.md) for the frame format, torn-record recovery, and rotation rules.

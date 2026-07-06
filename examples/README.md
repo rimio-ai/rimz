@@ -30,7 +30,3 @@ tmux source-file ~/.tmux.conf
 cp examples/zellij/config.kdl ~/.config/zellij/config.kdl
 zellij setup --check
 ```
-
-## Resolvers — `resolvers/`
-
-Reference resolver implementations for the decision bridge; see [`resolvers/README.md`](./resolvers/README.md).

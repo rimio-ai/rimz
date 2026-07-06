@@ -92,7 +92,7 @@ These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claud
 | `PostCompact` | after compaction completes | `trigger` (`manual`\|`auto`) | lifecycle (`CompactionEnded`) |
 | `SessionEnd` | session terminates | `reason` | lifecycle (`ends_session`) |
 | `Notification` | Claude Code sends a notification | `message` | lifecycle (silent) |
-| `PermissionRequest` | a permission dialog appears | `tool_name`, `tool_input`, `permission_mode` | blocking-feed (sync) |
+| `PermissionRequest` | a permission dialog appears | `tool_name`, `tool_input`, `permission_mode` | awaiting-user (sync) |
 
 `ExitPlanMode` and `AskUserQuestion` have no dedicated install entry — they self-classify off `tool_name` on the broad `PreToolUse` hook.
 

@@ -2,9 +2,9 @@
 
 > See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [agent.md](./agent.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md) and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
 
-`rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and Rimz types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command and resolvers use.
+`rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and Rimz types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command uses.
 
-One model runs underneath every send: create a durable record first, deliver now when the agent can take the text, otherwise keep the record queued and deliver at the agent's next turn boundary, oldest first. The record-first path lets a message outlive a busy agent, a room that closes and reopens, a transient resolver miss, or a crash between claim and send.
+One model runs underneath every send: create a durable record first, deliver now when the agent can take the text, otherwise keep the record queued and deliver at the agent's next turn boundary, oldest first. The record-first path lets a message outlive a busy agent, a room that closes and reopens, a transient mux write failure, or a crash between claim and send.
 
 Three send modes place a message on that timing axis: `--steer` interrupts the live pane now, the default sends now when the target can receive and parks otherwise, and `--schedule` parks until a wall-clock time. [Send modes](#send-modes) has the detail.
 
@@ -15,7 +15,7 @@ A target is an @-mention resolved against the live fleet: `@claude` names the Cl
 Three modes place a send on the timing axis. All three resolve the target through the same address parser, ride the same bracketed-paste primitive, and write the same audit events.
 
 - `--steer`: interrupt the live pane immediately. It first writes a durable `queued` record, then moves it to `sent` when the paste reaches the pane. When the address resolves only to a durable card, it prints `queued for @handle (msg_...)` and the retry path delivers later. Conflicts with `--schedule` and `--on`, since it has no later gate.
-- Default: send now when the target can receive, meaning a live pane, an open gate, no pending ask reserving input (unless `--force`), and no ready queued backlog for the same agent. [Gates and delivery conditions](#gates-and-delivery-conditions) has the full list. When any condition fails, the text remains a `queued` record for the next qualifying turn boundary. A successful send-now moves that record to `sent`. A mux write failure with no `sent` record yet records `last_error`, clears pane affinity, and leaves the message queued for retry when the receiver is visible again.
+- Default: send now when the target can receive, meaning a live pane, an open gate, no waiting agent reserving input (unless `--force`), and no ready queued backlog for the same agent. [Gates and delivery conditions](#gates-and-delivery-conditions) has the full list. When any condition fails, the text remains a `queued` record for the next qualifying turn boundary. A successful send-now moves that record to `sent`. A mux write failure with no `sent` record yet records `last_error`, clears pane affinity, and leaves the message queued for retry when the receiver is visible again.
 - `--schedule <DUR|HH:MM>`: always parks and stores a `not_before` timestamp. The room must be open so the sidebar elder can spawn `message sweep` when the wake stamp comes due.
 
 ## Addressing and targets
@@ -66,7 +66,7 @@ A record stores:
 | `text` | the message content |
 | `enter` | whether to submit with Enter after the paste |
 | `gate` | `Done`, `Any`, or hidden `Resume`: the status gate that releases delivery |
-| `force` | deliver past a pending ask |
+| `force` | deliver past a waiting agent |
 | `pane_id` | pane address when known at enqueue time |
 | `status` | lifecycle state (see below) |
 | `enqueued_at`, `updated_at`, `delivered_at` | timestamps |
@@ -106,7 +106,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
 A parked message delivers when all five conditions hold:
 
 1. Gate is open. `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`; hidden `DeliveryGate::Resume` opens only on `Paused` after the account-budget resume guard passes. `Running`, `Waiting`, and `Paused` keep ordinary delivery closed.
-2. No pending ask. A feed ask attached to the agent's bound session reserves the next input. `--force` bypasses the ask, mirroring `message --steer --force`.
+2. Not waiting. An agent holding an open blocking prompt ([`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs)) reserves the next input for your answer. `--force` bypasses the reservation, mirroring `message --steer --force`; without it the skip reports `is waiting on your input in its pane; answer it or pass --force`.
 3. FIFO head. The message is the oldest ready queued record for its card and lane. `msg_` id string order is FIFO order; scheduled messages whose `not_before` is still in the future are filtered out, so they never block a later ready message on the same card. Resume nudges use a control lane so a parked-turn wakeup does not wait behind ordinary user text that cannot deliver until after the wakeup.
 4. Live pane exists. The target must have a pane that can receive a paste.
 5. Hooks are installed and trusted. Parked delivery needs hooks, because hooks are the delivery signal.
@@ -130,7 +130,7 @@ Only unparked root turn ends trigger ordinary parked delivery. `Registered`, sub
 The helper follows a strict sequence:
 
 1. **Settle**: wait a short delay (400 ms default, `RIMZ_MESSAGE_SETTLE_MS` overrides for tests) for the agent state to stabilize.
-2. **Candidate check**: read the queued head, verify `not_before` has passed, the gate is open against a fresh snapshot, the pending-ask predicate holds (skipped under `force`), and a live pane exists.
+2. **Candidate check**: read the queued head, verify `not_before` has passed, the gate is open against a fresh snapshot, the receiver is not waiting on input (skipped under `force`), and a live pane exists.
 3. **Claim**: under the workspace lock, transition the record from `Queued` to `Claimed` and increment the pre-send attempt count. The claim moves the record out of the queued scan immediately before sending.
 4. **Send**: write text to the live pane through the same bracketed-paste path as `--steer`. Smart compaction prepends a fresh `Command` record at delivery time before the claimed prompt.
 5. **Record send**: a successful pane write moves the record to `Sent`, still live until the agent confirms it or the reconciler times it out.
@@ -152,7 +152,7 @@ One cannot confirm the other. Batched prompt records carry a shared `batch_id`, 
 
 ### Retry and failure
 
-- **Pre-send failure** (pane gone, gate closed, pending ask blocks): the record stays or returns to `Queued` with `last_error` and no pane affinity, so the next qualifying turn boundary re-resolves a pane. A delivery helper claim increments `attempts`; an initial send-now failure records the error before any claim exists.
+- **Pre-send failure** (pane gone, gate closed, a waiting agent reserves input): the record stays or returns to `Queued` with `last_error` and no pane affinity, so the next qualifying turn boundary re-resolves a pane. A delivery helper claim increments `attempts`; an initial send-now failure records the error before any claim exists.
 - **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id and batch id, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever same-lane prefix is ready at the next boundary. After the unconfirmed-send cap, the record becomes `TimedOut`.
 - **Independent caps**: `unconfirmed_sends` gates the unconfirmed-send cap (`RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS`, 3 by default); `attempts` gates the pre-send cap (`MAX_DELIVERY_ATTEMPTS`, 5). A claim increments `attempts` only, and a stale-`Sent` requeue increments `unconfirmed_sends` only.
 - **Claim TTL**: a `Claimed` record older than 15 s (`CLAIM_TTL`) is treated as expired, so a crash after claim leaves a redeliverable record. `message list --all` surfaces it.
@@ -183,7 +183,7 @@ Scheduled and parked messages need an open room for wakeups:
 2. The elected sidebar elder reads that cache and, when due, spawns a detached `rimz message sweep`.
 3. The sweep helper reconciles stale `Sent` records, finds ready FIFO heads whose gates are open, calls the same one-message delivery path as lifecycle hooks, then rewrites the wake cache to the next future schedule, ready queued retry, or reconcile deadline, or removes it.
 
-Ready `Queued` heads arm the wake stamp as a backstop even when `not_before` is absent or already elapsed. A fresh ready message contributes its `updated_at` timestamp, so the elder sweep recovers an idle-agent message that missed the live send path. When a sweep cannot deliver the FIFO head because the gate is closed, a pending ask reserves input, or the pane is unavailable, it writes `retry_after = now + RIMZ_MESSAGE_DELIVERY_WINDOW_MS`; the elder then retries at most once per delivery window instead of every tick. `retry_after` is a wake hint only: it does not affect `is_ready`, FIFO, claim leases, or the turn-end hook, so lifecycle delivery still runs immediately when the target finishes. Future scheduled messages still arm their `not_before`, and `Sent` records still arm their reconcile deadline.
+Ready `Queued` heads arm the wake stamp as a backstop even when `not_before` is absent or already elapsed. A fresh ready message contributes its `updated_at` timestamp, so the elder sweep recovers an idle-agent message that missed the live send path. When a sweep cannot deliver the FIFO head because the gate is closed, a waiting agent reserves input, or the pane is unavailable, it writes `retry_after = now + RIMZ_MESSAGE_DELIVERY_WINDOW_MS`; the elder then retries at most once per delivery window instead of every tick. `retry_after` is a wake hint only: it does not affect `is_ready`, FIFO, claim leases, or the turn-end hook, so lifecycle delivery still runs immediately when the target finishes. Future scheduled messages still arm their `not_before`, and `Sent` records still arm their reconcile deadline.
 
 ## Smart compaction
 
@@ -270,15 +270,15 @@ The store exposes `list()` (live records), `list_history()` (terminal records wi
 
 Routing text to an agent is the write side; the transcript log is the durable record of the resulting conversation, and `rimz transcript` reads it back as a chat timeline. The log is Rimz-owned, distinct from a provider's native session files, so ended agents, past channels, and their asks and answers stay visible after those native files rotate away or leave the live snapshot.
 
-Hook and resolver paths append entries to fixed 7-day buckets at `transcript/<bucket-start>.jsonl`, append-only and under the workspace lock. Buckets are never pruned, and reads sort by recorded timestamp, so a bucket boundary carries no ordering meaning. Each entry stores a kind, the receiving agent's identity and channel, a timestamp, the text, and the structured `from`, `questions`, or `answers` its kind needs. Six kinds cover the conversation surface:
+Hook and delivery paths append entries to fixed 7-day buckets at `transcript/<bucket-start>.jsonl`, append-only and under the workspace lock. Buckets are never pruned, and reads sort by recorded timestamp, so a bucket boundary carries no ordering meaning. Each entry stores a kind, the receiving agent's identity and channel, a timestamp, the text, and the structured `from`, `questions`, or `answers` its kind needs. Six kinds cover the conversation surface:
 
 | Kind | Records | Reads back as |
 | --- | --- | --- |
 | `Prompt` | a human prompt to an agent | `user: @receiver, text` |
 | `Message` | an inter-agent delivery, tagged with structured `from` | `@sender: @receiver, text` |
 | `Assistant` | a root turn's final assistant message | `@receiver: text` |
-| `Ask` | a native question ask; its `questions` carry option labels and descriptions | the agent's question |
-| `Answer` | the effective answer, carrying `answers` choices | `you` or the resolver to the agent |
+| `Ask` | a native question ask, recorded when a blocking hook marks the agent waiting; its `questions` carry option labels and descriptions | the agent's question |
+| `Answer` | the effective answer, recorded when the pane answer releases the waiting row and carrying `answers` choices | `you` to the agent |
 | `Error` | a hook-path provider error marker newly merged into `AgentContext.turn_error` | `@receiver: error text` with error styling |
 
 A delivery becomes a `Message` entry when the receiver's turn-start hook parses the `from @sender` prefix ([Sender prefix](#sender-prefix)); the delivery queue record stays bookkeeping, never a transcript source. A batched delivery splits on the blank-line boundaries that introduce another sender prefix, so each section becomes its own transcript entry. A peer-opened turn also records the receiver's reply, because that reply is its own `Assistant` entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh). Statusline-only detections stay card/sidebar enrichment, because that path is lock-free and does not write the transcript log.
@@ -314,5 +314,5 @@ Two hidden helpers are the pipeline's execution arms, spawned detached with null
 ## Hazards
 
 - Queued text can land while a human has half-typed a draft in the agent pane. Rimz gates on ledger state, not focused-pane state or captured composer contents.
-- Agent UIs can present dialogs that are not feed asks. Core keeps pane capture out of delivery; a resolver that needs to inspect UI text owns capture-before-send.
+- Agent UIs can present dialogs no hook reports. Core keeps pane capture out of delivery; a script that needs to inspect UI text owns capture-before-send through the public `pane capture` primitive.
 - Multiplexer sends are best-effort: a pane can disappear or reject input after the claim, which the message record records and retries until the attempt cap.

@@ -243,7 +243,7 @@ A waiting or failed agent is the whole point. Its glyph leads, bold, and the car
 ▌  ▢ ──────────────────────────────────────────    0%    ← context meter — empty window
 ```
 
-A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs you and *what task*, and selecting it lands you in the agent's pane, where the full prompt and its safe defaults live — that is the row's job, to route you there. A script's `feed ask` is the one item answerable from the sidebar itself: it chose Rimz as its surface, so its declared options render as buttons on the row.
+A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs you and *what task*, and selecting it lands you in the agent's pane, where the full prompt and its safe defaults live — that is the row's job, to route you there.
 
 ### Process rows
 

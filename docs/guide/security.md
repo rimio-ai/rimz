@@ -7,7 +7,7 @@
 A project workspace runs untrusted code. Hooks, postinstall scripts, generated binaries, test runners, and the agents themselves all execute as you. Same-UID isolation is therefore not a meaningful trust boundary inside a workspace. Trust must be explicit at two layers:
 
 1. **Project trust** — what Rimz reads from `.rimz/config.toml` and what it is allowed to execute on the project's behalf.
-2. **Resolver handlers** — the per-machine notification commands you wire to answer feed items on your behalf.
+2. **Notification handlers** — the per-machine commands you wire to run on the room's attention cues.
 
 These are the only two trust decisions Rimz asks you to make. Everything else flows from them.
 
@@ -36,13 +36,13 @@ Per-machine notification handlers (`[[notifications.handler]]` and legacy `[noti
 
 The per-machine `loop.toml` schedules also live outside project trust. A `check = "<shell>"` entry is the user's own scheduled command, stored under `~/.config/rimz/` or Rimz-owned state, so a clone cannot supply it and the project trust hash stays scoped to `.rimz/config.toml`. The scheduled-execution surface stays visible — `rimz loop add` runs hook preflight before recording an agent action, `rimz loop list` shows whether the task's room is open, and `rimz doctor` carries the configured tasks.
 
-## Resolver handlers
+## Notification handlers
 
-Resolver handlers are per-machine notification commands. A cloned repository cannot supply them, and they run only after you add them to `~/.config/rimz/config.toml`.
+Notification handlers are per-machine commands, entering the room only by your hand in `~/.config/rimz/config.toml`; a cloned repository cannot supply them. They run from the elected sidebar producer under the current uid.
 
-Handlers inspect feed payloads, pane text, and transcripts as untrusted data. Bounded patterns and silence on unknown shapes are the safety posture.
+A handler that acts on the room treats pane text and transcripts as untrusted data. Bounded patterns and silence on unknown shapes are the safety posture.
 
-Detail in [resolvers.md](../internals/agents/resolvers.md).
+Wiring detail in [notifications.md](../internals/sidebar/notifications.md).
 
 ## Hook safety
 
@@ -56,7 +56,7 @@ The mechanics behind these guarantees — the decision channel, the neutral no-o
 
 ## UID boundaries
 
-An agent launched through `sudo`, `su`, or `doas` as another real uid is visible as a foreign process, not as a Rimz agent. The sidebar may label the process row with the agent kind and uid marker, but hooks, hook installation, account probes, and resolver delegation remain scoped to the current uid and the trusted project surface. This keeps another user's `~/.claude` or equivalent config and credentials outside the current room's trust decision.
+An agent launched through `sudo`, `su`, or `doas` as another real uid is visible as a foreign process, not as a Rimz agent. The sidebar may label the process row with the agent kind and uid marker, but hooks, hook installation, account probes, and notification handlers remain scoped to the current uid and the trusted project surface. This keeps another user's `~/.claude` or equivalent config and credentials outside the current room's trust decision.
 
 ## Forge status probes
 
@@ -68,7 +68,7 @@ CI build and test workflows run PR code on the `pull_request` trigger, so fork P
 
 ## Pane safety
 
-`rimz pane capture` returns untrusted terminal text. Rimz core does not parse it for correctness and does not auto-type. Resolvers that use pane primitives must pattern-match bounded prompt shapes and abstain when unsure. Captured text is data, never an instruction stream — feeding it into an LLM prompt as if it were a user message is the standard prompt-injection footgun.
+`rimz pane capture` returns untrusted terminal text. Rimz core does not parse it for correctness and does not auto-type. A script that answers prompts through pane primitives must pattern-match bounded prompt shapes and abstain when unsure. Captured text is data, never an instruction stream — feeding it into an LLM prompt as if it were a user message is the standard prompt-injection footgun.
 
 ## The Zellij presence plugin
 
@@ -77,8 +77,7 @@ On Zellij, rimz loads a small presence plugin into each session so the sidebar l
 ## State safety
 
 - State directories use `0700` permissions.
-- Feed resolution requires workspace ID, request ID, and nonce.
-- First valid CAS writer wins. Later writers are rejected, or recorded as `late audit` where the state machine allows.
+- A supervised-run wakeup counts only when its workspace ID and run ID match the waiting run's socket.
 - PID identity is cleanup metadata only — never the basis for authorization.
 - The session identity pin (`RIMZ_WORKSPACE_ID`/`RIMZ_PROJECT_ROOT`) selects which ledger a participant writes to; it executes nothing and enters no trust hash. The pin is hash-verified against its root, and same-UID environment access sits inside the existing trust boundary — a forged pin can redirect a write only to a ledger the same user already owns.
 
@@ -112,7 +111,7 @@ When on, Rimz sends its own `warn!`/`error!` events and the agent turn-error war
 When an agent version is outside the tested range:
 
 - observability hooks may remain active,
-- blocking feed hooks keep returning the agent-native neutral output, so the prompt stays in the agent's UI either way,
+- blocking ask hooks keep returning the agent-native neutral output, so the prompt stays in the agent's UI either way,
 - drift degrades observability fidelity only; `rimz doctor` warns.
 
-For the two unattended-run patterns (agent-native bypass vs permissive resolver) and their audit tradeoffs, see [product.md](./product.md).
+For the two unattended-run patterns (the agent-native bypass flag vs answering in the agent's own UI) and their audit tradeoffs, see [product.md](./product.md).

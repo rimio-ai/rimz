@@ -6,5 +6,5 @@ Local contract for `crates/rimz/` — the CLI binary, hook entrypoints, and the 
 
 - Command handlers (`src/cli/`) parse, call domain modules, and present; domain logic lives in the domain module, never in a handler.
 - Domain modules stay free of Zellij, tmux, and agent-specific dependencies — backend knowledge enters through `mux/`, agent knowledge through `agents/`.
-- Resolution matching uses `(workspace_id, request_id, nonce)` — never PID alone.
+- Run-wake matching uses `(workspace_id, run_id)` — never PID alone.
 - Normalized pane IDs (`zellij:terminal_3`, `tmux:%3`) travel everywhere outside `mux/`; raw IDs stay inside the backend adapters.

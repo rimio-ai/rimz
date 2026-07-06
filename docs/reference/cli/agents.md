@@ -201,7 +201,7 @@ A single-agent target builds that same channel log and filters it to messages th
 
 ## Drive panes
 
-`rimz pane` exposes the public pane primitives that humans, resolvers, and scripts share: see the room as panes, read what is on screen, type into one, and move focus.
+`rimz pane` exposes the public pane primitives that humans and scripts share: see the room as panes, read what is on screen, type into one, and move focus.
 
 ```sh
 rimz pane list
@@ -225,7 +225,7 @@ rimz pane detach
 
 The agent labels are a best-effort overlay folded from the workspace snapshot, so a pane the multiplexer has handed back to a shell reads `process`; the tab grouping always works, even with no snapshot reachable. `--json` emits the tab tree with a per-pane `kind`, `command`, `cwd`, and `pid`, and an `agent` object for agent panes. `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention. Named keys are `enter`, `escape`, `tab`, `backspace`, the four arrows, `ctrl-c`, `ctrl-d`, and `ctrl-u`, with aliases like `return`, `esc`, and `bs`.
 
-Pane capture is untrusted terminal text — scripts and resolvers match bounded patterns before sending anything back, and `pane send` is the same explicit input path as `message --steer`. Resolver patterns and pane-send discipline are in [resolver internals](../../internals/agents/resolvers.md).
+Pane capture is untrusted terminal text — a script matches bounded patterns before sending anything back, and `pane send` is the same explicit input path as `message --steer`. The operator-facing safety rules are in [security.md](../../guide/security.md).
 
 ## Schedule turns with loop
 

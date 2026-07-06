@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../DESIGN.md#invariants) for the invariants this surface operationalizes.
 
-`rimz` runs one room per project and gives you the verbs to live in it: open and attach the room, launch and steer agents, ask questions from scripts, and keep the ledger-backed workspace healthy. Every command resolves to the room for the directory you run it in, so you can call it from any pane, any worktree, or a script on the same machine and reach the same workspace.
+`rimz` runs one room per project and gives you the verbs to live in it: open and attach the room, launch and steer agents, and keep the ledger-backed workspace healthy. Every command resolves to the room for the directory you run it in, so you can call it from any pane, any worktree, or a script on the same machine and reach the same workspace.
 
 This page is the map. It orients you, indexes every command, and collects the conventions that hold across all of them. Each command group has its own page with the full synopsis, examples, and edge cases.
 
@@ -18,7 +18,7 @@ rimz
 `rimz` resolves the workspace, creates or reattaches the Zellij or tmux session, opens the sidebar, and drops you in. From there you work three ways, each with its own entry point:
 
 - **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), then use [`rimz message`](./cli/agents.md#message-an-agent) to interrupt now with `--steer`, park for the next boundary, or schedule the earliest delivery time.
-- **Script the fleet.** Run one supervised agent turn with [`rimz agents … -p`](./cli/agents.md#supervised-runs--p) and branch on its exit code, or block on a human decision with [`rimz feed ask`](./cli/feed.md#feed-items-and-decisions).
+- **Script the fleet.** Run one supervised agent turn with [`rimz agents … -p`](./cli/agents.md#supervised-runs--p) and branch on its exit code, or put turns on a schedule with [`rimz loop`](./cli/agents.md#schedule-turns-with-loop).
 - **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms), open Zellij rooms in the browser with [`rimz web`](./cli/web.md), then attribute render-stream bytes with `rimz remote bandwidth` from inside the served room.
 
 ## Find a command
@@ -27,7 +27,7 @@ rimz
 | --- | --- | --- |
 | **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `web`, `list`, `stats`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) · [Web](./cli/web.md) · [Stats](../internals/reach/welcome.md#rimz-stats) |
 | **Work with agents** | `agents`, `message`, `transcript`, `pane`, `channel`, `worktree`, `loop` | [Agent control](./cli/agents.md) · [Channels](./cli/channel.md) |
-| **Decisions, hooks, and trust** | `feed`, `event`, `hooks`, `trust` | [Feed, hooks, and trust](./cli/feed.md) |
+| **Hooks and trust** | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
 One surface has its own reference outside this map: [`rimz config`](./configuration.md) edits the per-machine config; the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics.

@@ -36,15 +36,15 @@ That's the loop. Everything else in Rimz is a variation on those primitives.
 
 ## When an agent needs you
 
-The everyday path has nothing extra wired: the agent asks in its own UI, Rimz records the ask, wakes the sidebar, and points you at the pane. You see `claude · waiting · permission`, jump, answer, and the row clears when the agent moves on.
+The everyday path has nothing extra wired: the agent asks in its own UI, the hook flips its row to waiting, the sidebar wakes, and Rimz points you at the pane. You see `claude · waiting · permission`, jump, answer, and the row clears when the agent moves on.
 
-Two more answer paths build on the same record. A handler you wire can answer recognised routine prompts ahead of you, in the same UI, on the audit trail ([Engineer the loop](#engineer-the-loop)). And a script can raise its own question into the same column with `rimz feed ask` ([the pipeline scenario](#put-your-pipeline-in-the-room)). The schema names the two surfaces `native_ui` and `script`; wire-level detail lives in [ledger.md](../internals/sidebar/ledger.md).
+Waiting is agent state, so everything downstream reads it the same way: ranking lifts the row ([attention.md](./attention.md)), notifications carry it off-screen, and `rimz message` holds a queued prompt until your answer lands. How blocking prompts become lifecycle signals is in [agent.md](../internals/agents/agent.md).
 
 ## Triage a local fleet
 
 Four sessions across two worktrees, and one hits a permission prompt: the sidebar surfaces it, you jump, read what the agent wants to run, and approve in its own prompt. Triage goes from staring at five terminals to answering the questions that need you, when they need you.
 
-Between questions you steer. `rimz message --steer @claude "focus on the failing parser test"` types into the pane now, holding off only while a pending ask owns the keyboard. `rimz message --on done @codex "open a PR summary"` delivers at the turn boundary, parking durably until Codex is free, so you hand off follow-up work without watching for it.
+Between questions you steer. `rimz message --steer @claude "focus on the failing parser test"` types into the pane now, holding off only while the agent is waiting on your answer. `rimz message --on done @codex "open a PR summary"` delivers at the turn boundary, parking durably until Codex is free, so you hand off follow-up work without watching for it.
 
 Addresses read like Slack. `@codex` names a kind, `@planner` a profile you defined, `@swift-otter` one specific agent, `@all` everyone; `#channel` names the lane, defaulting to the one you are in. Reaching several takes an explicit `--all`, and `--create` launches an agent straight from its address. The grammar and delivery gates: [the agent-control reference](../reference/cli/agents.md#message-an-agent).
 
@@ -72,25 +72,19 @@ Long runs meet provider limits, and the room keeps them legible: an agent on the
 
 ## Engineer the loop
 
-The [everyday loop](#the-loop) needs you at step 3. Loop engineering is how the fleet keeps moving when you are not there, in three layers: built-in recovery, a handler for the prompts that repeat, and a deliberate permission posture.
+The [everyday loop](#the-loop) needs you at step 3. Loop engineering is how the fleet keeps moving when you are not there, in three layers: built-in recovery, notification wakeups you build on, and a deliberate permission posture.
 
 Built-ins first. `[resume] auto_continue = true` (off by default) resumes rate-limit and spend-limit parks the moment the provider window resets and retries overload or transient API errors on a bounded backoff; context compaction rides the same loop, so a long agent keeps its footing with no babysitter process ([configuration.md → Resume](../reference/configuration.md#resume), [provider.md → Auto-continue](../internals/agents/provider.md#auto-continue)).
 
-Then a handler, for the prompts Rimz should not answer by itself. You've approved "Can I run `cargo check`?" eight times today, and six more agents wake up tomorrow. Wire a notification handler once and it answers the routine ones in the agent's own pane:
+Then wakeups. A notification handler is a per-machine command that fires on the room's attention cues — an agent going waiting, a failure, a park — with the agent, kind, pane id, and workspace root in its environment ([notifications](../internals/sidebar/notifications.md)):
 
 ```toml
 [[notifications.handler]]
 when = { kind = ["waiting"] }
-command = "python3 ~/bin/loop_permission_handler.py"
+command = "python3 ~/bin/waiting_handler.py"
 ```
 
-```
-[ waiting row ] → [ handler inspects ] → [ pane send ] → [ record --by handler ]
-```
-
-Unknown shapes stay pending and still route to you. The morning after six overnight agents reads: 47 routine permissions answered, 3 architecture-shaped questions skipped, one waiting in the sidebar for you. Attention bandwidth scales with the handler, not with the agent count.
-
-The handler is whatever intelligence you give it — a bounded-pattern script, a supervised one-shot agent (`rimz agents codex -p …`), or a standing in-room guardian reached with `rimz message --steer @guardian`. Reference handlers live in `examples/resolvers/` with the pattern in [resolvers.md](../internals/agents/resolvers.md); handler security lives in [security.md](./security.md).
+What the handler runs is up to you, and the primitives that drive the room are public CLI: `rimz pane capture` reads the prompt, `rimz pane send` types into the agent's own UI, `rimz message` hands work to another agent, and `rimz agents <kind> -p` runs a supervised one-shot. Composed from them, a handler can clear the routine permission prompt you've approved eight times today — a bounded-pattern script, a one-shot agent delegate, or a standing in-room guardian reached with `rimz message --steer @guardian`. Anything the handler leaves alone stays waiting in the sidebar and still routes to you, so attention bandwidth scales with what you automate rather than with the agent count. The safety posture for handlers is in [security.md](./security.md).
 
 ### Choose the permission posture
 
@@ -98,7 +92,7 @@ How an unattended run answers permissions is a posture you choose, and two patte
 
 The agent's own bypass flag runs straight through: `claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`, or `rimz agents <kind> "<prompt>" -p --yolo` to pass the adapter's flag for you (`--ask` keeps the provider's prompts in place). Rimz still observes sessions, completions, and failures through lifecycle hooks; the tradeoff is that the agent skips permission events at the source, so the ledger holds what other hooks report rather than a per-decision audit trail.
 
-A permissive handler keeps the audit trail: it recognises a narrow prompt, answers in the agent's own UI with `rimz pane send`, and records the row with `rimz feed resolve --method pane-send --by <name>`. Prefer it when handled prompts belong on the record, and reserve the bypass flag for runs where you accept the tradeoff.
+Answering in the agent's own UI keeps the per-decision record: the prompt, the answer, and the tool run all land in the agent's transcript, whether you typed the answer or a handler you wired sent it with `rimz pane send`. Prefer that path when handled prompts belong on the record, and reserve the bypass flag for runs where you accept the tradeoff.
 
 ## Put your pipeline in the room
 
@@ -109,7 +103,7 @@ A permissive handler keeps the audit trail: it recognises a narrow prompt, answe
 rimz agents codex --worktree=deps --timeout 4h -p "update dependencies, run the test suite, open a PR"
 ```
 
-Because the agent runs in a real pane, a run that stops to ask survives the stop: the question takes the normal path — your handler answers the routine ones, the rest pops to the cockpit and your notification channel — and you answer from anywhere while the script is still blocking. A failing migration at 3 a.m. becomes a push on your phone, a one-line fix typed over SSH, and a green pipeline by morning. The same shape runs while you watch: a PR-review job launched from CI joins the room as one more row and asks its design questions in your workspace.
+Because the agent runs in a real pane, a run that stops to ask survives the stop: the question takes the normal path — the row goes waiting, pops to the cockpit and your notification channel — and you answer from anywhere while the script is still blocking. A failing migration at 3 a.m. becomes a push on your phone, a one-line fix typed over SSH, and a green pipeline by morning. The same shape runs while you watch: a PR-review job launched from CI joins the room as one more row and asks its design questions in your workspace.
 
 For orchestration:
 
@@ -119,4 +113,4 @@ For orchestration:
 
 Flags and selection rules: [the agent-control reference](../reference/cli/agents.md#agents). Run records and completion mechanics: [harness.md](../internals/agents/harness.md#supervised-runs).
 
-Scripts join the room directly too. A deploy pipeline that pauses at a staging-to-prod gate calls `rimz feed ask --title "Promote build 2026.05.18-rc.4?"` and blocks; the question lands in the sidebar with answer buttons, and you or another process answers it from anywhere. `rimz event emit` announces milestones to the same column. These are the same primitives agent integrations use, so anything an agent can surface, a script can too.
+Scripts drive the room with the same commands you type. A pipeline that needs a judgment call runs one supervised turn and reads the exit code (`rimz agents claude -p "review the canary metrics and reply SHIP or HOLD"`); a wrapper hands follow-up work to a running agent with `rimz message --on done`; `rimz pane capture` and `rimz transcript` read back what happened. These are the primitives the interactive room runs on, so anything you do at the keyboard, a script can do on a schedule.

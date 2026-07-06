@@ -19,7 +19,7 @@ Room identity is path-derived and shared across backends, so a live rival sessio
 
 ## `MuxBackend`
 
-One trait, [`MuxBackend`](../../../crates/rimz/src/mux/mod.rs), holds every backend-specific operation — session lifecycle, pane listing and I/O, focus, sidebar and tab layout, presence install, and health/recovery. Everything correctness-critical sits above it, identical across backends: the ledger, script-ask sockets, the wakeup socket, the feed and event schemas, the trust gate, the agent hooks.
+One trait, [`MuxBackend`](../../../crates/rimz/src/mux/mod.rs), holds every backend-specific operation — session lifecycle, pane listing and I/O, focus, sidebar and tab layout, presence install, and health/recovery. Everything correctness-critical sits above it, identical across backends: the ledger, the run and wakeup sockets, the event schema, the trust gate, the agent hooks.
 
 **Parity is the rule, fast paths are the exception.** A backend-only capability is always a latency hint layered over shared truth — never a correctness requirement. If a feature exists only on Zellij, the tmux backend passes the same matrix without it. Cross-backend policy (the one-sidebar-per-view planner and plan-execution accounting in [`reconcile.rs`](../../../crates/rimz/src/mux/reconcile.rs), the sizing math in [`width.rs`](../../../crates/rimz/src/mux/width.rs)) stays pure and above the backends; each backend collects inputs and executes the plan.
 
@@ -57,7 +57,7 @@ The two backends bind it differently because a tmux binding and a Zellij binding
 
 ## Pane and view IDs
 
-Raw IDs stay inside the backend adapter, where the native command expects them (Zellij `terminal_3`, `plugin_1`; tmux `%3`). Everywhere else they travel **normalized** — `zellij:<raw>`, `tmux:<raw>` — through env vars (`RIMZ_PANE_ID`), feed items, snapshots, and CLI arguments. [`pane_from_env_value`](../../../crates/rimz/src/mux/mod.rs) is the one env→ID mapping.
+Raw IDs stay inside the backend adapter, where the native command expects them (Zellij `terminal_3`, `plugin_1`; tmux `%3`). Everywhere else they travel **normalized** — `zellij:<raw>`, `tmux:<raw>` — through env vars (`RIMZ_PANE_ID`), ledger events, snapshots, and CLI arguments. [`pane_from_env_value`](../../../crates/rimz/src/mux/mod.rs) is the one env→ID mapping.
 
 `ViewId` names the view (tab/window) holding a pane by the pane-list identity Rimz observes on every fast path — Zellij tab position (`tab_1`), tmux window id (`@3`). `PaneRef.view_id` is the flat read-side seam; the producer lifts it into `TabFrame.view_id` so sidebar-per-view bookkeeping runs over typed topology.
 
@@ -101,7 +101,7 @@ These are the upstream quirks the backend works around; the upstream surfaces th
 
 - **Minimum version is 0.44.0**, the floor `rimz doctor` reports as `meets_min_version`; below it Rimz refuses the Zellij room and points at upgrading Zellij or using tmux. `stack-panes` and `advanced_mouse_actions` are inside the supported floor, while `mouse_click_through` and `mouse_hover_effects` stay version-gated for future compatibility.
 - **Plugin keybinds pause briefly on 0.44.x.** Zellij's upstream `KeybindPipe` completion path can freeze the UI for about one second before a plugin keybind acts; the focus-key jump still lands.
-- **Pane IDs are positional, not stable.** Zellij exposes no stable per-pane CLI handle; ids can be reused as panes close and reopen, which is why feed items carry `pane_process_start` so reconciliation can refuse a stale match.
+- **Pane IDs are positional, not stable.** Zellij exposes no stable per-pane CLI handle; ids can be reused as panes close and reopen, which is why pane stamps carry `pane_process_start` so reconciliation can refuse a stale match.
 - **Session names are short and path-unique** (`rimz-<basename-slug>-<hash6>`), keeping the room human-scannable while staying under Zellij's macOS AF_UNIX socket budget and distinguishing same-basename roots. When the recorded and current derived names diverge, `rimz start` retires the stale session before rebirth.
 - **`new-pane` answers before the pane mounts, and action stdout can cross clients.** The printed pane id is allocated before the screen thread mounts the pane (a detached session drops the mount entirely), so reconcile treats it as a hint, discovers the mounted pane through plugin topology, and cleans up only a pane a fresh topology snapshot proves is a newly-created `rimz-sidebar`.
 - **`new-pane` can mount into a nested row.** A directional add still anchors to the focused layout node, so a sidebar can report `x=0` with a work pane spanning beneath it; every add verifies the full-height left-column band and repairs only the narrow nested shape it creates.
@@ -149,7 +149,7 @@ Desktop notifications are terminal-local: the sidebar renderer writes OSC 777 an
 What both backends deliver:
 
 - **Detach and reattach are multiplexer features** — Rimz does not reimplement them.
-- **Runtime correctness needs no visible sidebar** — hooks and `rimz feed ask` work headless.
+- **Runtime correctness needs no visible sidebar** — hooks, `rimz message`, and supervised runs work headless.
 - **The renderer is interchangeable and optional** — the native pane is the default on both backends; correctness never depends on which renderer (or none) is attached.
 - **The ledger survives host restart; processes do not**, unless a host supervisor is wired (tmux-resurrect, Zellij resurrect, systemd).
 - **`rimz doctor` reports** the selected backend, versions and floor compliance, PATH-visible backend binaries, backend server-log excerpts, feature availability, sidebar liveness, Rimz runtime socket headroom, the server socket path, Zellij IPC socket headroom when selected, and any degraded modes.

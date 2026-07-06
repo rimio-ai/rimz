@@ -4,7 +4,7 @@
 
 One agent in one thread is a conversation; tens of agents across a dozen worktrees is a team. The harness runs that team. It spawns agents into panes, reaches any one by name, drives it live or leaves it a task for when it is free, and leaves the pane usable or reclaims it when the agent exits — the same machinery whether a human, a cron job, a CI gate, or a PR hook is doing the driving.
 
-Everything here rides primitives both backends share: a layout compiles to backend-neutral panes, placement lands on a tab or a split, an address resolves through one parser, and a message rides the one pane-send primitive humans and resolvers already use. [cli/agents.md](../../reference/cli/agents.md) is the command surface (flags, synopses, examples); this doc is what those commands do underneath.
+Everything here rides primitives both backends share: a layout compiles to backend-neutral panes, placement lands on a tab or a split, an address resolves through one parser, and a message rides the one pane-send primitive humans and scripts already use. [cli/agents.md](../../reference/cli/agents.md) is the command surface (flags, synopses, examples); this doc is what those commands do underneath.
 
 ## The model
 

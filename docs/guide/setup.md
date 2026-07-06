@@ -36,7 +36,7 @@ A commented line keeps following the defaults shipped by future Rimz versions; u
 
 ## Install agent hooks
 
-Hooks are how a running agent reports to the room: turn starts and ends, permission prompts, and blocking questions reach the sidebar and the feed through hook events. Install them into every detected agent's per-user config:
+Hooks are how a running agent reports to the room: turn starts and ends, permission prompts, and blocking questions reach the sidebar through hook events. Install them into every detected agent's per-user config:
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
@@ -44,7 +44,7 @@ rimz hooks install              # every detected agent on PATH (claude, codex, p
 rimz hooks install claude       # one agent kind
 ```
 
-The install is additive — your existing hooks stay — and each report names the file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, Rimz wraps the command so the sidebar reads live context, and restores yours on uninstall. The first `rimz` run offers the same install with a consent prompt and diff preview, so `rimz hooks install` is mainly for adding an agent later or re-checking the surface. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the feed CLI](../reference/cli/feed.md#agent-hooks).
+The install is additive — your existing hooks stay — and each report names the file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, Rimz wraps the command so the sidebar reads live context, and restores yours on uninstall. The first `rimz` run offers the same install with a consent prompt and diff preview, so `rimz hooks install` is mainly for adding an agent later or re-checking the surface. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
 
 ## True color
 

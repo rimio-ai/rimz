@@ -10,4 +10,4 @@ Topic detail lives in [harness.md](../../../../docs/internals/agents/harness.md)
 - Harness delivery rides `message`; it never reimplements queues, gates, retries, or transcript audit.
 - CLI handlers keep argument parsing, presentation, and cross-command orchestration. Harness modules own pure domain rules, durable records, helper argv shape, and side-effect boundaries.
 - Elder-fired helpers in `schedule/fire.rs` and `auto_continue.rs` spawn hidden CLI subprocesses with fresh null stdio.
-- `auto_continue.rs` is in the sidebar import graph. Keep it free of ledger-writer, feed-store, bridge, and broker imports; runtime-cache writes through `ledger::atomic::write_temp_then_rename_cache` are the allowed durability path.
+- `auto_continue.rs` is in the sidebar import graph. Keep it free of ledger-writer, bridge, and broker imports; runtime-cache writes through `ledger::atomic::write_temp_then_rename_cache` are the allowed durability path.

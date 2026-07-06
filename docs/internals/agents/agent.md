@@ -31,8 +31,8 @@ AgentLifecycleObservation ──► one agent.lifecycle event in the ledger
   │  replay: reduce_agent_states folds each signal through step()
   ▼
 AgentState ──► one rollup entry per (kind, agent_id)
-  │  snapshot: live panes bind instances; heartbeat, sidecars,
-  │  and pending asks refine the displayed row
+  │  snapshot: live panes bind instances; heartbeat and
+  │  sidecars refine the displayed row
   ▼
 sidebar row                  (sidebar.md projects, the interface legend paints)
 ```
@@ -41,7 +41,7 @@ A reduced state is two axes plus one head ([`LifecycleState`](../../../crates/ri
 
 | Status | Meaning | Decided by |
 | --- | --- | --- |
-| `waiting` | blocked on a human decision | a pending blocking ask on the feed channel |
+| `waiting` | blocked on a human decision | the lifecycle channel: a blocking hook's `awaiting_input` signal |
 | `failed` | the last turn errored | the lifecycle channel |
 | `paused` | stopped mid-turn on a provider limit | derived at projection ([Displayed status](#displayed-status)) |
 | `idle` | wired in, nothing in flight | the lifecycle channel |
@@ -96,7 +96,8 @@ running ───── turn ended ─────┬── clean ────�
  subagents  : subagent started establishes the child row in running;
               subagent stopped resolves it to success / failed
  compacting : a transient head held over any status (the bracket below)
- waiting    : a pending blocking ask on the feed channel, joined at projection
+ waiting    : awaiting input enters from any status; the next turn, tool,
+              or compaction close returns the row to running
  removed    : session ended · pane reverted to a shell · reaped (no row)
 ```
 
@@ -109,11 +110,12 @@ The edges, precisely:
 | `turn_ended`, clean | `running` → `success` | the turn resolved; the phase rests |
 | `turn_ended`, errored | `running` → `failed` | the error bit always wins |
 | `turn_ended`, clean with background work in flight | `running` → `running` | the main thread parked, the phase is `parked`; see below |
+| `awaiting_input` | any → `waiting` | a blocking prompt ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question) holds the row for a human; a repeat restamps it |
 | `subagent_started` | *(none)* → `running` | establishes the child row, keyed by the child's own id |
 | `subagent_stopped` | `running` → `success` / `failed` | the child's terminal verdict, kept through the parent's turn |
-| `tool_used` (mutating) | resting or *(none)* → `running`, reconciled | completed work proves a turn; attention rows hold; the first file-editing tool moves the phase to `acting` |
-| `compacting` | status and phase held | stamps the [compaction head](#the-compaction-bracket) |
-| `compaction_ended` | auto → `running` (phase carried) · manual → `idle` · trigger unknown → held | closes and counts an open [bracket](#the-compaction-bracket) |
+| `tool_used` (mutating) | resting or *(none)* → `running`, reconciled; `waiting` → `running` | completed work proves a turn; attention rows hold; a tool on a waiting row is the answered-permission edge; the first file-editing tool moves the phase to `acting` |
+| `compacting` | status and phase held | stamps the [compaction head](#the-compaction-bracket); a waiting row stays waiting |
+| `compaction_ended` | auto → `running` (phase carried) · manual → `idle` · trigger unknown → held · any close on `waiting` → `running` | closes and counts an open [bracket](#the-compaction-bracket) |
 | `ended` | removal | the reducer's tombstone path handles it upstream; reaching `step` it is an ignored no-op |
 | `lost` | held | Rimz-synthesized `rimz.agent-lost` marker; preserves the row and feeds crash recovery, reaching `step` as an ignored no-op |
 
@@ -121,7 +123,7 @@ A `TurnEnded` resolves the turn to `success`, or `failed` on its error bit, neve
 
 A `SubagentStopped` resolves the *child* the same way (`success`, or `failed` on its error bit), and the sidebar keeps that `✓`/`!` through the parent's turn ([sidebar.md → Sub-agent lists](../sidebar/sidebar.md#sub-agent-lists)).
 
-`waiting` arrives on the feed channel: a pending blocking ask joined to the agent puts the row in `waiting` ([Two hook channels](#two-hook-channels)). The lifecycle channel drives `failed`, `idle`, `success`, and `running`; `paused` is derived at projection ([Displayed status](#displayed-status)).
+`waiting` arrives like every other status: a blocking hook (permission request, plan approval, user question) classifies as [awaiting-user](#two-hook-channels) and records an `awaiting_input` lifecycle signal, and `step` moves the row to `waiting`. The reducer stamps `waiting_since` from the signal, and the shared guard [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) (`status == waiting && last_activity <= waiting_since`) is the single authority read paths use, so an activity heartbeat that postdates the ask releases an answered sub-turn prompt without waiting for a durable clear. A transition off `waiting` sets `waiting_cleared`, and the ingestion path appends those durably even for signals it would otherwise skip, so a non-mutating approved tool still clears the row on replay. `paused` is derived at projection ([Displayed status](#displayed-status)).
 
 **Fail-soft, never silent.** `step` is total: an unexpected `(state, signal)` pair never panics and never freezes. It takes the signal's natural edge (the agent is authoritative about its own activity) and tags the result [`TransitionKind::Reconciled`](../../../crates/rimz/src/agents/lifecycle.rs) with the state it overrode and why. The reducer discards the tag; the ingestion path ([`cli/hooks.rs`](../../../crates/rimz/src/cli/hooks.rs)) logs it once per fresh event under `rimz::agent::lifecycle` to stderr (`warn!` on a reconciled edge, `debug!` on an ignored no-op, `error!` on a quarantined identity), keeping hook stdout for the decision channel. Drift between the model and reality leaves a structured breadcrumb instead of a wrong-but-quiet row. The headline case is in the edge table: a **tool observed on a resting row** proves the rollup is stale, so `step` moves it to `running` and logs the edge.
 
@@ -157,7 +159,7 @@ A compaction signal for a session the rollup has never seen folds to nothing. Co
 
 `snapshot.agents` (the rollup as `rimz sidebar snapshot` reports it) keeps the agent-owned truth. Read paths share a cheap [`effective_status`](../../../crates/rimz/src/agents/state.rs) projection, so a still-`running` turn with an active provider-park marker reads as `paused` in `rimz pane list` and message delivery; the sidebar row projection then adds budget-aware refinements on top. The refinements are one family with a pinned precedence, top rung wins:
 
-1. **A human-blocked `waiting` row stays first.** A pending blocking ask outranks every refinement below.
+1. **A human-blocked `waiting` row stays first.** An open blocking prompt outranks every refinement below; a `waiting` row that fails [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) (activity postdating the ask proves it was answered in the pane) projects back to `running` in the `reasoning` phase until a durable clear lands.
 2. **`paused`**: an agent whose latest turn stopped on a provider limit or transient API error. No hook emits `paused`; Rimz derives it at projection, and it joins the cockpit tally just under the actionable attention states. The marker can refine a still-`running` row (the provider emitted no lifecycle end) or a same-turn `failed` row (the lifecycle recorded an errored end). The certificate is per-agent, but the budget decision is account-scoped. `rate_limit` and `spend_limit` read the fused per-kind account budget: the row parks while a subscription mana bar is spent or has recovered into the auto-continue path, and stays resumable when extra credits are disabled or exhausted, as long as that mana bar has a real future refill. `overloaded` covers provider overload, serving capacity, 5xx-class failures, stalled streams, timeouts, and connection drops; it holds until a newer hook event self-clears it ([provider.md → Spent windows](./provider.md#spent-windows-and-paused-rows)).
 3. **Waiting on children**: a `running` agent with a live subagent paints a quiet wave, exempt from the stall escalation. The stall clock reads the row's displayed activity, which folds in the children's, so a child that just finished defers the escalation too.
 4. **Turn death**: a non-transient provider API error or unclassified turn-death marker escalates to `!` at once. For a still-`running` row the marker postdates `last_activity`, so the explicit death certificate beats the stall window; for a terminal `failed` row the marker must fall inside the row's current turn, so an old marker never explains a fresh failure. Transient 5xx, stall, timeout, and connection errors park like overloads once the marker proves that class. The card quotes the upstream or derived error label, and any newer hook event self-clears it.
@@ -183,7 +185,7 @@ So the binding test is one question: does a live local pane bind the session? A 
 
 **Phase 2: session binding.** A lifecycle hook arrives carrying a session id, and Rimz joins it to the right instance. A standalone hook stamped the pane id, so the join is exact and free. An unstamped session walks a deterministic recovery ladder: hook ingestion writes a recovered same-cwd pane stamp from the repaired live frame; a `codex resume <session-id>` pane binds exactly; then same-cwd sessions pair newest-first to the latest viable pane process-start before the session's first event. Residual ambiguity binds deterministically and appends a `binding.log.jsonl` breadcrumb. The ladder's guards and limits are [sidebar.md → Presence model](../sidebar/sidebar.md#presence-model).
 
-**Phase 3: instance exit.** The in-pane agent process is the liveness truth, surfaced through the pane: the CLI client is the pane's foreground process or the single hosted descendant under the pane root, so when it exits the pane reverts to a shell and stops reading as an agent. The instance leaves with no exit hook, in both launch modes. A `SessionEnd` hook (Claude) tombstones the session eagerly on top of this, clearing its pending asks and context sidecar at once; Codex has no `SessionEnd`, so a Codex session leaves by pane liveness and the [rollup reaper](#liveness-and-presence) alone.
+**Phase 3: instance exit.** The in-pane agent process is the liveness truth, surfaced through the pane: the CLI client is the pane's foreground process or the single hosted descendant under the pane root, so when it exits the pane reverts to a shell and stops reading as an agent. The instance leaves with no exit hook, in both launch modes. A `SessionEnd` hook (Claude) tombstones the session eagerly on top of this, clearing its row and context sidecar at once; Codex has no `SessionEnd`, so a Codex session leaves by pane liveness and the [rollup reaper](#liveness-and-presence) alone.
 
 Daemon-routed Codex hooks first name the shared app-server daemon, then the recovery ladder re-owns any local session to its in-pane process and stores the full pane stamp (`pane_id`, tab id, cwd, pane pid, and process start). An unbound daemon-owned session abstains from pid liveness and ages through the ghost TTL like a pidless row; the app-server loaded-thread reaper remains a faster secondary signal, dropping a daemon-mode session absent from `thread/loaded/list` before the pane fold ([`reap_runtime`](../../../crates/rimz/src/ledger/snapshot/view/reap.rs)) while an unreachable daemon or untrusted list keeps every session.
 
@@ -197,7 +199,7 @@ Presence comes from the live pane, with no exit event required: an agent renders
 
 - It keeps a busy agent's row animating.
 - It escalates a `running` agent silent past the configurable stall window (30 minutes by default) to the `!` attention state.
-- It recovers an answered `native_ui` ask: once `last_activity` passes the ask, the snapshot stops folding it, so an agent that answered in its own UI returns to `running` without waiting for the next turn boundary.
+- It recovers an answered ask: once `last_activity` passes `waiting_since`, [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) reads false, so an agent whose prompt was answered in its own UI returns to `running` without waiting for the next turn boundary.
 
 Like every heartbeat it is latency, not truth: a missing file just leaves `last_activity` at the event-log timestamp.
 
@@ -207,22 +209,22 @@ Like every heartbeat it is latency, not truth: a missing file just leaves `last_
 
 A coding agent reports to Rimz through hooks, and every agent speaks through one trait, [`AgentAdapter`](../../../crates/rimz/src/agents/mod.rs), registered in [`registry::ADAPTERS`](../../../crates/rimz/src/agents/registry.rs). The trait is the single place a native protocol diverges and the single place it is normalized; nothing downstream of it is agent-specific. The per-provider mappings it produces are the adapter docs; the raw upstream protocols they read are the [external references](../../externals/agent-adapter/claude-reference.md).
 
-An agent is one source among many: anything a hook does, a script can do through the same CLI, because a hook is just an adapter that translates a native protocol onto `rimz event`/`rimz feed`.
+An agent reports through the same public shape everything else uses: a hook is an adapter that translates a native protocol onto one Rimz CLI entrypoint, and the observations it records land in the same ledger every read surface projects.
 
 ### The seam: `AgentAdapter`
 
 Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables, integration coverage) and one registry line. The methods, by role (signatures live in the trait):
 
-- **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the feed kind.
+- **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the [`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs).
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs). `None` means "no transition here", so high-frequency events stay silent.
-- **`render_neutral`** emits the agent-native no-op for blocking asks. Hooks write feed items and return neutral; the agent's own UI stays open as the answer surface.
+- **`render_neutral`** emits the agent-native no-op for blocking asks. Hooks record the waiting observation and return neutral; the agent's own UI stays open as the answer surface.
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../../crates/rimz/src/agents/context.rs); **`local_context_refresh`** derives sidecar fields from local provider state on hook or producer tick triggers; **`context_refresh_spawn`** maps hook or tick triggers to a detached `rimz` helper when a provider's rich context transport needs one.
 - **`install_hooks`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it; **`probe_account`** / **`parse_spend`** / **`transcript_files`** feed the account and spend model in [provider.md](./provider.md).
 
 Two invariants hold the seam shut:
 
 - **Adapters never touch the ledger.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every ledger write; it calls the adapter for classification and neutral output only.
-- **Nothing downstream reads a native payload.** The adapter emits exactly two things the rest of Rimz consumes: an `AgentLifecycleObservation` and a blocking-feed classification. A native field reached for outside an adapter is a mapping that belongs *in* the adapter.
+- **Nothing downstream reads a native payload.** The adapter emits exactly two things the rest of Rimz consumes: an `AgentLifecycleObservation` and a blocking-ask classification. A native field reached for outside an adapter is a mapping that belongs *in* the adapter.
 
 ### Two hook channels
 
@@ -230,7 +232,7 @@ Two invariants hold the seam shut:
 
 **Lifecycle: fast, non-blocking.** Drives agent status, the turn phase, task, and enrichment. Each flows through `observe_lifecycle`; an event carrying no transition returns `None` and records nothing.
 
-**Blocking-feed: records the ask and returns neutral.** A permission request, plan approval, or user question becomes a feed item when the agent has its own ask UI. Rimz writes a `native_ui` item, returns the agent-native no-op immediately, and leaves the prompt visible in the agent's pane. An agent whose descriptor declares `native_ask_ui` off (pi) gets the same neutral no-op with **no feed item**, since there is no native prompt an item could route the human to.
+**Awaiting-user: records the waiting state and returns neutral.** A permission request, plan approval, or user question ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs)) becomes an `awaiting_input` lifecycle signal when the agent has its own ask UI. Rimz records the signal — the row goes `waiting`, and the ask's question text lands as a transcript `Ask` entry — returns the agent-native no-op immediately, and leaves the prompt visible in the agent's pane. An agent whose descriptor declares `native_ask_ui` off (pi) gets the same neutral no-op with **no waiting observation**, since there is no native prompt a `?` row could route the human to.
 
 Blocking decision hooks must be **sync**: an async one would ignore the decision printed on stdout, so the installer rejects it.
 
@@ -252,7 +254,7 @@ A **daemon-routed** hook (Codex's, fired from the shared app-server) inherits it
 
 A lifecycle hook fires → `classify_hook` returns `Lifecycle` → `observe_lifecycle` maps the payload onto an `AgentLifecycleObservation` → the CLI records it as an `agent.lifecycle` event, and [the rollup](#the-rollup) and [the state machine](#the-state-machine) above own it from there.
 
-A blocking hook fires → `classify_hook` returns `BlockingFeed` with a `FeedKind` → the CLI writes a `native_ui` feed item when the adapter declares a native ask UI, calls `render_neutral`, and exits. The agent's UI owns the prompt; resolvers answer there with pane primitives and record with `rimz feed resolve`.
+A blocking hook fires → `classify_hook` returns `AwaitingUser` with an `AskKind` → the CLI records the `awaiting_input` lifecycle event when the adapter declares a native ask UI, calls `render_neutral`, and exits. The agent's UI owns the prompt; the sidebar's `?` row routes you to the pane, and you answer there.
 
 ### Hook install: the visible security step
 
@@ -319,6 +321,6 @@ The hook mapping has four jobs: route each native event to a channel, map lifecy
 
 Stay best-effort throughout: a failure is an omitted field, never an error. The account and spend half of the recipe is [provider.md → Adding a provider](./provider.md#adding-a-provider).
 
-Required tests: install/uninstall, lifecycle mapping (native event → observation → state), feed classification, coverage conformance, neutral silence, malformed-payload handling, PID attribution, install version drift, and the context mapping from a fixture tail and a fixture transport payload (including the fresh-session zero and unreadable-unknown cases). Pinned stdout shapes live as inline `insta` goldens in each adapter's `tests` module. The adapter-authoring contract is in [`crates/rimz/src/agents/AGENTS.md`](../../../crates/rimz/src/agents/AGENTS.md).
+Required tests: install/uninstall, lifecycle mapping (native event → observation → state), ask classification, coverage conformance, neutral silence, malformed-payload handling, PID attribution, install version drift, and the context mapping from a fixture tail and a fixture transport payload (including the fresh-session zero and unreadable-unknown cases). Pinned stdout shapes live as inline `insta` goldens in each adapter's `tests` module. The adapter-authoring contract is in [`crates/rimz/src/agents/AGENTS.md`](../../../crates/rimz/src/agents/AGENTS.md).
 
 > **Neutral semantics diverge; verify per agent.** Empty stdout hands the prompt to Claude's and Codex's own UI, but for Pi — which has no native prompt to fall back to — empty stdout *is* the allow. Each adapter documents what its no-op means; never assume one agent's neutral behaviour for another.
