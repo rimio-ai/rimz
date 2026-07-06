@@ -138,11 +138,10 @@ pub struct SidebarSnapshot {
     /// reducer leaves it empty and falls back to descriptor defaults.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub wired_default_models: BTreeMap<String, String>,
-    /// Every live agent pane the producer bound during the pane fold, uncapped
-    /// and built at the binding site — the authoritative source for command
-    /// resolution (`message --steer`), so a target reaches exactly the agent panes the
-    /// producer saw rather than the capped, display-shaped `worktree_groups`
-    /// rows. Holds bound sessions (with their pane, even when the session's own
+    /// Every live agent pane the producer bound during the pane fold, built at
+    /// the binding site — the authoritative source for command resolution
+    /// (`message --steer`), so a target reaches exactly the agent panes the
+    /// producer saw. Holds bound sessions (with their pane, even when the session's own
     /// `agent_id` carries no stamped pane) and wired panes with no session yet.
     /// Frame-derived: the pure rollup leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

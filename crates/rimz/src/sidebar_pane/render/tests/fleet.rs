@@ -626,7 +626,6 @@ fn render_make_up_filter_narrows_the_body() {
         .iter_mut()
         .find(|group| group.label == "main")
         .expect("the fixture groups by worktree");
-    main_group.hidden_count = 2;
     main_group.rows.push(crate::SidebarRow {
         id: "%9".to_owned(),
         name: "zsh".to_owned(),

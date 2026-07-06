@@ -197,7 +197,6 @@ pub(crate) fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> Sideb
         kind: SidebarWorktreeKind::Worktree,
         status_counts: Vec::new(),
         rows,
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,

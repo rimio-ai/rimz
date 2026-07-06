@@ -170,7 +170,6 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 rows: (0..per_group)
                     .map(|index| agent_row(group, index))
                     .collect(),
-                hidden_count: 0,
                 diff_added: Some(120),
                 diff_removed: Some(40),
                 commits_ahead: Some(3),

@@ -339,7 +339,6 @@ fn inactive_groups_sink_below_process_groups() {
         kind: SidebarWorktreeKind::Worktree,
         status_counts: Vec::new(),
         rows: vec![process_row("zsh", "/repo/b")],
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -425,7 +424,7 @@ fn cap_keeps_inactive_success_above_hidden_idle_tail() {
             .any(|row| row.id == "old-done"),
         "inactive success remains visible even when the inactive idle tail is capped"
     );
-    assert!(snapshot.worktree_groups[0].hidden_count > 0);
+    assert_eq!(snapshot.worktree_groups[0].rows.len(), 11);
 }
 
 #[test]
@@ -672,7 +671,6 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
                 row
             })
             .collect(),
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,

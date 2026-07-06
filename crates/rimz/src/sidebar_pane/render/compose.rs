@@ -18,8 +18,8 @@ use super::sections::{
 };
 use super::theme::Theme;
 use super::{
-    Alert, BodyFilter, UiState, active_dashboard_tab, dashboard_present, dashboard_tabbed, labels,
-    row_passes_filter,
+    Alert, BodyFilter, MoreHit, UiState, active_dashboard_tab, dashboard_present, dashboard_tabbed,
+    group_visible_rows, labels,
 };
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
@@ -71,7 +71,7 @@ pub(crate) fn compose_lines(
     // the same frame the cards carry (see `with_gutter`).
     let inner = content_width(cells);
     let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, theme);
-    let (scroll, scroll_map) = scroll_lines(snapshot, ui, cells, theme);
+    let (scroll, scroll_map, scroll_more_hits) = scroll_lines(snapshot, ui, cells, theme);
 
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
@@ -166,6 +166,16 @@ pub(crate) fn compose_lines(
     };
     let end = (offset + viewport).min(scroll_len);
     let overflow = scroll_len > viewport && viewport > 0;
+    let scroll_base = lines.len();
+    let more_hits = scroll_more_hits
+        .into_iter()
+        .filter_map(|mut hit| {
+            (hit.line >= offset && hit.line < end).then(|| {
+                hit.line = scroll_base + hit.line - offset;
+                hit
+            })
+        })
+        .collect();
     for (index, line) in scroll
         .into_iter()
         .enumerate()
@@ -206,6 +216,7 @@ pub(crate) fn compose_lines(
         line_map: map,
         tab_hits,
         make_up_hits,
+        more_hits,
         banner_line,
         scroll_offset: offset,
         top_height: top_shown,
@@ -335,6 +346,7 @@ pub(crate) struct ComposedFrame {
     pub(crate) line_map: Vec<Option<usize>>,
     pub(crate) tab_hits: Vec<ProviderTabHit>,
     pub(crate) make_up_hits: Vec<MakeUpHit>,
+    pub(crate) more_hits: Vec<MoreHit>,
     pub(crate) banner_line: Option<usize>,
     pub(crate) scroll_offset: usize,
     pub(crate) top_height: usize,
@@ -358,8 +370,7 @@ fn resolve_scroll_offset(
         // selected row sits elsewhere.
         auto_scroll_to_selection(scroll_map, target, offset, viewport)
     } else if ui.focus_group_reveal
-        && let Some(group_first) =
-            selected_group_first_ordinal(snapshot, ui.make_up_filter, ui.selected_index)
+        && let Some(group_first) = selected_group_first_ordinal(snapshot, ui, ui.selected_index)
     {
         auto_scroll_reveal_group(scroll_map, group_first, ui.selected_index, offset, viewport)
     } else {
@@ -462,16 +473,17 @@ pub(super) fn auto_scroll_reveal_group(
 /// out of range.
 fn selected_group_first_ordinal(
     snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
+    ui: &UiState,
     selected: usize,
 ) -> Option<usize> {
     let mut start = 0;
     for group in &snapshot.worktree_groups {
-        let len = group
-            .rows
-            .iter()
-            .filter(|row| row_passes_filter(row, filter))
-            .count();
+        let len = group_visible_rows(
+            group,
+            ui.make_up_filter,
+            ui.expanded_groups.contains(&group.key),
+        )
+        .len();
         if len == 0 {
             continue;
         }
@@ -491,8 +503,13 @@ fn visible_row_ordinal(snapshot: &SidebarSnapshot, ui: &UiState, id: &str) -> Op
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row_passes_filter(row, ui.make_up_filter))
+        .flat_map(|group| {
+            group_visible_rows(
+                group,
+                ui.make_up_filter,
+                ui.expanded_groups.contains(&group.key),
+            )
+        })
         .position(|row| row.id == id)
 }
 
@@ -702,9 +719,10 @@ pub(super) fn scroll_lines(
     ui: &UiState,
     width: usize,
     theme: &Theme,
-) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
+) -> (Vec<Line<'static>>, Vec<Option<usize>>, Vec<MoreHit>) {
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
+    let mut more_hits = Vec::new();
 
     if !snapshot.worktree_groups.is_empty() {
         let mut row_index = 0;
@@ -714,10 +732,8 @@ pub(super) fn scroll_lines(
         // with a matching row; the external catch-all is just another group.
         let mut emitted = false;
         for group in &snapshot.worktree_groups {
-            let has_visible = group
-                .rows
-                .iter()
-                .any(|row| row_passes_filter(row, ui.make_up_filter));
+            let expanded = ui.expanded_groups.contains(&group.key);
+            let has_visible = !group_visible_rows(group, ui.make_up_filter, expanded).is_empty();
             if !has_visible {
                 continue;
             }
@@ -735,6 +751,7 @@ pub(super) fn scroll_lines(
                 &snapshot.theme.display.context_meter,
                 snapshot.theme.display.card_density,
                 ui.make_up_filter,
+                expanded,
                 &mut row_index,
                 ui.selected_index,
                 ui.animation_phase,
@@ -742,11 +759,12 @@ pub(super) fn scroll_lines(
                 lead_unread_id,
                 &mut lines,
                 &mut map,
+                &mut more_hits,
             );
         }
     }
 
-    (lines, map)
+    (lines, map, more_hits)
 }
 
 /// Append structural (non-row) lines, tagging each map slot `None` and opening

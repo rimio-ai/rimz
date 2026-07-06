@@ -69,7 +69,6 @@ pub struct GroupSig {
     pub kind: SidebarWorktreeKind,
     pub row_ids: Vec<String>,
     pub render_order: Vec<String>,
-    pub hidden_count: usize,
     pub status_counts: Vec<StatusCountSig>,
 }
 
@@ -171,7 +170,6 @@ pub fn extract_sig(
                 kind: group.kind,
                 row_ids,
                 render_order,
-                hidden_count: group.hidden_count,
                 status_counts,
             }
         })

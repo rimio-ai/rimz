@@ -9,8 +9,8 @@ use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
 use super::layout::{
-    capped_rows, compare_groups, effective_worktree_roots, group_branch_label, multi_branch_paths,
-    sort_rows, status_counts, worktree_group_key,
+    compare_groups, effective_worktree_roots, group_branch_label, multi_branch_paths, sort_rows,
+    status_counts, worktree_group_key,
 };
 use super::score;
 use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
@@ -133,14 +133,11 @@ pub(super) fn build_worktree_groups_from_rows(
                 label
             };
             let status_counts = status_counts(&rows);
-            let total = rows.len();
-            rows = capped_rows(rows);
             SidebarWorktreeGroup {
                 key,
                 label,
                 kind,
                 status_counts,
-                hidden_count: total.saturating_sub(rows.len()),
                 rows,
                 diff_added: None,
                 diff_removed: None,

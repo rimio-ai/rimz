@@ -465,7 +465,6 @@ mod tests {
             kind: crate::SidebarWorktreeKind::Worktree,
             status_counts,
             rows,
-            hidden_count: 0,
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,

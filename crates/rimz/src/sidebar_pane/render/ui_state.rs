@@ -4,6 +4,7 @@ use crate::diag::record::GateRule;
 use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
 use jiff::Timestamp;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use super::sections::{MakeUpHit, ProviderTabHit};
@@ -129,8 +130,8 @@ pub struct UiState {
     /// body, or `None` for the resting show-all view.
     /// Renderer-local display state — the producer, the ledger, and the
     /// cockpit counts (always the full fleet) are untouched; only the body
-    /// iteration narrows, through the one shared [`row_passes_filter`]
-    /// predicate. A pure toggle: a click on the active target clears it, and
+    /// iteration narrows, through the one shared `group_visible_rows` walk. A
+    /// pure toggle: a click on the active target clears it, and
     /// it auto-clears when its count drops to zero — the make-up
     /// twin of a dashboard tab pick ending when its panel leaves.
     pub(crate) make_up_filter: Option<BodyFilter>,
@@ -139,6 +140,16 @@ pub struct UiState {
     /// make-up bucket and the unread count's footprint, written as a
     /// byproduct of every draw like `line_map` and `tab_hits`.
     pub(crate) make_up_hits: Vec<MakeUpHit>,
+    /// Worktree groups expanded through the renderer-local `+K more` affordance.
+    /// Expansion is presentation state only: the snapshot carries the full
+    /// roster, and a group drops from this set once it no longer has a capped
+    /// tail to reveal.
+    pub(crate) expanded_groups: BTreeSet<String>,
+    /// Hit-test map of the `+K more` / `− less` toggle lines in the most
+    /// recently drawn frame: the absolute screen line and group key, written as
+    /// a byproduct of every draw like `line_map`, `tab_hits`, and
+    /// `make_up_hits`.
+    pub(crate) more_hits: Vec<MoreHit>,
     /// Screen row of the `↑ N need you` jump banner in the most recently drawn
     /// frame, or `None` when the lead-unread card is in view and the banner is
     /// hidden. The mouse hit-test reads it to scroll the cards to the top;
@@ -252,4 +263,10 @@ impl Alert {
 pub(crate) enum BodyFilter {
     Status(AgentStatus),
     Unread,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MoreHit {
+    pub(crate) line: usize,
+    pub(crate) group_key: String,
 }

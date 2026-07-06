@@ -316,8 +316,8 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_the_line_map() {
     // The selection walk and the rendered line map share one predicate, so
     // their ordinals can never drift: the filtered universe is exactly the
     // contiguous 0..count the body's hit-test entries carry.
-    assert_eq!(visible_row_count(&snapshot, None), 3);
-    assert_eq!(visible_row_count(&snapshot, filter), 1);
+    assert_eq!(visible_row_count(&snapshot, None, &Default::default()), 3);
+    assert_eq!(visible_row_count(&snapshot, filter, &Default::default()), 1);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let running = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     assert_eq!(row_index_of_pane(&snapshot, filter, &failed), Some(0));
@@ -334,7 +334,7 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_the_line_map() {
     ordinals.dedup();
     assert_eq!(
         ordinals,
-        (0..visible_row_count(&snapshot, filter)).collect::<Vec<_>>(),
+        (0..visible_row_count(&snapshot, filter, &Default::default())).collect::<Vec<_>>(),
         "the line map carries exactly the filtered walk's ordinals"
     );
 }
@@ -366,8 +366,8 @@ fn unread_filter_narrows_to_unread_rows() {
     snapshot.worktree_groups[1].rows[0].unread = true;
     let filter = Some(BodyFilter::Unread);
 
-    assert_eq!(visible_row_count(&snapshot, None), 3);
-    assert_eq!(visible_row_count(&snapshot, filter), 2);
+    assert_eq!(visible_row_count(&snapshot, None, &Default::default()), 3);
+    assert_eq!(visible_row_count(&snapshot, filter, &Default::default()), 2);
 
     let mut ui = UiState::default();
     let outcome = handle_key(KeyAction::Filter(FilterAction::Unread), &mut ui, &snapshot);
@@ -507,17 +507,17 @@ fn step_attention_index_reverses_the_inbox_walk() {
     // The forward triage order is [unread success @1, read failed @2]; reverse
     // inverts every step and enters at the last row from outside the list.
     assert_eq!(
-        step_attention_index(&snapshot, None, 1, false),
+        step_attention_index(&snapshot, None, &Default::default(), 1, false),
         Some(2),
         "reverse from the first candidate wraps to the last"
     );
     assert_eq!(
-        step_attention_index(&snapshot, None, 2, false),
+        step_attention_index(&snapshot, None, &Default::default(), 2, false),
         Some(1),
         "reverse steps to the previous candidate"
     );
     assert_eq!(
-        step_attention_index(&snapshot, None, 0, false),
+        step_attention_index(&snapshot, None, &Default::default(), 0, false),
         Some(2),
         "a selection outside the list enters at the last row going backward"
     );

@@ -25,14 +25,14 @@ fn next_attention_index(
     filter: Option<BodyFilter>,
     selected: usize,
 ) -> Option<usize> {
-    step_attention_index(snapshot, filter, selected, true)
+    step_attention_index(snapshot, filter, &Default::default(), selected, true)
 }
 
 /// A group whose first row is a multi-line agent card (model, effort, and
 /// context% set so it carries identity + description + gauge, and selecting
 /// it reveals its deeper budget-bar and stats lines), followed by a
-/// single-line process row, with a non-zero hidden count so a `+K more` line
-/// renders. The fixture for the whole-block clickability regression guard.
+/// single-line process row. The fixture for the whole-block clickability
+/// regression guard.
 fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
     let agent = crate::SidebarRow {
@@ -81,7 +81,6 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             count: 1,
         }],
         rows: vec![agent, process],
-        hidden_count: 2,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -208,7 +207,6 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
                 ),
                 filter_row(false, "terminal_2", "zsh", None, "terminal_2", "/repo/main"),
             ],
-            hidden_count: 0,
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,
@@ -235,7 +233,6 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
                 "terminal_3",
                 "/repo/feature",
             )],
-            hidden_count: 0,
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,

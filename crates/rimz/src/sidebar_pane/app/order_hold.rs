@@ -114,7 +114,6 @@ mod tests {
             kind: SidebarWorktreeKind::Worktree,
             status_counts: Vec::<SidebarStatusCount>::new(),
             rows,
-            hidden_count: 0,
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,

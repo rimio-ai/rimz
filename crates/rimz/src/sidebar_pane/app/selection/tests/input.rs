@@ -72,6 +72,56 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
         "the section gap is not a row"
     );
 }
+
+#[test]
+fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
+    let ws = workspace();
+    let panes = (0..9)
+        .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+        .collect::<Vec<_>>();
+    let snapshot = snapshot_with_panes(&ws, panes);
+    let group_key = snapshot.worktree_groups[0].key.clone();
+    let mut ui = UiState::default();
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    ui.line_map = composed.line_map;
+    ui.more_hits = composed.more_hits;
+    assert_eq!(
+        visible_row_count(&snapshot, None, &ui.expanded_groups),
+        6,
+        "collapsed body exposes the capped row ordinals"
+    );
+    let more_line = ui.more_hits.first().expect("more hit").line;
+
+    let outcome = handle_mouse_click(0, screen_row_for(more_line), &mut ui, &snapshot);
+
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert!(ui.expanded_groups.contains(&group_key));
+    assert_eq!(
+        visible_row_count(&snapshot, None, &ui.expanded_groups),
+        9,
+        "expanded body exposes every row ordinal"
+    );
+
+    let theme = ui.theme(&snapshot.theme);
+    let expanded = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let mut ordinals = expanded
+        .line_map
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    ordinals.dedup();
+    assert_eq!(ordinals, (0..9).collect::<Vec<_>>());
+
+    ui.line_map = expanded.line_map;
+    ui.more_hits = expanded.more_hits;
+    let less_line = ui.more_hits.first().expect("less hit").line;
+    let outcome = handle_mouse_click(0, screen_row_for(less_line), &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert!(!ui.expanded_groups.contains(&group_key));
+}
+
 #[test]
 fn focus_keys_fire_without_mutating_selection() {
     // Every jump — a mouse click, a digit ordinal, Enter, or the Space triage
@@ -602,7 +652,6 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
         kind: crate::SidebarWorktreeKind::Worktree,
         status_counts: Vec::new(),
         rows,
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,

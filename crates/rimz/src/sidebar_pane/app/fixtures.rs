@@ -62,7 +62,6 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
                 card: crate::RowCard::Process(crate::ProcessCard::default()),
             })
             .collect(),
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -108,7 +107,6 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             count: 1,
         }],
         rows: vec![row],
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,

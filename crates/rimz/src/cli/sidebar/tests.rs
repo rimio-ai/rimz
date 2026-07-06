@@ -169,6 +169,168 @@ fn gallery_fixtures_build_with_coherent_context() {
         );
     }
 
+    let focus = sidebar_fixture_snapshot(SidebarFixtureState::Focus).unwrap();
+    let cards = agent_cards(&focus);
+    let planner = cards
+        .iter()
+        .find(|card| card.handle.as_deref() == Some("planner"))
+        .expect("planner card");
+    assert_eq!(planner.status, rimz::agents::AgentStatus::Success);
+    assert_eq!(planner.phase, rimz::agents::TurnPhase::Idle);
+    assert_eq!(planner.sub_agents.len(), 5);
+    assert_eq!(
+        planner
+            .sub_agents
+            .iter()
+            .filter(|child| child.name == "Explore")
+            .count(),
+        3,
+    );
+    assert_eq!(
+        planner
+            .sub_agents
+            .iter()
+            .filter(|child| child.name == "Plan")
+            .count(),
+        2,
+    );
+    assert!(planner.sub_agents.iter().all(|child| {
+        child.name != "Explore" || child.status == rimz::agents::AgentStatus::Success
+    }));
+    assert!(planner.sub_agents.iter().all(|child| {
+        child.name != "Plan" || child.status == rimz::agents::AgentStatus::Success
+    }));
+    let coder = agent_card_by_id(&focus, "agent:codex:coder");
+    assert_eq!(coder.sub_agents.len(), 2);
+    assert_eq!(
+        coder
+            .sub_agents
+            .iter()
+            .filter(|child| child.name == "general-purpose")
+            .count(),
+        2,
+    );
+    let allowed = ["Explore", "Plan", "general-purpose"]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let sub_agent_names = states
+        .iter()
+        .flat_map(agent_cards)
+        .flat_map(|card| &card.sub_agents)
+        .map(|child| child.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        sub_agent_names.is_subset(&allowed),
+        "unexpected sub-agent names: {sub_agent_names:?}",
+    );
+    assert!(states.iter().flat_map(agent_cards).all(|card| {
+        card.sub_agents
+            .iter()
+            .all(|child| child.status != rimz::agents::AgentStatus::Waiting)
+    }));
+    let handles = cards
+        .iter()
+        .filter_map(|card| card.handle.as_deref())
+        .collect::<Vec<_>>();
+    assert!(handles.contains(&"planner"));
+    assert!(handles.contains(&"coder"));
+    assert!(handles.contains(&"reviewer"));
+    assert!(handles.contains(&"architect"));
+    assert!(handles.contains(&"developer"));
+    assert!(handles.contains(&"sre"));
+
+    let cockpit = &states[0];
+    assert_eq!(cockpit.presence, None);
+    assert!(cockpit.link.is_none());
+    assert!(states[1].link.is_some());
+    assert!(cockpit.worktree_groups.iter().any(|group| {
+        group.landed == Some(true)
+            && group.trunk_sync == Some(rimz::WorktreeTrunkSync::Merged)
+            && group.pr_state == Some(rimz::WorktreePrState::Merged)
+    }));
+    let reach = &states[3];
+    assert_eq!(reach.presence, None);
+    assert!(reach.link.is_none());
+    let statuses = cockpit
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter_map(|row| row.status())
+        .collect::<Vec<_>>();
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Running));
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Idle));
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Success));
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Waiting));
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Failed));
+    assert!(statuses.contains(&rimz::agents::AgentStatus::Paused));
+    assert!(agent_cards(cockpit).iter().any(|card| {
+        card.status == rimz::agents::AgentStatus::Running
+            && card.phase == rimz::agents::TurnPhase::Acting
+    }));
+    assert!(agent_cards(cockpit).iter().any(|card| {
+        card.status == rimz::agents::AgentStatus::Running
+            && card.phase == rimz::agents::TurnPhase::Reasoning
+    }));
+    assert!(
+        agent_cards(cockpit)
+            .iter()
+            .any(|card| card.turn_error_label.as_deref() == Some("API error"))
+    );
+    assert!(
+        agent_cards(cockpit)
+            .iter()
+            .any(|card| card.compacting || card.compaction_count > 0)
+    );
+
+    let all_statuses = states
+        .iter()
+        .flat_map(|snapshot| &snapshot.worktree_groups)
+        .flat_map(|group| &group.rows)
+        .filter_map(|row| row.status())
+        .collect::<Vec<_>>();
+    for status in [
+        rimz::agents::AgentStatus::Waiting,
+        rimz::agents::AgentStatus::Failed,
+        rimz::agents::AgentStatus::Paused,
+        rimz::agents::AgentStatus::Success,
+        rimz::agents::AgentStatus::Running,
+        rimz::agents::AgentStatus::Idle,
+    ] {
+        assert!(all_statuses.contains(&status), "missing {status:?}");
+    }
+
+    for snapshot in &states {
+        let live = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.status_counts)
+            .map(|count| count.count)
+            .sum::<usize>();
+        assert!((10..=42).contains(&live), "live count {live}");
+        for group in &snapshot.worktree_groups {
+            let rendered_idle = group
+                .rows
+                .iter()
+                .filter(|row| row.status() == Some(rimz::agents::AgentStatus::Idle))
+                .count();
+            let counted_idle = group
+                .status_counts
+                .iter()
+                .find(|count| count.status == rimz::agents::AgentStatus::Idle)
+                .map(|count| count.count)
+                .unwrap_or(0);
+            assert_eq!(counted_idle, rendered_idle);
+        }
+        let sessions = snapshot.value_tally.as_ref().unwrap().headline.sessions;
+        assert!((60..=120).contains(&sessions), "sessions {sessions}");
+    }
+    assert!(states.iter().flat_map(agent_cards).any(|card| {
+        card.context
+            .as_ref()
+            .and_then(|context| context.cost.as_ref())
+            .and_then(|cost| cost.total_cost_usd)
+            .is_some()
+    }));
     for row in states
         .iter()
         .flat_map(|snapshot| &snapshot.worktree_groups)
@@ -307,6 +469,15 @@ fn agent_card_by_id<'a>(snapshot: &'a rimz::SidebarSnapshot, id: &str) -> &'a ri
             _ => None,
         })
         .unwrap_or_else(|| panic!("agent card {id}"))
+}
+
+fn agent_cards(snapshot: &rimz::SidebarSnapshot) -> Vec<&rimz::AgentCard> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter_map(|row| row.as_agent())
+        .collect()
 }
 
 fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {

@@ -113,8 +113,8 @@ fn floating_agent_pane_stays_addressable_without_room_row() {
 
 #[test]
 fn agent_panes_are_uncapped() {
-    // Worktree rows cap at WORKTREE_ROW_CAP idle rows, but agent_panes lists every
-    // live agent pane so a command never misses one hidden behind `+K more`.
+    // The sidebar snapshot and agent_panes both keep every live agent pane so a
+    // command never misses one hidden by the renderer's `+K more` cap.
     let mut snapshot = room(Vec::new(), Vec::new());
     snapshot.wired_kinds = vec!["codex".to_owned()];
     let panes: Vec<_> = (0..9)
@@ -132,10 +132,7 @@ fn agent_panes_are_uncapped() {
         .iter()
         .map(|group| group.rows.len())
         .sum();
-    assert!(
-        rendered < 9,
-        "rendered rows are capped below the pane count: {rendered}"
-    );
+    assert_eq!(rendered, 9, "snapshot rows stay uncapped: {rendered}");
 }
 
 #[test]

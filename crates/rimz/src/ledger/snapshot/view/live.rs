@@ -43,24 +43,6 @@ impl SidebarSnapshot {
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_live_panes_and_unread(
-        mut self,
-        panes: Vec<PaneRef>,
-        exclude: Option<&PaneId>,
-        unread_row_ids: &BTreeSet<String>,
-    ) -> Self {
-        let panes = Self::card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(
-            &panes,
-            None,
-            Some(unread_row_ids),
-            &BTreeMap::new(),
-            &BTreeSet::new(),
-        );
-        self
-    }
-
     pub fn card_admitted_live_panes(panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Vec<PaneRef> {
         panes
             .into_iter()
@@ -139,8 +121,7 @@ impl SidebarSnapshot {
             changed |= group.rows.len() != before;
             refresh_overlay_group(group);
         }
-        self.worktree_groups
-            .retain(|group| !group.rows.is_empty() || group.hidden_count > 0);
+        self.worktree_groups.retain(|group| !group.rows.is_empty());
         if self
             .focused_pane
             .as_ref()

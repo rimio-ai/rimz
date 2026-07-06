@@ -73,7 +73,6 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
                 ..crate::AgentCard::default()
             })),
         }],
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -586,7 +585,6 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
                     ..crate::AgentCard::default()
                 })),
             }],
-            hidden_count: 0,
             diff_added: None,
             diff_removed: None,
             commits_ahead: None,

@@ -165,7 +165,7 @@ An **empty room** has no make-up line at all — just identity and the `◎ 0` /
 
 The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation — only same-worktree agents collaborate — so each group reads as one bounded block.
 
-While a [make-up bucket](#zone-1--the-cockpit) or the unread lens is picked, the body shows only the matching cards: non-matching rows, process rows, worktree groups left empty, and the `+K more` line all step aside until the pick clears.
+While a [make-up bucket](#zone-1--the-cockpit) or the unread lens is picked, the body shows every matching card: non-matching rows, process rows, worktree groups left empty, and the `+K more` line all step aside until the pick clears, and the unfiltered cap does not apply.
 
 **The cards scroll between the pinned zones.** When the cards outgrow the pane they scroll between the cockpit and the dashboard — both stay put — and the right-margin scrollbar (`▐` thumb, `▕` track) appears while the viewport moves. The viewport follows the **selection**: picking any row brings its card, expanded subagent list included, fully into view, pinning a too-tall card's first line to the top. The mouse wheel scrolls freely without moving the selection — peek anywhere, and the next selection change snaps the view back. `?` swaps the card body for the keys-and-filter overlay while the cockpit, footer, and alert rails stay pinned.
 
@@ -300,7 +300,7 @@ A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups git-
 
 **Ranking is automatic: unread, hot, warm, then archived.** Within a worktree, rows first sort by inbox and age band, then by a fixed-point attention score: `waiting`, `failed`, and `paused` heat as their clock approaches the one-hour boundary, warm rows decay until 24 hours, and archived rows park below current work. Calm rows keep stable pane order within equal states, and worktrees sort by their most-urgent member plus git state when attention is tied.
 
-**The cap.** Each worktree shows a capped number of rows (configurable) with a dim `+K more`. The cap trims only the idle/process tail; active, blocked, paused, finished, and focused rows stay visible:
+**The cap.** Each worktree shows a capped number of rows with a dim `+K more`. Click `+K more` to expand that group in place; the expanded group shows every row and a dim `− less` line that collapses it. The cap trims only the idle/process tail; active, blocked, paused, finished, unread, and focused rows stay visible:
 
 ```
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal

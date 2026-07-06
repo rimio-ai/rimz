@@ -33,7 +33,6 @@ fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
                     kind: SidebarWorktreeKind::Worktree,
                     row_ids,
                     render_order,
-                    hidden_count: 0,
                     status_counts: status_counts
                         .into_iter()
                         .map(|(status, count)| StatusCountSig { status, count })
@@ -103,15 +102,6 @@ fn row_with_subagents(id: &str, pane: &str, group: &str, sub_agent_ids: Vec<&str
         .map(str::to_owned)
         .collect::<Vec<_>>();
     row
-}
-
-fn with_hidden_count(mut frame: FrameSig, group_key: &str, hidden_count: usize) -> FrameSig {
-    for group in &mut frame.groups {
-        if group.key == group_key {
-            group.hidden_count = hidden_count;
-        }
-    }
-    frame
 }
 
 fn with_pane_closed(mut frame: FrameSig, pane_id: &str) -> FrameSig {
@@ -264,17 +254,15 @@ fn single_frame_invariants_fire_without_warmup() {
         "status_count_mismatch"
     ));
 
-    let mut hidden_count = sig(0, vec![row("a", "p1", "main")]);
-    hidden_count.groups[0].hidden_count = 2;
-    hidden_count.groups[0].status_counts = vec![StatusCountSig {
+    let mut declared_surplus = sig(0, vec![row("a", "p1", "main")]);
+    declared_surplus.groups[0].status_counts = vec![StatusCountSig {
         status: "running".to_owned(),
         count: 3,
     }];
-    assert_lacks_kind(
-        &Observer::default().observe(hidden_count),
-        "status_count_mismatch",
-        "hidden rows allow declared surplus",
-    );
+    assert!(has_kind(
+        &Observer::default().observe(declared_surplus),
+        "status_count_mismatch"
+    ));
 
     let drafts = Observer::default().observe(sig(
         0,
@@ -430,23 +418,6 @@ fn row_presence_reports_real_blinks_and_short_lived_rows() {
 
 #[test]
 fn row_presence_ignores_expected_absence_causes() {
-    let mut hidden = Observer::default();
-    hidden.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
-    hidden.observe(sig(
-        11_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
-    ));
-    hidden.observe(with_hidden_count(
-        sig(12_000, vec![row("b", "p2", "main")]),
-        "main",
-        1,
-    ));
-    let drafts = hidden.observe(sig(
-        13_000,
-        vec![row("a", "p1", "main"), row("b", "p2", "main")],
-    ));
-    assert_lacks_kind(&drafts, "row_presence_flap", "hidden group cap");
-
     let mut pane_closed = Observer::default();
     pane_closed.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
     pane_closed.observe(sig(
@@ -1013,7 +984,7 @@ fn order_flap_reports_only_stable_membership_reorders() {
             vec![row("a", "p1", "main"), row("c", "p3", "main")],
         ),
         (
-            "capped tail rotation changes visible set",
+            "same-count membership changes",
             vec![row("b", "p2", "main"), row("c", "p3", "main")],
         ),
     ] {

@@ -161,6 +161,7 @@ fn rendered_group_lines_with(
     let mut row_index = 0;
     let mut lines = Vec::new();
     let mut map = Vec::new();
+    let mut more_hits = Vec::new();
     worktree_group_lines(
         theme,
         &snapshot.worktree_groups[0],
@@ -170,6 +171,7 @@ fn rendered_group_lines_with(
         &snapshot.theme.display.context_meter,
         snapshot.theme.display.card_density,
         None,
+        false,
         &mut row_index,
         0,
         phase,
@@ -177,6 +179,7 @@ fn rendered_group_lines_with(
         lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         &mut lines,
         &mut map,
+        &mut more_hits,
     );
     lines
 }

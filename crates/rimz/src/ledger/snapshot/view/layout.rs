@@ -11,8 +11,6 @@ use super::{
     SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
 };
 
-pub(super) const WORKTREE_ROW_CAP: usize = 6;
-
 /// The branch shared by a group's branched rows, if any. Returns `None` for a
 /// group with no branch information, leaving the caller's path-basename seed.
 pub(super) fn group_branch_label(rows: &[SidebarRow]) -> Option<String> {
@@ -241,10 +239,6 @@ pub(super) fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
 pub(super) fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
     sort_rows(&mut group.rows);
     group.status_counts = status_counts(&group.rows);
-    let total = group.rows.len().saturating_add(group.hidden_count);
-    let rows = std::mem::take(&mut group.rows);
-    group.rows = capped_rows(rows);
-    group.hidden_count = total.saturating_sub(group.rows.len());
 }
 
 pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) {
@@ -257,43 +251,6 @@ pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) 
 pub(super) fn sort_rows(rows: &mut [SidebarRow]) {
     let cohorts = rank_cohort_blocks(rows.iter().map(row_rank_facts));
     rows.sort_by_cached_key(|row| rank_key(row_rank_facts(row), &cohorts));
-}
-
-/// Trim a group's idle/process tail to `WORKTREE_ROW_CAP`, always keeping unread
-/// rows, non-idle agent rows, and the focused pane. Inactive success rows still
-/// stay visible so a renderer never drops an unread stamp before receipts
-/// converge; sticky unread idle rows stay visible until the human reads them,
-/// and the first live process row stays visible when it is the group's only
-/// live member, so capping never turns a live shell's group into an inactive
-/// one. Ordinary inactive idle rows are the first calm rows hidden behind `+K
-/// more`.
-pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
-    let process_is_only_live_member = rows.iter().map(row_band).min() == Some(0)
-        && rows
-            .iter()
-            .filter(|row| row_band(row) == 0)
-            .all(SidebarRow::is_process);
-    let liveness_process_id = if process_is_only_live_member {
-        rows.iter()
-            .find(|row| row.is_process() && row_band(row) == 0)
-            .map(|row| row.id.clone())
-    } else {
-        None
-    };
-    let mut visible = Vec::new();
-    for row in rows {
-        if row.unread
-            || row
-                .status()
-                .is_some_and(|status| status != AgentStatus::Idle)
-            || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
-            || liveness_process_id.as_deref() == Some(row.id.as_str())
-            || visible.len() < WORKTREE_ROW_CAP
-        {
-            visible.push(row);
-        }
-    }
-    visible
 }
 
 fn row_ordinal(row: &SidebarRow) -> Option<u64> {
@@ -769,10 +726,6 @@ fn group_member_urgency(facts: &RankFacts<'_>) -> u32 {
 /// sets the band — score orders within one — so a fresh `idle` agent outranks a
 /// warm or archived `waiting` one. The `external` partition is group-only
 /// ([`compare_groups`]).
-fn row_band(row: &SidebarRow) -> u8 {
-    band(row.inactive, row.archived)
-}
-
 fn band(inactive: bool, archived: bool) -> u8 {
     if archived {
         2
@@ -794,8 +747,7 @@ pub struct AgentWorktreeGroup<'a> {
 /// Group root agents by worktree and rank them the way the sidebar ranks rows
 /// and groups: attention agents first (longest-overdue), calm agents in stable
 /// spawn order, the `external` catch-all last. The `rimz agents list` roster
-/// reuses this so the CLI and the room agree on order. Uncapped, unlike the
-/// sidebar's per-worktree cap.
+/// reuses this so the CLI and the room agree on order.
 pub fn group_live_agents_by_worktree<'a>(
     agents: &[&'a AgentState],
     snapshot: &SidebarSnapshot,

@@ -104,7 +104,6 @@ fn row_snapshot_at(
                 ..AgentCard::default()
             })),
         }],
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,
@@ -156,7 +155,6 @@ fn snapshot_in_group(
         kind,
         status_counts: Vec::new(),
         rows: vec![row],
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,

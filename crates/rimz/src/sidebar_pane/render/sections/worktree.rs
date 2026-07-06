@@ -17,22 +17,22 @@ use crate::sidebar_pane::render::labels::{
     branch_delta_spans, diff_spans, status_glyph, trunk_glyph_spans,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
-use crate::sidebar_pane::render::row_passes_filter;
 use crate::sidebar_pane::render::theme::{Component, Theme};
+use crate::sidebar_pane::render::{MoreHit, group_visible_rows};
 
 use super::agent_card::row_lines;
 use super::{Gutter, Tier, content_width, with_gutter};
 
 /// Compose one worktree group's lines, appending to `lines`, and tag each
 /// content line in the parallel `map` with the visible row index it belongs to
-/// (or `None` for the group header and the `+K more` hidden-count line). `map`
-/// stays exactly as long as `lines`, so the hit-test can look a screen line up
-/// to a row with no separate geometry. The row index captured for a row's lines
-/// is the value *before* `row_index` advances, matching `app::visible_rows()`:
-/// both walk the same [`row_passes_filter`] predicate, so the ordinals stay 1:1
-/// under a make-up filter too. The caller skips a group the filter empties; the
-/// `+K more` line is filter-suppressed here (it counts producer-capped calm
-/// rows, not filtered ones, so it would mislead under a narrowed body).
+/// (or `None` for the group header and more/less toggle line). `map` stays
+/// exactly as long as `lines`, so the hit-test can look a screen line up to a
+/// row with no separate geometry. The row index captured for a row's lines is
+/// the value *before* `row_index` advances, matching `app::visible_rows()`:
+/// both walk [`group_visible_rows`], so the ordinals stay 1:1 under capping,
+/// expansion, and make-up filters. The caller skips a group the filter empties;
+/// the more/less line is filter-suppressed because a narrowed body is already
+/// uncapped.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     theme: &Theme,
@@ -43,6 +43,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     bands: &ContextMeterConfig,
     card_density: CardDensityMode,
     filter: Option<BodyFilter>,
+    expanded: bool,
     row_index: &mut usize,
     selected_index: usize,
     animation_phase: u64,
@@ -50,17 +51,15 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     lead_unread: Option<&str>,
     lines: &mut Vec<Line<'static>>,
     map: &mut Vec<Option<usize>>,
+    more_hits: &mut Vec<MoreHit>,
 ) {
     // Does the selection live in this worktree? If so the whole group reads as
     // one bracketed lane: the resting `▎` spine on the header and every row,
     // with the selected card itself lit bold `▌`. The `external` catch-all is
     // never a lane.
     let first_row = *row_index;
-    let passing = group
-        .rows
-        .iter()
-        .filter(|row| row_passes_filter(row, filter))
-        .count();
+    let visible = group_visible_rows(group, filter, expanded);
+    let passing = visible.len();
     let group_selected = group.kind != SidebarWorktreeKind::External
         && (first_row..first_row + passing).contains(&selected_index);
     let lane = if group_selected {
@@ -83,11 +82,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
         (group.kind != SidebarWorktreeKind::External && passing > 0).then_some(*row_index);
     map.push(header_target);
     let tier = Tier::for_width(content_width(width));
-    for row in group
-        .rows
-        .iter()
-        .filter(|row| row_passes_filter(row, filter))
-    {
+    for row in visible {
         let selected = *row_index == selected_index;
         let this_row = *row_index;
         *row_index += 1;
@@ -110,10 +105,35 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
         map.extend(std::iter::repeat_n(Some(this_row), row_lines.len()));
         lines.extend(row_lines);
     }
-    if filter.is_none() && group.hidden_count > 0 {
+    let hidden = if filter.is_none() {
+        group
+            .rows
+            .len()
+            .saturating_sub(group_visible_rows(group, None, false).len())
+    } else {
+        0
+    };
+    if filter.is_none() && hidden > 0 && !expanded {
+        more_hits.push(MoreHit {
+            line: lines.len(),
+            group_key: group.key.clone(),
+        });
         lines.push(with_gutter(
             theme,
-            Line::styled(format!("  +{} more", group.hidden_count), theme.muted()),
+            Line::styled(format!("  +{hidden} more"), theme.muted()),
+            lane,
+            None,
+            width,
+        ));
+        map.push(None);
+    } else if filter.is_none() && hidden > 0 && expanded {
+        more_hits.push(MoreHit {
+            line: lines.len(),
+            group_key: group.key.clone(),
+        });
+        lines.push(with_gutter(
+            theme,
+            Line::styled("  − less", theme.muted()),
             lane,
             None,
             width,

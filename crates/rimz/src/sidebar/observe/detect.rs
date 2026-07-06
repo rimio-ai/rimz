@@ -159,17 +159,7 @@ impl Observer {
             declared.sort();
             let mut tallied_sorted = tallied;
             tallied_sorted.sort();
-            let mismatch = if group.hidden_count > 0 {
-                tallied_sorted.iter().any(|count| {
-                    declared
-                        .iter()
-                        .find(|declared| declared.status == count.status)
-                        .is_none_or(|declared| count.count > declared.count)
-                })
-            } else {
-                declared != tallied_sorted
-            };
-            if mismatch {
+            if declared != tallied_sorted {
                 drafts.push(AnomalyDraft::from_sig(
                     sig,
                     AnomalyKind::StatusCountMismatch {
@@ -272,20 +262,13 @@ impl Observer {
             .iter()
             .filter_map(|row| row.pane_id.as_deref())
             .collect::<BTreeSet<_>>();
-        let hidden_by_group = hidden_by_group(sig);
 
         for row in &sig.rows {
-            let hidden_now = hidden_by_group
-                .get(row.group_key.as_str())
-                .copied()
-                .unwrap_or(false);
             match self.presence.get_mut(&row.row_id) {
                 Some(presence) => {
                     if let Some(gone_at) = presence.gone_at.take()
                         && sig.at_ms.saturating_sub(gone_at) <= window
                         && !presence.closed_justified
-                        && !presence.hidden_at_absence
-                        && !hidden_now
                     {
                         drafts.push(AnomalyDraft::from_sig(
                             sig,
@@ -301,9 +284,7 @@ impl Observer {
                     presence.last_seen_at = sig.at_ms;
                     presence.pane_id = row.pane_id.clone();
                     presence.group_key = row.group_key.clone();
-                    presence.hidden_last_seen = hidden_now;
                     presence.closed_justified = false;
-                    presence.hidden_at_absence = false;
                 }
                 None => {
                     self.presence.insert(
@@ -313,9 +294,7 @@ impl Observer {
                             last_seen_at: sig.at_ms,
                             pane_id: row.pane_id.clone(),
                             group_key: row.group_key.clone(),
-                            hidden_last_seen: hidden_now,
                             gone_at: None,
-                            hidden_at_absence: false,
                             closed_justified: false,
                             short_lived_emitted: false,
                         },
@@ -335,10 +314,6 @@ impl Observer {
             if presence.gone_at.is_some() {
                 continue;
             }
-            let hidden_now = hidden_by_group
-                .get(presence.group_key.as_str())
-                .copied()
-                .unwrap_or(false);
             let closed = presence
                 .pane_id
                 .as_ref()
@@ -357,8 +332,6 @@ impl Observer {
                 && !presence.short_lived_emitted
                 && !closed
                 && !rebound
-                && !presence.hidden_last_seen
-                && !hidden_now
             {
                 drafts.push(AnomalyDraft::from_sig(
                     sig,
@@ -374,7 +347,6 @@ impl Observer {
                 presence.short_lived_emitted = true;
             }
             presence.gone_at = Some(sig.at_ms);
-            presence.hidden_at_absence = hidden_now || presence.hidden_last_seen;
             presence.closed_justified = closed;
         }
 
@@ -568,9 +540,7 @@ impl Observer {
                     last_seen_at: sig.at_ms,
                     pane_id: row.pane_id.clone(),
                     group_key: row.group_key.clone(),
-                    hidden_last_seen: false,
                     gone_at: None,
-                    hidden_at_absence: false,
                     closed_justified: false,
                     short_lived_emitted: false,
                 });
@@ -607,9 +577,7 @@ struct RowPresence {
     last_seen_at: u64,
     pane_id: Option<String>,
     group_key: String,
-    hidden_last_seen: bool,
     gone_at: Option<u64>,
-    hidden_at_absence: bool,
     closed_justified: bool,
     short_lived_emitted: bool,
 }
@@ -726,13 +694,6 @@ fn pane_closed(sig: &FrameSig, pane_id: &str) -> bool {
         .pane_closed
         .iter()
         .any(|event| event.pane_id == pane_id)
-}
-
-fn hidden_by_group(sig: &FrameSig) -> BTreeMap<&str, bool> {
-    sig.groups
-        .iter()
-        .map(|group| (group.key.as_str(), group.hidden_count > 0))
-        .collect()
 }
 
 fn millis(duration: std::time::Duration) -> u64 {

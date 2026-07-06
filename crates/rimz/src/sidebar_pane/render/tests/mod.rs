@@ -26,6 +26,7 @@ mod alert;
 mod animation;
 mod ansi;
 mod budget;
+mod capping;
 mod fleet;
 mod fold;
 mod fuzz;
@@ -405,6 +406,7 @@ fn card_lines(selected_index: usize) -> Vec<String> {
     let mut row_index = 0;
     let mut lines = Vec::new();
     let mut map = Vec::new();
+    let mut more_hits = Vec::new();
     worktree_group_lines(
         &theme,
         &snapshot.worktree_groups[0],
@@ -414,6 +416,7 @@ fn card_lines(selected_index: usize) -> Vec<String> {
         &snapshot.theme.display.context_meter,
         snapshot.theme.display.card_density,
         None,
+        false,
         &mut row_index,
         selected_index,
         0,
@@ -421,6 +424,7 @@ fn card_lines(selected_index: usize) -> Vec<String> {
         lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         &mut lines,
         &mut map,
+        &mut more_hits,
     );
     lines
         .into_iter()
@@ -443,6 +447,7 @@ fn group_lines(
     let mut row_index = 0;
     let mut lines = Vec::new();
     let mut map = Vec::new();
+    let mut more_hits = Vec::new();
     worktree_group_lines(
         theme,
         &snapshot.worktree_groups[0],
@@ -452,6 +457,7 @@ fn group_lines(
         &snapshot.theme.display.context_meter,
         snapshot.theme.display.card_density,
         None,
+        false,
         &mut row_index,
         selected_index,
         0,
@@ -459,6 +465,7 @@ fn group_lines(
         lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         &mut lines,
         &mut map,
+        &mut more_hits,
     );
     assert_eq!(map.len(), lines.len(), "map stays in lockstep with lines");
     lines

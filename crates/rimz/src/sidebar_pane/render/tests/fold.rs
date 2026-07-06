@@ -197,6 +197,64 @@ fn render_group_cap_shows_overflow_indicator() {
     assert!(rendered.contains("+3 more"), "{rendered}");
     assert_snapshot("group_cap_with_overflow", rendered);
 }
+
+#[test]
+fn render_group_cap_expands_in_place() {
+    let agents = (0..9)
+        .map(|i| {
+            let mut agent = agent(
+                &format!("codex-{i}"),
+                "codex",
+                AgentStatus::Idle,
+                Some("/repo/main"),
+                Some("main"),
+                Some(&format!("task-{i}")),
+            );
+            agent.last_activity = fixed_now() - Duration::from_secs(i);
+            agent
+        })
+        .collect::<Vec<_>>();
+    let snapshot = snapshot_with(Vec::new(), agents);
+    let mut ui = UiState::default();
+    ui.expanded_groups
+        .insert(snapshot.worktree_groups[0].key.clone());
+
+    let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 36, 44);
+
+    assert!(rendered.contains("− less"), "{rendered}");
+    assert!(rendered.contains("task-8"), "{rendered}");
+    assert!(!rendered.contains("+3 more"), "{rendered}");
+    assert_snapshot("group_cap_expanded", rendered);
+}
+
+#[test]
+fn expanded_group_auto_clears_when_tail_no_longer_hides() {
+    let agents = (0..9)
+        .map(|i| {
+            agent(
+                &format!("codex-{i}"),
+                "codex",
+                AgentStatus::Idle,
+                Some("/repo/main"),
+                Some("main"),
+                Some(&format!("task-{i}")),
+            )
+        })
+        .collect::<Vec<_>>();
+    let snapshot = snapshot_with(Vec::new(), agents);
+    let group_key = snapshot.worktree_groups[0].key.clone();
+    let mut ui = UiState::default();
+    ui.expanded_groups.insert(group_key.clone());
+    let mut terminal = Terminal::new(TestBackend::new(40, 30)).unwrap();
+
+    draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    assert!(ui.expanded_groups.contains(&group_key));
+
+    let mut shrunk = snapshot.clone();
+    shrunk.worktree_groups[0].rows.truncate(6);
+    draw_to_terminal_with_ui(&mut terminal, &shrunk, None, &mut ui).unwrap();
+    assert!(!ui.expanded_groups.contains(&group_key));
+}
 /// L0 density (~24 columns): line 1 still names the row by status glyph
 /// and clipped name, and label-less meter chrome from line 2 is dropped
 /// when capability data is absent.
@@ -316,6 +374,7 @@ fn expanded_card_lists_subagents_only_when_selected() {
         let mut row_index = 0;
         let mut lines = Vec::new();
         let mut map = Vec::new();
+        let mut more_hits = Vec::new();
         worktree_group_lines(
             &theme,
             &snapshot.worktree_groups[0],
@@ -325,6 +384,7 @@ fn expanded_card_lists_subagents_only_when_selected() {
             &snapshot.theme.display.context_meter,
             snapshot.theme.display.card_density,
             None,
+            false,
             &mut row_index,
             selected_index,
             0,
@@ -332,6 +392,7 @@ fn expanded_card_lists_subagents_only_when_selected() {
             lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
             &mut lines,
             &mut map,
+            &mut more_hits,
         );
         lines
             .into_iter()

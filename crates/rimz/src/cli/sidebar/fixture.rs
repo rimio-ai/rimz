@@ -55,22 +55,11 @@ pub(super) fn sidebar_fixture_snapshot(
         SidebarFixtureState::Economy => add_economy_fixture(&mut snapshot, now),
         SidebarFixtureState::Reach => add_reach_fixture(&mut snapshot, now),
     }
-    for group in &mut snapshot.worktree_groups {
-        group.status_counts = status_counts_from_rows(&group.rows, group.hidden_count);
-    }
-    if state == SidebarFixtureState::Cockpit {
-        // A fleet larger than the visible cards: five idle agents rolled off the
-        // card list still count in the cockpit make-up (¤). hidden_count stays
-        // 0, so no "+N more" tail renders.
-        if let Some(group) = snapshot
-            .worktree_groups
-            .iter_mut()
-            .find(|group| group.label == "observer-lag")
-        {
-            group.status_counts = status_counts_from_rows(&group.rows, 5);
-        }
-    }
     snapshot.sort_groups_for_presentation();
+    for group in &mut snapshot.worktree_groups {
+        move_fixture_overflow_to_tail(&mut group.rows);
+        group.status_counts = status_counts_from_rows(&group.rows);
+    }
     Ok(snapshot)
 }
 
@@ -152,8 +141,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             label: "main".to_owned(),
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
-            rows: vec![claude, codex, process],
-            hidden_count: 0,
+            rows: with_overflow(vec![claude, codex, process], 3, now),
             diff_added: Some(182),
             diff_removed: Some(47),
             commits_ahead: Some(3),
@@ -170,7 +158,6 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![pi],
-            hidden_count: 0,
             diff_added: Some(14),
             diff_removed: Some(3),
             commits_ahead: Some(1),
@@ -458,7 +445,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![claude, compacting, process],
-            hidden_count: 0,
             diff_added: Some(1840),
             diff_removed: Some(620),
             commits_ahead: Some(3),
@@ -475,7 +461,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![codex],
-            hidden_count: 0,
             diff_added: Some(1180),
             diff_removed: Some(430),
             commits_ahead: Some(1),
@@ -492,7 +477,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![pi],
-            hidden_count: 0,
             diff_added: Some(760),
             diff_removed: Some(210),
             commits_ahead: Some(1),
@@ -509,7 +493,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![success, paused],
-            hidden_count: 0,
             diff_added: Some(0),
             diff_removed: Some(0),
             commits_ahead: Some(0),
@@ -526,7 +509,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![opencode_theme, claude_theme],
-            hidden_count: 0,
             diff_added: Some(1320),
             diff_removed: Some(540),
             commits_ahead: Some(2),
@@ -549,7 +531,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
                 codex_observer,
                 claude_budget_idle,
             ],
-            hidden_count: 0,
             diff_added: Some(980),
             diff_removed: Some(360),
             commits_ahead: Some(1),
@@ -903,7 +884,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![planner, coder, reviewer],
-            hidden_count: 0,
             diff_added: Some(1520),
             diff_removed: Some(470),
             commits_ahead: Some(2),
@@ -920,7 +900,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![rollout_coder, rollout_reviewer],
-            hidden_count: 0,
             diff_added: Some(1180),
             diff_removed: Some(390),
             commits_ahead: Some(2),
@@ -937,7 +916,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![ci_failed, pi_paused],
-            hidden_count: 0,
             diff_added: Some(880),
             diff_removed: Some(240),
             commits_ahead: Some(1),
@@ -954,7 +932,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![architect_tokens, opencode_tokens, sre_tokens],
-            hidden_count: 0,
             diff_added: Some(1420),
             diff_removed: Some(520),
             commits_ahead: Some(1),
@@ -1275,7 +1252,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![opencode, claude, pnpm],
-            hidden_count: 0,
             diff_added: Some(1580),
             diff_removed: Some(520),
             commits_ahead: Some(1),
@@ -1292,7 +1268,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![codex],
-            hidden_count: 0,
             diff_added: Some(700),
             diff_removed: Some(210),
             commits_ahead: Some(1),
@@ -1309,7 +1284,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![pi, codex_idle],
-            hidden_count: 0,
             diff_added: Some(1120),
             diff_removed: Some(360),
             commits_ahead: Some(1),
@@ -1326,7 +1300,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![opencode_limit, pi_limit, claude_limit],
-            hidden_count: 0,
             diff_added: Some(1980),
             diff_removed: Some(740),
             commits_ahead: Some(2),
@@ -1343,7 +1316,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![codex_credit, opencode_credit, claude_credit, pi_credit_idle],
-            hidden_count: 0,
             diff_added: Some(0),
             diff_removed: Some(0),
             commits_ahead: Some(0),
@@ -1631,7 +1603,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![claude],
-            hidden_count: 0,
             diff_added: Some(720),
             diff_removed: Some(160),
             commits_ahead: Some(1),
@@ -1648,7 +1619,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![codex, pi],
-            hidden_count: 0,
             diff_added: Some(1240),
             diff_removed: Some(380),
             commits_ahead: Some(1),
@@ -1665,7 +1635,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![opencode, claude_idle],
-            hidden_count: 0,
             diff_added: Some(560),
             diff_removed: Some(140),
             commits_ahead: Some(1),
@@ -1682,7 +1651,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![pi_netcheck, claude_netcheck_paused, claude_netcheck],
-            hidden_count: 0,
             diff_added: Some(1680),
             diff_removed: Some(610),
             commits_ahead: Some(1),
@@ -1699,7 +1667,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![codex_web, pi_web],
-            hidden_count: 0,
             diff_added: Some(940),
             diff_removed: Some(280),
             commits_ahead: Some(1),
@@ -1716,7 +1683,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             kind: rimz::SidebarWorktreeKind::Worktree,
             status_counts: Vec::new(),
             rows: vec![opencode_stats, claude_stats_idle],
-            hidden_count: 0,
             diff_added: Some(0),
             diff_removed: Some(0),
             commits_ahead: Some(0),
@@ -2055,11 +2021,114 @@ fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::P
     }
 }
 
-fn status_counts_from_rows(
-    rows: &[rimz::SidebarRow],
+const FIXTURE_WORKTREE_ROW_CAP: usize = 6;
+
+fn with_overflow(
+    mut rows: Vec<rimz::SidebarRow>,
     hidden: usize,
-) -> Vec<rimz::SidebarStatusCount> {
-    let mut counts = [
+    now: jiff::Timestamp,
+) -> Vec<rimz::SidebarRow> {
+    let visible = capped_visible_count(&rows);
+    let base_hidden = rows.len().saturating_sub(visible);
+    let fillers_kept = FIXTURE_WORKTREE_ROW_CAP.saturating_sub(visible);
+    let filler_count = hidden.saturating_sub(base_hidden) + fillers_kept;
+    let path = rows
+        .first()
+        .and_then(|row| row.worktree_path.clone())
+        .unwrap_or_else(|| "/srv/code/query-engine".to_owned());
+    let branch = rows
+        .first()
+        .and_then(|row| row.worktree_branch.clone())
+        .unwrap_or_else(|| "main".to_owned());
+    let seed = rows
+        .first()
+        .map(|row| {
+            row.id
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+                .collect::<String>()
+        })
+        .unwrap_or_else(|| "group".to_owned());
+    rows.extend((0..filler_count).map(|index| {
+        let mut row = agent_row_with(
+            &format!("agent:fixture-overflow:{seed}:{index}"),
+            "codex",
+            &format!("overflow_{seed}_{index}"),
+            &path,
+            &branch,
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            "queued background follow-up",
+            "GPT-5.1-Codex",
+            None,
+            now,
+            AgentRowOptions {
+                age_secs: Some(24 * 60 * 60 + i64::try_from(index).unwrap_or_default()),
+                ..AgentRowOptions::default()
+            },
+        );
+        row.inactive = true;
+        row.archived = true;
+        row
+    }));
+    rows
+}
+
+fn capped_visible_count(rows: &[rimz::SidebarRow]) -> usize {
+    let process_is_only_live_member = rows.iter().map(row_band).min() == Some(0)
+        && rows
+            .iter()
+            .filter(|row| row_band(row) == 0)
+            .all(rimz::SidebarRow::is_process);
+    let liveness_process_id = if process_is_only_live_member {
+        rows.iter()
+            .find(|row| row.is_process() && row_band(row) == 0)
+            .map(|row| row.id.as_str())
+    } else {
+        None
+    };
+    let mut visible = 0;
+    for row in rows {
+        if row.unread
+            || row
+                .status()
+                .is_some_and(|status| status != rimz::agents::AgentStatus::Idle)
+            || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
+            || liveness_process_id == Some(row.id.as_str())
+            || visible < FIXTURE_WORKTREE_ROW_CAP
+        {
+            visible += 1;
+        }
+    }
+    visible
+}
+
+fn row_band(row: &rimz::SidebarRow) -> u8 {
+    if row.archived {
+        2
+    } else if row.inactive {
+        1
+    } else {
+        0
+    }
+}
+
+fn move_fixture_overflow_to_tail(rows: &mut Vec<rimz::SidebarRow>) {
+    let mut overflow = Vec::new();
+    let mut visible = Vec::new();
+    for row in std::mem::take(rows) {
+        if row.id.starts_with("agent:fixture-overflow:") {
+            overflow.push(row);
+        } else {
+            visible.push(row);
+        }
+    }
+    visible.extend(overflow);
+    *rows = visible;
+}
+
+fn status_counts_from_rows(rows: &[rimz::SidebarRow]) -> Vec<rimz::SidebarStatusCount> {
+    [
         rimz::agents::AgentStatus::Waiting,
         rimz::agents::AgentStatus::Failed,
         rimz::agents::AgentStatus::Paused,
@@ -2075,21 +2144,7 @@ fn status_counts_from_rows(
             .count();
         (count > 0).then_some(rimz::SidebarStatusCount { status, count })
     })
-    .collect::<Vec<_>>();
-    if hidden > 0 {
-        if let Some(count) = counts
-            .iter_mut()
-            .find(|count| count.status == rimz::agents::AgentStatus::Idle)
-        {
-            count.count += hidden;
-        } else {
-            counts.push(rimz::SidebarStatusCount {
-                status: rimz::agents::AgentStatus::Idle,
-                count: hidden,
-            });
-        }
-    }
-    counts
+    .collect::<Vec<_>>()
 }
 
 fn add_provider_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {

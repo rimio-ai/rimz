@@ -182,11 +182,10 @@ impl SidebarRow {
 }
 
 /// A live agent pane the producer bound during the pane fold: a running agent
-/// CLI and the pane it occupies. Built uncapped at the binding site, so command
-/// resolution (`message --steer`) addresses exactly the live agent panes the producer saw
-/// — not the capped, display-shaped [`SidebarRow`]s. A bound session carries its
-/// `agent_id`, pet name, and ordinal; a wired pane before its session binds
-/// carries only its kind and pane.
+/// CLI and the pane it occupies. Built at the binding site, so command
+/// resolution (`message --steer`) addresses exactly the live agent panes the
+/// producer saw. A bound session carries its `agent_id`, pet name, and ordinal;
+/// a wired pane before its session binds carries only its kind and pane.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneAgent {
     pub kind: AgentKind,

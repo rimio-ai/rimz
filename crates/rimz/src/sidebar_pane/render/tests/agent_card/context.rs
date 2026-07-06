@@ -310,6 +310,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
         let snapshot = snapshot_with(Vec::new(), vec![agent]);
         let mut lines = Vec::new();
         let mut map = Vec::new();
+        let mut more_hits = Vec::new();
         let mut row_index = 0;
         worktree_group_lines(
             &theme,
@@ -320,6 +321,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
             &snapshot.theme.display.context_meter,
             snapshot.theme.display.card_density,
             None,
+            false,
             &mut row_index,
             0,
             0,
@@ -327,6 +329,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
             lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
             &mut lines,
             &mut map,
+            &mut more_hits,
         );
         // Identify segments by foreground: the selected card's band lays a bg
         // behind every span, orthogonal to which composition accent the segment

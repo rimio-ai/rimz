@@ -41,7 +41,6 @@ struct BackgroundContentKey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BackgroundGroupKey {
     key: String,
-    hidden_count: usize,
     rows: Vec<BackgroundRowKey>,
 }
 
@@ -66,7 +65,6 @@ fn background_content_key(snapshot: &SidebarSnapshot) -> BackgroundContentKey {
             .iter()
             .map(|group| BackgroundGroupKey {
                 key: group.key.clone(),
-                hidden_count: group.hidden_count,
                 rows: group
                     .rows
                     .iter()
@@ -1151,9 +1149,9 @@ impl LoopState {
         read_marks.observe_fold(clear.ids.clone(), now.as_millisecond(), &live);
         set_rows_unread(current, &clear.ids, false);
         emit_unread_cleared_trace(diag, &clear.trace);
-        // Presentation sort only reorders the producer's already-capped visible set.
-        // The order hold below can keep this sorted order stable across a read-clear
-        // long enough for the user to confirm where they landed.
+        // Presentation sort reorders the snapshot's full row set. The order hold
+        // below can keep this sorted order stable across a read-clear long enough
+        // for the user to confirm where they landed.
         current.sort_groups_for_presentation();
         // Reconcile the highlight as part of the fold, before the next frame paints:
         // re-anchor the identity-keyed selection to its row (so a status-churn

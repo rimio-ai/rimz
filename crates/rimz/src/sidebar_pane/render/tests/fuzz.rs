@@ -88,7 +88,6 @@ fn build_adversarial_snapshot(
             group.key = row.text.clone();
             group.label = row.text.clone();
             group.kind = SidebarWorktreeKind::Worktree;
-            group.hidden_count = row.options;
         }
         for (row_idx, rendered) in group.rows.iter_mut().enumerate() {
             let Some(spec) = rows.get(row_idx % rows.len().max(1)) else {

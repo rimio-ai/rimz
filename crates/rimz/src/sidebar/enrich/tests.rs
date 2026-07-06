@@ -1110,7 +1110,6 @@ fn config_fold_stamps_agent_context_severity() {
         kind: crate::SidebarWorktreeKind::Worktree,
         status_counts: Vec::new(),
         rows: vec![agent_row(Some(85)), agent_row(Some(5)), process_row()],
-        hidden_count: 0,
         diff_added: None,
         diff_removed: None,
         commits_ahead: None,

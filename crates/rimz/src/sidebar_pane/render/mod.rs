@@ -39,6 +39,7 @@ use self::compose::{
     auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, pad_chrome,
     scroll_thumb,
 };
+pub(crate) use self::ui_state::MoreHit;
 pub use self::ui_state::{Alert, UiState};
 pub(crate) use self::ui_state::{
     BodyFilter, Browse, DashboardTab, FrozenOrder, GateNotice, ManualScroll, OrderHold,
@@ -110,6 +111,7 @@ fn draw_into(
     // The composed maps and the resolved scroll offset are byproducts of the
     // draw: store them so the mouse hit-test and the next frame's viewport read
     // the geometry of the frame the user is actually looking at.
+    prune_expanded_groups(snapshot, ui);
     let theme = ui.theme(&snapshot.theme);
     let composed = compose_lines(snapshot, alert, ui, theme.as_ref(), area.width, area.height);
     let top_height = composed.top_height;
@@ -117,6 +119,7 @@ fn draw_into(
     ui.line_map = composed.line_map;
     ui.tab_hits = composed.tab_hits;
     ui.make_up_hits = composed.make_up_hits;
+    ui.more_hits = composed.more_hits;
     ui.banner_line = composed.banner_line;
     ui.scrollbar
         .observe(composed.scroll_offset, ui.animation_phase);
@@ -273,12 +276,102 @@ pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<BodyFilter>) ->
     }
 }
 
+const WORKTREE_ROW_CAP: usize = 6;
+
+/// The rows a worktree group paints and the selection model can browse.
+///
+/// With a make-up filter active, every matching row passes: the cockpit bucket
+/// count and the narrowed body stay exact. With an expanded group, the full
+/// roster passes. Otherwise the calm idle/process tail trims to
+/// [`WORKTREE_ROW_CAP`], always keeping unread rows, non-idle agent rows, and
+/// the focused pane. Inactive success rows still stay visible so a renderer
+/// never drops an unread stamp before receipts converge; sticky unread idle
+/// rows stay visible until the human reads them, and the first live process row
+/// stays visible when it is the group's only live member, so capping never
+/// turns a live shell's group into an inactive one. Ordinary inactive idle rows
+/// are the first calm rows hidden behind `+K more`.
+pub(crate) fn group_visible_rows(
+    group: &crate::SidebarWorktreeGroup,
+    filter: Option<BodyFilter>,
+    expanded: bool,
+) -> Vec<&SidebarRow> {
+    if filter.is_some() {
+        return group
+            .rows
+            .iter()
+            .filter(|row| row_passes_filter(row, filter))
+            .collect();
+    }
+    if expanded {
+        return group.rows.iter().collect();
+    }
+
+    let process_is_only_live_member = group.rows.iter().map(row_band).min() == Some(0)
+        && group
+            .rows
+            .iter()
+            .filter(|row| row_band(row) == 0)
+            .all(SidebarRow::is_process);
+    let liveness_process_id = if process_is_only_live_member {
+        group
+            .rows
+            .iter()
+            .find(|row| row.is_process() && row_band(row) == 0)
+            .map(|row| row.id.as_str())
+    } else {
+        None
+    };
+
+    let mut visible = Vec::new();
+    for row in &group.rows {
+        if row.unread
+            || row
+                .status()
+                .is_some_and(|status| status != AgentStatus::Idle)
+            || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
+            || liveness_process_id == Some(row.id.as_str())
+            || visible.len() < WORKTREE_ROW_CAP
+        {
+            visible.push(row);
+        }
+    }
+    visible
+}
+
+fn row_band(row: &SidebarRow) -> u8 {
+    if row.archived {
+        2
+    } else if row.inactive {
+        1
+    } else {
+        0
+    }
+}
+
+fn group_has_hidden_tail(group: &crate::SidebarWorktreeGroup) -> bool {
+    group_visible_rows(group, None, false).len() < group.rows.len()
+}
+
+fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut UiState) {
+    ui.expanded_groups.retain(|key| {
+        snapshot
+            .worktree_groups
+            .iter()
+            .any(|group| group.key == *key && group_has_hidden_tail(group))
+    });
+}
+
 fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a SidebarRow> {
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row_passes_filter(row, ui.make_up_filter))
+        .flat_map(|group| {
+            group_visible_rows(
+                group,
+                ui.make_up_filter,
+                ui.expanded_groups.contains(&group.key),
+            )
+        })
         .nth(ui.selected_index)
 }
 

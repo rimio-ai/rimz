@@ -204,6 +204,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
 
         let mut lines = Vec::new();
         let mut map = Vec::new();
+        let mut more_hits = Vec::new();
         let mut row_index = 0;
         worktree_group_lines(
             &theme,
@@ -214,6 +215,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
             &snapshot.theme.display.context_meter,
             snapshot.theme.display.card_density,
             None,
+            false,
             &mut row_index,
             0,
             0,
@@ -221,6 +223,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
             lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
             &mut lines,
             &mut map,
+            &mut more_hits,
         );
 
         let span_style = |content: &str| {
@@ -269,6 +272,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
 
     let mut lines = Vec::new();
     let mut map = Vec::new();
+    let mut more_hits = Vec::new();
     let mut row_index = 0;
     worktree_group_lines(
         &theme,
@@ -279,6 +283,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
         &snapshot.theme.display.context_meter,
         snapshot.theme.display.card_density,
         None,
+        false,
         &mut row_index,
         0,
         0,
@@ -286,6 +291,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
         lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         &mut lines,
         &mut map,
+        &mut more_hits,
     );
 
     let lead = lines

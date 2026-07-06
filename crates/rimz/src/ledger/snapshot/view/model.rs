@@ -101,7 +101,6 @@ pub struct SidebarWorktreeGroup {
     pub kind: SidebarWorktreeKind,
     pub status_counts: Vec<SidebarStatusCount>,
     pub rows: Vec<SidebarRow>,
-    pub hidden_count: usize,
     /// Total insertions and deletions relative to trunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_added: Option<u32>,

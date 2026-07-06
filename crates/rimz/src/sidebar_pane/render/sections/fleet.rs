@@ -51,7 +51,7 @@ pub(crate) struct MakeUpHit {
 /// bucket renders; colored statuses use their semantic tone, idle rests at the
 /// soft stat gray, and every zero count sits at the same soft gray beside its
 /// glyph.
-/// Counts span the capped agents (`status_counts`). The
+/// Counts span the full snapshot roster (`status_counts`). The
 /// fleet's live time / token / commit totals are gone — the summary line's
 /// today-accumulated breakdown carries the fleet's resource read.
 ///
@@ -339,7 +339,7 @@ impl<'a> Cluster<'a> {
 }
 
 /// The fleet head-count read by the dashboard's L2: `(main, subs)` — the main
-/// agents you launched (the sum of the capped per-worktree `status_counts`, so it
+/// agents you launched (the sum of the per-worktree `status_counts`, so it
 /// matches the cockpit make-up below) and the subagents they spawned this turn.
 pub(in crate::sidebar_pane::render) fn fleet_size(
     groups: &[SidebarWorktreeGroup],
@@ -361,9 +361,9 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
 /// the lead unread row when `is_lead_bucket`, so it carries the configured
 /// continuous attention signal with that row; any unread bucket that is *not*
 /// the lead settles to the steady bright crest, and a read bucket holds its
-/// `rest_style`. Reads the rendered rows (capped-away agents are excluded — the
-/// bucket count still spans them, but a hidden agent never drives the visible
-/// signal).
+/// `rest_style`. Reads the full roster, so a hidden unread row still drives its
+/// cockpit bucket while the row itself remains reachable through the unread lens
+/// or group expansion.
 fn bucket_style(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
