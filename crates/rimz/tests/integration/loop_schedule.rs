@@ -62,7 +62,8 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
             && stdout.contains("TASK")
             && stdout.contains("SCHEDULE")
             && stdout.contains("NEXT")
-            && stdout.contains("LAST RUN")
+            && stdout.contains("LAST")
+            && stdout.contains("STATUS")
             && !stdout.contains("SOURCE")
             && !stdout.contains("RUNS")
             && !stdout.contains("RESULT"),
@@ -76,7 +77,9 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
     );
     assert!(
         stdout.lines().any(|line| {
-            line.starts_with("wake") && line.contains("@claude") && line.contains("delivered")
+            line.trim_start().starts_with("wake")
+                && line.contains("@claude")
+                && line.contains("✓ delivered")
         }),
         "loop list should fold run history for wake: {stdout}"
     );
@@ -319,28 +322,32 @@ fn loop_check_failure_show_prints_exit_and_output() {
 
     let stdout = loop_ok(&env, &["loop", "show", "missing"]);
     assert!(
-        stdout.contains("RESULT") && stdout.contains("failed"),
+        stdout.contains("STATUS") && stdout.contains("failed"),
         "show should print runs table: {stdout}"
     );
     assert!(
         stdout
             .lines()
-            .any(|line| { line.contains("failed ×2") && line.contains(command) }),
+            .any(|line| { line.contains("✗ failed (exit 127) ×2") && line.contains(command) }),
         "show should collapse repeated failures and print note: {stdout}"
     );
     assert!(
-        stdout.contains("last run output (exit 127)") && stdout.contains(command),
+        stdout.contains("LAST RUN — ✗ failed (exit 127)")
+            && stdout.contains("│ sh:")
+            && stdout.contains(command),
         "show should print output detail: {stdout}"
     );
 
     let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
         !stdout.contains("NOTE"),
-        "list should merge notes into LAST RUN: {stdout}"
+        "list should merge failure notes into STATUS: {stdout}"
     );
     assert!(
         stdout.lines().any(|line| {
-            line.starts_with("missing") && line.contains("failed ×2") && line.contains(command)
+            line.trim_start().starts_with("missing")
+                && line.contains("✗ failed (exit 127) ×2")
+                && line.contains(command)
         }),
         "list should print failure streak and note: {stdout}"
     );
@@ -532,20 +539,20 @@ fn loop_show_displays_shadowed_error_and_run_tail() {
 
     let stdout = loop_ok(&env, &["loop", "show", "forensics"]);
 
-    assert!(stdout.contains("last run detail (failed"), "{stdout}");
-    assert!(stdout.contains("  ✗ output tail:"), "{stdout}");
+    assert!(stdout.contains("LAST RUN — ✗ failed (exit 1)"), "{stdout}");
+    assert!(stdout.contains("  output tail:"), "{stdout}");
     assert!(
-        stdout.contains("    agent startup failed\n    missing binary"),
+        stdout.contains("  │ agent startup failed\n  │ missing binary"),
         "{stdout}"
     );
     assert!(
         stdout.contains("  transcript: /tmp/rimz-transcript.jsonl"),
         "{stdout}"
     );
-    assert!(stdout.contains("last failure detail (error"), "{stdout}");
+    assert!(stdout.contains("LAST FAILURE — ✗ error"), "{stdout}");
     assert!(
         stdout.contains(
-            "  ✗ error:\n    reading system-prompt-file `/missing.md`\n    caused by: not found"
+            "  error:\n  │ reading system-prompt-file `/missing.md`\n  │ caused by: not found"
         ),
         "{stdout}"
     );
@@ -795,9 +802,11 @@ fn loop_list_next_uses_room_arm_stamp() {
         "list should include NEXT: {stdout}"
     );
     assert!(
-        stdout
-            .lines()
-            .any(|line| line.starts_with("next") && line.contains("every 15m  -")),
+        stdout.lines().any(|line| {
+            line.trim_start().starts_with("next")
+                && line.contains("every 15m")
+                && line.split_whitespace().last() == Some("-")
+        }),
         "no arm stamp should render dash: {stdout}"
     );
 
@@ -812,7 +821,7 @@ fn loop_list_next_uses_room_arm_stamp() {
     assert!(
         stdout
             .lines()
-            .any(|line| line.starts_with("next") && line.contains("due")),
+            .any(|line| line.trim_start().starts_with("next") && line.contains("due")),
         "due arm stamp should render due: {stdout}"
     );
 }
@@ -850,14 +859,16 @@ fn loop_add_at_reset_is_ping_only_and_renders_without_cold_cache() {
     );
     let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
-        stdout.lines().any(|line| line.starts_with("w7")
-            && line.contains("at window reset")
-            && line.split_whitespace().any(|cell| cell == "-")),
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("w7")
+                && line.contains("at window reset")
+                && line.split_whitespace().any(|cell| cell == "-")),
         "cold cache should render at-reset with dash next: {stdout}"
     );
     let stdout = loop_ok(&env, &["loop", "show", "w7"]);
     assert!(
-        stdout.contains("schedule: at window reset") && stdout.contains("next:     -"),
+        stdout.contains("w7 — at window reset") && !stdout.contains(" · next "),
         "show should render at-reset with dash next: {stdout}"
     );
 }
@@ -881,13 +892,13 @@ fn loop_show_and_list_fold_legacy_records() {
     assert!(
         stdout
             .lines()
-            .any(|line| line.starts_with("legacy") && line.contains("completed")),
+            .any(|line| line.trim_start().starts_with("legacy") && line.contains("✓ completed")),
         "list should fold legacy record: {stdout}"
     );
 
     let stdout = loop_ok(&env, &["loop", "show", "legacy"]);
     assert!(
-        stdout.contains("completed") && stdout.contains("MODE"),
+        stdout.contains("✓ completed") && stdout.contains("MODE"),
         "show should render legacy record with defaulted fields: {stdout}"
     );
 }

@@ -532,15 +532,7 @@ fn outcome_failure_tail(outcome: &RunOutcome) -> Option<String> {
 }
 
 fn write_failure_tail(out: &mut impl Write, tail: &str) -> std::io::Result<()> {
-    for (idx, line) in tail.trim_end().lines().enumerate() {
-        let rendered = if idx == 0 {
-            ui::paint(ui::palette::ALARM, &format!("  ✗ {line}"))
-        } else {
-            ui::paint(ui::palette::FAINT, &format!("    {line}"))
-        };
-        writeln!(out, "{rendered}")?;
-    }
-    Ok(())
+    render::write_gutter_block(out, Some(ui::palette::ALARM), tail)
 }
 
 fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool> {
@@ -607,7 +599,7 @@ mod tests {
         assert!(raw.contains(&ui::paint(ui::palette::ALARM.bold(), "failed (exit 1)")));
         let out = anstream::adapter::strip_str(&raw).to_string();
         assert!(out.contains("loop `wake`: failed (exit 1) in 1.9s"));
-        assert!(out.contains("  ✗ error: boom\n    Usage: codex [OPTIONS] [PROMPT]"));
+        assert!(out.contains("  │ error: boom\n  │ Usage: codex [OPTIONS] [PROMPT]"));
         assert!(out.contains("run: run_0123456789abcdef01234567"));
         assert!(out.contains("transcript: /tmp/transcript.jsonl"));
         assert!(out.contains("see: rimz loop show wake"));

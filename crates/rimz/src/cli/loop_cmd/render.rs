@@ -21,22 +21,19 @@ pub(super) fn list() -> Result<()> {
         let root = entry.resolved_root();
         groups.entry(root).or_default().push((name, entry));
     }
-    let mut table = ui::Table::new(["NAME", "TASK", "SCHEDULE", "NEXT", "LAST RUN"]);
-    for (root, entries) in groups {
+    for (idx, (root, entries)) in groups.into_iter().enumerate() {
         let runtime = runtime_for_root(&root);
-        let room = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
-            "room open"
-        } else {
-            "no room"
-        };
+        let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
         let stamps = runtime
             .as_ref()
             .map(rimz::harness::schedule::last_stamps)
             .unwrap_or_default();
-        table.section(format!(
-            "{} — {room}",
-            ui::home_relative(root.to_string_lossy().as_ref())
-        ));
+        if idx > 0 {
+            writeln!(out)?;
+        }
+        write_root_heading(&mut out, &root, room_is_open)?;
+        let mut table =
+            ui::Table::new(["NAME", "TASK", "SCHEDULE", "LAST", "STATUS", "NEXT"]).indent(2);
         for (name, entry) in entries {
             let parsed = schedule::parse_schedule(name, entry);
             let when = match &parsed {
@@ -58,20 +55,21 @@ pub(super) fn list() -> Result<()> {
                 })
                 .map(ui::cell)
                 .unwrap_or_else(|| ui::cell("-").dash());
-            let last_run = stats
+            let (last, status) = stats
                 .get(name)
-                .map(|stats| last_run_cell(stats, now))
-                .unwrap_or_else(|| ui::cell("-").dash());
+                .map(|stats| last_run_cells(stats, now))
+                .unwrap_or_else(|| (ui::cell("-").dash(), ui::cell("-").dash()));
             table.row([
                 ui::cell(name.as_str()).fg(ui::palette::ACCENT),
                 ui::cell(task_subject(entry)),
                 ui::cell(when),
+                last,
+                status,
                 next,
-                last_run,
             ]);
         }
+        table.render(&mut out)?;
     }
-    table.render(&mut out)?;
     Ok(())
 }
 
@@ -79,6 +77,63 @@ pub(super) fn room_open(root: &Path) -> bool {
     runtime_for_root(root)
         .as_ref()
         .is_some_and(fresh_sidebar_present)
+}
+
+fn write_root_heading(
+    out: &mut impl Write,
+    root: &Path,
+    room_is_open: bool,
+) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{} · {}",
+        ui::paint(
+            ui::palette::ACCENT.bold(),
+            &ui::home_relative(root.to_string_lossy().as_ref())
+        ),
+        ui::paint(room_style(room_is_open), room_label(room_is_open))
+    )
+}
+
+fn root_with_room(root: &Path, room_is_open: bool) -> String {
+    format!(
+        "{} · {}",
+        ui::home_relative(root.to_string_lossy().as_ref()),
+        room_label(room_is_open)
+    )
+}
+
+fn room_label(room_is_open: bool) -> &'static str {
+    if room_is_open { "room open" } else { "no room" }
+}
+
+fn room_style(room_is_open: bool) -> anstyle::Style {
+    if room_is_open {
+        ui::palette::GOOD
+    } else {
+        ui::palette::MUTED
+    }
+}
+
+fn schedule_style<T, E>(parsed: std::result::Result<&T, &E>) -> anstyle::Style {
+    if parsed.is_ok() {
+        anstyle::Style::new()
+    } else {
+        ui::palette::ALARM
+    }
+}
+
+fn check_summary(entry: &TaskEntry) -> Option<String> {
+    let check = entry.check.as_ref()?;
+    if entry.spec.is_some() || entry.bind.is_some() {
+        let on = match entry.on.unwrap_or_default() {
+            CheckOn::Fail => "fail",
+            CheckOn::Success => "success",
+        };
+        Some(format!("{check} (wake on {on})"))
+    } else {
+        Some(check.clone())
+    }
 }
 
 fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
@@ -118,11 +173,7 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
         .as_ref()
         .map(rimz::harness::schedule::last_stamps)
         .unwrap_or_default();
-    let room = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
-        "open"
-    } else {
-        "no room"
-    };
+    let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
     let parsed = schedule::parse_schedule(&args.name, &entry);
     let schedule_text = match &parsed {
         Ok(parsed) => parsed.describe(),
@@ -131,52 +182,69 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let window_reset = window_reset_for(&entry);
-    let next = parsed
-        .as_ref()
-        .ok()
-        .and_then(|parsed| {
-            next_fire_text(
-                &args.name,
-                &parsed.schedule,
-                &stamps,
-                &now_zoned,
-                now,
-                window_reset,
-            )
-        })
-        .unwrap_or_else(|| "-".to_owned());
+    let next = parsed.as_ref().ok().and_then(|parsed| {
+        next_fire_text(
+            &args.name,
+            &parsed.schedule,
+            &stamps,
+            &now_zoned,
+            now,
+            window_reset,
+        )
+    });
     let records = run_log::task_records(&state_home(), &args.name);
 
     let mut out = ui::out();
-    writeln!(out, "loop `{}`", args.name)?;
-    let mut kv = ui::KeyVals::new();
-    kv.push("source", ui::cell(source.label()));
+    write!(
+        out,
+        "{} — {}",
+        ui::paint(ui::palette::ACCENT.bold(), &args.name),
+        ui::paint(schedule_style(parsed.as_ref()), &schedule_text)
+    )?;
+    if let Some(next) = next {
+        write!(out, " · next {next}")?;
+    }
+    writeln!(out)?;
+    let mut kv = ui::KeyVals::new().indent(2);
     kv.push("task", ui::cell(task_subject(&entry)));
-    kv.push("schedule", ui::cell(schedule_text));
-    kv.push(
-        "root",
-        ui::cell(ui::home_relative(root.to_string_lossy().as_ref())),
-    );
-    kv.push("room", ui::cell(room));
-    kv.push("next", ui::cell(next));
-    kv.push("runs", ui::cell(records.len().to_string()));
+    if let Some(check) = check_summary(&entry) {
+        kv.push("check", ui::cell(check));
+    }
+    kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
+    kv.push("source", ui::cell(source.label()));
     kv.render(&mut out)?;
 
     if records.is_empty() {
+        writeln!(out)?;
         writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
         return Ok(());
     }
 
     writeln!(out)?;
-    let mut table = ui::Table::new(["WHEN", "MODE", "RESULT", "TIME", "EXIT", "NOTE"]);
+    writeln!(
+        out,
+        "{}",
+        ui::paint(
+            ui::palette::HEADER,
+            &format!("RECENT RUNS ({} recorded)", records.len())
+        )
+    )?;
     let rows = collapsed_run_rows(&records);
     let start = rows.len().saturating_sub(args.runs);
-    for row in &rows[start..] {
+    let visible_rows = &rows[start..];
+    let show_note = visible_rows.iter().any(|row| row.key.note.is_some());
+    let headers = if show_note {
+        vec!["WHEN", "MODE", "STATUS", "TOOK", "NOTE"]
+    } else {
+        vec!["WHEN", "MODE", "STATUS", "TOOK"]
+    };
+    let mut table = ui::Table::new(headers).indent(2);
+    for row in visible_rows {
         let record = row.latest;
-        table.row([
+        let mut cells = vec![
             ui::cell(ui::rel_age(record.at, now)),
             ui::cell(row.key.mode.map_or("-", LoopRunMode::label)).dash(),
-            loop_result_record_cell(record, row.count),
+            run_status_cell(record, row.count),
             ui::cell(
                 record
                     .duration_ms
@@ -184,20 +252,22 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
                     .unwrap_or_else(|| "-".to_owned()),
             )
             .dash(),
-            ui::cell(row.key.exit.as_deref().unwrap_or("-")).dash(),
-            ui::cell(row.key.note.as_deref().unwrap_or("-")).dash(),
-        ]);
+        ];
+        if show_note {
+            cells.push(ui::cell(row.key.note.as_deref().unwrap_or("-")).dash());
+        }
+        table.row(cells);
     }
     table.render(&mut out)?;
 
     let (detail_idx, failure_idx) = detail_indices(&records);
     if let Some(detail) = detail_idx.and_then(|idx| records.get(idx)) {
         writeln!(out)?;
-        render_record_detail(&mut out, &entry, detail, "last run detail", now)?;
+        render_record_detail(&mut out, &entry, detail, "LAST RUN", now)?;
     }
     if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
         writeln!(out)?;
-        render_record_detail(&mut out, &entry, failure, "last failure detail", now)?;
+        render_record_detail(&mut out, &entry, failure, "LAST FAILURE", now)?;
     }
     Ok(())
 }
@@ -248,36 +318,93 @@ fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
     rows
 }
 
-fn last_run_cell(stats: &run_log::LoopRunStats, now: Timestamp) -> ui::Cell {
-    let mut label = run_display_label(&stats.last);
+fn last_run_cells(stats: &run_log::LoopRunStats, now: Timestamp) -> (ui::Cell, ui::Cell) {
+    let status = run_status(&stats.last);
+    let mut label = format!("{} {}", status.glyph, status.label);
     if stats.streak > 1 {
         label.push_str(&format!(" ×{}", stats.streak));
     }
-    let mut parts = vec![label, ui::rel_age(stats.last.at, now)];
-    if let Some(note) = record_note(&stats.last) {
-        parts.push(note);
+    if failure_note_visible(stats.last.result)
+        && let Some(note) = record_note(&stats.last)
+    {
+        label.push_str(" · ");
+        label.push_str(&note);
     }
-    ui::cell(parts.join(" · ")).fg(loop_result_style(stats.last.result))
+    (
+        ui::cell(ui::rel_age(stats.last.at, now)),
+        ui::cell(label).fg(status.style),
+    )
 }
 
-fn loop_result_record_cell(record: &LoopRunRecord, count: usize) -> ui::Cell {
-    let result = record.result;
-    let style = loop_result_style(result);
-    let mut label = run_display_label(record);
+fn run_status_cell(record: &LoopRunRecord, count: usize) -> ui::Cell {
+    let status = run_status(record);
+    let mut label = format!("{} {}", status.glyph, status.label);
     if count > 1 {
         label.push_str(&format!(" ×{count}"));
     }
-    ui::cell(label).fg(style)
+    ui::cell(label).fg(status.style)
 }
 
-fn run_display_label(record: &LoopRunRecord) -> String {
-    if record.result == LoopRunResult::CheckSkipped {
-        return match record.check.as_ref() {
-            Some(check) if !check.timed_out && check.code == Some(0) => "check ok".to_owned(),
-            _ => "check failed".to_owned(),
-        };
+struct RunStatusDisplay {
+    glyph: &'static str,
+    label: String,
+    style: anstyle::Style,
+}
+
+fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
+    let (glyph, label, style) = match record.result {
+        LoopRunResult::Completed => ("✓", "completed".to_owned(), ui::palette::GOOD),
+        LoopRunResult::Delivered => ("✓", "delivered".to_owned(), ui::palette::GOOD),
+        LoopRunResult::Failed => {
+            let mut label = "failed".to_owned();
+            if let Some(exit) = failure_exit_label(record) {
+                label.push_str(" (");
+                label.push_str(&exit);
+                label.push(')');
+            }
+            ("✗", label, ui::palette::ALARM)
+        }
+        LoopRunResult::TimedOut => ("✗", "timed out".to_owned(), ui::palette::ALARM),
+        LoopRunResult::Errored => ("✗", "error".to_owned(), ui::palette::ALARM),
+        LoopRunResult::SkippedWindow => ("○", "skipped".to_owned(), ui::palette::WARN),
+        LoopRunResult::Expired => ("○", "expired".to_owned(), ui::palette::WARN),
+        LoopRunResult::Canceled => ("○", "canceled".to_owned(), ui::palette::WARN),
+        LoopRunResult::TargetGone => ("○", "target gone".to_owned(), ui::palette::WARN),
+        LoopRunResult::Overlapped => ("○", "overlapped".to_owned(), ui::palette::WARN),
+        LoopRunResult::CheckSkipped => (
+            "○",
+            check_skipped_label(record).to_owned(),
+            ui::palette::MUTED,
+        ),
+    };
+    RunStatusDisplay {
+        glyph,
+        label,
+        style,
     }
-    record.result.label().to_owned()
+}
+
+fn check_skipped_label(record: &LoopRunRecord) -> &'static str {
+    match record.check.as_ref() {
+        Some(check) if check.timed_out => "check timed out",
+        Some(check) if check.code == Some(0) => "check passed",
+        Some(_) => "check failed",
+        None => "check failed",
+    }
+}
+
+fn failure_exit_label(record: &LoopRunRecord) -> Option<String> {
+    record_exit(record).map(|exit| match exit.as_str() {
+        "timeout" | "signal" => exit,
+        code => format!("exit {code}"),
+    })
+}
+
+fn failure_note_visible(result: LoopRunResult) -> bool {
+    matches!(
+        result,
+        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored
+    )
 }
 
 pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
@@ -312,7 +439,12 @@ fn record_exit(record: &LoopRunRecord) -> Option<String> {
         if check.timed_out {
             return Some("timeout".to_owned());
         }
-        return check.code.map(|code| code.to_string());
+        return Some(
+            check
+                .code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_owned()),
+        );
     }
     record
         .run_id
@@ -402,48 +534,46 @@ fn render_record_detail(
     title: &str,
     now: Timestamp,
 ) -> std::io::Result<()> {
-    writeln!(
+    write!(out, "{} — ", ui::paint(anstyle::Style::new().bold(), title))?;
+    let status = run_status(record);
+    write!(
         out,
-        "{} ({}, {}, {})",
-        ui::paint(anstyle::Style::new().bold(), title),
-        ui::paint(loop_result_style(record.result), record.result.label()),
+        "{}",
+        ui::paint(status.style, &format!("{} {}", status.glyph, status.label))
+    )?;
+    write!(
+        out,
+        " · {} · {}",
         ui::rel_age(record.at, now),
         record.mode.map_or("legacy", LoopRunMode::label)
     )?;
+    if let Some(exit) = detail_exit_segment(record) {
+        write!(out, " · {exit}")?;
+    }
+    writeln!(out)?;
     if let Some(check) = &record.check {
-        let status = if check.timed_out {
-            "timeout".to_owned()
+        let first_style = if check.timed_out || check.code != Some(0) {
+            Some(ui::palette::ALARM)
         } else {
-            check
-                .code
-                .map(|code| format!("exit {code}"))
-                .unwrap_or_else(|| "signal".to_owned())
+            None
         };
-        if check.timed_out || check.code != Some(0) {
-            write_alarm_block(out, &format!("last run output ({status})"), &check.output)?;
-        } else {
-            writeln!(out, "last run output ({status}):")?;
-            if check.output.trim().is_empty() {
-                writeln!(out, "-")?;
-            } else {
-                writeln!(out, "{}", check.output.trim_end())?;
-            }
-        }
+        write_gutter_block(out, first_style, &check.output)?;
     }
     let run_record = record
         .run_id
         .as_deref()
         .and_then(|run_id| run_record_for(entry, run_id));
     if let Some(error) = &record.error {
-        write_alarm_block(out, "error", error)?;
+        write_detail_label(out, "error")?;
+        write_gutter_block(out, None, error)?;
     }
     if let Some(last_message) = record.last_message.as_ref().or_else(|| {
         run_record
             .as_ref()
             .and_then(|record| record.last_message.as_ref())
     }) {
-        writeln!(out, "last message:")?;
-        writeln!(out, "{last_message}")?;
+        write_detail_label(out, "last message")?;
+        write_gutter_block(out, None, last_message)?;
     }
     if let Some(run_id) = &record.run_id {
         writeln!(
@@ -456,7 +586,8 @@ fn render_record_detail(
             .and_then(|record| record.failure_tail.as_deref())
             .filter(|tail| !tail.trim().is_empty())
         {
-            write_alarm_block(out, "output tail", tail)?;
+            write_detail_label(out, "output tail")?;
+            write_gutter_block(out, None, tail)?;
         }
         if let Some(transcript) = run_record
             .as_ref()
@@ -472,29 +603,61 @@ fn render_record_detail(
     Ok(())
 }
 
-fn write_alarm_block(out: &mut impl Write, label: &str, body: &str) -> std::io::Result<()> {
+fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
+    if matches!(
+        record.result,
+        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored
+    ) {
+        return None;
+    }
+    let check = record.check.as_ref()?;
+    if check.timed_out {
+        return Some("timeout".to_owned());
+    }
+    Some(
+        check
+            .code
+            .map(|code| format!("exit {code}"))
+            .unwrap_or_else(|| "signal".to_owned()),
+    )
+}
+
+fn write_detail_label(out: &mut impl Write, label: &str) -> std::io::Result<()> {
     writeln!(
         out,
         "{}",
-        ui::paint(ui::palette::ALARM, &format!("  ✗ {label}:"))
-    )?;
-    write_alarm_body(out, body)
+        ui::paint(ui::palette::MUTED, &format!("  {label}:"))
+    )
 }
 
-fn write_alarm_body(out: &mut impl Write, body: &str) -> std::io::Result<()> {
+pub(super) fn write_gutter_block(
+    out: &mut impl Write,
+    first_style: Option<anstyle::Style>,
+    body: &str,
+) -> std::io::Result<()> {
     let body = body.trim_end();
     if body.trim().is_empty() {
-        return writeln!(out, "    {}", ui::paint(ui::palette::FAINT, "-"));
+        return write_gutter_line(out, Some(ui::palette::FAINT), "-");
     }
     for (idx, line) in body.lines().enumerate() {
-        let style = if idx == 0 {
-            ui::palette::ALARM
-        } else {
-            ui::palette::FAINT
-        };
-        writeln!(out, "    {}", ui::paint(style, line))?;
+        let style = if idx == 0 { first_style } else { None };
+        write_gutter_line(out, style, line)?;
     }
     Ok(())
+}
+
+fn write_gutter_line(
+    out: &mut impl Write,
+    style: Option<anstyle::Style>,
+    line: &str,
+) -> std::io::Result<()> {
+    write!(out, "  {}", ui::paint(ui::palette::FAINT, "│ "))?;
+    if let Some(style) = style {
+        write!(out, "{}", ui::paint(style, line))?;
+    } else {
+        write!(out, "{line}")?;
+    }
+    writeln!(out)
 }
 
 fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::harness::run::RunRecord> {
@@ -562,21 +725,38 @@ mod tests {
     }
 
     #[test]
-    fn run_display_label_names_check_skipped_outcomes() {
+    fn run_status_names_check_skipped_outcomes() {
         let mut skipped = record(10, LoopRunResult::CheckSkipped);
         skipped.check = Some(CheckRecord {
             code: Some(0),
             timed_out: false,
             output: "ok".to_owned(),
         });
-        assert_eq!(run_display_label(&skipped), "check ok");
+        let status = run_status(&skipped);
+        assert_eq!(status.glyph, "○");
+        assert_eq!(status.label, "check passed");
 
         skipped.check = Some(CheckRecord {
             code: Some(1),
             timed_out: false,
             output: "not yet".to_owned(),
         });
-        assert_eq!(run_display_label(&skipped), "check failed");
+        assert_eq!(run_status(&skipped).label, "check failed");
+    }
+
+    #[test]
+    fn run_status_merges_failed_check_exit() {
+        let mut failed = record(10, LoopRunResult::Failed);
+        failed.check = Some(CheckRecord {
+            code: Some(127),
+            timed_out: false,
+            output: "missing".to_owned(),
+        });
+
+        let status = run_status(&failed);
+
+        assert_eq!(status.glyph, "✗");
+        assert_eq!(status.label, "failed (exit 127)");
     }
 
     #[test]
@@ -641,17 +821,17 @@ mod tests {
             &mut out,
             &entry,
             &detail,
-            "last failure detail",
+            "LAST FAILURE",
             Timestamp::from_second(30).expect("timestamp"),
         )
         .unwrap();
 
         let raw = String::from_utf8(out).unwrap();
-        assert!(raw.contains(&ui::paint(ui::palette::ALARM, "error")));
+        assert!(raw.contains(&ui::paint(ui::palette::MUTED, "  error:")));
         let out = anstream::adapter::strip_str(&raw).to_string();
-        assert!(out.contains("last failure detail (error, "));
-        assert!(out.contains(", manual)"));
-        assert!(out.contains("  ✗ error:\n    outer error\n    inner detail"));
+        assert!(out.contains("LAST FAILURE — ✗ error · "));
+        assert!(out.contains(" · manual"));
+        assert!(out.contains("  error:\n  │ outer error\n  │ inner detail"));
     }
 
     #[test]
@@ -672,17 +852,15 @@ mod tests {
             &mut out,
             &entry,
             &detail,
-            "last failure detail",
+            "LAST FAILURE",
             Timestamp::from_second(30).expect("timestamp"),
         )
         .unwrap();
 
         let raw = String::from_utf8(out).unwrap();
-        assert!(raw.contains(&ui::paint(
-            ui::palette::ALARM,
-            "  ✗ last run output (exit 2):"
-        )));
+        assert!(raw.contains(&ui::paint(ui::palette::ALARM, "first line")));
         let out = anstream::adapter::strip_str(&raw).to_string();
-        assert!(out.contains("  ✗ last run output (exit 2):\n    first line\n    second line"));
+        assert!(out.contains("LAST FAILURE — ✗ failed (exit 2)"));
+        assert!(out.contains("  │ first line\n  │ second line"));
     }
 }

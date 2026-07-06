@@ -231,6 +231,7 @@ pub(crate) struct Table {
     headers: Vec<String>,
     align: Vec<Align>,
     rows: Vec<Body>,
+    indent: usize,
     clip_last_width: Option<usize>,
 }
 
@@ -246,6 +247,7 @@ impl Table {
             headers,
             align,
             rows: Vec::new(),
+            indent: 0,
             clip_last_width: None,
         }
     }
@@ -257,6 +259,12 @@ impl Table {
                 *slot = Align::Right;
             }
         }
+        self
+    }
+
+    /// Indent the header row and body rows by `n` spaces.
+    pub(crate) fn indent(mut self, n: usize) -> Self {
+        self.indent = n;
         self
     }
 
@@ -327,6 +335,7 @@ impl Table {
     ) -> std::io::Result<()> {
         let cols = self.headers.len();
         let blank = cell("");
+        write!(w, "{:indent$}", "", indent = self.indent)?;
         for (col, (&width, &align)) in widths.iter().zip(&self.align).enumerate() {
             if col > 0 {
                 write!(w, "  ")?;
@@ -471,6 +480,17 @@ mod tests {
 
         assert_eq!(rendered, "NAME   DESC\nagent  unicode wide…\n");
         assert!(rendered.lines().all(|line| line.width() <= 20));
+    }
+
+    #[test]
+    fn table_indent_applies_to_header_and_rows() {
+        let mut table = Table::new(["NAME", "CTX"]).indent(2);
+        table.row([cell("right-yard"), cell("ok")]);
+
+        assert_eq!(
+            strip(|w| table.render(w)),
+            "  NAME        CTX\n  right-yard  ok\n"
+        );
     }
 
     #[test]
