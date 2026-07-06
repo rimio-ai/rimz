@@ -6,7 +6,7 @@
 
 Remote targets use `[user@]host:<session-or-path>`. A bare target after the colon is a session name and compiles to remote `rimz attach --attach`; a value containing `/` or starting with `~` is a path and compiles to remote `rimz start --attach`. The snippet repairs non-login-shell PATH before invoking remote `rimz`, and a missing remote binary exits with the install fix.
 
-The remote PTY carries the local `$TERM`. Portable names such as `xterm-256color`, `screen-256color`, and `tmux-256color` ride through unchanged; terminal-specific names use local `infocmp -x $TERM` and remote `tic` to seed `~/.terminfo` before `exec`, with `TERM=xterm-256color` as the fallback when provisioning cannot run.
+The remote PTY carries the local `$TERM`. Portable names such as `xterm-256color`, `screen-256color`, and `tmux-256color` ride through unchanged; terminal-specific names use local `infocmp -x $TERM` and remote `tic` to seed `~/.terminfo` before `exec`, with `TERM=xterm-256color` as the fallback when provisioning cannot run. When the local terminal advertises 24-bit color, the snippet also exports `COLORTERM=truecolor` because SSH does not forward `COLORTERM`.
 
 The print and one-shot paths use a single `ssh -t` invocation. Every attach enables `-o Compression=yes`; sshd negotiates it and an sshd that disallows compression continues uncompressed. The supervised path adds a PID-scoped ControlMaster socket under the local runtime directory so a second SSH channel can measure the same TCP connection without opening a new transport. The socket directory must be owned by the current user and private (`0700`); when Rimz cannot guarantee that, it skips ControlMaster/probes and attaches with plain SSH.
 

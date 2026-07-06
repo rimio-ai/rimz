@@ -192,6 +192,7 @@ pub fn ssh_attach_spec(
     no_resume: bool,
     mux: Option<MuxName>,
     term: &TermPlan,
+    truecolor: bool,
     control: Option<&Path>,
 ) -> CommandSpec {
     CommandSpec::new(ssh_program())
@@ -208,7 +209,7 @@ pub fn ssh_attach_spec(
         .args(control.into_iter().flat_map(link::control_options))
         .args(["-t", "--"])
         .arg(target.destination.clone())
-        .arg(guarded_snippet(target, no_resume, mux, term))
+        .arg(guarded_snippet(target, no_resume, mux, term, truecolor))
 }
 
 /// How the remote session resolves the local terminal. `-t` carries the local
@@ -292,6 +293,7 @@ fn guarded_snippet(
     no_resume: bool,
     mux: Option<MuxName>,
     term: &TermPlan,
+    truecolor: bool,
 ) -> String {
     let (verb, arg) = match &target.spec {
         RemoteSpec::Path(path) => ("start", quote_remote_path(path)),
@@ -311,9 +313,14 @@ fn guarded_snippet(
     format!(
         "{}; \
          command -v rimz >/dev/null 2>&1 || {{ echo {not_found} >&2; exit {code}; }}; \
-         {term_setup}exec {rimz} -- {arg}",
+         {truecolor_setup}{term_setup}exec {rimz} -- {arg}",
         remote_path_prefix(),
         code = REMOTE_RIMZ_MISSING_EXIT,
+        truecolor_setup = if truecolor {
+            "export COLORTERM=truecolor; "
+        } else {
+            ""
+        },
         term_setup = term.remote_setup(),
     )
 }
@@ -634,6 +641,7 @@ mod tests {
             false,
             None,
             &TermPlan::Keep,
+            false,
             None,
         ));
         assert!(line.starts_with("ssh -o ServerAliveInterval=5"), "{line}");
@@ -645,6 +653,7 @@ mod tests {
             false,
             None,
             &TermPlan::Keep,
+            false,
             None,
         ));
         assert!(
@@ -718,6 +727,7 @@ mod tests {
             no_resume: bool,
             mux: Option<MuxName>,
             term: TermPlan,
+            truecolor: bool,
             control: Option<&'static Path>,
             destination_index: usize,
             snippet_contains: &'static [&'static str],
@@ -730,6 +740,7 @@ mod tests {
                 no_resume: false,
                 mux: None,
                 term: TermPlan::Keep,
+                truecolor: false,
                 control: None,
                 destination_index: 10,
                 snippet_contains: &[
@@ -745,6 +756,7 @@ mod tests {
                 no_resume: false,
                 mux: None,
                 term: TermPlan::Keep,
+                truecolor: false,
                 control: None,
                 destination_index: 10,
                 snippet_contains: &["exec rimz start --attach -- \"$HOME\"'/code/query-engine'"],
@@ -755,6 +767,7 @@ mod tests {
                 no_resume: true,
                 mux: Some(MuxName::Tmux),
                 term: TermPlan::Keep,
+                truecolor: false,
                 control: None,
                 destination_index: 10,
                 snippet_contains: &["exec rimz attach --attach --no-resume --mux tmux -- "],
@@ -765,6 +778,7 @@ mod tests {
                 no_resume: false,
                 mux: None,
                 term: TermPlan::Keep,
+                truecolor: false,
                 control: Some(Path::new("/tmp/rimz.sock")),
                 destination_index: 14,
                 snippet_contains: &["exec rimz attach --attach -- 'query-engine'"],
@@ -775,9 +789,34 @@ mod tests {
                 no_resume: false,
                 mux: None,
                 term: TermPlan::Downgrade,
+                truecolor: false,
                 control: None,
                 destination_index: 10,
                 snippet_contains: &["export TERM=xterm-256color; exec rimz"],
+            },
+            SpecCase {
+                name: "truecolor keep",
+                target: "dev-box:query-engine",
+                no_resume: false,
+                mux: None,
+                term: TermPlan::Keep,
+                truecolor: true,
+                control: None,
+                destination_index: 10,
+                snippet_contains: &["export COLORTERM=truecolor; exec rimz"],
+            },
+            SpecCase {
+                name: "truecolor and term downgrade",
+                target: "dev-box:query-engine",
+                no_resume: false,
+                mux: None,
+                term: TermPlan::Downgrade,
+                truecolor: true,
+                control: None,
+                destination_index: 10,
+                snippet_contains: &[
+                    "export COLORTERM=truecolor; export TERM=xterm-256color; exec rimz",
+                ],
             },
             SpecCase {
                 name: "term copy",
@@ -788,6 +827,7 @@ mod tests {
                     name: "alacritty".to_owned(),
                     source: "ALACRITTY|fake,".to_owned(),
                 },
+                truecolor: false,
                 control: None,
                 destination_index: 10,
                 snippet_contains: &[concat!(
@@ -801,6 +841,7 @@ mod tests {
                 case.no_resume,
                 case.mux,
                 &case.term,
+                case.truecolor,
                 case.control,
             );
             assert_eq!(spec.program, "ssh", "{}", case.name);

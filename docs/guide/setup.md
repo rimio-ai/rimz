@@ -50,8 +50,8 @@ The install is additive — your existing hooks stay — and each report names t
 
 The sidebar and agent TUIs render best at 24-bit color, and three layers decide whether you get it:
 
-- **Your terminal.** Pick one that advertises truecolor — Ghostty, WezTerm, Kitty, and Alacritty all do. This is the whole story on Zellij, which inherits color support from the terminal it runs in.
-- **Rimz.** `[theme] mode = "auto"` (the default) emits truecolor whenever `COLORTERM` or the `$TERM` terminfo advertises it. Inside a Rimz tmux room, Rimz stamps `COLORTERM=truecolor` at birth when the launching terminal advertises it, so `auto` resolves to truecolor despite tmux's `tmux-256color` default. Pin `mode = "truecolor"` when a hop strips the advertisement, such as an SSH config that does not forward `COLORTERM`.
+- **Your terminal.** Pick one that advertises truecolor — Ghostty, WezTerm, Kitty, and Alacritty all do. This is the whole story for local terminal-attached Zellij, which inherits color support from the terminal it runs in.
+- **Rimz.** `[theme] mode = "auto"` (the default) emits truecolor whenever `COLORTERM` or the `$TERM` terminfo advertises it. Inside a Rimz tmux room, Rimz stamps `COLORTERM=truecolor` at birth when the launching terminal advertises it, so `auto` resolves to truecolor despite tmux's `tmux-256color` default; `rimz remote` carries the same stamp over SSH when the local terminal advertises it, and `rimz web` stamps browser-born rooms because xterm.js renders 24-bit color. Pin `mode = "truecolor"` for rooms born before this support or for other stripping hops.
 - **Your own tmux sessions.** tmux needs `default-terminal` and the RGB overrides in [the tmux baseline below](#tmux) for its own color handling outside Rimz rooms.
 
 With a Nerd Font in the terminal, one line upgrades the glyphs too:

@@ -312,8 +312,14 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 bail!("--web is web-only and has no SSH attach command; drop --print");
             }
             let term = remote_term_plan();
-            let plain_spec =
-                ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term, None);
+            let plain_spec = ssh_attach_spec(
+                &remote.target,
+                remote.no_resume,
+                remote.mux,
+                &term,
+                rimz::tui::truecolor(),
+                None,
+            );
             supervisor::print_remote_command(&plain_spec);
             Ok(())
         }
@@ -329,8 +335,15 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 return web::run_remote_web(&remote);
             }
             let term = remote_term_plan();
-            let plain_spec =
-                ssh_attach_spec(&remote.target, remote.no_resume, remote.mux, &term, None);
+            let truecolor = rimz::tui::truecolor();
+            let plain_spec = ssh_attach_spec(
+                &remote.target,
+                remote.no_resume,
+                remote.mux,
+                &term,
+                truecolor,
+                None,
+            );
             if remote.reconnect {
                 let control = rimz::remote::link::validated_control_path()
                     .context("checking SSH ControlMaster socket path")?;
@@ -339,6 +352,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                     remote.no_resume,
                     remote.mux,
                     &term,
+                    truecolor,
                     Some(&control),
                 );
                 supervisor::supervise_remote(&control_spec, &plain_spec, &remote.target, &control)
@@ -423,7 +437,14 @@ mod tests {
             .unwrap();
 
         let raw = resolve_connect("prod:raw-session", false, false, None, &aliases).unwrap();
-        let raw_spec = ssh_attach_spec(&raw.target, raw.no_resume, raw.mux, &TermPlan::Keep, None);
+        let raw_spec = ssh_attach_spec(
+            &raw.target,
+            raw.no_resume,
+            raw.mux,
+            &TermPlan::Keep,
+            false,
+            None,
+        );
         assert_eq!(raw_spec.args[10], "prod");
         assert!(raw.reconnect);
         assert!(!raw.no_resume);
@@ -434,6 +455,7 @@ mod tests {
             named.no_resume,
             named.mux,
             &TermPlan::Keep,
+            false,
             None,
         );
         assert_eq!(named_spec.args[10], "prod-box");

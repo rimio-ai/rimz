@@ -65,7 +65,7 @@ enum InfocmpFixture {
     Copy,
 }
 
-fn run_exec_with_term(term: &str, infocmp: InfocmpFixture) -> Vec<String> {
+fn run_exec_with_term(term: &str, colorterm: Option<&str>, infocmp: InfocmpFixture) -> Vec<String> {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let mut cmd = env.rimz();
@@ -74,6 +74,14 @@ fn run_exec_with_term(term: &str, infocmp: InfocmpFixture) -> Vec<String> {
         .env("RIMZ_TEST_SSH_LOG", &log)
         .env("RIMZ_REMOTE_PROBE_MS", "0")
         .env("TERM", term);
+    match colorterm {
+        Some(value) => {
+            cmd.env("COLORTERM", value);
+        }
+        None => {
+            cmd.env_remove("COLORTERM");
+        }
+    }
     match infocmp {
         InfocmpFixture::Ambient => {}
         InfocmpFixture::Missing => {
@@ -203,18 +211,31 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
 
 #[test]
 fn exec_uses_ssh_shim_and_applies_terminal_plan() {
-    let portable = run_exec_with_term("xterm-256color", InfocmpFixture::Ambient);
+    let portable = run_exec_with_term("xterm-256color", None, InfocmpFixture::Ambient);
     assert!(snippet(&portable).starts_with("PATH=\"$HOME/.cargo/bin"));
     assert!(snippet(&portable).ends_with("exec rimz attach --attach -- 'query-engine'"));
+    assert!(
+        !snippet(&portable).contains("COLORTERM"),
+        "{}",
+        snippet(&portable)
+    );
 
-    let downgrade = run_exec_with_term("alacritty", InfocmpFixture::Missing);
+    let truecolor =
+        run_exec_with_term("xterm-256color", Some("truecolor"), InfocmpFixture::Ambient);
+    assert!(
+        snippet(&truecolor).contains("export COLORTERM=truecolor; exec rimz"),
+        "{}",
+        snippet(&truecolor)
+    );
+
+    let downgrade = run_exec_with_term("alacritty", None, InfocmpFixture::Missing);
     assert!(
         snippet(&downgrade).contains("export TERM=xterm-256color; exec rimz"),
         "{}",
         snippet(&downgrade)
     );
 
-    let copy = run_exec_with_term("alacritty", InfocmpFixture::Copy);
+    let copy = run_exec_with_term("alacritty", None, InfocmpFixture::Copy);
     assert!(
         snippet(&copy)
             .contains("printf '%s\\n' 'CANNED,' | tic -x - 2>/dev/null && export TERM='alacritty'"),
