@@ -32,14 +32,21 @@
 
 Rimz is a realtime dashboard for harnessing agentic coding: one human and tens of agents working together in one zellij or tmux room, where everything about every agent reads at a glance. Every agent gets a live card (state, task, context health, live cost), and the sidebar routes your attention to whichever one needs you.
 
-Rimz is also the substrate for harness and loop engineering: one uniform interface across Claude Code, Codex, Pi, and OpenCode, a durable message system for steering and queuing agents, supervised runs with exit codes for scripts and CI, and scheduled loops that keep the fleet working on a clock. All of it is a single lightweight binary inside the tmux or zellij you already run.
-
 <p align="center">
   <img src="docs/rimz-full.png" alt="A Rimz room: the sidebar triaging a fleet of coding agents beside their panes" width="100%">
   <br/><sub>The sidebar triages the fleet on the left; agents work in their own panes.</sub>
 </p>
 
+
+Rimz is also the substrate for harness and loop engineering: one uniform interface across Claude Code, Codex, Pi, and OpenCode, a durable message system for steering and queuing agents, supervised runs with exit codes for scripts and CI, and scheduled loops that keep the fleet working on a clock. All of it is a single lightweight binary inside the tmux or zellij you already run.
+
+
 ## What it does
+
+<p align="center">
+  <img src="docs/rimz-gallery.png" alt="" width="100%">
+  <br/><sub>Realtime harness dashboard, with rich information at a glance</sub>
+</p>
 
 - **Realtime Harness Dashboard:** working state and task, model and effort, context health and compactions, token mix down to cache reads, live dollar cost, and the subagent tree
 - **Attention, Routed:** one glance at the cockpit line (`? 2  ! 1 …`) reads the whole fleet, the column below arrives already triaged, and one keypress drops you into the pane that is waiting
