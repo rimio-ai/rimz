@@ -904,10 +904,8 @@ fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Res
     }
 
     let agents: Vec<&AgentState> = cached_snapshot.root_agents().collect();
-    let target = scoped_handle(
-        message_target(&message, &agents),
-        message.channel.as_deref(),
-    );
+    let raw_target = message_target(&message, &agents);
+    let target = scoped_handle(raw_target.clone(), message.channel.as_deref());
     let sender = scoped_handle(message.sender.render(), message.channel.as_deref());
     let mut out = render::out();
     writeln!(
@@ -972,7 +970,7 @@ fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Res
     if let Some(text) = message.text.as_deref() {
         write_indented_block(&mut out, text)?;
     } else {
-        writeln!(out, "  ({})", textless_location(&message, &target))?;
+        writeln!(out, "  ({})", textless_location(&message, &raw_target))?;
     }
     writeln!(out)?;
     writeln!(

@@ -10,7 +10,9 @@ use rimz::agents::{
 };
 use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
-use rimz::ledger::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use rimz::ledger::event::{
+    AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod,
+};
 use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
 
 use crate::common::Env;
@@ -259,6 +261,48 @@ fn terminal_message_history_keeps_text_for_list_and_show() {
     assert!(!shown.contains("unconfirmed_sends:"));
     assert!(!shown.contains("last_error:"));
     assert_second_precision_created(&shown);
+}
+
+#[test]
+fn message_show_keeps_channel_in_textless_transcript_hint() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-textless", "docs", &[]);
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.parent_agent_id.is_none())
+        .expect("agent");
+    let mut message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "pre-history body".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some("docs".to_owned()));
+    message.status = MessageStatus::Delivered;
+    message.delivered_at = Some(message.enqueued_at);
+    let message_id = message.message_id.to_string();
+    let event =
+        EventEnvelope::message_event(&message, "rimz-test", MessageEventMethod::Delivered, None);
+    env.ledger().append_event(&event).expect("append event");
+
+    let shown = env
+        .rimz()
+        .args(["message", "show", &message_id])
+        .output()
+        .expect("message show");
+    assert!(
+        shown.status.success(),
+        "message show failed: {}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains("(content in `rimz transcript @claude#docs`)"),
+        "{shown}"
+    );
 }
 
 #[test]
