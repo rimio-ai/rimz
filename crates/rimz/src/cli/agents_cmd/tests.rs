@@ -1552,7 +1552,7 @@ mod render {
     #[test]
     fn agents_table_projects_turn_error_statuses() {
         let now = jiff::Timestamp::from_second(2_000).unwrap();
-        let failed = agent_with_status(
+        let mut failed = agent_with_status(
             "failed-sess",
             rimz::agents::AgentStatus::Running,
             rimz::agents::TurnPhase::Reasoning,
@@ -1563,6 +1563,7 @@ mod render {
             1_010,
             "API Error: Bad Request",
         );
+        failed.description = Some("fix failing auth flow".to_owned());
         let paused = agent_with_status(
             "paused-sess",
             rimz::agents::AgentStatus::Running,
@@ -1583,14 +1584,46 @@ mod render {
         let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
 
         let mut out = anstream::StripStream::new(Vec::new());
-        render_agents_table(&mut out, &snapshot, &agents, now).expect("render agents table");
+        render_agents_table(&mut out, &snapshot, &agents, now, 120).expect("render agents table");
         let text = String::from_utf8(out.into_inner()).expect("utf8");
 
+        assert!(text.contains("DESC"), "{text}");
+        assert!(text.contains("fix failing auth flow"), "{text}");
         assert!(text.contains("failed"), "{text}");
         assert!(text.contains("paused"), "{text}");
         assert!(
             !text.contains("running:reasoning"),
             "turn-error rows drop the stale phase suffix:\n{text}"
+        );
+    }
+
+    #[test]
+    fn agents_table_clips_description_to_width() {
+        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let mut agent = agent_with_status(
+            "long-desc",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        agent.description = Some("this description is far too long for the terminal".to_owned());
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
+            Vec::new(),
+            vec![agent],
+            now,
+        );
+        let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
+
+        let mut out = anstream::StripStream::new(Vec::new());
+        render_agents_table(&mut out, &snapshot, &agents, now, 72).expect("render agents table");
+        let text = String::from_utf8(out.into_inner()).expect("utf8");
+
+        assert!(text.contains('…'), "{text}");
+        assert!(
+            text.lines()
+                .all(|line| unicode_width::UnicodeWidthStr::width(line) <= 72),
+            "{text}"
         );
     }
 }

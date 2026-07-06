@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentContext, AgentTokenUsage};
+use crate::agents::{AgentContext, AgentTokenUsage, usable_description};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::feed::Surface;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId};
@@ -397,6 +397,32 @@ impl Default for AgentCard {
 }
 
 impl AgentCard {
+    /// One-line activity label for CLI and sidebar rows: rich session preview,
+    /// rich session name, launch description, live task, then latest prompt.
+    pub fn activity_description(&self) -> Option<&str> {
+        self.context
+            .as_ref()
+            .and_then(|context| context.session_preview.as_deref())
+            .filter(|preview| usable_description(preview))
+            .or_else(|| {
+                self.context
+                    .as_ref()
+                    .and_then(|context| context.session_name.as_deref())
+                    .filter(|name| usable_description(name))
+            })
+            .or_else(|| {
+                self.description
+                    .as_deref()
+                    .filter(|description| usable_description(description))
+            })
+            .or_else(|| self.task.as_deref().filter(|task| usable_description(task)))
+            .or_else(|| {
+                self.prompt
+                    .as_deref()
+                    .filter(|prompt| usable_description(prompt))
+            })
+    }
+
     /// The context gauge's value (0..=100): the statusline's authoritative
     /// `used_percentage` when it is paired with its own window, else the
     /// statusline's token composition over that same window, else the

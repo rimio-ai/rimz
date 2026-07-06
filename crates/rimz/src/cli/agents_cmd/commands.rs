@@ -50,7 +50,13 @@ pub(super) fn list_agents(
     }
 
     let mut out = render::out();
-    render_agents_table(&mut out, &snapshot, &agents, jiff::Timestamp::now())?;
+    render_agents_table(
+        &mut out,
+        &snapshot,
+        &agents,
+        jiff::Timestamp::now(),
+        render::terminal_columns(120),
+    )?;
     Ok(())
 }
 
@@ -69,6 +75,7 @@ pub(crate) fn render_agents_table(
     snapshot: &rimz::SidebarSnapshot,
     agents: &[&AgentState],
     now: jiff::Timestamp,
+    max_width: usize,
 ) -> std::io::Result<()> {
     let groups = rimz::ledger::snapshot::group_live_agents_by_worktree(agents, snapshot);
     let ordered_agents: Vec<&AgentState> = groups
@@ -76,9 +83,10 @@ pub(crate) fn render_agents_table(
         .flat_map(|group| group.agents.iter().copied())
         .collect();
     let mut table = render::Table::new([
-        "AGENT", "STATUS", "CHANNEL", "MODEL", "CTX", "TOKENS", "AGE",
+        "AGENT", "STATUS", "CHANNEL", "MODEL", "CTX", "TOKENS", "AGE", "DESC",
     ])
-    .right(&[4, 5, 6]);
+    .right(&[4, 5, 6])
+    .clip_last(max_width);
     for &agent in &ordered_agents {
         table.row(agent_row(agent, &ordered_agents, now));
     }
@@ -164,6 +172,18 @@ pub(super) fn show_agent(
     } else {
         None
     };
+    let cost = agent
+        .as_ref()
+        .and_then(|agent| session_cost(&runtime, agent));
+    let messages = match agent.as_ref() {
+        Some(agent) => show_messages(&ledger, agent)?,
+        None => Vec::new(),
+    };
+    let recent_transcript = match agent.as_ref() {
+        Some(agent) => recent_agent_transcript(&workspace, agent).ok(),
+        None => None,
+    }
+    .filter(|view| !view.entries.is_empty());
     if json {
         #[derive(serde::Serialize)]
         struct Show<'a> {
@@ -176,6 +196,10 @@ pub(super) fn show_agent(
             #[serde(skip_serializing_if = "Option::is_none")]
             ask: Option<crate::cli::transcript::AskView>,
             #[serde(skip_serializing_if = "Option::is_none")]
+            cost: Option<rimz::agents::AgentCost>,
+            #[serde(default, skip_serializing_if = "Vec::is_empty")]
+            messages: Vec<ShowMessage>,
+            #[serde(skip_serializing_if = "Option::is_none")]
             capture: Option<rimz::mux::PaneCapture>,
         }
         supervised::output::print_json(&Show {
@@ -183,6 +207,8 @@ pub(super) fn show_agent(
             stale,
             run,
             ask,
+            cost,
+            messages,
             capture: pane_capture,
         })?;
         return Ok(());
@@ -200,65 +226,31 @@ pub(super) fn show_agent(
             Ok(_) => unreachable!("agent is present above"),
         };
     };
-    let mut kv = render::KeyVals::new();
     let peers: Vec<&AgentState> = snapshot
         .agents
         .iter()
         .filter(|candidate| candidate.parent_agent_id.is_none())
         .collect();
-    kv.push(
-        "agent",
-        render::cell(rimz::harness::target::agent_handle(agent, &peers, true))
-            .fg(render::palette::ACCENT),
-    );
-    kv.push(
-        "kind",
-        render::cell(agent.kind.to_string()).fg(render::palette::META),
-    );
-    if let Some(profile) = agent.profile.as_deref() {
-        kv.push("profile", render::cell(profile).fg(render::palette::META));
-    }
-    if let Some(name) = agent.name.as_deref() {
-        kv.push("name", render::cell(name));
-    }
-    kv.push("session", render::cell(agent.agent_id.to_string()));
-    kv.push(
-        "status",
-        render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
-    );
-    if let Some((_, label)) = agent.displayed_turn_error() {
-        kv.push(
-            "error",
-            render::cell(label.unwrap_or("provider API error")).fg(render::palette::ALARM),
-        );
-    }
-    if let Some(ask) = ask.as_ref() {
-        kv.push(
-            "ask",
-            render::cell(crate::cli::transcript::ask_summary(ask)).fg(render::palette::WARN),
-        );
-    }
-    if stale {
-        kv.push(
-            "lifecycle",
-            render::cell("stale").fg(render::palette::FAINT),
-        );
-    }
-    kv.push("model", render::cell(model_label(agent)).dash());
-    kv.push("context", context_cell(agent));
-    kv.push("worktree", render::cell(worktree_label(agent)).dash());
-    push_pane_anchor(&mut kv, agent);
-    if let Some(registered_at) = agent.registered_at {
-        kv.push("registered_at", render::cell(registered_at.to_string()));
-    }
-    kv.render(&mut render::out())?;
+    let now = jiff::Timestamp::now();
+    let mut out = render::out();
+    render_agent_section(&mut out, agent, &peers)?;
+    render_activity_section(&mut out, agent, ask.as_ref(), stale, now)?;
+    render_context_section(&mut out, agent, cost.as_ref())?;
+    render_placement_section(&mut out, agent)?;
     if let Some(run) = run.or_else(|| newest_run_for_agent(&ledger, agent).ok().flatten()) {
-        print_run_line(&run)?;
+        render_run_section(&mut out, &run, now)?;
+    }
+    if !messages.is_empty() {
+        render_messages_section(&mut out, &messages)?;
+    }
+    if let Some(view) = recent_transcript.as_ref() {
+        section(&mut out, "Recent transcript")?;
+        let tz = crate::cli::machine_config().time_zone();
+        crate::cli::transcript::render_lines_to(&mut out, view, &tz)?;
     }
     if let Some(capture) = pane_capture {
         use std::io::Write;
 
-        let mut out = render::out();
         writeln!(
             out,
             "{} {}",
@@ -297,6 +289,329 @@ fn resolve_audit_agent(
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ShowMessage {
+    id: String,
+    status: String,
+    from: String,
+    age: String,
+    text: String,
+}
+
+fn section(w: &mut impl Write, title: &str) -> std::io::Result<()> {
+    writeln!(
+        w,
+        "{}",
+        render::paint(render::palette::ACCENT.bold(), title)
+    )
+}
+
+fn render_agent_section(
+    w: &mut impl Write,
+    agent: &AgentState,
+    peers: &[&AgentState],
+) -> std::io::Result<()> {
+    section(w, "Agent")?;
+    let mut kv = render::KeyVals::new().indent(2);
+    kv.push(
+        "handle",
+        render::cell(rimz::harness::target::agent_handle(agent, peers, true))
+            .fg(render::palette::ACCENT),
+    );
+    kv.push(
+        "kind",
+        render::cell(agent.kind.to_string()).fg(render::palette::META),
+    );
+    if let Some(profile) = agent.profile.as_deref() {
+        kv.push("profile", render::cell(profile).fg(render::palette::META));
+    }
+    if let Some(role) = agent.role.as_deref() {
+        kv.push("role", render::cell(role).fg(render::palette::META));
+    }
+    if let Some(team) = agent.team.as_deref() {
+        kv.push("team", render::cell(team).fg(render::palette::META));
+    }
+    if let Some(name) = agent.name.as_deref() {
+        kv.push("name", render::cell(name));
+    }
+    kv.push("session", render::cell(agent.agent_id.to_string()));
+    if let Some(registered_at) = agent.registered_at {
+        kv.push("registered_at", render::cell(registered_at.to_string()));
+    }
+    kv.render(w)?;
+    writeln!(w)
+}
+
+fn render_activity_section(
+    w: &mut impl Write,
+    agent: &AgentState,
+    ask: Option<&crate::cli::transcript::AskView>,
+    stale: bool,
+    now: jiff::Timestamp,
+) -> std::io::Result<()> {
+    section(w, "Activity")?;
+    let mut kv = render::KeyVals::new().indent(2);
+    kv.push(
+        "description",
+        render::cell(agent.activity_description().unwrap_or("-")).dash(),
+    );
+    kv.push(
+        "status",
+        render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
+    );
+    if let Some(started) = agent.turn_started_at {
+        kv.push("turn_started", render::cell(started.to_string()));
+        kv.push("turn_elapsed", render::cell(render::rel_age(started, now)));
+    }
+    kv.push(
+        "last_activity",
+        render::cell(render::rel_age(agent.last_activity, now)),
+    );
+    if let Some((_, label)) = agent.displayed_turn_error() {
+        kv.push(
+            "turn_error",
+            render::cell(label.unwrap_or("provider API error")).fg(render::palette::ALARM),
+        );
+    }
+    if let Some(ask) = ask {
+        kv.push(
+            "ask",
+            render::cell(crate::cli::transcript::ask_summary(ask)).fg(render::palette::WARN),
+        );
+    }
+    if stale {
+        kv.push("stale", render::cell("yes").fg(render::palette::FAINT));
+    }
+    kv.render(w)?;
+    writeln!(w)
+}
+
+fn render_context_section(
+    w: &mut impl Write,
+    agent: &AgentState,
+    cost: Option<&rimz::agents::AgentCost>,
+) -> std::io::Result<()> {
+    section(w, "Context")?;
+    let mut kv = render::KeyVals::new().indent(2);
+    kv.push("model", render::cell(model_label(agent)).dash());
+    kv.push("fill", context_cell(agent));
+    kv.push(
+        "window",
+        render::cell(
+            agent
+                .resolved_context_window()
+                .map(|tokens| tokens.to_string())
+                .unwrap_or_else(|| "-".to_owned()),
+        )
+        .dash(),
+    );
+    kv.push(
+        "total_tokens",
+        render::cell(opt_count(agent.total_tokens)).dash(),
+    );
+    kv.push(
+        "fresh_input_tokens",
+        render::cell(opt_count(agent.fresh_input_tokens)).dash(),
+    );
+    kv.push(
+        "cache_read_tokens",
+        render::cell(opt_count(agent.cache_read_input_tokens)).dash(),
+    );
+    kv.push(
+        "cache_write_tokens",
+        render::cell(opt_count(agent.cache_write_input_tokens)).dash(),
+    );
+    kv.push(
+        "output_tokens",
+        render::cell(opt_count(agent.output_tokens)).dash(),
+    );
+    kv.push(
+        "compactions",
+        render::cell(agent.compaction_count.to_string()),
+    );
+    kv.push(
+        "cost",
+        render::cell(
+            cost.and_then(|cost| cost.total_cost_usd)
+                .map(fmt_cost)
+                .unwrap_or_else(|| "-".to_owned()),
+        )
+        .dash(),
+    );
+    kv.render(w)?;
+    writeln!(w)
+}
+
+fn render_placement_section(w: &mut impl Write, agent: &AgentState) -> std::io::Result<()> {
+    section(w, "Placement")?;
+    let mut kv = render::KeyVals::new().indent(2);
+    kv.push("channel", render::cell(worktree_label(agent)).dash());
+    kv.push(
+        "worktree",
+        render::cell(agent.worktree_path.as_deref().unwrap_or("-")).dash(),
+    );
+    push_pane_anchor(&mut kv, agent);
+    kv.render(w)?;
+    writeln!(w)
+}
+
+fn render_run_section(
+    w: &mut impl Write,
+    run: &RunRecord,
+    now: jiff::Timestamp,
+) -> std::io::Result<()> {
+    section(w, "Run")?;
+    let mut kv = render::KeyVals::new().indent(2);
+    kv.push("id", render::cell(run.run_id.to_string()));
+    kv.push(
+        "status",
+        render::cell(supervised::output::status_label(run.status))
+            .fg(render::status::run(run.status)),
+    );
+    kv.push("prompt", render::cell(preview(&run.prompt)));
+    kv.push(
+        "started",
+        render::cell(render::rel_age(run.started_at, now)),
+    );
+    let end = run.completed_at.unwrap_or(run.updated_at);
+    kv.push("updated", render::cell(render::rel_age(end, now)));
+    kv.push(
+        "duration",
+        render::cell(duration_label(run.started_at, end)),
+    );
+    kv.push(
+        "exit_code",
+        render::cell(run.status.exit_code().to_string()),
+    );
+    if let Some(tail) = run.failure_tail.as_deref() {
+        kv.push(
+            "failure",
+            render::cell(preview(tail)).fg(render::palette::ALARM),
+        );
+    }
+    kv.render(w)?;
+    writeln!(w)
+}
+
+fn render_messages_section(w: &mut impl Write, messages: &[ShowMessage]) -> std::io::Result<()> {
+    section(w, "Messages")?;
+    let mut table = render::Table::new(["ID", "STATUS", "FROM", "AGE", "TEXT"]);
+    for message in messages {
+        table.row([
+            render::cell(message.id.as_str()).fg(render::palette::ACCENT),
+            render::cell(message.status.as_str()),
+            render::cell(message.from.as_str()).fg(render::palette::META),
+            render::cell(message.age.as_str()),
+            render::cell(message.text.as_str()).dash(),
+        ]);
+    }
+    table.render(w)?;
+    writeln!(w)
+}
+
+fn opt_count(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+fn fmt_cost(value: f64) -> String {
+    if value >= 1.0 {
+        format!("${value:.2}")
+    } else {
+        format!("${value:.4}")
+    }
+}
+
+fn duration_label(start: jiff::Timestamp, end: jiff::Timestamp) -> String {
+    render::age_label(end.duration_since(start).as_secs().max(0) as u64)
+}
+
+fn preview(text: &str) -> String {
+    const MAX: usize = 80;
+    let preview = text.replace(['\r', '\n', '\t'], " ");
+    let mut chars = preview.chars();
+    let short: String = chars.by_ref().take(MAX).collect();
+    if chars.next().is_some() {
+        let mut shortened = preview.chars().take(MAX - 3).collect::<String>();
+        shortened.push_str("...");
+        shortened
+    } else {
+        short
+    }
+}
+
+fn session_cost(
+    runtime: &rimz::RuntimePaths,
+    agent: &AgentState,
+) -> Option<rimz::agents::AgentCost> {
+    let adapter = rimz::agents::find_adapter(agent.kind.as_str())?;
+    let transcript = Path::new(agent.transcript_path.as_deref()?);
+    let prices =
+        rimz::agents::pricing::load_cached_for_spending(&runtime.shared_pricing_cache_path());
+    rimz::agents::spending::session_cost_usd(adapter, agent.agent_id.as_str(), transcript, &prices)
+}
+
+fn show_messages(ledger: &rimz::Ledger, agent: &AgentState) -> Result<Vec<ShowMessage>> {
+    let now = jiff::Timestamp::now();
+    let mut rows: Vec<ShowMessage> = ledger
+        .list_messages()?
+        .into_iter()
+        .filter(|message| message.same_agent_card(agent))
+        .map(|message| ShowMessage {
+            id: message.message_id.to_string(),
+            status: message.status.as_str().to_owned(),
+            from: message.sender.render(),
+            age: render::rel_age(message.enqueued_at, now),
+            text: preview(&message.text),
+        })
+        .collect();
+    let mut delivered = Vec::new();
+    for event in ledger.read_events()?.into_iter().rev() {
+        let rimz::ledger::event::EventKind::Message { payload, .. } = event.kind() else {
+            continue;
+        };
+        if payload.status != rimz::message::MessageStatus::Delivered
+            || !rimz::message::card_matches(
+                &payload.kind,
+                &payload.agent_id,
+                payload.agent_name.as_deref(),
+                &agent.kind,
+                &agent.agent_id,
+                agent.name.as_deref(),
+            )
+        {
+            continue;
+        }
+        delivered.push(ShowMessage {
+            id: payload.message_id.to_string(),
+            status: payload.status.as_str().to_owned(),
+            from: payload.sender.unwrap_or_default().render(),
+            age: render::rel_age(payload.enqueued_at.unwrap_or(event.timestamp), now),
+            text: "-".to_owned(),
+        });
+        if delivered.len() >= 3 {
+            break;
+        }
+    }
+    delivered.reverse();
+    rows.extend(delivered);
+    Ok(rows)
+}
+
+fn recent_agent_transcript(
+    workspace: &rimz::ResolvedWorkspace,
+    agent: &AgentState,
+) -> Result<crate::cli::transcript::RenderedChat> {
+    crate::cli::transcript::chat_view(
+        workspace,
+        Some(&format!("@{}", agent.agent_id.as_str())),
+        None,
+        Some(6),
+        false,
+    )
 }
 
 pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()> {
@@ -378,46 +693,210 @@ pub(super) fn wait_agent(
     }
 }
 
-pub(super) fn stop_agent(reference: String, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn logs_agent(
+    reference: String,
+    tail: Option<usize>,
+    follow: bool,
+    all: bool,
+    json: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let target = agent_logs_target(&reference);
+    if follow {
+        return follow_agent_logs(&workspace, &target, tail, all, json);
+    }
+    let view = crate::cli::transcript::chat_view(&workspace, Some(&target), None, tail, all)?;
+    if json {
+        let entries: Vec<_> = view
+            .entries
+            .iter()
+            .map(|entry| entry.chat.clone())
+            .collect();
+        supervised::output::print_json(&serde_json::json!({ "entries": entries }))?;
+    } else if view.entries.is_empty() {
+        let mut out = render::err();
+        writeln!(
+            out,
+            "{}",
+            render::paint(
+                render::palette::FAINT,
+                view.empty_message
+                    .as_deref()
+                    .unwrap_or("No conversation recorded yet.")
+            )
+        )?;
+    } else {
+        let tz = crate::cli::machine_config().time_zone();
+        let mut out = render::out();
+        crate::cli::transcript::render_lines_to(&mut out, &view, &tz)?;
+    }
+    Ok(())
+}
+
+fn agent_logs_target(reference: &str) -> String {
+    if reference.starts_with('@') || reference.starts_with('#') {
+        reference.to_owned()
+    } else {
+        format!("@{reference}")
+    }
+}
+
+fn follow_agent_logs(
+    workspace: &rimz::ResolvedWorkspace,
+    target: &str,
+    tail: Option<usize>,
+    all: bool,
+    json: bool,
+) -> Result<()> {
+    let initial = crate::cli::transcript::chat_view(workspace, Some(target), None, tail, all)?;
+    let baseline = if tail.is_some() {
+        crate::cli::transcript::chat_view(workspace, Some(target), None, None, all)?
+            .entries
+            .len()
+    } else {
+        initial.entries.len()
+    };
+    if json {
+        for entry in &initial.entries {
+            write_json_line(&entry.chat)?;
+        }
+    } else if !initial.entries.is_empty() {
+        let tz = crate::cli::machine_config().time_zone();
+        let mut out = render::out();
+        crate::cli::transcript::render_lines_to(&mut out, &initial, &tz)?;
+    }
+
+    let tz = crate::cli::machine_config().time_zone();
+    let mut seen = baseline;
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let view = crate::cli::transcript::chat_view(workspace, Some(target), None, None, all)?;
+        if view.entries.len() <= seen {
+            continue;
+        }
+        let new_entries = view.entries[seen..].to_vec();
+        seen = view.entries.len();
+        if json {
+            for entry in new_entries {
+                write_json_line(&entry.chat)?;
+            }
+        } else {
+            let mut out = render::out();
+            let delta = crate::cli::transcript::RenderedChat {
+                channel: view.channel.clone(),
+                focus: view.focus.clone(),
+                entries: new_entries,
+                archive_prefix: 0,
+                archived_hidden: 0,
+                newest_archived_at: None,
+                empty_message: None,
+            };
+            render::finish(
+                crate::cli::transcript::render_lines_to(&mut out, &delta, &tz)
+                    .map_err(|err| std::io::Error::other(err.to_string())),
+            )?;
+        }
+    }
+}
+
+fn write_json_line(value: &impl serde::Serialize) -> Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer(&mut stdout, value)?;
+    writeln!(stdout)?;
+    Ok(())
+}
+
+pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = crate::cli::open_ledger(&workspace)?;
     let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    let live_agent = crate::cli::resolve_agent_one(
-        &snapshot,
-        &reference,
-        None,
-        crate::cli::current_channel(&workspace).as_deref(),
-    )
-    .ok();
-    if let Some(run) = newest_run_by_ref(&ledger, &reference, live_agent)? {
-        if run_stop_should_cancel(&run) {
-            let (record, wrote) = rimz::harness::run::cancel(ledger.paths(), &run.run_id)?;
-            if wrote {
-                rimz::ledger::wakeup::wake_run(ledger.runtime_paths(), &record)
-                    .context("waking run waiter")?;
-            }
-        }
-        if let Ok(backend) = supervised::pane::backend_for_workspace_session(&workspace, globals) {
-            supervised::pane::close_stopped_run_pane_after_grace(
-                backend.as_ref(),
-                &ledger,
-                &workspace.session_name,
-                &run,
-                supervised::pane::STOP_BACKSTOP_GRACE,
-            );
-        }
-        return Ok(());
-    }
-    let agent = match live_agent {
-        Some(agent) => agent,
-        None => crate::cli::resolve_agent_one(
+    let current_channel = crate::cli::current_channel(&workspace);
+    if all {
+        let agents = rimz::harness::target::resolve_many(
             &snapshot,
             &reference,
             None,
-            crate::cli::current_channel(&workspace).as_deref(),
-        )?,
+            current_channel.as_deref(),
+        )?;
+        let peers: Vec<&AgentState> = snapshot.root_agents().collect();
+        let mut failed = false;
+        let mut out = render::out();
+        for agent in agents {
+            let label = rimz::harness::target::agent_handle(agent, &peers, true);
+            match stop_live_agent(&workspace, &ledger, globals, agent) {
+                Ok(()) => writeln!(out, "stopped {label}")?,
+                Err(err) => {
+                    failed = true;
+                    writeln!(out, "error {label}: {err:#}")?;
+                }
+            }
+        }
+        if failed {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    let live_agent_result =
+        crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel.as_deref());
+    let live_agent = live_agent_result.as_ref().ok().copied();
+    if let Some(run) = newest_run_by_ref(&ledger, &reference, live_agent)? {
+        stop_run(&workspace, &ledger, globals, &run)?;
+        return Ok(());
+    }
+    let live_agent = live_agent_result.map_err(|err| stop_resolve_error(err, &reference))?;
+    close_agent_pane(&workspace, live_agent)
+}
+
+fn stop_resolve_error(err: anyhow::Error, reference: &str) -> anyhow::Error {
+    let Some(target_err) = err.downcast_ref::<rimz::TargetErr>() else {
+        return err;
     };
-    close_agent_pane(&workspace, agent)
+    if matches!(target_err, rimz::TargetErr::Ambiguous { .. }) {
+        anyhow::anyhow!(
+            "{target_err}; re-run `rimz agents stop {reference} --all` to stop every match"
+        )
+    } else {
+        err
+    }
+}
+
+fn stop_live_agent(
+    workspace: &rimz::ResolvedWorkspace,
+    ledger: &rimz::Ledger,
+    globals: &GlobalFlags,
+    agent: &AgentState,
+) -> Result<()> {
+    if let Some(run) = newest_run_for_agent(ledger, agent)? {
+        stop_run(workspace, ledger, globals, &run)
+    } else {
+        close_agent_pane(workspace, agent)
+    }
+}
+
+fn stop_run(
+    workspace: &rimz::ResolvedWorkspace,
+    ledger: &rimz::Ledger,
+    globals: &GlobalFlags,
+    run: &RunRecord,
+) -> Result<()> {
+    if run_stop_should_cancel(run) {
+        let (record, wrote) = rimz::harness::run::cancel(ledger.paths(), &run.run_id)?;
+        if wrote {
+            rimz::ledger::wakeup::wake_run(ledger.runtime_paths(), &record)
+                .context("waking run waiter")?;
+        }
+    }
+    if let Ok(backend) = supervised::pane::backend_for_workspace_session(workspace, globals) {
+        supervised::pane::close_stopped_run_pane_after_grace(
+            backend.as_ref(),
+            ledger,
+            &workspace.session_name,
+            run,
+            supervised::pane::STOP_BACKSTOP_GRACE,
+        );
+    }
+    Ok(())
 }
 
 /// Whether `stop` must cancel a run's supervision before reclaiming its pane.
@@ -894,6 +1373,7 @@ fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) ->
         context_cell(agent),
         render::cell(tokens_label(agent)).dash(),
         render::cell(render::age_short(agent.last_seen, now)),
+        render::cell(agent.activity_description().unwrap_or("-")).dash(),
     ]
 }
 

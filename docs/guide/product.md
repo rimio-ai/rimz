@@ -128,7 +128,7 @@ A failing migration at 3 a.m. becomes a push on your phone, a one-line fix typed
 For orchestration:
 
 - `--detach` prints the agent pet name and returns immediately.
-- `rimz agents show <ref>` reports the card and attached durable run.
+- `rimz agents show <ref>` reports the agent, activity, context, placement, attached durable run, message queue, and recent transcript.
 - `rimz agents wait <ref> --stream` or `rimz agents <kind> "<prompt>" -p --stream` streams the turn as it happens.
 - `rimz message --steer @<agent> "continue"` is the first-class nudge for wrapper scripts.
 - `rimz pane send` / `rimz pane capture` remain the universal pane fallback.

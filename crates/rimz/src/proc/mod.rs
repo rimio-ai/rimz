@@ -624,6 +624,60 @@ pub fn write_bytes(_pid: u32) -> Option<u64> {
     None
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeTotals {
+    pub cpu_ticks: u64,
+    pub rss_kb: u64,
+    pub io_bytes: Option<u64>,
+    pub process_count: u32,
+}
+
+/// Sum CPU, resident memory, and VFS I/O over a process tree rooted at
+/// `root_pid`. `None` means the root cannot be sampled on this platform or it
+/// vanished before its first stat read.
+pub fn tree_totals(root_pid: u32) -> Option<TreeTotals> {
+    tree_totals_with(root_pid, &stat_metrics, &children, &io_bytes)
+}
+
+fn tree_totals_with(
+    root_pid: u32,
+    stat: &dyn Fn(u32) -> Option<StatMetrics>,
+    children: &dyn Fn(u32) -> Vec<u32>,
+    io: &dyn Fn(u32) -> Option<u64>,
+) -> Option<TreeTotals> {
+    let mut stack = vec![root_pid];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut totals = TreeTotals {
+        cpu_ticks: 0,
+        rss_kb: 0,
+        io_bytes: Some(0),
+        process_count: 0,
+    };
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        let children = children(pid);
+        stack.extend(children);
+        let metrics = match stat(pid) {
+            Some(metrics) => metrics,
+            None if pid == root_pid => return None,
+            None => continue,
+        };
+        totals.cpu_ticks = totals
+            .cpu_ticks
+            .saturating_add(metrics.cpu_ticks)
+            .saturating_add(metrics.child_cpu_ticks);
+        totals.rss_kb = totals.rss_kb.saturating_add(metrics.rss_kb);
+        totals.process_count = totals.process_count.saturating_add(1);
+        totals.io_bytes = match (totals.io_bytes, io(pid)) {
+            (Some(total), Some(bytes)) => Some(total.saturating_add(bytes)),
+            _ => None,
+        };
+    }
+    (totals.process_count > 0).then_some(totals)
+}
+
 /// Clock ticks per second for `/proc` `starttime` (`SC_CLK_TCK`). Linux reports
 /// `starttime` in USER_HZ; `sysconf` returns it, and an unavailable or nonsensical
 /// answer falls back to 100 — the USER_HZ every mainstream Linux target fixes it
@@ -848,6 +902,64 @@ Uid:\t0\t0\t0\t0
         // Only rchar present: returns None (wchar is missing).
         let io = "rchar: 1000\n";
         assert_eq!(parse_io_bytes(io), None);
+    }
+
+    #[test]
+    fn tree_totals_walks_descendants_and_dedupes_cycles() {
+        let stat = |pid| {
+            Some(StatMetrics {
+                state: 'S',
+                cpu_ticks: u64::from(pid),
+                child_cpu_ticks: 10,
+                rss_kb: u64::from(pid * 100),
+                start_ticks: 1,
+            })
+        };
+        let children = |pid| match pid {
+            1 => vec![2, 3],
+            2 => vec![3],
+            _ => Vec::new(),
+        };
+        let io = |pid| Some(u64::from(pid * 1_000));
+
+        assert_eq!(
+            tree_totals_with(1, &stat, &children, &io),
+            Some(TreeTotals {
+                cpu_ticks: 36,
+                rss_kb: 600,
+                io_bytes: Some(6_000),
+                process_count: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn tree_totals_returns_none_when_root_is_missing() {
+        let stat = |_pid| None;
+        let children = |_pid| Vec::new();
+        let io = |_pid| Some(0);
+
+        assert_eq!(tree_totals_with(1, &stat, &children, &io), None);
+    }
+
+    #[test]
+    fn tree_totals_missing_child_io_makes_tree_io_unknown() {
+        let stat = |pid| {
+            Some(StatMetrics {
+                state: 'S',
+                cpu_ticks: u64::from(pid),
+                child_cpu_ticks: 0,
+                rss_kb: 1,
+                start_ticks: 1,
+            })
+        };
+        let children = |pid| if pid == 1 { vec![2] } else { Vec::new() };
+        let io = |pid| (pid == 1).then_some(10);
+
+        assert_eq!(
+            tree_totals_with(1, &stat, &children, &io).map(|totals| totals.io_bytes),
+            Some(None)
+        );
     }
 
     #[test]

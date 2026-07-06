@@ -83,7 +83,8 @@ pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spend
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
     ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS,
-    DEFAULT_STALL_AFTER_SECS, is_stalled, is_turn_complete, is_turn_dead,
+    DEFAULT_STALL_AFTER_SECS, is_stalled, is_turn_complete, is_turn_dead, looks_like_control_text,
+    single_line_description, usable_description,
 };
 pub(crate) use state::{
     AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,

@@ -8,6 +8,7 @@ mod reconcile;
 mod refresh_usage;
 mod supervised;
 pub(crate) mod team_restore;
+mod top;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -39,11 +40,13 @@ pub(crate) use commands::render_agents_table;
 #[cfg(test)]
 use commands::{RunPlacement, run_placement, run_stop_should_cancel};
 use commands::{
-    focus_agent, list_agents, run_print, run_supervised, show_agent, stop_agent, wait_agent,
+    focus_agent, list_agents, logs_agent, run_print, run_supervised, show_agent, stop_agent,
+    wait_agent,
 };
 use exec::run_exec;
 use launch::*;
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
+use top::{TopArgs, run_top};
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
@@ -203,7 +206,7 @@ pub(super) enum InputFormat {
 #[derive(Debug, Subcommand)]
 enum AgentsSubcmd {
     /// List agent cards in the current room.
-    #[command(alias = "ls")]
+    #[command(aliases = ["ls", "ps"])]
     List {
         #[arg(long)]
         json: bool,
@@ -213,6 +216,7 @@ enum AgentsSubcmd {
         worktree: Option<String>,
     },
     /// Show one agent card.
+    #[command(alias = "inspect")]
     Show {
         reference: String,
         #[arg(long)]
@@ -224,6 +228,20 @@ enum AgentsSubcmd {
         #[arg(long, requires = "capture")]
         ansi: bool,
     },
+    /// Show one agent transcript.
+    Logs {
+        reference: String,
+        #[arg(short = 'n', long = "tail")]
+        tail: Option<usize>,
+        #[arg(short = 'f', long, conflicts_with = "all")]
+        follow: bool,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show live agent resource usage.
+    Top(TopArgs),
     /// Focus an agent pane.
     Focus { reference: String },
     /// Wait for a supervised run or for an interactive agent to become idle.
@@ -239,7 +257,11 @@ enum AgentsSubcmd {
         json: bool,
     },
     /// Stop a supervised run or close an agent pane.
-    Stop { reference: String },
+    Stop {
+        reference: String,
+        #[arg(long)]
+        all: bool,
+    },
     /// Hidden wrapper used inside launched agent panes.
     #[command(hide = true)]
     Exec(Box<ExecArgs>),
@@ -325,6 +347,14 @@ pub fn run(mut args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }) => {
             return show_agent(reference, json, capture, ansi, globals);
         }
+        Some(AgentsSubcmd::Logs {
+            reference,
+            tail,
+            follow,
+            all,
+            json,
+        }) => return logs_agent(reference, tail, follow, all, json, globals),
+        Some(AgentsSubcmd::Top(args)) => return run_top(args, globals),
         Some(AgentsSubcmd::Focus { reference }) => return focus_agent(reference, globals),
         Some(AgentsSubcmd::Wait {
             reference,
@@ -333,7 +363,7 @@ pub fn run(mut args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             from_start,
             json,
         }) => return wait_agent(reference, timeout, stream, from_start, json, globals),
-        Some(AgentsSubcmd::Stop { reference }) => return stop_agent(reference, globals),
+        Some(AgentsSubcmd::Stop { reference, all }) => return stop_agent(reference, all, globals),
         None => {}
     }
     if args.spec.is_none() {

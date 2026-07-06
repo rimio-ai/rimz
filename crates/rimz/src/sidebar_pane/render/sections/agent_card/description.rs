@@ -72,11 +72,11 @@ pub(super) fn description_line(
     let mut left = vec![Span::raw("  ")];
     if let Some(label) = agent(row)
         .and_then(|agent| agent.turn_error_label.as_deref())
-        .and_then(single_line_description)
+        .and_then(crate::agents::single_line_description)
     {
         left.extend(body_spans(&label, true));
     } else {
-        match descriptor(row).and_then(single_line_description) {
+        match descriptor(row).and_then(crate::agents::single_line_description) {
             Some(text) => left.extend(body_spans(&text, false)),
             None => left.push(Span::raw("—".to_owned())),
         }
@@ -101,58 +101,7 @@ pub(super) fn description_line(
 /// turn until it earns richer metadata. `None` when the session has nothing to
 /// show — the caller skips blank idle cards or paints an em dash.
 pub(super) fn descriptor(row: &SidebarRow) -> Option<&str> {
-    // The producer sanitizes prompt/task before they reach the row; this is a
-    // last-ditch backstop so a harness control turn (`<task-notification>…`)
-    // can never paint the description even if a future producer regressed.
-    ctx(row)
-        .and_then(|context| context.session_preview.as_deref())
-        .filter(|preview| usable_description(preview))
-        .or_else(|| {
-            ctx(row)
-                .and_then(|context| context.session_name.as_deref())
-                .filter(|name| usable_description(name))
-        })
-        .or_else(|| {
-            agent(row)
-                .and_then(|agent| agent.description.as_deref())
-                .filter(|description| usable_description(description))
-        })
-        .or_else(|| {
-            agent(row)
-                .and_then(|agent| agent.task.as_deref())
-                .filter(|task| usable_description(task))
-        })
-        .or_else(|| {
-            agent(row)
-                .and_then(|agent| agent.prompt.as_deref())
-                .filter(|prompt| usable_description(prompt))
-        })
-}
-
-pub(super) fn usable_description(value: &str) -> bool {
-    single_line_description(value).is_some() && !looks_like_control_text(value)
-}
-
-fn single_line_description(value: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut pending_space = false;
-    for ch in value.chars() {
-        if ch.is_whitespace() {
-            if !out.is_empty() {
-                pending_space = true;
-            }
-            continue;
-        }
-        if ch.is_control() {
-            continue;
-        }
-        if pending_space {
-            out.push(' ');
-            pending_space = false;
-        }
-        out.push(ch);
-    }
-    (!out.is_empty()).then_some(out)
+    row.as_agent().and_then(AgentCard::activity_description)
 }
 
 /// An idle agent with nothing to describe yet — waiting for its first prompt.
@@ -160,18 +109,6 @@ pub(super) fn awaiting_first_prompt(row: &SidebarRow) -> bool {
     row.is_agent()
         && matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && descriptor(row).is_none()
-}
-
-/// Whether a description candidate is a harness-injected control turn rather
-/// than human-authored text — it leads with one of the synthetic-turn tags. A
-/// renderer backstop only; the real guard is `sanitize_user_prompt` in the
-/// producer, and the producer-owned tag list is shared here so the two guards
-/// cannot drift.
-pub(super) fn looks_like_control_text(value: &str) -> bool {
-    let trimmed = value.trim_start();
-    crate::agents::CONTROL_TAG_PREFIXES
-        .iter()
-        .any(|tag| trimmed.starts_with(tag))
 }
 
 #[cfg(test)]

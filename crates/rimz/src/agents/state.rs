@@ -907,6 +907,32 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    /// One-line activity label for CLI and sidebar rows: rich session preview,
+    /// rich session name, launch description, live task, then latest prompt.
+    pub fn activity_description(&self) -> Option<&str> {
+        self.context
+            .as_ref()
+            .and_then(|context| context.session_preview.as_deref())
+            .filter(|preview| usable_description(preview))
+            .or_else(|| {
+                self.context
+                    .as_ref()
+                    .and_then(|context| context.session_name.as_deref())
+                    .filter(|name| usable_description(name))
+            })
+            .or_else(|| {
+                self.description
+                    .as_deref()
+                    .filter(|description| usable_description(description))
+            })
+            .or_else(|| self.task.as_deref().filter(|task| usable_description(task)))
+            .or_else(|| {
+                self.prompt
+                    .as_deref()
+                    .filter(|prompt| usable_description(prompt))
+            })
+    }
+
     /// The lifecycle-machine view of this rollup entry — exactly the `prev` the
     /// reducer (and the ingestion anomaly log) folds the next signal onto.
     /// Lossless: `status` and `phase` are stored verbatim from the machine's
@@ -1054,6 +1080,44 @@ impl AgentState {
     }
 }
 
+/// Collapse whitespace and drop control characters, returning `None` for blank
+/// values. Callers keep the original borrowed field for precedence decisions and
+/// run this only at render boundaries.
+pub fn single_line_description(value: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut pending_space = false;
+    for ch in value.chars() {
+        if ch.is_whitespace() {
+            if !out.is_empty() {
+                pending_space = true;
+            }
+            continue;
+        }
+        if ch.is_control() {
+            continue;
+        }
+        if pending_space {
+            out.push(' ');
+            pending_space = false;
+        }
+        out.push(ch);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+pub fn usable_description(value: &str) -> bool {
+    single_line_description(value).is_some() && !looks_like_control_text(value)
+}
+
+/// Whether a description candidate is a harness-injected control turn rather
+/// than human-authored text.
+pub fn looks_like_control_text(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    crate::agents::CONTROL_TAG_PREFIXES
+        .iter()
+        .any(|tag| trimmed.starts_with(tag))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1080,6 +1144,59 @@ mod tests {
         let encoded = serde_json::to_value(&agent).expect("encode");
         assert!(encoded.get("agent_pid").is_none());
         assert!(encoded.get("agent_process_start").is_none());
+    }
+
+    #[test]
+    fn activity_description_prefers_rich_context_then_fallbacks() {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.prompt = Some("latest prompt".to_owned());
+        agent.task = Some("live task".to_owned());
+        agent.description = Some("launch label".to_owned());
+        agent.context = Some(AgentContext {
+            source: "codex".to_owned(),
+            session_name: Some("thread name".to_owned()),
+            session_preview: Some("thread preview".to_owned()),
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: None,
+            pr: None,
+            account: None,
+            turn_error: None,
+            turn_complete: None,
+            observed_at: Timestamp::from_second(1_000).unwrap(),
+        });
+
+        assert_eq!(agent.activity_description(), Some("thread preview"));
+        agent.context.as_mut().unwrap().session_preview = None;
+        assert_eq!(agent.activity_description(), Some("thread name"));
+        agent.context = None;
+        assert_eq!(agent.activity_description(), Some("launch label"));
+        agent.description = None;
+        assert_eq!(agent.activity_description(), Some("live task"));
+        agent.task = None;
+        assert_eq!(agent.activity_description(), Some("latest prompt"));
+    }
+
+    #[test]
+    fn activity_description_rejects_blank_and_control_text() {
+        let mut agent = test_agent(AgentStatus::Running, 1_000);
+        agent.task = Some(" \n\t".to_owned());
+        agent.prompt =
+            Some("<task-notification>synthetic</task-notification> real prompt".to_owned());
+
+        assert_eq!(agent.activity_description(), None);
+        assert_eq!(
+            single_line_description("ship\nwide\tlabel\rnow\u{0007}").as_deref(),
+            Some("ship wide label now")
+        );
     }
 
     /// The context tier climbs calm → yellow → amber → red, taking the worse

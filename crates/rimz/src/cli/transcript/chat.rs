@@ -141,17 +141,6 @@ pub(super) fn display_handle(handle: &str, grouped: bool) -> &str {
     if grouped { base_handle(handle) } else { handle }
 }
 
-pub(super) fn render_chat(
-    channel: Option<&str>,
-    entries: &[RenderEntry],
-    archive_prefix: usize,
-    tz: &TimeZone,
-) -> Result<()> {
-    let mut out = render::out();
-    let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();
-    render_chat_to(&mut out, channel, entries, archive_prefix, tz, today)
-}
-
 pub(super) fn render_chat_to(
     out: &mut impl Write,
     channel: Option<&str>,

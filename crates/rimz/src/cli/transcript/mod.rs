@@ -46,18 +46,18 @@ pub(crate) struct AskView {
 }
 
 #[derive(Serialize)]
-struct ChatView {
+pub(crate) struct ChatView {
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     focus: Option<String>,
-    entries: Vec<ChatLine>,
+    pub entries: Vec<ChatLine>,
     #[serde(skip_serializing_if = "Option::is_none")]
     archived_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-struct ChatLine {
+pub(crate) struct ChatLine {
     pub from: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
@@ -79,11 +79,11 @@ fn is_false(value: &bool) -> bool {
 type AgentKey = (AgentKind, AgentSessionId);
 
 #[derive(Clone, Debug)]
-struct RenderEntry {
+pub(crate) struct RenderEntry {
     kind: ChatKind,
     request_id: Option<RequestId>,
     agent: AgentKey,
-    chat: ChatLine,
+    pub(crate) chat: ChatLine,
 }
 
 #[derive(Clone, Debug)]
@@ -113,7 +113,7 @@ mod chat;
 mod layout;
 mod scope;
 
-use chat::{format_marker_when, render_chat, render_entry_for_log_entry};
+use chat::{format_marker_when, render_chat_to, render_entry_for_log_entry};
 use scope::{
     build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_matches_focus,
     keep_last, live_boundary, live_root_agents, resolve_scope,
@@ -122,19 +122,82 @@ use scope::{
 use {chat::*, scope::*};
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing state paths")?;
-    let current = current_channel(&workspace);
-    let entries = dedup_asks(rimz::chat::read_all(&paths)?);
-    if entries.is_empty() {
-        return write_empty_chat(args.json, "No conversation recorded yet.");
-    }
-    let identities = build_identities(&entries);
-    let live_agents = live_root_agents(&workspace);
-    let live_root_keys = live_agents.iter().map(|agent| agent.key.clone()).collect();
-    let scope = resolve_scope(
+    let view = chat_view(
+        &workspace,
         args.target.as_deref(),
         args.worktree.as_deref(),
+        args.last,
+        args.all,
+    )?;
+    if view.entries.is_empty() {
+        return write_empty_chat(
+            args.json,
+            view.empty_message
+                .as_deref()
+                .unwrap_or("No conversation recorded yet."),
+        );
+    }
+    if args.json {
+        print_json(&ChatView {
+            channel: view.channel.clone(),
+            focus: view.focus.clone(),
+            entries: view
+                .entries
+                .iter()
+                .map(|entry| entry.chat.clone())
+                .collect(),
+            archived_count: (view.archived_hidden > 0).then_some(view.archived_hidden),
+        })?;
+    } else {
+        let tz = super::machine_config().time_zone();
+        let mut out = render::out();
+        render_lines_to(&mut out, &view, &tz)?;
+        if view.archived_hidden > 0 {
+            write_archive_hint(view.archived_hidden, view.newest_archived_at, &tz)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RenderedChat {
+    pub(crate) channel: Option<String>,
+    pub(crate) focus: Option<String>,
+    pub(crate) entries: Vec<RenderEntry>,
+    pub(crate) archive_prefix: usize,
+    pub(crate) archived_hidden: usize,
+    pub(crate) newest_archived_at: Option<jiff::Timestamp>,
+    pub(crate) empty_message: Option<String>,
+}
+
+pub(crate) fn chat_view(
+    workspace: &rimz::ResolvedWorkspace,
+    target: Option<&str>,
+    worktree: Option<&str>,
+    last: Option<usize>,
+    all: bool,
+) -> Result<RenderedChat> {
+    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing state paths")?;
+    let current = current_channel(workspace);
+    let entries = dedup_asks(rimz::chat::read_all(&paths)?);
+    if entries.is_empty() {
+        return Ok(RenderedChat {
+            channel: None,
+            focus: None,
+            entries: Vec::new(),
+            archive_prefix: 0,
+            archived_hidden: 0,
+            newest_archived_at: None,
+            empty_message: Some("No conversation recorded yet.".to_owned()),
+        });
+    }
+    let identities = build_identities(&entries);
+    let live_agents = live_root_agents(workspace);
+    let live_root_keys = live_agents.iter().map(|agent| agent.key.clone()).collect();
+    let scope = resolve_scope(
+        target,
+        worktree,
         current.as_deref(),
         &identities,
         &live_root_keys,
@@ -144,8 +207,16 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         .filter(|entry| entry_in_scope(entry, &scope))
         .collect();
     if filtered.is_empty() {
-        let message = empty_scope_message(&scope, args.target.as_deref());
-        return write_empty_chat(args.json, &message);
+        let empty_message = empty_scope_message(&scope, target);
+        return Ok(RenderedChat {
+            channel: scope.channel,
+            focus: scope.focus,
+            entries: Vec::new(),
+            archive_prefix: 0,
+            archived_hidden: 0,
+            newest_archived_at: None,
+            empty_message: Some(empty_message),
+        });
     }
 
     let mut entries: Vec<_> = filtered
@@ -158,8 +229,16 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     entries.sort_by(|left, right| compare_optional_timestamps(left.chat.at, right.chat.at));
 
     if entries.is_empty() {
-        let message = empty_scope_message(&scope, args.target.as_deref());
-        return write_empty_chat(args.json, &message);
+        let empty_message = empty_scope_message(&scope, target);
+        return Ok(RenderedChat {
+            channel: scope.channel,
+            focus: scope.focus,
+            entries: Vec::new(),
+            archive_prefix: 0,
+            archived_hidden: 0,
+            newest_archived_at: None,
+            empty_message: Some(empty_message),
+        });
     }
 
     let boundary = live_boundary(&scope, &live_agents);
@@ -169,11 +248,11 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         }
         None => entries.len(),
     };
-    let show_archive = args.all || split == entries.len();
+    let show_archive = all || split == entries.len();
     let mut archived_hidden = 0;
     let mut newest_archived_at = None;
     let (shown, archive_prefix) = if show_archive {
-        keep_last(&mut entries, args.last);
+        keep_last(&mut entries, last);
         let archive_prefix = archive_prefix(&entries, boundary);
         (entries, archive_prefix)
     } else {
@@ -182,25 +261,34 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
             .checked_sub(1)
             .and_then(|index| entries[index].chat.at);
         let mut current = entries.split_off(split);
-        keep_last(&mut current, args.last);
+        keep_last(&mut current, last);
         (current, 0)
     };
 
-    if args.json {
-        print_json(&ChatView {
-            channel: scope.channel.clone(),
-            focus: scope.focus.clone(),
-            entries: shown.iter().map(|entry| entry.chat.clone()).collect(),
-            archived_count: (archived_hidden > 0).then_some(archived_hidden),
-        })?;
-    } else {
-        let tz = super::machine_config().time_zone();
-        render_chat(scope.channel.as_deref(), &shown, archive_prefix, &tz)?;
-        if archived_hidden > 0 {
-            write_archive_hint(archived_hidden, newest_archived_at, &tz)?;
-        }
-    }
-    Ok(())
+    Ok(RenderedChat {
+        channel: scope.channel,
+        focus: scope.focus,
+        entries: shown,
+        archive_prefix,
+        archived_hidden,
+        newest_archived_at,
+        empty_message: None,
+    })
+}
+
+pub(crate) fn render_lines_to(
+    out: &mut impl Write,
+    view: &RenderedChat,
+    tz: &TimeZone,
+) -> Result<()> {
+    render_chat_to(
+        out,
+        view.channel.as_deref(),
+        &view.entries,
+        view.archive_prefix,
+        tz,
+        jiff::Timestamp::now().to_zoned(tz.clone()).date(),
+    )
 }
 
 fn archive_prefix(entries: &[RenderEntry], boundary: Option<jiff::Timestamp>) -> usize {

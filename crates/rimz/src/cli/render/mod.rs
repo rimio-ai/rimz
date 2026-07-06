@@ -14,6 +14,7 @@ pub(crate) mod status;
 use std::io::Write;
 
 use jiff::Timestamp;
+use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 /// Styled stdout for human command output. Lock it once and write the whole
@@ -149,6 +150,7 @@ enum Align {
 }
 
 /// A single table or key/value cell: plain text plus an optional palette style.
+#[derive(Clone)]
 pub(crate) struct Cell {
     text: String,
     style: Option<anstyle::Style>,
@@ -190,6 +192,13 @@ impl Cell {
         }
     }
 
+    fn clipped(&self, width: usize) -> Self {
+        Cell {
+            text: clip_to_width(&self.text, width),
+            style: self.style,
+        }
+    }
+
     fn write_padded(&self, w: &mut impl Write, width: usize, align: Align) -> std::io::Result<()> {
         let pad = width.saturating_sub(self.width());
         match align {
@@ -222,6 +231,7 @@ pub(crate) struct Table {
     headers: Vec<String>,
     align: Vec<Align>,
     rows: Vec<Body>,
+    clip_last_width: Option<usize>,
 }
 
 impl Table {
@@ -236,6 +246,7 @@ impl Table {
             headers,
             align,
             rows: Vec::new(),
+            clip_last_width: None,
         }
     }
 
@@ -253,6 +264,13 @@ impl Table {
         self.rows.push(Body::Row(cells.into_iter().collect()));
     }
 
+    /// Clip the trailing column so rendered rows fit within `max_total_width`
+    /// whenever the fixed columns leave any budget for it.
+    pub(crate) fn clip_last(mut self, max_total_width: usize) -> Self {
+        self.clip_last_width = Some(max_total_width);
+        self
+    }
+
     /// Open a group: a blank line then `label` in the accent tone, heading every
     /// row pushed until the next section.
     pub(crate) fn section(&mut self, label: impl Into<String>) {
@@ -267,6 +285,23 @@ impl Table {
                 for (col, cell) in row.iter().enumerate().take(cols) {
                     widths[col] = widths[col].max(cell.width());
                 }
+            }
+        }
+        if let Some(max_total_width) = self.clip_last_width
+            && cols > 0
+        {
+            let last = cols - 1;
+            let gaps = 2 * last;
+            let fixed: usize = widths.iter().take(last).sum::<usize>() + gaps;
+            let available = max_total_width.saturating_sub(fixed);
+            if available < widths[last] {
+                let floor = 8;
+                let allowed = if available >= floor {
+                    available
+                } else {
+                    available.max(1)
+                };
+                widths[last] = allowed.min(widths[last]);
             }
         }
         let header_cells: Vec<Cell> = self
@@ -303,6 +338,13 @@ impl Table {
                 write!(w, "  ")?;
             }
             let c = cells.get(col).unwrap_or(&blank);
+            let clipped;
+            let c = if self.clip_last_width.is_some() && col + 1 == cols {
+                clipped = c.clipped(width);
+                &clipped
+            } else {
+                c
+            };
             // The last left-aligned column needs no padding, keeping line ends clean.
             if col + 1 == cols && align == Align::Left {
                 c.write_styled(w)?;
@@ -311,6 +353,35 @@ impl Table {
             }
         }
         writeln!(w)
+    }
+}
+
+fn clip_to_width(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_owned();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_owned();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    let body_width = max_width - 1;
+    for ch in text.chars() {
+        let width = ch.width().unwrap_or(0);
+        if used + width > body_width {
+            break;
+        }
+        out.push(ch);
+        used += width;
+    }
+    if out.is_empty() {
+        "…".to_owned()
+    } else {
+        out.push('…');
+        out
     }
 }
 
@@ -395,6 +466,24 @@ mod tests {
             strip(|w| table.render(w)),
             "NAME         CTX\nright-yard  100%\na             5%\n"
         );
+    }
+
+    #[test]
+    fn table_clip_last_limits_trailing_column() {
+        let mut table = Table::new(["NAME", "DESC"]).clip_last(20);
+        table.row([cell("agent"), cell("unicode wide 文字 tail")]);
+
+        let rendered = strip(|w| table.render(w));
+
+        assert_eq!(rendered, "NAME   DESC\nagent  unicode wide…\n");
+        assert!(rendered.lines().all(|line| line.width() <= 20));
+    }
+
+    #[test]
+    fn clip_to_width_respects_unicode_width() {
+        assert_eq!(clip_to_width("abcd", 4), "abcd");
+        assert_eq!(clip_to_width("abcdef", 4), "abc…");
+        assert_eq!(clip_to_width("文字abc", 5), "文字…");
     }
 
     #[test]

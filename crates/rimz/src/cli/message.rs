@@ -349,7 +349,13 @@ fn message_miss(
         writeln!(out, "no agents are running")?;
     } else {
         writeln!(out, "available agents:")?;
-        super::agents_cmd::render_agents_table(&mut out, snapshot, &agents, Timestamp::now())?;
+        super::agents_cmd::render_agents_table(
+            &mut out,
+            snapshot,
+            &agents,
+            Timestamp::now(),
+            render::terminal_columns(120),
+        )?;
     }
     out.flush().ok();
     std::process::exit(1);
