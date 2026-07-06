@@ -42,7 +42,7 @@ pub enum ProduceErr {
     /// but unreadable — a test-seam failure, never a production state.
     #[error("reading RIMZ_TEST_PANE_LIST {path}: {reason}")]
     Fixture { path: PathBuf, reason: String },
-    /// `list-panes` failed: no live session to enumerate, or the mux errored.
+    /// Pane discovery failed: no live session to enumerate, or the mux errored.
     #[error(transparent)]
     PaneDiscovery(#[from] crate::mux::MuxErr),
     /// The mux returned an Ok-but-implausible pane frame and no prior frame was

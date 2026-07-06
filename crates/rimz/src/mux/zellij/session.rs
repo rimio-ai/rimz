@@ -1,103 +1,174 @@
-//! Zellij session discovery and pane-list reads.
+//! Zellij session discovery and topology-cache reads.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use super::parse::{
-    SessionState, classify_session_not_found, is_session_not_found, is_transient_empty,
-    session_state_from_line,
-};
-use super::raw_pane::{RawPane, RawPaneListing, SessionCleanliness, classify_session_panes};
-use super::{HEALTH_PROBE_TIMEOUT, LIST_PANES_ATTEMPTS, LIST_PANES_RETRY_DELAY, ZellijBackend};
+use super::parse::{SessionState, session_state_from_line};
+use super::raw_pane::{RawPaneListing, SessionCleanliness, classify_session_panes};
+use super::{HEALTH_PROBE_TIMEOUT, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend};
+use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::WorkspaceId;
-use crate::ledger::paths::RuntimePaths;
+use crate::ledger::paths::{self, RuntimePaths};
+use crate::mux::PresencePluginOptions;
 use crate::mux::{MuxErr, Result};
 use crate::sidebar::cache::{pane_topology_cache_is_fresh, read_pane_topology_cache};
 use crate::sidebar::timing::unix_now_ms;
+use crate::workspace::{self, KnownWorkspace};
 
 impl ZellijBackend {
-    pub(super) fn list_panes_with_session(&self, session: Option<&str>) -> Result<Vec<RawPane>> {
-        self.list_panes_bounded(session, super::super::COMMAND_TIMEOUT)
-    }
-
-    /// `list-panes` with a caller-chosen per-attempt bound. The pre-attach health
-    /// probe passes [`HEALTH_PROBE_TIMEOUT`] so a hung server cannot stall the
-    /// launch; everyone else inherits [`super::super::COMMAND_TIMEOUT`].
-    pub(super) fn list_panes_bounded(
+    pub(super) fn topology_panes(
         &self,
-        session: Option<&str>,
+        session: &str,
+        min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
-    ) -> Result<Vec<RawPane>> {
-        let mut spec = self.cmd();
-        if let Some(name) = session {
-            spec = spec.args(["--session".to_owned(), name.to_owned()]);
-        }
-        spec = spec.args(["action", "list-panes", "-j", "-a"]);
-        for attempt in 0..LIST_PANES_ATTEMPTS {
-            if attempt > 0 {
-                std::thread::sleep(LIST_PANES_RETRY_DELAY);
-            }
-            let output = match session {
-                Some(name) => spec
-                    .run_with_timeout(timeout)
-                    .map_err(|err| classify_session_not_found(err, name))?,
-                None => spec.run_with_timeout(timeout)?,
-            };
-            if let Some(name) = session
-                && (is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr))
-            {
-                return Err(MuxErr::SessionNotFound {
-                    session: name.to_owned(),
-                });
-            }
-            if is_transient_empty(&output.stdout) {
-                continue;
-            }
-            let panes = serde_json::from_slice::<Vec<RawPane>>(&output.stdout).map_err(|e| {
-                MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!("parsing list-panes JSON: {e}"),
-                }
-            })?;
-            // A named live session can briefly answer `[]` while the server's
-            // screen state catches up to a background birth or a busy action
-            // tick. Treat that like empty stdout: retry before concluding the
-            // room has no panes.
-            if session.is_some() && panes.is_empty() && attempt + 1 < LIST_PANES_ATTEMPTS {
-                continue;
-            }
-            return Ok(panes);
-        }
-        Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("list-panes returned no output after {LIST_PANES_ATTEMPTS} attempts"),
-        })
+    ) -> Result<Vec<super::raw_pane::RawPane>> {
+        self.topology_listing(Some(session), None, min_topology_produced_at_ms, timeout)
+            .map(|listing| listing.panes)
     }
 
-    pub(super) fn list_panes_cached_or_cli(
+    pub(super) fn topology_panes_for_workspace(
+        &self,
+        session: &str,
+        workspace_id: &WorkspaceId,
+        min_topology_produced_at_ms: Option<u64>,
+        timeout: Duration,
+    ) -> Result<Vec<super::raw_pane::RawPane>> {
+        self.topology_listing(
+            Some(session),
+            Some(workspace_id),
+            min_topology_produced_at_ms,
+            timeout,
+        )
+        .map(|listing| listing.panes)
+    }
+
+    pub(super) fn topology_listing(
         &self,
         session: Option<&str>,
         workspace_id: Option<&WorkspaceId>,
         min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
     ) -> Result<RawPaneListing> {
-        let topology_cache = session
-            .zip(workspace_id)
-            .and_then(|(session, workspace_id)| {
-                let runtime = match &self.runtime_dir {
-                    Some(dir) => RuntimePaths::under(workspace_id.clone(), dir).ok()?,
-                    None => RuntimePaths::for_workspace(workspace_id.clone()).ok()?,
-                };
-                read_pane_topology_cache(&runtime, session)
-            });
+        let session = self.resolve_topology_session(session)?;
+        let known = self.resolve_topology_workspace(&session, workspace_id)?;
+        let runtime = self.runtime_paths_for_workspace(known.workspace_id.clone())?;
         let now_ms = unix_now_ms();
-        if let Some(cache) = topology_cache
+        if let Some(cache) = read_pane_topology_cache(&runtime, &session)
             && pane_topology_cache_is_fresh(&cache, now_ms, min_topology_produced_at_ms)
         {
             return Ok(RawPaneListing::from_topology(cache));
         }
-        let observed_at_ms = unix_now_ms();
-        self.list_panes_bounded(session, timeout)
-            .map(|panes| RawPaneListing::from_cli(panes, observed_at_ms))
+        if self.session_state(&session) != SessionState::Live {
+            return Err(MuxErr::SessionNotFound { session });
+        }
+        let floor_ms = min_topology_produced_at_ms.unwrap_or(now_ms);
+        self.request_topology_dump(&known);
+        let deadline = Instant::now() + timeout;
+        loop {
+            let now_ms = unix_now_ms();
+            if let Some(cache) = read_pane_topology_cache(&runtime, &session)
+                && pane_topology_cache_is_fresh(&cache, now_ms, Some(floor_ms))
+            {
+                return Ok(RawPaneListing::from_topology(cache));
+            }
+            if Instant::now() >= deadline {
+                return Err(MuxErr::Output {
+                    program: "zellij".to_owned(),
+                    reason: format!(
+                        "Zellij topology unavailable for session `{session}`; run `rimz doctor`"
+                    ),
+                });
+            }
+            std::thread::sleep(TOPOLOGY_CACHE_POLL_STEP);
+        }
+    }
+
+    fn resolve_topology_session(&self, session: Option<&str>) -> Result<String> {
+        if let Some(session) = session.filter(|session| !session.is_empty()) {
+            return Ok(session.to_owned());
+        }
+        std::env::var("ZELLIJ_SESSION_NAME")
+            .ok()
+            .filter(|session| !session.is_empty())
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: "pane listing on Zellij needs a Rimz room session".to_owned(),
+            })
+    }
+
+    fn resolve_topology_workspace(
+        &self,
+        session: &str,
+        workspace_id: Option<&WorkspaceId>,
+    ) -> Result<KnownWorkspace> {
+        if let Some(workspace_id) = workspace_id {
+            return Ok(KnownWorkspace {
+                workspace_id: workspace_id.clone(),
+                project_root: std::path::PathBuf::new(),
+                session_name: session.to_owned(),
+                root_class: workspace::RootClass::Directory,
+            });
+        }
+        self.known_workspaces()
+            .map_err(|err| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("reading Rimz workspace registry: {err}"),
+            })?
+            .into_iter()
+            .find(|known| known.session_name == session)
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!(
+                    "pane listing on Zellij needs a Rimz room; found no workspace for session `{session}`"
+                ),
+            })
+    }
+
+    fn known_workspaces(&self) -> std::io::Result<Vec<KnownWorkspace>> {
+        match &self.runtime_dir {
+            Some(root) => workspace::known_workspaces_under(&paths::workspaces_dir_under(root)),
+            None => workspace::known_workspaces(),
+        }
+    }
+
+    fn runtime_paths_for_workspace(&self, workspace_id: WorkspaceId) -> Result<RuntimePaths> {
+        match &self.runtime_dir {
+            Some(dir) => RuntimePaths::under(workspace_id, dir),
+            None => RuntimePaths::for_workspace(workspace_id),
+        }
+        .map_err(|err| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("resolving Rimz runtime paths: {err}"),
+        })
+    }
+
+    fn request_topology_dump(&self, known: &KnownWorkspace) {
+        let Some(wasm) = super::presence_plugin_path() else {
+            tracing::debug!(
+                session = %known.session_name,
+                "Zellij topology refresh skipped because the presence plugin artifact is unavailable",
+            );
+            return;
+        };
+        let machine_config = MachineConfig::load_lenient();
+        let mux_config = MultiplexerConfig::from(machine_config.as_ref());
+        let opts = PresencePluginOptions {
+            session_name: known.session_name.clone(),
+            workspace_id: known.workspace_id.clone(),
+            wasm,
+            rimz_bin: crate::proc::rimz_exe(),
+            converge: false,
+            seed_permissions: machine_config.web.enabled,
+            focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
+            focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
+            mouse_click_through: mux_config.zellij.mouse_click_through,
+        };
+        if let Err(err) = self.dump_topology_for(&opts) {
+            tracing::debug!(
+                session = %known.session_name,
+                error = %err,
+                "Zellij topology refresh pipe failed",
+            );
+        }
     }
 
     /// Classify `name`'s live room from a bounded pane listing. A running
@@ -110,8 +181,12 @@ impl ZellijBackend {
     /// A failed or timed-out listing is different: the room is uninspectable, not
     /// proven stale. Preserve it and let the caller surface the stuck-room path
     /// rather than force-deleting panes it could not see.
-    pub(super) fn session_cleanliness(&self, name: &str) -> Result<SessionCleanliness> {
-        self.list_panes_bounded(Some(name), HEALTH_PROBE_TIMEOUT)
+    pub(super) fn session_cleanliness(
+        &self,
+        name: &str,
+        workspace_id: &WorkspaceId,
+    ) -> Result<SessionCleanliness> {
+        self.topology_panes_for_workspace(name, workspace_id, None, HEALTH_PROBE_TIMEOUT)
             .map(|panes| classify_session_panes(&panes))
     }
 

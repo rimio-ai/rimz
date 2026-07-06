@@ -9,14 +9,14 @@ use crate::pane::PaneRef;
 fn raw_pane_position_metadata_accepts_live_and_topology_shapes() {
     let json = r#"[
           {
-            "id": 8, "is_plugin": false, "tab_id": 42, "tab_position": 1,
+            "id": 8, "is_plugin": false, "tab_position": 1,
             "tab_name": "rimzd", "pane_x": 60, "pane_columns": 118,
             "title": "claude remote-control --spawn worktree",
             "terminal_command": "claude remote-control --spawn worktree"
           }
         ]"#;
     let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    assert_eq!(parsed[0].tab_id, 42);
+    assert_eq!(parsed[0].tab_position, 1);
     assert_eq!(parsed[0].view_position(), 1);
     assert_eq!(parsed[0].tab_name.as_deref(), Some("rimzd"));
     assert_eq!(parsed[0].pane_x, Some(60));
@@ -36,7 +36,7 @@ fn raw_pane_position_metadata_accepts_live_and_topology_shapes() {
     let cache: PaneTopologyCache = serde_json::from_str(json).unwrap();
     assert_eq!(cache.panes[0].tab_position, 3);
     let panes = raw_panes_from_topology(cache);
-    assert_eq!(panes[0].tab_id, 3);
+    assert_eq!(panes[0].tab_position, 3);
     assert_eq!(panes[0].view_position(), 3);
 }
 
@@ -265,7 +265,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
           },
           {
             "id": 2, "is_plugin": false, "is_floating": true,
-            "tab_id": 0, "tab_position": 4, "tab_name": "work",
+            "tab_position": 4, "tab_name": "work",
             "terminal_command": "codex", "pane_cwd": "/repo/main"
           },
           {
@@ -278,34 +278,36 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
           }
         ]"#;
     let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    let listing = RawPaneListing::from_cli(parsed, 1).into_pane_listing(
-        "rimz-test".to_owned(),
-        |mut p, session_name| {
-            if !p.is_listed_pane() {
-                return None;
-            }
-            let command = p.display_command();
-            Some(PaneRef {
-                pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
-                session_name: session_name.to_owned(),
-                view_id: Some(format!("tab_{}", p.view_position())),
-                view_kind: Some(ViewKind::Tab),
-                view_name: p.tab_name.take(),
-                is_focused: p.is_focused,
-                is_floating: p.is_floating,
-                pane_pid: p.pid(),
-                pane_process_start: p.process_start(),
-                hosted_agent_kind: None,
-                hosted_agent_process_start: None,
-                command,
-                spawn_command: p.spawn_command().map(str::to_owned),
-                cwd: p.reported_cwd().map(str::to_owned),
-                resumed_session_id: None,
-                elevated_agent: None,
-                first_seen_at_ms: None,
-            })
-        },
-    );
+    let listing = RawPaneListing {
+        panes: parsed,
+        observed_at_ms: 1,
+        authoritative_focus: None,
+    }
+    .into_pane_listing("rimz-test".to_owned(), |mut p, session_name| {
+        if !p.is_listed_pane() {
+            return None;
+        }
+        let command = p.display_command();
+        Some(PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
+            session_name: session_name.to_owned(),
+            view_id: Some(format!("tab_{}", p.view_position())),
+            view_kind: Some(ViewKind::Tab),
+            view_name: p.tab_name.take(),
+            is_focused: p.is_focused,
+            is_floating: p.is_floating,
+            pane_pid: None,
+            pane_process_start: None,
+            hosted_agent_kind: None,
+            hosted_agent_process_start: None,
+            command,
+            spawn_command: p.spawn_command().map(str::to_owned),
+            cwd: None,
+            resumed_session_id: None,
+            elevated_agent: None,
+            first_seen_at_ms: None,
+        })
+    });
 
     let pane_ids: Vec<&str> = listing
         .panes
@@ -316,7 +318,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
     assert_eq!(listing.panes[1].command, None);
     assert!(listing.panes[1].is_floating);
     assert_eq!(listing.panes[1].spawn_command.as_deref(), Some("codex"));
-    assert_eq!(listing.panes[1].cwd.as_deref(), Some("/repo/main"));
+    assert_eq!(listing.panes[1].cwd, None);
     assert_eq!(listing.panes[1].view_id.as_deref(), Some("tab_4"));
 }
 
@@ -438,7 +440,7 @@ fn topology_cache_focus_becomes_authoritative_listing_focus() {
 
     let listing = RawPaneListing::from_topology(cache);
 
-    assert!(listing.served_from_topology);
+    assert!(listing.authoritative_focus.is_some());
     assert_eq!(
         listing.authoritative_focus,
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_7"))

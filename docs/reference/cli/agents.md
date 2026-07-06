@@ -212,7 +212,7 @@ rimz pane split
 rimz pane detach
 ```
 
-`list` is the room seen as panes: every pane grouped under its native tab, each row labelled with the agent that lives in it (`@kind#worktree`) or `process` for a plain pane, with status and working directory. Rimz's own sidebar pane is omitted, and a `●` marks the active pane in each tab.
+`list` is the room seen as panes: every pane grouped under its native tab, each row labelled with the agent that lives in it (`@kind#worktree`) or `process` for a plain pane, with status and working directory. Rimz's own sidebar pane is omitted, and a `●` marks the active pane in each tab. On Zellij, listing a named session requires a known Rimz workspace record because the pane roster comes from Rimz's presence-plugin topology cache.
 
 `split` opens a shell beside the current pane along its longer visual edge, matching the room's native new-pane behavior.
 

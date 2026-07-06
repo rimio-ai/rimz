@@ -373,8 +373,8 @@ fn heartbeat_mtime_is_fresh(path: &Path) -> bool {
 }
 
 /// The producer's pane-discovery mode for this workspace — event when the
-/// backend's presence channel pokes, otherwise poll with the first failing
-/// precondition and its fix.
+/// backend's presence channel pokes. Zellij treats a missing plugin as a
+/// failed precondition; tmux still names its polling fallback.
 fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presence {
     use rimz::sidebar::cache::{presence_event_mode, presence_stamp_age_ms};
 
@@ -405,21 +405,19 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
         };
         return model::Presence::Poll { reason };
     }
-    // Poll mode: name the first failing precondition in fix order.
     if zellij_mod::presence_plugin_path().is_none() {
-        return model::Presence::Poll {
-            reason: "embedded plugin unavailable or could not materialize (reinstall rimz)"
+        return model::Presence::Unavailable {
+            error: "embedded plugin unavailable or could not materialize; reinstall rimz or use the tmux backend"
                 .to_owned(),
         };
     }
-    let meets_floor = zellij_mod::capabilities().is_ok_and(|caps| {
-        caps.parsed_version
-            .is_some_and(|v| v >= zellij_mod::PRESENCE_PLUGIN_MIN_ZELLIJ)
-    });
+    let meets_floor = zellij_mod::capabilities().is_ok_and(|caps| caps.meets_min_version);
     if !meets_floor {
-        let (maj, min, patch) = zellij_mod::PRESENCE_PLUGIN_MIN_ZELLIJ;
-        return model::Presence::Poll {
-            reason: format!("zellij below the plugin floor (>= {maj}.{min}.{patch} required)"),
+        let (maj, min, patch) = zellij_mod::MIN_ZELLIJ_VERSION;
+        return model::Presence::Unavailable {
+            error: format!(
+                "zellij below the Rimz floor; upgrade to >= {maj}.{min}.{patch} or use the tmux backend"
+            ),
         };
     }
     let reason = match age {
@@ -431,7 +429,7 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
         None => "no plugin poke yet (approve the one-time permission prompt in the Zellij session)"
             .to_owned(),
     };
-    model::Presence::Poll { reason }
+    model::Presence::Unavailable { error: reason }
 }
 
 /// Per-machine remote-control auto-launch posture. Doctor separates hard

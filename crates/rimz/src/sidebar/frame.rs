@@ -207,10 +207,10 @@ impl PaneState {
     /// `cwd`, `started_at`) from the prior read and carries `previous` along.
     /// Foreground command repair is narrower: idle commands and agent hosts may
     /// be restored freely, but active commands require a known same pane-root
-    /// pid. Zellij's fresh list-panes path usually has no pid here, so an
-    /// exited foreground task does not keep rendering as busy when the shell
-    /// returns and the mux reports no fresh command for a tick. tmux's pid is
-    /// the stable pane root, so this still preserves tmux raced-null repair.
+    /// pid. Zellij topology has no pid here, so an exited foreground task does
+    /// not keep rendering as busy when the shell returns and the mux reports no
+    /// fresh command for a tick. tmux's pid is the stable pane root, so this
+    /// still preserves tmux raced-null repair.
     ///
     /// `current.pid` is never backfilled here: on Zellij the pid is a
     /// metrics-layer derivation, and only that layer's `starttime` pid-reuse

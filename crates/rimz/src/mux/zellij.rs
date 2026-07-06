@@ -37,15 +37,7 @@ use crate::ids::PaneId;
 
 /// Minimum Zellij version Rimz supports overall and reports as the doctor
 /// floor.
-pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 41, 0);
-
-/// Minimum Zellij version that ships `advanced_mouse_actions`. Below this the
-/// flag is unknown, so Rimz omits it and accepts Zellij's older defaults.
-const MIN_ADVANCED_MOUSE_ACTIONS_VERSION: (u32, u32, u32) = (0, 43, 0);
-
-/// Minimum Zellij version that ships `stacked_resize`. Below this the flag is
-/// unknown, so Rimz omits it and accepts the host's native split fallback.
-const MIN_STACKED_RESIZE_VERSION: (u32, u32, u32) = (0, 42, 0);
+pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 44, 0);
 
 /// Minimum Zellij version that ships the `mouse_click_through` option. Below
 /// this the flag is unknown, so we omit it — a single click then focuses the
@@ -56,17 +48,15 @@ const MIN_MOUSE_CLICK_THROUGH_VERSION: (u32, u32, u32) = (0, 44, 0);
 /// switch that suppresses hover chrome while leaving other mouse handling alone.
 const MIN_MOUSE_HOVER_EFFECTS_VERSION: (u32, u32, u32) = (0, 44, 0);
 
-/// Zellij's action client occasionally answers `list-panes` with an empty
-/// stdout and a success status when the session server is mid-tick — a known
-/// race that a short retry clears.
-const LIST_PANES_ATTEMPTS: u32 = 3;
-const LIST_PANES_RETRY_DELAY: Duration = Duration::from_millis(50);
-
 /// Per-attempt bound for the pre-attach health probe.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// `query-tab-names` can hit the same action-client startup race as
-/// `list-panes`.
+/// Poll cadence while waiting for the presence plugin to publish a requested
+/// topology payload.
+const TOPOLOGY_CACHE_POLL_STEP: Duration = Duration::from_millis(50);
+
+/// `query-tab-names` can hit an action-client startup race during busy session
+/// ticks.
 const TAB_NAMES_ATTEMPTS: u32 = 5;
 const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -87,19 +77,16 @@ const NEW_TAB_MATERIALIZE_STEP: Duration = Duration::from_millis(50);
 const FOCUS_RESTORE_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 const FOCUS_RESTORE_CONFIRM_STEP: Duration = Duration::from_millis(50);
 
-/// Minimum Zellij that loads the presence plugin.
-pub const PRESENCE_PLUGIN_MIN_ZELLIJ: (u32, u32, u32) = (0, 44, 0);
-
-/// Minimum Zellij that exposes explicit multi-pane stacking through
-/// `zellij action stack-panes`.
-const STACK_PANES_MIN_ZELLIJ: (u32, u32, u32) = (0, 42, 0);
-
 /// Pipe name the presence-plugin launch sends its boot message down.
 const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";
 
 /// Pipe name `rimz web open` sends to the presence plugin; keep in sync with
 /// `crates/rimz-presence-zellij/src/wire.rs`.
 const PRESENCE_SHARE_PIPE: &str = "rimz:share_session";
+
+/// Pipe name that asks the presence plugin for an immediate topology cache
+/// publish. Keep in sync with `crates/rimz-presence-zellij/src/wire.rs`.
+const PRESENCE_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
 
 /// Deadline for the presence-plugin boot pipe.
 const PRESENCE_PIPE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -215,12 +202,7 @@ fn zellij_options_args(
         "--auto-layout".to_owned(),
         bool_value(false),
     ];
-    args.extend(versioned_bool_arg(
-        "--stacked-resize",
-        true,
-        parsed_version,
-        MIN_STACKED_RESIZE_VERSION,
-    ));
+    args.extend(["--stacked-resize".to_owned(), bool_value(true)]);
     args.extend(mouse_click_through_args(
         config.mouse_click_through,
         parsed_version,
@@ -232,12 +214,7 @@ fn zellij_options_args(
         args.extend(["--mouse-mode".to_owned(), bool_value(value)]);
     }
     if let Some(value) = config.advanced_mouse_actions {
-        args.extend(versioned_bool_arg(
-            "--advanced-mouse-actions",
-            value,
-            parsed_version,
-            MIN_ADVANCED_MOUSE_ACTIONS_VERSION,
-        ));
+        args.extend(["--advanced-mouse-actions".to_owned(), bool_value(value)]);
     }
     if let Some(value) = config.mouse_hover_effects {
         args.extend(versioned_bool_arg(
@@ -385,11 +362,9 @@ impl ZellijBackend {
             .map(|_| ())
     }
 
-    pub(super) fn go_to_tab_id(&self, session: &str, tab_id: u64) -> Result<()> {
-        self.zellij_action(session)
-            .args(["go-to-tab-by-id".to_owned(), tab_id.to_string()])
-            .run()
-            .map(|_| ())
+    pub(super) fn go_to_tab_position(&self, session: &str, tab_position: u64) -> Result<()> {
+        let index = u32::try_from(tab_position.saturating_add(1)).unwrap_or(u32::MAX);
+        self.go_to_tab(session, index)
     }
 
     pub(super) fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {

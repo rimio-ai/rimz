@@ -14,7 +14,9 @@ mod shell {
         self, CorrectionAction, FocusCorrection, FocusPatch, ForegroundCommandUpdate, PaneFields,
         Poke, PokePolicy, RawStablePaneFields, TimerGate,
     };
-    use rimz_presence_zellij::wire::{self, FOCUS_SIDEBAR_PIPE, SHARE_SESSION_PIPE};
+    use rimz_presence_zellij::wire::{
+        self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, SHARE_SESSION_PIPE,
+    };
     use zellij_tile::prelude::*;
 
     #[derive(Default)]
@@ -295,6 +297,7 @@ mod shell {
         }
 
         fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
+            let now = now_ms();
             // The focus-key channel: a keybind pipes `FOCUS_SIDEBAR_PIPE` and the
             // plugin runs `rimz sidebar focus --toggle`, reaching the sidebar
             // from any pane — a Zellij keybind cannot focus a pane by id itself.
@@ -307,6 +310,10 @@ mod shell {
                 // This can be dropped while the upgraded StartWebServer grant
                 // is pending; PermissionRequestResult(Granted) replays it.
                 share_current_session();
+                return false;
+            }
+            if pipe_message.name == DUMP_TOPOLOGY_PIPE {
+                self.dump_topology(now);
                 return false;
             }
             // Otherwise the launch channel: rimz loads this plugin via `zellij
@@ -352,6 +359,14 @@ mod shell {
             if let Some(policy) = self.policy.as_mut() {
                 policy.on_signal(now);
             }
+        }
+
+        fn dump_topology(&mut self, now: u64) {
+            if !self.granted {
+                self.pending_pregrant_change = true;
+                return;
+            }
+            self.run_wake(wire::WakeRequest::Changed, now);
         }
 
         fn flush_pregrant_change(&mut self, now: u64) {

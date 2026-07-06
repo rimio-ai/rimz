@@ -495,12 +495,27 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
 
 fn mux_environment_preflight(mux: MuxName, session_name: &str) -> Result<()> {
     match mux {
-        MuxName::Zellij => rimz::mux::zellij::socket_preflight(session_name)?,
+        MuxName::Zellij => {
+            rimz::mux::zellij::socket_preflight(session_name)?;
+            zellij_version_preflight()?;
+        }
         // tmux sockets live under its own short per-user socket directory; the
         // Rimz session name does not participate in an AF_UNIX path budget.
         MuxName::Tmux => {}
     }
     Ok(())
+}
+
+fn zellij_version_preflight() -> Result<()> {
+    let caps = rimz::mux::zellij::capabilities().context("checking Zellij version")?;
+    if caps.meets_min_version {
+        return Ok(());
+    }
+    let (maj, min, patch) = rimz::mux::zellij::MIN_ZELLIJ_VERSION;
+    let found = caps.binary_version.trim();
+    anyhow::bail!(
+        "Zellij {found} is below Rimz's floor; upgrade Zellij to >= {maj}.{min}.{patch}, or run this room with `--mux tmux`."
+    );
 }
 
 fn rimz_socket_environment_preflight(workspace_id: &WorkspaceId) -> Result<()> {

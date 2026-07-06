@@ -376,7 +376,7 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
                 verdict(tally, Health::Warn, format!("poll mode — {reason}"))
             }
             Presence::Unavailable { error } => {
-                verdict(tally, Health::Warn, format!("unavailable ({error})"))
+                verdict(tally, Health::Alarm, format!("unavailable ({error})"))
             }
         };
         kv.push("presence", value);

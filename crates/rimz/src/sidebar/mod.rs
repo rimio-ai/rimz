@@ -5,7 +5,7 @@
 //!
 //! The invariant is one *producer* per workspace, one *renderer* per tab. Every
 //! tab runs its own renderer; the eldest live instance is elected the producer
-//! (UUIDv7 ids sort by birth) and forks `list-panes`/git, while younger
+//! (UUIDv7 ids sort by birth) and reads the mux/git inputs, while younger
 //! renderers read its published cache read-only. So the mux/git round-trip is
 //! paid once per workspace without any per-tab renderer going dark. A launch
 //! lock keeps concurrent attaches from each spawning a daemon, and the orphan
@@ -159,7 +159,7 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
 /// True when a live sidebar holds an older instance id than `own_id`. UUIDv7
 /// ids sort by birth time, so the lowest id is the eldest. The eldest is the
 /// sole producer (it finds no elder); every younger renderer reads its
-/// published cache rather than forking its own `list-panes`/git (see
+/// published cache rather than running its own mux/git reads (see
 /// [`crate::sidebar`] module docs). The election trusts the same heartbeat TTL
 /// as the launch gate, so a just-SIGKILLed elder is honoured for at most one
 /// TTL before the next-eldest renderer takes over production.

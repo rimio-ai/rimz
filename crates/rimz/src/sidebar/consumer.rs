@@ -49,7 +49,7 @@ pub fn rollup_snapshot(
 }
 
 /// Render the consumer snapshot entirely from runtime caches and sidecars — no
-/// `list-panes`, no git. Reads the **event-fresh** rollup in process from
+/// no mux roster read, no git. Reads the **event-fresh** rollup in process from
 /// `latest.json` (`consumer_rollup`), folds the producer's coalesced pane list
 /// from `snapshot.json` when one exists, folds the session and subagent
 /// statusline context plus per-tool activity, overlays the panes with this
@@ -61,8 +61,8 @@ pub fn rollup_snapshot(
 /// and surfaces the reason.
 ///
 /// Pairing fresh rollup + coalesced panes is the lag fix: a `LedgerDelta` folds
-/// the new agent/status in this tab within one wakeup, while the slower
-/// `list-panes` cadence only governs genuine pane open/close.
+/// the new agent/status in this tab within one wakeup, while the slower pane
+/// roster cadence only governs genuine pane open/close.
 ///
 /// This is the producer's fast-lane twin: the native renderer calls it directly
 /// each tick, and the `--no-produce` CLI path shares it.

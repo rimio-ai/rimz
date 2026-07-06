@@ -3,8 +3,7 @@ use std::time::{Duration, Instant};
 
 use rimz::ids::WorkspaceId;
 use rimz::mux::{
-    DaemonView, HostPane, MuxBackend, PaneListOptions, SidebarPaneOptions, SidebarWidth,
-    ZellijBackend,
+    DaemonView, HostPane, MuxBackend, SidebarPaneOptions, SidebarWidth, ZellijBackend,
 };
 use rimz::pane::PaneRef;
 use tempfile::TempDir;
@@ -136,7 +135,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         2,
         "birth layout should produce exactly the daemon + working tabs",
     );
-    let panes = wait_for_tab_pane_count(&backend, &name, "rimzd", 3);
+    let panes = wait_for_tab_pane_count(xdg.path(), &name, "rimzd", 3);
     assert_eq!(
         panes.len(),
         3,
@@ -162,21 +161,12 @@ fn tab_names_in_order(xdg: &Path, session: &str) -> Vec<String> {
 }
 
 /// Poll `list_panes` until `tab_name` has `want` terminal panes, or time out.
-fn wait_for_tab_pane_count(
-    backend: &ZellijBackend,
-    session: &str,
-    tab_name: &str,
-    want: usize,
-) -> Vec<PaneRef> {
+fn wait_for_tab_pane_count(xdg: &Path, session: &str, tab_name: &str, want: usize) -> Vec<PaneRef> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut last = Vec::new();
     loop {
-        if let Ok(listing) = backend.list_panes(PaneListOptions {
-            session_name: Some(session.to_owned()),
-            ..Default::default()
-        }) {
-            last = listing
-                .panes
+        if let Ok(raw) = list_panes_json(xdg, session) {
+            last = pane_refs_from_list_panes_json(session, &raw)
                 .into_iter()
                 .filter(|pane| pane.view_name.as_deref() == Some(tab_name))
                 .collect();

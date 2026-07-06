@@ -39,6 +39,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_spend_parser_boundaries(root, &files)?;
     ensure_sidebar_library_boundaries(root, &files)?;
     ensure_sidebar_enrich_projection_only(root, &files)?;
+    ensure_no_zellij_runtime_list_panes(root, &files)?;
     ensure_sidebar_event_log_reads_through_rollup(root, &files)?;
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
     ensure_diag_writes_stay_in_diag(root, &files)?;
@@ -168,6 +169,25 @@ fn ensure_sidebar_enrich_projection_only(root: &Path, files: &[PathBuf]) -> Resu
         )?;
     }
     Ok(())
+}
+
+fn ensure_no_zellij_runtime_list_panes(root: &Path, files: &[PathBuf]) -> Result<()> {
+    ensure_no_match(
+        files,
+        concat!("list", "-panes"),
+        |path| {
+            path.extension().and_then(OsStr::to_str) != Some("rs")
+                || is_test_source_path(root, path)
+                || !is_zellij_or_sidebar_runtime_source(root, path)
+        },
+        "Zellij runtime must use presence-plugin topology, not zellij action list-panes",
+    )
+}
+
+fn is_zellij_or_sidebar_runtime_source(root: &Path, path: &Path) -> bool {
+    path == root.join("crates/rimz/src/mux/zellij.rs")
+        || path.starts_with(root.join("crates/rimz/src/mux/zellij"))
+        || path.starts_with(root.join("crates/rimz/src/sidebar"))
 }
 
 fn is_sidebar_enrich_source(root: &Path, path: &Path) -> bool {

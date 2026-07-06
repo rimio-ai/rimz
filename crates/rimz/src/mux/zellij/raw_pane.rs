@@ -6,9 +6,7 @@ use std::{
     num::NonZeroU16,
 };
 
-use jiff::Timestamp;
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::ids::{MuxName, PaneId};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
@@ -40,9 +38,9 @@ pub(super) fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
     let mut index: HashMap<u64, usize> = HashMap::new();
     for pane in panes.iter().filter(|pane| pane.is_terminal()) {
-        let slot = *index.entry(pane.tab_id).or_insert_with(|| {
+        let slot = *index.entry(pane.tab_position).or_insert_with(|| {
             views.push(ViewSidebars {
-                view: pane.tab_id.to_string(),
+                view: pane.tab_position.to_string(),
                 sidebar_panes: Vec::new(),
                 has_working: false,
                 has_daemon_host: false,
@@ -86,9 +84,9 @@ pub(super) fn docked_sidebar_cols(panes: &[RawPane]) -> Option<NonZeroU16> {
         else {
             continue;
         };
-        let (count, first_tab) = widths.entry(cols).or_insert((0, pane.tab_id));
+        let (count, first_tab) = widths.entry(cols).or_insert((0, pane.tab_position));
         *count += 1;
-        *first_tab = (*first_tab).min(pane.tab_id);
+        *first_tab = (*first_tab).min(pane.tab_position);
     }
     widths
         .into_iter()
@@ -103,10 +101,12 @@ pub(super) fn docked_sidebar_cols(panes: &[RawPane]) -> Option<NonZeroU16> {
         .map(|(cols, _, _)| cols)
 }
 
-pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_id: u64) -> Option<u64> {
+pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_position: u64) -> Option<u64> {
     panes
         .iter()
-        .filter(|pane| pane.tab_id == tab_id && pane.is_live_terminal() && !is_sidebar_pane(pane))
+        .filter(|pane| {
+            pane.tab_position == tab_position && pane.is_live_terminal() && !is_sidebar_pane(pane)
+        })
         .min_by_key(|pane| (pane.pane_x.unwrap_or(u64::MAX), pane.id))
         .map(|pane| pane.id)
 }
@@ -180,13 +180,13 @@ pub(super) fn floating_panes_in_anchor_view(panes: &[RawPane], anchor: &PaneId) 
     let Some(anchor_tab) = panes
         .iter()
         .find(|pane| !pane.is_plugin && pane.id == anchor_raw)
-        .map(|pane| pane.tab_id)
+        .map(|pane| pane.tab_position)
     else {
         return Vec::new();
     };
     panes
         .iter()
-        .filter(|pane| pane.tab_id == anchor_tab && pane.is_floating && !pane.is_plugin)
+        .filter(|pane| pane.tab_position == anchor_tab && pane.is_floating && !pane.is_plugin)
         .map(|pane| zellij_pane_id(pane.id))
         .collect()
 }
@@ -240,7 +240,7 @@ pub(super) fn sidebar_dock_verdict(
         return Some(SidebarDock::SwapReachable);
     }
     let intrudes = panes.iter().any(|other| {
-        other.tab_id == pane.tab_id
+        other.tab_position == pane.tab_position
             && other.id != pane.id
             && !excluded.contains(&other.id)
             && other.is_terminal()
@@ -271,7 +271,7 @@ pub(super) fn repairable_nested_work_pane_ids(
     let mut work: Vec<&RawPane> = panes
         .iter()
         .filter(|pane| {
-            pane.tab_id == sidebar.tab_id
+            pane.tab_position == sidebar.tab_position
                 && pane.is_live_terminal()
                 && !is_sidebar_pane(pane)
                 && !excluded.contains(&pane.id)
@@ -326,19 +326,21 @@ pub(super) fn sidebar_geometry_off_spec(
 }
 
 /// The mounted sidebar pane an add produced: a fresh live, sidebar-titled
-/// terminal pane in `tab_id` matching the stdout hint, or — the hint being
+/// terminal pane in `tab_position` matching the stdout hint, or — the hint being
 /// unreliable — the lowest fresh such id absent from the before-set, so a
 /// cross-talk duplicate resolves deterministically and reconcile closes the
 /// rest. A hinted pane already present before the add is never accepted.
 pub(super) fn mounted_sidebar_pane(
     panes: &[RawPane],
-    tab_id: u64,
+    tab_position: u64,
     before: &HashSet<u64>,
     hint: Option<u64>,
 ) -> Option<u64> {
     let ids: Vec<u64> = panes
         .iter()
-        .filter(|pane| pane.tab_id == tab_id && pane.is_live_terminal() && is_sidebar_pane(pane))
+        .filter(|pane| {
+            pane.tab_position == tab_position && pane.is_live_terminal() && is_sidebar_pane(pane)
+        })
         .map(|pane| pane.id)
         .collect();
     if let Some(raw) = hint
@@ -350,8 +352,7 @@ pub(super) fn mounted_sidebar_pane(
     ids.into_iter().filter(|id| !before.contains(id)).min()
 }
 
-/// Subset of fields `zellij action list-panes -j -a` emits. We deserialize
-/// only what we route into `PaneRef`; serde silently ignores everything else.
+/// Pane fields published by the presence plugin topology cache.
 #[derive(Debug, Deserialize)]
 pub(super) struct RawPane {
     pub(super) id: u64,
@@ -368,14 +369,10 @@ pub(super) struct RawPane {
     pub(super) is_floating: bool,
     #[serde(default)]
     pub(super) is_focused: bool,
-    /// Zellij's internal tab id, used by `...-by-id` action verbs. The
-    /// presence-plugin cache cannot observe it, so cache-derived raw panes set
-    /// this to the tab position and only flow through read-only projection.
-    pub(super) tab_id: u64,
-    /// Positional tab index from `list-panes -j`. `PaneRef.view_id` uses this
-    /// value so the CLI and presence-cache projections agree.
-    #[serde(default)]
-    pub(super) tab_position: Option<u64>,
+    /// Positional tab index from the plugin manifest. Zellij's internal tab ids
+    /// are intentionally absent from product runtime.
+    #[serde(alias = "tab_id")]
+    pub(super) tab_position: u64,
     /// Name of the tab the pane lives in. Routed into [`PaneRef::view_name`];
     /// also how the `rimzd` daemon view is recognised on Zellij, whose pane list
     /// reports no command fields a classifier could read instead.
@@ -395,20 +392,6 @@ pub(super) struct RawPane {
     pub(super) terminal_command: Option<String>,
     #[serde(default)]
     pub(super) pane_command: Option<String>,
-    #[serde(default)]
-    pub(super) command: Option<String>,
-    #[serde(default)]
-    pub(super) pane_cwd: Option<String>,
-    #[serde(default)]
-    pub(super) cwd: Option<String>,
-    #[serde(default)]
-    pub(super) pane_pid: Option<u32>,
-    #[serde(default)]
-    pub(super) pid: Option<u32>,
-    #[serde(default)]
-    pub(super) pane_process_start: Option<Value>,
-    #[serde(default)]
-    pub(super) process_start: Option<Value>,
 }
 
 impl RawPane {
@@ -436,15 +419,11 @@ impl RawPane {
         self.is_listed_pane() && !self.is_floating
     }
 
-    /// The live foreground command the pane reports. `pane_command` is the
-    /// current Zellij pty-enriched field; `command` is the older field name.
-    /// Present-but-empty fields fall through rather than masking the next
-    /// source.
+    /// The live foreground command the presence plugin last observed.
     pub(super) fn foreground_command(&self) -> Option<&str> {
-        [self.pane_command.as_deref(), self.command.as_deref()]
-            .into_iter()
-            .flatten()
-            .find(|value| !value.is_empty())
+        self.pane_command
+            .as_deref()
+            .filter(|value| !value.is_empty())
     }
 
     /// The launch command Zellij was given when the pane was spawned.
@@ -465,28 +444,8 @@ impl RawPane {
         self.foreground_command().map(str::to_owned)
     }
 
-    /// The cwd the pane reports; `pane_cwd` wins, falling back to `cwd`, with
-    /// a present-but-empty field falling through like the command ladder.
-    pub(super) fn reported_cwd(&self) -> Option<&str> {
-        [self.pane_cwd.as_deref(), self.cwd.as_deref()]
-            .into_iter()
-            .flatten()
-            .find(|value| !value.is_empty())
-    }
-
-    pub(super) fn pid(&self) -> Option<u32> {
-        self.pane_pid.or(self.pid)
-    }
-
-    pub(super) fn process_start(&self) -> Option<Timestamp> {
-        self.pane_process_start
-            .as_ref()
-            .or(self.process_start.as_ref())
-            .and_then(timestamp_from_json)
-    }
-
     pub(super) fn view_position(&self) -> u64 {
-        self.tab_position.unwrap_or(self.tab_id)
+        self.tab_position
     }
 }
 
@@ -500,21 +459,13 @@ impl From<PaneTopologyPane> for RawPane {
             is_suppressed: pane.is_suppressed,
             is_floating: pane.is_floating,
             is_focused: pane.is_focused,
-            tab_id: pane.tab_position,
-            tab_position: Some(pane.tab_position),
+            tab_position: pane.tab_position,
             tab_name: pane.tab_name,
             pane_columns: pane.pane_columns,
             pane_x: pane.pane_x,
             title: pane.title,
             terminal_command: pane.terminal_command,
             pane_command: pane.pane_command,
-            command: None,
-            pane_cwd: None,
-            cwd: None,
-            pane_pid: None,
-            pid: None,
-            pane_process_start: None,
-            process_start: None,
         }
     }
 }
@@ -527,27 +478,16 @@ pub(super) fn raw_panes_from_topology(cache: PaneTopologyCache) -> Vec<RawPane> 
 pub(super) struct RawPaneListing {
     pub(super) panes: Vec<RawPane>,
     pub(super) observed_at_ms: u64,
-    pub(super) served_from_topology: bool,
     pub(super) authoritative_focus: Option<PaneId>,
 }
 
 impl RawPaneListing {
-    pub(super) fn from_cli(panes: Vec<RawPane>, observed_at_ms: u64) -> Self {
-        Self {
-            panes,
-            observed_at_ms,
-            served_from_topology: false,
-            authoritative_focus: None,
-        }
-    }
-
     pub(super) fn from_topology(cache: PaneTopologyCache) -> Self {
         let observed_at_ms = cache.produced_at_ms;
         let authoritative_focus = cache.focused_pane.map(zellij_pane_id);
         Self {
             panes: raw_panes_from_topology(cache),
             observed_at_ms,
-            served_from_topology: true,
             authoritative_focus,
         }
     }
@@ -565,23 +505,9 @@ impl RawPaneListing {
                 .filter_map(|pane| project(pane, &session_name))
                 .collect(),
             observed_at_ms: self.observed_at_ms,
-            served_from_topology: self.served_from_topology,
             authoritative_focus: self.authoritative_focus,
         }
     }
-}
-
-pub(super) fn timestamp_from_json(value: &Value) -> Option<Timestamp> {
-    if let Some(seconds) = value.as_i64() {
-        return Timestamp::from_second(seconds).ok();
-    }
-    if let Some(raw) = value.as_str() {
-        if let Ok(seconds) = raw.parse::<i64>() {
-            return Timestamp::from_second(seconds).ok();
-        }
-        return raw.parse::<Timestamp>().ok();
-    }
-    None
 }
 
 #[cfg(test)]

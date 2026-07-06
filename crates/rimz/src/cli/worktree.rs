@@ -467,8 +467,17 @@ fn other_live_pane_inside(path: &Path, globals: &GlobalFlags) -> bool {
     let Some(own) = own_pane_id(mux) else {
         return false;
     };
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
     let backend = rimz::mux::backend_for(mux);
-    let Ok(listing) = backend.list_panes(rimz::mux::PaneListOptions::default()) else {
+    let Ok(listing) = backend.list_panes(rimz::mux::PaneListOptions {
+        session_name: workspace
+            .as_ref()
+            .map(|workspace| workspace.session_name.clone()),
+        workspace_id: workspace
+            .as_ref()
+            .map(|workspace| workspace.workspace_id.clone()),
+        ..Default::default()
+    }) else {
         return false;
     };
     let panes = listing.panes;

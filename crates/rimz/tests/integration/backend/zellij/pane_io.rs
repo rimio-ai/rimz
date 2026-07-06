@@ -21,9 +21,8 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    backend
-        .open_sidebar(&sidebar_opts(&name, cwd.path(), stub, 200), None)
-        .expect("open_sidebar");
+    let opts = sidebar_opts(&name, cwd.path(), stub, 200);
+    backend.open_sidebar(&opts, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
     let sidebar = raw_sidebar_pane(xdg.path(), &name);
@@ -53,6 +52,14 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
     focus_nonplugin_pane_until(xdg.path(), &name, tab_id, work_id, "fixture work pane");
 
     let env = Env::new();
+    let workspace_root = std::path::PathBuf::from(format!("/tmp/rimz-{name}"));
+    record_known_workspace_session(
+        &env.state_root(),
+        &opts.workspace_id,
+        &workspace_root,
+        &name,
+    );
+    write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
     let run_focus_toggle = || {
         let output = env
             .rimz()
@@ -85,6 +92,7 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         "out-of-session focus should land on the sidebar pane",
     );
 
+    write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
     run_focus_toggle();
     assert_eq!(
         wait_for_focused_nonplugin_id_in_tab(xdg.path(), &name, tab_id, work_id),

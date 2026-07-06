@@ -21,7 +21,7 @@ use crate::sidebar::timing::{
 // The shared pane frame cache is keyed to one `(workspace, session)`: the
 // per-workspace runtime root scopes the workspace, and `session_name` prevents
 // serving one session's panes to another during detach or session rotation. It
-// caches only the expensive `list-panes` round-trip; the ledger rollup stays
+// caches only the expensive pane roster read; the ledger rollup stays
 // event-fresh and is folded over this frame by producer and consumer reads.
 thread_local! {
     /// This thread's last `snapshot.json` parse ([`ParseCache`]). The consumer
@@ -165,9 +165,8 @@ pub fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duratio
 }
 
 /// Path of the Zellij presence-plugin topology cache, beside the producer's
-/// `snapshot.json` pane frame. The topology cache is a pre-producer latency
-/// hint: it lets the Zellij backend skip the slow JSON `list-panes` enrichment
-/// path, then the normal producer frame still carries the rendered view-model.
+/// `snapshot.json` pane frame. The topology cache is Zellij's pane roster; the
+/// normal producer frame still carries the rendered view-model.
 pub fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("pane-topology.json")
 }
@@ -192,11 +191,11 @@ pub fn read_pane_topology_cache(
     (cache.session_name == session).then_some(cache)
 }
 
-/// Whether a same-session plugin topology payload is young enough to use as a
-/// Zellij `list-panes` substitute. The window matches the presence liveness
-/// window so one normal keepalive jitter does not force the slow CLI fallback,
-/// and the optional floor lets lifecycle/resize events require a post-signal
-/// topology just like they require a post-signal pane frame.
+/// Whether a same-session plugin topology payload is young enough to use as
+/// Zellij's roster. The window matches the presence liveness window so one
+/// normal keepalive jitter does not fail a read, and the optional floor lets
+/// lifecycle/resize events require a post-signal topology just like they
+/// require a post-signal pane frame.
 pub fn pane_topology_cache_is_fresh(
     cache: &PaneTopologyCache,
     now_ms: u64,

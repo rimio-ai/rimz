@@ -7,10 +7,10 @@
 //! `snapshot.json`; a sparse poke degrades to the identity-free
 //! `PanesChanged` nudge.
 //!
-//! The producer contract (`rimz sidebar snapshot`): with a fresh stamp, a
-//! pane cache far past the poll TTL is served without a `list-panes` fork —
-//! the layer's whole point — and without the stamp the same cache is stale and
-//! the producer forks `list-panes` exactly as before the layer landed.
+//! The producer contract (`rimz sidebar snapshot`): with a fresh stamp, a pane
+//! cache far past the default TTL is served without a mux roster read — the
+//! layer's whole point. Zellij pane discovery comes from plugin topology, not a
+//! CLI fallback.
 //!
 //! No live Zellij needed; the `zellij-trace` shim stands in for every mux
 //! fork and its log is the proof either way. `unsafe_code = "forbid"` is
@@ -162,7 +162,7 @@ impl WakeEnv {
     }
 
     /// Seed the shared pane cache with a publishable shell frame produced
-    /// `age` ago — fresh under the event-mode TTL, stale under the poll TTL.
+    /// `age` ago — fresh under the event-mode TTL, stale under the default TTL.
     fn seed_pane_cache(&self, age: Duration) {
         self.seed_pane_cache_with_shell(
             "terminal_7",
@@ -328,7 +328,10 @@ impl WakeEnv {
     fn assert_no_list_panes_fork(&self, context: &str) {
         let trace = self.trace_lines();
         let forked = trace.iter().any(|line| line.contains("list-panes"));
-        assert!(!forked, "{context} must avoid zellij list-panes: {trace:?}");
+        assert!(
+            !forked,
+            "{context} must avoid zellij list-panes fallback: {trace:?}"
+        );
     }
 }
 
@@ -573,7 +576,7 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
     assert_eq!(
         cached.viewed_panes,
         vec![PaneId::from_parts(MuxName::Zellij, "terminal_6")],
-        "topology cache skips list-panes but refreshes viewed panes even when the sample lags",
+        "topology cache avoids zellij list-panes but refreshes viewed panes even when the sample lags",
     );
     assert_eq!(
         cached.presence.map(|presence| presence.human_clients),
@@ -830,7 +833,7 @@ fn wake_without_live_sidebars_still_stamps_via_cwd_resolution() {
 }
 
 #[test]
-fn event_mode_stamp_controls_stale_cache_polling() {
+fn presence_stamp_extends_the_pane_cache_ttl() {
     let event_env = WakeEnv::new();
     let wake = event_env.wake("alive", false);
     assert!(
@@ -849,20 +852,7 @@ fn event_mode_stamp_controls_stale_cache_polling() {
     assert_eq!(
         event_env.trace_lines(),
         Vec::<String>::new(),
-        "event mode must serve the stale poll cache without a mux fork",
-    );
-
-    let poll_env = WakeEnv::new();
-    poll_env.seed_pane_cache(Duration::from_secs(5));
-    let _ = poll_env.snapshot();
-    let forked_list_panes = poll_env
-        .trace_lines()
-        .iter()
-        .any(|line| line.contains("list-panes"));
-    assert!(
-        forked_list_panes,
-        "poll mode must re-fork list-panes for the same 5s-old cache; trace: {:?}",
-        poll_env.trace_lines(),
+        "event mode must serve the default-stale cache without a mux fork",
     );
 }
 

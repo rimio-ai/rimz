@@ -4,13 +4,13 @@ Rimz builds from source into one binary that runs inside the Zellij or tmux you 
 
 The source install also builds a small Zellij plugin that ships embedded in the binary. The plugin compiles to WebAssembly, so the build needs Rust's `wasm32-wasip1` target — and the repo installs it for you: [rust-toolchain.toml](../../rust-toolchain.toml) pins the stable channel, the components, and that target, and `rustup` applies the file the first time you build in the repo. There is no manual target setup.
 
-`cargo install --locked rimz` installs the binary-only crate from crates.io with the presence plugin embedded from a vendored WebAssembly artifact. Zellij uses the poll-mode freshness path only on Zellij older than 0.44, after a denied plugin permission, or when `RIMZ_PRESENCE_PLUGIN` points at an unusable override; `cargo xtask install` from a source checkout builds and embeds a fresh plugin artifact.
+`cargo install --locked rimz` installs the binary-only crate from crates.io with the presence plugin embedded from a vendored WebAssembly artifact. Zellij pane discovery uses that plugin's topology channel, so Zellij rooms require Zellij 0.44 or newer and a loadable presence plugin; `cargo xtask install` from a source checkout builds and embeds a fresh plugin artifact.
 
 ## Prerequisites
 
 Rimz needs four things on your machine.
 
-- **A terminal multiplexer** — Zellij or tmux. Both are first-class; install one, or both and choose per project. Rimz refuses to start against a build too old to carry the room options it sets, so mind the floors: **tmux 3.5 or newer** and **Zellij 0.41 or newer** (tmux 3.5 adds CSI-u soft-newline keys with a multiline-paste caveat; tmux 3.6 preserves paste too; Zellij 0.44 and up add the sidebar's single-click jumps and the presence plugin). `rimz doctor` reports the installed version and whether it clears the floor.
+- **A terminal multiplexer** — Zellij or tmux. Both are first-class; install one, or both and choose per project. Rimz refuses to start against a build too old to carry the room options it sets, so mind the floors: **tmux 3.5 or newer** and **Zellij 0.44 or newer** (tmux 3.5 adds CSI-u soft-newline keys with a multiline-paste caveat; tmux 3.6 preserves paste too; Zellij 0.44 carries the sidebar's single-click jumps and the presence-plugin topology channel). `rimz doctor` reports the installed version and whether it clears the floor.
 - **A C linker** — `cc` and `ld` link the final binary. The build pulls in no C libraries of its own; the linker is all the system toolchain provides.
 - **Git** — to clone the source.
 - **Rust, through `rustup`** — the compiler and Cargo. `rustup` reads the repo's pinned toolchain and installs the matching channel, components, and WebAssembly target on first build.
@@ -190,7 +190,7 @@ ls "$(rustc --print target-libdir --target wasm32-wasip1)" | grep libcore
 
 ### `rimz doctor` flags the multiplexer as unsupported
 
-Rimz refuses to start against a multiplexer too old to carry the room options it sets — tmux below 3.5, or Zellij below 0.41. Check the installed version, then install a current build from the per-OS steps above.
+Rimz refuses to start against a multiplexer too old to carry the room options it sets — tmux below 3.5, or Zellij below 0.44. Check the installed version, then install a current build from the per-OS steps above.
 
 ```sh
 tmux -V
@@ -198,7 +198,7 @@ zellij --version
 rimz doctor
 ```
 
-On tmux, `extended-keys-format` (tmux 3.5) is the option an older server rejects; Rimz enables `extended-keys` and `*:extkeys` across supported tmux versions so Shift+Enter and Alt+Enter reach agents as soft newlines. tmux 3.5.x corrupts pasted newlines while extended keys are active; tmux 3.6 preserves paste too. On Zellij, 0.44 is the floor for single-click sidebar jumps and the presence plugin, while 0.41 through 0.43 run without them.
+On tmux, `extended-keys-format` (tmux 3.5) is the option an older server rejects; Rimz enables `extended-keys` and `*:extkeys` across supported tmux versions so Shift+Enter and Alt+Enter reach agents as soft newlines. tmux 3.5.x corrupts pasted newlines while extended keys are active; tmux 3.6 preserves paste too. On Zellij, 0.44 is the floor for single-click sidebar jumps and the presence-plugin topology channel.
 
 ### `rustup` is missing
 

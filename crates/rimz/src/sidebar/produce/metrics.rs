@@ -151,7 +151,7 @@ pub(super) fn pane_root_bindings(
 
 /// Whether any pane in `frame` needs a fresh `/proc` sample. Used by the pane
 /// cache fast path so metrics can refresh from a topology-fresh frame without
-/// paying another mux `list-panes`.
+/// paying another mux roster read.
 pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths) -> bool {
     let prior = read_metrics_sample_cache(&runtime.root.join("metrics-sample.json"));
     let now_ms = unix_now_ms();
@@ -183,8 +183,7 @@ pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths)
 /// process-table child map when it was already paid for, or from each sampled
 /// process's per-task `/proc/<pid>/task/<tid>/children` files. The full process-table
 /// walk runs only while some due pane's binding is unknown — pane churn or a
-/// foreground change, exactly the moments a fresh `list-panes` was already
-/// paid for.
+/// foreground change, exactly the moments a fresh roster was already paid for.
 pub(super) fn enrich_pane_metrics(
     frame: &mut PaneFrame,
     session_name: &str,
@@ -218,7 +217,7 @@ pub(super) fn enrich_pane_metrics(
         return false;
     }
 
-    // Zellij's `list-panes` reports no per-pane pid (tmux fills `#{pane_pid}`
+    // Zellij topology reports no per-pane pid (tmux fills `#{pane_pid}`
     // natively), so first restore each due pidless pane's root pid from the
     // prior tick's binding — starttime-guarded, one stat read per pane instead
     // of the table walk below.

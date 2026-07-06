@@ -21,8 +21,8 @@ pub(crate) const TICK_FOLD_BYTES_BUDGET: u64 = 256 * 1024;
 /// Warm produce with fresh inputs is pinned at zero spawns; hot git sweeps burst
 /// once per diff-stats TTL rather than on consecutive ticks.
 pub(crate) const TICK_SPAWN_BUDGET: u64 = 32;
-/// Mux subprocess wait budget. Zellij `list-panes` has a high steady floor in
-/// large sessions, so mux wait is accounted separately from in-process work.
+/// Mux subprocess wait budget. Mux waits are accounted separately from
+/// in-process work.
 pub(crate) const TICK_MUX_WAIT_BUDGET_MS: u64 = 5_000;
 /// Consecutive over-budget ticks required before a diagnostic. The streak window
 /// filters one-off IO stalls like the health-alert and observer windows do.
@@ -77,8 +77,7 @@ pub(crate) struct TickMeter {
 impl TickMeter {
     /// The wall budget is one configured data tick. At the default one-second
     /// tick this bounds Rimz in-process work. Mux subprocess wait has its own
-    /// fixed budget because large Zellij sessions have a high steady `list-panes`
-    /// floor that should not hide real fold/enrich regressions.
+    /// fixed budget so mux stalls do not hide real fold/enrich regressions.
     pub(crate) fn new(tick_loop: TickLoop, tick: Duration) -> Self {
         Self {
             tick_loop,

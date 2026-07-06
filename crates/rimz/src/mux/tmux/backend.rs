@@ -157,7 +157,6 @@ impl MuxBackend for TmuxBackend {
         Ok(PaneListing {
             panes,
             observed_at_ms,
-            served_from_topology: false,
             authoritative_focus: None,
         })
     }

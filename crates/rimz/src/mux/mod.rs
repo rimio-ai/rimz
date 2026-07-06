@@ -194,13 +194,9 @@ pub struct PaneListOptions {
 pub struct PaneListing {
     pub panes: Vec<PaneRef>,
     /// Wall-clock millisecond when the pane source observed this topology.
-    /// For a topology-cache hit this is the cache's `produced_at_ms`; for a
-    /// live mux CLI read it is stamped before the command starts.
+    /// For a topology-cache hit this is the cache's `produced_at_ms`; other
+    /// backends stamp it before the live mux read starts.
     pub observed_at_ms: u64,
-    /// Whether this listing came from the presence topology cache rather than a
-    /// live mux pane read. A topology hit skips the expensive pane-list command;
-    /// the producer may still sample the cheaper per-client focus probe.
-    pub served_from_topology: bool,
     /// Focus resolved by a backend push source that already owns the full
     /// session topology. Used only when the named pane survives listing filters.
     pub authoritative_focus: Option<PaneId>,

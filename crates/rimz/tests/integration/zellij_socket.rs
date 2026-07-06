@@ -178,8 +178,14 @@ impl FakeZellij {
     fn new(mode: FakeZellijMode) -> Self {
         let home = TempDir::new().expect("fake zellij home");
         let bin = zellij_trace_shim();
-        let log = home.path().join("zellij.log");
+        let log_name = match mode {
+            FakeZellijMode::Normal => "zellij.normal.log",
+            FakeZellijMode::SocketOverflowOnBirth => "zellij.socket-overflow-on-birth.log",
+            FakeZellijMode::BirthFails => "zellij.birth-fails.log",
+        };
+        let log = home.path().join(log_name);
         fs::write(&log, "").expect("create fake zellij log");
+        fs::write(log.with_extension("mode"), mode.env_value()).expect("write fake zellij mode");
         Self {
             _home: home,
             bin,

@@ -288,8 +288,8 @@ pub(crate) fn resolve_pane_targets<'a>(
 /// rollup without the render spine, so a just-started sessionless pane is
 /// addressable without paying group-root, spending, account, dashboard, or git
 /// enrichment. `min_pane_cache_ms` floors the pane pull at now, bypassing the
-/// producer's pane cache (up to 10s old in Zellij event mode). One `list-panes`
-/// fork; falls back to the rollup when there is no mux to enumerate.
+/// producer's pane cache (up to 10s old in event mode). One mux roster read;
+/// falls back to the rollup when there is no mux to enumerate.
 pub(crate) fn resolution_snapshot(
     workspace: &rimz::ResolvedWorkspace,
     ledger: &Ledger,

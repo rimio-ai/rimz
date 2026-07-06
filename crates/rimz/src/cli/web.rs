@@ -13,7 +13,7 @@ use crate::cli::room;
 use rimz::config::MachineConfig;
 use rimz::ids::MuxName;
 use rimz::ledger::{atomic, paths};
-use rimz::mux::{CommandSpec, PaneListOptions};
+use rimz::mux::CommandSpec;
 use rimz::sidebar_pane::render::scheme;
 use rimz::web::{
     ParsedWebStatus, WebClientColors, WebOpenPayload, WebServerStatus, WebStartOptions,
@@ -177,7 +177,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         session_name: session,
         workspace_id,
     } = web_room;
-    ensure_session_addressable_for_web(&session, &workspace_id)?;
+    ensure_session_addressable_for_web(&session)?;
     let payload = web_payload(
         &session,
         config.web.zellij.base_url.as_deref(),
@@ -292,20 +292,19 @@ fn write_bytes_with_trailing_newline(
     Ok(())
 }
 
-fn ensure_session_addressable_for_web(
-    session: &str,
-    workspace_id: &rimz::ids::WorkspaceId,
-) -> Result<()> {
+fn ensure_session_addressable_for_web(session: &str) -> Result<()> {
     let backend = rimz::mux::backend_for(MuxName::Zellij);
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match backend.list_panes(PaneListOptions {
-            session_name: Some(session.to_owned()),
-            workspace_id: Some(workspace_id.clone()),
-            command_timeout: Some(Duration::from_secs(2)),
-            ..PaneListOptions::default()
-        }) {
-            Ok(_) => return Ok(()),
+        match backend.list_sessions() {
+            Ok(sessions) if sessions.iter().any(|name| name == session) => return Ok(()),
+            Ok(_) => {
+                if Instant::now() >= deadline {
+                    bail!(
+                        "Zellij session `{session}` is not addressable after web preparation. Run `rimz reset` from the workspace, then retry `rimz web open`."
+                    );
+                }
+            }
             Err(err) => {
                 let detail = err.to_string();
                 if Instant::now() >= deadline {

@@ -889,9 +889,9 @@ fn mark_unread(globals: &GlobalFlags, target: String, worktree: Option<String>) 
 /// returns to a working pane in the sidebar's tab when already on the sidebar,
 /// so one key reaches the sidebar and goes back. The session is the keypress's
 /// `--session-name` (the tmux binding resolves it per room); a bare invocation
-/// resolves the room from the cwd. Focus needs only the session — never the
-/// workspace id — so it skips the participant resolve when the session is given,
-/// which also lets the off-server `run-shell` child work without a room cwd.
+/// resolves the room from the cwd. Focus takes only the session; the Zellij
+/// roster resolves the workspace from Rimz's known-session registry when the
+/// off-server `run-shell` child has no room cwd.
 fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> Result<()> {
     let session_name = match session_name {
         Some(name) => name,

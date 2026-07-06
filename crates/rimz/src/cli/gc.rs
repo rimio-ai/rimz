@@ -184,7 +184,11 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
         };
     let mut protected_paths = match rimz::mux::auto_detect_backend(globals.mux) {
         Ok(mux) => rimz::mux::backend_for(mux)
-            .list_panes(rimz::mux::PaneListOptions::default())
+            .list_panes(rimz::mux::PaneListOptions {
+                session_name: Some(workspace.session_name.clone()),
+                workspace_id: Some(workspace.workspace_id.clone()),
+                ..Default::default()
+            })
             .map(|listing| live_user_cwds(&listing.panes))
             .unwrap_or_default(),
         Err(_) => Vec::new(),

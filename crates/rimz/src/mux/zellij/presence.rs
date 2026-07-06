@@ -6,27 +6,24 @@ use std::{env, fs};
 use kdl::{KdlDocument, KdlNode};
 
 use super::{
-    PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_PLUGIN_MIN_ZELLIJ, PRESENCE_SHARE_PIPE,
-    ZellijBackend, parse_version,
+    PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_SHARE_PIPE, PRESENCE_TOPOLOGY_PIPE,
+    ZellijBackend,
 };
 use crate::ledger::{atomic, paths};
-use crate::mux::{MuxBackend, MuxErr, Result};
+use crate::mux::{MuxErr, Result};
 
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));
 const PRESENCE_PLUGIN_FILE: &str = "rimz-presence-zellij.wasm";
-// Must match `crates/rimz-presence-zellij/src/main.rs`'s request_permission batch.
-const PRESENCE_PLUGIN_PERMISSIONS: [&str; 4] = [
-    "ReadApplicationState",
-    "RunCommands",
-    "Reconfigure",
-    "StartWebServer",
-];
+const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 3] =
+    ["ReadApplicationState", "RunCommands", "Reconfigure"];
+const PRESENCE_PLUGIN_WEB_PERMISSION: &str = "StartWebServer";
 
 /// Locate the presence-plugin wasm: the `RIMZ_PRESENCE_PLUGIN` override, else
 /// the embedded plugin materialized under `$XDG_DATA_HOME/rimz/plugins/`, else
-/// a development fallback beside the running executable. `None` leaves the
-/// session in poll mode; `rimz doctor` names the missing artifact and the fix.
+/// a development fallback beside the running executable. `None` means the
+/// Zellij backend's required topology source is unavailable; `rimz doctor`
+/// names the missing artifact and the fix.
 ///
 /// Canonical, because Zellij keys the user's one-time permission grant on the
 /// exact path string it is handed: one real artifact must read as one string
@@ -161,9 +158,6 @@ impl ZellijBackend {
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {
-        if !self.presence_plugin_supported(opts, PRESENCE_BOOT_PIPE) {
-            return Ok(());
-        }
         self.seed_presence_permissions(opts);
         let url = format!("file:{}", opts.wasm.display());
         let configuration = presence_plugin_configuration(opts);
@@ -212,6 +206,17 @@ impl ZellijBackend {
         self.pipe_to_presence_plugin(opts, PRESENCE_SHARE_PIPE, "share")
     }
 
+    pub(super) fn dump_topology_for(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+    ) -> Result<()> {
+        self.ensure_presence_plugin_for(opts)?;
+        match self.pipe_to_presence_plugin(opts, PRESENCE_TOPOLOGY_PIPE, "dump") {
+            Ok(()) | Err(MuxErr::Timeout { .. }) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
     fn seed_presence_permissions(&self, opts: &super::super::PresencePluginOptions) {
         let cache_root = self.cache_root.clone().unwrap_or_else(paths::cache_home);
         seed_presence_permissions_in(&cache_root, opts);
@@ -223,9 +228,6 @@ impl ZellijBackend {
         pipe_name: &str,
         payload: &str,
     ) -> Result<()> {
-        if !self.presence_plugin_supported(opts, pipe_name) {
-            return Ok(());
-        }
         // `zellij pipe --plugin` launches the plugin if absent — the one load
         // verb that works on a clientless session (`start-or-reload-plugin`
         // refuses without a connected client) — and routes a no-op message to
@@ -249,30 +251,9 @@ impl ZellijBackend {
             .run_with_timeout(PRESENCE_PIPE_TIMEOUT)
             .map(|_| ())
     }
-
-    fn presence_plugin_supported(
-        &self,
-        opts: &super::super::PresencePluginOptions,
-        pipe_name: &str,
-    ) -> bool {
-        let parsed = self.version().ok().as_deref().and_then(parse_version);
-        if parsed.is_none_or(|v| v < PRESENCE_PLUGIN_MIN_ZELLIJ) {
-            tracing::debug!(
-                session = %opts.session_name,
-                version = ?parsed,
-                pipe_name,
-                "zellij below the presence-plugin floor; skipping presence pipe",
-            );
-            return false;
-        }
-        true
-    }
 }
 
 fn seed_presence_permissions_in(cache_root: &Path, opts: &super::super::PresencePluginOptions) {
-    if !opts.seed_permissions {
-        return;
-    }
     let path = cache_root.join("zellij").join("permissions.kdl");
     // Zellij 0.44.3 keys the permission cache on the plugin path string, not
     // the `file:` URL accepted by `zellij pipe --plugin`; the live integration
@@ -281,7 +262,7 @@ fn seed_presence_permissions_in(cache_root: &Path, opts: &super::super::Presence
     let Some(mut document) = read_presence_permissions_document(&path) else {
         return;
     };
-    if !ensure_presence_permissions_document(&mut document, &key) {
+    if !ensure_presence_permissions_document(&mut document, &key, opts.seed_permissions) {
         return;
     }
     document.fmt();
@@ -319,7 +300,11 @@ fn read_presence_permissions_document(path: &Path) -> Option<KdlDocument> {
     }
 }
 
-fn ensure_presence_permissions_document(document: &mut KdlDocument, key: &str) -> bool {
+fn ensure_presence_permissions_document(
+    document: &mut KdlDocument,
+    key: &str,
+    include_web: bool,
+) -> bool {
     let mut found = false;
     let mut changed = false;
     for node in document
@@ -328,23 +313,26 @@ fn ensure_presence_permissions_document(document: &mut KdlDocument, key: &str) -
         .filter(|node| node.name().value() == key)
     {
         found = true;
-        changed |= ensure_presence_permissions_node(node);
+        changed |= ensure_presence_permissions_node(node, include_web);
     }
     if found {
         return changed;
     }
 
     let mut node = KdlNode::new(key);
-    ensure_presence_permissions_node(&mut node);
+    ensure_presence_permissions_node(&mut node, include_web);
     document.nodes_mut().push(node);
     true
 }
 
-fn ensure_presence_permissions_node(node: &mut KdlNode) -> bool {
+fn ensure_presence_permissions_node(node: &mut KdlNode, include_web: bool) -> bool {
     let had_children = node.children().is_some();
     let children = node.ensure_children();
     let mut changed = !had_children;
-    for permission in PRESENCE_PLUGIN_PERMISSIONS {
+    for permission in PRESENCE_PLUGIN_BASE_PERMISSIONS
+        .into_iter()
+        .chain(include_web.then_some(PRESENCE_PLUGIN_WEB_PERMISSION))
+    {
         if children.get(permission).is_none() {
             children.nodes_mut().push(KdlNode::new(permission));
             changed = true;
@@ -355,7 +343,7 @@ fn ensure_presence_permissions_node(node: &mut KdlNode) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{MIN_ZELLIJ_VERSION, PRESENCE_PLUGIN_MIN_ZELLIJ};
+    use super::super::MIN_ZELLIJ_VERSION;
     use super::*;
 
     fn presence_opts(session_name: &str, rimz_bin: &str) -> crate::mux::PresencePluginOptions {
@@ -389,7 +377,11 @@ mod tests {
         let key = "/tmp/rimz-presence-zellij.wasm";
         let mut document = KdlDocument::new();
 
-        assert!(ensure_presence_permissions_document(&mut document, key));
+        assert!(ensure_presence_permissions_document(
+            &mut document,
+            key,
+            false
+        ));
         document.fmt();
         let rendered = document.to_string();
         rendered
@@ -397,7 +389,7 @@ mod tests {
             .expect("seeded KDL round-trips");
         assert_eq!(
             permission_children(&document, key),
-            PRESENCE_PLUGIN_PERMISSIONS
+            PRESENCE_PLUGIN_BASE_PERMISSIONS
         );
         assert!(
             rendered.starts_with("\"/tmp/rimz-presence-zellij.wasm\""),
@@ -420,7 +412,11 @@ mod tests {
         .parse()
         .expect("parse starting permissions");
 
-        assert!(ensure_presence_permissions_document(&mut document, key));
+        assert!(ensure_presence_permissions_document(
+            &mut document,
+            key,
+            true
+        ));
         document.fmt();
         document
             .to_string()
@@ -445,11 +441,19 @@ mod tests {
     fn seed_presence_permissions_is_noop_when_complete() {
         let key = "/tmp/rimz-presence-zellij.wasm";
         let mut document = KdlDocument::new();
-        assert!(ensure_presence_permissions_document(&mut document, key));
+        assert!(ensure_presence_permissions_document(
+            &mut document,
+            key,
+            true
+        ));
         document.fmt();
         let once = document.to_string();
 
-        assert!(!ensure_presence_permissions_document(&mut document, key));
+        assert!(!ensure_presence_permissions_document(
+            &mut document,
+            key,
+            true
+        ));
         document.fmt();
         assert_eq!(document.to_string(), once);
     }
@@ -511,13 +515,10 @@ fi
     }
 
     #[test]
-    fn presence_plugin_floor_admits_the_tile_line_only() {
-        // The floor is the `zellij-tile` pin: 0.44.x loads, anything older keeps
-        // the pane poll (and stays above MIN_ZELLIJ_VERSION for everything else).
-        assert!((0, 44, 0) >= PRESENCE_PLUGIN_MIN_ZELLIJ);
-        assert!((0, 44, 3) >= PRESENCE_PLUGIN_MIN_ZELLIJ);
-        assert!((0, 43, 9) < PRESENCE_PLUGIN_MIN_ZELLIJ);
-        assert!(PRESENCE_PLUGIN_MIN_ZELLIJ >= MIN_ZELLIJ_VERSION);
+    fn presence_plugin_floor_is_the_zellij_floor() {
+        assert_eq!(MIN_ZELLIJ_VERSION, (0, 44, 0));
+        assert!((0, 44, 3) >= MIN_ZELLIJ_VERSION);
+        assert!((0, 43, 9) < MIN_ZELLIJ_VERSION);
     }
     #[test]
     fn presence_plugin_configuration_renders_expressible_fields() {

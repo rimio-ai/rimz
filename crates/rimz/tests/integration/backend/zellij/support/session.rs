@@ -370,7 +370,19 @@ pub(in crate::backend::zellij) fn sidebar_command_stub() -> (TempDir, PathBuf) {
 pub(in crate::backend::zellij) fn sidebar_stub_alive_for(seconds: u32) -> (TempDir, PathBuf) {
     let dir = TempDir::new().expect("stub dir");
     let path = dir.path().join("rimz-stub");
-    std::fs::write(&path, format!("#!/bin/sh\nsleep {seconds}\n")).expect("write stub");
+    let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = sidebar ] && [ \"$2\" = wake ]; then\n\
+             \texec {} \"$@\"\n\
+             fi\n\
+             sleep {seconds}\n",
+            shell_quote(&rimz.display().to_string()),
+        ),
+    )
+    .expect("write stub");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -379,4 +391,8 @@ pub(in crate::backend::zellij) fn sidebar_stub_alive_for(seconds: u32) -> (TempD
         std::fs::set_permissions(&path, perms).expect("chmod");
     }
     (dir, path)
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }

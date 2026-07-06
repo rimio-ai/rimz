@@ -72,7 +72,7 @@ Backing out is the mirror of opting in, and the reader is told so right here: `r
 
 With consent done, Rimz makes sure the session exists and drops the reader in: a working shell pane on the right, focused and pristine, and the sidebar pinned left at about 30% width.
 
-On Zellij, one more one-time approval can greet them, a small floating prompt from Zellij itself asking to let Rimz's presence plugin watch pane state, focus panes after tab switches, and run commands. That plugin is the push channel that keeps the sidebar fresh without polling and keeps tab switches landing on work ([security.md](./security.md#the-zellij-presence-plugin)); `y` dismisses it for good across sessions, and declining keeps Zellij's native focus memory while the sidebar polls.
+On Zellij, one more one-time approval can greet them, a small floating prompt from Zellij itself asking to let Rimz's presence plugin watch pane state, focus panes after tab switches, and run commands. That plugin is the topology channel that tells Rimz which panes exist and keeps tab switches landing on work ([security.md](./security.md#the-zellij-presence-plugin)); `y` dismisses it for good across sessions, and declining leaves Zellij's native focus memory in place while `rimz doctor` names the permission fix.
 
 ```
  ⌘ query-engine

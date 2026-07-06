@@ -165,7 +165,6 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
     assert!(log.contains("web\t--status"), "{log}");
     assert!(log.contains("web\t--list-tokens"), "{log}");
     assert!(!log.contains("web\t--create-token"), "{log}");
-    assert!(log.contains("\tattach\t--create-background\t"), "{log}");
     assert!(
         !log.contains("\t--web-sharing\ton\t"),
         "runtime plugin sharing is authoritative; birth-time --web-sharing is dead: {log}"
@@ -270,7 +269,6 @@ fn web_open_assumes_zellij_without_mux_flag() {
     assert!(log.contains("web\t--status"), "{log}");
     assert!(log.contains("web\t--list-tokens"), "{log}");
     assert!(!log.contains("web\t--create-token"), "{log}");
-    assert!(log.contains("\tattach\t--create-background\t"), "{log}");
     assert!(
         !log.contains("\t--web-sharing\ton\t"),
         "runtime plugin sharing is authoritative; birth-time --web-sharing is dead: {log}"
@@ -443,10 +441,8 @@ fn web_open_refuses_url_when_prepared_session_is_not_addressable() {
         .args(["--print", "--json"])
         .env("RIMZ_ZELLIJ_BIN", zellij_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &log)
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 0s ago]\n", workspace.session_name),
-        )
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
+        .env("RIMZ_TEST_ZELLIJ_DISABLE_CREATED_SESSIONS", "1")
         .env(
             "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
             "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
@@ -455,7 +451,6 @@ fn web_open_refuses_url_when_prepared_session_is_not_addressable() {
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
             materialized_room_panes_json(),
         )
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES_FAIL_AFTER", "0")
         .bounded_output()
         .expect("run rimz web open");
 

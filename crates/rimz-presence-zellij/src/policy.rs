@@ -15,7 +15,7 @@ use serde::Serialize;
 pub const POKE_FLOOR_MS: u64 = 100;
 
 /// Follow-up after a pane-changing poke. Zellij can deliver `CommandChanged`
-/// before `list-panes` has converged on the new foreground command; this second
+/// before the manifest has converged on the new foreground command; this second
 /// poke forces one settled frame instead of letting the stretched event-mode
 /// pane TTL carry the pre-change command.
 pub const SETTLE_POKE_MS: u64 = 250;

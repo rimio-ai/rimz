@@ -18,6 +18,11 @@ pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
 /// admit web clients to the current session.
 pub const SHARE_SESSION_PIPE: &str = "rimz:share_session";
 
+/// Pipe message name the host backend sends when it needs a topology cache
+/// newer than a local mutation. The plugin publishes one immediate
+/// `panes-changed` wake carrying the current topology payload.
+pub const DUMP_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
+
 /// The modifier half of a focus-key chord.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChordModifier {

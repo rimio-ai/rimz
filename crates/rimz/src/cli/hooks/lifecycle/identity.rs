@@ -24,13 +24,17 @@ pub(super) fn agent_identity_env(
     var: &str,
     validate: IdentityValidator,
 ) -> Option<String> {
-    std::env::var(var)
-        .ok()
-        .and_then(|raw| validate(raw, "env", var))
-        .or_else(|| {
-            let raw = rimz::proc::env_var(observation.agent_pid?, var)?;
-            validate(raw, "process", var)
-        })
+    if let Ok(raw) = std::env::var(var) {
+        if raw.trim().is_empty() {
+            let _ = validate(raw, "env", var);
+            return None;
+        }
+        if let Some(value) = validate(raw, "env", var) {
+            return Some(value);
+        }
+    }
+    let raw = rimz::proc::env_var(observation.agent_pid?, var)?;
+    validate(raw, "process", var)
 }
 
 pub(in crate::cli::hooks) fn fill_root_launch_identity(

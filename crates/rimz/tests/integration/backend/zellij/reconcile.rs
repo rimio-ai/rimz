@@ -36,6 +36,7 @@ fn reconcile_defers_the_add_on_a_detached_session() {
 
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = sidebar_opts(&name, cwd.path(), stub, 120);
+    write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
     // A freshly born --create-background session whose only pane is still
     // materializing is the case most prone to reconcile's transient-empty read,
     // so retry until reconcile actually observes the working pane.
@@ -129,13 +130,15 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         240,
     );
     let liveness = claimed_liveness(sidebar_id);
+    write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
+    let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &liveness);
 
     assert_eq!(report.redocked, 1, "the off-spec claimed sidebar converges");
     assert_eq!(report.closed, 0, "the renderer's pane is never closed");
     assert_eq!(report.recovered, 0, "nothing needed adding");
     assert_eq!(report.failed, 0);
-    assert_sidebar_is_left_thirty_percent(&xdg, &name);
+    assert_sidebar_is_left_docked(&xdg, &name);
     assert_sidebar_identity(
         &xdg,
         &name,
@@ -196,7 +199,7 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         "layout should birth a sidebar and two work panes: {initial:?}",
     );
 
-    let _client = AttachedClient::attach(xdg_dir.path(), &name, 160, 60);
+    let _client = AttachedClient::attach(xdg_dir.path(), &name, 240, 60);
     let xdg = xdg_dir.path().to_path_buf();
     wait_for_attached_client(&xdg, &name);
 
@@ -243,13 +246,15 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
 
     let opts = reconcile_opts(&name, "/tmp/rimz-nested", cwd.path(), cwd.path(), stub, 160);
     let liveness = claimed_liveness(sidebar_id);
+    write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
+    let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &liveness);
 
     assert_eq!(report.redocked, 1, "the nested sidebar converges");
     assert_eq!(report.closed, 0, "geometry repair is not duplicate cleanup");
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
-    assert_sidebar_is_left_thirty_percent(&xdg, &name);
+    assert_sidebar_is_left_docked(&xdg, &name);
     assert_sidebar_identity(
         &xdg,
         &name,
@@ -352,6 +357,7 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
         240,
     );
     let liveness = claimed_liveness(sidebar_id);
+    write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &liveness);
 
     assert_eq!(
@@ -429,12 +435,14 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
     let (_stub_dir, stub) = sidebar_command_stub();
 
     let opts = reconcile_opts(&name, "/tmp/rimz-rowadd", cwd.path(), cwd.path(), stub, 160);
+    write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
+    let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &rimz::mux::SidebarLiveness::default());
 
     assert_eq!(report.recovered, 1, "the missing sidebar is added");
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
-    assert_sidebar_is_left_thirty_percent(&xdg, &name);
+    assert_sidebar_is_left_docked(&xdg, &name);
 }
 
 fn write_kdl_layout(

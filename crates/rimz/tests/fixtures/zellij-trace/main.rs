@@ -9,6 +9,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
     let log_path = env::var_os("RIMZ_TEST_ZELLIJ_LOG").expect("RIMZ_TEST_ZELLIJ_LOG unset");
@@ -29,7 +30,16 @@ fn main() {
     }
 
     if cli.first().is_some_and(|arg| arg == "list-sessions") {
-        if let Ok(output) = env::var("RIMZ_TEST_ZELLIJ_LIST_SESSIONS") {
+        let scripted = env::var("RIMZ_TEST_ZELLIJ_LIST_SESSIONS").ok();
+        let suppress_created = env::var_os("RIMZ_TEST_ZELLIJ_DISABLE_CREATED_SESSIONS").is_some()
+            || birth_mode_fails(&trace_mode(&log_path));
+        let created = if suppress_created {
+            Vec::new()
+        } else {
+            created_sessions(&log_path)
+        };
+        if scripted.is_some() || !created.is_empty() {
+            let output = merge_list_sessions(scripted.as_deref().unwrap_or(""), &created);
             write_stdout_raw(&output);
             return;
         }
@@ -126,7 +136,20 @@ fn main() {
         return;
     }
 
-    let mode = env::var("RIMZ_TEST_ZELLIJ_MODE").unwrap_or_default();
+    if cli
+        .windows(2)
+        .any(|window| window[0] == "--name" && window[1] == "rimz:dump_topology")
+    {
+        if let Some(session) = arg_after(cli, "--session")
+            && let Some(configuration) = arg_after(cli, "--plugin-configuration")
+            && let Some(workspace_id) = configuration_value(configuration, "workspace_id")
+        {
+            write_topology_cache(session, workspace_id);
+        }
+        return;
+    }
+
+    let mode = trace_mode(&log_path);
     if mode == "fail-write"
         && cli
             .windows(2)
@@ -149,6 +172,112 @@ fn main() {
         write_stderr("simulated zellij birth failure");
         std::process::exit(5);
     }
+}
+
+fn created_sessions(log_path: &Path) -> Vec<String> {
+    let Ok(log) = std::fs::read_to_string(log_path) else {
+        return Vec::new();
+    };
+    let mut sessions = Vec::new();
+    for line in log.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        for window in fields.windows(3) {
+            if window[0] == "attach" && window[1] == "--create-background" {
+                let session = window[2];
+                if !sessions.iter().any(|seen| seen == session) {
+                    sessions.push(session.to_owned());
+                }
+            }
+        }
+    }
+    sessions
+}
+
+fn mode_path(log_path: &Path) -> std::path::PathBuf {
+    log_path.with_extension("mode")
+}
+
+fn trace_mode(log_path: &Path) -> String {
+    mode_from_log_path(log_path)
+        .or_else(|| {
+            env::var("RIMZ_TEST_ZELLIJ_MODE")
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| std::fs::read_to_string(mode_path(log_path)).ok())
+        .unwrap_or_default()
+}
+
+fn birth_mode_fails(mode: &str) -> bool {
+    matches!(mode, "socket-overflow-on-birth" | "birth-fails")
+}
+
+fn mode_from_log_path(log_path: &Path) -> Option<String> {
+    let name = log_path.file_name()?.to_str()?;
+    ["socket-overflow-on-birth", "birth-fails", "fail-write"]
+        .into_iter()
+        .find(|mode| name.contains(mode))
+        .map(str::to_owned)
+}
+
+fn merge_list_sessions(scripted: &str, created: &[String]) -> String {
+    let mut output = scripted.to_owned();
+    for session in created {
+        if !scripted.lines().any(|line| line.starts_with(session)) {
+            output.push_str(session);
+            output.push_str(" [Created 0s ago]\n");
+        }
+    }
+    output
+}
+
+fn configuration_value<'a>(configuration: &'a str, key: &str) -> Option<&'a str> {
+    configuration.split(',').find_map(|entry| {
+        let (candidate, value) = entry.split_once('=')?;
+        (candidate == key && !value.is_empty()).then_some(value)
+    })
+}
+
+fn write_topology_cache(session: &str, workspace_id: &str) {
+    let Some(runtime_root) = env::var_os("XDG_RUNTIME_DIR") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(runtime_root)
+        .join("rimz")
+        .join(workspace_id)
+        .join("pane-topology.json");
+    let panes = match env::var("RIMZ_TEST_ZELLIJ_TOPOLOGY_PANES")
+        .or_else(|_| env::var("RIMZ_TEST_ZELLIJ_LIST_PANES"))
+    {
+        Ok(raw) => raw,
+        Err(_) => return,
+    };
+    let panes: serde_json::Value = match serde_json::from_str(&panes) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    let topology = serde_json::json!({
+        "session_name": session,
+        "produced_at_ms": now_ms(),
+        "panes": panes,
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create fake topology dir");
+    }
+    std::fs::write(
+        path,
+        serde_json::to_vec(&topology).expect("serialize fake topology"),
+    )
+    .expect("write fake topology");
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 fn arg_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {

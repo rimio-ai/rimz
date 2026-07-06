@@ -162,6 +162,8 @@ impl<'a> RoomHarness<'a> {
         cmd.env("XDG_RUNTIME_DIR", runtime.path());
         cmd.env("HOME", &env.home_root);
         cmd.env("RIMZ_TEST_PANE_LIST", &pane_file);
+        cmd.env(rimz::harness::run::ENV_CHANNEL, "");
+        cmd.env(rimz::harness::run::ENV_TEAM, "");
         cmd.env_remove("RUST_LOG");
 
         let child = pair.slave.spawn_command(cmd).expect("spawn rimz sidebar");
@@ -373,6 +375,25 @@ impl<'a> RoomHarness<'a> {
         runtime: Option<&std::path::Path>,
     ) -> Vec<(String, String)> {
         let mut env = self.pane_env(session_id);
+        env.push((rimz::harness::run::ENV_AGENT_NAME.to_owned(), String::new()));
+        env.push((rimz::harness::run::ENV_CHANNEL.to_owned(), String::new()));
+        env.push((rimz::harness::run::ENV_TEAM.to_owned(), String::new()));
+        env.push((
+            rimz::harness::run::ENV_LAUNCH_GROUP.to_owned(),
+            String::new(),
+        ));
+        env.push((
+            rimz::harness::run::ENV_LAUNCH_ORDINAL.to_owned(),
+            String::new(),
+        ));
+        env.push((
+            rimz::harness::run::ENV_AGENT_MODEL.to_owned(),
+            String::new(),
+        ));
+        env.push((
+            rimz::harness::run::ENV_AGENT_EFFORT.to_owned(),
+            String::new(),
+        ));
         if let Some(runtime) = runtime {
             env.push(("XDG_RUNTIME_DIR".to_owned(), runtime.display().to_string()));
         }

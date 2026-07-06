@@ -214,8 +214,10 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
     // `open_sidebar` must heal it: tear the sidebar-less session down and
     // rebirth one that carries the sidebar.
     let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = sidebar_opts(&name, cwd.path(), stub, 120);
+    write_topology_cache_from_list_panes(xdg.path(), &opts.workspace_id, &name);
     ZellijBackend::with_runtime_dir(xdg.path())
-        .open_sidebar(&sidebar_opts(&name, cwd.path(), stub, 120), None)
+        .open_sidebar(&opts, None)
         .expect("open_sidebar");
 
     let healed = wait_for_pane_count(xdg.path(), &name, 2);

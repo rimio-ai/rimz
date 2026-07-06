@@ -121,6 +121,10 @@ fn tmux_room_shows_agent_after_hook() {
     // hook stamps it exactly as TMUX_PANE would inside that pane, binding the
     // agent row to its live pane.
     let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
+    let codex_pid = tmux_capture(
+        &socket,
+        &["display-message", "-p", "-t", &codex_pane, "#{pane_pid}"],
+    );
     let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room", &[]);
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
@@ -129,6 +133,7 @@ fn tmux_room_shows_agent_after_hook() {
     env.install_agent_hooks("codex");
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
+        ("RIMZ_AGENT_PID", codex_pid.as_str()),
         (rimz::harness::run::ENV_AGENT_ROLE, "coder"),
         (rimz::harness::run::ENV_AGENT_PROFILE, "codex-coder"),
     ];
@@ -230,6 +235,10 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
         ],
     );
     let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
+    let codex_pid = tmux_capture(
+        &socket,
+        &["display-message", "-p", "-t", &codex_pane, "#{pane_pid}"],
+    );
     let serve = sidebar_serve_line(
         &env,
         &rimz,
@@ -246,6 +255,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     env.install_agent_hooks("codex");
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
+        ("RIMZ_AGENT_PID", codex_pid.as_str()),
         (rimz::harness::run::ENV_AGENT_ROLE, "coder"),
         (rimz::harness::run::ENV_AGENT_PROFILE, "codex-coder"),
     ];

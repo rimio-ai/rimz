@@ -62,7 +62,7 @@ pub const TAB_READ_DWELL: Duration = Duration::from_millis(2500);
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
 /// under the default 1s data tick: when one ledger-delta wakeup wakes every
 /// sidebar at once, the first produces the heavy snapshot and the rest read it
-/// back within this window instead of each spawning their own `list-panes`.
+/// back within this window instead of each running their own mux roster read.
 /// Short enough that live pane/git drift (which fires no ledger delta) still
 /// surfaces inside one tick. While the presence stamp is fresh the producer
 /// uses [`EVENT_PANE_TTL`] instead.
@@ -73,9 +73,9 @@ pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// command/focus overlays live in each renderer's in-memory event store until
 /// the verifying pull supersedes them. The poll is only the backstop for a
 /// *lost* event — pane truth can stale at most this long before it heals,
-/// while steady-state `list-panes` action clients drop ~10× versus
-/// [`SNAPSHOT_CACHE_TTL`]. Forced freshness (`min_pane_cache_ms`) overrides
-/// it, so lifecycle/resize floors still pull a fresh pane list in event mode.
+/// while steady-state roster reads drop ~10× versus [`SNAPSHOT_CACHE_TTL`].
+/// Forced freshness (`min_pane_cache_ms`) overrides it, so lifecycle/resize
+/// floors still pull a fresh pane list in event mode.
 pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
 /// How often the producer re-samples tmux client activity while an idle-capable
@@ -311,8 +311,8 @@ pub const ACCEPT_REGRESSION_AFTER_REJECTS: u32 = 2;
 /// Hard wall-clock ceiling on a regression-hold episode — the load-bearing
 /// hatch, since a slow poll cadence could otherwise stretch the count out.
 /// One second caps a genuine exit on the producer tab (whose reject-refetches
-/// each pay a `list-panes` round-trip) while staying above a single such
-/// round-trip, and well under [`GIVE_UP_AFTER_DEGRADED`].
+/// each pay a mux roster read) while staying above a single such read, and well
+/// under [`GIVE_UP_AFTER_DEGRADED`].
 pub const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(1);
 
 /// Consecutive refresh failures before the renderer surfaces a degraded

@@ -1,11 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rimz::ids::PaneId;
+use rimz::ids::{MuxName, PaneId, ViewKind, WorkspaceId};
+use rimz::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use rimz::mux::{
-    ClientFocusOptions, MuxBackend, PaneListOptions, SidebarLiveness, SidebarPaneOptions,
-    SidebarRecovery, ZellijBackend,
+    ClientFocusOptions, MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
+    ZellijBackend,
 };
 use rimz::pane::PaneRef;
 
@@ -289,6 +293,248 @@ pub(in crate::backend::zellij) fn expect_list_panes_json(
     session: &str,
 ) -> serde_json::Value {
     list_panes_json(xdg, session).unwrap_or_else(|err| panic!("{err}"))
+}
+
+pub(in crate::backend::zellij) fn pane_refs_from_list_panes_json(
+    session: &str,
+    panes: &serde_json::Value,
+) -> Vec<PaneRef> {
+    panes
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|pane| pane.get("is_plugin").and_then(|value| value.as_bool()) != Some(true))
+        .filter(|pane| pane.get("is_held").and_then(|value| value.as_bool()) != Some(true))
+        .filter(|pane| pane.get("exited").and_then(|value| value.as_bool()) != Some(true))
+        .filter(|pane| pane.get("is_suppressed").and_then(|value| value.as_bool()) != Some(true))
+        .filter_map(|pane| pane_ref_from_list_panes_json(session, pane))
+        .collect()
+}
+
+pub(in crate::backend::zellij) fn write_topology_cache_from_list_panes(
+    xdg: &Path,
+    workspace_id: &WorkspaceId,
+    session: &str,
+) {
+    let panes = expect_list_panes_json(xdg, session);
+    write_topology_cache_from_value(xdg, workspace_id, session, &panes);
+}
+
+fn write_topology_cache_from_value(
+    xdg: &Path,
+    workspace_id: &WorkspaceId,
+    session: &str,
+    panes: &serde_json::Value,
+) {
+    let tab_positions = tab_positions_from_list_panes_json(panes);
+    let topology_panes: Vec<PaneTopologyPane> = panes
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|pane| topology_pane_from_list_panes_json(pane, &tab_positions))
+        .collect();
+    let topology = PaneTopologyCache {
+        session_name: session.to_owned(),
+        produced_at_ms: now_ms(),
+        focused_pane: None,
+        panes: topology_panes,
+    };
+    let path = xdg
+        .join("rimz")
+        .join(workspace_id.as_str())
+        .join("pane-topology.json");
+    std::fs::create_dir_all(path.parent().expect("topology parent"))
+        .expect("create topology parent");
+    rimz::ledger::atomic::write_temp_then_rename_cache_compact(&path, &topology)
+        .expect("write topology cache");
+}
+
+pub(in crate::backend::zellij) struct TopologyCacheMirror {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for TopologyCacheMirror {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("topology mirror thread");
+        }
+    }
+}
+
+pub(in crate::backend::zellij) fn topology_cache_mirror(
+    xdg: &Path,
+    workspace_id: &WorkspaceId,
+    session: &str,
+) -> TopologyCacheMirror {
+    let xdg = xdg.to_path_buf();
+    let workspace_id = workspace_id.clone();
+    let session = session.to_owned();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let handle = std::thread::spawn(move || {
+        while !thread_stop.load(Ordering::Relaxed) {
+            if let Ok(panes) = list_panes_json(&xdg, &session) {
+                write_topology_cache_from_value(&xdg, &workspace_id, &session, &panes);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    });
+    TopologyCacheMirror {
+        stop,
+        handle: Some(handle),
+    }
+}
+
+pub(in crate::backend::zellij) fn record_known_workspace_session(
+    state_root: &Path,
+    workspace_id: &WorkspaceId,
+    project_root: &Path,
+    session: &str,
+) {
+    let state = rimz::StatePaths::under(workspace_id.clone(), state_root).expect("state paths");
+    state.ensure_dirs().expect("workspace state dirs");
+    let record = rimz::WorkspaceRecord {
+        workspace_id: workspace_id.clone(),
+        project_root: project_root.to_path_buf(),
+        session_name: session.to_owned(),
+        root_class: rimz::workspace::RootClass::Directory,
+        updated_at: jiff::Timestamp::now(),
+    };
+    rimz::ledger::workspace_record::write(&state, &record).expect("workspace record");
+}
+
+fn tab_positions_from_list_panes_json(panes: &serde_json::Value) -> BTreeMap<u64, u64> {
+    let mut positions = BTreeMap::new();
+    for pane in panes.as_array().map(Vec::as_slice).unwrap_or_default() {
+        let Some(tab_id) = pane.get("tab_id").and_then(|value| value.as_u64()) else {
+            continue;
+        };
+        if !positions.contains_key(&tab_id) {
+            let position = u64::try_from(positions.len()).ok().unwrap_or(u64::MAX);
+            positions.insert(tab_id, position);
+        }
+    }
+    positions
+}
+
+fn topology_pane_from_list_panes_json(
+    pane: &serde_json::Value,
+    tab_positions: &BTreeMap<u64, u64>,
+) -> Option<PaneTopologyPane> {
+    let tab_position = pane
+        .get("tab_position")
+        .and_then(|value| value.as_u64())
+        .or_else(|| {
+            pane.get("tab_id")
+                .and_then(|value| value.as_u64())
+                .and_then(|tab_id| tab_positions.get(&tab_id).copied())
+        })
+        .unwrap_or(1);
+    Some(PaneTopologyPane {
+        id: pane.get("id")?.as_u64()?,
+        is_plugin: pane
+            .get("is_plugin")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        is_held: pane
+            .get("is_held")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        exited: pane
+            .get("exited")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        is_suppressed: pane
+            .get("is_suppressed")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        is_floating: pane
+            .get("is_floating")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        is_focused: pane
+            .get("is_focused")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        tab_position,
+        tab_name: pane
+            .get("tab_name")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
+        pane_columns: pane.get("pane_columns").and_then(|value| value.as_u64()),
+        pane_x: pane.get("pane_x").and_then(|value| value.as_u64()),
+        title: pane
+            .get("title")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
+        pane_command: pane
+            .get("pane_command")
+            .or_else(|| pane.get("command"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
+        terminal_command: pane
+            .get("terminal_command")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
+    })
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn pane_ref_from_list_panes_json(session: &str, pane: &serde_json::Value) -> Option<PaneRef> {
+    let id = pane.get("id")?.as_u64()?;
+    let tab = pane
+        .get("tab_position")
+        .or_else(|| pane.get("tab_id"))
+        .and_then(|value| value.as_u64());
+    Some(PaneRef {
+        pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{id}")),
+        session_name: session.to_owned(),
+        view_id: tab.map(|tab| format!("tab_{tab}")),
+        view_kind: Some(ViewKind::Tab),
+        view_name: pane
+            .get("tab_name")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
+        is_focused: pane
+            .get("is_focused")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        is_floating: pane
+            .get("is_floating")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        command: pane
+            .get("pane_command")
+            .or_else(|| pane.get("command"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        spawn_command: pane
+            .get("terminal_command")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        cwd: None,
+        pane_pid: None,
+        pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
+        resumed_session_id: None,
+        elevated_agent: None,
+        first_seen_at_ms: None,
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1041,13 +1287,9 @@ pub(in crate::backend::zellij) fn wait_for_pane_count(
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut last_panes = Vec::new();
     loop {
-        match ZellijBackend::with_runtime_dir(xdg).list_panes(PaneListOptions {
-            session_name: Some(session.to_owned()),
-            command_timeout: Some(LIST_PANES_JSON_TIMEOUT),
-            ..Default::default()
-        }) {
-            Ok(listing) => {
-                let panes = listing.panes;
+        match list_panes_json(xdg, session) {
+            Ok(raw) => {
+                let panes = pane_refs_from_list_panes_json(session, &raw);
                 if panes.len() >= want || Instant::now() >= deadline {
                     return panes;
                 }
@@ -1127,6 +1369,18 @@ pub(in crate::backend::zellij) fn reconcile_loop(
 }
 
 pub(in crate::backend::zellij) fn assert_sidebar_is_left_thirty_percent(xdg: &Path, session: &str) {
+    let (columns, total_columns) = assert_sidebar_is_left_docked_inner(xdg, session);
+    assert!(
+        columns * 100 <= total_columns * 35,
+        "sidebar should occupy roughly 30% of the tab: {columns}/{total_columns}",
+    );
+}
+
+pub(in crate::backend::zellij) fn assert_sidebar_is_left_docked(xdg: &Path, session: &str) {
+    let _ = assert_sidebar_is_left_docked_inner(xdg, session);
+}
+
+fn assert_sidebar_is_left_docked_inner(xdg: &Path, session: &str) -> (u64, u64) {
     let panes = expect_list_panes_json(xdg, session);
     let panes = panes.as_array().expect("pane geometry array");
     let sidebar = panes
@@ -1178,10 +1432,7 @@ pub(in crate::backend::zellij) fn assert_sidebar_is_left_thirty_percent(xdg: &Pa
             "work pane intrudes into the sidebar column band: sidebar={sidebar}, pane={pane}",
         );
     }
-    assert!(
-        columns * 100 <= total_columns * 35,
-        "sidebar should occupy roughly 30% of the tab: {columns}/{total_columns}",
-    );
+    (columns, total_columns)
 }
 
 /// The `rimz-sidebar` pane's column width per tab, from the live pane listing.

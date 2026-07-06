@@ -1,10 +1,10 @@
 //! Zellij pane-topology cache published by the presence plugin through
 //! `rimz sidebar wake`.
 //!
-//! The cache is a latency hint for Zellij's expensive JSON `list-panes` path:
-//! it carries the topology fields Rimz needs for pane projection, plus the
-//! plugin-retained live foreground command. `terminal_command` remains the
-//! pane's spawn command; `pane_command` is the foreground display command.
+//! The cache is Zellij's authoritative pane roster: it carries the topology
+//! fields Rimz needs for pane projection, plus the plugin-retained live
+//! foreground command. `terminal_command` remains the pane's spawn command;
+//! `pane_command` is the foreground display command.
 //! Process id, cwd, and resource enrichment still come from the existing
 //! `/proc` lanes.
 

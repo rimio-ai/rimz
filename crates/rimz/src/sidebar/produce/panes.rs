@@ -1,4 +1,4 @@
-//! The live pane frame: the single-flight `list-panes` cache, the raced-read
+//! The live pane frame: the single-flight pane-roster cache, the raced-read
 //! process rotation, and the `/proc` process-start stamp — everything the
 //! producer publishes to `snapshot.json` for consumers to fold in process.
 
@@ -63,9 +63,9 @@ fn fresh_snapshot_cache(
     })
 }
 
-/// The session's live panes from the mux — the `list-panes` round-trip the
-/// snapshot cache amortizes across the fleet. The ledger rollup is read
-/// separately (fresh from `latest.json`), so this enumerates only the pane set.
+/// The session's live panes from the mux — the roster read the snapshot cache
+/// amortizes across the fleet. The ledger rollup is read separately (fresh from
+/// `latest.json`), so this enumerates only the pane set.
 /// The per-view `is_focused` mark rides the pane list itself as a fallback
 /// focus candidate. The elected producer also samples the attached clients'
 /// viewed panes once per tick so the viewed tab anchors to the user's focused
@@ -118,7 +118,7 @@ fn rotate_from_prior(frame: &mut PaneFrame, prior: Option<&PaneFrame>) {
     }
 }
 
-/// The pane ids a fresh `list-panes` read left without a process start — the
+/// The pane ids a fresh mux roster read left without a process start — the
 /// set the `/proc` stamp owns ([`stamp_pane_process_starts`]). Captured before
 /// the frame rotates against the prior publish, so a backend-reported start is
 /// never confused with Rimz's own derived stamp and never overwritten by one.
@@ -253,7 +253,6 @@ pub fn repaired_pane_frame_for_binding(
         Some(fixture) => PaneListing {
             panes: fixture,
             observed_at_ms: unix_now_ms(),
-            served_from_topology: false,
             authoritative_focus: None,
         },
         None => list_session_panes(
@@ -285,7 +284,7 @@ pub fn repaired_pane_frame_for_binding(
 }
 
 /// Fill a pane's raced-empty cwd from `/proc/<pane_pid>/cwd` once the root pid
-/// is known. A fresh `list-panes` can answer a just-born pane with an empty cwd
+/// is known. A fresh mux roster can answer a just-born pane with an empty cwd
 /// for a tick; without one the pane groups under `external` and flickers there
 /// until the mux reports the path. Only an empty cwd is ever filled — a
 /// mux-reported cwd is authoritative because it tracks OSC7/foreground chdir,
@@ -488,14 +487,14 @@ fn annotate_elevated_agents(
 }
 
 /// Return the live pane frame for `session` — the pane list plus the pane-source
-/// observation stamp that event fusion orders against — sharing one `list-panes`
-/// round-trip across every sidebar via a short-lived single-flight cache.
+/// observation stamp that event fusion orders against — sharing one mux roster
+/// read across every sidebar via a short-lived single-flight cache.
 ///
 /// Fast path: a fresh same-session cache is read back with no mux work. Slow
 /// path: a non-blocking `try_lock` elects one producer; losers poll briefly for
 /// its write, then hold a usable prior frame before producing locally. That
-/// keeps a wedged mux client from turning every sidebar into its own
-/// `list-panes` fork.
+/// keeps a wedged mux client from turning every sidebar into its own roster
+/// read.
 pub(super) fn cached_panes_or_produce(
     runtime: &crate::RuntimePaths,
     mux: MuxName,
@@ -588,16 +587,14 @@ pub(super) fn cached_panes_or_produce(
                     return Err(err);
                 }
             };
-            let served_from_topology = listing.served_from_topology;
             let observed_at_ms = listing.observed_at_ms;
             let authoritative_focus = listing.authoritative_focus;
             let panes = filter_foreign_session_panes(listing.panes, session, diag);
             let prior = read_snapshot_cache(&cache_path, session);
-            // A topology-served pane list skips the expensive `list-panes`
-            // read, but renderer paint gating still depends on fresh client
-            // focus. Sample `client_view` on every producer tick so a newly
-            // viewed tab can repaint immediately; only a failed topology-side
-            // sample carries the last publish forward.
+            // Renderer paint gating still depends on fresh client focus. Sample
+            // `client_view` on every producer tick so a newly viewed tab can
+            // repaint immediately; a failed Zellij sample carries the last
+            // publish forward because topology is the roster source.
             let prior_client_view = || {
                 prior.as_ref().map_or_else(
                     || (Vec::new(), None),
@@ -609,7 +606,7 @@ pub(super) fn cached_panes_or_produce(
                     let presence = presence_sample_from_client_view(&client_view);
                     (client_view.viewed_panes, Some(presence))
                 }
-                Err(_) if served_from_topology => prior_client_view(),
+                Err(_) if mux == MuxName::Zellij => prior_client_view(),
                 Err(_) => (Vec::new(), None),
             };
             let (mut frame, diagnostics) =
@@ -641,10 +638,8 @@ pub(super) fn cached_panes_or_produce(
     ) {
         Coalesced::Shared(cache) => Ok(cache),
         // The producer wedged past the wait. Prefer any usable prior frame over
-        // a second mux fork: Zellij can stall every `list-panes` client when the
-        // session contains an empty half-born tab, and a local stampede makes
-        // the server less responsive. Without a prior, produce locally so a
-        // cold room still has a chance to recover.
+        // a second mux read. Without a prior, produce locally so a cold room
+        // still has a chance to recover.
         Coalesced::ProduceLocal => {
             let prior = read_snapshot_cache(&cache_path, session);
             if let Some(prior) = prior
@@ -673,12 +668,12 @@ pub(super) fn cached_panes_or_produce(
                 &cache_path,
             )
         }
-        // We won: fork `list-panes` and publish it. The guard holds the lock
+        // We won: read the mux roster and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
             let prior = read_snapshot_cache(&cache_path, session);
             let frame = produce_candidate(true, min_pane_cache_ms)?;
-            // A mid-tick `list-panes` race can drop a live pane's command/cwd/
+            // A mid-tick mux race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, run the shared repaired-frame
             // ladder before publishing.

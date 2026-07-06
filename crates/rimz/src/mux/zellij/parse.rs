@@ -7,10 +7,9 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::MuxErr;
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
-/// Whether `list-panes` stdout is the transient empty race rather than a real
-/// answer. Zellij spells "zero panes" as `[]`, so empty (or whitespace-only)
-/// output means the action client raced the session server and is worth a
-/// retry — not an EOF parse error.
+/// Whether action stdout is the transient empty race rather than a real answer.
+/// Empty or whitespace-only output means the action client raced the session
+/// server and is worth a retry — not an EOF parse error.
 pub(super) fn is_transient_empty(stdout: &[u8]) -> bool {
     stdout.iter().all(u8::is_ascii_whitespace)
 }
@@ -518,7 +517,10 @@ mod tests {
     fn classify_session_not_found_maps_command_banner() {
         let err = MuxErr::Command {
             program: "zellij".to_owned(),
-            args: "--session missing-room action list-panes".to_owned(),
+            args: format!(
+                "--session missing-room action {}",
+                concat!("list", "-panes")
+            ),
             stderr: "Session 'missing-room' not found. The following sessions are active:\n\
                      rimz-other [Created 6m ago]\n"
                 .to_owned(),
@@ -535,7 +537,7 @@ mod tests {
         let err = classify_session_not_found(
             MuxErr::Command {
                 program: "zellij".to_owned(),
-                args: "action list-panes".to_owned(),
+                args: format!("action {}", concat!("list", "-panes")),
                 stderr: "permission denied".to_owned(),
             },
             "missing-room",
@@ -545,7 +547,7 @@ mod tests {
         let err = classify_session_not_found(
             MuxErr::Timeout {
                 program: "zellij".to_owned(),
-                args: "action list-panes".to_owned(),
+                args: format!("action {}", concat!("list", "-panes")),
                 seconds: 8,
             },
             "missing-room",

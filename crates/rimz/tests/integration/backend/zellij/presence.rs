@@ -155,7 +155,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         Ok(caps)
             if caps
                 .parsed_version
-                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) => {}
+                .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
             eprintln!("zellij below the presence-plugin floor; skipping test");
             return;
@@ -265,7 +265,7 @@ fn share_web_session_enables_browser_clients_on_a_clientless_session() {
         Ok(caps)
             if caps
                 .parsed_version
-                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) => {}
+                .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
             eprintln!("zellij below the presence-plugin floor; skipping test");
             return;
@@ -311,7 +311,7 @@ fn focus_key_press_from_different_cwd_pipes_sidebar_focus_through_the_plugin() {
         Ok(caps)
             if caps
                 .parsed_version
-                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) => {}
+                .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
             eprintln!("zellij below the presence-plugin floor; skipping test");
             return;
