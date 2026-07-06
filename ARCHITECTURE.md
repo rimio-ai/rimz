@@ -10,7 +10,7 @@ workspace root == Rimz workspace == multiplexer session
 
 A **root** is the richest class a directory offers: an enclosing git repository (whose worktrees group inside one room), else a project-marker directory, else the directory itself — the workspace a headless box of agents gets with no source control. A pane's workspace is the session it lives in: session birth stamps the identity pin into the mux environment, and participating commands honor it before re-deriving from cwd ([workspace.rs](./crates/rimz/src/workspace.rs)). Zellij and tmux own panes, views, sessions, attach/detach, and scrollback; Rimz owns project identity, the feed, durable state, notification handlers, hook entrypoints, and the sidebar rendering contract.
 
-Product invariants and the operating paths live in [DESIGN.md](./DESIGN.md); this file is the structural map.
+Product invariants and the feed surfaces live in [DESIGN.md](./DESIGN.md); this file is the structural map.
 
 ## How to read this map
 

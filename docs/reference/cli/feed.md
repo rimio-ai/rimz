@@ -1,6 +1,6 @@
 # Feed, events, hooks, and trust
 
-These commands publish items to the room's ledger, answer them, wire agent hooks, and grant project trust. The model behind them is [a programmable harness](../../../DESIGN.md#a-programmable-harness); the actionable surfaces are [the two operating paths](../../../DESIGN.md#the-two-operating-paths).
+These commands publish items to the room's ledger, answer them, wire agent hooks, and grant project trust. The model behind them is [a programmable harness](../../../DESIGN.md#a-programmable-harness); the actionable surfaces are [the two feed surfaces](../../../DESIGN.md#the-two-feed-surfaces).
 
 ## Common script flows
 

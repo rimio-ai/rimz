@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
 
-Rimz is a harness for developers running ten or twenty Claude Code, Codex, or Pi sessions in parallel — on a laptop, or on a server you reach over SSH — and it lives inside the Zellij or tmux you already run, with your keybinds and the official apps untouched. This page is the working tour: the room and the sidebar, the everyday loop, and the four scenarios people run — triaging a local fleet, running a room on a server, pairing two agents on one feature, and putting a pipeline in the room — with loop automation and the multi-repo room as the capabilities that scale them. For the felt walk-through from first keystroke to a ten-agent fleet, see [experience.md](./experience.md).
+Rimz is a harness for developers running ten or twenty Claude Code, Codex, or Pi sessions in parallel — on a laptop, or on a server you reach over SSH — inside the Zellij or tmux you already run, with your keybinds and the official apps untouched. This page is the working tour: the room and the sidebar, the everyday loop, and the four scenarios people run — triaging a local fleet, running the room on a server, pairing two agents on one feature, and putting a pipeline in the room — with loop engineering and the multi-repo room as the moves that scale them. For the felt walk-through from first keystroke to a ten-agent fleet, see [experience.md](./experience.md).
 
 ## The room and the sidebar
 
@@ -42,7 +42,7 @@ That's the loop. Every other feature in Rimz is a variation on those primitives.
 
 When an agent needs a decision, Rimz gets you to it. The everyday path has nothing extra wired: the agent asks in its own UI, Rimz records the ask, wakes the sidebar, and points you at the pane. You see "claude · waiting · permission", focus that pane, and answer Claude's prompt; the sidebar clears when the agent moves on.
 
-Loop automation can answer a recognised routine prompt ahead of you in the same UI and record what it did; anything it leaves alone stays on the prompt for you. See [Engineer the loop](#engineer-the-loop).
+A handler you wire can answer a recognised routine prompt ahead of you in the same UI and record what it did; anything it leaves alone stays on the prompt for you. See [Engineer the loop](#engineer-the-loop).
 
 A second surface exists for scripts: a process can call `rimz feed ask` and route its own decision into the same sidebar column (the `script` surface), covered under [the pipeline scenario](#put-your-pipeline-in-the-room). The schema names the surfaces `native_ui` and `script`, with wire-level details in [ledger.md](../internals/sidebar/ledger.md).
 
@@ -66,11 +66,13 @@ Long runs meet provider limits, and the room keeps them legible: an agent that s
 
 ## Engineer the loop
 
+The [everyday loop](#the-loop) needs you at step 3; loop engineering is how the fleet keeps moving when you are not there. It layers three choices: built-in recovery, a permission posture, and a handler for the prompts that repeat.
+
 Start with built-ins. With `[resume] auto_continue = true` (off by default), rate-limit and spend-limit parks resume at the provider window reset, and overload or transient API-error parks retry on a bounded backoff. Context compaction rides the same loop, so a long agent can keep its footing without a second process to babysit it. Configuration is in [configuration.md → Resume](../reference/configuration.md#resume), and the live path is in [provider.md → Auto-continue](../internals/agents/provider.md#auto-continue).
 
 Choose the permission posture next: [agent-native bypass or audited prompt answers](#choosing-the-permission-posture) decides how an unattended run handles approvals.
 
-Then wire loop automation for prompts Rimz should not answer by itself. You've answered routine permissions all day: "Can I run `cargo check`?" for the eighth time, with six more agents waking up tomorrow morning. Write a small notification handler that wraps a smarter model or a narrow policy, wire it once, and it handles the routine ones in the agent's own pane.
+Then wire a handler for the prompts Rimz should not answer by itself. You've answered routine permissions all day: "Can I run `cargo check`?" for the eighth time, with six more agents waking up tomorrow morning. Write a small notification handler that wraps a smarter model or a narrow policy, wire it once, and it handles the routine ones in the agent's own pane.
 
 ```toml
 [[notifications.handler]]
@@ -88,7 +90,7 @@ Unknown shapes stay pending and still route to you.
 
 The morning after six overnight agents: "The policy handler answered 47 routine permissions, skipped 3 architecture-shaped questions, and one stayed in the sidebar for me." Your team's attention bandwidth scales with the handler, not with the agent count.
 
-The automation is whatever intelligence you put behind the handler: a bounded-pattern script, a supervised one-shot agent (`rimz agents codex -p …`), or a standing in-room guardian reached with `rimz message --steer @guardian`. Reference handlers live in `examples/resolvers/`, the pattern lives in [resolvers.md](../internals/agents/resolvers.md), and handler security lives in [security.md](./security.md).
+The handler is whatever intelligence you put behind it: a bounded-pattern script, a supervised one-shot agent (`rimz agents codex -p …`), or a standing in-room guardian reached with `rimz message --steer @guardian`. Reference handlers live in `examples/resolvers/`, the pattern lives in [resolvers.md](../internals/agents/resolvers.md), and handler security lives in [security.md](./security.md).
 
 ## Two agents, one feature
 
@@ -117,7 +119,7 @@ One sidebar triages the whole machine: an agent blocking in `~/code/query-engine
 rimz agents codex --worktree=deps --timeout 4h -p "update dependencies, run the test suite, open a PR"
 ```
 
-Because the agent runs in a real pane, a run that stops to ask survives the stop: the question takes the normal path — loop automation can answer a recognised routine prompt, anything left pops to the cockpit and your notification channel — and you attach from anywhere, answer in the agent's own UI, and the run picks up and finishes while the script is still blocking.
+Because the agent runs in a real pane, a run that stops to ask survives the stop: the question takes the normal path — your handler can answer a recognised routine prompt, anything left pops to the cockpit and your notification channel — and you attach from anywhere, answer in the agent's own UI, and the run picks up and finishes while the script is still blocking.
 
 A failing migration at 3 a.m. becomes a push on your phone, a one-line fix typed over SSH, and a green pipeline by morning. The same shape runs while you watch: a PR-review job launched from CI joins your room as one more row, where you inspect the work as it happens and it asks its design questions right in your workspace.
 
@@ -139,7 +141,7 @@ How an unattended run answers permissions on its own is a posture you choose, an
 
 The first is the agent's own bypass flag. Launch each agent with `claude --dangerously-skip-permissions` or `codex --dangerously-bypass-approvals-and-sandbox` and it runs straight through (`rimz agents <kind> "<prompt>" -p --yolo` passes the adapter's flag for you; `--ask` leaves the provider's prompts in place). Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff is that the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
 
-The second is permissive loop automation. Wire a notification handler that recognises a narrow prompt, types the answer into the agent's own UI with `rimz pane send`, and records the audit row with `rimz feed resolve --method pane-send --by <name>`. Prefer this when you want audit rows for handled prompts without bypassing the provider's native dialog.
+The second is a permissive handler. Wire a notification handler that recognises a narrow prompt, types the answer into the agent's own UI with `rimz pane send`, and records the audit row with `rimz feed resolve --method pane-send --by <name>`. Prefer this when you want audit rows for handled prompts without bypassing the provider's native dialog.
 
 The two patterns compose: a handler for routine cases, with the agent's bypass flag only when you want the provider to skip permission events at the source.
 
