@@ -261,7 +261,11 @@ pub fn parse_created_login_token(
         .filter(|line| !line.is_empty())
         .rev()
         .find_map(|line| {
-            let (_, token) = line.split_once(':')?;
+            let (name, token) = line.split_once(':')?;
+            let suffix = name.trim().strip_prefix("token_")?;
+            if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
             let token = token.trim();
             (!token.is_empty()).then(|| token.to_owned())
         })
@@ -739,6 +743,10 @@ mod tests {
         assert_eq!(
             parse_created_login_token(stdout).expect("token parses"),
             "d2d9a2b9-9861-43b3-960b-b5292ac0407b"
+        );
+        assert_eq!(
+            parse_created_login_token(b"Created token successfully\n\ntoken_1: rimz-tok-123\nnote: still use the token line\n").expect("token parses"),
+            "rimz-tok-123"
         );
         assert_eq!(
             parse_created_login_token(b"Created token successfully\n").unwrap_err(),
