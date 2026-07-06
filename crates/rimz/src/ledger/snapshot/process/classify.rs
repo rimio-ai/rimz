@@ -9,14 +9,19 @@ pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program(command)).to_owned()
 }
 
-/// The command with its program token reduced to a basename: the leading path
-/// trimmed so `target/debug/xtask install-dev` reads as `xtask install-dev`,
-/// while arguments stay verbatim. Sees past a `sudo` wrapper, so the wrapped
-/// program's own path is the one trimmed.
+/// The command with an absolute program path reduced to a basename: `/usr/bin/cargo
+/// build` reads as `cargo build`, while relative paths like
+/// `target/debug/xtask install-dev` stay verbatim as build-location context.
+/// Arguments always stay verbatim. Sees past a `sudo` wrapper, so the wrapped
+/// program's own path is the one considered.
 pub(crate) fn command_program_basename(command: &str) -> String {
     let Some((program, _)) = effective_program_and_args(command) else {
         return command.to_owned();
     };
+    if !std::path::Path::new(program).is_absolute() {
+        return command.to_owned();
+    }
+
     let base = basename(program);
     if base.len() == program.len() {
         return command.to_owned();
@@ -257,7 +262,11 @@ mod tests {
     fn command_program_basename_trims_only_the_program_token() {
         assert_eq!(
             command_program_basename("target/debug/xtask install-dev"),
-            "xtask install-dev"
+            "target/debug/xtask install-dev"
+        );
+        assert_eq!(
+            command_program_basename("./target/debug/xtask install-dev"),
+            "./target/debug/xtask install-dev"
         );
         assert_eq!(
             command_program_basename("/usr/bin/cargo build"),

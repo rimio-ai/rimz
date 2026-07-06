@@ -65,7 +65,7 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         program.clone()
     };
     // The command earns a second line only when it adds something past the
-    // primary label — the program path trimmed to its basename, arguments
+    // primary label — an absolute program path trimmed to its basename, arguments
     // verbatim.
     let command_detail = command
         .filter(|_| state.is_busy() || elevated.is_some())
@@ -200,7 +200,7 @@ mod tests {
             path_active
                 .as_process()
                 .and_then(|process| process.command_detail.as_deref()),
-            Some("xtask install-dev")
+            Some("target/debug/xtask install-dev")
         );
 
         // Idle shell: one clean line, no detail.
