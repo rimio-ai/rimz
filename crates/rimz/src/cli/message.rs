@@ -1564,10 +1564,55 @@ fn collapse_home_in_snippet(text: &str) -> String {
 }
 
 fn collapse_home_in_snippet_to(home: Option<&str>, text: &str) -> String {
-    let Some(home) = home.filter(|home| !home.is_empty() && *home != "/") else {
+    let Some(home) = home
+        .map(|home| home.trim_end_matches('/'))
+        .filter(|home| !home.is_empty() && *home != "/")
+    else {
         return text.to_owned();
     };
-    text.replace(home, "~")
+    let mut collapsed = String::new();
+    let mut rest = text;
+    let mut changed = false;
+    while let Some(index) = rest.find(home) {
+        let (before, matched) = rest.split_at(index);
+        let after = &matched[home.len()..];
+        if home_match_boundary(before.chars().next_back(), after.chars().next()) {
+            collapsed.push_str(before);
+            collapsed.push('~');
+            rest = after;
+            changed = true;
+        } else {
+            let (head, tail) = matched.split_at(matched.chars().next().unwrap().len_utf8());
+            collapsed.push_str(before);
+            collapsed.push_str(head);
+            rest = tail;
+        }
+    }
+    if !changed {
+        return text.to_owned();
+    }
+    collapsed.push_str(rest);
+    collapsed
+}
+
+fn home_match_boundary(previous: Option<char>, next: Option<char>) -> bool {
+    home_start_boundary(previous) && home_end_boundary(next)
+}
+
+fn home_start_boundary(ch: Option<char>) -> bool {
+    ch.is_none_or(|ch| {
+        ch.is_whitespace() || matches!(ch, '"' | '\'' | '`' | '(' | '[' | '{' | '<' | '=' | ':')
+    })
+}
+
+fn home_end_boundary(ch: Option<char>) -> bool {
+    ch.is_none_or(|ch| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                '/' | '"' | '\'' | '`' | ')' | ']' | '}' | '>' | ',' | ';' | ':'
+            )
+    })
 }
 
 fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
@@ -1988,6 +2033,14 @@ mod tests {
         assert_eq!(
             collapse_home_in_snippet_to(None, "see /home/dev/worktree"),
             "see /home/dev/worktree"
+        );
+        assert_eq!(
+            collapse_home_in_snippet_to(Some("/home/dev"), "see /home/development/plan.md"),
+            "see /home/development/plan.md"
+        );
+        assert_eq!(
+            collapse_home_in_snippet_to(Some("/home/dev/"), "see /home/dev/worktree"),
+            "see ~/worktree"
         );
         assert_eq!(collapse_home_in_snippet_to(Some("/"), "/tmp"), "/tmp");
         assert_eq!(collapse_home_in_snippet_to(Some(""), "/tmp"), "/tmp");
