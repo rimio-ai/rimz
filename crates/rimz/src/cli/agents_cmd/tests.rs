@@ -1575,10 +1575,16 @@ mod render {
             1_010,
             "API Error: Overloaded",
         );
+        let running = agent_with_status(
+            "running-sess",
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Reasoning,
+            1_000,
+        );
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
             Vec::new(),
-            vec![failed, paused],
+            vec![failed, paused, running],
             now,
         );
         let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
@@ -1591,9 +1597,10 @@ mod render {
         assert!(text.contains("fix failing auth flow"), "{text}");
         assert!(text.contains("failed"), "{text}");
         assert!(text.contains("paused"), "{text}");
+        assert!(text.contains("running"), "{text}");
         assert!(
-            !text.contains("running:reasoning"),
-            "turn-error rows drop the stale phase suffix:\n{text}"
+            !text.contains(":reasoning"),
+            "agent rows drop phase suffixes:\n{text}"
         );
     }
 
@@ -1625,6 +1632,183 @@ mod render {
                 .all(|line| unicode_width::UnicodeWidthStr::width(line) <= 72),
             "{text}"
         );
+    }
+
+    #[test]
+    fn agents_table_groups_by_channel_with_isolation_glyphs() {
+        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let mut worktree = agent_with_status(
+            "worktree-channel",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        worktree.channel = Some("auth-refresh".to_owned());
+        worktree.worktree_path = Some("/repo/worktrees/auth-refresh".to_owned());
+        let mut plain = agent_with_status(
+            "plain-channel",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        plain.channel = Some("docs".to_owned());
+        plain.worktree_path = Some("/repo/main".to_owned());
+        let mut external = agent_with_status(
+            "external",
+            rimz::agents::AgentStatus::Failed,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        external.worktree_path = None;
+        external.worktree_branch = None;
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo/main")),
+            Vec::new(),
+            vec![worktree, plain, external],
+            now,
+        )
+        .with_project_root(Some(PathBuf::from("/repo/main")));
+
+        let text = render_agents_text(&snapshot, now, 120);
+
+        assert!(text.contains("⑂ auth-refresh"), "{text}");
+        assert!(text.contains("# docs"), "{text}");
+        assert!(text.contains("external"), "{text}");
+        assert!(
+            !text.lines().next().unwrap_or_default().contains("CHANNEL"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn agents_table_group_header_projects_shared_team() {
+        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let mut planner = agent_with_status(
+            "planner",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        planner.channel = Some("auth-refresh".to_owned());
+        planner.worktree_path = Some("/repo/worktrees/auth-refresh".to_owned());
+        planner.team = Some("pcr".to_owned());
+        let mut coder = agent_with_status(
+            "coder",
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Acting,
+            1_000,
+        );
+        coder.channel = planner.channel.clone();
+        coder.worktree_path = planner.worktree_path.clone();
+        coder.team = planner.team.clone();
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo/main")),
+            Vec::new(),
+            vec![planner, coder],
+            now,
+        )
+        .with_project_root(Some(PathBuf::from("/repo/main")));
+
+        let text = render_agents_text(&snapshot, now, 120);
+
+        assert!(text.contains("⑂ auth-refresh · pcr team"), "{text}");
+    }
+
+    #[test]
+    fn agents_table_group_header_suppresses_repeated_or_mixed_team() {
+        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let mut repeated = agent_with_status(
+            "repeated-team",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        repeated.channel = Some("rimz/pcr".to_owned());
+        repeated.team = Some("pcr".to_owned());
+        let repeated_snapshot = rimz::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo/main")),
+            Vec::new(),
+            vec![repeated],
+            now,
+        )
+        .with_project_root(Some(PathBuf::from("/repo/main")));
+        let repeated_text = render_agents_text(&repeated_snapshot, now, 120);
+        let repeated_header = repeated_text
+            .lines()
+            .find(|line| line.contains("rimz/pcr"))
+            .unwrap_or_default();
+        assert!(!repeated_header.contains("team"), "{repeated_text}");
+
+        let mut planner = agent_with_status(
+            "mixed-planner",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        planner.channel = Some("mixed".to_owned());
+        planner.team = Some("pcr".to_owned());
+        let mut coder = agent_with_status(
+            "mixed-coder",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        coder.channel = planner.channel.clone();
+        coder.team = Some("review".to_owned());
+        let mixed_snapshot = rimz::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo/main")),
+            Vec::new(),
+            vec![planner, coder],
+            now,
+        )
+        .with_project_root(Some(PathBuf::from("/repo/main")));
+        let mixed_text = render_agents_text(&mixed_snapshot, now, 120);
+        let mixed_header = mixed_text
+            .lines()
+            .find(|line| line.contains("# mixed"))
+            .unwrap_or_default();
+        assert!(!mixed_header.contains("team"), "{mixed_text}");
+    }
+
+    #[test]
+    fn show_activity_projects_phase_only_for_active_turns() {
+        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let active = agent_with_status(
+            "active",
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Acting,
+            1_000,
+        );
+        let idle = agent_with_status(
+            "idle",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+
+        let mut active_out = anstream::StripStream::new(Vec::new());
+        super::commands::render_activity_section(&mut active_out, &active, None, false, now)
+            .expect("render active activity");
+        let active_text = String::from_utf8(active_out.into_inner()).expect("utf8");
+        assert!(
+            active_text
+                .lines()
+                .any(|line| line.contains("status:") && line.contains("running")),
+            "{active_text}"
+        );
+        assert!(
+            active_text
+                .lines()
+                .any(|line| line.contains("phase:") && line.contains("acting")),
+            "{active_text}"
+        );
+
+        let mut idle_out = anstream::StripStream::new(Vec::new());
+        super::commands::render_activity_section(&mut idle_out, &idle, None, false, now)
+            .expect("render idle activity");
+        let idle_text = String::from_utf8(idle_out.into_inner()).expect("utf8");
+        assert!(idle_text.contains("status:"), "{idle_text}");
+        assert!(!idle_text.contains("phase:"), "{idle_text}");
     }
 }
 
@@ -1782,6 +1966,17 @@ fn run_record_with_status(status: RunStatus) -> RunRecord {
     );
     record.status = status;
     record
+}
+
+fn render_agents_text(
+    snapshot: &rimz::SidebarSnapshot,
+    now: jiff::Timestamp,
+    max_width: usize,
+) -> String {
+    let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_agents_table(&mut out, snapshot, &agents, now, max_width).expect("render agents table");
+    String::from_utf8(out.into_inner()).expect("utf8")
 }
 
 trait AgentTurnErrorFixture {

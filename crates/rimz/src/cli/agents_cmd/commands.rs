@@ -82,15 +82,80 @@ pub(crate) fn render_agents_table(
         .iter()
         .flat_map(|group| group.agents.iter().copied())
         .collect();
-    let mut table = render::Table::new([
-        "AGENT", "STATUS", "CHANNEL", "MODEL", "CTX", "TOKENS", "AGE", "DESC",
-    ])
-    .right(&[4, 5, 6])
-    .clip_last(max_width);
-    for &agent in &ordered_agents {
-        table.row(agent_row(agent, &ordered_agents, now));
+    let mut table =
+        render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE", "DESC"])
+            .right(&[3, 4, 5])
+            .clip_last(max_width);
+    for group in groups {
+        table.section_cells(group_header_cells(&group, snapshot));
+        for &agent in &group.agents {
+            table.row(agent_row(agent, &ordered_agents, now));
+        }
     }
     table.render(w)
+}
+
+fn group_header_cells(
+    group: &rimz::ledger::snapshot::AgentWorktreeGroup<'_>,
+    snapshot: &rimz::SidebarSnapshot,
+) -> Vec<render::Cell> {
+    if group.kind == rimz::SidebarWorktreeKind::External {
+        return vec![render::cell("external").fg(render::palette::FAINT)];
+    }
+
+    let label = match group.kind {
+        rimz::SidebarWorktreeKind::Worktree => format!("⑂ {}", group.label),
+        rimz::SidebarWorktreeKind::Channel if channel_group_is_worktree_backed(group, snapshot) => {
+            format!("⑂ {}", group.label)
+        }
+        rimz::SidebarWorktreeKind::Channel => format!("# {}", group.label),
+        rimz::SidebarWorktreeKind::Root => group.label.clone(),
+        rimz::SidebarWorktreeKind::External => unreachable!("external returned above"),
+    };
+    let mut cells = vec![render::cell(label).fg(render::palette::ACCENT.bold())];
+    if let Some(team) = shared_group_team(group)
+        && !group.label.ends_with(&format!("/{team}"))
+    {
+        cells.push(render::cell(format!("· {team} team")).fg(render::palette::META));
+    }
+    cells
+}
+
+fn channel_group_is_worktree_backed(
+    group: &rimz::ledger::snapshot::AgentWorktreeGroup<'_>,
+    snapshot: &rimz::SidebarSnapshot,
+) -> bool {
+    let Some(project_root) = snapshot.project_root.as_deref() else {
+        return false;
+    };
+    let Some(first) = group
+        .agents
+        .first()
+        .and_then(|agent| agent.worktree_path.as_deref())
+    else {
+        return false;
+    };
+    Path::new(first) != project_root
+        && group
+            .agents
+            .iter()
+            .all(|agent| agent.worktree_path.as_deref() == Some(first))
+}
+
+fn shared_group_team(group: &rimz::ledger::snapshot::AgentWorktreeGroup<'_>) -> Option<String> {
+    let first = group
+        .agents
+        .first()
+        .and_then(|agent| agent.team.as_deref())?;
+    if group
+        .agents
+        .iter()
+        .all(|agent| agent.team.as_deref() == Some(first))
+    {
+        Some(first.to_owned())
+    } else {
+        None
+    }
 }
 
 fn list_channel_filter(
@@ -344,7 +409,7 @@ fn render_agent_section(
     writeln!(w)
 }
 
-fn render_activity_section(
+pub(super) fn render_activity_section(
     w: &mut impl Write,
     agent: &AgentState,
     ask: Option<&crate::cli::transcript::AskView>,
@@ -361,6 +426,10 @@ fn render_activity_section(
         "status",
         render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
     );
+    let (_, phase) = agent_status_projection(agent);
+    if phase != rimz::agents::TurnPhase::Idle {
+        kv.push("phase", render::cell(phase_label(phase)));
+    }
     if let Some(started) = agent.turn_started_at {
         kv.push("turn_started", render::cell(started.to_string()));
         kv.push("turn_elapsed", render::cell(render::rel_age(started, now)));
@@ -1379,13 +1448,12 @@ fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
 }
 
 /// The columns shared by `agents list` in display order. The lead `AGENT` cell
-/// omits `#channel`; the `CHANNEL` cell carries that scope.
+/// omits `#channel` because its section header carries that scope.
 fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) -> Vec<render::Cell> {
     vec![
         render::cell(rimz::harness::target::agent_handle(agent, peers, false))
             .fg(render::palette::ACCENT),
         render::cell(agent_status_label(agent)).fg(agent_status_style(agent)),
-        render::cell(worktree_label(agent)).dash(),
         model_cell(agent),
         context_cell(agent),
         render::cell(tokens_label(agent)).dash(),
@@ -1456,13 +1524,8 @@ fn agent_name(agent: &AgentState) -> &str {
     agent.name.as_deref().unwrap_or(agent.agent_id.as_str())
 }
 
-fn agent_status_label(agent: &AgentState) -> String {
-    let (status, phase) = agent_status_projection(agent);
-    if phase == rimz::agents::TurnPhase::Idle {
-        status.as_str().to_owned()
-    } else {
-        format!("{}:{}", status.as_str(), phase_label(phase))
-    }
+fn agent_status_label(agent: &AgentState) -> &'static str {
+    agent_status_projection(agent).0.as_str()
 }
 
 fn agent_status_style(agent: &AgentState) -> anstyle::Style {

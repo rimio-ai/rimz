@@ -218,7 +218,7 @@ impl Cell {
 /// head a group of following rows.
 enum Body {
     Row(Vec<Cell>),
-    Section(String),
+    Section(Vec<Cell>),
 }
 
 /// A borderless table whose columns auto-fit their widest cell. Headers render
@@ -282,7 +282,12 @@ impl Table {
     /// Open a group: a blank line then `label` in the accent tone, heading every
     /// row pushed until the next section.
     pub(crate) fn section(&mut self, label: impl Into<String>) {
-        self.rows.push(Body::Section(label.into()));
+        self.section_cells(vec![cell(label).fg(palette::ACCENT.bold())]);
+    }
+
+    /// Open a group with styled spans joined by one space.
+    pub(crate) fn section_cells(&mut self, cells: Vec<Cell>) {
+        self.rows.push(Body::Section(cells));
     }
 
     pub(crate) fn render(&self, w: &mut impl Write) -> std::io::Result<()> {
@@ -315,11 +320,14 @@ impl Table {
         for body in &self.rows {
             match body {
                 Body::Row(row) => self.write_row(w, row, &widths)?,
-                Body::Section(label) => {
+                Body::Section(cells) => {
                     writeln!(w)?;
-                    cell(label.clone())
-                        .fg(palette::ACCENT.bold())
-                        .write_styled(w)?;
+                    for (idx, cell) in cells.iter().enumerate() {
+                        if idx > 0 {
+                            write!(w, " ")?;
+                        }
+                        cell.write_styled(w)?;
+                    }
                     writeln!(w)?;
                 }
             }
@@ -490,6 +498,21 @@ mod tests {
         assert_eq!(
             strip(|w| table.render(w)),
             "  NAME        CTX\n  right-yard  ok\n"
+        );
+    }
+
+    #[test]
+    fn table_section_cells_join_styled_spans() {
+        let mut table = Table::new(["NAME"]);
+        table.section_cells(vec![
+            cell("⑂ auth-refresh").fg(palette::ACCENT.bold()),
+            cell("· pcr team").fg(palette::META),
+        ]);
+        table.row([cell("@coder")]);
+
+        assert_eq!(
+            strip(|w| table.render(w)),
+            "NAME\n\n⑂ auth-refresh · pcr team\n@coder\n"
         );
     }
 

@@ -120,7 +120,6 @@ fn sample(
             AgentSample {
                 handle,
                 status: agent.status,
-                phase: agent.phase,
                 context_pct: agent.context_fill_pct(),
                 tokens: agent.total_tokens.unwrap_or(0),
                 age: render::age_short(agent.last_seen, now),
@@ -148,7 +147,6 @@ struct TopSample {
 struct AgentSample {
     handle: String,
     status: AgentStatus,
-    phase: rimz::agents::TurnPhase,
     context_pct: Option<f64>,
     tokens: u64,
     age: String,
@@ -199,7 +197,7 @@ fn top_rows(previous: &TopSample, current: &TopSample, elapsed_hint: Duration) -
             };
             TopRow {
                 handle: current.handle.clone(),
-                status: status_label(current.status, current.phase),
+                status: status_label(current.status),
                 cpu_pct,
                 mem_bytes: current
                     .metrics
@@ -234,10 +232,7 @@ fn cpu_milli(value: f64) -> u64 {
 }
 
 fn render_top(w: &mut impl Write, sample: &TopSample, rows: &[TopRow]) -> std::io::Result<()> {
-    let running = rows
-        .iter()
-        .filter(|row| row.status.starts_with("running"))
-        .count();
+    let running = rows.iter().filter(|row| row.status == "running").count();
     let total_cpu: f64 = rows.iter().filter_map(|row| row.cpu_pct).sum();
     let total_mem: u64 = rows.iter().filter_map(|row| row.mem_bytes).sum();
     let total_tokens: u64 = rows.iter().map(|row| row.tokens).sum();
@@ -365,21 +360,8 @@ fn channel_filter(
     }
 }
 
-fn status_label(status: AgentStatus, phase: rimz::agents::TurnPhase) -> String {
-    if phase == rimz::agents::TurnPhase::Idle {
-        status.as_str().to_owned()
-    } else {
-        format!("{}:{}", status.as_str(), phase_label(phase))
-    }
-}
-
-fn phase_label(phase: rimz::agents::TurnPhase) -> &'static str {
-    match phase {
-        rimz::agents::TurnPhase::Idle => "idle",
-        rimz::agents::TurnPhase::Reasoning => "reasoning",
-        rimz::agents::TurnPhase::Acting => "acting",
-        rimz::agents::TurnPhase::Parked => "parked",
-    }
+fn status_label(status: AgentStatus) -> String {
+    status.as_str().to_owned()
 }
 
 fn fmt_cpu(value: Option<f64>) -> String {
@@ -425,7 +407,6 @@ mod tests {
         AgentSample {
             handle: handle.to_owned(),
             status: AgentStatus::Running,
-            phase: rimz::agents::TurnPhase::Idle,
             context_pct: Some(25.0),
             tokens,
             age: "1s".to_owned(),
