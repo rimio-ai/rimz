@@ -877,6 +877,10 @@ impl AgentAdapter for ClaudeAdapter {
         )
     }
 
+    fn oauth_credentials_stamp(&self) -> Option<u64> {
+        oauth_usage::credentials_stamp()
+    }
+
     fn remote_control_status(
         &self,
         account: Option<&crate::agents::AgentAccount>,

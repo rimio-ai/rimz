@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 
 use crate::agents::AccountUsageSnapshot;
-use crate::agents::credits::OauthReportable;
+use crate::agents::credits::{OauthReportable, file_mtime_ms};
 
 use super::spend::{latest_message_provider, opencode_data_dirs};
 
@@ -89,6 +89,10 @@ pub(crate) fn fetch() -> Result<AccountUsageSnapshot> {
             provider.to_owned(),
         )),
     }
+}
+
+pub(crate) fn credentials_stamp() -> Option<u64> {
+    auth_path().and_then(|path| file_mtime_ms(&path))
 }
 
 fn auth_path() -> Option<PathBuf> {

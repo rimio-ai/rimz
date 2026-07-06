@@ -633,6 +633,10 @@ impl AgentAdapter for OpencodeAdapter {
     fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
         crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "opencode.oauth_usage")
     }
+
+    fn oauth_credentials_stamp(&self) -> Option<u64> {
+        oauth_usage::credentials_stamp()
+    }
 }
 
 /// Offline fallback window when the plugin's catalog-resolved

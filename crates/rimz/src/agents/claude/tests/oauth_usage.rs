@@ -1,4 +1,23 @@
 use super::*;
+use crate::agents::credits::OauthReportable;
+
+#[test]
+fn reportable_classifier_treats_unauthorized_as_settled_auth() {
+    assert!(
+        !ClaudeOauthUsageErr::Http {
+            kind: HttpErrKind::Status(401),
+            host: "api.anthropic.com".to_owned(),
+        }
+        .should_report()
+    );
+    assert!(
+        ClaudeOauthUsageErr::Http {
+            kind: HttpErrKind::Status(403),
+            host: "api.anthropic.com".to_owned(),
+        }
+        .should_report()
+    );
+}
 
 #[test]
 fn credentials_parse_token_expiry_and_scope() {

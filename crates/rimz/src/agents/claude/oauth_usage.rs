@@ -15,7 +15,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::{OauthUsageResponse, oauth_http_get};
+use crate::agents::credits::{OauthUsageResponse, file_mtime_ms, oauth_http_get};
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, transcript_fs::home_dir};
 
 use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate_limit_used_pct};
@@ -43,12 +43,15 @@ pub(crate) enum ClaudeOauthUsageErr {
 impl crate::agents::credits::OauthReportable for ClaudeOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent credentials, an
     /// expired token, and a missing usage scope are the normal state for an
-    /// account that does not feed Rimz its usage, not a fault; parse and HTTP
-    /// failures are.
+    /// account that does not feed Rimz its usage, not a fault; a provider 401
+    /// is the same settled auth verdict. Parse and other HTTP failures are.
     fn should_report(&self) -> bool {
         !matches!(
             self,
             Self::NoCredentials | Self::TokenExpired | Self::MissingScope
+        ) && !matches!(
+            self,
+            Self::Http { kind, .. } if kind.is_auth_rejected()
         )
     }
 }
@@ -152,6 +155,10 @@ fn load_keychain_credentials() -> Result<ClaudeOauthCredentials> {
 
 fn credentials_path() -> PathBuf {
     home_dir().join(".claude").join(".credentials.json")
+}
+
+pub(crate) fn credentials_stamp() -> Option<u64> {
+    file_mtime_ms(&credentials_path())
 }
 
 pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {

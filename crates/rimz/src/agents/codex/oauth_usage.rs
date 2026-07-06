@@ -12,7 +12,7 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::{OauthUsageResponse, oauth_http_get};
+use crate::agents::credits::{OauthUsageResponse, file_mtime_ms, oauth_http_get};
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, ResetCredits};
 
 use super::app_server::codex_home;
@@ -36,9 +36,14 @@ pub(crate) enum CodexOauthUsageErr {
 impl crate::agents::credits::OauthReportable for CodexOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent or API-key-only
     /// credentials are the normal state for an app-server or logged-out account,
-    /// not a fault; parse and HTTP failures are.
+    /// not a fault; a provider 401 is the expired/revoked-token state rather
+    /// than a Rimz fault. Parse and other HTTP failures are.
     fn should_report(&self) -> bool {
         !matches!(self, Self::NoCredentials | Self::ApiKeyOnly)
+            && !matches!(
+                self,
+                Self::Http { kind, .. } if kind.is_auth_rejected()
+            )
     }
 }
 
@@ -111,6 +116,10 @@ pub(crate) fn fetch_usage() -> Result<AccountUsageSnapshot> {
     snapshot.reset_credits =
         fetch_reset_credits(&reset_credits_url(base_url.as_deref()), &credentials).ok();
     Ok(snapshot)
+}
+
+pub(crate) fn credentials_stamp() -> Option<u64> {
+    file_mtime_ms(&codex_home()?.join("auth.json"))
 }
 
 pub(crate) fn fetch_usage_with_token(

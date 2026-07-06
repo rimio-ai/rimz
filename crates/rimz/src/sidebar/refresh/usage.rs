@@ -66,29 +66,42 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return false;
     };
+    let stamp = adapter.oauth_credentials_stamp();
     let mut fetched_windows = None;
-    let entry =
-        merge_provider_credits_entry_if_due(runtime, kind, || match adapter.probe_oauth_usage() {
+    let entry = merge_provider_credits_entry_if_due(runtime, kind, stamp, || {
+        match adapter.probe_oauth_usage() {
             OauthUsageProbe::Found(usage) => {
                 fetched_windows = usage.rate_limits.clone();
                 ProviderCreditsEntry {
                     observed_at_ms: unix_now_ms(),
                     oauth_read_at_ms: unix_now_ms(),
+                    auth_settled: false,
+                    credentials_stamp: None,
                     ok: true,
                     extra_credits: usage.extra_credits,
                     reset_credits: usage.reset_credits,
                 }
             }
-            OauthUsageProbe::NoCredentials
-            | OauthUsageProbe::Failed
-            | OauthUsageProbe::Unsupported => ProviderCreditsEntry {
+            OauthUsageProbe::NoCredentials => ProviderCreditsEntry {
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
+                auth_settled: true,
+                credentials_stamp: stamp,
                 ok: false,
                 extra_credits: None,
                 reset_credits: None,
             },
-        });
+            OauthUsageProbe::Failed | OauthUsageProbe::Unsupported => ProviderCreditsEntry {
+                observed_at_ms: unix_now_ms(),
+                oauth_read_at_ms: unix_now_ms(),
+                auth_settled: false,
+                credentials_stamp: None,
+                ok: false,
+                extra_credits: None,
+                reset_credits: None,
+            },
+        }
+    });
     let written = entry.is_some();
     if merge_windows && let Some(rate_limits) = fetched_windows {
         merge_account_rate_limits(runtime, kind, rate_limits);

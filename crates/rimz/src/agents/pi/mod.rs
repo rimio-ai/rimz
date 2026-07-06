@@ -678,6 +678,10 @@ impl AgentAdapter for PiAdapter {
     fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
         crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "pi.oauth_usage")
     }
+
+    fn oauth_credentials_stamp(&self) -> Option<u64> {
+        oauth_usage::credentials_stamp()
+    }
 }
 
 fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {

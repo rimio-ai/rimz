@@ -1,4 +1,39 @@
 use super::*;
+use crate::agents::credits::OauthReportable;
+
+#[test]
+fn reportable_classifier_treats_unauthorized_as_settled_auth() {
+    assert!(!CodexOauthUsageErr::NoCredentials.should_report());
+    assert!(!CodexOauthUsageErr::ApiKeyOnly.should_report());
+    assert!(
+        !CodexOauthUsageErr::Http {
+            kind: HttpErrKind::Status(401),
+            host: "chatgpt.com".to_owned(),
+        }
+        .should_report()
+    );
+    assert!(
+        CodexOauthUsageErr::Http {
+            kind: HttpErrKind::Status(403),
+            host: "chatgpt.com".to_owned(),
+        }
+        .should_report()
+    );
+    assert!(
+        CodexOauthUsageErr::Http {
+            kind: HttpErrKind::Status(500),
+            host: "chatgpt.com".to_owned(),
+        }
+        .should_report()
+    );
+    assert!(
+        CodexOauthUsageErr::Http {
+            kind: HttpErrKind::Transport,
+            host: "chatgpt.com".to_owned(),
+        }
+        .should_report()
+    );
+}
 
 #[test]
 fn credentials_distinguish_api_key_and_oauth_login() {

@@ -827,6 +827,10 @@ impl AgentAdapter for CodexAdapter {
         crate::agents::credits::map_probe_snapshot(oauth_usage::fetch_usage(), "codex.oauth_usage")
     }
 
+    fn oauth_credentials_stamp(&self) -> Option<u64> {
+        oauth_usage::credentials_stamp()
+    }
+
     /// Codex has no statusline, so app-server-owned metadata (rate-limit
     /// windows, model display name, thread preview/name, version) refreshes
     /// out-of-band on turn boundaries: `SessionStart` populates it early (rate

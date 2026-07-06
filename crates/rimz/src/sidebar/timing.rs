@@ -199,6 +199,11 @@ pub const CREDITS_TTL: Duration = Duration::from_secs(60);
 /// realtime/app-server credits freshness.
 pub const OAUTH_USAGE_TTL: Duration = Duration::from_secs(5 * 60);
 
+/// Retry cadence once an OAuth probe settled as an auth failure (missing or
+/// provider-rejected credentials). The credential-file stamp fast-path retries
+/// sooner when the user re-logs-in.
+pub const OAUTH_USAGE_SETTLED_TTL: Duration = Duration::from_secs(60 * 60);
+
 /// How often the producer samples a pane attached clients are currently
 /// viewing. Focus, not process activity, buys the fast `/proc` lane so the
 /// pane under the user's eyes stays live.

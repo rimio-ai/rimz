@@ -102,6 +102,8 @@ fn producer_reset_advance_invalidates_oauth_usage_throttle() {
         crate::sidebar::refresh::credits::ProviderCreditsEntry {
             observed_at_ms: 1,
             oauth_read_at_ms: 1234,
+            auth_settled: false,
+            credentials_stamp: None,
             ok: true,
             extra_credits: Some(crate::agents::ExtraCredits::known(None, Some(4.0), None)),
             reset_credits: None,

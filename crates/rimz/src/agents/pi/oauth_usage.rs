@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 
 use crate::agents::AccountUsageSnapshot;
+use crate::agents::credits::file_mtime_ms;
 
 use super::account;
 use super::spend::pi_config_dir;
@@ -85,6 +86,10 @@ pub(crate) fn fetch() -> Result<AccountUsageSnapshot> {
         .map_err(PiOauthUsageErr::from),
         provider => Err(PiOauthUsageErr::UnsupportedProvider(provider.to_owned())),
     }
+}
+
+pub(crate) fn credentials_stamp() -> Option<u64> {
+    file_mtime_ms(&pi_config_dir().join("auth.json"))
 }
 
 fn load_credentials_from(path: &Path, used_provider: Option<String>) -> Result<SelectedCredential> {

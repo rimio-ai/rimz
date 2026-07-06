@@ -618,6 +618,14 @@ pub trait AgentAdapter: Send + Sync {
         OauthUsageProbe::Unsupported
     }
 
+    /// Modification stamp (unix ms) of the credential source behind
+    /// [`probe_oauth_usage`](Self::probe_oauth_usage), so the refresh driver
+    /// can retry a settled auth failure the moment credentials change. `None`
+    /// when the source is not a local file.
+    fn oauth_credentials_stamp(&self) -> Option<u64> {
+        None
+    }
+
     /// Probe the provider's own realtime account channel while idle.
     /// Producer-only, best-effort, and read-only: no ledger writes happen in the
     /// adapter, and the caller owns every cache merge. `RuntimePaths` lets the

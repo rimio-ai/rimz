@@ -6,7 +6,8 @@
 //! API-key spend projection, or a future admin API, so the type keeps each
 //! figure optional and lets the renderer state only what is known.
 
-use std::time::Duration;
+use std::path::Path;
+use std::time::{Duration, UNIX_EPOCH};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,22 @@ impl std::fmt::Display for HttpErrKind {
             Self::Body => f.write_str("body"),
         }
     }
+}
+
+impl HttpErrKind {
+    pub(crate) fn is_auth_rejected(&self) -> bool {
+        matches!(self, Self::Status(401))
+    }
+}
+
+pub(crate) fn file_mtime_ms(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
 /// The host authority of `url` — scheme stripped, path/query/fragment and any
@@ -261,8 +278,8 @@ fn clean_usd(value: Option<f64>) -> Option<f64> {
 ///
 /// - `Found` — a usage reading to merge.
 /// - `NoCredentials` — the probe ran and confidently found nothing to fetch (no
-///   OAuth login, an API-key-only file, an expired token, a provider with no
-///   quota surface). A settled state, logged at debug.
+///   OAuth login, an API-key-only file, an expired token or provider-rejected
+///   token, a provider with no quota surface). A settled state, logged at debug.
 /// - `Failed` — the probe could not complete (unreadable file, parse error, HTTP
 ///   error). Transient, logged at warn, retried on the short TTL.
 /// - `Unsupported` — the adapter exposes no OAuth usage probe (the trait
