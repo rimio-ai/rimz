@@ -13,12 +13,20 @@ on:
         description: build ci/Dockerfile instead of refreshing the current image
         required: false
         default: "false"
+  schedule:
+    # Weekly advisory-DB refresh: empty inputs take the default refresh path
+    # (current RIMZ_CI_IMAGE base, full=false, date+sha tag). Keeps the baked
+    # RustSec DB inside cargo-deny's 90-day staleness cap.
+    - cron: "0 4 * * 1"
 
 jobs:
   build:
     name: build and publish rimz-ci
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 45
+    concurrency:
+      group: ci-image-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v6
 
