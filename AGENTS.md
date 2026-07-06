@@ -63,8 +63,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 
 **Guide** — `docs/guide/`
 - [installation.md](./docs/guide/installation.md) — source install prerequisites and Rust toolchain setup for Linux and macOS.
-- [zellij.md](./docs/guide/zellij.md) — configure your own Zellij `config.kdl`: the essential and recommended settings for a modern coding-agent session.
-- [tmux.md](./docs/guide/tmux.md) — configure your own `~/.tmux.conf`: true color, copy-mode, status bar, and the behaviors agents rely on.
+- [setup.md](./docs/guide/setup.md) — first-pass machine setup after install: config init, agent hooks, true color, pets, the hands-off loop knobs, and the Zellij/tmux baselines with Rimz room overrides.
 - [product.md](./docs/guide/product.md) — the working tour: the room, the loop, and the four scenarios people run.
 - [experience.md](./docs/guide/experience.md) — first-run-to-fleet experience, section by section.
 - [attention.md](./docs/guide/attention.md) — attention routing and card ranking: what needs you, the glance-to-pane loop, the unread inbox, the one-hour and archive windows, team state, and the git verdict behind the sidebar order.

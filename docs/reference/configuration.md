@@ -344,7 +344,7 @@ pane_frames = true          # an optional override; unset, your config.kdl wins
 ## pane_border_status = "top"  # optional override; unset, your ~/.tmux.conf wins
 ```
 
-To configure your *own* Zellij or tmux — the theme, true color, copy-mode, and keybindings Rimz leaves to you, and your sessions outside the room — see the [Zellij](../guide/zellij.md) and [tmux](../guide/tmux.md) setup guides.
+To configure your *own* Zellij or tmux — the theme, true color, copy-mode, and keybindings Rimz leaves to you, and your sessions outside the room — see the [Zellij](../guide/setup.md#zellij) and [tmux](../guide/setup.md#tmux) baselines in the setup guide.
 
 ## Appearance and the sidebar
 

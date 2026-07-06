@@ -127,26 +127,13 @@ rimz --version
 rimz doctor
 ```
 
-`rimz doctor` reports the multiplexer it selected, its version and whether it clears the floor, the presence-plugin status, sidebar liveness, and runtime socket headroom — the fastest read on whether a fresh machine is ready.
+`rimz doctor` reports the multiplexer it selected, its version and whether it clears the floor, the presence-plugin status, sidebar liveness, and runtime socket headroom — the fastest read on whether a fresh machine is ready. From here, [set up your machine](./setup.md) is the next step: config init, agent hooks, and the settings that make the room comfortable.
 
 ## Configure your multiplexer
 
 Rimz configures each room for you. On every session birth and reattach it sets the options agents need, so a freshly installed Zellij or tmux works without editing `~/.config/zellij/config.kdl` or `~/.tmux.conf`. A Zellij room opens in locked mode so your typing reaches the agent pane, with single-click sidebar jumps, 100k-line scrollback, the system clipboard, and resurrection off; a tmux room runs with the mouse on, focus events, OSC passthrough for desktop notifications, 100k-line history, and CSI-u extended keys, so Shift+Enter and Alt+Enter reach agents as soft newlines. On tmux 3.5.x, that trades clean multiline clipboard paste until tmux 3.6. Rimz reasserts these on every attach.
 
-Tune the room from Rimz's own config, `~/.config/rimz/config.toml`, under `[zellij]` and `[tmux]`. The setting most people reach for first is pane frames — borders that mark which pane holds focus.
-
-```toml
-[zellij]
-pane_frames = true            # off by default; frame each pane
-
-[tmux]
-pane_border_status = "top"    # optional override; unset, ~/.tmux.conf wins
-pane_border_lines = "single"  # optional override; unset, ~/.tmux.conf wins
-```
-
-Set room overrides in Rimz's config, the file it reads on attach. Optional keys left unset fall through to your own Zellij or tmux config; keys you set here win when Rimz reasserts the room. `rimz config init --print` lists every room option with its default, and the full model lives in the [configuration reference](../reference/configuration.md#multiplexer-room-options).
-
-Your own Zellij and tmux config still owns everything Rimz leaves alone — the theme, true-color output, your default shell, copy-mode keybindings, and status-bar styling — and a baseline keeps the multiplexer pleasant in your sessions outside Rimz too. The [Zellij setup guide](./zellij.md) and the [tmux setup guide](./tmux.md) give the essential and recommended settings for each.
+Your own Zellij and tmux config still owns everything Rimz leaves alone — the theme, true-color output, your default shell, copy-mode keybindings, and status-bar styling — and a baseline keeps the multiplexer pleasant in your sessions outside Rimz too. Tuning the room from Rimz's config (`[zellij]` and `[tmux]` overrides) and building that baseline are both covered in [set up your machine](./setup.md#configure-your-multiplexer).
 
 ## Uninstall
 
