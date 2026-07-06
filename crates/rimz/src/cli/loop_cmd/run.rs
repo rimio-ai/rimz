@@ -465,14 +465,12 @@ fn write_check_skipped_summary(
 ) -> std::io::Result<()> {
     let label = match outcome.check.as_ref() {
         Some(check) if check.timed_out => "check timed out".to_owned(),
-        Some(check) if check.code == Some(0) => {
-            format!("check passed (exit {})", check.code.unwrap_or_default())
-        }
+        Some(check) if check.code == Some(0) => "check passed (exit 0)".to_owned(),
         Some(check) => match check.code {
             Some(code) => format!("check failed (exit {code})"),
             None => "check failed (signal)".to_owned(),
         },
-        None => outcome.result.label().to_owned(),
+        None => "check skipped".to_owned(),
     };
     write!(
         out,
