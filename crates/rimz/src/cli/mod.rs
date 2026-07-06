@@ -13,6 +13,7 @@ mod doctor;
 mod event;
 mod feed;
 mod gc;
+mod help;
 mod hooks;
 mod list;
 mod list_pets;
@@ -46,7 +47,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use rimz::agents::AgentState;
 use rimz::ids::MuxName;
@@ -54,7 +55,9 @@ use rimz::{Ledger, RuntimePaths, StatePaths};
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
     reject_removed_top_level_tokens()?;
-    let cli = Cli::parse();
+    let cmd = help::customize(<Cli as CommandFactory>::command());
+    let mut matches = cmd.get_matches();
+    let cli = Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|err| err.exit());
     let mut globals = cli.global;
     globals.normalize()?;
     globals.color.write_global();
@@ -348,10 +351,11 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
     about = "One room per project for agents, scripts, and humans."
 )]
 struct Cli {
-    #[clap(flatten)]
+    #[command(flatten)]
     global: GlobalFlags,
 
-    #[clap(flatten)]
+    #[command(next_help_heading = "Launch options (bare `rimz` / start / attach)")]
+    #[command(flatten)]
     attach: AttachFlags,
 
     /// Come up empty: skip recovering prior agents when the session is reborn.
@@ -427,9 +431,11 @@ impl ColorWhen {
 
 #[derive(Debug, Subcommand)]
 enum Subcmd {
-    /// Start or attach to a workspace session (default action).
+    /// Open or attach the room for a path (default action).
     Start(StartArgs),
-    /// Attach to a workspace session by name.
+    /// Attach to a room by session name.
+    ///
+    /// Omit the name to use the cwd's workspace.
     Attach(AttachArgs),
     /// Manage and connect to SSH remote rooms.
     Remote(remote::RemoteArgs),
@@ -437,22 +443,30 @@ enum Subcmd {
     Web(web::WebArgs),
     /// Workspace identity helpers.
     Workspace(workspace::WorkspaceArgs),
-    /// Show known workspaces and which mux is currently running them.
+    /// Show known workspaces and which mux is running them.
     List(list::ListArgs),
-    /// Token-activity heatmap, model/agent breakdowns, and usage insights.
+    /// Token-activity heatmap and usage insights.
+    ///
+    /// Includes model and agent breakdowns.
     Stats(stats::StatsArgs),
-    /// Preview the bundled provider-dashboard pets as cell-art.
+    /// Preview the bundled provider-dashboard pets.
+    ///
+    /// Renders the pets as pane-local cell art.
     ListPets(list_pets::ListPetsArgs),
     /// List the bundled sidebar theme names.
     ListThemes(list_themes::ListThemesArgs),
     /// Emit generic events into the workspace ledger.
     Event(event::EventArgs),
-    /// Feed primitives: ask, push, list, show, resolve, dismiss, abstain.
+    /// Ask, list, and resolve human decisions.
+    ///
+    /// Includes ask, push, list, show, resolve, dismiss, and abstain.
     Feed(feed::FeedArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
-    /// Remove Rimz from this machine: hooks, rooms, runtime footprint.
-    /// Use --state, --config, or --all to purge durable state and config.
+    /// Remove Rimz from this machine.
+    ///
+    /// Removes hooks, rooms, and runtime footprint. Use --state, --config, or
+    /// --all to purge durable state and config.
     Uninstall(uninstall::UninstallArgs),
     /// Create, list, and remove named channels.
     Channel(channel::ChannelArgs),
@@ -460,18 +474,26 @@ enum Subcmd {
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in Rimz-owned worktrees.
     Agents(Box<agents_cmd::AgentsArgs>),
-    /// Schedule supervised agent turns from the room's sidebar elder.
+    /// Schedule supervised agent turns.
+    ///
+    /// Runs from the room's sidebar elder.
     #[command(name = "loop")]
     Loop(loop_cmd::LoopArgs),
-    /// Reload running sidebars in place (pick up a freshly-installed build).
+    /// Reload running sidebars in place.
+    ///
+    /// Picks up a freshly-installed build.
     Reload(reload::ReloadArgs),
-    /// Force a clean rebirth of this workspace's room, destroying a stuck or
-    /// resurrected Zellij session and sweeping its orphaned processes.
+    /// Force a clean rebirth of this workspace's room.
+    ///
+    /// Destroys a stuck or resurrected Zellij session and sweeps its orphaned
+    /// processes.
     Reset(reset::ResetArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
-    /// Message an agent: `--steer` interrupts now; the default parks for the
-    /// next safe turn boundary, optionally after `--schedule`.
+    /// Message an agent, now (`--steer`) or at the next turn boundary.
+    ///
+    /// The default parks for the next safe turn boundary, optionally after
+    /// `--schedule`.
     Message(message::MessageArgs),
     /// Manage the per-machine resolver allowlist.
     Resolver(resolver::ResolverArgs),
@@ -482,7 +504,9 @@ enum Subcmd {
     /// humans do not.
     #[command(hide = true)]
     Statusline(statusline::StatuslineArgs),
-    /// Install/uninstall agent hooks. Internal hook entrypoints live here too.
+    /// Install or uninstall agent hooks.
+    ///
+    /// Internal hook entrypoints live here too.
     Hooks(hooks::HooksArgs),
     /// Codex helper API. The Codex hook calls these; humans usually do not.
     #[command(hide = true)]
@@ -495,13 +519,13 @@ enum Subcmd {
     Daemon(daemon::DaemonArgs),
     /// Inspect and edit the per-machine config.
     Config(config::ConfigArgs),
-    /// Adapter integration-concern and lifecycle-hook coverage matrices.
+    /// Adapter integration and lifecycle-hook coverage matrices.
     Coverage(coverage::CoverageArgs),
     /// Manage the project's executable-surface trust grant.
     Trust(trust::TrustArgs),
     /// Inspect agent or channel conversation transcripts.
     Transcript(transcript::TranscriptArgs),
-    /// Environment + backend report.
+    /// Environment and backend report.
     Doctor(doctor::DoctorArgs),
     /// First-run setup report and default config bootstrap.
     Setup(setup::SetupArgs),

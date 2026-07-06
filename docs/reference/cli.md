@@ -25,12 +25,12 @@ rimz
 
 | Group | Commands | Reference |
 | --- | --- | --- |
-| **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `web`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) · [Web](./cli/web.md) |
+| **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `web`, `list`, `stats`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) · [Web](./cli/web.md) · [Stats](../internals/reach/welcome.md#rimz-stats) |
 | **Work with agents** | `agents`, `message`, `transcript`, `pane`, `channel`, `worktree`, `loop` | [Agent control](./cli/agents.md) · [Channels](./cli/channel.md) |
 | **Decisions, hooks, and trust** | `feed`, `event`, `resolver`, `hooks`, `trust` | [Feed, resolvers, hooks, and trust](./cli/feed.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
-Two surfaces have their own reference outside this map: [`rimz config`](./configuration.md) edits the per-machine config (the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics), and [`rimz stats`](../internals/reach/welcome.md#rimz-stats) renders the token-activity lobby.
+One surface has its own reference outside this map: [`rimz config`](./configuration.md) edits the per-machine config; the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics.
 
 Hook install previews use `rimz hooks install --dry-run [AGENT]`, which prints the exact config diff without writing agent files.
 
