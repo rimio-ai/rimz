@@ -13,7 +13,7 @@ The lobby is the entry path's behaviour outside a workspace; it carries no comma
 
 The wordmark and the pace heatmap the lobby renders also stand alone as [`rimz stats`](#rimz-stats), so you can read your pace from inside a room where the lobby never appears.
 
-The lobby is a TTY surface. When stdin and stdout are not both interactive, the dead-end keeps its printed guidance and `rimz remote connect <host>` keeps its current behaviour, so scripts and pipes see no new interactive prompt. This mirrors the opportunistic-attach commitment in [DESIGN.md](../../../DESIGN.md#commitments).
+The lobby is a TTY surface. When stdin and stdout are not both interactive, the dead-end keeps its printed guidance and `rimz remote connect <host>` keeps its current behaviour, so scripts and pipes see no new interactive prompt. This mirrors the opportunistic-attach invariant in [DESIGN.md](../../../DESIGN.md#invariants).
 
 ## The local lobby
 

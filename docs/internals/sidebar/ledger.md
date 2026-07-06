@@ -63,7 +63,7 @@ Sockets, heartbeats, and read receipts are liveness hints — rebuilt or rebound
 
 ## Feed lifecycle and the script bridge
 
-An actionable feed item is created with one `surface` — `native_ui` or `script` — and the surface is the wire signal the rest of the system reads: sidebar rendering and feed-verb gating branch on it. [DESIGN.md → the two feed surfaces](../../../DESIGN.md#the-two-feed-surfaces) defines which process waits and where each answer comes from; this section covers what each path commits to the ledger.
+An actionable feed item is created with one `surface` — `native_ui` or `script` — and the surface is the wire signal the rest of the system reads: sidebar rendering and feed-verb gating branch on it. [DESIGN.md → the two feed surfaces](../../../DESIGN.md#decisions-in-the-agents-own-ui) defines which process waits and where each answer comes from; this section covers what each path commits to the ledger.
 
 Three rules hold across all surfaces:
 

@@ -1,6 +1,6 @@
 # Configuration
 
-> See [DESIGN.md](../../DESIGN.md#commitments) for the commitments this doc operationalizes.
+> See [DESIGN.md](../../DESIGN.md#invariants) for the invariants this doc operationalizes.
 
 Rimz runs with zero configuration. Everything here is optional tuning — start the room, and you can come back to add a theme, a launch profile, or a notification route once you know what you want to change.
 

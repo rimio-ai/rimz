@@ -58,13 +58,13 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 
 **Root**
 - [README.md](./README.md) — product entry point.
-- [DESIGN.md](./DESIGN.md) — what Rimz offers, the attention problem, the design choices that answer it, the two feed surfaces, commitments, non-goals.
+- [DESIGN.md](./DESIGN.md) — the attention problem, the design pillars that answer it, the two feed surfaces, invariants, non-goals.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — runtime shape, repository layout, module ownership.
 
 **Guide** — `docs/guide/`
 - [installation.md](./docs/guide/installation.md) — source install prerequisites and Rust toolchain setup for Linux and macOS.
 - [setup.md](./docs/guide/setup.md) — first-pass machine setup after install: config init, agent hooks, true color, pets, the hands-off loop knobs, and the Zellij/tmux baselines with Rimz room overrides.
-- [product.md](./docs/guide/product.md) — the working tour: the room, the loop, and the four scenarios people run.
+- [product.md](./docs/guide/product.md) — the working tour: the room, the loop, and the scenarios people run, local fleet to scripted pipeline.
 - [experience.md](./docs/guide/experience.md) — first-run-to-fleet experience, section by section.
 - [attention.md](./docs/guide/attention.md) — attention routing and card ranking: what needs you, the glance-to-pane loop, the unread inbox, the one-hour and archive windows, team state, and the git verdict behind the sidebar order.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.

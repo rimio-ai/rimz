@@ -1,6 +1,6 @@
 # The rimz command line
 
-> See [DESIGN.md](../../DESIGN.md#commitments) for the commitments this surface operationalizes.
+> See [DESIGN.md](../../DESIGN.md#invariants) for the invariants this surface operationalizes.
 
 `rimz` runs one room per project and gives you the verbs to live in it: open and attach the room, launch and steer agents, ask questions from scripts, and keep the ledger-backed workspace healthy. Every command resolves to the room for the directory you run it in, so you can call it from any pane, any worktree, or a script on the same machine and reach the same workspace.
 

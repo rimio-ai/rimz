@@ -193,7 +193,7 @@ Adapters are thin layers over the same hook and transcript primitives ([agents i
 
 ## Documentation
 
-- [Product tour](./docs/guide/product.md) — the room, the loop, and the four scenarios people run
+- [Product tour](./docs/guide/product.md) — the room, the loop, and the scenarios people run, local fleet to scripted pipeline
 - [Set up your machine](./docs/guide/setup.md) — config, hooks, true color, pets, and the zellij/tmux baselines
 - [Attention](./docs/guide/attention.md) — how the sidebar decides what needs you
 - [Security](./docs/guide/security.md) — threat model and guardrails

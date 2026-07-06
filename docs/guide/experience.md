@@ -4,7 +4,7 @@
 
 The reader this doc is written for runs Claude Code and Codex agents all day, several at once, and is tired of flipping tabs to find the one that is blocked. They saw Rimz on Hacker News an hour ago and want to feel the value in under five minutes or they close the tab.
 
-Two commitments run underneath the whole walk. Rimz is honest by default ([DESIGN.md → Commitments](../../DESIGN.md#commitments)): the column shows the truth about what is running, and when a fetch fails it labels the frame out loud. And Rimz notifies and routes: its whole job is to name the agent that needs you and take you straight to its pane, where you answer in the agent's own UI, where the full context lives.
+Two invariants run underneath the whole walk. Rimz is honest by default ([DESIGN.md → Invariants](../../DESIGN.md#invariants)): the column shows the truth about what is running, and when a fetch fails it labels the frame out loud. And Rimz notifies and routes: its whole job is to name the agent that needs you and take you straight to its pane, where you answer in the agent's own UI, where the full context lives.
 
 ## First run: consent, then the room
 
@@ -212,7 +212,7 @@ The `external` catch-all holds scripts, CI, and panes outside any worktree; it r
 
 The footer advertises `?`, and pressing it replaces the card body with the keys-and-filter overlay, so navigation, actions, status filters, and the sidebar-focus chord are learnable in place without leaving the room; [the sidebar interface reference](../interface/sidebar.md#bottom-chrome) shows the exact frame.
 
-Glyph shape carries the meaning and color is a redundant second channel, so every status reads under `NO_COLOR` and to color-blind eyes — twelve agents on one line is the [attention-at-a-glance design](../../DESIGN.md#attention-at-a-glance) carrying a real fleet.
+Glyph shape carries the meaning and color is a redundant second channel, so every status reads under `NO_COLOR` and to color-blind eyes — twelve agents on one line is the [triage-at-a-glance design](../../DESIGN.md#triage-at-a-glance) carrying a real fleet.
 
 ## Detach and reattach from anywhere
 
@@ -229,7 +229,7 @@ The same reattach has a first-class form: `rimz remote connect dev-box:query-eng
 
 The sidebar comes back exactly as the reader left it: every agent where it was, every question still waiting, ranked identically, plus whatever finished while they were gone, already triaged by the same ranking. The first usable frame paints from the ledger immediately, since a resize or attach is itself a wakeup, so reattach reconstructs from durable state with no loading screen.
 
-This is what changes how the reader works: start a run on the dev box, close everything, and pick it up on a phone at the airport. Continuity is ledger-owned ([DESIGN.md → Commitments](../../DESIGN.md#commitments)); the running processes are the host's job — systemd, tmux-resurrect, Zellij resurrect ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
+This is what changes how the reader works: start a run on the dev box, close everything, and pick it up on a phone at the airport. Continuity is ledger-owned ([DESIGN.md → Invariants](../../DESIGN.md#invariants)); the running processes are the host's job — systemd, tmux-resurrect, Zellij resurrect ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
 
 ## When something is wrong
 

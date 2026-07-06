@@ -1,97 +1,74 @@
 # Design
 
-Rimz is the harness layer for agentic coding: it gives every project one room — a Zellij or tmux session with a sidebar that reads the whole fleet at a glance — and one CLI that carries every event into the room's durable ledger, so the room survives detach, sidebar reload, and reattach from anywhere.
+Rimz is the harness layer for agentic coding: one human, a fleet of coding agents, one room per project. The room is a Zellij or tmux session with a sidebar that reads the whole fleet at a glance; underneath it, one CLI carries every event into a durable ledger, so the room survives detach, reload, reboot, and reattach from anywhere.
 
-Rimz stays small because it builds on what you already run: your multiplexer, a directory of flat files for the ledger, and one CLI that every event flows through.
+The problem Rimz answers is attention. A fleet emits far more than one person can read — prompts, tool calls, completions, failures, token burn, rate-limit stalls — and Rimz spends that finite attention well: it turns the wall of activity into "this pane, right now, needs you," and otherwise stays quiet. Every choice below serves that job.
 
 > **Invariant.** Rimz routes your attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI. A resolver you wire explicitly may answer routine prompts in that same UI, and the prompt remains there for you.
 
-## The design problem
+## Triage at a glance
 
-One human, many agents, finite attention. A fleet emits far more than one person can read: prompts, tool calls, completions, failures, token burn, rate-limit stalls. Rimz's job is to spend that limited attention well — to turn a wall of activity into "this pane, right now, needs you," and otherwise stay quiet. Every design choice below answers that question.
+The sidebar is a presence and attention map: one row per live pane, enriched from the ledger, grouped by worktree. One glance answers what is working, what is blocked, what errored, and what it is costing — and keeps answering as the fleet grows.
 
-Two ideas carry the answer.
+- The column arrives triaged: hot work inside the one-hour prompt-cache window ranks first, then warm work up to the 24-hour archive boundary, then archived work, with an attention score ordering each band. A row turns unread the moment it needs you (`waiting`, `failed`, `paused`, `success`) and stays marked until you focus it; exactly one row is ever in motion, so the eye lands where to go next.
+- Two symbols carry every call for attention — `?` *needs your answer*, `!` *needs a look* — by shape, so the signal survives `NO_COLOR` and color-blind eyes; color only reinforces. The fixed cockpit line (`? 2  ! 1 …`) compresses the fleet: a row of zeros means nothing needs you, skip the scan.
+- Five states cover every agent — `running`, `waiting`, `idle`, `success`, `failed` — plus a derived `paused` for provider-limit parks, with short-lived heads (thinking, compacting, delegating) riding `running`. A context meter, token totals, live dollar cost, diff stats, and last-activity age ride the rows; the provider dashboard carries the pace, its 5h/7d budget bars draining in real time.
+- Presence is live and facts are durable: a row exists because a pane runs right now and clears itself when the agent exits, while everything the agent did stays in the ledger. Stats enrich display; the ledger and explicit events decide state and correctness.
 
-**The decision moment stays in the agent's UI.** The moment an agent asks to run a command is the moment a human can stop something destructive, so Rimz keeps that moment in the agent's own UI and spends its effort getting you there fast. A handler you wire for routine prompts types into that same UI and records what it did, so delegation changes who answers — never where, and never off the record.
+The glyph legend and rendered frames live in [the interface reference](./docs/interface/sidebar.md), the ranking and presence mechanics in [sidebar.md](./docs/internals/sidebar/sidebar.md), and the reasoning about what deserves attention in [attention.md](./docs/guide/attention.md).
 
-**Cooperation runs through channels.** A channel is a named lane where a human and a few agent colleagues work one line of work: a Git worktree is one backing for a channel, an in-place named team forms one as `<dir>/<team>`, and the room's directory is the default lane. You address a colleague by kind within the channel — `@claude#auth-refresh` names the Claude working auth-refresh — and combine kinds the way a team combines roles. Identity stays light on purpose, enough to name who needs you; the weight is on the cooperation inside the channel.
+## Decisions in the agent's own UI
 
-## Design choices
+The moment an agent asks to run a command is the moment a human can stop something destructive. Rimz keeps that moment in the agent's own UI and spends its effort getting you there fast; anything you wire to answer for you types into that same UI and records what it did, so delegation changes who answers — never where, and never off the record.
 
-### Attention at a glance
-
-The sidebar is a worktree-keyed presence and attention map: one row per live pane, each agent enriched from the ledger, grouped by the worktree it lives in. It answers four questions in a single glance — *what is working smoothly, what is blocked, what errored, and how much has been done* — and keeps answering them as the fleet grows.
-
-- The column arrives triaged. Attention rises by hot work inside the one-hour prompt-cache window, then warm work up to the 24-hour archive boundary, then archived work; a fixed-point score orders attention rows inside each band while calm groups hold position through status churn. Read state never changes a card's band. A row becomes unread when it enters `waiting`, `failed`, `paused`, or `success` — including rows already in that state when you attach — and stays unread until you focus it or `rimz sidebar mark-read` clears it; the wash, the lead-row motion, the jump inbox, and notifications surface it in place. A per-worktree cap trims only the idle/process tail.
-- Two symbols carry every call for attention: `?` (*needs your answer*) and `!` (*needs a look*). The signal survives `NO_COLOR` and color-blindness; color is a second, redundant channel. Live work travels through spinner frames, an unread row stays marked until you read it — even after the agent recovers — and exactly one row is ever in motion, so the eye lands on where to go next.
-- A fixed cockpit line (`? 2  ! 1 …`) compresses the whole fleet, and the live-agent summary carries the unread count (`¤ 6 (2)`) while unseen rows exist. A row of zeros and no unread count means nothing needs you — skip the scan entirely.
-- A row exists because a pane is running right now, read live from the multiplexer. An agent's durable facts come from the ledger; an agent that exits is gone the moment its pane reverts to a shell, and the row clears on its own.
-
-The full glyph vocabulary and every rendered frame live in [the interface reference](./docs/interface/sidebar.md); how presence, ranking, and recovery are computed lives in [sidebar.md](./docs/internals/sidebar/sidebar.md).
-
-### Realtime state and rich stats
-
-Routing attention is half the read; the other half is *how the work is going*. Rimz gives every agent a small, legible state and rides it with live stats, so progress and health read without leaving the sidebar.
-
-- Each agent rolls up to one of five states — `running`, `waiting`, `idle`, `success`, `failed` — and Rimz derives one of its own: `paused`, a display park for an agent that stopped mid-turn on a provider limit, lifted by provider recovery, window reset, or the next hook event. Short-lived heads ride the running state (thinking, compaction, delegation) so the moment-to-moment phase shows inside one state ([agent.md](./docs/internals/agents/agent.md)).
-- A context meter, token totals, live dollar cost, diff stats, and a last-activity age ride the rows: which agent is burning toward a rate limit, which is one approval from done. The provider dashboard carries the pace — spend for today, the week, and the month per provider, with 5h/7d budget bars draining in real time. These enrich display; the ledger and explicit events decide state and correctness.
-
-### Run the fleet like a team
-
-A fleet is a team, and Rimz gives it what a team needs: a channel per line of work, a member you can name, and a way to reach that member in either tense. Spawning separates three independent choices — agents (which tools run), layout (the shape on screen), channel (which cooperation lane) — so a planner-and-reviewer pair in any channel is one command.
-
-- A channel is a cooperation lane, backed by a durable bare name, a Git worktree, an in-place named team as `<dir>/<team>`, or the directory room itself. An agent is a member, addressed as `@handle#channel`: `@claude` the kind, `@planner` the role, `@swift-otter` the one instance, `@all` the whole channel. The address resolves against live presence — one match delivers, many ask you to pick (or `--all` fans out), zero misses or, with `--create`, launches the member straight from its address.
-- You reach a member through `message`: `--steer` types into a live pane now, the default parks work for the member's next open turn, `--schedule` sets the earliest delivery time, and `--on done|any` chooses the boundary gate. Every mode routes human-authored text through the one pane-send primitive and records an audit event that omits the message text.
-- Automation is a teammate. A supervised `rimz agents … -p` run drives one member headless — a cron job, a CI gate, a PR hook, or a script launches the turn, reads the final answer or a stream, and exits on a script-friendly status code — through the same hooks, ledger, and pane path an interactive member uses.
-
-The launcher, the address grammar, message delivery, and supervised-run machinery live in [harness.md](./docs/internals/agents/harness.md).
-
-### Stay light
-
-Rimz adds a sidebar and a ledger-backed question path to the terminal you already run, and keeps its own footprint small.
-
-- Zellij and tmux already own panes, sessions, attach/detach, and scrollback. Rimz drives them through a thin backend seam and leaves your keybinds, layout, and detach/reattach exactly as they were.
-- Durable state is a directory of flat files written with atomic temp-file-plus-rename: no daemon to keep alive, no schema to migrate. It survives detach, reload, and reboot, travels over SSH, and reads with `cat`.
-- The ledger, CLI, and sidebar model are identical on Zellij and tmux; core behaviour uses only primitives both backends share.
-
-### A programmable harness
-
-Every event reaches the room through one CLI: `rimz event …` to announce, `rimz feed …` to ask and answer, and `rimz agents … -p` to launch one supervised agent turn from a script.
-
-Agent hooks are the primary writers, but the same primitives are open to anything else on the machine — a `terraform apply` or a CI gate can announce itself or post a question to the same room column an agent uses. The sidebar is one renderer of that shared state; `rimz feed list` is another. Agent integrations are adapters over those primitives, which is what lets a script reach every surface an agent does.
-
-Loop engineering closes the loop when you step away. A notification handler wakes with the request id and pane; `rimz feed show` and `rimz pane capture` give it context; `rimz pane send` and `rimz message` answer in the agent's own UI; `rimz feed resolve --by <name>` records who acted. The intelligence behind the handler is yours to choose: a bounded-pattern script, a smarter model, or another agent driven through the same harness. The policy is yours to write; reference handlers live in [resolvers.md](./docs/internals/agents/resolvers.md).
-
-## The two feed surfaces
-
-Every ask is recorded with one `surface`, and the surface decides who waits on the answer and which answers are legal.
+Every ask is recorded with one `surface`, which decides who waits and which answers are legal:
 
 | Surface | Source | Who waits | Behaviour |
 | --- | --- | --- | --- |
-| `native_ui` | Agent hook | no one — hooks return immediately | The hook records the ask, wakes sidebars, and exits. The prompt stays in the agent's own UI for you, or for a handler that types there. |
-| `script` | A script that called `rimz feed ask` | the calling script | The script blocks on its per-request socket until `rimz feed resolve` answers or its own timeout fires. No agent involved. |
+| `native_ui` | agent hook | no one — hooks return immediately | the ask is recorded, sidebars wake, and the prompt stays in the agent's UI for you or a handler |
+| `script` | `rimz feed ask` | the calling script | the script blocks on its per-request socket until `rimz feed resolve` answers or its timeout fires |
 
-These two are the whole contract. An unattended run either carries the agent's own bypass flag (`native_ui`) or a handler that answers in the prompt and records `--by <name>`. The wire-level surfaces, sockets, and CAS rules are in [ledger.md](./docs/internals/sidebar/ledger.md).
+These two are the whole contract. An unattended run either carries the agent's own bypass flag (`native_ui`) or a handler that answers in the prompt and records `--by <name>`; sockets, nonces, and CAS rules live in [ledger.md](./docs/internals/sidebar/ledger.md).
 
-## Commitments
+## A fleet run like a team
+
+A channel is a named lane where a human and a few agent colleagues work one line of work, backed by a bare name, a Git worktree, an in-place team as `<dir>/<team>`, or the room's directory itself. Spawning separates three independent choices — agents (which tools), layout (the shape on screen), channel (which lane) — so a planner-and-reviewer pair in any lane is one command.
+
+- A member is addressed as `@handle#channel`: `@claude` the kind, `@planner` the role, `@swift-otter` the one instance, `@all` the lane. Addresses resolve against live presence — one match delivers, many ask you to pick (or `--all` fans out), and `--create` launches the member straight from its address. Identity stays light on purpose, enough to name who needs you; the weight is on the cooperation inside the lane.
+- `message` reaches a member in either tense: `--steer` types into the live pane now, the default parks text for the next open turn, `--schedule` sets a delivery floor, and `--on done|any` picks the boundary gate. Every mode routes through the one pane-send primitive and records an audit event that omits the message text.
+- Automation is a teammate. `rimz agents … -p` drives one member headless — cron, CI, or a script launches the turn, reads the answer or a stream, and branches on the exit code — through the same hooks, ledger, and pane path an interactive member uses.
+
+The launcher, address grammar, delivery gates, and supervised-run machinery live in [harness.md](./docs/internals/agents/harness.md).
+
+## A programmable room
+
+Everything reaches the room through one CLI — `rimz event` announces, `rimz feed` asks and answers, `rimz agents -p` runs a supervised turn — and agent hooks are simply its primary callers. A `terraform apply` or a CI gate posts to the same column an agent uses, so anything an agent can surface, a script can too. The sidebar is one renderer of the shared state; `rimz feed list` is another.
+
+Loop engineering composes those primitives into policy: a notification handler wakes with the request id and pane, inspects with `rimz feed show` and `rimz pane capture`, answers in the agent's own UI with `rimz pane send` or `rimz message`, and records who acted with `rimz feed resolve --by <name>`. The intelligence behind it is yours — a bounded-pattern script, a smarter model, or another agent through the same harness; reference handlers live in [resolvers.md](./docs/internals/agents/resolvers.md).
+
+## Built on what you already run
+
+- Zellij and tmux own panes, sessions, attach/detach, and scrollback; Rimz drives them through a thin backend seam and leaves your keybinds and layout exactly as they were. The ledger, CLI, and sidebar model are identical on both backends; core behaviour uses only primitives both share.
+- Durable state is a directory of flat files written with atomic temp-file-plus-rename: no daemon, no database, no schema to migrate. It survives detach, reload, and reboot, travels over SSH, and reads with `cat`.
+
+## Invariants
 
 Each line is a decision a reader might challenge, with the reason on the same line.
 
-- **One root, one room.** A workspace root — a git repo whose worktrees group inside the room, a project-marker directory, or any directory — maps to one workspace, one multiplexer session, one ledger, one sidebar, and one live backend. A second multiplexer over the same path is refused while the first is live, and `rimz attach` from the workspace prefers the live backend. A repo with five branches and ten agents stays scannable as one room, and a headless box running agents in a bare directory gets the same room with no source control. Any directory can be the room root, including `$HOME` and `/`; the directory tier announces itself at start so the chosen root stays visible.
-- **A pane's workspace is the session it lives in.** Session birth stamps an identity pin into the mux environment, and participating commands honor the verified pin before re-deriving from cwd, so an agent in a nested repo still writes to the room's ledger. Room-choosing commands resolve fresh, keeping a deliberate per-repo room one `rimz start` away; overlapping rooms are legal and surfaced.
-- **The ledger owns durability.** Ask and event state outlives detach, sidebar reload, sidebar crash, and no-client mode. The sidebar renders the ledger; correctness lives one layer down.
-- **A reborn room offers recovery after reboot or mux crash.** When the machine rebooted since the room was last alive — detected by boot id, or by boot time where the boot id is unreadable — or the prior mux incarnation died after wrappers wrote positive `agent-lost` markers, Rimz offers to re-seed prior agents from the durable rollup into `#channel` tabs grouped by their channel label, each restored idle (`claude --resume`, `codex resume`, `pi --session`). A host with no readable boot signal and no lost markers starts bare. Empty named channels reopen as tabs from the channel registry. The prompt defaults to recovery and non-interactive starts recover. Agents deliberately closed while the machine stays up — a tab/pane or the whole room — stay out of recovery. Continuity is Rimz-owned and transcript-based: the clean rebirth after reboot or crash is guaranteed, the conversation transcript including asks and answers is durable, and the provider resume rides on top as best-effort enrichment.
-- **One view-model, many renderers.** The `rimz sidebar snapshot` JSON is the shared view-model; the native pane and CLI listings are projections of it — `rimz pane list` joins the live pane spine with the agent overlay the sidebar renders, grouped by tab instead of by worktree — and any future renderer joins the same way. None owns state; none gates correctness.
+- **One root, one room.** A workspace root — a git repo whose worktrees group inside the room, a project-marker directory, or any directory, `$HOME` and `/` included — maps to one workspace, one mux session, one ledger, one sidebar, and one live backend, and a rival mux over the same path is refused while the first lives. Ten agents across five branches stay scannable as one room, and a headless box with no source control gets the same room.
+- **A pane's workspace is the session it lives in.** Session birth pins the workspace identity into the mux environment and commands honor the verified pin before re-deriving from cwd, so an agent in a nested repo still writes to the room's ledger. Overlapping rooms are legal and surfaced, and a deliberate per-repo room stays one `rimz start` away.
+- **The ledger owns durability.** Ask and event state outlives detach, sidebar reload, sidebar crash, and no-client mode; the sidebar renders the ledger, and correctness lives one layer down.
+- **A reborn room offers its fleet back.** After a reboot or mux crash, Rimz offers to re-seed prior agents from the durable rollup into their channel tabs, restored idle (`claude --resume`, `codex resume`, `pi --session`); the prompt defaults to recovery, non-interactive starts recover, and agents you closed deliberately stay closed. Continuity is Rimz-owned and transcript-based — the rebirth is guaranteed, the transcript with asks and answers is durable, and the provider's own resume rides on top as best-effort enrichment.
+- **One view-model, many renderers.** The `rimz sidebar snapshot` JSON is the shared view-model; the native pane and CLI listings are projections of it, and any future renderer joins the same way. None owns state; none gates correctness.
 - **Degraded frames say so.** The sidebar keeps the last good snapshot and pins a labeled banner with cause and age; banners, the trust state, and `rimz doctor` are where Rimz reports what it cannot currently vouch for.
-- **Interactive attach is opportunistic.** `rimz` enters the selected mux only when stdin/stdout are TTYs and the caller is not already inside it; non-interactive callers get a printed attach command, and explicit flags override.
-- **Loop engineering is explicit and per-machine.** A notification handler runs only where you wire it. The handler owns its credentials and policy, answers through pane primitives, and records its name with `--by`.
-- **Transcripts and panes enrich display.** Pane contents and transcripts decorate rows; the ledger and explicit events decide permissions, state, and correctness. Core reads a pane to render it and to refine Codex turn-death labels from TUI-only warnings.
-- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives for humans and handlers. `message` routes human-authored text through the same send primitive; deferred delivery types only at open boundaries after any schedule floor, and a pending ask holds delivery. State decisions come from the ledger, hooks, and sidecars; bounded Codex warning capture only names an already-detected turn-death marker.
-- **Headless works.** Hooks, `rimz feed ask`, and `rimz agents -p` run with no sidebar and no attached client. The sidebar is a UI over a workspace that runs fine without one.
+- **Interactive attach is opportunistic.** `rimz` enters the mux only when stdin/stdout are TTYs and the caller is not already inside it; non-interactive callers get a printed attach command, and explicit flags override.
+- **Loop engineering is explicit and per-machine.** A notification handler runs only where you wire it, owns its credentials and policy, answers through pane primitives, and records its name with `--by`.
+- **Pane I/O is explicit, and it enriches rather than decides.** `pane capture` and `pane send` are public primitives for humans and handlers, and `message` routes human-authored text through the same send path — delivering only at open turn boundaries, held while an ask is pending. Pane contents and transcripts decorate rows; the ledger, hooks, and explicit events decide permissions, state, and correctness.
+- **Headless works.** Hooks, `rimz feed ask`, and `rimz agents -p` run with no sidebar and no attached client; the sidebar is a UI over a workspace that runs fine without one.
 
 ## Non-goals
 
-- Not a cloud control plane or cross-workspace orchestrator: one root, one room.
-- An agents-only event surface is a non-goal: scripts and humans announce and answer through the same CLI an agent's hooks use.
-- Answer policy is yours to write; reference handlers ship as examples ([resolvers.md](./docs/internals/agents/resolvers.md)).
-- Process resurrection across host restart is the host's job. The ledger survives a reboot; running sessions need tmux-resurrect, Zellij resurrect, systemd, or another supervisor.
+- A cloud control plane or cross-workspace orchestrator: one root, one room.
+- An agents-only event surface: humans and scripts announce and answer through the same CLI an agent's hooks use.
+- Built-in answer policy: policy is yours to write, and reference handlers ship as examples ([resolvers.md](./docs/internals/agents/resolvers.md)).
+- Process resurrection across host restart: the ledger survives a reboot; running sessions belong to tmux-resurrect, Zellij resurrect, systemd, or another supervisor.

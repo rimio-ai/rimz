@@ -1,6 +1,6 @@
 # Provider accounts, balances, and spend
 
-> See [DESIGN.md → Attention at a glance](../../../DESIGN.md#attention-at-a-glance) for the account-scoped-budget invariant this doc operationalizes, [agent.md → Rich context](./agent.md#rich-context-agentcontext) for how the live-session rich context this doc interprets is stored on the rollup, and [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard) for what the provider dashboard looks like on screen.
+> See [DESIGN.md → Triage at a glance](../../../DESIGN.md#triage-at-a-glance) for the account-scoped-budget invariant this doc operationalizes, [agent.md → Rich context](./agent.md#rich-context-agentcontext) for how the live-session rich context this doc interprets is stored on the rollup, and [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard) for what the provider dashboard looks like on screen.
 
 A coding agent runs against a **provider account** — a login, on a plan, that may or may not be metered — and that account has a two-tier **balance**: included subscription windows that refill on their clocks, plus paid extra/API usage the provider or the local spend ledger can name.
 
