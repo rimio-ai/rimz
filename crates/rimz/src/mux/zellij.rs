@@ -279,7 +279,8 @@ fn zellij_options_args(
 
 #[derive(Debug, Default)]
 pub struct ZellijBackend {
-    /// Override for `XDG_RUNTIME_DIR`, where Zellij locates its server socket.
+    /// Test-only root for Zellij's socket, state, config, cache, home, and log
+    /// env pins. Production inherits the process environment.
     runtime_dir: Option<PathBuf>,
     /// Test-scoped cache root paired with `runtime_dir`; production uses the
     /// process XDG cache root.
@@ -296,9 +297,9 @@ impl ZellijBackend {
         Self::default()
     }
 
-    /// Pin every Zellij command this backend runs to `dir` as `XDG_RUNTIME_DIR`,
-    /// and write Zellij-side cache state there, so a test's server, sessions,
-    /// sockets, and permission grants never touch the user's.
+    /// Pin every Zellij command this backend runs to `dir` as the full XDG,
+    /// HOME, and TMPDIR surface, so a test's server, sessions, sockets,
+    /// permission grants, cache, and logs never touch the user's.
     pub fn with_runtime_dir(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         Self {
@@ -343,7 +344,14 @@ impl ZellijBackend {
         let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
         let mut spec = CommandSpec::new(program);
         if let Some(dir) = &self.runtime_dir {
-            spec = spec.env("XDG_RUNTIME_DIR", dir.to_string_lossy().into_owned());
+            let dir = dir.to_string_lossy().into_owned();
+            spec = spec
+                .env("XDG_RUNTIME_DIR", dir.clone())
+                .env("XDG_STATE_HOME", dir.clone())
+                .env("XDG_CONFIG_HOME", dir.clone())
+                .env("XDG_CACHE_HOME", dir.clone())
+                .env("HOME", dir.clone())
+                .env("TMPDIR", dir);
         }
         spec
     }

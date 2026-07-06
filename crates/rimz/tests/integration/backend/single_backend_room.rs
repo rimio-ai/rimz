@@ -270,6 +270,7 @@ impl ZellijRoom {
 
         let output = {
             let mut cmd = env.rimz();
+            pin_zellij_shared_env(&env, &mut cmd);
             cmd.args(["--mux", "zellij", "start"])
                 .env("TMUX_TMPDIR", &tmux_tmpdir)
                 .bounded_output()
@@ -290,6 +291,7 @@ impl ZellijRoom {
 
     fn rimz(&self) -> Command {
         let mut cmd = self.env.rimz();
+        pin_zellij_shared_env(&self.env, &mut cmd);
         cmd.env("TMUX_TMPDIR", &self.tmux_tmpdir);
         cmd
     }
@@ -351,9 +353,15 @@ impl ZellijRoom {
             .env("XDG_STATE_HOME", self.env.state_root())
             .env("XDG_CONFIG_HOME", self.env.config_root())
             .env("XDG_CACHE_HOME", &self.env.home_root)
-            .env("HOME", &self.env.home_root);
+            .env("HOME", &self.env.home_root)
+            .env("TMPDIR", &self.env.home_root);
         cmd
     }
+}
+
+fn pin_zellij_shared_env(env: &Env, cmd: &mut Command) {
+    cmd.env("XDG_CACHE_HOME", &env.home_root)
+        .env("TMPDIR", &env.home_root);
 }
 
 impl Drop for ZellijRoom {

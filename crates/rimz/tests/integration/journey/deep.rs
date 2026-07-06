@@ -631,9 +631,8 @@ fn attach_and_read_until(runtime: &Path, session: &str, needle: &str, budget: Du
         })
         .expect("openpty");
     let mut cmd = CommandBuilder::new("zellij");
-    cmd.scrub_session_env();
     cmd.args(["attach", session]);
-    cmd.env("XDG_RUNTIME_DIR", runtime);
+    pin_zellij_pty_env(&mut cmd, runtime);
     let mut child = pair.slave.spawn_command(cmd).expect("attach zellij");
     drop(pair.slave);
 
@@ -980,8 +979,28 @@ impl Drop for TmuxServerGuard {
 
 fn scoped_zellij(runtime: &Path) -> Command {
     let mut cmd = Command::new("zellij");
-    cmd.scrub_session_env().env("XDG_RUNTIME_DIR", runtime);
+    cmd.scrub_session_env();
+    pin_zellij_command_env(&mut cmd, runtime);
     cmd
+}
+
+fn pin_zellij_command_env(cmd: &mut Command, runtime: &Path) {
+    cmd.env("XDG_RUNTIME_DIR", runtime)
+        .env("XDG_STATE_HOME", runtime)
+        .env("XDG_CONFIG_HOME", runtime)
+        .env("XDG_CACHE_HOME", runtime)
+        .env("HOME", runtime)
+        .env("TMPDIR", runtime);
+}
+
+fn pin_zellij_pty_env(cmd: &mut CommandBuilder, runtime: &Path) {
+    cmd.scrub_session_env();
+    cmd.env("XDG_RUNTIME_DIR", runtime);
+    cmd.env("XDG_STATE_HOME", runtime);
+    cmd.env("XDG_CONFIG_HOME", runtime);
+    cmd.env("XDG_CACHE_HOME", runtime);
+    cmd.env("HOME", runtime);
+    cmd.env("TMPDIR", runtime);
 }
 
 struct ZellijSessionGuard {

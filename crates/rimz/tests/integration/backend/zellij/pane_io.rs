@@ -57,6 +57,8 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
         let output = env
             .rimz()
             .env("XDG_RUNTIME_DIR", xdg.path())
+            .env("XDG_CACHE_HOME", xdg.path())
+            .env("TMPDIR", xdg.path())
             .args([
                 "--mux",
                 "zellij",

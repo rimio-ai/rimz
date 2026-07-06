@@ -1,13 +1,12 @@
 //! Live Zellij backend tests.
 //!
-//! Each test spawns a real `zellij` server under its own throwaway
-//! `XDG_RUNTIME_DIR` (Zellij locates its server socket there) and drives the
-//! `ZellijBackend` against it via [`ZellijBackend::with_runtime_dir`]. The
-//! per-test runtime dir is the isolation seam — it gives every test a private
-//! server, so the suite runs in parallel and concurrently across git worktrees
-//! with no shared lock. Mirrors the tmux backend's `with_socket` isolation.
-//! The whole module becomes a no-op (early-return per test, message printed once)
-//! when the `zellij` binary is not on PATH.
+//! Each test spawns a real `zellij` server under its own throwaway env root and
+//! drives the `ZellijBackend` against it via [`ZellijBackend::with_runtime_dir`].
+//! The per-test root is the isolation seam — it gives every test a private
+//! server, cache, config, and log, so the suite runs in parallel and concurrently
+//! across git worktrees with no shared lock. Mirrors the tmux backend's
+//! `with_socket` isolation. The whole module becomes a no-op (early-return per
+//! test, message printed once) when the `zellij` binary is not on PATH.
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 

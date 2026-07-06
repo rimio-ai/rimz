@@ -106,12 +106,14 @@ pub(in crate::backend::zellij) fn scoped_zellij(xdg: &Path) -> std::process::Com
     // developer's per-machine config and fleet transcript history into
     // renderer panes (the snapshot producer then cold-parses minutes of real
     // `~/.claude` history), and a real `XDG_CONFIG_HOME` leaks their Zellij
-    // config into the session under test.
+    // config into the session under test. A real `TMPDIR` leaks the test
+    // server's log lines into the user's shared Zellij log.
     cmd.env("XDG_RUNTIME_DIR", xdg)
         .env("XDG_STATE_HOME", xdg)
         .env("XDG_CONFIG_HOME", xdg)
         .env("XDG_CACHE_HOME", xdg)
-        .env("HOME", xdg);
+        .env("HOME", xdg)
+        .env("TMPDIR", xdg);
     cmd
 }
 
@@ -167,6 +169,7 @@ impl ZellijSession {
         cmd.env("XDG_CONFIG_HOME", xdg.path());
         cmd.env("XDG_CACHE_HOME", xdg.path());
         cmd.env("HOME", xdg.path());
+        cmd.env("TMPDIR", xdg.path());
         if create {
             cmd.args(["attach", "--create", &name]);
         } else {
@@ -247,6 +250,7 @@ impl AttachedClient {
         cmd.env("XDG_CONFIG_HOME", xdg);
         cmd.env("XDG_CACHE_HOME", xdg);
         cmd.env("HOME", xdg);
+        cmd.env("TMPDIR", xdg);
         cmd.args(["attach", name]);
         let child = pair.slave.spawn_command(cmd).expect("spawn zellij attach");
         drop(pair.slave);

@@ -465,6 +465,43 @@ esac
 }
 
 #[test]
+fn runtime_dir_pins_full_zellij_env_surface() {
+    let runtime = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = runtime.path().to_string_lossy().into_owned();
+    let pinned = ZellijBackend::with_runtime_dir(&runtime).cmd();
+
+    for key in [
+        "XDG_RUNTIME_DIR",
+        "XDG_STATE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "HOME",
+        "TMPDIR",
+    ] {
+        assert_eq!(
+            pinned.env.get(key),
+            Some(&runtime),
+            "{key} must point at the test runtime dir",
+        );
+    }
+
+    let default = ZellijBackend::default().cmd();
+    for key in [
+        "XDG_RUNTIME_DIR",
+        "XDG_STATE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "HOME",
+        "TMPDIR",
+    ] {
+        assert!(
+            !default.env.contains_key(key),
+            "production backend must not override {key}",
+        );
+    }
+}
+
+#[test]
 fn version_parser_and_floor_hold() {
     assert_eq!(parse_version("zellij 0.41.2"), Some((0, 41, 2)));
     assert_eq!(parse_version("  zellij 1.2.3  \n"), Some((1, 2, 3)));
