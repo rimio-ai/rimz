@@ -138,7 +138,7 @@ The ping defaults its prompt to `ping` at the lowest effort, skips when the prov
 
 ## Configure your multiplexer
 
-Rimz sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, and clipboard on tmux; 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything Rimz leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside Rimz. The baselines below make either multiplexer modern and pleasant everywhere.
+Rimz sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, and clipboard on tmux; 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything Rimz leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside Rimz. The baselines below make either multiplexer modern and pleasant everywhere, and each ships as a complete copy-ready file under [examples/](../../examples/).
 
 ### Room overrides in Rimz config
 
@@ -161,6 +161,12 @@ Optional keys left unset fall through to your own Zellij or tmux config; a key y
 ### Zellij
 
 The file is `~/.config/zellij/config.kdl`; `zellij setup --dump-config` prints the full default set, and `zellij setup --check` validates your edits. Every key here is catalogued in the [Zellij upstream reference](../externals/mux-adapter/zellij-reference.md#configuration).
+
+[examples/zellij-config.kdl](../../examples/zellij-config.kdl) is this whole baseline — every block below plus the `tokyo-night` theme — as one file. Keys it leaves out keep Zellij's defaults, so it works as a complete replacement:
+
+```sh
+cp examples/zellij-config.kdl ~/.config/zellij/config.kdl   # from the rimz checkout; back up an existing file first
+```
 
 #### Essential
 
@@ -238,6 +244,13 @@ Rimz also disables Zellij's session metadata loop inside its room. At roughly 10
 ### tmux
 
 The file is `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`); reload it with `tmux source-file ~/.tmux.conf` or the `prefix` + `r` binding below. Every option here is catalogued in the [tmux upstream reference](../externals/mux-adapter/tmux-reference.md#options).
+
+[examples/tmux.conf](../../examples/tmux.conf) bundles everything below as one file — the essentials, the parity chords, and the pane frames and status bar fully styled in TokyoNight:
+
+```sh
+cp examples/tmux.conf ~/.tmux.conf   # from the rimz checkout; back up an existing file first
+tmux source-file ~/.tmux.conf        # or restart the tmux server
+```
 
 #### Essential
 

@@ -1,0 +1,69 @@
+// A complete Zellij config for coding-agent work: correct behavior for agent
+// TUIs, a look that matches Rimz's default sidebar scheme, and the everyday
+// actions on Alt chords that work without leaving locked mode.
+//
+// Install (back up any existing config first):
+//   cp examples/zellij-config.kdl ~/.config/zellij/config.kdl
+//
+// Keys not listed here keep Zellij's defaults, and new sessions pick the file
+// up on birth. docs/guide/setup.md walks through every choice; the [zellij]
+// table in ~/.config/rimz/config.toml can override the room-scoped keys.
+
+// --- Correct behavior for agent sessions ------------------------------------
+
+default_mode "locked"                  // typing goes to the agent; Ctrl+g enters Zellij
+scroll_buffer_size 100000              // keep long agent output scrollable
+mouse_mode true                        // scroll, select, and resize with the mouse
+copy_on_select true                    // selecting text copies it
+copy_clipboard "system"                // yank into the OS clipboard over OSC52
+support_kitty_keyboard_protocol true   // Shift+Enter and friends reach TUI agents
+
+// Terminals without OSC52 support can pipe copies through a helper instead:
+// copy_command "wl-copy"                      // Wayland
+// copy_command "xclip -selection clipboard"   // X11
+// copy_command "pbcopy"                       // macOS
+
+// --- Look and feel -----------------------------------------------------------
+
+theme "tokyo-night"                    // matches Rimz's default sidebar scheme
+pane_frames true                       // titled borders mark the focused pane
+styled_underlines true                 // colored/curly underlines from agents and editors
+osc8_hyperlinks true                   // clickable links in command output
+show_startup_tips false                // skip the startup tip banner
+show_release_notes false               // skip the release-notes pane on upgrade
+mouse_hover_effects false              // no hover frames/help text; calmer with many panes
+session_serialization false            // clean session births; Rimz owns rebirth in its rooms
+// default_shell "zsh"                 // uncomment to pin a shell; unset uses $SHELL
+
+// --- Alt chords in locked mode -------------------------------------------------
+// Locked mode passes every key to the pane except Ctrl+g. These binds keep the
+// everyday actions one keypress away; the block merges with Zellij's defaults,
+// so every other mode keeps its stock keys. A chord bound here stops reaching
+// the app in the pane (zsh's Alt-f / Alt-., agent-TUI Alt keys) - trim the set
+// to what you use. examples/tmux.conf mirrors the same chords for tmux.
+
+keybinds {
+    locked {
+        // Tabs.
+        bind "Alt t" { NewTab; }
+        bind "Alt x" { CloseTab; }
+        bind "Alt ," { GoToPreviousTab; }
+        bind "Alt ." { GoToNextTab; }
+        bind "Alt 1" { GoToTab 1; }
+        bind "Alt 2" { GoToTab 2; }
+        bind "Alt 3" { GoToTab 3; }
+        bind "Alt 4" { GoToTab 4; }
+        bind "Alt 5" { GoToTab 5; }
+
+        // Panes.
+        bind "Alt n" { NewPane; }
+        bind "Alt h" { MoveFocus "left"; }
+        bind "Alt j" { MoveFocus "down"; }
+        bind "Alt k" { MoveFocus "up"; }
+        bind "Alt l" { MoveFocus "right"; }
+        bind "Alt f" { ToggleFloatingPanes; }
+
+        // Session.
+        bind "Alt d" { Detach; }
+    }
+}
