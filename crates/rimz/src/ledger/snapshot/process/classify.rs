@@ -22,6 +22,8 @@ pub(crate) fn command_program_basename(command: &str) -> String {
         return command.to_owned();
     }
 
+    // `program` is a `split_whitespace` token from `command`, so its pointer
+    // delta is the byte offset to splice at.
     let start = program.as_ptr() as usize - command.as_ptr() as usize;
     let end = start + program.len();
     let mut out = String::with_capacity(command.len() - (program.len() - base.len()));
