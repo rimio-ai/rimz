@@ -151,6 +151,8 @@ Compaction is a transient head over the status. The opening signal (`Compacting`
 
 `CompactionEnded` is the explicit close, and its trigger decides where the agent lands: a known **automatic** trigger returns to `running` with the interrupted phase carried (automatic compaction happens mid-turn); a known **manual** trigger rests to `idle` (`/compact` runs between turns); an **absent** trigger holds the prior status and phase. A close that rests the agent advances `turn_started_at`, retiring the prior turn's subagents the same as a fresh prompt or `/clear`; an automatic mid-turn close resumes the turn and holds the boundary. Redundant close signals are idempotent, since an absent bracket closes nothing. The projection also expires the head past a short display window, so a crash mid-compact can never pulse it forever.
 
+A compaction signal for a session the rollup has never seen folds to nothing. Codex compaction rotates thread ids before the replacement session is real, so the rotated id registers at its first turn or tool signal instead; aborted compactions cannot create unreapable ghosts that steal pane primacy.
+
 ## Displayed status
 
 `snapshot.agents` (the rollup as `rimz sidebar snapshot` reports it) keeps the agent-owned truth. Read paths share a cheap [`effective_status`](../../../crates/rimz/src/agents/state.rs) projection, so a still-`running` turn with an active provider-park marker reads as `paused` in `rimz pane list` and message delivery; the sidebar row projection then adds budget-aware refinements on top. The refinements are one family with a pinned precedence, top rung wins:

@@ -240,7 +240,9 @@ pub(super) fn log_lifecycle_transition(
         .map(|agent| agent.lifecycle());
     if prev.is_none() && !observation.signal.establishes_identity() {
         // Create-on-miss: a non-start event for an agent with no prior rollup
-        // entry materializes the session, which the reducer does by design.
+        // entry usually materializes the session. Compaction signals are the
+        // exception: the reducer quarantines unknown compaction ids because
+        // some providers rotate ids before the replacement session is real.
         // The authoritative reducer logs this same condition at debug! (see
         // `snapshot/project.rs`), and the cached snapshot read here can lag a
         // just-appended start, so a warn! is a per-event false positive that

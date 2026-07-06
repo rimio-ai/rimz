@@ -274,6 +274,22 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             );
             continue;
         }
+        if matches!(
+            signal,
+            lifecycle::LifecycleSignal::Compacting
+                | lifecycle::LifecycleSignal::CompactionEnded { .. }
+        ) && prior.is_none()
+        {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                event_id = %envelope.event_id,
+                workspace = %envelope.workspace_id,
+                kind = %kind,
+                agent_id = %agent_id,
+                "compaction signal for unknown session ignored by agent-state reducer",
+            );
+            continue;
+        }
         if matches!(signal, lifecycle::LifecycleSignal::SubagentStopped { .. })
             && prior.is_none()
             && event_parent_agent_id.is_some()

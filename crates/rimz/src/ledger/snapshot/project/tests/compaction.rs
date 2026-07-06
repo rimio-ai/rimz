@@ -44,6 +44,60 @@ fn tool_used() -> serde_json::Value {
     serde_json::json!({ "signal": "tool_used", "mutates": true, "edits": true })
 }
 
+fn lifecycle_for_agent(
+    agent_id: &str,
+    event_name: &str,
+    signal: serde_json::Value,
+) -> EventEnvelope {
+    raw_lifecycle(
+        "codex",
+        serde_json::json!({
+            "event_name": event_name,
+            "agent_id": agent_id,
+            "signal": signal,
+        }),
+    )
+}
+
+#[test]
+fn compacting_for_unknown_session_folds_to_nothing() {
+    let compact = lifecycle_for_agent("fresh-compact", "PreCompact", signal("compacting"));
+
+    assert!(reduce_agent_states(&[compact]).is_empty());
+}
+
+#[test]
+fn compaction_ended_for_unknown_session_folds_to_nothing() {
+    let post = lifecycle_for_agent("fresh-compact", "SessionStart", compaction_ended(None));
+
+    assert!(reduce_agent_states(&[post]).is_empty());
+}
+
+#[test]
+fn compacting_after_registration_still_stamps_the_head() {
+    let registered = lifecycle_for_agent("session-a", "SessionStart", signal("registered"));
+    let compact = lifecycle_for_agent("session-a", "PreCompact", signal("compacting"));
+
+    let agents = reduce_agent_states(&[registered, compact]);
+
+    assert_eq!(agents.len(), 1);
+    assert!(agents[0].compacting_since.is_some());
+}
+
+#[test]
+fn aborted_compaction_rotation_does_not_create_a_ghost_session() {
+    let original = lifecycle_for_agent("session-a", "SessionStart", signal("registered"));
+    let aborted_rotation = lifecycle_for_agent("session-b", "PreCompact", signal("compacting"));
+    let replacement = lifecycle_for_agent("session-c", "SessionStart", signal("registered"));
+
+    let agents = reduce_agent_states(&[original, aborted_rotation, replacement]);
+
+    assert_eq!(agents.len(), 2);
+    assert!(agents.iter().any(|agent| agent.agent_id == "session-a"));
+    assert!(agents.iter().any(|agent| agent.agent_id == "session-c"));
+    assert!(agents.iter().all(|agent| agent.agent_id != "session-b"));
+}
+
 #[test]
 fn compaction_end_clears_marker_and_counts_completed_brackets() {
     let prompt = lifecycle("claude", "UserPromptSubmit", signal("turn_started"));
