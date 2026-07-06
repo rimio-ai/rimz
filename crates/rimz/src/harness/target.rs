@@ -583,17 +583,6 @@ pub fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
     agent.in_worktree(filter)
 }
 
-/// Whether a stamped message channel belongs to the lane `filter` names: the
-/// same lane, or a team sub-lane (`filter/<team>`). This is the string-level
-/// peer of [`Candidate::in_worktree`] for message records that carry a composed
-/// channel instead of an agent.
-pub fn channel_in_lane(channel: &str, filter: &str) -> bool {
-    channel == filter
-        || channel
-            .strip_prefix(filter)
-            .is_some_and(|rest| rest.starts_with('/'))
-}
-
 /// Build the right miss for a mention that matched nothing. When a channel was
 /// in play and the selector matches *elsewhere*, name those channels so the
 /// fix is obvious; otherwise fall back to the generic did-you-mean miss.

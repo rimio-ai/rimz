@@ -386,12 +386,16 @@ fn clear_without_target_removes_scoped_channel_lane() {
         String::from_utf8_lossy(&cleared.stderr)
     );
     let stdout = String::from_utf8_lossy(&cleared.stdout);
-    assert!(stdout.contains("removed 2 message(s) in #docs"));
+    assert!(stdout.contains("removed 1 message(s) in #docs"));
     assert!(stdout.contains(&docs));
-    assert!(stdout.contains(&docs_team));
+    // Lane membership is exact: the `docs/forge` team lane is its own scope.
+    assert!(!stdout.contains(&docs_team));
     let pending = env.ledger().list_pending_messages().unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message_id.as_str(), ops);
+    let pending_ids: Vec<&str> = pending
+        .iter()
+        .map(|message| message.message_id.as_str())
+        .collect();
+    assert_eq!(pending_ids, vec![docs_team.as_str(), ops.as_str()]);
 }
 
 #[test]

@@ -711,12 +711,7 @@ fn list_messages(
     };
     let filter_channel = channel.as_deref().or(default_channel);
     if let Some(filter) = filter_channel {
-        messages.retain(|message| {
-            message
-                .channel
-                .as_deref()
-                .is_some_and(|channel| rimz::harness::target::channel_in_lane(channel, filter))
-        });
+        messages.retain(|message| message.channel.as_deref() == Some(filter));
     }
     if let Some(status) = status {
         messages.retain(|message| message.status == status);
@@ -1433,7 +1428,7 @@ fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> String {
     let Some((base, channel)) = rendered.rsplit_once('#') else {
         return rendered;
     };
-    if rimz::harness::target::channel_in_lane(channel, filter) {
+    if channel == filter {
         base.to_owned()
     } else {
         rendered
@@ -1710,9 +1705,11 @@ mod tests {
             scoped_handle("@coder#project".to_owned(), Some("project")),
             "@coder"
         );
+        // Lane membership is exact: a team lane keeps its suffix under the
+        // directory filter.
         assert_eq!(
             scoped_handle("@coder#project/forge".to_owned(), Some("project")),
-            "@coder"
+            "@coder#project/forge"
         );
         assert_eq!(
             scoped_handle("@coder#ops".to_owned(), Some("project")),

@@ -563,12 +563,7 @@ impl Ledger {
                 MessageStatus::Removed,
                 session_name,
                 "clear",
-                |message| {
-                    message.status.is_open()
-                        && message.channel.as_deref().is_some_and(|candidate| {
-                            crate::harness::target::channel_in_lane(candidate, channel)
-                        })
-                },
+                |message| message.status.is_open() && message.channel.as_deref() == Some(channel),
                 |_| {},
             )
         })
