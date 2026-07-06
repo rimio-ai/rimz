@@ -253,7 +253,7 @@ pub(super) fn log_lifecycle_transition(
             kind,
             agent_id,
             signal = ?observation.signal,
-            "non-start lifecycle event created an unseen session",
+            "non-start lifecycle event observed for an unseen session",
         );
     }
     let transition = agent_lifecycle::step(prev.as_ref(), &observation.signal);
