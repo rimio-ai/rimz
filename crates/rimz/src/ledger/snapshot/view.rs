@@ -186,12 +186,13 @@ pub struct SidebarSnapshot {
     pub worktree_roots: Vec<PathBuf>,
     /// The repo's durable worktree-home directory — the resolved `[agents.worktree]
     /// dir` template (default `…/<repo>-worktrees`). It widens the cockpit
-    /// spend scope alone: a session recorded under a worktree that cleanup has
-    /// since removed still counts toward the room's headline figure, because the
-    /// home is a stable path prefix while `worktree_roots` tracks only the live
-    /// `git worktree list`. It never feeds pod grouping, which stays on
-    /// `worktree_roots`. Like `project_root`, the `rimz sidebar snapshot`
-    /// enrichment fills it from `MachineConfig`; the pure path leaves it `None`.
+    /// spend scope: a session recorded under a worktree that cleanup has since
+    /// removed still counts toward the room's headline figure, because the home
+    /// is a stable path prefix while `worktree_roots` tracks only the live `git
+    /// worktree list`. It also folds unstamped rows inside Rimz-owned worktrees
+    /// into their `#channel` pod so grouping agrees with message addressing.
+    /// Like `project_root`, the `rimz sidebar snapshot` enrichment fills it from
+    /// `MachineConfig`; the pure path leaves it `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_home: Option<PathBuf>,
     /// The room root's class from the workspace record. Grouping reads it to
@@ -401,11 +402,13 @@ impl SidebarSnapshot {
     }
 
     /// Record the repo's durable worktree-home directory so the cockpit spend
-    /// scope counts sessions from worktrees cleanup has since removed. Filled
-    /// from `MachineConfig`'s `[agents.worktree] dir` after construction, like
-    /// `with_worktree_roots`; the pure path leaves it `None`.
+    /// scope counts sessions from worktrees cleanup has since removed and
+    /// unstamped Rimz-owned worktree rows fold into their `#channel` pod.
+    /// Filled from `MachineConfig`'s `[agents.worktree] dir` after construction,
+    /// like `with_worktree_roots`; the pure path leaves it `None`.
     pub fn with_worktree_home(mut self, worktree_home: Option<PathBuf>) -> Self {
-        self.worktree_home = worktree_home;
+        self.worktree_home =
+            worktree_home.map(|path| crate::worktree::normalize_path_lexical(&path));
         self
     }
 

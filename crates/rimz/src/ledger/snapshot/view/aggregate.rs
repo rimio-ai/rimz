@@ -1,16 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
 use crate::agents::{AccountBudget, AgentState};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::snapshot::row::SidebarRow;
-use crate::workspace::RootClass;
 
 use super::layout::{
-    compare_groups, effective_worktree_roots, group_branch_label, multi_branch_paths, sort_rows,
-    status_counts, worktree_group_key,
+    GroupRoots, compare_groups, effective_worktree_roots, group_branch_label, multi_branch_paths,
+    sort_rows, status_counts, worktree_group_key,
 };
 use super::score;
 use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
@@ -63,9 +61,7 @@ pub(super) struct AgentProjection<'a> {
 pub(super) fn build_worktree_groups_from_rows(
     mut rows: Vec<SidebarRow>,
     agent_projection: AgentProjection<'_>,
-    project_root: Option<&Path>,
-    worktree_roots: &[PathBuf],
-    root_class: RootClass,
+    roots: GroupRoots<'_>,
     now: Timestamp,
     windows: AttentionWindows,
 ) -> Vec<SidebarWorktreeGroup> {
@@ -93,10 +89,16 @@ pub(super) fn build_worktree_groups_from_rows(
             .map(|row| (row.worktree_path.as_deref(), row.worktree_branch.as_deref())),
     );
     let effective_roots = effective_worktree_roots(
-        worktree_roots,
+        roots.worktree_roots,
         rows.iter()
             .map(|row| (row.worktree_path.as_deref(), row.worktree_branch.as_deref())),
     );
+    let roots = GroupRoots {
+        project_root: roots.project_root,
+        worktree_roots: &effective_roots,
+        worktree_home: roots.worktree_home,
+        root_class: roots.root_class,
+    };
 
     let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
         BTreeMap::new();
@@ -110,9 +112,7 @@ pub(super) fn build_worktree_groups_from_rows(
             row.worktree_path.as_deref(),
             row.worktree_branch.as_deref(),
             split_by_branch,
-            project_root,
-            &effective_roots,
-            root_class,
+            roots,
         );
         by_group
             .entry(key)

@@ -185,6 +185,29 @@ fn named_channel_groups_a_live_agent_ahead_of_worktree_identity() {
 }
 
 #[test]
+fn listing_roster_folds_unstamped_rimz_worktree_agents_into_channel_pod() {
+    let worktree = "/repo/rimz-worktrees/message-channel";
+    let mut stamped = agent("claude", "stamped", AgentStatus::Running, 20).worktree(worktree);
+    stamped.channel = Some("message-channel".to_owned());
+    let unstamped = agent("codex", "bare", AgentStatus::Idle, 10).worktree(worktree);
+    let snapshot = room(Vec::new(), vec![stamped, unstamped])
+        .with_project_root(Some(std::path::PathBuf::from("/repo/rimz")))
+        .with_worktree_home(Some(std::path::PathBuf::from("/repo/rimz-worktrees")));
+    let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+    let groups = group_live_agents_by_worktree(&refs, &snapshot);
+
+    assert_eq!(
+        groups.len(),
+        1,
+        "roster matches sidebar grouping: {groups:?}"
+    );
+    assert_eq!(groups[0].kind, SidebarWorktreeKind::Channel);
+    assert_eq!(groups[0].label, "message-channel");
+    assert_eq!(groups[0].agents.len(), 2);
+}
+
+#[test]
 fn listing_roster_mirrors_cohort_block_order_and_group_attention_rank() {
     let mut first = agent("claude", "cohort-first", AgentStatus::Success, 30).worktree("/repo/a");
     first.launch_group = Some("launch_group_1".to_owned());

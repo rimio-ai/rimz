@@ -11,7 +11,7 @@ use crate::pane::PaneRef;
 
 use super::SidebarSnapshot;
 use super::aggregate::{AgentProjection, AttentionWindows, build_worktree_groups_from_rows};
-use super::layout::refresh_overlay_group;
+use super::layout::{GroupRoots, refresh_overlay_group};
 use projection::{LazyAgentPaneProjection, rows_from_panes};
 
 mod projection;
@@ -100,9 +100,12 @@ impl SidebarSnapshot {
                 account_budgets,
                 exhausted_resumes,
             },
-            self.project_root.as_deref(),
-            &self.worktree_roots,
-            self.root_class,
+            GroupRoots {
+                project_root: self.project_root.as_deref(),
+                worktree_roots: &self.worktree_roots,
+                worktree_home: self.worktree_home.as_deref(),
+                root_class: self.root_class,
+            },
             self.now,
             AttentionWindows::from_config(&self.attention),
         );

@@ -59,14 +59,20 @@ pub(super) fn effective_worktree_roots<'a>(
     roots.into_iter().collect()
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct GroupRoots<'a> {
+    pub project_root: Option<&'a Path>,
+    pub worktree_roots: &'a [PathBuf],
+    pub worktree_home: Option<&'a Path>,
+    pub root_class: RootClass,
+}
+
 pub(super) fn worktree_group_key(
     explicit_channel: Option<&str>,
     path: Option<&str>,
     branch: Option<&str>,
     split_by_branch: bool,
-    project_root: Option<&Path>,
-    worktree_roots: &[PathBuf],
-    root_class: RootClass,
+    roots: GroupRoots<'_>,
 ) -> (SidebarWorktreeKind, String, String) {
     if let Some(channel) = explicit_channel.filter(|channel| !channel.is_empty()) {
         return (
@@ -77,6 +83,22 @@ pub(super) fn worktree_group_key(
     }
     let branch = branch.filter(|branch| !branch.is_empty());
     if let Some(path) = path.filter(|path| !path.is_empty()) {
+        let cwd = Path::new(path);
+        if roots
+            .worktree_home
+            .is_some_and(|home| is_within(home, cwd) && cwd != home)
+            && roots.project_root != Some(cwd)
+        {
+            // Mirror `compose_channel`'s worktree-basename fallback so grouping
+            // agrees with addressing and `rimz channel list` for unstamped
+            // agents launched inside a Rimz-owned worktree.
+            let label = path_basename(cwd);
+            return (
+                SidebarWorktreeKind::Channel,
+                format!("channel:{label}"),
+                label,
+            );
+        }
         // A cwd belongs to the *deepest* group root that contains it: the room
         // root or any group root — a repo room's `git worktree list` checkouts
         // plus every git-backed row's own resolved toplevel. Keying on the
@@ -87,16 +109,16 @@ pub(super) fn worktree_group_key(
         // outside every root (a home shell, `/tmp`, CI) falls through to the
         // `external` catch-all unless its path still carries the reported branch
         // name — the short pre-enumeration window for a real worktree checkout.
-        let cwd = Path::new(path);
-        let matched = worktree_roots
+        let matched = roots
+            .worktree_roots
             .iter()
             .map(PathBuf::as_path)
-            .chain(project_root)
+            .chain(roots.project_root)
             .filter(|root| is_within(root, cwd))
             .max_by_key(|root| root.components().count());
         let per_path = match matched {
-            Some(root) => project_root == Some(root) && root_class == RootClass::Repo,
-            None => project_root.is_none() && worktree_roots.is_empty(),
+            Some(root) => roots.project_root == Some(root) && roots.root_class == RootClass::Repo,
+            None => roots.project_root.is_none() && roots.worktree_roots.is_empty(),
         };
         if per_path {
             let label = branch
@@ -118,7 +140,7 @@ pub(super) fn worktree_group_key(
             // The room root of a non-repo room: one name-only pod for panes at
             // the root and in non-repo subdirs. Branches never split or label
             // it — a non-repo root has no git story to disagree about.
-            if project_root == Some(root) {
+            if roots.project_root == Some(root) {
                 let label = path_basename(root);
                 return (SidebarWorktreeKind::Root, root_key, label);
             }
@@ -772,6 +794,12 @@ pub fn group_live_agents_by_worktree<'a>(
             )
         }),
     );
+    let roots = GroupRoots {
+        project_root,
+        worktree_roots: &effective_roots,
+        worktree_home: snapshot.worktree_home.as_deref(),
+        root_class: snapshot.root_class,
+    };
     let mut by_key: BTreeMap<String, AgentWorktreeGroup<'a>> = BTreeMap::new();
     for &agent in agents {
         let split_by_branch = agent
@@ -783,9 +811,7 @@ pub fn group_live_agents_by_worktree<'a>(
             agent.worktree_path.as_deref(),
             agent.worktree_branch.as_deref(),
             split_by_branch,
-            project_root,
-            &effective_roots,
-            snapshot.root_class,
+            roots,
         );
         by_key
             .entry(key)
