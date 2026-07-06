@@ -1093,7 +1093,7 @@ fn print_removed_summary(scope: &str, removed: &[MessageRecord]) {
         .iter()
         .map(|message| message.message_id.to_string())
         .collect();
-    #[expect(clippy::print_stdout, reason = "command result is removal count")]
+    #[expect(clippy::print_stdout, reason = "final user-facing message")]
     {
         if ids.is_empty() {
             println!("removed 0 message(s) {scope}");
@@ -1555,6 +1555,11 @@ fn delivery_verdict(check: &deliver::DeliveryCheck, target: &str, now: Timestamp
             .status
             .map(|status| status.as_str())
             .unwrap_or("unknown");
+        if check.gate.gate == DeliveryGate::Resume {
+            return format!(
+                "waiting: {target} is {status}; resume gate opens when the agent is paused and provider recovery passes"
+            );
+        }
         return format!(
             "waiting: {target} is {status}; gate '{}' opens at next turn end",
             check.gate.gate

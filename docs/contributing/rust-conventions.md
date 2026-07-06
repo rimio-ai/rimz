@@ -33,7 +33,7 @@ Stdout is the protocol surface. The lint wall lives once in the workspace `Cargo
 A `println!` site is legal only when annotated `#[expect(clippy::print_stdout, reason = "...")]` and its stdout is one of:
 
 - a `--json` event stream or the final user-facing message of a command;
-- a single scripting value (`message clear` counts, `feed` request ids);
+- a single scripting value (`feed` request ids);
 - the agent-native decision channel — `rimz hooks <agent> ...` stdout is parsed by the agent, per [agent.md → Hook stdout is the decision channel](../internals/agents/agent.md#hook-stdout-is-the-decision-channel);
 - the `doctor` multi-section diagnostic, a bespoke layout migrated to `render` opportunistically.
 
