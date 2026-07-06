@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -14,7 +14,7 @@ use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::ids::AgentKind;
 use rimz::message::MessageStatus;
 
-use crate::common::Env;
+use crate::common::{Env, ScrubSessionEnvExt};
 
 #[test]
 fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
@@ -1125,13 +1125,12 @@ fn register_running_agent_at(env: &Env, session_id: &str, branch: &str, cwd: &Pa
 
 fn run_hook(env: &Env, payload: serde_json::Value, cwd: &Path) {
     let payload = serde_json::to_string(&payload).expect("payload");
-    let mut cmd = env.rimz();
+    let owner = dummy_agent_process();
+    let owner_pid = owner.id();
+    reap_later(owner);
+    let mut cmd = env.hook_command("claude");
     cmd.current_dir(cwd)
-        .args(["hooks", "feed", "--source", "claude"])
-        .env("RIMZ_AGENT_PID", std::process::id().to_string())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .env("RIMZ_AGENT_PID", owner_pid.to_string());
     if let Some(channel) =
         rimz::harness::target::resolve_room_channel(&env.project_root, cwd, None, None)
     {
@@ -1146,6 +1145,20 @@ fn run_hook(env: &Env, payload: serde_json::Value, cwd: &Path) {
         "hook failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn dummy_agent_process() -> std::process::Child {
+    let mut cmd = Command::new("sleep");
+    cmd.scrub_session_env();
+    // ponytail: bounded sleeper keeps hook-owned agents live for test snapshots;
+    // add a per-test owner guard if tests start lasting longer than this window.
+    cmd.arg("30").spawn().expect("spawn dummy agent process")
+}
+
+fn reap_later(mut child: std::process::Child) {
+    let _ = std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 fn write_loop_config(env: &Env, text: &str) {
