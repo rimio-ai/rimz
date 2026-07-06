@@ -458,11 +458,8 @@ fn project_local_dirs(workspaces: &[KnownWorkspace]) -> Vec<PathBuf> {
 
 fn shell_quote_path(path: &Path) -> String {
     let raw = path.display().to_string();
-    if raw
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-'))
-    {
-        return raw;
-    }
-    format!("'{}'", raw.replace('\'', r"'\''"))
+    shlex::try_quote(&raw)
+        // Existing filesystem paths cannot contain NUL bytes.
+        .expect("path display string is shell-quotable")
+        .into_owned()
 }
