@@ -1,13 +1,15 @@
-// A complete Zellij config for coding-agent work: correct behavior for agent
-// TUIs, a look that matches Rimz's default sidebar scheme, and the everyday
-// actions on Alt chords that work without leaving locked mode.
+// A complete Zellij starting point for coding-agent work: correct behavior
+// for agent TUIs, a look that matches Rimz's default sidebar scheme, and the
+// everyday actions on Alt chords that work without leaving locked mode.
 //
-// Install (back up any existing config first):
-//   cp examples/zellij-config.kdl ~/.config/zellij/config.kdl
+// Zellij reads one config file, so this ships as a whole file. Starting fresh:
+//   cp examples/zellij/config.kdl ~/.config/zellij/config.kdl
+// Already have a config.kdl? Lift the blocks you want -- each section stands
+// alone, and keys not listed here keep Zellij's defaults either way. Validate
+// the result with `zellij setup --check`.
 //
-// Keys not listed here keep Zellij's defaults, and new sessions pick the file
-// up on birth. docs/guide/setup.md walks through every choice; the [zellij]
-// table in ~/.config/rimz/config.toml can override the room-scoped keys.
+// docs/guide/setup.md walks through every choice; the [zellij] table in
+// ~/.config/rimz/config.toml can override the room-scoped keys per machine.
 
 // --- Correct behavior for agent sessions ------------------------------------
 
@@ -40,7 +42,7 @@ session_serialization false            // clean session births; Rimz owns rebirt
 // everyday actions one keypress away; the block merges with Zellij's defaults,
 // so every other mode keeps its stock keys. A chord bound here stops reaching
 // the app in the pane (zsh's Alt-f / Alt-., agent-TUI Alt keys) - trim the set
-// to what you use. examples/tmux.conf mirrors the same chords for tmux.
+// to what you use. examples/tmux/zellij-keys.conf mirrors the same chords.
 
 keybinds {
     locked {

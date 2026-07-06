@@ -138,7 +138,7 @@ The ping defaults its prompt to `ping` at the lowest effort, skips when the prov
 
 ## Configure your multiplexer
 
-Rimz sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, and clipboard on tmux; 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything Rimz leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside Rimz. The baselines below make either multiplexer modern and pleasant everywhere, and each ships as a complete copy-ready file under [examples/](../../examples/).
+Rimz sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, and clipboard on tmux; 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything Rimz leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside Rimz. The baselines below make either multiplexer modern and pleasant everywhere, and both ship ready to adopt under [examples/](../../examples/README.md) — tmux as sourceable modules, Zellij as a complete starting file.
 
 ### Room overrides in Rimz config
 
@@ -162,10 +162,11 @@ Optional keys left unset fall through to your own Zellij or tmux config; a key y
 
 The file is `~/.config/zellij/config.kdl`; `zellij setup --dump-config` prints the full default set, and `zellij setup --check` validates your edits. Every key here is catalogued in the [Zellij upstream reference](../externals/mux-adapter/zellij-reference.md#configuration).
 
-[examples/zellij-config.kdl](../../examples/zellij-config.kdl) is this whole baseline — every block below plus the `tokyo-night` theme — as one file. Keys it leaves out keep Zellij's defaults, so it works as a complete replacement:
+[examples/zellij/config.kdl](../../examples/zellij/config.kdl) is this whole baseline — every block below plus the `tokyo-night` theme — as one file, since Zellij reads a single config. Starting fresh, copy it; with an existing `config.kdl`, lift the blocks you want. Unlisted keys keep Zellij's defaults either way:
 
 ```sh
-cp examples/zellij-config.kdl ~/.config/zellij/config.kdl   # from the rimz checkout; back up an existing file first
+cp examples/zellij/config.kdl ~/.config/zellij/config.kdl   # from the rimz checkout
+zellij setup --check
 ```
 
 #### Essential
@@ -245,11 +246,12 @@ Rimz also disables Zellij's session metadata loop inside its room. At roughly 10
 
 The file is `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`); reload it with `tmux source-file ~/.tmux.conf` or the `prefix` + `r` binding below. Every option here is catalogued in the [tmux upstream reference](../externals/mux-adapter/tmux-reference.md#options).
 
-[examples/tmux.conf](../../examples/tmux.conf) bundles everything below as one file — the essentials, the parity chords, and the pane frames and status bar fully styled in TokyoNight:
+Everything below ships as four self-contained modules under [examples/tmux/](../../examples/README.md#tmux--tmux) — [`agents.conf`](../../examples/tmux/agents.conf) (the essentials), [`quality-of-life.conf`](../../examples/tmux/quality-of-life.conf) (copy-mode, window names, splits), [`zellij-keys.conf`](../../examples/tmux/zellij-keys.conf) (the parity chords), and [`theme-tokyonight.conf`](../../examples/tmux/theme-tokyonight.conf) (frames and status bar) — so your `~/.tmux.conf` stays yours and adopts by reference:
 
 ```sh
-cp examples/tmux.conf ~/.tmux.conf   # from the rimz checkout; back up an existing file first
-tmux source-file ~/.tmux.conf        # or restart the tmux server
+# From the rimz checkout: source the modules you want; drop any line.
+printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-keys,theme-tokyonight}.conf >> ~/.tmux.conf
+tmux source-file ~/.tmux.conf
 ```
 
 #### Essential
