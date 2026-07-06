@@ -1,19 +1,13 @@
 use serde_json::json;
 
 use super::*;
-use crate::feed::ResolutionMethod;
 use crate::harness::run::PermissionMode;
 use std::io::Write;
 use std::path::Path;
 
-mod decision;
 mod install;
 mod lifecycle;
 mod transcript;
-
-fn fixture(kind: FeedKind) -> FeedItem {
-    crate::agents::testkit::feed_item(kind, "codex")
-}
 
 #[test]
 fn codex_commands_and_permission_args_match_run_posture() {

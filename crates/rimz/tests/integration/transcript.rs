@@ -1,6 +1,3 @@
-use std::time::{Duration, Instant};
-
-use jiff::Timestamp;
 use serde_json::json;
 
 use rimz::chat::{ChatEntry, ChatKind};
@@ -8,8 +5,6 @@ use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId};
 
 use crate::common::Env;
-
-const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
 
 #[test]
 fn transcript_renders_durable_turns_asks_answers_and_channels() {
@@ -43,7 +38,7 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
         "other prompt",
         "other answer",
     );
-    bridge_permission_to_allow(&env, "sess-transcript-a", branch, &claude_path);
+    native_permission_to_allow(&env, "sess-transcript-a", branch, &claude_path);
 
     let single = run_ok(
         env.rimz()
@@ -265,7 +260,7 @@ fn resolving_agent_ask_through_cli_appends_transcript_answer() {
     let env = Env::new();
     let mut item = FeedItem::new(
         env.workspace_id.clone(),
-        Surface::Bridge,
+        Surface::NativeUi,
         FeedKind::Permission,
         "allow?",
         "claude",
@@ -279,12 +274,7 @@ fn resolving_agent_ask_through_cli_appends_transcript_answer() {
         .push_feed_item(&item, "rimz-test")
         .expect("push");
 
-    let resolve = env.resolve(
-        request_id.as_str(),
-        r#"{"choice":"allow"}"#,
-        "opus-policy",
-        "cli",
-    );
+    let resolve = env.resolve(request_id.as_str(), r#"{"choice":"allow"}"#, "you", "cli");
     assert!(
         resolve.status.success(),
         "resolve failed: {}",
@@ -890,14 +880,12 @@ fn register_live_codex_turn(
     owner
 }
 
-fn bridge_permission_to_allow(
+fn native_permission_to_allow(
     env: &Env,
     session_id: &str,
     branch: &str,
     transcript: &std::path::Path,
 ) {
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
     let transcript = transcript.to_string_lossy().into_owned();
     let payload = serde_json::to_string(&json!({
         "hook_event_name": "PermissionRequest",
@@ -913,23 +901,27 @@ fn bridge_permission_to_allow(
     scrub_launch_identity(&mut cmd);
     cmd.env("RIMZ_AGENT_PID", "");
     cmd.env(rimz::harness::run::ENV_AGENT_ROLE, "claude");
-    let child = env.spawn_payload(cmd, &payload);
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-        .expect("bridge item should appear in feed");
-
-    let resolve = env.resolve(&request_id, r#"{"choice":"allow"}"#, "opus-policy", "cli");
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-    let output = child.wait_with_output().expect("wait hook");
+    let output = env
+        .spawn_payload(cmd, &payload)
+        .wait_with_output()
+        .expect("wait hook");
     assert!(
         output.status.success(),
         "hook failed\nstdout={}\nstderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "native hook returns neutral");
+
+    let request_id = env
+        .poll_pending_request_id(std::time::Instant::now() + std::time::Duration::from_secs(5))
+        .expect("native_ui item should appear in feed");
+
+    let resolve = env.resolve(&request_id, r#"{"choice":"allow"}"#, "you", "cli");
+    assert!(
+        resolve.status.success(),
+        "resolve failed: {}",
+        String::from_utf8_lossy(&resolve.stderr)
     );
 }
 

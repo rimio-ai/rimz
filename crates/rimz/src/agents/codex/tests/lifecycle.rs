@@ -429,7 +429,4 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
             )
             .is_none()
     );
-
-    use crate::agents::ClaudeAdapter;
-    assert!(CodexAdapter.descriptor().hook_cap < ClaudeAdapter.descriptor().hook_cap);
 }

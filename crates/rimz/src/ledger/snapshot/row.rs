@@ -8,7 +8,7 @@ use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentContext, AgentTokenUsage, usable_description};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::feed::Surface;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId};
 use crate::pane::PaneRef;
 
 /// One frame-admitted sidebar row. The base names the row and pane; [`RowCard`]
@@ -111,10 +111,6 @@ impl SidebarRow {
 
     pub fn phase(&self) -> TurnPhase {
         self.as_agent().map_or(TurnPhase::Idle, |agent| agent.phase)
-    }
-
-    pub fn resolver(&self) -> Option<&SidebarResolverState> {
-        self.as_agent().and_then(|agent| agent.resolver.as_ref())
     }
 
     pub fn request_id(&self) -> Option<&RequestId> {
@@ -341,8 +337,6 @@ pub struct AgentCard {
     /// session's first cost; row ordering keys on pane creation, not this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resolver: Option<SidebarResolverState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
     /// Subagents this agent spawned this turn, nested under the parent.
@@ -386,7 +380,6 @@ impl Default for AgentCard {
             context: None,
             context_severity: None,
             registered_at: None,
-            resolver: None,
             options: Vec::new(),
             sub_agents: Vec::new(),
             compacting: false,
@@ -593,13 +586,6 @@ pub struct SidebarSubAgent {
     /// stable across refreshes, unlike the enrichment-fed `started_at`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SidebarResolverState {
-    pub resolver_id: ResolverId,
-    pub display_name: Option<String>,
-    pub budget_until: Option<Timestamp>,
 }
 
 #[cfg(test)]

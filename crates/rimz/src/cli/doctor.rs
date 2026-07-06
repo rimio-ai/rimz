@@ -1,6 +1,6 @@
 //! `rimz doctor` — workspace health report: trust state, protocol versions,
-//! resolver freshness, socket-path budget, hook wiring, agent problems, and
-//! message-delivery failures.
+//! socket-path budget, hook wiring, agent problems, and message-delivery
+//! failures.
 //!
 //! The report is collected once into a [`model::DoctorReport`], then either
 //! rendered as the human report ([`render`]) or serialized as JSON — to stdout
@@ -64,7 +64,6 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         storage: runtime::collect_storage(),
         protocols: ws.map(protocol::collect_protocols),
         trust: ws.map(agents::collect_trust),
-        resolver_heartbeats: ws.map(agents::collect_unauthorized_resolvers),
         agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
         messages: ws.map(messages::collect_messages),
         diagnostics: ws.map(runtime::collect_diagnostics),

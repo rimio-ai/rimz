@@ -6,26 +6,38 @@ use std::time::{Duration, SystemTime};
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
-use rimz::resolver::heartbeat::ResolverHeartbeat;
+use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::timing::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
-use rimz::{ResolverId, RuntimePaths, SidebarInstanceId, WorkspaceId};
+use rimz::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use serde_json::json;
 
 use crate::common::Env;
 
 #[test]
-fn gc_removes_stale_runtime_heartbeat() {
+fn gc_removes_stale_sidebar_heartbeat_and_leaves_legacy_resolver_file() {
     let env = Env::new();
     let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
     rt.ensure_dirs().expect("runtime dirs");
 
-    let resolver_id: ResolverId = "opus-policy".parse().expect("resolver id");
-    let heartbeat = ResolverHeartbeat::new(env.workspace_id.clone(), resolver_id);
-    let heartbeat_path = rt.heartbeat_dir.join("resolver.opus-policy.json");
-    std::fs::write(&heartbeat_path, serde_json::to_vec(&heartbeat).unwrap())
+    let heartbeat = SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        SidebarInstanceId::new(),
+        MuxName::Tmux,
+        "rimz-test",
+        rt.sock_dir.join("sidebar.old.sock"),
+        None,
+    );
+    let heartbeat_path = rt.heartbeat_dir.join("sidebar.old.json");
+    rimz::ledger::atomic::write_temp_then_rename(&heartbeat_path, &heartbeat)
         .expect("write heartbeat");
+    let legacy_resolver = rt.heartbeat_dir.join("resolver.opus-policy.json");
+    std::fs::write(&legacy_resolver, br#"{"legacy":true}"#).expect("write legacy resolver file");
     let old = SystemTime::now() - Duration::from_secs(7200);
     std::fs::File::open(&heartbeat_path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    std::fs::File::open(&legacy_resolver)
         .unwrap()
         .set_modified(old)
         .unwrap();
@@ -40,6 +52,10 @@ fn gc_removes_stale_runtime_heartbeat() {
     assert!(
         !heartbeat_path.exists(),
         "stale heartbeat should be removed"
+    );
+    assert!(
+        legacy_resolver.exists(),
+        "legacy resolver heartbeat is no longer a runtime GC target"
     );
 }
 

@@ -1,4 +1,4 @@
-//! `rimz feed` — the feed surface: push, ask, list, show, resolve, dismiss, abstain.
+//! `rimz feed` — the feed surface: push, ask, list, show, resolve, dismiss.
 
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
     AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, Surface,
 };
-use rimz::ids::{AgentKind, AgentSessionId, RequestId, ResolverId};
+use rimz::ids::{AgentKind, AgentSessionId, RequestId};
 use rimz::ledger::runtime::{RuntimeScope, current_process_owner};
 use rimz::ledger::{FeedStoreErr, LedgerErr};
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
@@ -29,7 +29,7 @@ pub struct FeedArgs {
 
 #[derive(Debug, Subcommand)]
 enum FeedSubcmd {
-    /// Push a non-blocking feed item (no resolver wait).
+    /// Push a non-blocking feed item.
     Push {
         #[arg(long)]
         kind: String,
@@ -38,7 +38,7 @@ enum FeedSubcmd {
         #[arg(long)]
         body: Option<String>,
     },
-    /// Ask a question; block until a human or resolver answers.
+    /// Ask a question; block until another process answers.
     Ask {
         #[arg(long)]
         title: String,
@@ -65,18 +65,15 @@ enum FeedSubcmd {
         #[arg(long)]
         json: bool,
     },
-    /// Apply a resolver decision (valid for surface = bridge | script).
+    /// Record an answer (valid for surface = native_ui | script).
     Resolve {
         request_id: String,
         #[arg(long)]
         decision: String,
         #[arg(long)]
-        resolver_id: Option<String>,
+        by: Option<String>,
         #[arg(long, value_enum, default_value_t = MethodArg::Cli)]
         method: MethodArg,
-        /// Bypass the chain-active CAS check (`Human override`).
-        #[arg(long)]
-        override_chain: bool,
     },
     /// Dismiss a native-UI item without forwarding to the agent.
     Dismiss {
@@ -84,19 +81,10 @@ enum FeedSubcmd {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Active resolver passes on a request, advancing the chain.
-    Abstain {
-        request_id: String,
-        #[arg(long)]
-        resolver_id: String,
-        #[arg(long)]
-        reason: Option<String>,
-    },
 }
 
 #[derive(Clone, Debug, ValueEnum)]
 enum MethodArg {
-    HookBridge,
     PaneSend,
     Cli,
     Sidebar,
@@ -105,7 +93,6 @@ enum MethodArg {
 impl From<MethodArg> for ResolutionMethod {
     fn from(value: MethodArg) -> Self {
         match value {
-            MethodArg::HookBridge => Self::HookBridge,
             MethodArg::PaneSend => Self::PaneSend,
             MethodArg::Cli => Self::Cli,
             MethodArg::Sidebar => Self::Sidebar,
@@ -129,26 +116,19 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
         FeedSubcmd::Resolve {
             request_id,
             decision,
-            resolver_id,
+            by,
             method,
-            override_chain,
         } => resolve(
             &ledger,
-            &workspace,
             request_id,
             decision,
-            resolver_id,
+            by,
             method,
-            override_chain,
+            &workspace.session_name,
         ),
         FeedSubcmd::Dismiss { request_id, reason } => {
             dismiss(&ledger, &workspace, request_id, reason)
         }
-        FeedSubcmd::Abstain {
-            request_id,
-            resolver_id,
-            reason,
-        } => abstain(&ledger, &workspace, request_id, resolver_id, reason),
     }
 }
 
@@ -195,7 +175,7 @@ fn ask(
         return Ok(());
     }
 
-    // Bind before push so a fast resolver can't miss the socket.
+    // Bind before push so a fast answer can't miss the socket.
     let expected = ExpectedFrame {
         workspace_id: item.workspace_id.clone(),
         request_id: request_id.clone(),
@@ -239,7 +219,6 @@ fn ask_item(
     // The pane the asking script runs inside, when it runs inside one; outside
     // a pane the ask stays rollup metadata served by feed list/resolve.
     item.pane = rimz::mux::ambient_pane_id().map(PaneRef::from_id);
-    item.hook_wait_timeout_seconds = timeout.map(|d| d.as_secs()).unwrap_or(0);
     if let Some(deadline) = timeout {
         item.feed_deadline_at = Some(Timestamp::now() + deadline);
     }
@@ -376,19 +355,17 @@ fn show(ledger: &Ledger, request_id: String, json: bool) -> Result<()> {
 
 fn resolve(
     ledger: &Ledger,
-    workspace: &ResolvedWorkspace,
     request_id: String,
     decision: String,
-    resolver_id: Option<String>,
+    by: Option<String>,
     method: MethodArg,
-    override_chain: bool,
+    session_name: &str,
 ) -> Result<()> {
     let id = request_id.parse::<RequestId>()?;
     let decision: Value = serde_json::from_str(&decision).context("parsing --decision as JSON")?;
     let mut resolution = Resolution::new(decision, method.into());
-    resolution.resolver_id = resolver_id.map(|id| id.parse::<ResolverId>()).transpose()?;
-    let outcome =
-        ledger.resolve_feed_item(&id, resolution, override_chain, &workspace.session_name)?;
+    resolution.by = by;
+    let outcome = ledger.resolve_feed_item(&id, resolution, session_name)?;
     record_resolved_agent_ask_answer(ledger, &outcome.resolved_item);
     #[expect(clippy::print_stdout, reason = "command outcome")]
     {
@@ -440,19 +417,17 @@ fn record_resolved_agent_ask_answer(ledger: &Ledger, item: &Option<FeedItem>) {
 }
 
 fn resolution_from(resolution: &Resolution) -> String {
+    if let Some(by) = resolution.by.as_deref().filter(|by| !by.trim().is_empty()) {
+        return by.to_owned();
+    }
     match resolution.method {
         ResolutionMethod::Cli
         | ResolutionMethod::Sidebar
         | ResolutionMethod::PaneSend
         | ResolutionMethod::Dismiss => "you".to_owned(),
-        ResolutionMethod::HookBridge => resolution
-            .resolver_id
-            .as_ref()
-            .map(|resolver| format!("@{}", resolver.as_str()))
-            .unwrap_or_else(|| "resolver".to_owned()),
         ResolutionMethod::AgentMovedOn
         | ResolutionMethod::OwnerExited
-        | ResolutionMethod::WorkspaceReset => "resolver".to_owned(),
+        | ResolutionMethod::WorkspaceReset => "answered".to_owned(),
     }
 }
 
@@ -464,31 +439,6 @@ fn dismiss(
 ) -> Result<()> {
     let id = request_id.parse::<RequestId>()?;
     ledger.dismiss_feed_item(&id, reason, &workspace.session_name)?;
-    Ok(())
-}
-
-fn abstain(
-    ledger: &Ledger,
-    workspace: &ResolvedWorkspace,
-    request_id: String,
-    resolver_id: String,
-    reason: Option<String>,
-) -> Result<()> {
-    let id = request_id.parse::<RequestId>()?;
-    let resolver = resolver_id.parse::<ResolverId>()?;
-    let outcome = ledger.abstain_feed_item(&id, &resolver, reason, &workspace.session_name)?;
-    #[expect(clippy::print_stdout, reason = "command outcome")]
-    {
-        println!(
-            "{} next_resolver={}",
-            outcome.request_id,
-            outcome
-                .next_resolver
-                .as_ref()
-                .map(|r| r.as_str())
-                .unwrap_or("(none)"),
-        );
-    }
     Ok(())
 }
 
@@ -510,7 +460,7 @@ fn attach_current_owner(item: &mut FeedItem) {
 }
 
 /// Parse a `feed ask` timeout like `30s`, `5m`, `1h`, or `1d`. Scripts can gate
-/// for days, so days join the resolver/gc units.
+/// for days, so days join the GC units.
 fn parse_timeout(raw: &str) -> std::result::Result<Duration, String> {
     super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
 }

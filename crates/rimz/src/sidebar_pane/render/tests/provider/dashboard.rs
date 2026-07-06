@@ -353,7 +353,7 @@ fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
 
     let backend = TestBackend::new(54, 34);
     let mut terminal = Terminal::new(backend).unwrap();
-    let mut ui = ui;
+    let mut ui = fixed_theme_ui(&snapshot, &ui);
     draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
     let buffer = terminal.backend().buffer();
     let first = crate::sidebar_pane::pets::placeholder_cluster(0, 0);

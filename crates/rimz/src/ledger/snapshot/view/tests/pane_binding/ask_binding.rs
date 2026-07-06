@@ -110,37 +110,6 @@ fn standalone_ask_on_an_agents_pane_folds_onto_the_agent_row() {
 }
 
 #[test]
-fn standalone_bridge_ask_renders_its_resolver_from_the_frame() {
-    let mut item = FeedItem::new(
-        workspace(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "approve deploy?",
-        "deploy",
-        "script",
-    );
-    item.pane = Some(pane("%7", "deploy", "/repo/main"));
-    item.chain_active_resolver = Some(crate::ids::ResolverId::new_unchecked("auto-approver"));
-    let request_id = item.request_id.clone();
-
-    let snapshot = room(vec![item], Vec::new())
-        .with_live_panes(vec![pane("%7", "deploy", "/repo/main")], None);
-
-    let rows = rows(&snapshot);
-    assert_eq!(rows.len(), 1, "the bridge ask owns the pane row slot");
-    let row = rows[0];
-    assert_eq!(row.status(), Some(AgentStatus::Waiting));
-    assert_eq!(row.request_id(), Some(&request_id));
-    assert_eq!(
-        row.resolver()
-            .as_ref()
-            .map(|resolver| resolver.resolver_id.as_str()),
-        Some("auto-approver"),
-        "a frame-admitted bridge ask carries its active resolver"
-    );
-}
-
-#[test]
 fn standalone_ask_on_a_wired_idle_lazy_pane_folds_onto_the_idle_row() {
     let item = script_ask_for_pane(Some(pane("term1", "codex", "/repo/main")));
     let request_id = item.request_id.clone();

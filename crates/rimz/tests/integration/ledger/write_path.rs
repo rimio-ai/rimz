@@ -143,7 +143,7 @@ fn resolve_leaves_latest_reflecting_the_resolve_event() {
     let h = crate::common::Harness::new();
     let item = FeedItem::new(
         h.workspace_id.clone(),
-        Surface::Bridge,
+        Surface::NativeUi,
         FeedKind::Permission,
         "allow?",
         "claude",
@@ -158,7 +158,6 @@ fn resolve_leaves_latest_reflecting_the_resolve_event() {
         .resolve_feed_item(
             &request_id,
             Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::Cli),
-            true,
             "rimz-test",
         )
         .expect("resolve");

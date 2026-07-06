@@ -62,7 +62,7 @@ The tables show the default Unicode set. `[theme.glyphs]` can select Nerd Font o
 | `⏸`   | paused     | stopped mid-turn on a provider rate-limit or overload; resumes when the provider recovers or the window resets | on recovery |
 | `⢿`   | working    | running and editing | no |
 | `⠁`   | thinking   | running, before the turn's first file edit | no |
-| `⠙`   | resolving  | a resolver is answering on the bridge | being handled |
+| `⠙`   | working    | an agent or process is active | work in progress |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | a look, not the lead |
 | `○`/`⢿` | process  | a pane with no agent (shell, editor): hollow `○` when idle, `⢿` while it does real work — one soft step below the agent cards, never a cockpit tally | no |

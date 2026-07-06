@@ -162,7 +162,7 @@ They select the row, or click the notification, or hit the global triage key fro
 
 The reasons it lands this way are small and deliberate. Every waiting row routes the reader to the agent's UI, where the full context and the safe defaults already live. Notifications are best-effort polish: clicking one focuses the terminal and pre-selects the row, but the ledger is authoritative, so a missed notification loses nothing. Three agents going waiting at once coalesce into one notification, and an agent that stays waiting past a threshold earns a single nudge rather than a stream.
 
-Enrol a resolver later (the growing-into-it section below) and this same waiting row shows the chain working the item instead of asking the reader: the glyph becomes a braille spinner and the task slot reads the resolver and its remaining budget. It still counts in the `?` tally, because the item is pending and just being handled, and it returns to `? waiting` only if the chain comes up empty.
+Wire a resolver later (the growing-into-it section below) and this same waiting row may be answered before the reader arrives: the handler types in the agent's pane, records `--by <name>`, and the row clears. Unknown prompts stay `? waiting` and still route to the pane.
 
 ## A fleet, and the one key that tames it
 
@@ -263,11 +263,11 @@ The same honesty extends to trust and protocol. An untrusted `.rimz/config.toml`
 
 By now the reader is hooked on the observe-and-route loop, and the product grows with them along paths they discover when they need them.
 
-Resolvers are the morning-after upgrade: tired of approving `cargo check` for the eighth time, the reader enrols a resolver once — one of the two that ship ready-made (`hook_bridge_resolver.py` for routine permissions, `pane_send_resolver.py` for well-known terminal prompts), or a small process of their own wrapping a smarter model. The resolver slots ahead of the reader and the chain still ends with them, which is what lets the fleet keep working while they sleep. Mechanics are in [resolvers.md](../internals/agents/resolvers.md).
+Resolvers are the morning-after upgrade: tired of approving `cargo check` for the eighth time, the reader wires a resolver handler once — the bundled `pane_send_resolver.py` for well-known terminal prompts, `agent_resolver.sh` for a supervised agent delegate, or a small process of their own wrapping a smarter model. The handler answers routine prompts in the agent's own pane and skips anything outside policy, which is what lets the fleet keep working while they sleep. Mechanics are in [resolvers.md](../internals/agents/resolvers.md).
 
-Unattended runs are the same idea with no human at the end of the chain, and `rimz agents <kind> "<prompt>" -p` makes the whole shape scriptable; the detail lives in [product.md → Put your pipeline on the feed](./product.md#put-your-pipeline-on-the-feed).
+Unattended runs are the same idea without waiting on a person, and `rimz agents <kind> "<prompt>" -p` makes the whole shape scriptable; the detail lives in [product.md → Put your pipeline in the room](./product.md#put-your-pipeline-in-the-room).
 
-And because agents and scripts share one CLI, a deploy or migration script can post to the same sidebar and block on its own question, answerable straight from the column ([the pipeline scenario](./product.md#put-your-pipeline-on-the-feed)).
+And because agents and scripts share one CLI, a deploy or migration script can post to the same sidebar and block on its own question, answerable straight from the column ([the pipeline scenario](./product.md#put-your-pipeline-in-the-room)).
 
 ## The experience in one screen
 
@@ -279,6 +279,6 @@ And because agents and scripts share one CLI, a deploy or migration script can p
 | The fleet | presses Space | grouped roster, `? 2  ! 1` | in control |
 | Detach, reattach | closes laptop, ssh back | the column reconstructed from the ledger | relief, then trust |
 | When wrong | hits a failure | a labeled degraded banner | trust through honesty |
-| Growing into it | enrols a resolver | the chain working the row | leverage |
+| Growing into it | wires a resolver | routine rows clearing | leverage |
 
 The arc runs from curiosity to reassurance to delight to the pitch landing to mastery to trust. If the question moment does not land inside five minutes, nothing after it matters.

@@ -7,7 +7,7 @@
 A project workspace runs untrusted code. Hooks, postinstall scripts, generated binaries, test runners, and the agents themselves all execute as you. Same-UID isolation is therefore not a meaningful trust boundary inside a workspace. Trust must be explicit at two layers:
 
 1. **Project trust** — what Rimz reads from `.rimz/config.toml` and what it is allowed to execute on the project's behalf.
-2. **Resolver allowlist** — what is allowed to answer feed items on your behalf.
+2. **Resolver handlers** — the per-machine notification commands you wire to answer feed items on your behalf.
 
 These are the only two trust decisions Rimz asks you to make. Everything else flows from them.
 
@@ -20,7 +20,6 @@ Project config is read inertly until trusted.
 - No project-declared commands run.
 - Project-declared profiles stay inert.
 - No project-declared hook installs proceed.
-- No project-launched resolver binaries start.
 
 **Trusted.**
 - Full project config applies.
@@ -37,13 +36,11 @@ Per-machine notification handlers (`[[notifications.handler]]` and legacy `[noti
 
 The per-machine `loop.toml` schedules also live outside project trust. A `check = "<shell>"` entry is the user's own scheduled command, stored under `~/.config/rimz/` or Rimz-owned state, so a clone cannot supply it and the project trust hash stays scoped to `.rimz/config.toml`. The scheduled-execution surface stays visible — `rimz loop add` runs hook preflight before recording an agent action, `rimz loop list` shows whether the task's room is open, and `rimz doctor` carries the configured tasks.
 
-## Resolver trust
+## Resolver handlers
 
-Resolver trust is a per-machine allowlist. A same-UID process can write a heartbeat file, but only enrolled `resolver_id`s engage the bridge. Heartbeats from unknown resolver IDs are kept for diagnostics; `rimz doctor` reports them as `unauthorized resolver heartbeat seen`.
+Resolver handlers are per-machine notification commands. A cloned repository cannot supply them, and they run only after you add them to `~/.config/rimz/config.toml`.
 
-Optional `--binary <path>` pins a resolver's executable path; Rimz then verifies the heartbeating process's executable matches before engaging the bridge. `rimz doctor` reports when platform support degrades that check.
-
-Project config that *launches* a resolver binary flows through the project trust gate first. The two gates layer: project trust controls whether project config can launch a resolver at all; the resolver allowlist controls whether a heartbeating resolver can answer once launched.
+Handlers inspect feed payloads, pane text, and transcripts as untrusted data. Bounded patterns and silence on unknown shapes are the safety posture.
 
 Detail in [resolvers.md](../internals/agents/resolvers.md).
 
@@ -115,8 +112,7 @@ When on, Rimz sends its own `warn!`/`error!` events and the agent turn-error war
 When an agent version is outside the tested range:
 
 - observability hooks may remain active,
-- the decision bridge disables by default,
-- blocking feed hooks pass through with neutral output (agent's native UI takes over),
-- `--unsafe-agent-version` can override per workspace; `rimz doctor` keeps warning.
+- blocking feed hooks keep returning the agent-native neutral output, so the prompt stays in the agent's UI either way,
+- drift degrades observability fidelity only; `rimz doctor` warns.
 
 For the two unattended-run patterns (agent-native bypass vs permissive resolver) and their audit tradeoffs, see [product.md](./product.md).

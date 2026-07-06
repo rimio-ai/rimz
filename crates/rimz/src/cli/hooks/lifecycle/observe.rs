@@ -183,8 +183,7 @@ pub(super) fn expiry_scope_for_signal(signal: &LifecycleSignal) -> Option<AskExp
     // A lifecycle boundary can strand the session's pending native_ui asks:
     // the agent answers those in its own UI and never reports back, so they
     // pile up as duplicate attention. Session end expires every surface; a
-    // live session moving on expires only native_ui asks so an in-flight bridge
-    // ask keeps resolving.
+    // live session moving on expires only native_ui asks.
     match signal {
         LifecycleSignal::Ended => Some(AskExpiry::SessionEnded),
         LifecycleSignal::TurnStarted | LifecycleSignal::TurnEnded { .. } => {

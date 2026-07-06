@@ -19,7 +19,6 @@ pub(super) fn sidebar_fixture_snapshot(
         now,
         worktree_groups: Vec::new(),
         needs_attention: Vec::new(),
-        resolver_working: Vec::new(),
         agents: Vec::new(),
         wired_kinds: vec!["codex".to_owned()],
         wired_default_models: std::collections::BTreeMap::new(),

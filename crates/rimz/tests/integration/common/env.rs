@@ -1,6 +1,6 @@
 //! Out-of-process CLI harness: drives the `rimz` binary with XDG roots scoped
 //! to a tempdir, the workspace resolved from the project root, and the
-//! hook/feed/resolver round-trip helpers every CLI test repeats.
+//! hook/feed round-trip helpers every CLI test repeats.
 
 use std::io::{self, Write};
 use std::os::unix::net::UnixDatagram;
@@ -8,11 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use jiff::Timestamp;
-
 use super::command::ScrubSessionEnvExt;
 use rimz::pane::PaneRef;
-use rimz::resolver::heartbeat::ResolverHeartbeat;
 use rimz::{EventEnvelope, Ledger, RuntimePaths, StatePaths, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
 use tempfile::TempDir;
@@ -103,8 +100,7 @@ impl Env {
             runtime_root,
             agent_owner: std::sync::OnceLock::new(),
         };
-        // Pre-create the heartbeat dir so resolver-heartbeat writes never race
-        // the ledger creating it.
+        // Pre-create the heartbeat dir so sidebar writes never race the ledger creating it.
         std::fs::create_dir_all(env.heartbeat_dir()).expect("mkdir heartbeat");
         env
     }
@@ -133,7 +129,7 @@ impl Env {
             .join(self.workspace_id.as_str())
     }
 
-    /// Absolute path to the built `rimz` binary, for resolvers that shell out.
+    /// Absolute path to the built `rimz` binary, for helper scripts that shell out.
     pub fn rimz_bin(&self) -> PathBuf {
         super::shim::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"))
     }
@@ -161,34 +157,6 @@ impl Env {
             .env_remove("RUST_LOG")
             .current_dir(&self.project_root);
         cmd
-    }
-
-    // --- resolver enrolment & heartbeats ---
-
-    pub fn enrol(&self, id: &str, order: u32, budget: &str) {
-        let status = self
-            .rimz()
-            .args([
-                "resolver",
-                "add",
-                id,
-                "--order",
-                &order.to_string(),
-                "--budget",
-                budget,
-            ])
-            .status()
-            .expect("spawn resolver add");
-        assert!(status.success(), "resolver add `{id}` failed");
-    }
-
-    pub fn write_heartbeat(&self, id: &str, last_seen: Timestamp) {
-        let resolver_id = id.parse().expect("resolver id parse");
-        let mut hb = ResolverHeartbeat::new(self.workspace_id.clone(), resolver_id);
-        hb.last_seen = last_seen;
-        let path = self.heartbeat_dir().join(format!("resolver.{id}.json"));
-        std::fs::write(&path, serde_json::to_vec(&hb).expect("serialize hb"))
-            .expect("write heartbeat");
     }
 
     // --- hooks ---
@@ -239,7 +207,7 @@ impl Env {
     }
 
     /// Spawn the hook and feed it `payload`, returning the live child so the
-    /// test can drive the ledger while the hook blocks on the bridge.
+    /// test can drive the ledger while the hook writes its feed item.
     pub fn spawn_hook(&self, source: &str, payload: &str) -> Child {
         self.spawn_payload(self.hook_command(source), payload)
     }
@@ -417,13 +385,7 @@ impl Env {
         request_id
     }
 
-    pub fn resolve(
-        &self,
-        request_id: &str,
-        decision: &str,
-        resolver_id: &str,
-        method: &str,
-    ) -> Output {
+    pub fn resolve(&self, request_id: &str, decision: &str, by: &str, method: &str) -> Output {
         self.rimz()
             .args([
                 "feed",
@@ -431,28 +393,13 @@ impl Env {
                 request_id,
                 "--decision",
                 decision,
-                "--resolver-id",
-                resolver_id,
+                "--by",
+                by,
                 "--method",
                 method,
             ])
             .output()
             .expect("spawn feed resolve")
-    }
-
-    pub fn abstain(&self, request_id: &str, resolver_id: &str, reason: &str) -> Output {
-        self.rimz()
-            .args([
-                "feed",
-                "abstain",
-                request_id,
-                "--resolver-id",
-                resolver_id,
-                "--reason",
-                reason,
-            ])
-            .output()
-            .expect("spawn feed abstain")
     }
 
     pub fn feed_list_json(&self) -> Value {
@@ -577,26 +524,6 @@ impl Env {
             std::thread::sleep(Duration::from_millis(50));
         }
         None
-    }
-
-    pub fn poll_active_resolver(&self, request_id: &str, expected: &str, until: Instant) -> bool {
-        while Instant::now() < until {
-            let out = self
-                .rimz()
-                .args(["feed", "show", request_id, "--json"])
-                .output()
-                .expect("feed show");
-            if out.status.success() {
-                let parsed: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
-                if parsed["chain_active_resolver"] == expected {
-                    return true;
-                }
-            }
-            // Spawns `rimz feed show` per iteration; the chain only re-evaluates
-            // on the producer's ~1 s tick, so 100 ms loses no real responsiveness.
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        false
     }
 
     // --- ledger access (per project root) ---

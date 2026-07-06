@@ -2,9 +2,9 @@
 //! workspaces.
 //!
 //! [`collect_runtime`] removes runtime liveness hints older than an
-//! operator-supplied threshold: resolver/sidebar heartbeat JSON, sidebar wakeup
-//! sockets named by stale heartbeats, and sidebar read-mark receipts whose
-//! owner heartbeat has expired. It also removes stale runtime provider probe
+//! operator-supplied threshold: sidebar heartbeat JSON, sidebar wakeup sockets
+//! named by stale heartbeats, and sidebar read-mark receipts whose owner
+//! heartbeat has expired. It also removes stale runtime provider probe
 //! markers. Per-request `feed.*.sock` files are deliberately left alone because
 //! a long-running `feed ask` may still own one.
 //!

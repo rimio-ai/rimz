@@ -334,6 +334,8 @@ fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
         worktree: None,
         task: None,
         pane_id,
+        request_id: None,
+        root: None,
         new_status: None,
     }
 }

@@ -28,7 +28,6 @@ mod statusline;
 mod subagent_statusline;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use jiff::Timestamp;
 #[cfg(test)]
@@ -42,9 +41,7 @@ use self::install::{
     preview_install_at, read_existing_json, uninstall_from, wrapped_status_line_command_from,
 };
 use self::payloads::{
-    ClaudeCommon, ClaudePermissionBehavior, ClaudePermissionDecisionOutput,
-    ClaudePermissionHookOutput, ClaudePostCompact, ClaudePreToolUseDecisionOutput,
-    ClaudePreToolUseHookOutput, ClaudeSessionStart, ClaudeStop, ClaudeSubagentStart,
+    ClaudeCommon, ClaudePostCompact, ClaudeSessionStart, ClaudeStop, ClaudeSubagentStart,
     ClaudeSubagentStop, ClaudeUserPromptSubmit, parse_post_compact, parse_post_tool_use,
     parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start,
     parse_subagent_stop, parse_user_prompt_submit,
@@ -61,20 +58,16 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
-    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    RootIdentity, SubagentIdentity, SubagentObservation, TranscriptMessage, choice_is_allow,
-    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, RootIdentity,
+    SubagentIdentity, SubagentObservation, TranscriptMessage, classify_agent_hook,
+    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::chat::{AskAnswer, AskQuestion};
-use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::feed::FeedKind;
 use crate::harness::run::PermissionMode;
-
-/// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
-/// margin so the bridge never holds the hook past Claude's kill window.
-const CLAUDE_HOOK_CAP: Duration = Duration::from_secs(120);
 
 /// Everything `const` about Claude Code, in one place. See
 /// [`AgentDescriptor`] for the descriptor-vs-trait split.
@@ -130,7 +123,6 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     lifecycle_hooks: CLAUDE_LIFECYCLE_HOOKS,
     default_context_window: Some(200_000),
     default_model: None,
-    hook_cap: CLAUDE_HOOK_CAP,
     process_names: &["claude"],
     extra_bin_dirs: &[],
     // `PreToolUse` (races the blocking ask) and `Notification` (idle) are
@@ -300,9 +292,10 @@ const CLAUDE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     ),
 ];
 
-/// Per-hook timeout written into the Claude config (seconds). Matches
-/// [`CLAUDE_HOOK_CAP`] so the agent and bridge agree on the ceiling.
-const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 120;
+/// Per-hook timeout written into the Claude config (seconds). Hooks write a
+/// feed item and return neutral immediately, so the value is a short guard for
+/// local I/O failures rather than an answer window.
+const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
 
 /// Installed events. Tuple is `(event_name, optional_matcher)`. Rimz installs
 /// every event as a single broad hook with no matcher: the helper classifies
@@ -353,10 +346,9 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "PostCompact",
 ];
 
-/// Events that hold the agent open while the bridge waits for an answer.
-/// Installing one with `_rimz_sync = false` in the existing config is a hard
-/// error — the source of truth for "must block" is this constant, never the
-/// on-disk file.
+/// Ask events that should run synchronously so the feed write completes before
+/// Claude continues to its own prompt. Installing one with `_rimz_sync = false`
+/// in an existing Rimz-managed config is a hard error.
 const BLOCKING_EVENTS: &[(&str, Option<&str>)] = &[("PermissionRequest", None)];
 
 const HOOKS_KEY: &str = "hooks";
@@ -639,60 +631,9 @@ impl AgentAdapter for ClaudeAdapter {
         })
     }
 
-    fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
-        match item.kind {
-            FeedKind::Permission => {
-                let output = ClaudePermissionDecisionOutput {
-                    hook_specific_output: ClaudePermissionHookOutput {
-                        hook_event_name: "PermissionRequest",
-                        decision: ClaudePermissionBehavior {
-                            behavior: if choice_is_allow(resolution) {
-                                "allow"
-                            } else {
-                                "deny"
-                            },
-                            updated_input: None,
-                            applied_rule: None,
-                        },
-                    },
-                };
-                Ok(serde_json::to_value(output)
-                    .expect("ClaudePermissionDecisionOutput is infallible"))
-            }
-            FeedKind::PlanApproval | FeedKind::Question => {
-                let updated_input = resolution
-                    .decision
-                    .get("updatedInput")
-                    .or_else(|| resolution.decision.get("updated_input"))
-                    .ok_or(AgentErr::MissingField {
-                        agent: "claude",
-                        field: "updatedInput",
-                    })?
-                    .clone();
-                let output = ClaudePreToolUseDecisionOutput {
-                    hook_specific_output: ClaudePreToolUseHookOutput {
-                        hook_event_name: "PreToolUse",
-                        permission_decision: if choice_is_allow(resolution) {
-                            "allow"
-                        } else {
-                            "deny"
-                        },
-                        updated_input,
-                    },
-                };
-                Ok(serde_json::to_value(output)
-                    .expect("ClaudePreToolUseDecisionOutput is infallible"))
-            }
-            other => Err(AgentErr::Render {
-                agent: "claude",
-                reason: format!("unsupported feed kind {other:?}"),
-            }),
-        }
-    }
-
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         // Claude treats stdout as a control/context surface. The safe no-op is
-        // exit 0 with no stdout; only resolver decisions write JSON.
+        // exit 0 with no stdout.
         Ok(None)
     }
 

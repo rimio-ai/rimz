@@ -66,17 +66,6 @@ pub(super) fn elapsed_label(seconds: i64) -> String {
     }
 }
 
-pub(super) fn time_remaining(deadline: Timestamp, now: Timestamp) -> String {
-    let seconds = deadline.duration_since(now).as_secs();
-    if seconds <= 0 {
-        "0s".to_owned()
-    } else if seconds < 60 {
-        format!("{seconds}s")
-    } else {
-        format!("{}m", seconds / 60)
-    }
-}
-
 /// A budget window's reset countdown, two units scaled to how much time is left:
 /// `{d}d{hh:02}h` at a day or more (`30d10h`, `6d23h`, `1d02h`), `{h}h{mm:02}m`
 /// under a day (`20h20m`, `5h00m`, `0h45m`). The provider panel right-aligns the

@@ -15,7 +15,6 @@ Configuration comes in two tiers. **Per-machine** config under `~/.config/rimz/`
 | `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, attention timing |
 | `~/.config/rimz/loop.toml` | per-machine | durable recurring loop task definitions and scheduled command checks |
 | `~/.agents/agents/<name>/agent.toml`, `~/.agents/teams/<name>/team.toml` | per-machine | drop-in profile and team fragments merged under `agents.toml` |
-| `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order (`rimz resolver`) |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases (`rimz remote`) |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant (`rimz trust`) |
 | `<root>/.rimz/config.toml` | committed | declared workspace shape, trust-tracked |
@@ -424,6 +423,6 @@ Command-running fields enter the trust hash, so a clone with project config read
 
 ## Sidecars and privacy
 
-Resolvers, remote aliases, and trust records each have their own command and reference: `rimz resolver` ([resolvers.md](../internals/agents/resolvers.md)), `rimz remote` ([getting started](./cli/getting-started.md#remote-rooms)), and `rimz trust` ([trust.md](../internals/sidebar/trust.md)).
+Resolver handlers, remote aliases, and trust records each have their own reference: [resolvers.md](../internals/agents/resolvers.md), `rimz remote` ([getting started](./cli/getting-started.md#remote-rooms)), and `rimz trust` ([trust.md](../internals/sidebar/trust.md)).
 
 Payload-fidelity and retention controls (`[privacy] payload_mode`) are a planned project surface. The design and intended keys are in [security.md](../guide/security.md), and the hook boundary they will govern is in [agent.md → The adapter boundary](../internals/agents/agent.md#the-adapter-boundary).

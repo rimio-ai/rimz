@@ -1,7 +1,6 @@
 use super::*;
 
-use crate::feed::{FeedKind, ResolutionMethod, Surface};
-use crate::ids::WorkspaceId;
+use crate::agents::AgentErr;
 use serde_json::json;
 
 #[test]
@@ -347,71 +346,10 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
     assert_eq!(OpencodeAdapter.observe_lifecycle("bogus", &json!({})), None);
 }
 
-fn permission_item() -> FeedItem {
-    crate::agents::testkit::feed_item(FeedKind::Permission, "opencode")
-}
-
 #[test]
-fn permission_and_neutral_decision_shapes_are_pinned() {
+fn neutral_decision_shape_is_pinned() {
     let rendered = OpencodeAdapter.render_neutral("permission_ask").unwrap();
     insta::assert_snapshot!(format!("{rendered:?}"), @"None");
-
-    let rendered = OpencodeAdapter
-        .render_decision(
-            &permission_item(),
-            &Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge),
-        )
-        .unwrap();
-    insta::assert_json_snapshot!(rendered, @r###"
-        {
-          "status": "allow"
-        }
-        "###);
-
-    let mut reason_field =
-        Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
-    reason_field.reason = Some("blocked by policy".to_owned());
-    let rendered = OpencodeAdapter
-        .render_decision(&permission_item(), &reason_field)
-        .unwrap();
-    insta::assert_json_snapshot!(rendered, @r###"
-        {
-          "reason": "blocked by policy",
-          "status": "deny"
-        }
-        "###);
-
-    let rendered = OpencodeAdapter
-        .render_decision(
-            &permission_item(),
-            &Resolution::new(
-                json!({ "choice": "deny", "reason": "not allowlisted" }),
-                ResolutionMethod::HookBridge,
-            ),
-        )
-        .unwrap();
-    assert_eq!(rendered["status"], "deny");
-    assert_eq!(rendered["reason"], "not allowlisted");
-
-    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
-    let item = FeedItem::new(
-        workspace,
-        Surface::Bridge,
-        FeedKind::PlanApproval,
-        "approve?",
-        "opencode",
-        "agent-hook",
-    );
-    let resolution = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
-    assert!(matches!(
-        OpencodeAdapter
-            .render_decision(&item, &resolution)
-            .unwrap_err(),
-        AgentErr::Render {
-            agent: "opencode",
-            ..
-        }
-    ));
 }
 
 #[test]

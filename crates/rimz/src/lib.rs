@@ -33,7 +33,6 @@ pub mod proc;
 pub mod reload;
 pub mod remote;
 pub mod remote_control;
-pub mod resolver;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;
@@ -54,22 +53,20 @@ pub use crate::agents::{
 };
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
 pub use crate::feed::{
-    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, ResolverStep,
-    ResolverStepState, Surface,
+    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, Surface,
 };
 pub use crate::harness::target::TargetErr;
 pub use crate::ids::{
-    EventId, MessageId, MuxName, PaneId, RequestId, ResolverId, RunId, SidebarInstanceId, ViewKind,
-    WorkspaceId,
+    EventId, MessageId, MuxName, PaneId, RequestId, RunId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
 pub use crate::ledger::event::EventEnvelope;
 pub use crate::ledger::{
     AgentCard, Ledger, PaneAgent, PresenceSample, ProcessCard, ProcessState, RowCallSplit, RowCard,
     RuntimePaths, RuntimeProjection, RuntimeScope, SidebarLinkFreshness, SidebarLinkHealth,
-    SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarResolverState, SidebarRow,
-    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind, StatePaths, TruthNotice, WorkspaceRecord, WorktreePrState,
-    WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
+    SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
+    SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths,
+    TruthNotice, WorkspaceRecord, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
+    lead_unread_row, triage_key,
 };
 pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

@@ -261,7 +261,7 @@ mod tests {
                     Some(current_process_owner(RuntimeOwnerKind::Script, "live")),
                 ),
                 item(Surface::Script, None),
-                item(Surface::Bridge, None),
+                item(Surface::NativeUi, None),
                 #[cfg(unix)]
                 item(
                     Surface::Script,
@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(
             runtime.items.len(),
             2,
-            "live script and ownerless bridge stay; ownerless/dead scripts drop"
+            "live script and ownerless native_ui stay; ownerless/dead scripts drop"
         );
 
         let audit = RuntimeProjection::from_parts(

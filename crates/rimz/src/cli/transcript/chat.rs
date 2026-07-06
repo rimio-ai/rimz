@@ -59,7 +59,7 @@ pub(super) fn chat_entry_for_log_entry(
             answers: Vec::new(),
         },
         ChatKind::Answer => ChatLine {
-            from: entry.from.clone().unwrap_or_else(|| "resolver".to_owned()),
+            from: entry.from.clone().unwrap_or_else(|| "answered".to_owned()),
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),

@@ -104,7 +104,6 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
         let mut kv = KeyVals::new().indent(2);
         kv.push("event", cell(protocols.event));
         kv.push("sidebar", cell(protocols.sidebar));
-        kv.push("resolver", cell(protocols.resolver));
         kv.render(w)?;
         for warning in &protocols.warnings {
             note(&mut tally, w, Health::Warn, warning)?;
@@ -114,7 +113,6 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     if let Some(trust) = &report.trust {
         render_trust(w, trust, &mut tally)?;
     }
-    render_resolver_heartbeats(w, report, &mut tally)?;
     render_agents(w, report, &mut tally)?;
     render_messages(w, report, &mut tally)?;
     render_diagnostics(w, report, &mut tally)?;
@@ -723,36 +721,6 @@ fn render_trust(w: &mut impl Write, trust: &Probe<Trust>, tally: &mut Tally) -> 
     kv.render(w)
 }
 
-fn render_resolver_heartbeats(
-    w: &mut impl Write,
-    report: &DoctorReport,
-    tally: &mut Tally,
-) -> io::Result<()> {
-    let Some(probe) = &report.resolver_heartbeats else {
-        return Ok(());
-    };
-    match probe {
-        Probe::Unavailable { error } => {
-            section(w, "RESOLVER HEARTBEATS")?;
-            note(tally, w, Health::Warn, &format!("unavailable ({error})"))
-        }
-        Probe::Ready(ids) if !ids.is_empty() => {
-            section(w, "RESOLVER HEARTBEATS")?;
-            for id in ids {
-                note(
-                    tally,
-                    w,
-                    Health::Warn,
-                    &format!("unauthorized resolver heartbeat seen ({id})"),
-                )?;
-            }
-            Ok(())
-        }
-        // No unauthorized heartbeats is the quiet, healthy case.
-        Probe::Ready(_) => Ok(()),
-    }
-}
-
 fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -> io::Result<()> {
     let Some(rollup) = &report.agents else {
         return Ok(());
@@ -1079,7 +1047,6 @@ mod tests {
             storage: storage_fixture(),
             protocols: None,
             trust: None,
-            resolver_heartbeats: None,
             agents: None,
             messages: None,
             diagnostics: None,

@@ -21,7 +21,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.PermissionRequest.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PermissionRequest through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.PostCompact]]
@@ -30,7 +30,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.PostCompact.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PostCompact through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.PostToolUse]]
@@ -39,7 +39,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.PostToolUse.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PostToolUse through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.PreCompact]]
@@ -48,7 +48,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.PreCompact.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PreCompact through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.PreToolUse]]
@@ -57,7 +57,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.PreToolUse.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PreToolUse through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.SessionStart]]
@@ -66,7 +66,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.SessionStart.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing SessionStart through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.Stop]]
@@ -74,7 +74,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.Stop.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing Stop through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.SubagentStart]]
@@ -83,7 +83,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.SubagentStart.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing SubagentStart through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.SubagentStop]]
@@ -92,7 +92,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.SubagentStop.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing SubagentStop through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
 
         [[hooks.UserPromptSubmit]]
@@ -100,7 +100,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         [[hooks.UserPromptSubmit.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing UserPromptSubmit through Rimz"
-        timeout = 60
+        timeout = 10
         type = "command"
         "###);
 }

@@ -1,6 +1,5 @@
-//! Out-of-process integration tests for `rimz hooks feed` exercising the
-//! `Surface::Bridge` wiring landed in M1. Each test spawns a real `rimz`
-//! binary; XDG roots are scoped under a tempdir so allowlist, state, and
+//! Out-of-process integration tests for `rimz hooks feed`. Each test spawns a
+//! real `rimz` binary; XDG roots are scoped under a tempdir so state and
 //! runtime files don't escape.
 
 use std::process::{Command, Output, Stdio};
@@ -13,9 +12,6 @@ use crate::common::{
     Env, claude_pre_tool_use_payload, codex_permission_payload, codex_pre_tool_use_payload,
     permission_payload, pi_tool_call_payload, tmux_pane,
 };
-
-const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
-const TEST_HOOK_CAP_MILLIS: &str = "50";
 
 fn permission_cases() -> [(&'static str, String); 2] {
     [
@@ -37,55 +33,6 @@ fn assert_hook_succeeded_neutral(source: &str, output: Output) {
     );
 }
 
-fn bridge_permission_to_allow(env: &Env, source: &str, payload: &str) -> Value {
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let child = env.spawn_hook(source, payload);
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-        .expect("bridge item should appear in feed");
-
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"allow"}"#,
-        "opus-policy",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    assert!(
-        output.status.success(),
-        "{source} hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    serde_json::from_str(stdout.trim()).expect("agent json")
-}
-
-fn assert_permission_allow_decision(source: &str, decision: &Value) {
-    assert_eq!(
-        decision["hookSpecificOutput"]["hookEventName"],
-        "PermissionRequest"
-    );
-    assert_eq!(
-        decision["hookSpecificOutput"]["decision"]["behavior"],
-        "allow"
-    );
-    if source == "codex" {
-        // Reserved-key invariant — Codex PermissionRequest must never see
-        // fields reserved for future behavior.
-        assert!(decision.get("updatedInput").is_none());
-        assert!(decision.get("updatedPermissions").is_none());
-        assert!(decision.get("interrupt").is_none());
-    }
-}
-
 fn lifecycle_event_count(env: &Env) -> usize {
     env.read_events()
         .iter()
@@ -102,17 +49,6 @@ fn run_claude_lifecycle(env: &Env, payload: Value) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-}
-
-fn run_cap_timeout(env: &Env, source: &str, payload: &str) -> Output {
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let mut cmd = env.hook_command(source);
-    cmd.env("RIMZ_HOOK_CAP_MILLIS", TEST_HOOK_CAP_MILLIS);
-    env.spawn_payload(cmd, payload)
-        .wait_with_output()
-        .expect("wait child")
 }
 
 #[test]
@@ -248,59 +184,21 @@ fn permission_hook_with_no_allowlisted_resolver_stays_native_ui() {
 }
 
 #[test]
-fn hook_with_resolver_chain_rejects_out_of_turn_and_advances_on_abstain() {
+fn permission_hook_native_ui_item_can_be_recorded_as_pane_answered() {
     let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    env.enrol("opus-policy", 10, "30s");
-    env.enrol("slack-on-call", 20, "5m");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-    env.write_heartbeat("slack-on-call", Timestamp::now());
+    let output = env.run_hook("claude", &permission_payload("Bash"));
+    assert_hook_succeeded_neutral("claude", output);
 
-    let child = env.spawn_hook("claude", &permission_payload("Bash"));
-
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-        .expect("bridge item should appear in feed");
-
-    let initial = env.feed_show_json(&request_id);
-    assert_eq!(initial["chain"][0]["resolver_id"], "opus-policy");
-    assert_eq!(initial["chain"][0]["state"], "active");
-    assert_eq!(initial["chain"][1]["resolver_id"], "slack-on-call");
-    assert_eq!(initial["chain"][1]["state"], "queued");
-    assert_eq!(initial["chain_active_resolver"], "opus-policy");
-    assert!(initial["chain_active_until"].is_string());
-
-    let out_of_turn = env.resolve(
-        &request_id,
-        r#"{"choice":"allow"}"#,
-        "slack-on-call",
-        "hook-bridge",
-    );
-    assert!(
-        !out_of_turn.status.success(),
-        "queued resolver must not answer before it is active"
-    );
-
-    let abstain = env.abstain(&request_id, "opus-policy", "outside policy");
-    assert!(
-        abstain.status.success(),
-        "abstain failed: {}",
-        String::from_utf8_lossy(&abstain.stderr)
-    );
-
-    let advanced = env.feed_show_json(&request_id);
-    assert_eq!(advanced["chain"][0]["state"], "abstained");
-    assert_eq!(advanced["chain"][1]["state"], "active");
-    assert_eq!(advanced["chain_active_resolver"], "slack-on-call");
-    assert!(advanced["chain_active_until"].is_string());
+    let items = env.feed_list_json();
+    let items = items.as_array().expect("array");
+    assert_eq!(items.len(), 1);
+    let request_id = items[0]["request_id"].as_str().expect("request id");
 
     let resolve = env.resolve(
-        &request_id,
+        request_id,
         r#"{"choice":"allow"}"#,
-        "slack-on-call",
-        "hook-bridge",
+        "auto-policy",
+        "pane-send",
     );
     assert!(
         resolve.status.success(),
@@ -308,56 +206,10 @@ fn hook_with_resolver_chain_rejects_out_of_turn_and_advances_on_abstain() {
         String::from_utf8_lossy(&resolve.stderr)
     );
 
-    let output = child.wait_with_output().expect("wait child");
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
-    assert_eq!(
-        decision["hookSpecificOutput"]["decision"]["behavior"],
-        "allow"
-    );
-
-    let resolved = env.feed_show_json(&request_id);
+    let resolved = env.feed_show_json(request_id);
     assert_eq!(resolved["status"], "resolved");
-    assert_eq!(resolved["chain"][0]["state"], "abstained");
-    assert_eq!(resolved["chain"][1]["state"], "answered");
-    assert!(resolved["chain_active_resolver"].is_null());
-    assert!(resolved["chain_active_until"].is_null());
-}
-
-#[test]
-fn permission_hook_with_fresh_resolver_engages_bridge_and_resolves() {
-    for (source, payload) in permission_cases() {
-        let env = Env::new();
-        if env.skip_if_sandboxed() {
-            continue;
-        }
-
-        let decision = bridge_permission_to_allow(&env, source, &payload);
-        assert_permission_allow_decision(source, &decision);
-    }
-}
-
-#[test]
-fn permission_hook_bridge_cap_timeout_emits_neutral() {
-    for (source, payload) in permission_cases() {
-        let env = Env::new();
-        if env.skip_if_sandboxed() {
-            continue;
-        }
-
-        let output = run_cap_timeout(&env, source, &payload);
-        assert_hook_succeeded_neutral(source, output);
-
-        let parsed = env.feed_list_json();
-        assert_eq!(parsed[0]["status"], "timed_out");
-        assert_eq!(parsed[0]["surface"], "bridge");
-        assert_eq!(parsed[0]["source"], source);
-    }
+    assert_eq!(resolved["resolution"]["by"], "auto-policy");
+    assert_eq!(resolved["resolution"]["method"], "pane_send");
 }
 
 #[test]
@@ -469,8 +321,8 @@ fn assert_agent_pane(snapshot: &Value, agent_id: &str, pane_id: &str) {
 #[test]
 fn pi_tool_call_with_no_resolver_emits_neutral_and_no_feed_item() {
     // Pi has no native permission prompt (`native_ask_ui` = false): with no
-    // fresh resolver the hook must answer neutral (empty stdout = the tool
-    // runs) and push NO feed item — nothing could ever answer one.
+    // native UI the hook must answer neutral (empty stdout = the tool runs)
+    // and push NO feed item — nothing could ever answer one.
     let env = Env::new();
     let output = env.run_hook("pi", &pi_tool_call_payload("bash"));
     assert_hook_succeeded_neutral("pi", output);
@@ -481,41 +333,6 @@ fn pi_tool_call_with_no_resolver_emits_neutral_and_no_feed_item() {
         0,
         "pi must not orphan an unanswerable native_ui item: {items}"
     );
-}
-
-#[test]
-fn pi_tool_call_bridge_allow_renders_empty_object() {
-    let env = Env::new();
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let child = env.spawn_hook("pi", &pi_tool_call_payload("bash"));
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-        .expect("bridge item should appear in feed");
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"allow"}"#,
-        "opus-policy",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    assert!(
-        output.status.success(),
-        "pi hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("pi decision json");
-    // Pi's allow is the empty object — the extension blocks only on
-    // `block === true`.
-    assert_eq!(decision, json!({}), "decision: {decision}");
 }
 
 #[test]
@@ -704,7 +521,7 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
         "prompt": "fix the sidebar reload bug",
     }));
 
-    // No resolver enrolled, so the blocking ask lands native_ui and pending.
+    // Blocking asks land native_ui and pending.
     run(&json!({
         "hook_event_name": "PreToolUse",
         "tool_name": "AskUserQuestion",
@@ -811,51 +628,6 @@ fn claude_pre_tool_blocking_events_use_native_ui_without_resolver() {
     }
 }
 
-#[test]
-fn claude_pre_tool_bridge_path_renders_updated_input() {
-    for (tool, field, value) in [
-        ("ExitPlanMode", "plan", "approved"),
-        ("AskUserQuestion", "question", "clarified"),
-    ] {
-        let env = Env::new();
-        if env.skip_if_sandboxed() {
-            continue;
-        }
-        env.enrol("opus-policy", 10, "30s");
-        env.write_heartbeat("opus-policy", Timestamp::now());
-
-        let child = env.spawn_hook("claude", &claude_pre_tool_use_payload(tool));
-        let request_id = env
-            .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-            .expect("bridge item should appear in feed");
-        let answer = format!(r#"{{"choice":"allow","updatedInput":{{"{field}":"{value}"}}}}"#);
-        let resolve = env.resolve(&request_id, &answer, "opus-policy", "hook-bridge");
-        assert!(
-            resolve.status.success(),
-            "resolve failed: {}",
-            String::from_utf8_lossy(&resolve.stderr)
-        );
-
-        let output = child.wait_with_output().expect("wait child");
-        assert!(
-            output.status.success(),
-            "hook stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8(output.stdout).expect("utf8");
-        let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
-        assert_eq!(
-            decision["hookSpecificOutput"]["hookEventName"],
-            "PreToolUse"
-        );
-        assert_eq!(
-            decision["hookSpecificOutput"]["permissionDecision"],
-            "allow"
-        );
-        assert_eq!(decision["hookSpecificOutput"]["updatedInput"][field], value);
-    }
-}
-
 // --- Codex PreToolUse blocking events ---
 
 #[test]
@@ -878,53 +650,6 @@ fn codex_request_user_input_uses_native_ui_without_resolver() {
     assert_eq!(items[0]["surface"], "native_ui");
     assert_eq!(items[0]["status"], "pending");
     assert_eq!(items[0]["kind"], "question");
-}
-
-#[test]
-fn codex_request_user_input_bridge_path_renders_pre_tool_decision() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let child = env.spawn_hook("codex", &codex_pre_tool_use_payload());
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-        .expect("bridge item should appear in feed");
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"allow","updatedInput":{"answer":"clarified"}}"#,
-        "opus-policy",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
-    assert_eq!(
-        decision["hookSpecificOutput"]["hookEventName"],
-        "PreToolUse"
-    );
-    assert_eq!(
-        decision["hookSpecificOutput"]["permissionDecision"],
-        "allow"
-    );
-    assert_eq!(
-        decision["hookSpecificOutput"]["updatedInput"]["answer"],
-        "clarified"
-    );
 }
 
 // --- Claude lifecycle and install/uninstall ---

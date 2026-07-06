@@ -1,6 +1,6 @@
 //! Multiplexer abstraction.
 //!
-//! Everything correctness-critical (ledger, bridge, hooks, schemas) sits
+//! Everything correctness-critical (ledger, hooks, schemas) sits
 //! above this trait and is identical across backends. Raw pane IDs live
 //! only inside the adapter — see [`crate::ids::PaneId`] for the normalized
 //! form that travels everywhere else.

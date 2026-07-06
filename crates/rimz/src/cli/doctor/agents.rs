@@ -1,9 +1,4 @@
-use std::fs;
-
-use rimz::RuntimePaths;
 use rimz::agents::AgentStatus;
-use rimz::ids::ResolverId;
-use rimz::resolver::Allowlist;
 use rimz::trust::{self};
 
 use super::super::open_ledger;
@@ -115,50 +110,4 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
             error: err.to_string(),
         },
     }
-}
-
-/// Resolver-shaped heartbeats whose id is not on the per-machine allowlist. The
-/// bridge drops these, so a user installing a resolver wrong sees why it never
-/// engages.
-pub(super) fn collect_unauthorized_resolvers(ws: &rimz::ResolvedWorkspace) -> Probe<Vec<String>> {
-    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            return Probe::Unavailable {
-                error: err.to_string(),
-            };
-        }
-    };
-    let allowlist = match Allowlist::load() {
-        Ok(allowlist) => allowlist,
-        Err(err) => {
-            return Probe::Unavailable {
-                error: format!("allowlist unavailable ({err})"),
-            };
-        }
-    };
-    let Ok(entries) = fs::read_dir(&runtime.heartbeat_dir) else {
-        return Probe::Ready(Vec::new());
-    };
-    let mut unauthorized: Vec<String> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        let Some(stem) = name
-            .strip_prefix("resolver.")
-            .and_then(|s| s.strip_suffix(".json"))
-        else {
-            continue;
-        };
-        let Ok(id) = stem.parse::<ResolverId>() else {
-            continue;
-        };
-        if !allowlist.contains(&id) {
-            unauthorized.push(id.as_str().to_owned());
-        }
-    }
-    unauthorized.sort();
-    Probe::Ready(unauthorized)
 }

@@ -4,7 +4,6 @@ use std::path::Path;
 
 use rimz::ledger::event::EVENT_SCHEMA_VERSION;
 use rimz::ledger::event_log;
-use rimz::resolver::heartbeat::RESOLVER_PROTOCOL_VERSION;
 use rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
 use rimz::{RuntimePaths, StatePaths};
 
@@ -19,7 +18,6 @@ pub(super) fn collect_protocols(ws: &rimz::ResolvedWorkspace) -> Protocols {
     Protocols {
         event: EVENT_SCHEMA_VERSION,
         sidebar: SIDEBAR_PROTOCOL_VERSION,
-        resolver: RESOLVER_PROTOCOL_VERSION,
         warnings,
     }
 }
@@ -101,8 +99,6 @@ fn collect_heartbeat_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<S
 fn heartbeat_kind_and_protocol(name: &str) -> Option<(&'static str, &'static str)> {
     if name.starts_with("sidebar.") && name.ends_with(".json") {
         Some(("sidebar", SIDEBAR_PROTOCOL_VERSION))
-    } else if name.starts_with("resolver.") && name.ends_with(".json") {
-        Some(("resolver", RESOLVER_PROTOCOL_VERSION))
     } else {
         None
     }

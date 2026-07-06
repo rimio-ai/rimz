@@ -41,8 +41,6 @@ pub(super) struct DoctorReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) trust: Option<Probe<Trust>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) resolver_heartbeats: Option<Probe<Vec<String>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agents: Option<AgentRollup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) messages: Option<Probe<Messages>>,
@@ -317,7 +315,6 @@ pub(super) struct StorageRootView {
 pub(super) struct Protocols {
     pub(super) event: &'static str,
     pub(super) sidebar: &'static str,
-    pub(super) resolver: &'static str,
     pub(super) warnings: Vec<String>,
 }
 

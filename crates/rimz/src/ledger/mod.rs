@@ -15,7 +15,7 @@
 //!   message_store.rs live message queue JSONL store
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
-//!   writer/         debounce, publish, expiry, resolver-chain writes
+//!   writer/         debounce, publish, expiry, resolve, queue, reset
 //!   gc.rs           maintenance façade
 //!   gc/             runtime collection and dead-workspace pruning
 //!   snapshot/       reduced snapshot rebuild
@@ -61,7 +61,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::feed::{AbandonReason, FeedItem, FeedStatus, Surface};
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, RunId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, RunId, WorkspaceId};
 use crate::ledger::event::{AgentLaunchState, EventEnvelope};
 
 pub use crate::ledger::feed_store::FeedStoreErr;
@@ -70,9 +70,9 @@ pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
     AgentCard, PaneAgent, PresenceSample, ProcessCard, ProcessState, RowCallSplit, RowCard,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel,
-    SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent,
-    SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync,
-    actionable_unread_count, lead_unread_row, triage_key,
+    SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
+    SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
+    lead_unread_row, triage_key,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 
@@ -83,8 +83,7 @@ pub use crate::ledger::workspace_record::WorkspaceRecord;
 pub enum AskExpiry {
     /// The session ended outright; expire every surface it left pending.
     SessionEnded,
-    /// A live session moved on; expire only its native_ui asks. Bridge asks
-    /// resolve via their own socket and must stay live.
+    /// A live session moved on; expire only its native_ui asks.
     MovedOn,
 }
 
@@ -177,18 +176,6 @@ pub struct TimeoutOutcome {
     pub request_id: RequestId,
     pub status: FeedStatus,
     pub transitioned: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct AbstainOutcome {
-    pub request_id: RequestId,
-    pub next_resolver: Option<ResolverId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ElapseOutcome {
-    pub request_id: RequestId,
-    pub next_resolver: Option<ResolverId>,
 }
 
 #[derive(Clone, Debug)]

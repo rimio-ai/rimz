@@ -163,7 +163,6 @@ fn abandon_pending_for_reset_locked(
         if item.status != FeedStatus::Pending {
             continue;
         }
-        item.mark_active_resolver_budget_elapsed(AbandonReason::WorkspaceReset);
         let mut resolution = Resolution::new(
             json!({ "abandoned": true }),
             ResolutionMethod::WorkspaceReset,

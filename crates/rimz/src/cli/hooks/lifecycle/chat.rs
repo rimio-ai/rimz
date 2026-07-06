@@ -21,8 +21,7 @@ pub(super) fn record_native_answer(
         return;
     };
 
-    // Bridge asks already record resolver answers when resolved. A native answer
-    // is recorded only when there is a pending native_ui ask to clear.
+    // A native answer is recorded only when there is a pending native_ui ask to clear.
     match ledger.expire_agent_native_ui_asks(
         agent.descriptor().kind,
         agent_id,

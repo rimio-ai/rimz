@@ -45,7 +45,7 @@ Rimz is a realtime dashboard for harnessing agentic coding: one human and tens o
 - **Local or Remote, Continuously:** start the room on your macbook or a server, close the laptop, and reattach from anywhere; the link heals itself, and even a reboot brings the room back with layout and agents resumed
 - **Worktrees, for every Agent:** open agents together, side by side in the same worktree with dynamic layout. For example use `claude,codex` to start Claude planning and Codex reviewing for agentic peer programming, or use `vim,codex+term` to start editor, agent and terminal side by side.
 - **Scriptable and Steerable:** the `claude -p` you missed, brought back as `rimz agents -p`. Plus `rimz message`, which adds dynamic control over the agent harness and integrates agents into scripts, CI, and workflows with observability
-- **Auto Recover, while you're Away:** agents keep working after you step away. A rate-limit park resumes the moment the window resets, API hiccups recover on their own, context compacts along the way, and routine questions fall to a resolver chain that always ends with you
+- **Auto Recover, while you're Away:** agents keep working after you step away. A rate-limit park resumes the moment the window resets, API hiccups recover on their own, context compacts along the way, and routine questions can route to notification handlers you wire, with the prompt still ending at your pane.
 
 ## How it works
 

@@ -301,14 +301,11 @@ fn collect_heartbeats(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HeartbeatKind {
-    Resolver,
     Sidebar,
 }
 
 fn heartbeat_kind(name: &str) -> Option<HeartbeatKind> {
-    if name.starts_with("resolver.") && name.ends_with(".json") {
-        Some(HeartbeatKind::Resolver)
-    } else if name.starts_with("sidebar.") && name.ends_with(".json") {
+    if name.starts_with("sidebar.") && name.ends_with(".json") {
         Some(HeartbeatKind::Sidebar)
     } else {
         None
@@ -426,9 +423,8 @@ fn is_older_than(path: &Path, older_than: Duration) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{MuxName, ResolverId, SidebarInstanceId};
+    use crate::ids::{MuxName, SidebarInstanceId};
     use crate::ledger::RuntimePaths;
-    use crate::resolver::heartbeat::ResolverHeartbeat;
     use crate::sidebar::heartbeat::SidebarHeartbeat;
     use tempfile::tempdir;
 
@@ -491,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_gc_removes_stale_heartbeats_and_sidebar_socket_only() {
+    fn runtime_gc_removes_stale_sidebar_heartbeats_and_sidebar_socket_only() {
         let temp = tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(temp.path());
         let rt = RuntimePaths::under(workspace_id.clone(), temp.path()).unwrap();
@@ -513,18 +509,11 @@ mod tests {
         let stale_sidebar_path = rt.heartbeat_dir.join("sidebar.stale.json");
         write_json(&stale_sidebar_path, &stale_sidebar);
 
-        let resolver_id: ResolverId = "opus-policy".parse().unwrap();
-        let stale_resolver = ResolverHeartbeat::new(workspace_id.clone(), resolver_id);
-        let stale_resolver_path = rt.heartbeat_dir.join("resolver.opus-policy.json");
-        write_json(&stale_resolver_path, &stale_resolver);
-
-        let fresh_resolver_id: ResolverId = "slack-on-call".parse().unwrap();
-        let fresh_resolver = ResolverHeartbeat::new(workspace_id, fresh_resolver_id);
-        let fresh_resolver_path = rt.heartbeat_dir.join("resolver.slack-on-call.json");
-        write_json(&fresh_resolver_path, &fresh_resolver);
+        let legacy_resolver_path = rt.heartbeat_dir.join("resolver.opus-policy.json");
+        fs::write(&legacy_resolver_path, b"{}").unwrap();
 
         let old = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&stale_socket, &stale_sidebar_path, &stale_resolver_path] {
+        for path in [&stale_socket, &stale_sidebar_path, &legacy_resolver_path] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
 
@@ -532,12 +521,11 @@ mod tests {
             collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
 
         assert_eq!(report.runtime_roots_scanned, 1);
-        assert_eq!(report.heartbeat_files_removed, 2);
+        assert_eq!(report.heartbeat_files_removed, 1);
         assert_eq!(report.sidebar_sockets_removed, 1);
         assert!(!stale_sidebar_path.exists());
-        assert!(!stale_resolver_path.exists());
         assert!(!stale_socket.exists());
-        assert!(fresh_resolver_path.exists());
+        assert!(legacy_resolver_path.exists());
         assert!(feed_socket.exists(), "feed sockets are not GC-owned");
     }
 

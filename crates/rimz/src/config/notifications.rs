@@ -6,10 +6,21 @@ use serde::{Deserialize, Serialize};
 use crate::agents::AgentStatus;
 
 pub const KNOWN_TEMPLATE_VARS: &[&str] = &[
-    "kind", "agent", "handle", "status", "worktree", "task", "count", "unread", "title", "body",
+    "kind",
+    "agent",
+    "handle",
+    "status",
+    "worktree",
+    "task",
+    "count",
+    "unread",
+    "request_id",
+    "pane",
+    "root",
+    "title",
+    "body",
 ];
-const KNOWN_TEMPLATE_VARS_LIST: &str =
-    "kind, agent, handle, status, worktree, task, count, unread, title, body";
+const KNOWN_TEMPLATE_VARS_LIST: &str = "kind, agent, handle, status, worktree, task, count, unread, request_id, pane, root, title, body";
 
 /// Best-effort attention delivery preferences. These are per-machine because
 /// they describe how this terminal or host should reach this user; a clone never

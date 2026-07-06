@@ -11,7 +11,8 @@ use crate::agents::{
 use crate::ledger::atomic;
 
 use super::{
-    CODEX_HOOK_CAP, HOOKS_TABLE, INSTALLED_EVENTS, RIMZ_BLOCK, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER,
+    CODEX_HOOK_TIMEOUT_SECS, HOOKS_TABLE, INSTALLED_EVENTS, RIMZ_BLOCK, RIMZ_HOOK_COMMAND,
+    RIMZ_HOOK_MARKER,
 };
 
 pub(super) fn codex_config_path() -> Result<PathBuf> {
@@ -221,7 +222,7 @@ fn insert_rimz_hook_group(root: &mut toml::Table, event: &str, matcher: Option<&
     );
     handler.insert(
         "timeout".to_owned(),
-        toml::Value::Integer(CODEX_HOOK_CAP.as_secs() as i64),
+        toml::Value::Integer(CODEX_HOOK_TIMEOUT_SECS),
     );
     handler.insert(
         "statusMessage".to_owned(),

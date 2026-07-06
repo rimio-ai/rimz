@@ -192,13 +192,6 @@ pub(in crate::sidebar_pane::render) fn subagent_head_style(
     role_style(theme, AnimationRole::Delegating, animation_phase)
 }
 
-pub(in crate::sidebar_pane::render) fn resolver_style(
-    theme: &Theme,
-    animation_phase: u64,
-) -> Style {
-    role_style(theme, AnimationRole::Resolving, animation_phase)
-}
-
 pub(in crate::sidebar_pane::render) fn working_style(theme: &Theme, animation_phase: u64) -> Style {
     role_style(theme, AnimationRole::Working, animation_phase)
 }

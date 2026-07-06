@@ -27,7 +27,7 @@ rimz
 | --- | --- | --- |
 | **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `web`, `list`, `stats`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) · [Web](./cli/web.md) · [Stats](../internals/reach/welcome.md#rimz-stats) |
 | **Work with agents** | `agents`, `message`, `transcript`, `pane`, `channel`, `worktree`, `loop` | [Agent control](./cli/agents.md) · [Channels](./cli/channel.md) |
-| **Decisions, hooks, and trust** | `feed`, `event`, `resolver`, `hooks`, `trust` | [Feed, resolvers, hooks, and trust](./cli/feed.md) |
+| **Decisions, hooks, and trust** | `feed`, `event`, `hooks`, `trust` | [Feed, hooks, and trust](./cli/feed.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
 One surface has its own reference outside this map: [`rimz config`](./configuration.md) edits the per-machine config; the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics.

@@ -46,7 +46,6 @@ pub(super) fn expire_agent_asks_locked(
         {
             continue;
         }
-        item.mark_active_resolver_budget_elapsed(reason);
         let mut resolution =
             Resolution::new(json!({ "expired": true }), ResolutionMethod::AgentMovedOn);
         resolution.reason = Some(reason.as_str().to_owned());
@@ -88,7 +87,6 @@ fn abandon_dead_owned_items_locked(
             continue;
         }
 
-        item.mark_active_resolver_budget_elapsed(AbandonReason::OwnerProcessExited);
         let mut resolution =
             Resolution::new(json!({ "abandoned": true }), ResolutionMethod::OwnerExited);
         resolution.reason = Some(AbandonReason::OwnerProcessExited.as_str().to_owned());
@@ -130,7 +128,7 @@ impl Ledger {
 
     /// Expire every pending agent-hook ask raised by a session that has *ended*.
     /// A dead session can't answer its own prompt on any surface, so all of its
-    /// pending asks — native_ui and bridge alike — are expired. See
+    /// pending asks are expired. See
     /// [`Self::expire_agent_asks`] for the shared mechanics.
     #[must_use = "durability barrier; check the result"]
     pub fn expire_agent_session(
@@ -146,7 +144,6 @@ impl Ledger {
     /// (a new prompt, the end of its turn, or a fresh ask superseding the old).
     /// Scoped to native_ui: the agent answers those in its own UI and never
     /// reports back, so they would otherwise pile up as duplicate attention.
-    /// Bridge asks resolve through their own socket and stay untouched.
     #[must_use = "durability barrier; check the result"]
     pub fn expire_agent_native_ui_asks(
         &self,

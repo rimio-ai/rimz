@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tracing::debug;
 
 use crate::ledger::atomic;
 
@@ -88,22 +89,22 @@ pub(crate) fn load<R: PendingTerminalRecord>(
     read_item(&path).map(Some)
 }
 
-pub(crate) fn list_all<R: PendingTerminalRecord>(dir: &Path) -> Result<Vec<R>, StoreErr> {
+pub(crate) fn list_all_lossy<R: PendingTerminalRecord>(dir: &Path) -> Result<Vec<R>, StoreErr> {
     let mut by_stem = HashMap::new();
-    for item in read_dir_items::<R>(&dir.join(TERMINAL_SUBDIR))?
+    for item in read_dir_items_lossy::<R>(&dir.join(TERMINAL_SUBDIR))?
         .into_iter()
-        .chain(read_dir_items::<R>(dir)?)
+        .chain(read_dir_items_lossy::<R>(dir)?)
     {
         by_stem.insert(item.file_stem(), item);
     }
     Ok(by_stem.into_values().collect())
 }
 
-pub(crate) fn list_pending_raw<R: DeserializeOwned>(dir: &Path) -> Result<Vec<R>, StoreErr> {
-    read_dir_items(dir)
+pub(crate) fn list_pending_raw_lossy<R: DeserializeOwned>(dir: &Path) -> Result<Vec<R>, StoreErr> {
+    read_dir_items_lossy(dir)
 }
 
-pub(crate) fn read_dir_items<R: DeserializeOwned>(dir: &Path) -> Result<Vec<R>, StoreErr> {
+pub(crate) fn read_dir_items_lossy<R: DeserializeOwned>(dir: &Path) -> Result<Vec<R>, StoreErr> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -121,7 +122,17 @@ pub(crate) fn read_dir_items<R: DeserializeOwned>(dir: &Path) -> Result<Vec<R>, 
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        items.push(read_item(&path)?);
+        match read_item(&path) {
+            Ok(item) => items.push(item),
+            Err(StoreErr::Json { path, source }) => {
+                debug!(
+                    path = %path.display(),
+                    error = %source,
+                    "skipping undecodable legacy record",
+                );
+            }
+            Err(err) => return Err(err),
+        }
     }
     Ok(items)
 }
@@ -211,7 +222,7 @@ mod tests {
         assert!(!pending_path(dir.path(), "one").exists());
         assert!(terminal_path(dir.path(), "one").exists());
         assert!(
-            list_pending_raw::<TestRecord>(dir.path())
+            list_pending_raw_lossy::<TestRecord>(dir.path())
                 .unwrap()
                 .is_empty()
         );
@@ -235,7 +246,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut all = list_all::<TestRecord>(dir.path()).unwrap();
+        let mut all = list_all_lossy::<TestRecord>(dir.path()).unwrap();
         all.sort_by(|a, b| a.id.cmp(&b.id));
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].title, "terminal");

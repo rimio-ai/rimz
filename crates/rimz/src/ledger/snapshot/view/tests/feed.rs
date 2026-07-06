@@ -12,17 +12,9 @@ fn pending_items_classify_to_metadata_until_a_live_frame_admits_rows() {
         "claude",
         "agent-hook",
     );
-    let bridge = FeedItem::new(
-        workspace(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "b",
-        "rimz",
-        "cli",
-    );
     let mut answered = FeedItem::new(
         workspace(),
-        Surface::Bridge,
+        Surface::Script,
         FeedKind::Permission,
         "a",
         "rimz",
@@ -47,7 +39,7 @@ fn pending_items_classify_to_metadata_until_a_live_frame_admits_rows() {
     answered.status = FeedStatus::Resolved;
     let mut timed = FeedItem::new(
         workspace(),
-        Surface::Bridge,
+        Surface::Script,
         FeedKind::Permission,
         "t",
         "rimz",
@@ -59,15 +51,13 @@ fn pending_items_classify_to_metadata_until_a_live_frame_admits_rows() {
     script.worktree_path = Some("/repo/rimz".to_owned());
 
     let snap = room(
-        vec![native, bridge, answered, timed, cli_native, script],
+        vec![native, answered, timed, cli_native, script],
         Vec::new(),
     );
-    // Agent-native and script asks survive as attention metadata; bridge asks
-    // remain resolver-working metadata. CLI native asks, resolved items, and
-    // timed-out items are history for the sidebar. Without a live frame, none
-    // of the metadata becomes a row.
+    // Agent-native and script asks survive as attention metadata. CLI native
+    // asks, resolved items, and timed-out items are history for the sidebar.
+    // Without a live frame, none of the metadata becomes a row.
     assert_eq!(snap.needs_attention.len(), 2);
-    assert_eq!(snap.resolver_working.len(), 1);
     assert!(snap.worktree_groups.is_empty());
 }
 

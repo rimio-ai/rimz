@@ -17,7 +17,7 @@ use crate::ledger::snapshot::process::{
 use crate::ledger::snapshot::row::{PaneAgent, SidebarRow};
 use crate::pane::PaneRef;
 
-use super::super::rows::{active_resolver_state, row_from_agent, row_from_standalone_item};
+use super::super::rows::{row_from_agent, row_from_standalone_item};
 
 pub(super) struct LazyAgentPaneProjection<'a> {
     pub(super) wired_kinds: &'a [String],
@@ -57,7 +57,6 @@ pub(crate) fn row_identity_violations<'a>(
 pub(super) fn rows_from_panes(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
-    resolver_working: &[FeedItem],
     panes: &[PaneRef],
     lazy_agents: LazyAgentPaneProjection<'_>,
     panes_produced_at_ms: Option<u64>,
@@ -69,7 +68,7 @@ pub(super) fn rows_from_panes(
     let mut seen_panes = HashSet::new();
     let mut bound_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
     let mut bound_agent_panes: HashMap<(AgentKind, AgentSessionId), PaneId> = HashMap::new();
-    let standalone_items = standalone_items_by_pane(needs_attention, resolver_working, panes);
+    let standalone_items = standalone_items_by_pane(needs_attention, panes);
     let computed_pairings;
     let lazy_pairings = if let Some(pairings) = lazy_agents.pairings {
         pairings
@@ -105,7 +104,7 @@ pub(super) fn rows_from_panes(
                 &mut bound_agent_panes,
                 agent,
                 pane,
-                pane_ask(agent, standalone_ask, needs_attention, resolver_working),
+                pane_ask(agent, standalone_ask, needs_attention),
                 now,
             ));
         } else if let Some(bind) = agent_pane_for_pane(
@@ -124,7 +123,7 @@ pub(super) fn rows_from_panes(
                     &mut bound_agent_panes,
                     agent,
                     pane,
-                    pane_ask(agent, standalone_ask, needs_attention, resolver_working),
+                    pane_ask(agent, standalone_ask, needs_attention),
                     now,
                 )),
                 AgentPaneRow::Idle(row) => {
@@ -186,11 +185,10 @@ pub(super) fn rows_from_panes(
 /// The newest pending standalone (non-agent-hook) ask per frame-admitted pane.
 fn standalone_items_by_pane<'a>(
     needs_attention: &'a [FeedItem],
-    resolver_working: &'a [FeedItem],
     panes: &[PaneRef],
 ) -> HashMap<PaneId, &'a FeedItem> {
     let mut by_pane = HashMap::new();
-    for item in needs_attention.iter().chain(resolver_working.iter()) {
+    for item in needs_attention {
         if item.source_kind == "agent-hook" {
             continue;
         }
@@ -220,9 +218,8 @@ fn pane_ask<'a>(
     agent: &AgentState,
     standalone_ask: Option<&'a FeedItem>,
     needs_attention: &'a [FeedItem],
-    resolver_working: &'a [FeedItem],
 ) -> Option<&'a FeedItem> {
-    standalone_ask.or_else(|| most_relevant_ask(agent, needs_attention, resolver_working))
+    standalone_ask.or_else(|| most_relevant_ask(agent, needs_attention))
 }
 
 /// Push a bound agent's row and return the [`PaneAgent`] for `agent_panes`. The
@@ -273,9 +270,8 @@ fn newborn_unknown_cwd(pane: &PaneRef, panes_produced_at_ms: Option<u64>) -> boo
 fn most_relevant_ask<'a>(
     agent: &AgentState,
     needs_attention: &'a [FeedItem],
-    resolver_working: &'a [FeedItem],
 ) -> Option<&'a FeedItem> {
-    pending_ask_for(agent, needs_attention.iter().chain(resolver_working.iter()))
+    pending_ask_for(agent, needs_attention.iter())
 }
 
 fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
@@ -287,7 +283,6 @@ fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
     agent.phase = TurnPhase::Idle;
     agent.request_id = Some(ask.request_id.clone());
     agent.surface = Some(ask.surface);
-    agent.resolver = active_resolver_state(ask);
     agent.options = ask.options.clone();
 }
 

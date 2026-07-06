@@ -83,7 +83,7 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Fsync {
     /// fsync the temp file and the parent dir — survives power loss. For
-    /// cold-path durable state: trust grants, resolver allowlists, workspace
+    /// cold-path durable state: trust grants, notification handlers, workspace
     /// records, hook installs, the rotation carryover. Cold paths keep the
     /// fsync even where the same-host argument would allow relaxing it,
     /// because removing it there buys nothing.

@@ -79,7 +79,6 @@ impl SidebarSnapshot {
         let mut projection = rows_from_panes(
             &self.agents,
             &self.needs_attention,
-            &self.resolver_working,
             panes,
             LazyAgentPaneProjection {
                 wired_kinds: &self.wired_kinds,

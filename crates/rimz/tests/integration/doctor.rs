@@ -4,10 +4,9 @@
 
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
-use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
+use rimz::ids::{MuxName, SidebarInstanceId};
 use rimz::ledger::event::{EventEnvelope, MessageEventMethod};
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
-use rimz::resolver::heartbeat::ResolverHeartbeat;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use serde_json::Value;
 
@@ -691,15 +690,6 @@ fn doctor_json_reports_protocol_version_mismatches() {
     )
     .expect("write old sidebar heartbeat");
 
-    let resolver_id: ResolverId = "opus-policy".parse().expect("resolver id");
-    let mut resolver = ResolverHeartbeat::new(env.workspace_id.clone(), resolver_id);
-    resolver.protocol_version = "rimz.resolver.v0".to_owned();
-    rimz::ledger::atomic::write_temp_then_rename(
-        &rt.heartbeat_dir.join("resolver.opus-policy.json"),
-        &resolver,
-    )
-    .expect("write old resolver heartbeat");
-
     let report = doctor_json(
         &env.rimz()
             .args(["doctor", "--json"])
@@ -709,7 +699,6 @@ fn doctor_json_reports_protocol_version_mismatches() {
     let protocols = &report["protocols"];
     assert_eq!(protocols["event"], "rimz.event.v2");
     assert_eq!(protocols["sidebar"], "rimz.plugin.v5");
-    assert_eq!(protocols["resolver"], "rimz.resolver.v1");
 
     let warnings = protocols["warnings"]
         .as_array()
@@ -725,12 +714,6 @@ fn doctor_json_reports_protocol_version_mismatches() {
     assert!(
         warnings.contains(
             "sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v5)"
-        ),
-        "{warnings}"
-    );
-    assert!(
-        warnings.contains(
-            "resolver heartbeat resolver.opus-policy.json uses rimz.resolver.v0 (expected rimz.resolver.v1)"
         ),
         "{warnings}"
     );

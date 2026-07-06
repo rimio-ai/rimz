@@ -27,7 +27,6 @@ mod reload;
 mod remote;
 mod render;
 mod reset;
-mod resolver;
 pub(crate) mod room;
 mod send;
 mod setup;
@@ -80,7 +79,6 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
         Some(Subcmd::Message(args)) => message::run(args, &globals),
-        Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
@@ -181,7 +179,6 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Reset(_)) => ("reset", None, None),
         Some(Subcmd::Pane(_)) => ("pane", None, None),
         Some(Subcmd::Message(_)) => ("message", None, None),
-        Some(Subcmd::Resolver(_)) => ("resolver", None, None),
         Some(Subcmd::Sidebar(args)) => (args.command_label(), None, None),
         Some(Subcmd::Statusline(_)) => ("statusline", None, None),
         Some(Subcmd::Hooks(args)) => {
@@ -457,9 +454,7 @@ enum Subcmd {
     ListThemes(list_themes::ListThemesArgs),
     /// Emit generic events into the workspace ledger.
     Event(event::EventArgs),
-    /// Ask, list, and resolve human decisions.
-    ///
-    /// Includes ask, push, list, show, resolve, dismiss, and abstain.
+    /// Feed primitives: ask, push, list, show, resolve, dismiss.
     Feed(feed::FeedArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
@@ -495,8 +490,6 @@ enum Subcmd {
     /// The default parks for the next safe turn boundary, optionally after
     /// `--schedule`.
     Message(message::MessageArgs),
-    /// Manage the per-machine resolver allowlist.
-    Resolver(resolver::ResolverArgs),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.
     #[command(hide = true)]
     Sidebar(sidebar::SidebarArgs),

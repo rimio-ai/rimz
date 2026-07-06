@@ -512,8 +512,8 @@ fn runtime_fallback_home() -> PathBuf {
     env::temp_dir().join(format!("rimz-{}", current_uid()))
 }
 
-/// Per-user, per-machine config root. Hosts the resolver allowlist and any
-/// other configuration that survives reboots but is not per-workspace.
+/// Per-user, per-machine config root. Hosts configuration that survives
+/// reboots but is not per-workspace.
 pub fn config_home() -> PathBuf {
     if let Some(value) = env_path("XDG_CONFIG_HOME") {
         return value;

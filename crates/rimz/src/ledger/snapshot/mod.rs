@@ -44,8 +44,8 @@ pub(crate) use process::{
     command_agent_kind_with_comm, command_is_sidebar_chrome, process_is_active, program_label,
 };
 pub use row::{
-    AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarResolverState,
-    SidebarRow, SidebarSubAgent, compose_channel,
+    AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarRow,
+    SidebarSubAgent, compose_channel,
 };
 #[cfg(test)]
 pub(crate) use view::fold_ask_onto_row;

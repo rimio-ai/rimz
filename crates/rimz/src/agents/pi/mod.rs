@@ -18,14 +18,10 @@
 //! `session_before_compact`/`session_compact`/`session_shutdown` are the
 //! compaction and exit signals. Spend stays in [`spend`].
 //!
-//! One wired event blocks: `tool_call`, pi's pre-tool gate, whose extension
-//! handler pi awaits. It classifies as a permission ask so a fresh enrolled
-//! resolver can allow or deny the tool; the decision is pi's own
-//! `ToolCallEventResult` — deny renders `{"block": true, "reason": …}`,
-//! allow renders `{}`. Pi draws no permission prompt of its own
-//! (`native_ask_ui: false`), so an ask nothing answers resolves neutrally —
-//! empty stdout lets the tool run, and no `native_ui` feed item is pushed:
-//! gating is opt-in via a resolver, never Rimz posing questions pi would not
+//! One wired event is an ask: `tool_call`, pi's pre-tool gate, whose extension
+//! handler pi awaits. Pi draws no permission prompt of its own
+//! (`native_ask_ui: false`), so the hook returns neutral immediately and no
+//! `native_ui` feed item is pushed: Rimz does not pose questions pi would not
 //! have asked. Subagents and background tasks stay declared off
 //! (`docs/externals/agent-adapter/pi-reference.md`) and the absences render
 //! deliberately.
@@ -36,10 +32,11 @@ pub(crate) mod payloads;
 pub(crate) mod spend;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use jiff::Timestamp;
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use super::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, RateLimitWindow,
@@ -54,11 +51,11 @@ use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, Result, agent_config_path, choice_is_allow,
-    classify_agent_hook, optional_payload_string, sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, Result, agent_config_path, classify_agent_hook, optional_payload_string,
+    sanitize_user_prompt,
 };
-use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::feed::FeedKind;
 use crate::ids::AgentSessionId;
 
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
@@ -88,15 +85,12 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        // `tool_call` is pi's awaited pre-tool gate: the extension handler
-        // holds the tool until the bridge answers, so an enrolled resolver
-        // can allow or deny it.
+        // `tool_call` is pi's awaited pre-tool gate. Pi has no native ask UI,
+        // so Rimz records no ask and returns neutral.
         blocking_feed: true,
         // Pi never asks natively — no permission prompts, plan approvals, or
-        // questions — so an ask no resolver answers has no pi surface to
-        // route the human to. It resolves neutrally (the tool runs) with no
-        // `native_ui` feed item: gating is opt-in via a resolver, never Rimz
-        // posing a question pi would not have asked.
+        // questions — so Rimz has no surface to route to. It returns neutral
+        // with no `native_ui` feed item.
         native_ask_ui: false,
         rich_context: false,
         transcript_tail_context: false,
@@ -120,10 +114,6 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     lifecycle_hooks: PI_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
-    // Pi awaits the `tool_call` handler with no kill window of its own, so
-    // the cap is purely Rimz's bridge ceiling — matched to Claude's so a
-    // resolver chain budgets identically across agents.
-    hook_cap: Duration::from_secs(120),
     process_names: &["pi"],
     extra_bin_dirs: &[],
     // Pi's progress-proving events, in its own wire vocabulary. The blocking
@@ -444,41 +434,9 @@ impl AgentAdapter for PiAdapter {
         })
     }
 
-    fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
-        match item.kind {
-            FeedKind::Permission => {
-                if choice_is_allow(resolution) {
-                    // Pi mutates tool arguments only in-process (the extension
-                    // handler edits `event.input`); the bridge cannot reach
-                    // that, so an `updatedInput` riding the resolution is
-                    // ignored and a plain allow renders.
-                    Ok(json!({}))
-                } else {
-                    let reason = resolution
-                        .reason
-                        .clone()
-                        .or_else(|| {
-                            resolution
-                                .decision
-                                .get("reason")
-                                .and_then(Value::as_str)
-                                .map(ToOwned::to_owned)
-                        })
-                        .unwrap_or_else(|| "denied by resolver".to_owned());
-                    Ok(json!({ "block": true, "reason": reason }))
-                }
-            }
-            other => Err(AgentErr::Render {
-                agent: "pi",
-                reason: format!("unsupported feed kind {other:?}"),
-            }),
-        }
-    }
-
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         // Empty stdout is the extension's allow: pi has no native prompt to
-        // fall back to, so "no answer" must let the tool run. This is the
-        // neutral the no-resolver and bridge-timeout paths print.
+        // fall back to, so "no answer" must let the tool run.
         Ok(None)
     }
 

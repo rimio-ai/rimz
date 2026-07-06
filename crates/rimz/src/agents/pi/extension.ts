@@ -213,11 +213,9 @@ export default function rimz(pi) {
     feed("session_shutdown", ctx, { reason: ev?.reason });
   });
 
-  // The blocking pre-tool gate. Pi awaits this handler, so the bridge wait
-  // happens here: spawn rimz, await its exit, read the decision from stdout.
-  // With no fresh enrolled resolver rimz answers immediately with no stdout
-  // (= allow), so the un-enrolled path adds one short-lived process and no
-  // human-visible latency. Every non-deny outcome — empty stdout, a parse
+  // The blocking pre-tool gate. Pi awaits this handler, so rimz returns the
+  // neutral no-op immediately. Pi has no native ask UI, so no feed item is
+  // created and every non-deny outcome — empty stdout, a parse
   // failure, a spawn error, a missing binary — resolves to "let the tool
   // run": pi has no native permission prompt, so blocking is opt-in via a
   // resolver and never a failure mode.

@@ -215,14 +215,14 @@ Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../.
 
 - **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the [`FeedKind`](../../../crates/rimz/src/feed.rs).
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs). `None` means "no transition here", so high-frequency events stay silent.
-- **`render_decision`** / **`render_neutral`** emit the agent-native decision JSON when a resolver answers, and the neutral no-op when no one does. **`hook_cap`** (a descriptor field) is how long a blocking hook may park on the bridge before falling back to neutral.
+- **`render_neutral`** emits the agent-native no-op for blocking asks. Hooks write feed items and return neutral; the agent's own UI stays open as the answer surface.
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../../crates/rimz/src/agents/context.rs); **`local_context_refresh`** derives sidecar fields from local provider state on hook or producer tick triggers; **`context_refresh_spawn`** maps hook or tick triggers to a detached `rimz` helper when a provider's rich context transport needs one.
 - **`install_hooks`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it; **`probe_account`** / **`parse_spend`** / **`transcript_files`** feed the account and spend model in [provider.md](./provider.md).
 
 Two invariants hold the seam shut:
 
-- **Adapters never touch the ledger.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every ledger write and all bridge I/O; it calls the adapter for classification and rendering only.
-- **Nothing downstream reads a native payload.** The adapter emits exactly two things the rest of Rimz consumes: an `AgentLifecycleObservation` and a decision `Value`. A native field reached for outside an adapter is a mapping that belongs *in* the adapter.
+- **Adapters never touch the ledger.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every ledger write; it calls the adapter for classification and neutral output only.
+- **Nothing downstream reads a native payload.** The adapter emits exactly two things the rest of Rimz consumes: an `AgentLifecycleObservation` and a blocking-feed classification. A native field reached for outside an adapter is a mapping that belongs *in* the adapter.
 
 ### Two hook channels
 
@@ -230,17 +230,17 @@ Two invariants hold the seam shut:
 
 **Lifecycle: fast, non-blocking.** Drives agent status, the turn phase, task, and enrichment. Each flows through `observe_lifecycle`; an event carrying no transition returns `None` and records nothing.
 
-**Blocking-feed: holds the agent open.** A permission request, plan approval, or user question. It becomes a [`FeedItem`](../../../crates/rimz/src/feed.rs) and engages the [feed lifecycle and decision bridge](../sidebar/ledger.md#feed-lifecycle-and-the-decision-bridge): bind a per-request socket and wait for a resolver (`bridge`), or write the item and return neutral so the agent's own UI asks (`native_ui`). The `native_ui` hand-off requires a surface to hand to: an agent whose descriptor declares `native_ask_ui` off (pi) resolves the same ask neutrally with **no feed item**, since there is nothing an item could route the human to.
+**Blocking-feed: records the ask and returns neutral.** A permission request, plan approval, or user question becomes a [`FeedItem`](../../../crates/rimz/src/feed.rs) when the agent has its own ask UI. Rimz writes a `native_ui` item, returns the agent-native no-op immediately, and leaves the prompt visible in the agent's pane. An agent whose descriptor declares `native_ask_ui` off (pi) gets the same neutral no-op with **no feed item**, since there is no native prompt an item could route the human to.
 
 Blocking decision hooks must be **sync**: an async one would ignore the decision printed on stdout, so the installer rejects it.
 
 ### Hook stdout is the decision channel
 
-This is the canonical statement of the rule the rest of the docs link to. A hook's stdout carries exactly one thing: the agent-native decision JSON, printed only when a resolver answers on the bridge. The neutral path prints nothing and exits 0, and the agent's own UI takes over. It follows that:
+This is the canonical statement of the rule the rest of the docs link to. A hook's stdout carries only the agent-native neutral no-op for blocking asks, and the agent's own UI stays responsible for the decision. It follows that:
 
 - **Logs never go to stdout.** They go to stderr or Rimz runtime state logs such as `binding.log.jsonl` (the `print_stdout` lint gates this; see [rust-conventions.md](../../contributing/rust-conventions.md)).
 - **Hook helper children get fresh, fully-piped stdio, never inherited.** A wrapped statusline command's stderr or a notification helper's chatter must never leak onto the decision channel; a CI grep rejects `Stdio::inherit` in hook paths.
-- **Every neutral and decision shape is golden-tested**, including the neutral no-op.
+- **Every neutral shape is golden-tested**, including the agent-native no-op.
 
 ### Hooks resolve the room they live in
 
@@ -252,7 +252,7 @@ A **daemon-routed** hook (Codex's, fired from the shared app-server) inherits it
 
 A lifecycle hook fires → `classify_hook` returns `Lifecycle` → `observe_lifecycle` maps the payload onto an `AgentLifecycleObservation` → the CLI records it as an `agent.lifecycle` event, and [the rollup](#the-rollup) and [the state machine](#the-state-machine) above own it from there.
 
-A blocking hook fires → `classify_hook` returns `BlockingFeed` with a `FeedKind` → the CLI writes a feed item and runs the three operating paths. On a resolver answer it calls `render_decision` and prints the JSON; on timeout (the `hook_cap`) or with no fresh resolver it calls `render_neutral` and the agent's UI takes over (an agent with no native ask UI just proceeds; neutral is its allow). The per-request socket, CAS, nonce, and late-answer rules live in [ledger.md](../sidebar/ledger.md).
+A blocking hook fires → `classify_hook` returns `BlockingFeed` with a `FeedKind` → the CLI writes a `native_ui` feed item when the adapter declares a native ask UI, calls `render_neutral`, and exits. The agent's UI owns the prompt; resolvers answer there with pane primitives and record with `rimz feed resolve`.
 
 ### Hook install: the visible security step
 
@@ -305,20 +305,20 @@ The sidecar lives wholly off the durable path (ledger first; sidebar wakeups are
 
 ## Adding an agent
 
-Claude, Codex, Pi, and OpenCode are the worked examples. New agents such as Cursor, Gemini, or Copilot land through `AgentAdapter` once their hook surface and decision outputs are verified. The work is one new directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md) (the trait impl, its `AgentDescriptor`, typed payloads, and `spend.rs`) plus one line in `registry::ADAPTERS` and a new doc under [`adapter/`](./adapter/claude.md). Nothing else changes: spending, coverage, doctor status, install, branding, and classification all resolve through the registry.
+Claude, Codex, Pi, and OpenCode are the worked examples. New agents such as Cursor, Gemini, or Copilot land through `AgentAdapter` once their hook surface is verified. The work is one new directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md) (the trait impl, its `AgentDescriptor`, typed payloads, and `spend.rs`) plus one line in `registry::ADAPTERS` and a new doc under [`adapter/`](./adapter/claude.md). Nothing else changes: spending, coverage, doctor status, install, branding, and classification all resolve through the registry.
 
 The descriptor carries two declared matrices, both conformance-checked and both printed by `rimz coverage` (wired green, partial yellow, unsupported/absent dim, so absences are visible at a glance):
 
 - The **`coverage`** table declares every `IntegrationConcern` as `Wired { via }`, `Partial { via, gap }` (no native signal, the behaviour reconstructed by derivation, the gap named), or `Unsupported { reason }`. Codex and OpenCode use partial `end` and `idle`: no per-session end or idle hook exists, yet pane liveness plus the reaper reconstruct end, and turn boundaries plus the ask path plus the stall window cover the attention slice of idle. Pi and OpenCode use partial `live$`.
 - The **`lifecycle_hooks`** table declares every `LifecycleSignalKind` as `Native { event }`, `Derived { via, gap }`, or `Absent { reason }`.
 
-The hook mapping has five jobs: route each native event to a channel; map lifecycle events to observations; render the agent's *own* decision shape (never reuse another agent's JSON); put tool-name vocabularies in the descriptor; and set `hook_cap` from the upstream's published deadline. The context read path adds two more; either alone is valid:
+The hook mapping has four jobs: route each native event to a channel, map lifecycle events to observations, render the agent's neutral no-op, and put tool-name vocabularies in the descriptor. The context read path adds two more; either alone is valid:
 
 1. **Locate the transcript** from whatever the hook payload offers, and **map the usage record** onto raw context tokens, the cumulative total, and the model, normalizing to the observation gauge fields ([the reading rules](#reading-rules)).
 2. **Map the transport**, if any, onto `AgentContext` through `observe_context`: every field `Option`, tolerantly parsed.
 
 Stay best-effort throughout: a failure is an omitted field, never an error. The account and spend half of the recipe is [provider.md → Adding a provider](./provider.md#adding-a-provider).
 
-Required tests: install/uninstall, lifecycle mapping (native event → observation → state), feed classification, coverage conformance, neutral silence, decision stdout (allow / deny / modified-input where supported), malformed-payload handling, PID attribution, version drift, and the context mapping from a fixture tail and a fixture transport payload (including the fresh-session zero and unreadable-unknown cases). Pinned stdout shapes live as inline `insta` goldens in each adapter's `tests` module. The adapter-authoring contract is in [`crates/rimz/src/agents/AGENTS.md`](../../../crates/rimz/src/agents/AGENTS.md).
+Required tests: install/uninstall, lifecycle mapping (native event → observation → state), feed classification, coverage conformance, neutral silence, malformed-payload handling, PID attribution, install version drift, and the context mapping from a fixture tail and a fixture transport payload (including the fresh-session zero and unreadable-unknown cases). Pinned stdout shapes live as inline `insta` goldens in each adapter's `tests` module. The adapter-authoring contract is in [`crates/rimz/src/agents/AGENTS.md`](../../../crates/rimz/src/agents/AGENTS.md).
 
-> **Decision shapes diverge; never share one.** Claude and Codex both wrap a `PermissionRequest` answer in `hookSpecificOutput.decision`, but Codex rejects fields Claude requires (`updatedInput`, `updatedPermissions`, `interrupt`). Each adapter renders its own shape; copying one agent's JSON to another corrupts the decision.
+> **Neutral semantics diverge; verify per agent.** Empty stdout hands the prompt to Claude's and Codex's own UI, but for Pi — which has no native prompt to fall back to — empty stdout *is* the allow. Each adapter documents what its no-op means; never assume one agent's neutral behaviour for another.

@@ -7,8 +7,6 @@
 //! a payload, touches the filesystem or network, or spawns a helper is an
 //! [`AgentAdapter`](super::AgentAdapter) trait method, never descriptor data.
 
-use std::time::Duration;
-
 use serde_json::Value;
 
 use crate::feed::FeedKind;
@@ -56,10 +54,6 @@ pub struct AgentDescriptor {
     /// fallback before a wired agent reports a session model and as the launch
     /// `--model` default when `rimz agents` has no configured model.
     pub default_model: Option<&'static str>,
-    /// Maximum time a blocking hook may hold the bridge open before falling
-    /// back to the neutral no-op. Set from the upstream's published deadline,
-    /// with margin so the bridge times out before the agent kills the hook.
-    pub hook_cap: Duration,
     /// Process names this agent's instance can run under — its own `comm`
     /// plus any launcher (`node` for a JS bundle). Drives the PID-attribution
     /// `/proc` walk.
@@ -310,8 +304,8 @@ pub struct Capabilities {
     /// (the blocking-feed channel).
     pub blocking_feed: bool,
     /// Renders its own ask UI in the pane — permission prompts, plan
-    /// approvals, questions — so a blocking ask no resolver answers can hand
-    /// off to the agent's surface as a `native_ui` feed item. An agent
+    /// approvals, questions — so a blocking ask can hand off to the agent's
+    /// surface as a `native_ui` feed item. An agent
     /// without one (pi gates tools only through the extension) resolves the
     /// same ask neutrally with no feed item: there is no surface the item
     /// could route the human to, so pushing one would strand it waiting.

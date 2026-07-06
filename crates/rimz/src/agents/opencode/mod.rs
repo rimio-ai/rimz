@@ -16,9 +16,10 @@ pub mod server;
 pub(crate) mod spend;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
@@ -30,10 +31,9 @@ use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, RefreshTrigger,
-    Result, SubagentIdentity, choice_is_allow, classify_agent_hook, resolve_subagent_identity,
-    sanitize_user_prompt,
+    Result, SubagentIdentity, classify_agent_hook, resolve_subagent_identity, sanitize_user_prompt,
 };
-use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::feed::FeedKind;
 use crate::ids::AgentSessionId;
 
 static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
@@ -79,7 +79,6 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     lifecycle_hooks: OPENCODE_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
-    hook_cap: Duration::from_secs(120),
     process_names: &["opencode", "bun"],
     extra_bin_dirs: &[".opencode/bin"],
     activity_events: &[
@@ -391,33 +390,6 @@ impl AgentAdapter for OpencodeAdapter {
                 data: r#"{"cost":0.42,"modelID":"gpt-5","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
             },
         })
-    }
-
-    fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
-        match item.kind {
-            FeedKind::Permission => {
-                if choice_is_allow(resolution) {
-                    Ok(json!({ "status": "allow" }))
-                } else {
-                    let reason = resolution
-                        .reason
-                        .clone()
-                        .or_else(|| {
-                            resolution
-                                .decision
-                                .get("reason")
-                                .and_then(Value::as_str)
-                                .map(ToOwned::to_owned)
-                        })
-                        .unwrap_or_else(|| "denied by resolver".to_owned());
-                    Ok(json!({ "status": "deny", "reason": reason }))
-                }
-            }
-            other => Err(AgentErr::Render {
-                agent: "opencode",
-                reason: format!("unsupported feed kind {other:?}"),
-            }),
-        }
     }
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {

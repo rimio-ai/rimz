@@ -8,15 +8,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-use serde_json::json;
 
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, TurnPhase};
 use super::{
-    ADAPTERS, AgentAdapter, AgentErr, AgentHookClass, ClassificationSample, ConcernCoverage,
-    HookCoverage, IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
+    ADAPTERS, AgentAdapter, AgentHookClass, ClassificationSample, ConcernCoverage, HookCoverage,
+    IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
 };
 use crate::agents::AgentStatus;
-use crate::feed::{FeedKind, Resolution, ResolutionMethod, Surface};
+use crate::feed::{FeedKind, Surface};
 use crate::ledger::snapshot::{AgentCard, RowCard, SidebarRow, fold_ask_onto_row};
 
 #[test]
@@ -31,31 +30,6 @@ fn classify_matches_corpus() {
                 "{kind} classification sample {}",
                 sample.event_name
             );
-        }
-    }
-}
-
-#[test]
-fn classify_render_closure() {
-    let resolution = Resolution::new(
-        json!({ "choice": "allow", "updatedInput": {} }),
-        ResolutionMethod::HookBridge,
-    );
-    for adapter in ADAPTERS {
-        let kind = adapter.descriptor().kind;
-        for feed_kind in producible_feed_kinds(&corpus(*adapter)) {
-            let item = super::testkit::feed_item(feed_kind, kind);
-            match adapter.render_decision(&item, &resolution) {
-                Ok(_) => {}
-                Err(AgentErr::Render { reason, .. })
-                    if reason.starts_with("unsupported feed kind") =>
-                {
-                    panic!("{kind} classifies {feed_kind:?} but cannot render it")
-                }
-                Err(err) => panic!(
-                    "{kind} render for classified {feed_kind:?} failed with non-closure error: {err}"
-                ),
-            }
         }
     }
 }
@@ -284,7 +258,7 @@ fn pending_ask_projects_to_waiting() {
             );
             assert_eq!(
                 row.surface(),
-                Some(Surface::Bridge),
+                Some(Surface::NativeUi),
                 "{kind} waiting row carries ask surface"
             );
         }

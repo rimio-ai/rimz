@@ -1285,7 +1285,9 @@ fn signal_pid(pid: i32, signal: nix::sys::signal::Signal) {
 #[cfg(unix)]
 fn wait_for_exit(child: &mut Child, agent_pid_file: &Path) -> ExitStatus {
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(5) {
+    // Signal-driven exits run the worktree cleanup inspection (git status,
+    // marker reads) first; a generous ceiling only bites on a real hang.
+    while start.elapsed() < Duration::from_secs(30) {
         match child.try_wait() {
             Ok(Some(status)) => return status,
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),

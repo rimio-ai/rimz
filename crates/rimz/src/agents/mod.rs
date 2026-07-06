@@ -1,9 +1,8 @@
 //! Agent adapter interface.
 //!
 //! Each adapter classifies an incoming hook event, observes lifecycle
-//! transitions, renders the agent-native neutral no-op, and
-//! (when a resolver answer is available) renders the agent-native decision
-//! JSON. Adapters never touch the ledger directly;
+//! transitions, and renders the agent-native neutral no-op. Adapters never
+//! touch the ledger directly;
 //! they're called by `rimz hooks <agent>` which owns the ledger writes.
 //!
 //! Adapters also own hook install and uninstall — translating the trait
@@ -48,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::chat::{AskAnswer, AskQuestion};
-use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::feed::FeedKind;
 use crate::harness::run::PermissionMode;
 
 pub use context::{
@@ -74,8 +73,8 @@ pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use observation::{AgentLifecycleObservation, LaunchParams, SessionOrigin};
 pub(crate) use payload::{
-    CONTROL_TAG_PREFIXES, choice_is_allow, classify_agent_hook, non_empty_trimmed,
-    optional_payload_string, sanitize_user_prompt, stop_payload_errored,
+    CONTROL_TAG_PREFIXES, classify_agent_hook, non_empty_trimmed, optional_payload_string,
+    sanitize_user_prompt, stop_payload_errored,
 };
 pub use pricing::{PriceBook, Pricing};
 pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};
@@ -106,13 +105,6 @@ pub use pi::PiAdapter;
 pub enum AgentErr {
     #[error("unknown agent integration `{0}`")]
     Unknown(String),
-    #[error("cannot render decision for {agent}: {reason}")]
-    Render { agent: &'static str, reason: String },
-    #[error("missing required field `{field}` in {agent} decision")]
-    MissingField {
-        agent: &'static str,
-        field: &'static str,
-    },
     #[error("install failed for {agent}: {reason}")]
     Install { agent: &'static str, reason: String },
     #[error("io error installing {agent} hooks at {path}: {source}")]
@@ -433,9 +425,6 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// Render the agent-native decision JSON for this resolution. Called
-    /// only when the hook is on the bridge and a resolver has answered.
-    fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value>;
     /// Render the neutral no-op — the "agent's own UI is the answer" fallback
     /// path. `None` means the hook should print nothing on this event.
     fn render_neutral(&self, event_name: &str) -> Result<Option<Value>>;

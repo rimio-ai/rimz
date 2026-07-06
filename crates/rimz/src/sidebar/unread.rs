@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::agents::AgentStatus;
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId};
 use crate::ledger::{RuntimePaths, atomic};
 use crate::sidebar::read_marks::ReadMarks;
 use crate::{SidebarRow, SidebarSnapshot};
@@ -258,6 +258,8 @@ pub struct OpenedUnread {
     pub worktree: Option<String>,
     pub task: Option<String>,
     pub pane_id: Option<PaneId>,
+    pub request_id: Option<RequestId>,
+    pub root: Option<String>,
     pub status: AgentStatus,
     pub episode_ms: i64,
     pub focused: bool,
@@ -338,6 +340,8 @@ pub(crate) fn opened_unread(row: &SidebarRow, episode_ms: i64, silent: bool) -> 
         worktree: row_worktree(row),
         task: row.task().map(str::to_owned),
         pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
+        request_id: row.request_id().cloned(),
+        root: row.worktree_path.clone(),
         status,
         episode_ms,
         focused: row.pane.as_ref().is_some_and(|pane| pane.is_focused),

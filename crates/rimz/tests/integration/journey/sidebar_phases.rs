@@ -179,48 +179,6 @@ fn turn_phase_flips_thinking_to_working_on_first_edit() {
     );
 }
 
-/// Phase 3b — a resolver in front. With a fresh enrolled resolver the same
-/// waiting row shows the chain working (braille `⠋ <resolver> <budget>`) instead
-/// of a static `?`, and still counts in the attention tally. (Implemented; stretch.)
-#[test]
-fn phase3b_resolver_in_front_shows_chain() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    // Enrol a resolver and make it look alive so the bridge engages.
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", jiff::Timestamp::now());
-
-    let room = RoomHarness::launch(&env, MuxName::Tmux);
-    room.onboard(&["codex"]);
-    room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-    room.agent_hook("codex", &user_prompt_submit("sess-1", "fix auth flow"));
-    // Fire the blocking hook in the background; it holds open on the bridge
-    // while we observe the mid-flight render.
-    let mut child = room.spawn_agent("codex", &permission_request("sess-1", "DO_NOT_RENDER_ME"));
-
-    // Wait on the resolver name — it is stable, while the leading braille cell
-    // animates — so the capture lands on the engaged frame instead of timing
-    // out past the bridge's budget.
-    let screen = room.wait_for(|s| s.contains("opus-policy"), SETTLE);
-    let _ = child.kill();
-    let _ = child.wait();
-
-    assert!(
-        resolver_spinner(&screen),
-        "a resolver in front leads the row with the braille spinner:\n{screen}"
-    );
-    assert!(
-        screen.contains("opus-policy"),
-        "the row names the active resolver:\n{screen}"
-    );
-    assert!(
-        screen.contains("? 1"),
-        "a delegated item is still pending, so it still counts in the tally:\n{screen}"
-    );
-}
-
 /// Phase 4 — a fleet across worktrees. Agents spread across `main` and
 /// `feature-migration`, plus a script paused at a gate. Grouping and the
 /// worktree headers are implemented; the script lands in the `external`
@@ -343,14 +301,6 @@ fn thinking_row(screen: &str, name: &str) -> bool {
     ]
     .iter()
     .any(|frame| screen.contains(&format!("{frame} {name}")))
-}
-
-/// A resolver-in-front row leads with an animated braille spinner, so a live
-/// capture may show any frame — confirm the leading cell is one of them.
-fn resolver_spinner(screen: &str) -> bool {
-    ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-        .iter()
-        .any(|frame| screen.contains(*frame))
 }
 
 /// Push a script `Question` item straight to the ledger with no worktree so it

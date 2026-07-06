@@ -8,7 +8,7 @@ One invariant ties the runtime together:
 workspace root == Rimz workspace == multiplexer session
 ```
 
-A **root** is the richest class a directory offers: an enclosing git repository (whose worktrees group inside one room), else a project-marker directory, else the directory itself — the workspace a headless box of agents gets with no source control. A pane's workspace is the session it lives in: session birth stamps the identity pin into the mux environment, and participating commands honor it before re-deriving from cwd ([workspace.rs](./crates/rimz/src/workspace.rs)). Zellij and tmux own panes, views, sessions, attach/detach, and scrollback; Rimz owns project identity, the feed, durable state, resolver trust, hook entrypoints, and the sidebar rendering contract.
+A **root** is the richest class a directory offers: an enclosing git repository (whose worktrees group inside one room), else a project-marker directory, else the directory itself — the workspace a headless box of agents gets with no source control. A pane's workspace is the session it lives in: session birth stamps the identity pin into the mux environment, and participating commands honor it before re-deriving from cwd ([workspace.rs](./crates/rimz/src/workspace.rs)). Zellij and tmux own panes, views, sessions, attach/detach, and scrollback; Rimz owns project identity, the feed, durable state, notification handlers, hook entrypoints, and the sidebar rendering contract.
 
 Product invariants and the operating paths live in [DESIGN.md](./DESIGN.md); this file is the structural map.
 
@@ -47,11 +47,11 @@ The CLI and hook subprocesses are the only writers of product truth. The sidebar
 
 | Owner | Owns | Does not own |
 | --- | --- | --- |
-| Multiplexer | panes, views, sessions, attach/detach, layout, scrollback | feed state, decisions, resolver trust |
+| Multiplexer | panes, views, sessions, attach/detach, layout, scrollback | feed state, decisions, handler trust |
 | Rimz ledger | events, feed items, resolutions, snapshots | terminal rendering, pane mechanics |
-| CLI / hook subprocesses | durable writes, bridge waiters, mux command calls | UI presentation |
+| CLI / hook subprocesses | durable writes, script-ask waiters, mux command calls | UI presentation |
 | Sidebar | rendering, focus affordances, human actions through the CLI | durable state files |
-| Resolvers | optional decisions through the public CLI | core policy, automatic trust |
+| Resolver handlers | optional decisions through the public CLI | core policy, automatic trust |
 | Agents | native UI, prompts, sandboxing, bypass behaviour | Rimz feed state |
 | Host | process resurrection, OS sandboxing | workspace state |
 
@@ -90,7 +90,7 @@ The ledger tier is durable truth, written with temp-file-plus-rename and a frame
 .
 |-- AGENTS.md              root of the layered contributor contract (== CLAUDE.md)
 |-- ARCHITECTURE.md        this file — runtime shape and module ownership
-|-- DESIGN.md              design commitments and the three operating paths
+|-- DESIGN.md              design commitments and the two feed surfaces
 |-- README.md              product entry point
 |-- ci/                    Dockerfile for the CI runner image (pinned Zellij and tmux)
 |-- docs/                  product and engineering docs (map in AGENTS.md);
@@ -101,13 +101,13 @@ The ledger tier is durable truth, written with temp-file-plus-rename and a frame
 |   |                      benches/ holds non-gating divan performance benches, and
 |   |                      presence/, pricing/, themes/ hold checked-in data build.rs embeds
 |   `-- rimz-presence-zellij/   headless Zellij presence plugin (wasm32-wasip1)
-|-- examples/resolvers/    reference resolver artifacts (Python, stdlib-only)
+|-- examples/resolvers/    reference resolver handler artifacts (Python/shell, stdlib-only)
 |-- scripts/               repo maintenance helpers (sync-repo)
 |-- supply-chain/          cargo-vet audit state
 `-- xtask/                 contributor task runner; entry point for every quality gate
 ```
 
-Add a crate only when ownership, target type, or dependency profile demands it. `rimz` is the one host runtime artifact — CLI, domain library, and native sidebar renderer ship in the same executable, every renderer projecting the same `rimz sidebar snapshot` view-model. `rimz-presence-zellij` clears the bar because it is a wasm32-wasip1 plugin binary owned by the Zellij plugin-host boundary, depending on no rimz crate; every `rimz` build embeds the vendored wasm checked in under `crates/rimz/presence/` and materializes it under the user's data directory before loading it. Its decision logic is a `zellij-tile`-free pure `policy.rs`, and its host-boundary argv/KDL rendering is pure `wire.rs`; both host-test in the ordinary workspace run ([multiplexers.md → Zellij presence channel](./docs/internals/sidebar/multiplexers.md#zellij-presence-channel)). `examples/resolvers/` are stdlib-only Python 3 artifacts, excluded from the workspace and never shipped; they prove the [resolver protocol](./docs/internals/agents/resolvers.md) is implementable through the public CLI alone ([examples/resolvers/README.md](./examples/resolvers/README.md)).
+Add a crate only when ownership, target type, or dependency profile demands it. `rimz` is the one host runtime artifact — CLI, domain library, and native sidebar renderer ship in the same executable, every renderer projecting the same `rimz sidebar snapshot` view-model. `rimz-presence-zellij` clears the bar because it is a wasm32-wasip1 plugin binary owned by the Zellij plugin-host boundary, depending on no rimz crate; every `rimz` build embeds the vendored wasm checked in under `crates/rimz/presence/` and materializes it under the user's data directory before loading it. Its decision logic is a `zellij-tile`-free pure `policy.rs`, and its host-boundary argv/KDL rendering is pure `wire.rs`; both host-test in the ordinary workspace run ([multiplexers.md → Zellij presence channel](./docs/internals/sidebar/multiplexers.md#zellij-presence-channel)). `examples/resolvers/` are stdlib-only artifacts, excluded from the workspace and never shipped; they prove the [resolver pattern](./docs/internals/agents/resolvers.md) is implementable through the public CLI alone ([examples/resolvers/README.md](./examples/resolvers/README.md)).
 
 ## Module map — `crates/rimz/src`
 
@@ -123,7 +123,6 @@ The major subsystems live in subtree modules, indexed in the table with their co
 | `mux/` | the Zellij/tmux seam: `MuxBackend`, the bounded subprocess engine, the reconcile planner, recovery, and the Zellij pane-topology cache | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/sidebar/multiplexers.md) |
 | `sidebar/` | the sidebar data plane: producer election, heartbeats, wakeup datagrams, unread episodes, read-mark receipts, the best-effort notification policy, pulled-truth/event fusion, the projection fold, the heavy-lane refresh directory (accounts, spending, usage, PR state, live-session sidecars, git stats), the producer pipeline, producer tick meter, and the rendered-stream anomaly observer | [state.md](./docs/internals/sidebar/state.md) · [sidebar.md](./docs/internals/sidebar/sidebar.md) · [notifications.md](./docs/internals/sidebar/notifications.md) · [diagnostics.md](./docs/internals/health/diagnostics.md#the-frame-stream-observer) |
 | `sidebar_pane/` | the native pane-resident sidebar process: the fixed-timestep serve loop, elder cache refresher and loop-task firing, renderer-local pets, and frame composition over the snapshot view-model, with the three-layer `render/theme/` color pipeline as the one place hue is decided | [sidebar.md](./docs/internals/sidebar/sidebar.md) · [interface/sidebar.md](./docs/interface/sidebar.md) · [pets.md](./docs/internals/sidebar/pets.md) |
-| `resolver/` | the per-machine allowlist, heartbeat freshness, and TOCTOU restat | [resolvers.md](./docs/internals/agents/resolvers.md) |
 | `remote/` | pure SSH target grammar, the guarded ssh command builder, reconnect policy, the link-health protocol, remote web prep/tunnel argv, and the `remote.toml` alias store | [remote.md](./docs/internals/reach/remote.md) |
 | `diag/` | diagnostic-only JSONL append surfaces and record schemas (sidebar anomalies, the shared rotating helper, pane-binding recovery, the notification trace, and Zellij presence-plugin telemetry) | [diagnostics.md](./docs/internals/health/diagnostics.md) · [notifications.md](./docs/internals/sidebar/notifications.md) |
 
@@ -132,7 +131,7 @@ The major subsystems live in subtree modules, indexed in the table with their co
 Each keeps its `//!` header as the entry point; grouped here by what they serve.
 
 - **Project identity and reach** — `workspace` (root/worktree resolution and env pinning), `web` (Zellij web URL/status/token argv and tunnel-port domain; [web.md](./docs/internals/reach/web.md)), `channel` (durable named lanes; [message.md § Channels](./docs/internals/agents/message.md#channels)), `worktree` (Rimz-owned Git worktrees with `.worktreeinclude` seeding and `.worktreelink` linking; [worktree.md](./docs/internals/agents/worktree.md)), `storage` (symlink-safe Rimz-owned disk measurement), `forge` (pure PR-number/URL/remote-host parsing).
-- **Feed, panes, and the decision seam** — `feed` (item lifecycle, surfaces, statuses), `chat` (durable cross-provider conversation log that hooks append and `rimz transcript` reads back; [message.md § Transcript](./docs/internals/agents/message.md#transcript)), `pane` (shared pane references and runtime owner metadata), `bridge` (per-request and per-run sockets, nonce validation), `sock` (the shared AF_UNIX budget and remedy), `ids` (typed identifier newtypes), `trust` (the executable-surface hash and grant state; [trust.md](./docs/internals/sidebar/trust.md)).
+- **Feed, panes, and the decision seam** — `feed` (item lifecycle, surfaces, statuses), `chat` (durable cross-provider conversation log that hooks append and `rimz transcript` reads back; [message.md § Transcript](./docs/internals/agents/message.md#transcript)), `pane` (shared pane references and runtime owner metadata), `bridge` (script-ask and per-run sockets, nonce validation), `sock` (the shared AF_UNIX budget and remedy), `ids` (typed identifier newtypes), `trust` (the executable-surface hash and grant state; [trust.md](./docs/internals/sidebar/trust.md)).
 - **Daemon view and managed hosts** — `remote_control` (remote-control host auto-launch and daemon-dashboard pane classification), `daemon_content` (daemon-view middle-column content resolution and the live-reload supervisor).
 - **Process and config infrastructure** — `config` (per-machine settings mirrored from `config.toml`/`theme.toml`/`agents.toml`/`loop.toml`, with the config-family leaves under `src/config/`), `observability` (off-box error reporting; [diagnostics.md](./docs/internals/health/diagnostics.md#off-box-error-reporting)), `agent_activity` (liveness hints), `lane` (thread-local producer lane tags and the per-lane counters the tick meter reads), `proc` (the `/proc` reader, pane-local process probes, and the spawn-count testkit seam), `reload` (binary-upgrade convergence and re-exec), `osc` (terminal notification bytes), `build_id`/`child_process`/`tui` (executable identity, detached-child helpers, shared TUI mode lifecycle), `testkit` (feature-gated synthetic-fleet builders for tests and benches).
 

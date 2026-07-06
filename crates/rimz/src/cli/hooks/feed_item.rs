@@ -88,27 +88,3 @@ fn agent_runtime_owner(source: &str, payload: &Value) -> Option<rimz::RuntimeOwn
     };
     Some(process_owner(kind, subject_id, pid))
 }
-
-pub(super) fn attach_resolver_chain(item: &mut FeedItem, fresh: &[AllowlistEntry]) {
-    let chain = fresh
-        .iter()
-        .map(|entry| ResolverStep {
-            resolver_id: entry.id.clone(),
-            display_name: entry.display_name.clone(),
-            order: i32::try_from(entry.order).unwrap_or(i32::MAX),
-            budget_ms: entry.budget_seconds.saturating_mul(1000),
-            state: ResolverStepState::Queued,
-            reason: None,
-        })
-        .collect();
-    item.activate_resolver_chain(chain);
-}
-
-pub(super) fn hook_cap_for(agent: &dyn AgentAdapter) -> Duration {
-    if let Ok(raw) = std::env::var(HOOK_CAP_OVERRIDE_ENV)
-        && let Ok(ms) = raw.parse::<u64>()
-    {
-        return Duration::from_millis(ms);
-    }
-    agent.descriptor().hook_cap
-}

@@ -13,7 +13,7 @@ use crate::agents::AgentStatus;
 use crate::config::{
     NotificationsPrefs, NotifyConditionAgent, RenderMode, TemplateVars, render_template,
 };
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId};
 use crate::remote::link::LinkTier;
 use crate::sidebar::unread::OpenedUnread;
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot, child_process};
@@ -63,6 +63,8 @@ pub struct NotificationAgent {
     pub worktree: Option<String>,
     pub task: Option<String>,
     pub pane_id: Option<PaneId>,
+    pub request_id: Option<RequestId>,
+    pub root: Option<String>,
     /// The status reached by an agent notification; `None` for link/reminder
     /// notifications that name no agent.
     pub new_status: Option<AgentStatus>,
@@ -418,6 +420,10 @@ fn spawn_notify_command(command: &str, notification: &Notification) -> std::io::
         .env("RIMZ_NOTIFY_BODY", &notification.body)
         .env("RIMZ_NOTIFY_AGENT", notification.agent_env())
         .env("RIMZ_NOTIFY_KIND", notification.kind_env());
+    let (request_id, pane, root) = notify_ask_env(notification);
+    cmd.env("RIMZ_NOTIFY_REQUEST_ID", request_id)
+        .env("RIMZ_NOTIFY_PANE", pane)
+        .env("RIMZ_NOTIFY_ROOT", root);
     if let Some(unread_count) = notification.unread_count {
         cmd.env("RIMZ_NOTIFY_UNREAD", unread_count.to_string());
     }
@@ -437,6 +443,9 @@ fn notification_template_vars(notification: &Notification) -> TemplateVars {
             .map(|count| count.to_string())
             .unwrap_or_default(),
     );
+    vars.insert("request_id", "");
+    vars.insert("pane", "");
+    vars.insert("root", "");
     if let [agent] = notification.agents.as_slice() {
         vars.insert(
             "status",
@@ -447,6 +456,23 @@ fn notification_template_vars(notification: &Notification) -> TemplateVars {
         );
         vars.insert("worktree", agent.worktree.clone().unwrap_or_default());
         vars.insert("task", agent.task.clone().unwrap_or_default());
+        vars.insert(
+            "request_id",
+            agent
+                .request_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        );
+        vars.insert(
+            "pane",
+            agent
+                .pane_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        );
+        vars.insert("root", agent.root.clone().unwrap_or_default());
     }
     vars.insert("title", notification.title.clone());
     vars.insert("body", notification.body.clone());
@@ -526,6 +552,8 @@ fn pending_notification(
         worktree: opened.worktree.clone(),
         task: opened.task.clone(),
         pane_id: opened.pane_id.clone(),
+        request_id: opened.request_id.clone(),
+        root: opened.root.clone(),
         new_status: Some(opened.status),
     };
     PendingNotification {
@@ -536,6 +564,25 @@ fn pending_notification(
         title,
         body,
     }
+}
+
+fn notify_ask_env(notification: &Notification) -> (String, String, String) {
+    if let [agent] = notification.agents.as_slice() {
+        return (
+            agent
+                .request_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            agent
+                .pane_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            agent.root.clone().unwrap_or_default(),
+        );
+    }
+    (String::new(), String::new(), String::new())
 }
 
 fn coalesced_notification(pending: Vec<PendingNotification>) -> Notification {

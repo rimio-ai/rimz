@@ -2,8 +2,8 @@ use jiff::Timestamp;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentState, AgentStatus};
-use crate::feed::{FeedItem, FeedStatus, ResolverStepState, Surface};
-use crate::ledger::snapshot::row::{AgentCard, RowCard, SidebarResolverState, SidebarRow};
+use crate::feed::{FeedItem, FeedStatus};
+use crate::ledger::snapshot::row::{AgentCard, RowCard, SidebarRow};
 use crate::pane::PaneRef;
 
 pub(in crate::ledger::snapshot) fn row_from_agent(
@@ -51,7 +51,6 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
             context: agent.context.clone(),
             context_severity: None,
             registered_at: agent.registered_at,
-            resolver: None,
             options: Vec::new(),
             sub_agents: Vec::new(),
             compacting: is_compacting(agent, now),
@@ -78,8 +77,8 @@ fn agent_context_window(agent: &AgentState) -> Option<u64> {
     })
 }
 
-/// A standalone attention row for a pending script/bridge ask on a pane no
-/// agent row claims. The caller has already proven `pane` is present in the
+/// A standalone attention row for a pending script ask on a pane no agent row
+/// claims. The caller has already proven `pane` is present in the
 /// current frame; the row refreshes its pane reference from that frame so
 /// jumps, focus, view id, command, cwd, and process start all read from live
 /// mux truth. Infallible by construction: both attention lists hold only
@@ -127,7 +126,6 @@ pub(super) fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> Sideb
             context: None,
             context_severity: None,
             registered_at: None,
-            resolver: active_resolver_state(item),
             options: item.options.clone(),
             sub_agents: Vec::new(),
             compacting: false,
@@ -139,26 +137,4 @@ pub(super) fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> Sideb
 
 pub(super) fn agent_id_from_item(item: &FeedItem) -> Option<String> {
     item.agent_session_id().map(ToOwned::to_owned)
-}
-
-pub(super) fn active_resolver_state(item: &FeedItem) -> Option<SidebarResolverState> {
-    if item.surface != Surface::Bridge || item.status != FeedStatus::Pending {
-        return None;
-    }
-    let resolver_id = item.chain_active_resolver.clone().or_else(|| {
-        item.chain
-            .iter()
-            .find(|step| step.state == ResolverStepState::Active)
-            .map(|step| step.resolver_id.clone())
-    })?;
-    let display_name = item
-        .chain
-        .iter()
-        .find(|step| step.resolver_id == resolver_id)
-        .and_then(|step| step.display_name.clone());
-    Some(SidebarResolverState {
-        resolver_id,
-        display_name,
-        budget_until: item.chain_active_until,
-    })
 }

@@ -2,7 +2,7 @@
 
 Working contract for humans and coding agents contributing to Rimz. Read on entry. Topic detail lives in the leaves linked from the [documentation map](#documentation-map); never duplicate it here.
 
-> **Invariant.** Rimz routes attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI. A resolver delegates routine answers only when you explicitly enrol one, and the chain ends with you.
+> **Invariant.** Rimz routes attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI. A resolver you wire explicitly may answer routine prompts in that same UI, and the prompt remains there for you.
 
 If a child `AGENTS.md` appears under a subtree, it extends this file with local-only constraints — it never restates parent rules.
 
@@ -17,7 +17,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 ## Engineering principles
 
 - **Explicit Rust.** Typed IDs, typed state machines, structured parsers, explicit errors. Domain errors return `Result`; `unwrap`, `expect`, and panics belong in tests, build scripts, and provably-impossible states (with a comment).
-- **Strong types** for workspace, request, resolver, pane, agent-kind, and agent-session IDs, and for surfaces, statuses, and protocol versions.
+- **Strong types** for workspace, request, pane, agent-kind, and agent-session IDs, and for surfaces, statuses, and protocol versions.
 - **Structured parsers** for TOML, JSON, KDL, and agent payloads.
 - **Ledger durability.** File-state writes use temp-file plus rename. Event-log writes follow the durability contract in [docs/internals/sidebar/ledger.md](./docs/internals/sidebar/ledger.md).
 - **Fail-fast as a precondition, not best-effort.** A configured capability that cannot work fails at the entry point with the fix — `rimz start` refuses rather than launching a degraded surface that errors downstream. Best-effort is for latency and enrichment (sidebar wakeups, app-server context), never for a precondition the user switched on.
@@ -27,10 +27,10 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Ledger first.** Correctness lives in the ledger, CAS rules, nonces, and per-request sockets. Sidebar wakeups are latency, not truth.
 - **Hook stdout is the decision channel.** Logs go to stderr or Rimz state logs. Hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class. Core behaviour never depends on a backend-only feature.
-- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `message` routes human-authored text through the same send path, while pane reads stay in rendering, resolver-owned inspection, and Codex turn-death confirmation.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `message` routes human-authored text through the same send path, while pane reads stay in rendering, explicit resolver inspection, and Codex turn-death confirmation.
 - **Sidebar is read-only on the ledger.** Sidebar code reads via `rimz sidebar snapshot`; ledger-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
-- **Security surfaces stay visible.** Project trust, resolver allowlists, hook install diffs, and privacy settings are product behaviour, not implementation details.
+- **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, and privacy settings are product behaviour, not implementation details.
 
 ## Implementation rules
 
@@ -58,7 +58,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 
 **Root**
 - [README.md](./README.md) — product entry point.
-- [DESIGN.md](./DESIGN.md) — what Rimz offers, the attention problem, the design choices that answer it, the three operating paths, commitments, non-goals.
+- [DESIGN.md](./DESIGN.md) — what Rimz offers, the attention problem, the design choices that answer it, the two feed surfaces, commitments, non-goals.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — runtime shape, repository layout, module ownership.
 
 **Guide** — `docs/guide/`
@@ -78,7 +78,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [web.md](./docs/reference/cli/web.md) — open a Zellij room in the browser and manage Zellij web server/token helpers.
   - [agents.md](./docs/reference/cli/agents.md) — run the fleet: `agents` launch and supervised runs, `message`, `transcript`, `pane`, `worktree`, `loop`, and the `@handle`/`#channel` addressing grammar.
   - [channel.md](./docs/reference/cli/channel.md) — durable named-channel commands and the `--channel` launch/send flag.
-  - [feed.md](./docs/reference/cli/feed.md) — decisions, hooks, and trust: `feed`, `event`, `resolver`, `hooks`, and `trust`.
+  - [feed.md](./docs/reference/cli/feed.md) — decisions, hooks, and trust: `feed`, `event`, `hooks`, and `trust`.
   - [maintenance.md](./docs/reference/cli/maintenance.md) — machine and room upkeep: `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, and `ping`.
 - [configuration.md](./docs/reference/configuration.md) — config tiers, generated per-machine template, project trust shape, privacy.
 - [theme.md](./docs/reference/theme.md) — sidebar theming: built-in and Ghostty-derived palettes, color depth and slot overrides, custom theme files, status-head animations, provider brand styling, and provider-dashboard pets.
@@ -93,7 +93,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
     - [pi.md](./docs/internals/agents/adapter/pi.md) — Pi.
     - [opencode.md](./docs/internals/agents/adapter/opencode.md) — OpenCode.
   - [provider.md](./docs/internals/agents/provider.md) — provider accounts, balances, spend, and pricing: the plan/metered model, the out-of-band account probe, the provider-dashboard aggregation, the full-history cost/spending walk, and the three-layer token price table (embedded snapshot, remote refresh, builtins).
-  - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver protocol, chain, pane primitives.
+  - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver pattern, notification handlers, pane primitives.
   - [harness.md](./docs/internals/agents/harness.md) — the agent harness end to end: the layout IR and backend tab/split placement, the agent-address grammar, supervised `rimz agents -p` runs (records, wakeups, output/input formats, posture, shared launch params), the scheduled loop tasks that drive those runs on a clock (calendar, interval, cron, one-shot, poll-until, and window-priming pings), and the `rimz agents exec` wrapper and run-pane cleanup.
   - [message.md](./docs/internals/agents/message.md) — the message system: how Rimz routes text to a running agent, from the send modes, the durable message record and lifecycle, delivery gates and FIFO ordering, the hook-triggered delivery pipeline, scheduling, smart compaction, wait confirmation, and retries, to the channel lanes that scope addressing (named, worktree, team, and directory backings, label precedence, and the registry), the transcript log and its `rimz transcript` read-back, and the audit trail.
   - [worktree.md](./docs/internals/agents/worktree.md) — Rimz-owned Git worktrees as one channel backing: creation and the `[worktree] dir`/base template, the `rimz-worktree.json` ownership marker, `.worktreeinclude` file seeding, `.worktreelink` directory sharing, and the landed-work cleanup decision plus the `rimz gc` sweep.
@@ -101,7 +101,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [sidebar.md](./docs/internals/sidebar/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
   - [state.md](./docs/internals/sidebar/state.md) — sidebar pulled truth, typed realtime events, fusion, process roles, and timing cadences.
   - [notifications.md](./docs/internals/sidebar/notifications.md) — best-effort desktop, bell, and command notifications layered over the sidebar attention model.
-  - [ledger.md](./docs/internals/sidebar/ledger.md) — durable state and the blocking decision bridge.
+  - [ledger.md](./docs/internals/sidebar/ledger.md) — durable state, feed surfaces, and script-ask bridge.
   - [multiplexers.md](./docs/internals/sidebar/multiplexers.md) — Zellij and tmux backend contracts.
   - [trust.md](./docs/internals/sidebar/trust.md) — executable-surface hash, trust states, auto-revoke.
   - [pets.md](./docs/internals/sidebar/pets.md) — opt-in provider-dashboard pets: pane-local cell-art rendering, the fleet-status sprite model, canned captions, and the Codex-CDN asset cache.

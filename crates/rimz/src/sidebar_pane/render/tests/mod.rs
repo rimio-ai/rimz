@@ -13,6 +13,7 @@ use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::json;
+use std::rc::Rc;
 use std::time::Duration;
 
 use super::chrome::abbreviate_under;
@@ -114,12 +115,23 @@ fn snapshot_to_screen_with_alert_and_ui(
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
     Backend::clear_region(terminal.backend_mut(), ClearType::All).unwrap();
-    let mut ui = ui.clone();
+    let mut ui = fixed_theme_ui(snapshot, ui);
     draw_to_terminal_with_ui(&mut terminal, snapshot, alert, &mut ui).unwrap();
     drop(terminal);
     let mut parser = vt100::Parser::new(height, width, 0);
     parser.process(&bytes);
     parser.screen().contents()
+}
+
+fn fixed_theme_ui(snapshot: &SidebarSnapshot, ui: &UiState) -> UiState {
+    let mut ui = ui.clone();
+    ui.theme_cache.get_or_insert_with(|| {
+        (
+            snapshot.theme.clone(),
+            Rc::new(Theme::fixed_for_theme(false, &snapshot.theme)),
+        )
+    });
+    ui
 }
 
 fn snapshot_text(screen: &str) -> String {

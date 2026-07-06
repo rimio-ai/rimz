@@ -23,7 +23,7 @@ pub struct UninstallArgs {
     /// Also delete durable ledgers, spend history, and shared state.
     #[arg(long)]
     pub state: bool,
-    /// Also delete per-machine config, themes, trust grants, and resolver allowlists.
+    /// Also delete per-machine config, themes, trust grants, and notification handlers.
     #[arg(long)]
     pub config: bool,
     /// Delete state and config in addition to the default runtime/cache/data wipe.

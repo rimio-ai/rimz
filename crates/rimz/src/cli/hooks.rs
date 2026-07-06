@@ -2,19 +2,13 @@
 //! agent decision channel; stderr is for diagnostics. The CLI marks the
 //! whole subtree `hide = true` because users don't run it by hand.
 //!
-//! Bridge wiring: when the per-machine allowlist contains a resolver whose
-//! heartbeat is fresh under the workspace runtime dir, the hook engages the
-//! bridge — binds a per-request socket, re-stats the resolver (TOCTOU
-//! guard), pushes a `Surface::Bridge` feed item, and blocks on the socket
-//! for up to the agent descriptor's `hook_cap`. On resolver answer
-//! the hook prints the agent-native decision JSON; on cap or resolver loss
-//! it downgrades to `native_ui` and returns the agent-native no-op. See
-//! `docs/internals/sidebar/ledger.md` for the wire-level contract.
+//! Ask hooks write a `native_ui` feed item when the agent has its own prompt
+//! surface, then return the agent-native neutral no-op immediately. The
+//! agent's UI stays the answer surface.
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
@@ -29,22 +23,18 @@ use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, Transiti
 use rimz::agents::{
     AgentAdapter, AgentHookClass, AgentLifecycleObservation, AgentState, adapter_by_kind,
 };
-use rimz::bridge::{self as bridge_api, BridgeOutcome, ExpectedFrame, SocketGuard};
-use rimz::feed::{
-    AbandonReason, FeedItem, FeedKind, FeedStatus, ResolverStep, ResolverStepState, Surface,
-};
+use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{MuxName, PaneId};
 use rimz::ledger::AskExpiry;
 use rimz::ledger::runtime::process_owner;
 use rimz::ledger::snapshot::pane_start_allows_bind;
 use rimz::mux::ClientFocusOptions;
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
-use rimz::resolver::{Allowlist, AllowlistEntry, fresh_enrolled, is_resolver_fresh, restat};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
+mod ask;
 mod binding;
 mod binding_select;
-mod bridge;
 mod feed_item;
 mod install;
 mod lifecycle;
@@ -54,19 +44,16 @@ mod proctree;
 #[cfg(test)]
 mod tests;
 
+use ask::handle_blocking_feed;
 use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
-use bridge::handle_blocking_feed;
 use feed_item::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
 use lifecycle::handle_lifecycle_hook;
 use owner::{attach_agent_owner, attach_agent_pane};
 use proctree::sibling_agent_pins;
-/// Hidden env-var override used by integration tests so the cap timeout
-/// shape can be exercised in tens of milliseconds. Production callers leave
-/// this unset and the adapter's `hook_cap` governs.
-pub(super) const HOOK_CAP_OVERRIDE_ENV: &str = "RIMZ_HOOK_CAP_MILLIS";
-pub(super) const FOCUSED_PANE_BIND_TIMEOUT: Duration = Duration::from_millis(1_000);
+pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(1_000);
 #[derive(Debug, Args)]
 pub struct HooksArgs {
     #[command(subcommand)]

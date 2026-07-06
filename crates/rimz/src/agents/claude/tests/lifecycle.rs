@@ -216,11 +216,6 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
 
 #[test]
 fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
-    assert_eq!(
-        ClaudeAdapter.descriptor().hook_cap,
-        std::time::Duration::from_secs(120)
-    );
-
     for (source, expected) in [
         ("compact", LifecycleSignal::CompactionEnded { auto: None }),
         ("startup", LifecycleSignal::Registered),

@@ -13,13 +13,13 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::fmt::{
-    activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label, time_remaining,
-    tokens_int, window_short,
+    activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label, tokens_int,
+    window_short,
 };
 use crate::sidebar_pane::render::labels::{
     CardAttention, CardEmphasis, activity_age_style, agent_glyph, agent_lead_style_with_attention,
     agent_role_style_at, compacting_head_style, context_breakdown_spans, context_compaction_spans,
-    context_gauge_spans, context_total_spans, elapsed_glyph, emphasize, resolver_style, role_glyph,
+    context_gauge_spans, context_total_spans, elapsed_glyph, emphasize, role_glyph,
     severity_heat_amount, severity_heat_color, subagent_head_style, token_total_glyph,
     unread_run_spans, window_style,
 };
@@ -32,7 +32,7 @@ mod identity;
 
 use self::{description::*, gauge::*, identity::*};
 
-use super::process::{composed_row, process_detail_line, process_row_line};
+use super::process::{process_detail_line, process_row_line};
 use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
 
 /// Width budget for the agent handle on line 1: kind-role handles through
@@ -104,7 +104,6 @@ pub(super) fn row_lines(
     let identity = IdentityLineContext {
         theme,
         providers,
-        now,
         tier,
         width: cw,
         attention,

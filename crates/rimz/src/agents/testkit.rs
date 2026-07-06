@@ -1,6 +1,5 @@
-//! Shared fixtures for the adapter unit tests: the canonical bridge ask each
-//! adapter renders decisions against, and the exhaustive lifecycle-signal
-//! enumeration the totality tests sweep.
+//! Shared fixtures for the adapter unit tests: a canonical agent ask and the
+//! exhaustive lifecycle-signal enumeration the totality tests sweep.
 
 use std::path::Path;
 
@@ -8,13 +7,12 @@ use crate::agents::lifecycle::LifecycleSignal;
 use crate::feed::{FeedItem, FeedKind, Surface};
 use crate::ids::WorkspaceId;
 
-/// The canonical pending bridge ask for one agent kind — the item every
-/// adapter's `render_decision` goldens start from.
+/// The canonical pending native ask for one agent kind.
 pub(crate) fn feed_item(kind: FeedKind, agent_kind: &str) -> FeedItem {
     let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
     FeedItem::new(
         workspace,
-        Surface::Bridge,
+        Surface::NativeUi,
         kind,
         "allow?",
         agent_kind,

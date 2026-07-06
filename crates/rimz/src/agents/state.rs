@@ -138,8 +138,8 @@ impl ContextSeverity {
 }
 
 /// A threshold-crossing an agent's observed state can trip — the typed shape a
-/// future hook flow emits and a resolver acts on, riding the same feed the
-/// resolver chain already drains (an auto-compact policy matching
+/// future hook flow emits and a resolver handler acts on, riding the same feed
+/// notification handlers can inspect (an auto-compact policy matching
 /// `ContextSeverity { to: Amber, .. }` and answering with `rimz pane send
 /// /compact`, exactly as the pane-send reference resolver acts on a recognised
 /// prompt today). Defined now so the seam is typed against the verdicts the

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::feed::{FeedItem, FeedStatus, Surface};
-use crate::ids::{RequestId, ResolverId};
+use crate::ids::RequestId;
 use crate::ledger::atomic;
 use crate::ledger::pending_terminal::{self, PendingTerminalRecord};
 
@@ -24,11 +24,6 @@ pub enum FeedStoreErr {
         request_id: RequestId,
         surface: Surface,
         verb: &'static str,
-    },
-    #[error("resolver {resolver} is not active for request {request_id}")]
-    ResolverNotActive {
-        request_id: RequestId,
-        resolver: ResolverId,
     },
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
@@ -84,7 +79,7 @@ pub fn load(feed_dir: &Path, request_id: &RequestId) -> Result<FeedItem> {
 /// request id with the pending side winning, so a terminal rewrite caught
 /// between its write and its relocation never lists twice.
 pub fn list(feed_dir: &Path) -> Result<Vec<FeedItem>> {
-    let mut items = pending_terminal::list_all::<FeedItem>(feed_dir)?;
+    let mut items = pending_terminal::list_all_lossy::<FeedItem>(feed_dir)?;
     items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
     Ok(items)
 }
@@ -94,7 +89,7 @@ pub fn list(feed_dir: &Path) -> Result<Vec<FeedItem>> {
 /// pre-partition layout is returned too and skipped by the caller's
 /// pending-status check.
 pub fn list_pending(feed_dir: &Path) -> Result<Vec<FeedItem>> {
-    let mut items = pending_terminal::list_pending_raw::<FeedItem>(feed_dir)?;
+    let mut items = pending_terminal::list_pending_raw_lossy::<FeedItem>(feed_dir)?;
     items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
     Ok(items)
 }
@@ -111,12 +106,11 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn list_reports_malformed_feed_file() {
+    fn list_skips_malformed_feed_file() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("req_bad.json"), b"{not json").unwrap();
 
-        let err = list(dir.path()).unwrap_err();
-        assert!(matches!(err, FeedStoreErr::Json { .. }));
+        assert!(list(dir.path()).unwrap().is_empty());
     }
 
     #[test]

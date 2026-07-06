@@ -112,7 +112,7 @@ A plan approval or user question answers on the `PreToolUse` event and **require
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": {} } }
 ```
 
-The neutral path (no resolver answered) is empty stdout, exit 0. Exact bytes are the inline goldens in [`claude/mod.rs`](../../../crates/rimz/src/agents/claude/mod.rs).
+The neutral path is empty stdout, exit 0. Exact bytes are the inline goldens in [`claude/mod.rs`](../../../crates/rimz/src/agents/claude/mod.rs).
 
 ### Full event catalog (index)
 

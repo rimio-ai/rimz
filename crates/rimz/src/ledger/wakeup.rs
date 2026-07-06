@@ -2,10 +2,10 @@
 //!
 //! Two channels:
 //!
-//! * **Per-request feed socket** — the waiting hook or script bound a socket
-//!   via [`crate::bridge::bind`]; when a resolver writes a decision, or reset
-//!   closes the request without one, the writer sends a small datagram so the
-//!   waiter can exit before its polling tick fires.
+//! * **Per-request feed socket** — a script `feed ask` caller bound a socket
+//!   via [`crate::bridge::bind`]; when `feed resolve` writes a decision, or
+//!   reset closes the request without one, the writer sends a small datagram so
+//!   the waiter can exit before its polling tick fires.
 //! * **Sidebar wakeup sockets** — each live sidebar instance writes a
 //!   heartbeat JSON under `runtime/heartbeat/sidebar.*.json` carrying the
 //!   path of a datagram socket it owns. After every mutation we walk the
@@ -51,8 +51,8 @@ pub enum WakeupErr {
 
 pub type Result<T> = std::result::Result<T, WakeupErr>;
 
-/// Send a terminal datagram to the per-request socket bound by the waiting hook
-/// or script. No-op for `native_ui` and still-pending items.
+/// Send a terminal datagram to the per-request socket bound by a waiting script.
+/// No-op for `native_ui` and still-pending items.
 pub fn wake_per_request(rt: &RuntimePaths, item: &FeedItem) -> Result<()> {
     if !item.surface.hook_blocks() {
         return Ok(());

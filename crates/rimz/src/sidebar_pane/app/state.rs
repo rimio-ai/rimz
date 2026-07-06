@@ -67,7 +67,6 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         now,
         worktree_groups: Vec::new(),
         needs_attention: Vec::new(),
-        resolver_working: Vec::new(),
         agents: Vec::new(),
         wired_kinds: Vec::new(),
         wired_default_models: std::collections::BTreeMap::new(),

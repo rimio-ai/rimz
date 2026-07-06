@@ -1,19 +1,15 @@
-//! Agent hook-payload fixtures and the environment probes the example-resolver
-//! tests lean on (`python3` availability, resolver heartbeat liveness).
+//! Agent hook-payload fixtures and the environment probes example tests lean
+//! on (`python3` availability and socket support).
 
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
 
-use jiff::Timestamp;
 use rimz::EventEnvelope;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::ids::AgentSessionId;
-use rimz::resolver::heartbeat::ResolverHeartbeat;
 use serde_json::json;
 
-use super::command::ScrubSessionEnvExt;
 use super::env::Env;
 use super::harness::Harness;
 
@@ -138,53 +134,6 @@ pub fn example_resolver_script(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Spawn a reference Python resolver pointed at the harness workspace, stdio
-/// piped. When `tmux_pane` is `Some`, route the resolver's `rimz` invocations
-/// at an isolated tmux server: `TMUX_PANE` selects tmux for backend detection,
-/// `TMUX_TMPDIR` pins the socket, and every other mux-detection variable is
-/// dropped so tmux is the only mux detected.
-pub fn spawn_example_resolver(
-    env: &Env,
-    script_name: &str,
-    resolver_id: &str,
-    run_seconds: f32,
-    tmux_pane: Option<&str>,
-) -> Child {
-    let script = example_resolver_script(script_name);
-    assert!(script.exists(), "resolver script missing: {script:?}");
-
-    let mut cmd = Command::new("python3");
-    cmd.scrub_session_env()
-        .arg(&script)
-        .args([
-            "--workspace-id",
-            env.workspace_id.as_str(),
-            "--resolver-id",
-            resolver_id,
-            "--rimz-bin",
-            &env.rimz_bin().display().to_string(),
-            "--tick-seconds",
-            "0.1",
-            "--run-seconds",
-            &run_seconds.to_string(),
-        ])
-        .env("XDG_STATE_HOME", env.state_root())
-        .env("XDG_RUNTIME_DIR", &env.runtime_root)
-        .env("XDG_CONFIG_HOME", env.config_root())
-        .env("HOME", &env.home_root)
-        .env_remove("RUST_LOG")
-        .current_dir(&env.project_root);
-    if let Some(pane) = tmux_pane {
-        let tmpdir = env.project_root.join("tmux");
-        std::fs::create_dir_all(&tmpdir).expect("mkdir tmux tmpdir");
-        cmd.env("TMUX_TMPDIR", tmpdir).env("TMUX_PANE", pane);
-    }
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn python resolver")
-}
-
 /// Whether `python3` is on PATH — example-resolver tests self-skip without it.
 pub fn python3_present() -> bool {
     Command::new("python3")
@@ -205,32 +154,4 @@ pub fn skip_preconditions(env: &Env) -> bool {
         return true;
     }
     env.skip_if_sandboxed()
-}
-
-/// Block until `resolver_id` has written a fresh heartbeat, or panic at
-/// `until`. Used by the example-resolver tests that wait for a spawned Python
-/// resolver to come alive before firing a hook.
-pub fn wait_for_heartbeat(env: &Env, resolver_id: &str, until: Instant) {
-    let path = env
-        .heartbeat_dir()
-        .join(format!("resolver.{resolver_id}.json"));
-    let ttl = Duration::from_secs(3);
-    while Instant::now() < until {
-        if let Ok(bytes) = std::fs::read(&path)
-            && let Ok(parsed) = serde_json::from_slice::<ResolverHeartbeat>(&bytes)
-        {
-            let age = Timestamp::now().duration_since(parsed.last_seen);
-            if !age.is_negative() && (age.as_secs() as u64) < ttl.as_secs() {
-                return;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    panic!("python resolver never wrote a fresh heartbeat at {path:?}");
-}
-
-/// Wait for a spawned example resolver to write its first heartbeat before a
-/// test fires the hook or polls the feed path it owns.
-pub fn wait_for_example_resolver(env: &Env, resolver_id: &str) {
-    wait_for_heartbeat(env, resolver_id, Instant::now() + Duration::from_secs(10));
 }

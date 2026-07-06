@@ -1,19 +1,15 @@
-//! Blocking decision bridge.
+//! Script ask and run wake sockets.
 //!
-//! A waiting hook or script binds a per-request Unix datagram socket and
-//! parks on it until either a wakeup frame arrives from the ledger writer
-//! (when a resolver calls `feed resolve`) or the cap fires. The socket path
-//! is derived from the request id; both binder and ledger writer call
-//! [`feed_socket_path`] so there is one source of truth.
+//! A script that called `rimz feed ask` binds a per-request Unix datagram
+//! socket and parks on it until either a wakeup frame arrives from the ledger
+//! writer or the cap fires. Supervised runs use the sibling run socket. Socket
+//! paths are derived from request/run ids so binder and ledger writer share one
+//! source of truth.
 //!
 //! Validation is by `(workspace_id, request_id, nonce)` — never by PID alone,
 //! per `docs/internals/sidebar/ledger.md`. Frames that fail validation are logged at
 //! `debug` and dropped; the waiter keeps recving until the cap.
 //!
-//! The TOCTOU resolver-heartbeat re-stat described by the bridge path lives
-//! in [`crate::resolver::freshness::restat`]; the hook calls it between
-//! [`bind`] and pushing the feed item with `Surface::Bridge`.
-
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -29,13 +25,6 @@ use crate::sock;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeErr {
-    /// Returned by [`crate::resolver::freshness::restat`] when the resolver
-    /// picked by the freshness walk is no longer serving: heartbeat missing,
-    /// stale beyond the TTL, off the allowlist, or pinned-binary mismatch.
-    /// The hook downgrades to `native_ui` and exits.
-    #[error("resolver heartbeat went stale for {0}; downgrading to native_ui")]
-    HeartbeatStale(RequestId),
-
     #[error("binding bridge socket at {path}: {source}")]
     Bind {
         path: PathBuf,
@@ -107,9 +96,9 @@ pub enum WakeupFrame {
     },
 }
 
-/// Per-request socket path. Single source of truth shared by binder and
-/// resolver. Short id from [`RequestId::short`] keeps the path well under
-/// the platform `AF_UNIX` budget.
+/// Per-request socket path. Single source of truth shared by binder and ledger
+/// writer. Short id from [`RequestId::short`] keeps the path well under the
+/// platform `AF_UNIX` budget.
 pub fn feed_socket_path(rt: &RuntimePaths, request_id: &RequestId) -> PathBuf {
     rt.sock_dir
         .join(format!("feed.{}.sock", request_id.short()))
@@ -178,10 +167,7 @@ impl Drop for SocketGuard {
     }
 }
 
-/// Adopt a freshly-bound std `UnixDatagram` into a tokio one. The hook
-/// bridge poll loop calls this once and keeps the tokio socket alive across
-/// many [`wait_for_resolution`] calls; the one-shot `feed ask` path uses
-/// [`wait_for_resolution_owning`] which adopts internally.
+/// Adopt a freshly-bound std `UnixDatagram` into a tokio one.
 pub fn adopt(sock: StdUnixDatagram) -> Result<tokio::net::UnixDatagram> {
     sock.set_nonblocking(true).map_err(BridgeErr::Recv)?;
     tokio::net::UnixDatagram::from_std(sock).map_err(BridgeErr::Recv)
@@ -192,8 +178,7 @@ pub fn adopt(sock: StdUnixDatagram) -> Result<tokio::net::UnixDatagram> {
 /// `debug`); the waiter keeps recving until either a valid frame lands or the
 /// cap expires.
 ///
-/// Takes the socket by borrow so the hook bridge can keep the per-request
-/// socket bound across chain-advance iterations without rebinding.
+/// Takes the socket by borrow for callers that own a long-lived waiter.
 pub async fn wait_for_resolution(
     sock: &tokio::net::UnixDatagram,
     expected: &ExpectedFrame,

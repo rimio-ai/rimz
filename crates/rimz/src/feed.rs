@@ -1,8 +1,8 @@
 //! Feed item vocabulary — `Surface`, `FeedStatus`, `FeedKind`, `Resolution`,
-//! the resolver chain step shape, and `FeedItem` itself.
+//! and `FeedItem` itself.
 //!
-//! The wire format here is the product's contract. The three surfaces are
-//! `native_ui | bridge | script` per `DESIGN.md`; statuses follow the
+//! The wire format here is the product's contract. The two surfaces are
+//! `native_ui | script` per `DESIGN.md`; statuses follow the
 //! lifecycle documented in `docs/internals/sidebar/ledger.md`. Do not rename
 //! serialized values without updating the docs.
 
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::AgentState;
-use crate::ids::{RequestId, ResolverId, WorkspaceId};
+use crate::ids::{RequestId, WorkspaceId};
 use crate::pane::{PaneRef, RuntimeOwner};
 
 /// Which UI is responsible for collecting the answer.
@@ -20,15 +20,13 @@ use crate::pane::{PaneRef, RuntimeOwner};
 pub enum Surface {
     /// Agent's own native UI in its pane. Rimz routes attention, not decisions.
     NativeUi,
-    /// Hook is on the Rimz bridge waiting for a resolver answer.
-    Bridge,
     /// Script called `rimz feed ask` and is blocked on the ledger.
     Script,
 }
 
 impl Surface {
     pub const fn supports_resolve(self) -> bool {
-        matches!(self, Self::Bridge | Self::Script)
+        matches!(self, Self::NativeUi | Self::Script)
     }
 
     pub const fn supports_dismiss(self) -> bool {
@@ -36,13 +34,12 @@ impl Surface {
     }
 
     pub const fn hook_blocks(self) -> bool {
-        matches!(self, Self::Bridge | Self::Script)
+        matches!(self, Self::Script)
     }
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::NativeUi => "native_ui",
-            Self::Bridge => "bridge",
             Self::Script => "script",
         }
     }
@@ -138,7 +135,6 @@ impl FeedKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResolutionMethod {
-    HookBridge,
     PaneSend,
     Cli,
     Sidebar,
@@ -152,8 +148,12 @@ pub enum ResolutionMethod {
 pub struct Resolution {
     pub decision: Value,
     pub method: ResolutionMethod,
-    pub resolver_id: Option<ResolverId>,
-    pub override_chain: bool,
+    #[serde(
+        default,
+        alias = "resolver_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub by: Option<String>,
     pub effective: bool,
     pub late: bool,
     pub reason: Option<String>,
@@ -165,8 +165,7 @@ impl Resolution {
         Self {
             decision,
             method,
-            resolver_id: None,
-            override_chain: false,
+            by: None,
             effective: true,
             late: false,
             reason: None,
@@ -175,24 +174,12 @@ impl Resolution {
     }
 }
 
-/// Canonical reasons the bridge gives up on a resolver chain. Rendered as
-/// snake_case strings on disk (audit event `reason` field, resolver step
-/// `reason` field); the enum is the vocabulary, the string is the wire form.
+/// Canonical reasons an ask is abandoned or times out. Rendered as snake_case
+/// strings on disk; the enum is the vocabulary, the string is the wire form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbandonReason {
-    /// Per-step resolver budget elapsed without an answer; chain advances.
-    BudgetElapsed,
-    /// Active resolver's heartbeat went stale mid-flight; chain advances.
-    HeartbeatStale,
-    /// Hook cap fired before the chain could answer; item moves to TimedOut.
-    BridgeCapElapsed,
-    /// Chain ran out of links without anyone answering; item moves to TimedOut.
-    ChainExhausted,
     /// A `rimz feed ask` script hit its own `--timeout`; item moves to TimedOut.
     ScriptWaitTimeout,
-    /// A resolver answered after the hook had already returned neutral; the
-    /// answer is recorded audit-only on the resolution.
-    HookAlreadyReturnedNeutral,
     /// The agent session that raised the ask ended before it was answered; the
     /// pending item is expired so it can't outlive its session.
     AgentSessionEnded,
@@ -212,12 +199,7 @@ pub enum AbandonReason {
 impl AbandonReason {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::BudgetElapsed => "budget_elapsed",
-            Self::HeartbeatStale => "heartbeat_stale",
-            Self::BridgeCapElapsed => "bridge_cap_elapsed",
-            Self::ChainExhausted => "chain_exhausted",
-            Self::ScriptWaitTimeout => "wait_timeout_elapsed",
-            Self::HookAlreadyReturnedNeutral => "hook_already_returned_neutral",
+            Self::ScriptWaitTimeout => "script_wait_timeout",
             Self::AgentSessionEnded => "agent_session_ended",
             Self::AgentMovedOn => "agent_moved_on",
             Self::OwnerProcessExited => "owner_process_exited",
@@ -236,27 +218,6 @@ impl AsRef<str> for AbandonReason {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
-}
-
-/// State of one slot in the resolver chain attached to a feed item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResolverStepState {
-    Queued,
-    Active,
-    Answered,
-    Abstained,
-    BudgetElapsed,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ResolverStep {
-    pub resolver_id: ResolverId,
-    pub display_name: Option<String>,
-    pub order: i32,
-    pub budget_ms: u64,
-    pub state: ResolverStepState,
-    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -282,16 +243,10 @@ pub struct FeedItem {
     pub runtime_owner: Option<RuntimeOwner>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
-    /// Hook cap from the agent's protocol. 0 means "no hook is waiting"
-    /// (the hook returned its neutral no-op and exited).
-    pub hook_wait_timeout_seconds: u64,
     /// Wall-clock deadline for `script`-surface items. None means no upper
     /// bound; the caller has not asked for a timeout.
     pub feed_deadline_at: Option<Timestamp>,
     pub resolution: Option<Resolution>,
-    pub chain: Vec<ResolverStep>,
-    pub chain_active_resolver: Option<ResolverId>,
-    pub chain_active_until: Option<Timestamp>,
 }
 
 impl FeedItem {
@@ -323,97 +278,9 @@ impl FeedItem {
             runtime_owner: None,
             created_at: now,
             updated_at: now,
-            hook_wait_timeout_seconds: 0,
             feed_deadline_at: None,
             resolution: None,
-            chain: Vec::new(),
-            chain_active_resolver: None,
-            chain_active_until: None,
         }
-    }
-
-    /// Attach a freshly selected resolver chain to this item. The first
-    /// resolver starts active; later resolvers remain queued until an
-    /// explicit handoff advances the chain.
-    pub fn activate_resolver_chain(&mut self, mut chain: Vec<ResolverStep>) {
-        let mut active = None;
-        for step in &mut chain {
-            if active.is_none() {
-                step.state = ResolverStepState::Active;
-                step.reason = None;
-                active = Some(step.resolver_id.clone());
-            } else {
-                step.state = ResolverStepState::Queued;
-                step.reason = None;
-            }
-        }
-
-        self.chain = chain;
-        self.chain_active_resolver = active;
-        self.chain_active_until = self.active_chain_deadline(Timestamp::now());
-    }
-
-    /// Mark the resolver that delivered the effective answer. Human
-    /// overrides usually have no resolver id; in that case the active chain
-    /// slot is still closed so stale links cannot answer later.
-    pub fn mark_resolver_answered(&mut self, resolver_id: Option<&ResolverId>) {
-        let target = resolver_id.or(self.chain_active_resolver.as_ref());
-        if let Some(target) = target
-            && let Some(step) = self
-                .chain
-                .iter_mut()
-                .find(|step| &step.resolver_id == target)
-        {
-            step.state = ResolverStepState::Answered;
-            step.reason = None;
-        }
-        self.chain_active_resolver = None;
-        self.chain_active_until = None;
-    }
-
-    /// Mark the current active resolver as elapsed and close the chain's
-    /// active slot. This records why the bridge fell back without changing
-    /// late-answer audit semantics.
-    pub fn mark_active_resolver_budget_elapsed(&mut self, reason: AbandonReason) {
-        if let Some(active) = self.chain_active_resolver.as_ref()
-            && let Some(step) = self
-                .chain
-                .iter_mut()
-                .find(|step| &step.resolver_id == active)
-        {
-            step.state = ResolverStepState::BudgetElapsed;
-            step.reason = Some(reason.as_str().to_owned());
-        }
-        self.chain_active_resolver = None;
-        self.chain_active_until = None;
-    }
-
-    /// Advance from the current resolver to the next queued resolver.
-    /// Returns the next resolver id when one exists.
-    pub fn advance_resolver_chain_after(&mut self, current: &ResolverId) -> Option<ResolverId> {
-        let mut found_current = false;
-        let mut next = None;
-        for step in &mut self.chain {
-            if found_current && step.state == ResolverStepState::Queued {
-                step.state = ResolverStepState::Active;
-                step.reason = None;
-                next = Some(step.resolver_id.clone());
-                break;
-            }
-            if &step.resolver_id == current {
-                found_current = true;
-            }
-        }
-
-        self.chain_active_resolver = next.clone();
-        self.chain_active_until = self.active_chain_deadline(Timestamp::now());
-        next
-    }
-
-    fn active_chain_deadline(&self, now: Timestamp) -> Option<Timestamp> {
-        let active = self.chain_active_resolver.as_ref()?;
-        let step = self.chain.iter().find(|step| &step.resolver_id == active)?;
-        Some(now + std::time::Duration::from_millis(step.budget_ms))
     }
 
     /// The agent session this item belongs to, read from the hook payload
@@ -455,13 +322,7 @@ pub fn pending_ask_in_snapshot<'a>(
     agent: &AgentState,
     snapshot: &'a crate::SidebarSnapshot,
 ) -> Option<&'a FeedItem> {
-    pending_ask_for(
-        agent,
-        snapshot
-            .needs_attention
-            .iter()
-            .chain(snapshot.resolver_working.iter()),
-    )
+    pending_ask_for(agent, snapshot.needs_attention.iter())
 }
 
 pub fn ask_summary(title: &str, body: Option<&str>, options: &[String]) -> String {
@@ -491,10 +352,6 @@ mod tests {
             "\"native_ui\""
         );
         assert_eq!(
-            serde_json::to_string(&Surface::Bridge).unwrap(),
-            "\"bridge\""
-        );
-        assert_eq!(
             serde_json::to_string(&Surface::Script).unwrap(),
             "\"script\""
         );
@@ -517,10 +374,9 @@ mod tests {
     #[test]
     fn surface_capabilities_match_design() {
         assert!(Surface::NativeUi.supports_dismiss());
-        assert!(!Surface::NativeUi.supports_resolve());
-        assert!(Surface::Bridge.supports_resolve());
+        assert!(Surface::NativeUi.supports_resolve());
         assert!(Surface::Script.supports_resolve());
-        assert!(Surface::Bridge.hook_blocks());
+        assert!(Surface::Script.hook_blocks());
         assert!(!Surface::NativeUi.hook_blocks());
     }
 

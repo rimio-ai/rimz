@@ -23,7 +23,10 @@ fn uninspectable_live_zellij_room_attaches_as_is() {
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
-        .bounded_output()
+        // The uninspectable room legitimately holds `start` for the full
+        // pre-attach topology ceiling (8s) before attaching as-is, so the
+        // default 10s bound leaves no headroom under suite load.
+        .bounded_output_within(Duration::from_secs(30))
         .expect("run rimz start");
 
     assert!(output.status.success(), "live room should attach as-is");

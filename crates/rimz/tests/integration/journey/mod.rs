@@ -7,9 +7,9 @@
 //! mechanics stay in `docs/internals/sidebar/sidebar.md`.
 //!
 //! "Running an agent" is simulated faithfully: Rimz only ever observes agents
-//! through their hooks, and the work pane itself is opaque to it (resolvers own
-//! pane I/O). So firing `rimz hooks feed --source claude` through an installed
-//! hook is the end-user act of running an agent. The harness's pane presence is
+//! through their hooks, and the work pane itself is opaque to it. So firing
+//! `rimz hooks feed --source claude` through an installed hook is the end-user
+//! act of running an agent. The harness's pane presence is
 //! a fixture; real focus, steering, and launched binaries live in `deep.rs`.
 //!
 #![allow(clippy::print_stdout, clippy::print_stderr)]
@@ -352,23 +352,6 @@ impl<'a> RoomHarness<'a> {
         );
     }
 
-    /// Spawn a blocking agent hook (the bridge path) through its installed
-    /// command, returning the live child. Requires an onboarded room.
-    pub fn spawn_agent(&self, source: &str, payload: &Value) -> std::process::Child {
-        assert!(
-            self.env.agent_hooks_installed(source),
-            "spawn_agent needs an onboarded room — call onboard(&[{source:?}]) first"
-        );
-        let session_id = payload_session_id(payload, source);
-        let hook_env = self.hook_env(&session_id, journey_launch_identity(source), None);
-        let hook_env: Vec<(&str, &str)> = hook_env
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect();
-        self.env
-            .spawn_installed_hook_in_pane(source, &payload.to_string(), &hook_env)
-    }
-
     pub fn run_statusline_feed(&self, source: &str, payload: &str) -> std::process::Output {
         let mut cmd = self.env.statusline_feed_command(source);
         cmd.env("XDG_RUNTIME_DIR", self.runtime.path());
@@ -476,11 +459,7 @@ impl PaneRoster {
             };
             roster.start(&agent.agent_id, &agent.kind, cwd);
         }
-        for item in snapshot
-            .needs_attention
-            .iter()
-            .chain(snapshot.resolver_working.iter())
-        {
+        for item in &snapshot.needs_attention {
             if item.source_kind == "agent-hook" {
                 continue;
             }

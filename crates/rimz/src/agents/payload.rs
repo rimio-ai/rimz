@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use crate::feed::{FeedKind, Resolution};
+use crate::feed::FeedKind;
 
 use super::{AgentHookClass, ClassifiedHook};
 
@@ -38,16 +38,6 @@ pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<
 pub(crate) fn non_empty_trimmed(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
-}
-
-/// Common helper: does the resolver decision read as an "allow"?
-pub(crate) fn choice_is_allow(resolution: &Resolution) -> bool {
-    resolution
-        .decision
-        .get("choice")
-        .and_then(Value::as_str)
-        .map(|v| matches!(v, "allow" | "yes" | "approve"))
-        .unwrap_or(false)
 }
 
 /// Whether a `Stop`-style turn-end payload carries an explicit error signal. A

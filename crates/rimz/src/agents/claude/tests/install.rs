@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::agents::AgentErr;
+
 #[test]
 fn install_into_empty_dir_creates_managed_entries() {
     let dir = tempfile::tempdir().unwrap();

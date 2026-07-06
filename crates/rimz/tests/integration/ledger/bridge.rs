@@ -125,7 +125,6 @@ async fn mismatched_nonce_is_dropped_real_resolve_wins() {
         ledger.resolve_feed_item(
             &req_for_task,
             Resolution::new(json!({ "choice": "yes" }), ResolutionMethod::Cli),
-            true,
             "rimz-test",
         )
     });

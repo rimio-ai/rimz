@@ -40,7 +40,6 @@ pub(super) fn attention_name_spans(
 pub(super) struct IdentityLineContext<'a> {
     pub(super) theme: &'a Theme,
     pub(super) providers: &'a [SidebarProviderPanel],
-    pub(super) now: Timestamp,
     pub(super) tier: Tier,
     pub(super) width: usize,
     pub(super) attention: CardAttention,
@@ -51,32 +50,6 @@ pub(super) struct IdentityLineContext<'a> {
 pub(super) fn identity_line(ctx: IdentityLineContext<'_>, row: &SidebarRow) -> Line<'static> {
     if row.is_process() {
         return process_row_line(ctx.theme, row, ctx.width, ctx.animation_phase);
-    }
-
-    if let Some(resolver) = row.resolver() {
-        let resolver_name = resolver
-            .display_name
-            .as_deref()
-            .unwrap_or_else(|| resolver.resolver_id.as_str());
-        let remaining = resolver
-            .budget_until
-            .map(|deadline| time_remaining(deadline, ctx.now))
-            .unwrap_or_else(|| "?".to_owned());
-        // A resolver mid-flight is the one "waiting for an answer" motion: a
-        // braille spinner while the resolver composes the decision, bounded by
-        // its budget. The resolver + budget fill the slot a task would.
-        return composed_row(
-            ctx.theme,
-            Span::styled(
-                role_glyph(ctx.theme, AnimationRole::Resolving, ctx.animation_phase),
-                resolver_style(ctx.theme, ctx.animation_phase),
-            ),
-            row.display_name(),
-            &format!("{resolver_name} {remaining}"),
-            row.last_activity,
-            ctx.now,
-            ctx.width,
-        );
     }
 
     let status = row.status().unwrap_or(AgentStatus::Idle);

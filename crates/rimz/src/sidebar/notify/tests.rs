@@ -6,7 +6,7 @@ use super::*;
 use crate::agents::AgentState;
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::{FeedItem, FeedKind, Surface};
-use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, RequestId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::sidebar::unread::{OpenedUnread, opened_unread};
 
@@ -723,9 +723,10 @@ fn command_spawn_receives_notification_env() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("env.txt");
     let command = format!(
-        "printf '%s\\n%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" \"${{RIMZ_NOTIFY_UNREAD-unset}}\" > {}",
+        "printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" \"${{RIMZ_NOTIFY_UNREAD-unset}}\" \"$RIMZ_NOTIFY_REQUEST_ID\" \"$RIMZ_NOTIFY_PANE\" \"$RIMZ_NOTIFY_ROOT\" > {}",
         sh_quote(&out)
     );
+    let request_id = RequestId::parse("req_0123456789abcdef0123456789abcdef").expect("request id");
     let notification = Notification {
         agents: vec![NotificationAgent {
             kind: AgentKind::new_unchecked("claude"),
@@ -734,7 +735,9 @@ fn command_spawn_receives_notification_env() {
             handle: "claude sess-1".to_owned(),
             worktree: None,
             task: None,
-            pane_id: None,
+            pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%9")),
+            request_id: Some(request_id),
+            root: Some("/repo".to_owned()),
             new_status: Some(AgentStatus::Waiting),
         }],
         notification_kind: NotificationKind::Waiting,
@@ -749,7 +752,7 @@ fn command_spawn_receives_notification_env() {
     };
     assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
 
-    let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\n";
+    let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\nreq_0123456789abcdef0123456789abcdef\ntmux:%9\n/repo\n";
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut text = String::new();
     while Instant::now() < deadline {
@@ -806,6 +809,8 @@ fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
             worktree: Some("feat/ntfy".to_owned()),
             task: Some("\"; rm -rf /".to_owned()),
             pane_id: None,
+            request_id: None,
+            root: None,
             new_status: Some(AgentStatus::Waiting),
         }],
         notification_kind: NotificationKind::Waiting,

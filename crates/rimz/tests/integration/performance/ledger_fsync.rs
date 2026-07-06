@@ -44,7 +44,7 @@ fn warm_append_push_and_resolve_perform_zero_fsyncs() {
         .expect("steady append");
     let item = FeedItem::new(
         h.workspace_id.clone(),
-        Surface::Bridge,
+        Surface::NativeUi,
         FeedKind::Permission,
         "allow?",
         "claude",
@@ -58,7 +58,6 @@ fn warm_append_push_and_resolve_perform_zero_fsyncs() {
         .resolve_feed_item(
             &item.request_id,
             Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::Cli),
-            true,
             "rimz-perf",
         )
         .expect("resolve");

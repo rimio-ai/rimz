@@ -58,4 +58,4 @@ granted_at   = "2026-05-23T12:34:56Z"
 rimz trust [status|grant|revoke] [--json]
 ```
 
-`status` is the default. `grant` pins the live hash; `revoke` deletes the record. `rimz doctor` surfaces the trust state alongside the protocol and resolver checks.
+`status` is the default. `grant` pins the live hash; `revoke` deletes the record. `rimz doctor` surfaces the trust state alongside the protocol checks.

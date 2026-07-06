@@ -68,7 +68,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 5;
+pub const SNAPSHOT_VERSION: u32 = 6;
 
 /// Sidebar view-model. The pane frame admits every rendered card; ledger,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
@@ -76,9 +76,9 @@ pub const SNAPSHOT_VERSION: u32 = 5;
 /// caps, status tallies, and row metadata are resolved here so renderers only
 /// paint semantics into glyphs.
 ///
-/// `needs_attention` and `resolver_working` are load-bearing: they are the
-/// reducer inputs the live-pane fold reads when panes are folded in
-/// (`with_live_panes`). The sidebar renderer reads `worktree_groups`.
+/// `needs_attention` is load-bearing: it is the reducer input the live-pane
+/// fold reads when panes are folded in (`with_live_panes`). The sidebar
+/// renderer reads `worktree_groups`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SidebarSnapshot {
     #[serde(default)]
@@ -123,7 +123,6 @@ pub struct SidebarSnapshot {
     pub now: Timestamp,
     pub worktree_groups: Vec<SidebarWorktreeGroup>,
     pub needs_attention: Vec<FeedItem>,
-    pub resolver_working: Vec<FeedItem>,
     pub agents: Vec<AgentState>,
     /// The wired agent kinds whose Rimz hooks are installed. Gates the idle
     /// synthesis in `rows_from_panes`: a launched-but-unbound pane for a wired
@@ -310,8 +309,6 @@ impl SidebarSnapshot {
         items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
 
         let mut needs_attention = Vec::new();
-        let mut resolver_working = Vec::new();
-
         for item in items {
             // A pending agent-hook ask outlives its agent only as data: once the
             // session that raised it is gone from the live rollup it is no longer
@@ -328,7 +325,6 @@ impl SidebarSnapshot {
                 (FeedStatus::Pending, Surface::Script) => {
                     needs_attention.push(item);
                 }
-                (FeedStatus::Pending, Surface::Bridge) if !stale => resolver_working.push(item),
                 // Resolved and otherwise-inactive items are history, not
                 // presence or attention: the sidebar never renders them, so they
                 // are dropped here rather than carried in the view-model.
@@ -351,7 +347,6 @@ impl SidebarSnapshot {
             now,
             worktree_groups: Vec::new(),
             needs_attention,
-            resolver_working,
             agents,
             wired_kinds: Vec::new(),
             wired_default_models: BTreeMap::new(),

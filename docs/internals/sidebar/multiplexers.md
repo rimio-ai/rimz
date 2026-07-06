@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes.
 
-Zellij and tmux carry different communities, and Rimz serves both as first-class backends — same ledger, same bridge, same CLI, same sidebar model, tested against one matrix. The multiplexer owns terminal mechanics (panes, views, attach/detach, scrollback, layout, resurrect); Rimz owns workspace state. This doc holds the Rimz-side contracts; the upstream surfaces live in the externals mirrors, [zellij-reference.md](../../externals/mux-adapter/zellij-reference.md) and [tmux-reference.md](../../externals/mux-adapter/tmux-reference.md).
+Zellij and tmux carry different communities, and Rimz serves both as first-class backends — same ledger, same CLI, same sidebar model, tested against one matrix. The multiplexer owns terminal mechanics (panes, views, attach/detach, scrollback, layout, resurrect); Rimz owns workspace state. This doc holds the Rimz-side contracts; the upstream surfaces live in the externals mirrors, [zellij-reference.md](../../externals/mux-adapter/zellij-reference.md) and [tmux-reference.md](../../externals/mux-adapter/tmux-reference.md).
 
 ## Backend selection
 
@@ -19,7 +19,7 @@ Room identity is path-derived and shared across backends, so a live rival sessio
 
 ## `MuxBackend`
 
-One trait, [`MuxBackend`](../../../crates/rimz/src/mux/mod.rs), holds every backend-specific operation — session lifecycle, pane listing and I/O, focus, sidebar and tab layout, presence install, and health/recovery. Everything correctness-critical sits above it, identical across backends: the ledger, the per-request decision sockets, the resolver heartbeat, the wakeup socket, the feed and event schemas, the trust gate, the agent hooks.
+One trait, [`MuxBackend`](../../../crates/rimz/src/mux/mod.rs), holds every backend-specific operation — session lifecycle, pane listing and I/O, focus, sidebar and tab layout, presence install, and health/recovery. Everything correctness-critical sits above it, identical across backends: the ledger, script-ask sockets, the wakeup socket, the feed and event schemas, the trust gate, the agent hooks.
 
 **Parity is the rule, fast paths are the exception.** A backend-only capability is always a latency hint layered over shared truth — never a correctness requirement. If a feature exists only on Zellij, the tmux backend passes the same matrix without it. Cross-backend policy (the one-sidebar-per-view planner and plan-execution accounting in [`reconcile.rs`](../../../crates/rimz/src/mux/reconcile.rs), the sizing math in [`width.rs`](../../../crates/rimz/src/mux/width.rs)) stays pure and above the backends; each backend collects inputs and executes the plan.
 
@@ -149,7 +149,7 @@ Desktop notifications are terminal-local: the sidebar renderer writes OSC 777 an
 What both backends deliver:
 
 - **Detach and reattach are multiplexer features** — Rimz does not reimplement them.
-- **Runtime correctness needs no visible sidebar** — hooks, the bridge, and `rimz feed ask` work headless.
+- **Runtime correctness needs no visible sidebar** — hooks and `rimz feed ask` work headless.
 - **The renderer is interchangeable and optional** — the native pane is the default on both backends; correctness never depends on which renderer (or none) is attached.
 - **The ledger survives host restart; processes do not**, unless a host supervisor is wired (tmux-resurrect, Zellij resurrect, systemd).
 - **`rimz doctor` reports** the selected backend, versions and floor compliance, PATH-visible backend binaries, backend server-log excerpts, feature availability, sidebar liveness, Rimz runtime socket headroom, the server socket path, Zellij IPC socket headroom when selected, and any degraded modes.

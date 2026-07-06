@@ -1,15 +1,10 @@
-//! Typed input and output structs for the Codex hook protocol.
+//! Typed input structs for the Codex hook protocol.
 //!
 //! **Input** (Deserialize): one struct per event in the installed and catalog
 //! sets. All use `#[serde(default)]` so sparse payloads always deserialize
 //! cleanly. `parse_*` free functions are the entry points called by the adapter.
 //! Silent events (read-only PostToolUse, PermissionRequest in observe_lifecycle)
 //! and compaction events are parsed to keep the wire surface typed and auditable.
-//!
-//! **Output** (Serialize): the Codex `PermissionRequest` and blocking
-//! `PreToolUse` decision shapes. Unlike Claude, Codex's `PermissionRequest`
-//! decision carries an optional `message` field alongside `behavior` — see
-//! adapter/codex-reference.md for the divergence note.
 //!
 //! Like the Claude catalog, this module is the **complete, parse-ready wire
 //! catalog**: every installed and near-term-catalog event (including the
@@ -18,7 +13,7 @@
 //! payload is present only for audit or future enrichment.
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::hook_types::{CompactTrigger, HookEventCommon, SessionSource};
@@ -165,68 +160,6 @@ parse_fn!(parse_subagent_stop, CodexSubagentStop);
 parse_fn!(parse_stop, CodexStop);
 parse_fn!(parse_pre_compact, CodexPreCompact);
 parse_fn!(parse_post_compact, CodexPostCompact);
-
-// ── Decision output struct ─────────────────────────────────────────────────
-
-/// Codex `PermissionRequest` decision output.
-///
-/// Wire: `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`
-///
-/// `message` is populated from the resolver's `reason` when present (drift fix
-/// #1: the upstream spec includes `decision.message`). It is absent from the
-/// wire when `None` via `skip_serializing_if`, keeping existing golden-test
-/// output byte-identical.
-///
-/// **Divergence from Claude.** Never emit `updatedInput`, `updatedPermissions`,
-/// or `interrupt` on a Codex `PermissionRequest` — those belong to *other* Codex
-/// hook types. See adapter/codex-reference.md for the full divergence note.
-#[derive(Debug, Serialize)]
-pub struct CodexPermissionDecisionOutput {
-    #[serde(rename = "hookSpecificOutput")]
-    pub hook_specific_output: CodexPermissionHookOutput,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CodexPermissionHookOutput {
-    #[serde(rename = "hookEventName")]
-    pub hook_event_name: &'static str,
-    pub decision: CodexPermissionBehavior,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CodexPermissionBehavior {
-    pub behavior: &'static str,
-    /// Reason surfaced when the resolver blocked the call. Absent when `None`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-
-/// Codex `PreToolUse` decision output for blocking `request_user_input` feed items.
-///
-/// Wire: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}`
-///
-/// `updatedInput` is optional on allow. A denial carries
-/// `permissionDecisionReason`; callers supply a default before construction.
-#[derive(Debug, Serialize)]
-pub struct CodexPreToolUseDecisionOutput {
-    #[serde(rename = "hookSpecificOutput")]
-    pub hook_specific_output: CodexPreToolUseHookOutput,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CodexPreToolUseHookOutput {
-    #[serde(rename = "hookEventName")]
-    pub hook_event_name: &'static str,
-    #[serde(rename = "permissionDecision")]
-    pub permission_decision: &'static str,
-    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
-    pub updated_input: Option<Value>,
-    #[serde(
-        rename = "permissionDecisionReason",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub permission_decision_reason: Option<String>,
-}
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 

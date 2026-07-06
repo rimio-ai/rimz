@@ -1,9 +1,7 @@
 use super::*;
 
 use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
-use crate::agents::{AgentHookClass, AgentStatus};
-use crate::feed::{FeedKind, ResolutionMethod, Surface};
-use crate::ids::WorkspaceId;
+use crate::agents::{AgentErr, AgentHookClass, AgentStatus};
 use serde_json::json;
 
 // Capability and coverage-table honesty is cross-checked against behavior for
@@ -418,75 +416,10 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
     assert!(!PiAdapter.moves_on("session_start"));
 }
 
-fn permission_item() -> FeedItem {
-    crate::agents::testkit::feed_item(FeedKind::Permission, "pi")
-}
-
 #[test]
-fn permission_and_neutral_decision_shapes_are_pinned() {
+fn neutral_decision_shape_is_pinned() {
     let rendered = PiAdapter.render_neutral("agent_end").unwrap();
     insta::assert_snapshot!(format!("{rendered:?}"), @"None");
-
-    for resolution in [
-        Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge),
-        Resolution::new(
-            json!({ "choice": "allow", "updatedInput": { "command": "ls -la" } }),
-            ResolutionMethod::HookBridge,
-        ),
-    ] {
-        let rendered = PiAdapter
-            .render_decision(&permission_item(), &resolution)
-            .unwrap();
-        assert_eq!(rendered, json!({}));
-    }
-
-    let mut reason_field =
-        Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
-    reason_field.reason = Some("rm -rf is not on the allowlist".to_owned());
-    let rendered = PiAdapter
-        .render_decision(&permission_item(), &reason_field)
-        .unwrap();
-    insta::assert_json_snapshot!(rendered, @r###"
-        {
-          "block": true,
-          "reason": "rm -rf is not on the allowlist"
-        }
-        "###);
-
-    for (resolution, expected_reason) in [
-        (
-            Resolution::new(
-                json!({ "choice": "deny", "reason": "policy says no" }),
-                ResolutionMethod::HookBridge,
-            ),
-            "policy says no",
-        ),
-        (
-            Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge),
-            "denied by resolver",
-        ),
-    ] {
-        let rendered = PiAdapter
-            .render_decision(&permission_item(), &resolution)
-            .unwrap();
-        assert_eq!(rendered["reason"], expected_reason);
-        assert_eq!(rendered["block"], true);
-    }
-
-    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
-    let item = FeedItem::new(
-        workspace,
-        Surface::Bridge,
-        FeedKind::PlanApproval,
-        "approve?",
-        "pi",
-        "agent-hook",
-    );
-    let resolution = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
-    assert!(matches!(
-        PiAdapter.render_decision(&item, &resolution).unwrap_err(),
-        AgentErr::Render { agent: "pi", .. }
-    ));
 }
 
 #[test]

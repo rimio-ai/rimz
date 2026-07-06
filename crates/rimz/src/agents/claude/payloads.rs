@@ -1,4 +1,4 @@
-//! Typed input and output structs for the Claude Code hook protocol.
+//! Typed input structs for the Claude Code hook protocol.
 //!
 //! **Input** (Deserialize): one struct per event in the installed and catalog
 //! sets. All use `#[serde(default)]` so sparse or out-of-spec payloads always
@@ -6,11 +6,6 @@
 //! the adapter. Silent events (PostToolUse, Notification) and identity events
 //! (PermissionRequest, SessionEnd) carry no observation but are parsed to keep
 //! the wire surface typed and auditable.
-//!
-//! **Output** (Serialize): the exact JSON shapes Claude reads back from stdout.
-//! Field names use `#[serde(rename)]` to match the camelCase wire protocol.
-//! Optional output fields use `#[serde(skip_serializing_if = "Option::is_none")]`
-//! so they are absent when `None`, keeping golden-test output byte-identical.
 //!
 //! This module is the **complete, parse-ready wire catalog**: every installed
 //! and near-term-catalog event has a struct and a `parse_*` entry point, even
@@ -20,7 +15,7 @@
 //! without scattering per-item attributes.
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::hook_types::{BackgroundTask, CompactTrigger, HookEventCommon, SessionSource};
@@ -207,61 +202,6 @@ parse_fn!(parse_subagent_stop, ClaudeSubagentStop);
 parse_fn!(parse_pre_compact, ClaudePreCompact);
 parse_fn!(parse_post_compact, ClaudePostCompact);
 parse_fn!(parse_permission_request, ClaudePermissionRequest);
-
-// ── Decision output structs ────────────────────────────────────────────────
-
-/// Claude `PermissionRequest` decision output.
-///
-/// Wire: `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`
-///
-/// `updated_input` and `applied_rule` are optional upstream output fields
-/// (see adapter/claude-reference.md). Both are absent from the wire when `None`
-/// via `skip_serializing_if`, keeping existing golden-test output byte-identical.
-#[derive(Debug, Serialize)]
-pub struct ClaudePermissionDecisionOutput {
-    #[serde(rename = "hookSpecificOutput")]
-    pub hook_specific_output: ClaudePermissionHookOutput,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ClaudePermissionHookOutput {
-    #[serde(rename = "hookEventName")]
-    pub hook_event_name: &'static str,
-    pub decision: ClaudePermissionBehavior,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ClaudePermissionBehavior {
-    pub behavior: &'static str,
-    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
-    pub updated_input: Option<Value>,
-    #[serde(rename = "appliedRule", skip_serializing_if = "Option::is_none")]
-    pub applied_rule: Option<String>,
-}
-
-/// Claude `PreToolUse` decision output for `PlanApproval` and `Question` feed
-/// kinds.
-///
-/// Wire: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{}}}`
-///
-/// `updated_input` is **required** by the upstream spec. Callers must extract it
-/// before constructing this struct; the missing-field error is returned from
-/// `render_decision` before construction.
-#[derive(Debug, Serialize)]
-pub struct ClaudePreToolUseDecisionOutput {
-    #[serde(rename = "hookSpecificOutput")]
-    pub hook_specific_output: ClaudePreToolUseHookOutput,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ClaudePreToolUseHookOutput {
-    #[serde(rename = "hookEventName")]
-    pub hook_event_name: &'static str,
-    #[serde(rename = "permissionDecision")]
-    pub permission_decision: &'static str,
-    #[serde(rename = "updatedInput")]
-    pub updated_input: Value,
-}
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 

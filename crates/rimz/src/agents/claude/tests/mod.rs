@@ -1,19 +1,13 @@
 use super::*;
 use crate::agents::TurnErrorClass;
-use crate::feed::ResolutionMethod;
 use crate::harness::run::PermissionMode;
 use serde_json::json;
 use std::path::Path;
 
 mod context;
-mod decision;
 mod install;
 mod install_statusline;
 mod lifecycle;
-
-fn fixture(kind: FeedKind) -> FeedItem {
-    crate::agents::testkit::feed_item(kind, "claude")
-}
 
 #[test]
 fn claude_commands_and_permission_args_match_run_posture() {

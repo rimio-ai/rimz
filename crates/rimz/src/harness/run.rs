@@ -363,7 +363,6 @@ fn pending_ask_for(agent: &AgentState, snapshot: &SidebarSnapshot) -> Option<Run
     snapshot
         .needs_attention
         .iter()
-        .chain(snapshot.resolver_working.iter())
         .find(|item| item_matches_agent(item, agent))
         .map(|item| RunPendingAsk {
             request_id: item.request_id.clone(),

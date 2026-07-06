@@ -33,8 +33,8 @@ const BREATH_CONFIG_AMPLITUDE: f32 = 0.12;
 const BLINK_PEAK_LIFT: f32 = 0.08;
 
 /// The fastest animation class currently visible in the snapshot. Fast motion
-/// changes every frame (working/thinking spinners, resolver work, active
-/// process rows). Breath motion is the attention/result blink and the calm
+/// changes every frame (working/thinking spinners, active process rows).
+/// Breath motion is the attention/result blink and the calm
 /// resting breathe, sampled near the base grid without paying the full spinner
 /// cadence for calm rooms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,8 +45,8 @@ pub(crate) enum AnimationCadence {
 }
 
 /// Whether any visible row is in an animated state — a running agent (working
-/// or pre-edit thinking), a resolver mid-flight, an active process spinning on
-/// real work (a build, a test, a `sudo` install), a row whose resolved status
+/// or pre-edit thinking), an active process spinning on real work (a build, a
+/// test, a `sudo` install), a row whose resolved status
 /// head moves, or the single lead unread `?`/`!` row whose configured effect
 /// flows. The serve loop uses this to choose the fast frame grid, the breath
 /// grid, or the slow data tick. A fully settled sidebar — quiet read idle/done
@@ -70,7 +70,7 @@ pub(crate) fn animation_cadence(
         .flat_map(|group| &group.rows)
     {
         if row.is_agent() {
-            if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
+            if row.status() == Some(AgentStatus::Running) {
                 return AnimationCadence::Fast;
             }
             // The status head asks for the breath grid only when its resolved

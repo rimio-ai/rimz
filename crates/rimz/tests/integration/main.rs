@@ -10,7 +10,6 @@ mod common;
 
 mod agent_launch;
 mod backend;
-mod chain_advance;
 mod channel;
 mod codex_broker;
 mod config;
@@ -36,7 +35,6 @@ mod proc;
 mod reload;
 mod remote_attach;
 mod reset;
-mod resolver;
 mod resume;
 mod run;
 mod sidebar_launch;

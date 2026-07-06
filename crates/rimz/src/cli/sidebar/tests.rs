@@ -63,7 +63,18 @@ fn strip_sgr(ansi: &[u8]) -> String {
     }
     stripped
         .lines()
-        .map(str::trim_end)
+        .map(|line| {
+            // The text fixture strips SGR, so color-chip tabs and plain cap
+            // tabs share one stable shape.
+            let normalized = line
+                .chars()
+                .map(|ch| match ch {
+                    '┤' | '├' => '─',
+                    _ => ch,
+                })
+                .collect::<String>();
+            normalized.trim_end().to_owned()
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

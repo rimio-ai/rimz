@@ -4,8 +4,8 @@
 //! (`request_user_input`) onto the feed, plus the lifecycle events
 //! (`SessionStart` registers idle, `SubagentStart` / `UserPromptSubmit` move
 //! to running, `SubagentStop` returns the child to idle, `Stop` completes the
-//! root turn — success, or failed on an error signal); renders Codex-shaped
-//! hook decision payloads (neutral is empty stdout).
+//! root turn — success, or failed on an error signal); neutral hook output is
+//! empty stdout.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
@@ -35,7 +35,6 @@ pub(crate) mod spend;
 mod transcript;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -50,11 +49,9 @@ use self::install::{
 #[cfg(test)]
 use self::install::{has_rimz_hook_command, snake_event_token};
 use self::payloads::{
-    CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
-    CodexPostCompact, CodexPreToolUseDecisionOutput, CodexPreToolUseHookOutput, CodexSessionStart,
-    CodexSubagentStart, CodexSubagentStop, CodexUserPromptSubmit, parse_post_compact,
-    parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
-    parse_user_prompt_submit,
+    CodexPostCompact, CodexSessionStart, CodexSubagentStart, CodexSubagentStop,
+    CodexUserPromptSubmit, parse_post_compact, parse_pre_tool_use, parse_session_start, parse_stop,
+    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
 pub(crate) use self::process::is_codex_cli_cmdline;
 pub use self::process::{
@@ -85,23 +82,21 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
-    ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
+    AgentAdapter, AgentLifecycleObservation, AgentTurnError, ClassifiedHook, ExtraCredits,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
     LocalContextRefresh, LocalContextRefreshCtx, RealtimeAccountUsage, RefreshSpawn,
     RefreshTrigger, Result, RootIdentity, SubagentIdentity, TranscriptMessage, TranscriptRole,
-    choice_is_allow, classify_agent_hook, non_empty_trimmed, optional_payload_string,
-    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored,
+    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::chat::AskQuestion;
-use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::feed::FeedKind;
 use crate::harness::run::PermissionMode;
 
-/// Codex's effective hook cap. Upstream's blocking-hook deadline is shorter
-/// than Claude's; this leaves a small safety margin so the bridge never holds
-/// the hook past the kill window. Verify against the active Codex hook docs
-/// before tightening.
-const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
+/// Per-hook timeout written into the Codex config (seconds). Hooks write a
+/// feed item and return neutral immediately, so the value is a short guard for
+/// local I/O failures rather than an answer window.
+const CODEX_HOOK_TIMEOUT_SECS: i64 = 10;
 
 /// Codex's GPT-5.5 backend input ceiling — the observed 272k-token limit above
 /// which the Codex backend rejects a prompt, listed by litellm and models.dev
@@ -225,7 +220,6 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     lifecycle_hooks: CODEX_LIFECYCLE_HOOKS,
     default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
     default_model: Some(DEFAULT_MODEL),
-    hook_cap: CODEX_HOOK_CAP,
     // Codex commonly runs as a `node` bundle, so PID attribution accepts the
     // launcher process name beside its own.
     process_names: &["codex", "node"],
@@ -649,62 +643,6 @@ impl AgentAdapter for CodexAdapter {
         })
     }
 
-    fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
-        match item.kind {
-            FeedKind::Permission => {
-                let output = CodexPermissionDecisionOutput {
-                    hook_specific_output: CodexPermissionHookOutput {
-                        hook_event_name: "PermissionRequest",
-                        decision: CodexPermissionBehavior {
-                            behavior: if choice_is_allow(resolution) {
-                                "allow"
-                            } else {
-                                "deny"
-                            },
-                            // Drift fix #1: upstream spec includes decision.message.
-                            // Populated from the resolver's reason when present;
-                            // absent (None) when not set so golden tests stay unchanged.
-                            message: resolution.reason.clone(),
-                        },
-                    },
-                };
-                Ok(serde_json::to_value(output)
-                    .expect("CodexPermissionDecisionOutput is infallible"))
-            }
-            FeedKind::PlanApproval | FeedKind::Question => {
-                let allow = choice_is_allow(resolution);
-                let output = CodexPreToolUseDecisionOutput {
-                    hook_specific_output: CodexPreToolUseHookOutput {
-                        hook_event_name: "PreToolUse",
-                        permission_decision: if allow { "allow" } else { "deny" },
-                        updated_input: allow
-                            .then(|| resolution_updated_input(resolution))
-                            .flatten(),
-                        permission_decision_reason: (!allow).then(|| {
-                            resolution
-                                .reason
-                                .clone()
-                                .or_else(|| {
-                                    resolution
-                                        .decision
-                                        .get("reason")
-                                        .and_then(Value::as_str)
-                                        .map(ToOwned::to_owned)
-                                })
-                                .unwrap_or_else(|| "denied by resolver".to_owned())
-                        }),
-                    },
-                };
-                Ok(serde_json::to_value(output)
-                    .expect("CodexPreToolUseDecisionOutput is infallible"))
-            }
-            other => Err(AgentErr::Render {
-                agent: "codex",
-                reason: format!("unsupported feed kind {other:?}"),
-            }),
-        }
-    }
-
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         // Codex permission hooks expect empty stdout on the neutral path —
         // the agent's own UI then asks the human. Per docs/internals/agents/agent.md:
@@ -920,14 +858,6 @@ impl AgentAdapter for CodexAdapter {
     ) -> crate::agents::spending::SpendParse {
         spend::parse_codex_spend(path, resume, prices)
     }
-}
-
-fn resolution_updated_input(resolution: &Resolution) -> Option<Value> {
-    resolution
-        .decision
-        .get("updatedInput")
-        .or_else(|| resolution.decision.get("updated_input"))
-        .cloned()
 }
 
 struct CodexLifecycleParts {
