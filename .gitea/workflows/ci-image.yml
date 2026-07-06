@@ -92,7 +92,9 @@ jobs:
             ENV RUSTUP_HOME=/usr/local/rustup \
                 CARGO_HOME=/usr/local/cargo \
                 PATH=/usr/local/cargo/bin:$PATH
-            COPY Cargo.toml Cargo.lock crates/ xtask/ /tmp/registry-warm/
+            COPY Cargo.toml Cargo.lock /tmp/registry-warm/
+            COPY crates/ /tmp/registry-warm/crates/
+            COPY xtask/ /tmp/registry-warm/xtask/
             RUN rm -rf /usr/local/cargo/advisory-dbs \
              && tmp="$(mktemp -d)" \
              && printf '[package]\nname="x"\nversion="0.0.0"\nedition="2021"\n' > "$tmp/Cargo.toml" \
