@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{ExtraCredits, ResetCredits};
 use crate::config::AccountsConfig;
+use crate::ledger::snapshot::format_plan_label;
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL};
 use crate::{RuntimePaths, SidebarSnapshot};
@@ -31,6 +32,12 @@ pub struct ProviderCreditsEntry {
     /// Credential-source stamp at that settled attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_stamp: Option<u64>,
+    /// Stable local OAuth account identifier for the facts cached here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<String>,
+    /// Raw provider plan tier from the OAuth usage response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_credits: Option<ExtraCredits>,
@@ -71,6 +78,8 @@ pub fn merge_provider_credits(
             oauth_read_at_ms: 0,
             auth_settled: false,
             credentials_stamp: None,
+            account_key: None,
+            plan: None,
             ok: extra_credits.is_some(),
             extra_credits,
             reset_credits: None,
@@ -86,6 +95,7 @@ pub fn merge_provider_credits_entry_if_due(
     runtime: &RuntimePaths,
     kind: &str,
     current_stamp: Option<u64>,
+    current_account_key: Option<String>,
     entry: impl FnOnce() -> ProviderCreditsEntry,
 ) -> Option<ProviderCreditsEntry> {
     let path = runtime.shared_credits_path();
@@ -93,28 +103,32 @@ pub fn merge_provider_credits_entry_if_due(
     let mut cache = read_credits_cache(&path);
     let now_ms = unix_now_ms();
     let prior = cache.entries.get(kind).cloned();
-    if prior
-        .as_ref()
-        .is_some_and(|entry| oauth_read_is_fresh(entry, now_ms, current_stamp))
-    {
+    if prior.as_ref().is_some_and(|entry| {
+        oauth_read_is_fresh(entry, now_ms, current_stamp, current_account_key.as_deref())
+    }) {
         return None;
     }
     let mut entry = entry();
     if entry.oauth_read_at_ms == 0 {
         entry.oauth_read_at_ms = unix_now_ms();
     }
+    let prior_matches_account = prior
+        .as_ref()
+        .is_some_and(|prior| prior.account_key.as_deref() == current_account_key.as_deref());
     if !entry.ok {
-        if let Some(prior) = prior.as_ref() {
+        if prior_matches_account && let Some(prior) = prior.as_ref() {
             entry.observed_at_ms = prior.observed_at_ms;
             entry.ok = prior.ok;
             entry.extra_credits = prior.extra_credits.clone();
             entry.reset_credits = prior.reset_credits.clone();
+            entry.plan = prior.plan.clone();
         }
-    } else if entry.reset_credits.is_none() {
+    } else if entry.reset_credits.is_none() && prior_matches_account {
         // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
         // and failed writes must not erase the last successful reset read.
         entry.reset_credits = prior.as_ref().and_then(|entry| entry.reset_credits.clone());
     }
+    entry.account_key = current_account_key;
     cache.refreshed_at_ms = unix_now_ms();
     cache.entries.insert(kind.to_owned(), entry.clone());
     write_credits_cache(&path, &cache);
@@ -139,6 +153,8 @@ pub(crate) fn merge_provider_credits_entry(
         entry.oauth_read_at_ms = prior.oauth_read_at_ms;
         entry.auth_settled = prior.auth_settled;
         entry.credentials_stamp = prior.credentials_stamp;
+        entry.account_key = prior.account_key.clone();
+        entry.plan = prior.plan.clone();
     }
     if entry.reset_credits.is_none() {
         // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
@@ -168,8 +184,12 @@ fn oauth_read_is_fresh(
     entry: &ProviderCreditsEntry,
     now_ms: u64,
     current_stamp: Option<u64>,
+    current_account_key: Option<&str>,
 ) -> bool {
     if entry.oauth_read_at_ms == 0 {
+        return false;
+    }
+    if entry.account_key.as_deref() != current_account_key {
         return false;
     }
     let ttl = if entry.auth_settled {
@@ -224,18 +244,21 @@ fn apply_credits_cache_with(
     for panel in &mut snapshot.providers {
         let ceiling = accounts.usage_limit(&panel.kind);
         if panel.metered {
-            panel.extra_credits = cache
+            let displayable_entry = cache
                 .entries
                 .get(&panel.kind)
-                .filter(|entry| entry_is_displayable(entry, now_ms))
+                .filter(|entry| entry_is_displayable(entry, now_ms));
+            if panel.plan.is_none() {
+                panel.plan = displayable_entry
+                    .and_then(|entry| entry.plan.as_deref())
+                    .filter(|plan| !plan.trim().is_empty())
+                    .map(|plan| format_plan_label(&panel.kind, plan));
+            }
+            panel.extra_credits = displayable_entry
                 .and_then(|entry| entry.extra_credits.clone())
                 .map(|credits| credits.with_limit_if_missing(ceiling))
                 .or_else(|| ceiling.map(|limit| ExtraCredits::known(None, None, Some(limit))));
-            panel.reset_credits = cache
-                .entries
-                .get(&panel.kind)
-                .filter(|entry| entry_is_displayable(entry, now_ms))
-                .and_then(|entry| entry.reset_credits.clone());
+            panel.reset_credits = displayable_entry.and_then(|entry| entry.reset_credits.clone());
             continue;
         }
 

@@ -33,6 +33,8 @@ mod reap;
 mod rows;
 mod score;
 
+pub(crate) use providers::format_plan_label;
+
 pub use model::{
     PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,

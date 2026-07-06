@@ -7,6 +7,8 @@
 //! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
 //! caches. An adapter may expose a pollable realtime account channel; the helper
 //! reads it first, then runs the OAuth channel on its own shared cadence.
+//! When OAuth windows are requested, they merge after the realtime fold so a
+//! fresh-token OAuth read can replace a stale warm realtime process.
 //! Best-effort and quiet: every provider-side failure exits successfully with
 //! the shared cache recording the retry state.
 
@@ -75,6 +77,6 @@ fn refresh_usage(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> boo
         merge_account_rate_limits(runtime, kind, rate_limits);
         wrote = true;
     }
-    wrote |= merge_oauth_usage_if_due(runtime, kind, windows_missing);
+    wrote |= merge_oauth_usage_if_due(runtime, kind, merge_windows || windows_missing);
     wrote
 }

@@ -365,7 +365,7 @@ fn default_provider_style(kind: &str) -> ProviderStyleDefaults {
 /// [`crate::agents::PlanLabel`]: Claude's tiers prefix `Claude` (`max` →
 /// `Claude Max`), Codex's prefix `ChatGPT` (`pro` → `ChatGPT Pro`); any other
 /// provider just title-cases the tier.
-fn format_plan_label(kind: &str, raw: &str) -> String {
+pub(crate) fn format_plan_label(kind: &str, raw: &str) -> String {
     let tier = provider_title_case(raw);
     match crate::agents::descriptor_by_kind(kind).map(|descriptor| &descriptor.plan_label) {
         Some(crate::agents::PlanLabel::Prefixed { prefix }) => format!("{prefix} {tier}"),

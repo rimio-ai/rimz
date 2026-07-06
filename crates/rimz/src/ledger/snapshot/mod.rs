@@ -49,6 +49,7 @@ pub use row::{
 };
 #[cfg(test)]
 pub(crate) use view::fold_ask_onto_row;
+pub(crate) use view::format_plan_label;
 pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
     PresenceSample, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarLinkFreshness, SidebarLinkHealth,

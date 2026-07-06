@@ -140,6 +140,36 @@ fn reset_credits_falls_back_to_available_entries() {
 }
 
 #[test]
+fn usage_response_maps_plan_type() {
+    let usage = parse_usage_response(
+        r#"{
+            "plan_type": "pro",
+            "rate_limit": {},
+            "credits": null
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(usage.plan.as_deref(), Some("pro"));
+}
+
+#[test]
+fn usage_response_ignores_missing_or_empty_plan_type() {
+    let missing = parse_usage_response(r#"{ "rate_limit": {}, "credits": null }"#).unwrap();
+    let empty = parse_usage_response(
+        r#"{
+            "plan_type": " ",
+            "rate_limit": {},
+            "credits": null
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(missing.plan, None);
+    assert_eq!(empty.plan, None);
+}
+
+#[test]
 fn reset_credits_parse_empty_or_bad_payloads() {
     assert!(parse_reset_credits(r#"{"credits":[]}"#).is_ok());
     assert!(parse_reset_credits("").is_err());

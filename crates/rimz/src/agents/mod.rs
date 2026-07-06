@@ -627,6 +627,14 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Stable identifier of the current local OAuth login behind
+    /// [`probe_oauth_usage`](Self::probe_oauth_usage), used to detect an
+    /// account switch and drop account-scoped caches. `None` when the provider
+    /// has no cheap local identity.
+    fn oauth_account_key(&self) -> Option<String> {
+        None
+    }
+
     /// Probe the provider's own realtime account channel while idle.
     /// Producer-only, best-effort, and read-only: no ledger writes happen in the
     /// adapter, and the caller owns every cache merge. `RuntimePaths` lets the

@@ -295,20 +295,20 @@ Unlike Claude (raw tokens, window derived from the payload model), Codex carries
 | Shape | Meaning |
 | --- | --- |
 | `OPENAI_API_KEY` present, non-empty | API-key login → **unmetered** by subscription windows; the provider dashboard uses transcript-derived API spend plus any display ceiling |
-| `tokens.access_token` present | ChatGPT login → **metered** (plan tier filled once a session reports it) |
+| `tokens.access_token` present | ChatGPT login → **metered** (plan tier filled by live app-server context or the OAuth usage response) |
 
-The plan tier rides the app-server (`account/rateLimits/read` `plan_type`), not the idle file. The semantics are in [adapter/codex.md → Account and balance](../../internals/agents/adapter/codex.md#account-and-balance).
+The plan tier rides the app-server (`account/rateLimits/read` `plan_type`) and the OAuth usage response (`plan_type`) for idle or switched accounts. The semantics are in [adapter/codex.md → Account and balance](../../internals/agents/adapter/codex.md#account-and-balance).
 
-[`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`.
+[`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`; the same local `tokens.account_id` is the cache key used to detect account switches.
 
 The default usage URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. The parsed usage response shape:
 
 ```jsonc
 {
   "user_id": "user_…",     // present, ignored
-  "account_id": "acct_…",  // present, ignored
+  "account_id": "acct_…",  // present, ignored; local tokens.account_id keys account switches
   "email": "person@example.com", // present, ignored
-  "plan_type": "plus | pro | team | …", // present, ignored here; live app-server owns the plan label
+  "plan_type": "plus | pro | team | …", // mapped as the idle/switched-account plan label fallback
   "rate_limit": {
     "primary_window": {
       "used_percent": 0-100,           // mapped

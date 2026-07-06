@@ -76,6 +76,24 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
     write_rate_limits_cache(&path, &cache);
 }
 
+/// Drop one provider kind's account-scoped windows after the local OAuth account
+/// key changes. Best-effort: a contended lock or absent kind is a no-op; the
+/// next refresh helper retries.
+pub fn drop_kind_rate_limits(runtime: &RuntimePaths, kind: &str) {
+    let path = runtime.shared_rate_limits_path();
+    let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {
+        return;
+    };
+    let mut cache = read_rate_limits_cache(&path);
+    let removed_windows = cache.windows.remove(kind).is_some();
+    let removed_pending = cache.pending.remove(kind).is_some();
+    if !(removed_windows || removed_pending) {
+        return;
+    }
+    cache.refreshed_at_ms = unix_now_ms();
+    write_rate_limits_cache(&path, &cache);
+}
+
 /// Project a budget window's reset-to-max roll forward to `now`: the timestamp-
 /// aware refill the dashboard and the window-priming guard share. Before the
 /// reset the last-known (most-drained) reading stands unchanged; once `now`

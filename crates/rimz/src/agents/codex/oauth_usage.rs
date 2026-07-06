@@ -80,6 +80,7 @@ struct CodexConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct UsageWire {
+    plan_type: Option<String>,
     rate_limit: RateLimitWire,
     credits: Option<CreditsWire>,
 }
@@ -120,6 +121,13 @@ pub(crate) fn fetch_usage() -> Result<AccountUsageSnapshot> {
 
 pub(crate) fn credentials_stamp() -> Option<u64> {
     file_mtime_ms(&codex_home()?.join("auth.json"))
+}
+
+pub(crate) fn account_key() -> Option<String> {
+    let home = codex_home()?;
+    load_credentials_from(&home.join("auth.json"))
+        .ok()?
+        .account_id
 }
 
 pub(crate) fn fetch_usage_with_token(
@@ -287,8 +295,14 @@ impl OauthUsageResponse for UsageWire {
                 )
             }),
             reset_credits: None,
+            plan: self.plan_type.and_then(non_empty_trimmed),
         }
     }
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 pub(in crate::agents::codex) fn credits_to_extra(

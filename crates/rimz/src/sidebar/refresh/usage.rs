@@ -23,8 +23,10 @@ use crate::agents::OauthUsageProbe;
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{CREDITS_TTL, OAUTH_USAGE_TTL};
 
-use super::credits::{ProviderCreditsEntry, merge_provider_credits_entry_if_due};
-use super::{SidebarSnapshot, merge_account_rate_limits};
+use super::credits::{
+    ProviderCreditsEntry, merge_provider_credits_entry_if_due, read_credits_cache,
+};
+use super::{SidebarSnapshot, drop_kind_rate_limits, merge_account_rate_limits};
 
 /// Schedule each metered, logged-in provider's API-query account-usage refresh.
 /// One uniform loop: gate on the offline override and the OAuth-attempt
@@ -67,41 +69,61 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
         return false;
     };
     let stamp = adapter.oauth_credentials_stamp();
+    let account_key = adapter.oauth_account_key();
+    if read_credits_cache(&runtime.shared_credits_path())
+        .entries
+        .get(kind)
+        .is_some_and(|entry| entry.account_key.as_deref() != account_key.as_deref())
+    {
+        tracing::info!(
+            target: crate::observability::BREADCRUMB_TARGET,
+            kind,
+            "provider account changed; dropping cached windows",
+        );
+        drop_kind_rate_limits(runtime, kind);
+    }
     let mut fetched_windows = None;
-    let entry = merge_provider_credits_entry_if_due(runtime, kind, stamp, || {
-        match adapter.probe_oauth_usage() {
-            OauthUsageProbe::Found(usage) => {
-                fetched_windows = usage.rate_limits.clone();
-                ProviderCreditsEntry {
+    let entry =
+        merge_provider_credits_entry_if_due(runtime, kind, stamp, account_key.clone(), || {
+            match adapter.probe_oauth_usage() {
+                OauthUsageProbe::Found(usage) => {
+                    fetched_windows = usage.rate_limits.clone();
+                    ProviderCreditsEntry {
+                        observed_at_ms: unix_now_ms(),
+                        oauth_read_at_ms: unix_now_ms(),
+                        auth_settled: false,
+                        credentials_stamp: None,
+                        account_key: None,
+                        plan: usage.plan,
+                        ok: true,
+                        extra_credits: usage.extra_credits,
+                        reset_credits: usage.reset_credits,
+                    }
+                }
+                OauthUsageProbe::NoCredentials => ProviderCreditsEntry {
+                    observed_at_ms: unix_now_ms(),
+                    oauth_read_at_ms: unix_now_ms(),
+                    auth_settled: true,
+                    credentials_stamp: stamp,
+                    account_key: None,
+                    plan: None,
+                    ok: false,
+                    extra_credits: None,
+                    reset_credits: None,
+                },
+                OauthUsageProbe::Failed | OauthUsageProbe::Unsupported => ProviderCreditsEntry {
                     observed_at_ms: unix_now_ms(),
                     oauth_read_at_ms: unix_now_ms(),
                     auth_settled: false,
                     credentials_stamp: None,
-                    ok: true,
-                    extra_credits: usage.extra_credits,
-                    reset_credits: usage.reset_credits,
-                }
+                    account_key: None,
+                    plan: None,
+                    ok: false,
+                    extra_credits: None,
+                    reset_credits: None,
+                },
             }
-            OauthUsageProbe::NoCredentials => ProviderCreditsEntry {
-                observed_at_ms: unix_now_ms(),
-                oauth_read_at_ms: unix_now_ms(),
-                auth_settled: true,
-                credentials_stamp: stamp,
-                ok: false,
-                extra_credits: None,
-                reset_credits: None,
-            },
-            OauthUsageProbe::Failed | OauthUsageProbe::Unsupported => ProviderCreditsEntry {
-                observed_at_ms: unix_now_ms(),
-                oauth_read_at_ms: unix_now_ms(),
-                auth_settled: false,
-                credentials_stamp: None,
-                ok: false,
-                extra_credits: None,
-                reset_credits: None,
-            },
-        }
-    });
+        });
     let written = entry.is_some();
     if merge_windows && let Some(rate_limits) = fetched_windows {
         merge_account_rate_limits(runtime, kind, rate_limits);

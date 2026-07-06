@@ -104,6 +104,8 @@ fn producer_reset_advance_invalidates_oauth_usage_throttle() {
             oauth_read_at_ms: 1234,
             auth_settled: false,
             credentials_stamp: None,
+            account_key: None,
+            plan: None,
             ok: true,
             extra_credits: Some(crate::agents::ExtraCredits::known(None, Some(4.0), None)),
             reset_credits: None,
@@ -470,6 +472,70 @@ fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
     assert!(
         cache.windows.contains_key("claude"),
         "an existing kind's windows are preserved"
+    );
+}
+
+#[test]
+fn drop_kind_rate_limits_removes_only_that_kinds_windows_and_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.shared_rate_limits_path();
+    let first_seen_at = Timestamp::from_second(2_000_000_000).unwrap();
+    write_rate_limits_cache(
+        &path,
+        &RateLimitsCache {
+            refreshed_at_ms: 1,
+            windows: BTreeMap::from([
+                (
+                    "codex".to_owned(),
+                    AgentRateLimits {
+                        windows: vec![rl_window(55, None)],
+                    },
+                ),
+                (
+                    "claude".to_owned(),
+                    AgentRateLimits {
+                        windows: vec![rl_window(20, None)],
+                    },
+                ),
+            ]),
+            pending: BTreeMap::from([
+                (
+                    "codex".to_owned(),
+                    vec![PendingRefill {
+                        duration_mins: Some(300),
+                        used_percentage: 1,
+                        first_seen_at,
+                    }],
+                ),
+                (
+                    "claude".to_owned(),
+                    vec![PendingRefill {
+                        duration_mins: Some(300),
+                        used_percentage: 2,
+                        first_seen_at,
+                    }],
+                ),
+            ]),
+        },
+    );
+
+    drop_kind_rate_limits(&runtime, "codex");
+    let cache = read_rate_limits_cache(&path);
+
+    assert!(!cache.windows.contains_key("codex"));
+    assert!(!cache.pending.contains_key("codex"));
+    assert!(cache.windows.contains_key("claude"));
+    assert!(cache.pending.contains_key("claude"));
+
+    let refreshed_at_ms = cache.refreshed_at_ms;
+    drop_kind_rate_limits(&runtime, "missing");
+    assert_eq!(
+        read_rate_limits_cache(&path).refreshed_at_ms,
+        refreshed_at_ms,
+        "absent kind is a no-op"
     );
 }
 

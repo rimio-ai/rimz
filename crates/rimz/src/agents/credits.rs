@@ -132,6 +132,7 @@ pub struct AccountUsageSnapshot {
     pub rate_limits: Option<AgentRateLimits>,
     pub extra_credits: Option<ExtraCredits>,
     pub reset_credits: Option<ResetCredits>,
+    pub plan: Option<String>,
 }
 
 /// A provider's raw OAuth usage response, normalized to the shared snapshot.

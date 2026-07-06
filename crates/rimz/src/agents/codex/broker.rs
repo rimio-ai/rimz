@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::app_server::{AppServerErr, codex_bin, recv_response, spawn_frame_reader, write_frame};
+use super::oauth_usage;
 use crate::bridge::SocketGuard;
 
 /// Wall-clock for the startup (and respawn) handshake — generous like the client
@@ -80,12 +81,14 @@ fn render_banner(info: &BrokerInfo<'_>) -> String {
 
 /// The held `codex app-server` child: write half, the reader-thread channel for
 /// its frames, the request id counter, and the cached `initialize` result so
-/// client handshakes need no round-trip.
+/// client handshakes need no round-trip. The auth stamp tracks the credential
+/// file the child read at spawn so an account switch respawns it before serving.
 struct ChildIo {
     stdin: ChildStdin,
     rx: Receiver<String>,
     next_id: i64,
     init_result: Value,
+    auth_stamp: Option<u64>,
     child: Child,
 }
 
@@ -153,6 +156,7 @@ fn spawn_and_handshake() -> Result<ChildIo, AppServerErr> {
         rx,
         next_id: 0,
         init_result: Value::Null,
+        auth_stamp: oauth_usage::credentials_stamp(),
         child,
     };
     let init = io.round_trip(
@@ -186,6 +190,11 @@ fn serve_request(
         return Ok(lock(shared).init_result.clone());
     }
     let mut io = lock(shared);
+    let auth_stamp = oauth_usage::credentials_stamp();
+    if io.auth_stamp != auth_stamp {
+        tracing::info!("codex auth changed; respawning app-server child");
+        io.respawn()?;
+    }
     match io.round_trip(method, params.clone(), Instant::now() + REQUEST_DEADLINE) {
         Err(AppServerErr::Closed | AppServerErr::Io(_)) => {
             tracing::warn!("codex app-server child gone; respawning");

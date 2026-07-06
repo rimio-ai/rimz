@@ -831,6 +831,10 @@ impl AgentAdapter for CodexAdapter {
         oauth_usage::credentials_stamp()
     }
 
+    fn oauth_account_key(&self) -> Option<String> {
+        oauth_usage::account_key()
+    }
+
     /// Codex has no statusline, so app-server-owned metadata (rate-limit
     /// windows, model display name, thread preview/name, version) refreshes
     /// out-of-band on turn boundaries: `SessionStart` populates it early (rate

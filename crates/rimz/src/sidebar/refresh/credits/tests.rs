@@ -47,6 +47,8 @@ fn oauth_read_stamp_throttles_oauth_probe() {
                     oauth_read_at_ms: now,
                     auth_settled: false,
                     credentials_stamp: None,
+                    account_key: None,
+                    plan: None,
                     ok: true,
                     extra_credits: Some(ExtraCredits::known(None, Some(1.0), None)),
                     reset_credits: None,
@@ -57,13 +59,15 @@ fn oauth_read_stamp_throttles_oauth_probe() {
 
     let mut calls = 0;
     assert!(
-        merge_provider_credits_entry_if_due(&runtime, "codex", None, || {
+        merge_provider_credits_entry_if_due(&runtime, "codex", None, None, || {
             calls += 1;
             ProviderCreditsEntry {
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
                 credentials_stamp: None,
+                account_key: None,
+                plan: None,
                 ok: true,
                 extra_credits: Some(ExtraCredits::known(None, Some(2.0), None)),
                 reset_credits: None,
@@ -80,13 +84,15 @@ fn oauth_read_stamp_throttles_oauth_probe() {
 
     let mut calls = 0;
     assert!(
-        merge_provider_credits_entry_if_due(&runtime, "codex", None, || {
+        merge_provider_credits_entry_if_due(&runtime, "codex", None, None, || {
             calls += 1;
             ProviderCreditsEntry {
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
                 credentials_stamp: None,
+                account_key: None,
+                plan: None,
                 ok: true,
                 extra_credits: Some(ExtraCredits::known(None, Some(2.0), None)),
                 reset_credits: None,
@@ -116,6 +122,8 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
                     oauth_read_at_ms: now,
                     auth_settled: true,
                     credentials_stamp: Some(41),
+                    account_key: None,
+                    plan: None,
                     ok: false,
                     extra_credits: None,
                     reset_credits: None,
@@ -126,13 +134,15 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
 
     let mut calls = 0;
     assert!(
-        merge_provider_credits_entry_if_due(&runtime, "codex", Some(41), || {
+        merge_provider_credits_entry_if_due(&runtime, "codex", Some(41), None, || {
             calls += 1;
             ProviderCreditsEntry {
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
                 credentials_stamp: None,
+                account_key: None,
+                plan: None,
                 ok: true,
                 extra_credits: Some(ExtraCredits::known(None, Some(2.0), None)),
                 reset_credits: None,
@@ -144,13 +154,15 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
     assert_eq!(calls, 0);
 
     assert!(
-        merge_provider_credits_entry_if_due(&runtime, "codex", Some(42), || {
+        merge_provider_credits_entry_if_due(&runtime, "codex", Some(42), None, || {
             calls += 1;
             ProviderCreditsEntry {
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
                 credentials_stamp: None,
+                account_key: None,
+                plan: None,
                 ok: true,
                 extra_credits: Some(ExtraCredits::known(None, Some(2.0), None)),
                 reset_credits: None,
@@ -170,13 +182,15 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
     write_credits_cache(&path, &cache);
 
     assert!(
-        merge_provider_credits_entry_if_due(&runtime, "codex", Some(42), || {
+        merge_provider_credits_entry_if_due(&runtime, "codex", Some(42), None, || {
             calls += 1;
             ProviderCreditsEntry {
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
                 credentials_stamp: None,
+                account_key: None,
+                plan: None,
                 ok: true,
                 extra_credits: Some(ExtraCredits::known(None, Some(3.0), None)),
                 reset_credits: None,
@@ -189,20 +203,138 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
 }
 
 #[test]
+fn account_key_change_bypasses_fresh_oauth_stamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.shared_credits_path();
+    let now = unix_now_ms();
+    write_credits_cache(
+        &path,
+        &CreditsCache {
+            refreshed_at_ms: now,
+            entries: BTreeMap::from([(
+                "codex".to_owned(),
+                ProviderCreditsEntry {
+                    observed_at_ms: 10,
+                    oauth_read_at_ms: now,
+                    auth_settled: false,
+                    credentials_stamp: None,
+                    account_key: Some("old".to_owned()),
+                    plan: Some("plus".to_owned()),
+                    ok: true,
+                    extra_credits: Some(ExtraCredits::known(None, Some(1.0), None)),
+                    reset_credits: None,
+                },
+            )]),
+        },
+    );
+
+    let mut calls = 0;
+    assert!(
+        merge_provider_credits_entry_if_due(
+            &runtime,
+            "codex",
+            None,
+            Some("new".to_owned()),
+            || {
+                calls += 1;
+                ProviderCreditsEntry {
+                    observed_at_ms: unix_now_ms(),
+                    oauth_read_at_ms: unix_now_ms(),
+                    auth_settled: false,
+                    credentials_stamp: None,
+                    account_key: None,
+                    plan: Some("pro".to_owned()),
+                    ok: true,
+                    extra_credits: Some(ExtraCredits::known(None, Some(2.0), None)),
+                    reset_credits: None,
+                }
+            },
+        )
+        .is_some()
+    );
+    assert_eq!(calls, 1);
+    assert_eq!(
+        read_credits_cache(&path)
+            .entries
+            .get("codex")
+            .and_then(|entry| entry.account_key.as_deref()),
+        Some("new")
+    );
+}
+
+#[test]
+fn failed_oauth_after_account_key_change_does_not_carry_prior_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    runtime.ensure_dirs().unwrap();
+    let reset_credits = ResetCredits {
+        count: 4,
+        soonest_expiry: jiff::Timestamp::from_second(1_800_000_000).ok(),
+    };
+    merge_provider_credits_entry(
+        &runtime,
+        "codex",
+        ProviderCreditsEntry {
+            observed_at_ms: 42,
+            oauth_read_at_ms: 1,
+            auth_settled: false,
+            credentials_stamp: None,
+            account_key: Some("old".to_owned()),
+            plan: Some("plus".to_owned()),
+            ok: true,
+            extra_credits: Some(ExtraCredits::known(None, Some(5.0), None)),
+            reset_credits: Some(reset_credits),
+        },
+    );
+
+    merge_provider_credits_entry_if_due(&runtime, "codex", None, Some("new".to_owned()), || {
+        ProviderCreditsEntry {
+            observed_at_ms: unix_now_ms(),
+            oauth_read_at_ms: unix_now_ms(),
+            auth_settled: false,
+            credentials_stamp: None,
+            account_key: None,
+            plan: None,
+            ok: false,
+            extra_credits: None,
+            reset_credits: None,
+        }
+    });
+
+    let entry = read_credits_cache(&runtime.shared_credits_path())
+        .entries
+        .remove("codex")
+        .expect("codex entry");
+    assert!(!entry.ok);
+    assert_eq!(entry.account_key.as_deref(), Some("new"));
+    assert_eq!(entry.extra_credits, None);
+    assert_eq!(entry.reset_credits, None);
+    assert_eq!(entry.plan, None);
+}
+
+#[test]
 fn oauth_merge_records_settled_auth_and_success_clears_it() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
         .expect("runtime");
     runtime.ensure_dirs().unwrap();
 
-    merge_provider_credits_entry_if_due(&runtime, "codex", Some(7), || ProviderCreditsEntry {
-        observed_at_ms: unix_now_ms(),
-        oauth_read_at_ms: unix_now_ms(),
-        auth_settled: true,
-        credentials_stamp: Some(7),
-        ok: false,
-        extra_credits: None,
-        reset_credits: None,
+    merge_provider_credits_entry_if_due(&runtime, "codex", Some(7), None, || {
+        ProviderCreditsEntry {
+            observed_at_ms: unix_now_ms(),
+            oauth_read_at_ms: unix_now_ms(),
+            auth_settled: true,
+            credentials_stamp: Some(7),
+            account_key: None,
+            plan: None,
+            ok: false,
+            extra_credits: None,
+            reset_credits: None,
+        }
     });
     let mut cache = read_credits_cache(&runtime.shared_credits_path());
     let entry = cache.entries.get_mut("codex").expect("codex entry");
@@ -211,14 +343,18 @@ fn oauth_merge_records_settled_auth_and_success_clears_it() {
     entry.oauth_read_at_ms = unix_now_ms() - OAUTH_USAGE_SETTLED_TTL.as_millis() as u64 - 1;
     write_credits_cache(&runtime.shared_credits_path(), &cache);
 
-    merge_provider_credits_entry_if_due(&runtime, "codex", Some(7), || ProviderCreditsEntry {
-        observed_at_ms: unix_now_ms(),
-        oauth_read_at_ms: unix_now_ms(),
-        auth_settled: false,
-        credentials_stamp: None,
-        ok: true,
-        extra_credits: Some(ExtraCredits::known(None, Some(8.0), None)),
-        reset_credits: None,
+    merge_provider_credits_entry_if_due(&runtime, "codex", Some(7), None, || {
+        ProviderCreditsEntry {
+            observed_at_ms: unix_now_ms(),
+            oauth_read_at_ms: unix_now_ms(),
+            auth_settled: false,
+            credentials_stamp: None,
+            account_key: None,
+            plan: None,
+            ok: true,
+            extra_credits: Some(ExtraCredits::known(None, Some(8.0), None)),
+            reset_credits: None,
+        }
     });
     let entry = read_credits_cache(&runtime.shared_credits_path())
         .entries
@@ -249,6 +385,8 @@ fn fold_applies_cached_credits_and_api_spend_ceiling() {
             oauth_read_at_ms: 0,
             auth_settled: false,
             credentials_stamp: None,
+            account_key: None,
+            plan: None,
             ok: true,
             extra_credits: Some(ExtraCredits::known(Some(7.0), None, None)),
             reset_credits: None,
@@ -315,6 +453,8 @@ fn extra_credits_only_merge_preserves_prior_oauth_and_reset_state() {
             oauth_read_at_ms: 1234,
             auth_settled: true,
             credentials_stamp: Some(11),
+            account_key: Some("acc".to_owned()),
+            plan: Some("pro".to_owned()),
             ok: true,
             extra_credits: None,
             reset_credits: Some(reset_credits.clone()),
@@ -352,6 +492,20 @@ fn extra_credits_only_merge_preserves_prior_oauth_and_reset_state() {
             .and_then(|entry| entry.credentials_stamp),
         Some(11)
     );
+    assert_eq!(
+        cache
+            .entries
+            .get("codex")
+            .and_then(|entry| entry.account_key.as_deref()),
+        Some("acc")
+    );
+    assert_eq!(
+        cache
+            .entries
+            .get("codex")
+            .and_then(|entry| entry.plan.as_deref()),
+        Some("pro")
+    );
 }
 
 #[test]
@@ -372,17 +526,21 @@ fn failed_oauth_merge_preserves_prior_displayable_credits() {
             oauth_read_at_ms: 1,
             auth_settled: false,
             credentials_stamp: None,
+            account_key: None,
+            plan: None,
             ok: true,
             extra_credits: Some(ExtraCredits::known(None, Some(5.0), None)),
             reset_credits: Some(reset_credits.clone()),
         },
     );
 
-    merge_provider_credits_entry_if_due(&runtime, "codex", None, || ProviderCreditsEntry {
+    merge_provider_credits_entry_if_due(&runtime, "codex", None, None, || ProviderCreditsEntry {
         observed_at_ms: unix_now_ms(),
         oauth_read_at_ms: unix_now_ms(),
         auth_settled: false,
         credentials_stamp: None,
+        account_key: None,
+        plan: None,
         ok: false,
         extra_credits: None,
         reset_credits: None,
@@ -416,6 +574,8 @@ fn invalidate_oauth_read_zeroes_attempt_stamp() {
             oauth_read_at_ms: 1234,
             auth_settled: true,
             credentials_stamp: Some(9),
+            account_key: None,
+            plan: None,
             ok: true,
             extra_credits: Some(ExtraCredits::known(None, Some(5.0), None)),
             reset_credits: None,
@@ -434,13 +594,15 @@ fn invalidate_oauth_read_zeroes_attempt_stamp() {
 
     let mut calls = 0;
     assert!(
-        merge_provider_credits_entry_if_due(&runtime, "codex", Some(9), || {
+        merge_provider_credits_entry_if_due(&runtime, "codex", Some(9), None, || {
             calls += 1;
             ProviderCreditsEntry {
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
                 credentials_stamp: None,
+                account_key: None,
+                plan: None,
                 ok: true,
                 extra_credits: Some(ExtraCredits::known(None, Some(6.0), None)),
                 reset_credits: None,
@@ -467,6 +629,8 @@ fn genuine_zero_reset_credits_replaces_prior_count() {
             oauth_read_at_ms: 0,
             auth_settled: false,
             credentials_stamp: None,
+            account_key: None,
+            plan: None,
             ok: true,
             extra_credits: None,
             reset_credits: Some(ResetCredits {
@@ -483,6 +647,8 @@ fn genuine_zero_reset_credits_replaces_prior_count() {
             oauth_read_at_ms: 0,
             auth_settled: false,
             credentials_stamp: None,
+            account_key: None,
+            plan: None,
             ok: true,
             extra_credits: None,
             reset_credits: Some(ResetCredits {
@@ -525,6 +691,8 @@ fn fold_applies_displayable_reset_credits_to_metered_panel() {
             oauth_read_at_ms: 0,
             auth_settled: false,
             credentials_stamp: None,
+            account_key: None,
+            plan: None,
             ok: true,
             extra_credits: None,
             reset_credits: Some(reset_credits.clone()),
@@ -537,6 +705,8 @@ fn fold_applies_displayable_reset_credits_to_metered_panel() {
             oauth_read_at_ms: 0,
             auth_settled: false,
             credentials_stamp: None,
+            account_key: None,
+            plan: None,
             ok: true,
             extra_credits: None,
             reset_credits: Some(ResetCredits {
@@ -550,4 +720,70 @@ fn fold_applies_displayable_reset_credits_to_metered_panel() {
 
     assert_eq!(snapshot.providers[0].reset_credits, Some(reset_credits));
     assert_eq!(snapshot.providers[1].reset_credits, None);
+}
+
+#[test]
+fn fold_fills_missing_plan_from_displayable_credits_entry() {
+    let mut snapshot = SidebarSnapshot::build(
+        crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+        Vec::new(),
+        Vec::new(),
+        jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+    );
+    snapshot.providers = vec![
+        panel("codex", true),
+        panel("claude", true),
+        panel("pi", true),
+    ];
+    snapshot.providers[1].plan = Some("Claude Max".to_owned());
+    let mut cache = CreditsCache::default();
+    let now_ms = CREDITS_DISPLAY_MAX_AGE.as_millis() as u64 + 100;
+    cache.entries.insert(
+        "codex".to_owned(),
+        ProviderCreditsEntry {
+            observed_at_ms: now_ms,
+            oauth_read_at_ms: 0,
+            auth_settled: false,
+            credentials_stamp: None,
+            account_key: Some("acc".to_owned()),
+            plan: Some("pro".to_owned()),
+            ok: true,
+            extra_credits: None,
+            reset_credits: None,
+        },
+    );
+    cache.entries.insert(
+        "claude".to_owned(),
+        ProviderCreditsEntry {
+            observed_at_ms: now_ms,
+            oauth_read_at_ms: 0,
+            auth_settled: false,
+            credentials_stamp: None,
+            account_key: Some("acc".to_owned()),
+            plan: Some("pro".to_owned()),
+            ok: true,
+            extra_credits: None,
+            reset_credits: None,
+        },
+    );
+    cache.entries.insert(
+        "pi".to_owned(),
+        ProviderCreditsEntry {
+            observed_at_ms: 0,
+            oauth_read_at_ms: 0,
+            auth_settled: false,
+            credentials_stamp: None,
+            account_key: Some("acc".to_owned()),
+            plan: Some("pro".to_owned()),
+            ok: true,
+            extra_credits: None,
+            reset_credits: None,
+        },
+    );
+
+    apply_credits_cache_with(&mut snapshot, &cache, &AccountsConfig::default(), now_ms);
+
+    assert_eq!(snapshot.providers[0].plan.as_deref(), Some("ChatGPT Pro"));
+    assert_eq!(snapshot.providers[1].plan.as_deref(), Some("Claude Max"));
+    assert_eq!(snapshot.providers[2].plan, None);
 }
