@@ -1616,6 +1616,7 @@ mod tests {
                 channel: None,
                 agent_id: None,
                 pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_lazy"),
+                pane_pid: None,
                 worktree_path: None,
                 worktree_branch: None,
             },
@@ -1704,6 +1705,7 @@ mod tests {
             channel: None,
             agent_id: Some(AgentSessionId::from(agent_id)),
             pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, pane),
+            pane_pid: None,
             worktree_path: None,
             worktree_branch: None,
         }

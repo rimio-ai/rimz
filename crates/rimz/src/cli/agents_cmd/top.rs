@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,7 @@ use crate::cli::render;
 use rimz::agents::{AgentState, AgentStatus};
 use rimz::harness::target;
 use rimz::ids::AgentSessionId;
+use rimz::pane::PaneRef;
 use rimz::proc::TreeTotals;
 use rimz::tui::{MouseCapture, TerminalModeGuard};
 use rimz::workspace::WorkspaceResolver;
@@ -89,16 +90,21 @@ fn sample(
         None,
     )
     .context("reading the room snapshot")?;
-    let in_room: HashSet<AgentSessionId> = snapshot
+    let in_room: HashMap<AgentSessionId, Option<u32>> = snapshot
         .agent_panes
         .iter()
-        .filter_map(|pane_agent| pane_agent.agent_id.clone())
+        .filter_map(|pane_agent| {
+            pane_agent
+                .agent_id
+                .clone()
+                .map(|id| (id, pane_agent.pane_pid))
+        })
         .collect();
     let agents: Vec<AgentState> = snapshot
         .agents
         .into_iter()
         .filter(|agent| agent.parent_agent_id.is_none())
-        .filter(|agent| in_room.contains(&agent.agent_id))
+        .filter(|agent| in_room.contains_key(&agent.agent_id))
         .filter(|agent| channel.is_none_or(|filter| target::agent_in_worktree(agent, filter)))
         .collect();
     let peers: Vec<&AgentState> = agents.iter().collect();
@@ -106,11 +112,9 @@ fn sample(
     let mut rows = BTreeMap::new();
     for agent in &agents {
         let handle = target::agent_handle(agent, &peers, false);
-        let metrics = agent
-            .pane
-            .as_ref()
-            .and_then(|pane| pane.pane_pid)
-            .and_then(rimz::proc::tree_totals);
+        let live_pane_pid = in_room.get(&agent.agent_id).copied().flatten();
+        let metrics =
+            metrics_root_pid(live_pane_pid, agent.pane.as_ref()).and_then(rimz::proc::tree_totals);
         rows.insert(
             agent.agent_id.to_string(),
             AgentSample {
@@ -128,6 +132,10 @@ fn sample(
         sampled_at: Instant::now(),
         rows,
     })
+}
+
+fn metrics_root_pid(live_pane_pid: Option<u32>, stamped_pane: Option<&PaneRef>) -> Option<u32> {
+    live_pane_pid.or_else(|| stamped_pane.and_then(|pane| pane.pane_pid))
 }
 
 #[derive(Clone, Debug)]
@@ -468,5 +476,14 @@ mod tests {
         write_crlf(&mut out, b"head\nrow\n").expect("write frame");
 
         assert_eq!(out, b"head\r\nrow\r\n");
+    }
+
+    #[test]
+    fn metrics_root_pid_prefers_live_frame_over_stamped_pane() {
+        let mut stamped = PaneRef::from_id(rimz::PaneId::from_parts(rimz::MuxName::Tmux, "%1"));
+        stamped.pane_pid = Some(11);
+
+        assert_eq!(metrics_root_pid(Some(22), Some(&stamped)), Some(22));
+        assert_eq!(metrics_root_pid(None, Some(&stamped)), Some(11));
     }
 }

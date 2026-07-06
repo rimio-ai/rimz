@@ -231,6 +231,7 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<SidebarSnapshot> {
                 channel: agent.channel.clone(),
                 agent_id: Some(agent.agent_id.clone()),
                 pane_id: pane.pane_id.clone(),
+                pane_pid: pane.pane_pid,
                 worktree_path: agent.worktree_path.clone(),
                 worktree_branch: agent.worktree_branch.clone(),
             })

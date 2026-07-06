@@ -214,6 +214,11 @@ pub struct PaneAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
     pub pane_id: PaneId,
+    /// Live pane root process id from the producer's pane frame, when the
+    /// backend probe reported one. Best-effort advisory metadata for
+    /// process-tree metrics; never a correctness signal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

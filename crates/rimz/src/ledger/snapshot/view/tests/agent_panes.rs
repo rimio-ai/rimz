@@ -16,7 +16,9 @@ fn cwd_bound_session_lists_its_producer_bound_pane() {
         vec![paneless_codex("sess-1", "/repo/main", 1_000)],
     );
     snapshot.wired_kinds = vec!["codex".to_owned()];
-    let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
+    let mut live = pane("term1", "codex", "/repo/main");
+    live.pane_pid = Some(12_345);
+    let snapshot = snapshot.with_live_panes(vec![live], None);
 
     assert_eq!(snapshot.agent_panes.len(), 1);
     let bound = &snapshot.agent_panes[0];
@@ -26,6 +28,7 @@ fn cwd_bound_session_lists_its_producer_bound_pane() {
         Some("sess-1")
     );
     assert_eq!(bound.pane_id.raw(), "term1");
+    assert_eq!(bound.pane_pid, Some(12_345));
     assert!(
         snapshot.agents[0].pane.is_none(),
         "the rollup session it came from carries no pane of its own"

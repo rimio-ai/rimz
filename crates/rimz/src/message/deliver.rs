@@ -612,6 +612,7 @@ mod tests {
                 channel: agent.channel.clone(),
                 agent_id: Some(agent.agent_id.clone()),
                 pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+                pane_pid: None,
                 worktree_path: agent.worktree_path.clone(),
                 worktree_branch: agent.worktree_branch.clone(),
             }];

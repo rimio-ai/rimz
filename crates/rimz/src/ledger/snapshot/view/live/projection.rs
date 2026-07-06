@@ -144,6 +144,7 @@ pub(super) fn rows_from_panes(
                         channel: row.channel.clone(),
                         agent_id: None,
                         pane_id: pane.pane_id.clone(),
+                        pane_pid: pane.pane_pid,
                         worktree_path: row.worktree_path.clone(),
                         worktree_branch: row.worktree_branch.clone(),
                     });
@@ -258,6 +259,7 @@ fn push_agent_row(
         channel: agent.channel.clone(),
         agent_id: Some(agent.agent_id.clone()),
         pane_id: pane.pane_id.clone(),
+        pane_pid: pane.pane_pid,
         worktree_path,
         worktree_branch: agent.worktree_branch.clone(),
     }

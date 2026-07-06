@@ -963,6 +963,7 @@ mod tests {
             channel: None,
             agent_id: Some(agent.agent_id.clone()),
             pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            pane_pid: None,
             worktree_path: agent.worktree_path.clone(),
             worktree_branch: agent.worktree_branch.clone(),
         }
@@ -979,6 +980,7 @@ mod tests {
             channel: None,
             agent_id: None,
             pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            pane_pid: None,
             worktree_path: Some("/repo/project".to_owned()),
             worktree_branch: Some("project".to_owned()),
         }

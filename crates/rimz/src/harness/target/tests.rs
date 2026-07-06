@@ -931,6 +931,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
         channel: None,
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
+        pane_pid: None,
         worktree_path: Some(worktree_path.to_owned()),
         worktree_branch: None,
     }
@@ -948,6 +949,7 @@ fn fresh_pane(kind: &str, raw_pane: &str) -> PaneAgent {
         channel: None,
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
+        pane_pid: None,
         worktree_path: None,
         worktree_branch: None,
     }
@@ -973,6 +975,7 @@ fn bound_pane(
         channel: None,
         agent_id: Some(AgentSessionId::from(session)),
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
+        pane_pid: None,
         worktree_path: Some(format!("/repo/{branch}")),
         worktree_branch: Some(branch.to_owned()),
     }
