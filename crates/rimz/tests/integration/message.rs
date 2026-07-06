@@ -105,7 +105,9 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
         "queue clear failed: {}",
         String::from_utf8_lossy(&cleared.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&cleared.stdout).trim(), "1");
+    let cleared_stdout = String::from_utf8_lossy(&cleared.stdout);
+    assert!(cleared_stdout.contains("removed 1 message(s) for @claude"));
+    assert!(cleared_stdout.contains(&second));
     assert!(env.ledger().list_pending_messages().unwrap().is_empty());
 
     let methods: Vec<String> = env
@@ -158,10 +160,7 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
     assert_eq!(archived.as_array().unwrap().len(), 1);
     assert_eq!(archived[0]["message_id"], docs);
     assert_eq!(archived[0]["channel"], "docs");
-    assert!(
-        archived[0].get("text").is_none(),
-        "terminal rows come from the log without message text"
-    );
+    assert_eq!(archived[0]["text"], "docs task");
 
     let ops_only = env
         .rimz()
@@ -197,14 +196,188 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
 
     let status = env
         .rimz()
-        .args(["message", "status", &ops])
+        .args(["message", "show", &ops])
         .output()
-        .expect("message status");
-    assert!(status.status.success(), "message status failed");
+        .expect("message show");
+    assert!(status.status.success(), "message show failed");
     let status = String::from_utf8_lossy(&status.stdout);
     assert!(status.contains(&ops));
     assert!(status.contains("queued"));
     assert!(status.contains("ops"));
+}
+
+#[test]
+fn terminal_message_history_keeps_text_for_list_and_show() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-history", "history", &[]);
+    let message_id = queue_direct_channel_message(&env, "history", "kept body");
+    env.ledger()
+        .settle_message(
+            &MessageId::parse(&message_id).expect("message id"),
+            MessageStatus::Delivered,
+            "rimz-test",
+            None,
+        )
+        .expect("settle delivered");
+
+    let listed = env
+        .rimz()
+        .args(["message", "list", "--all", "--json"])
+        .output()
+        .expect("message list");
+    assert!(
+        listed.status.success(),
+        "message list failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
+    let row = parsed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["message_id"] == message_id)
+        .expect("history row");
+    assert_eq!(row["status"], "delivered");
+    assert_eq!(row["text"], "kept body");
+
+    let shown = env
+        .rimz()
+        .args(["message", "show", &message_id])
+        .output()
+        .expect("message show");
+    assert!(
+        shown.status.success(),
+        "message show failed: {}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(shown.contains("kept body"));
+    assert!(shown.contains("message.delivered"));
+}
+
+#[test]
+fn message_show_reports_delivery_blocker_and_timeline() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-show-blocked", "show-blocked", &[]);
+    let message_id = queue_add(&env, "@claude", "wait for idle");
+
+    let shown = env
+        .rimz()
+        .args(["message", "show", &message_id])
+        .output()
+        .expect("message show");
+    assert!(
+        shown.status.success(),
+        "message show failed: {}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(shown.contains("delivery check:"));
+    assert!(shown.contains("is running; gate 'done' opens at next turn end"));
+    assert!(shown.contains("message.queued"));
+}
+
+#[test]
+fn remove_accepts_many_ids_and_keeps_processing_after_miss() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-remove-many", "remove-many", &[]);
+    let first = queue_direct_channel_message(&env, "remove-many", "first");
+    let second = queue_direct_channel_message(&env, "remove-many", "second");
+
+    let removed = env
+        .rimz()
+        .args(["message", "remove", &first, &second])
+        .output()
+        .expect("remove many");
+    assert!(
+        removed.status.success(),
+        "remove many failed: {}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&removed.stdout);
+    assert!(stdout.contains(&format!("removed {first}")));
+    assert!(stdout.contains(&format!("removed {second}")));
+    assert!(env.ledger().list_pending_messages().unwrap().is_empty());
+
+    let valid = queue_direct_channel_message(&env, "remove-many", "third");
+    let missing = "msg_0000000000009999";
+    let mixed = env
+        .rimz()
+        .args(["message", "remove", &valid, missing])
+        .output()
+        .expect("remove mixed");
+    assert!(!mixed.status.success(), "mixed remove should fail");
+    let stdout = String::from_utf8_lossy(&mixed.stdout);
+    assert!(stdout.contains(&format!("removed {valid}")));
+    assert!(stdout.contains(&format!("{missing} is not queued or claimed")));
+    assert!(env.ledger().list_pending_messages().unwrap().is_empty());
+}
+
+#[test]
+fn clear_without_target_removes_scoped_channel_lane() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-clear-lane", "docs", &[]);
+    let docs = queue_direct_channel_message(&env, "docs", "docs");
+    let docs_team = queue_direct_channel_message(&env, "docs/forge", "forge");
+    let ops = queue_direct_channel_message(&env, "ops", "ops");
+
+    let cleared = env
+        .rimz()
+        .env(rimz::harness::run::ENV_CHANNEL, "docs")
+        .args(["message", "clear"])
+        .output()
+        .expect("clear lane");
+    assert!(
+        cleared.status.success(),
+        "clear lane failed: {}",
+        String::from_utf8_lossy(&cleared.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&cleared.stdout);
+    assert!(stdout.contains("removed 2 message(s) in #docs"));
+    assert!(stdout.contains(&docs));
+    assert!(stdout.contains(&docs_team));
+    let pending = env.ledger().list_pending_messages().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id.as_str(), ops);
+}
+
+#[test]
+fn bare_message_lists_and_unknown_words_suggest_subcommands() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-bare-list", "bare-list", &[]);
+    let message_id = queue_direct_channel_message(&env, "bare-list", "hello inbox");
+
+    let listed = env.rimz().args(["message"]).output().expect("bare message");
+    assert!(
+        listed.status.success(),
+        "bare message failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let listed = String::from_utf8_lossy(&listed.stdout);
+    assert!(listed.contains("FROM"));
+    assert!(listed.contains("TO"));
+    assert!(listed.contains("MESSAGE"));
+    assert!(listed.contains(&message_id));
+
+    let id_hint = env
+        .rimz()
+        .args(["message", "msg_0000000000000001"])
+        .output()
+        .expect("message id hint");
+    assert!(!id_hint.status.success());
+    let stderr = String::from_utf8_lossy(&id_hint.stderr);
+    assert!(stderr.contains("did you mean `rimz message show msg_0000000000000001`?"));
+
+    let unknown = env
+        .rimz()
+        .args(["message", "wat"])
+        .output()
+        .expect("unknown word");
+    assert!(!unknown.status.success());
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(stderr.contains("unknown subcommand `wat`"));
+    assert!(stderr.contains("expected list, show <id>"));
 }
 
 #[test]

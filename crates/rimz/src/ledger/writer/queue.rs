@@ -35,6 +35,10 @@ impl Ledger {
         Ok(message_store::list(&self.inner.paths.messages_dir)?)
     }
 
+    pub fn list_message_history(&self) -> Result<Vec<MessageRecord>> {
+        Ok(message_store::list_history(&self.inner.paths.messages_dir)?)
+    }
+
     pub fn list_pending_messages(&self) -> Result<Vec<MessageRecord>> {
         Ok(message_store::list_pending(&self.inner.paths.messages_dir)?)
     }
@@ -57,6 +61,7 @@ impl Ledger {
         let method = MessageEventMethod::for_terminal_status(status)
             .expect("finalize_message_locked only accepts terminal message statuses");
         let event = EventEnvelope::message_event(&message, session_name, method, reason);
+        message_store::append_history(&txn.paths.messages_dir, &message)?;
         message_store::remove(&txn.paths.messages_dir, &message.message_id)?;
         txn.append(&event)?;
         Ok((message, event))
@@ -72,6 +77,7 @@ impl Ledger {
         let mut messages = message_store::list(&txn.paths.messages_dir)?;
         let mut removed_ids = std::collections::BTreeSet::new();
         let mut updated = Vec::new();
+        let mut history = Vec::new();
         let mut events = Vec::new();
         for message in &mut messages {
             match update(message) {
@@ -96,6 +102,7 @@ impl Ledger {
                         .expect("MessageUpdate::Finalize only accepts terminal statuses");
                     removed_ids.insert(message.message_id.to_string());
                     updated.push(message.clone());
+                    history.push(message.clone());
                     events.push(EventEnvelope::message_event(
                         message,
                         session_name,
@@ -107,6 +114,9 @@ impl Ledger {
         }
         if updated.is_empty() {
             return Ok(updated);
+        }
+        for message in &history {
+            message_store::append_history(&txn.paths.messages_dir, message)?;
         }
         messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
         message_store::replace_all(&txn.paths.messages_dir, &messages)?;
@@ -531,8 +541,8 @@ impl Ledger {
         agent_id: &AgentSessionId,
         agent_name: Option<&str>,
         session_name: &str,
-    ) -> Result<usize> {
-        let removed = self.commit(PublishPolicy::Skip, |txn| {
+    ) -> Result<Vec<MessageRecord>> {
+        self.commit(PublishPolicy::Skip, |txn| {
             self.finalize_matching_messages_locked(
                 txn,
                 MessageStatus::Removed,
@@ -541,8 +551,30 @@ impl Ledger {
                 |message| message.status.is_open() && message.same_card(kind, agent_id, agent_name),
                 |_| {},
             )
-        })?;
-        Ok(removed.len())
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn clear_channel_messages(
+        &self,
+        channel: &str,
+        session_name: &str,
+    ) -> Result<Vec<MessageRecord>> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            self.finalize_matching_messages_locked(
+                txn,
+                MessageStatus::Removed,
+                session_name,
+                "clear",
+                |message| {
+                    message.status.is_open()
+                        && message.channel.as_deref().is_some_and(|candidate| {
+                            crate::harness::target::channel_in_lane(candidate, channel)
+                        })
+                },
+                |_| {},
+            )
+        })
     }
 
     #[must_use = "durability barrier; check the result"]

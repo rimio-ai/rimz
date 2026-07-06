@@ -99,7 +99,7 @@ Created ──► Queued ──► Claimed ──► Sent ──► Delivered
 - `Queued` and `Claimed` are open (`is_open`): the message is live in the queue.
 - `Sent` means bytes were written to the pane; the record stays live in the queue until confirmation or reconciliation makes a terminal decision.
 - `Delivered` means the agent acknowledged the text: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`.
-- Terminal states (`Delivered`, `TimedOut`, `Errored`, `Removed`, `Abandoned`, `Archived`) are final; the record is removed from `messages/messages.jsonl` after the terminal event is prepared, and the event log is the transcript for that outcome.
+- Terminal states (`Delivered`, `TimedOut`, `Errored`, `Removed`, `Abandoned`, `Archived`) are final; the final record is appended to `messages/history.jsonl`, then removed from `messages/messages.jsonl`, and the event log records the outcome without message content.
 
 ## Gates and delivery conditions
 
@@ -169,7 +169,7 @@ One cannot confirm the other. Batched prompt records carry a shared `batch_id`, 
 | Pre-send retry cap exceeded | `Abandoned` |
 | Receiver session `Ended` or channel teardown | `Archived` |
 
-Lifecycle `Ended` archives receiver messages in realtime. Channel teardown archives too: recreating, explicitly removing, or sweeping a worktree channel through cleanup or `rimz gc` moves that channel's open records to `Archived`, and `message list` hides them by default while `message list --all` and `message status <id>` keep the audit trail visible. The message sweep is the primary reconciler for unconfirmed `Sent` records, and `rimz gc` is the durable backstop. `Archived` is distinct from retry exhaustion (`Abandoned`) and explicit user removal (`Removed`).
+Lifecycle `Ended` archives receiver messages in realtime. Channel teardown archives too: recreating, explicitly removing, or sweeping a worktree channel through cleanup or `rimz gc` moves that channel's open records to `Archived`, and `message list` hides them by default while `message list --all` and `message show <id>` keep the audit trail visible. The message sweep is the primary reconciler for unconfirmed `Sent` records, and `rimz gc` is the durable backstop. `Archived` is distinct from retry exhaustion (`Abandoned`) and explicit user removal (`Removed`).
 
 ## Scheduling
 
@@ -252,16 +252,17 @@ Commands run inside a named-channel tab inherit `RIMZ_CHANNEL`, so `@claude` sco
 
 ## The message store
 
-The ledger persists live message state in one JSONL file under the workspace state root, with terminal history in the shared event log:
+The ledger persists live message state in one JSONL file under the workspace state root, terminal message content in a sibling history file, and terminal audit in the shared event log:
 
 ```text
 messages/messages.jsonl   live queued, claimed, and sent records
+messages/history.jsonl    terminal records with text, size-guarded to newest 500 records
 events.log.jsonl          terminal message.* audit events
 ```
 
-`messages/messages.jsonl` holds only live records. A terminal transition removes the record from the queue file, then appends the terminal `message.*` event; a crash in between cannot redeliver the message, and the cost is at most a missing terminal audit row. All writes use temp-file-plus-rename through the ledger atomic helpers and hold the workspace lock.
+`messages/messages.jsonl` holds only live records. A terminal transition appends the final record to `messages/history.jsonl`, removes it from the queue file, then appends the terminal `message.*` event. The history append uses the same JSONL tolerance as the live queue and is pruned after append when the file passes 512 KiB by rewriting the newest 500 `msg_`-ordered records. The event log still carries no message content. All writes hold the workspace lock; queue rewrites use temp-file-plus-rename through the ledger atomic helpers, and history appends use the ledger append helper.
 
-The store exposes `list()` (live records) and `list_pending()` (`Queued` records only). On first access, a legacy `messages/<msg_id>.json` plus `messages/terminal/` layout migrates live `Queued`, `Claimed`, and `Sent` records into the JSONL file and discards terminal files already represented by the event log. Store implementation: [`ledger/message_store.rs`](../../../crates/rimz/src/ledger/message_store.rs); ledger mutations: [`ledger/writer/queue.rs`](../../../crates/rimz/src/ledger/writer/queue.rs).
+The store exposes `list()` (live records), `list_history()` (terminal records with text), and `list_pending()` (`Queued` records only). On first access, a legacy `messages/<msg_id>.json` plus `messages/terminal/` layout migrates live `Queued`, `Claimed`, and `Sent` records into the JSONL file and discards terminal files already represented by the event log. Store implementation: [`ledger/message_store.rs`](../../../crates/rimz/src/ledger/message_store.rs); ledger mutations: [`ledger/writer/queue.rs`](../../../crates/rimz/src/ledger/writer/queue.rs).
 
 ## Transcript
 
@@ -300,8 +301,8 @@ The payload carries `message_id`, `kind`, `agent_id`, `agent_name`, `channel`, `
 
 The user-facing surface — flags, synopses, examples, the `message list` columns — is [cli/agents.md § Message an agent](../../reference/cli/agents.md#message-an-agent). What the commands do underneath:
 
-- `message list` and `message status <msg_id>` merge two sources: live rows come from `messages/messages.jsonl` and carry text; terminal rows are projected from `message.*` events and omit it, because content never enters the event log.
-- `message remove <msg_id>` settles one live record to `Removed`; `message clear <target>` settles every open record for one card.
+- `message list` and `message show <msg_id>` merge three sources: live rows come from `messages/messages.jsonl`, terminal rows with text come from `messages/history.jsonl`, and old or unresolved terminal rows fall back to `message.*` events without text because content never enters the event log.
+- `message remove <msg_id>...` settles each named live record to `Removed`; `message clear <target>` settles every open record for one card, and targetless `message clear` settles every open record in the scoped channel lane.
 
 Two hidden helpers are the pipeline's execution arms, spawned detached with nulled stdio, never run by humans:
 

@@ -12,6 +12,9 @@ use crate::ledger::atomic;
 use crate::message::{MessageRecord, MessageStatus};
 
 const QUEUE_FILE: &str = "messages.jsonl";
+const HISTORY_FILE: &str = "history.jsonl";
+const HISTORY_MAX_BYTES: u64 = 512 * 1024;
+const HISTORY_KEEP_RECORDS: usize = 500;
 const LEGACY_TERMINAL_DIR: &str = "terminal";
 
 #[derive(Debug, thiserror::Error)]
@@ -77,6 +80,32 @@ pub fn list(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     read_queue(messages_dir)
 }
 
+#[must_use = "durability barrier; check the result"]
+pub fn append_history(messages_dir: &Path, message: &MessageRecord) -> Result<()> {
+    let path = history_path(messages_dir);
+    let mut line = Vec::new();
+    serde_json::to_writer(&mut line, message).map_err(|source| MessageStoreErr::Json {
+        path: path.clone(),
+        source,
+    })?;
+    line.push(b'\n');
+    atomic::append_record_bytes(&path, &line)?;
+    let size = fs::metadata(&path)
+        .map_err(|source| MessageStoreErr::Io {
+            path: path.clone(),
+            source,
+        })?
+        .len();
+    if size > HISTORY_MAX_BYTES {
+        prune_history(&path)?;
+    }
+    Ok(())
+}
+
+pub fn list_history(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
+    read_queue_file(&history_path(messages_dir))
+}
+
 pub fn list_pending(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     Ok(read_queue(messages_dir)?
         .into_iter()
@@ -139,18 +168,32 @@ fn read_queue_file(path: &Path) -> Result<Vec<MessageRecord>> {
 }
 
 fn write_queue(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
-    let path = queue_path(messages_dir);
+    write_messages_file(&queue_path(messages_dir), messages)
+}
+
+fn write_messages_file(path: &Path, messages: &[MessageRecord]) -> Result<()> {
     let mut messages = messages.to_vec();
     sort_messages(&mut messages);
     let mut bytes = Vec::new();
     for message in &messages {
         serde_json::to_writer(&mut bytes, message).map_err(|source| MessageStoreErr::Json {
-            path: path.clone(),
+            path: path.to_path_buf(),
             source,
         })?;
         bytes.push(b'\n');
     }
-    atomic::write_bytes_atomically(&path, &bytes)?;
+    atomic::write_bytes_atomically(path, &bytes)?;
+    Ok(())
+}
+
+fn prune_history(path: &Path) -> Result<()> {
+    let mut messages = read_queue_file(path)?;
+    if messages.len() <= HISTORY_KEEP_RECORDS {
+        return Ok(());
+    }
+    sort_messages(&mut messages);
+    let keep_from = messages.len() - HISTORY_KEEP_RECORDS;
+    write_messages_file(path, &messages[keep_from..])?;
     Ok(())
 }
 
@@ -233,6 +276,10 @@ fn queue_path(messages_dir: &Path) -> PathBuf {
     messages_dir.join(QUEUE_FILE)
 }
 
+fn history_path(messages_dir: &Path) -> PathBuf {
+    messages_dir.join(HISTORY_FILE)
+}
+
 fn sort_messages(messages: &mut [MessageRecord]) {
     messages.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
 }
@@ -307,6 +354,54 @@ mod tests {
         let messages = list(&messages_dir).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id, second.message_id);
+    }
+
+    #[test]
+    fn history_round_trips_terminal_text() {
+        let dir = tempdir().unwrap();
+        let messages_dir = dir.path().join("messages");
+        let agent = agent();
+        let mut message = MessageRecord::new(
+            WorkspaceId::from_project_root(dir.path()),
+            &agent,
+            "delivered body".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        message.status = MessageStatus::Delivered;
+
+        append_history(&messages_dir, &message).unwrap();
+
+        let history = list_history(&messages_dir).unwrap();
+        assert_eq!(history, vec![message]);
+    }
+
+    #[test]
+    fn history_prunes_to_newest_records() {
+        let dir = tempdir().unwrap();
+        let messages_dir = dir.path().join("messages");
+        let agent = agent();
+        for index in 0..=HISTORY_KEEP_RECORDS {
+            let mut message = MessageRecord::new(
+                WorkspaceId::from_project_root(dir.path()),
+                &agent,
+                "x".repeat(2048),
+                true,
+                DeliveryGate::Done,
+            );
+            message.message_id = fixed_message_id(index as u64);
+            message.status = MessageStatus::Delivered;
+            append_history(&messages_dir, &message).unwrap();
+        }
+
+        let history = list_history(&messages_dir).unwrap();
+
+        assert_eq!(history.len(), HISTORY_KEEP_RECORDS);
+        assert_eq!(history[0].message_id, fixed_message_id(1));
+        assert_eq!(
+            history[HISTORY_KEEP_RECORDS - 1].message_id,
+            fixed_message_id(HISTORY_KEEP_RECORDS as u64)
+        );
     }
 
     #[test]
@@ -399,6 +494,10 @@ mod tests {
 
     fn write_legacy(path: &Path, message: &MessageRecord) {
         std::fs::write(path, serde_json::to_vec_pretty(message).unwrap()).unwrap();
+    }
+
+    fn fixed_message_id(value: u64) -> MessageId {
+        MessageId::parse(&format!("msg_{value:016}")).unwrap()
     }
 
     fn agent() -> AgentState {

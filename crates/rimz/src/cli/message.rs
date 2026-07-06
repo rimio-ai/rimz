@@ -68,13 +68,22 @@ enum MessageSubcmd {
         /// Optional target filter.
         target: Option<String>,
     },
-    /// Show one message record.
-    Status { message_id: MessageId },
-    /// Remove one queued message.
-    Remove { message_id: MessageId },
-    /// Remove every queued message for an agent.
+    /// Show one message record with timeline and delivery diagnosis.
+    #[command(alias = "status")]
+    Show {
+        message_id: MessageId,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove queued messages.
+    Remove {
+        #[arg(value_name = "MESSAGE_ID", num_args = 1..)]
+        message_ids: Vec<MessageId>,
+    },
+    /// Remove queued messages for an agent, or in the scoped channel.
     Clear {
-        target: String,
+        target: Option<String>,
         #[arg(long, conflicts_with = "channel")]
         worktree: Option<String>,
         #[arg(long, value_name = "NAME", conflicts_with = "worktree")]
@@ -101,8 +110,8 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
             limit,
             target,
         }) => list_messages(json, all, status, channel, limit, target, globals),
-        Some(MessageSubcmd::Status { message_id }) => status_message(message_id, globals),
-        Some(MessageSubcmd::Remove { message_id }) => remove_message(message_id, globals),
+        Some(MessageSubcmd::Show { message_id, json }) => show_message(message_id, json, globals),
+        Some(MessageSubcmd::Remove { message_ids }) => remove_messages(message_ids, globals),
         Some(MessageSubcmd::Clear {
             target,
             worktree,
@@ -111,9 +120,17 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
         Some(MessageSubcmd::Deliver { message_id }) => deliver_message(message_id, globals),
         Some(MessageSubcmd::Sweep) => sweep_messages(globals),
         None => {
-            let target = args.target.ok_or_else(|| {
-                anyhow::anyhow!("expected a target, or `rimz message list|remove|clear`")
-            })?;
+            let Some(target) = args.target else {
+                return list_messages(false, false, None, None, None, None, globals);
+            };
+            if !target.starts_with('@') && !target.contains(':') {
+                if target.starts_with("msg_") {
+                    bail!("did you mean `rimz message show {target}`?");
+                }
+                bail!(
+                    "unknown subcommand `{target}`; expected list, show <id>, remove <id>..., clear [target], or an @agent target"
+                );
+            }
             let text = args.text.into_iter().collect();
             if args.steer {
                 steer_message(target, args.send, text, globals)
@@ -738,24 +755,26 @@ fn list_messages(
         let show_channel = filter_channel.is_none();
         let mut headers = vec![
             "ID",
-            "STATUS",
-            "TARGET",
             "FROM",
+            "TO",
+            "STATUS",
             "CREATED",
             "DELIVERED",
-            "TEXT",
+            "MESSAGE",
         ];
         if show_channel {
-            headers.insert(4, "CHANNEL");
+            headers.insert(3, "CHANNEL");
         }
         let mut table = render::Table::new(headers);
         for message in messages {
-            let target = message_target(&message, &agents);
+            let target = scoped_handle(message_target(&message, &agents), filter_channel);
+            let sender = scoped_handle(message.sender.render(), filter_channel);
+            let message_cell = message_cell(&message);
             let mut row = vec![
                 render::cell(message.message_id.to_string()).fg(render::palette::ACCENT),
-                render::cell(message.status.as_str()).fg(render::status::message(message.status)),
+                render::cell(sender).fg(render::palette::META),
                 render::cell(target).fg(render::palette::META),
-                render::cell(message.sender.render()).fg(render::palette::META),
+                render::cell(message.status.as_str()).fg(render::status::message(message.status)),
                 render::cell(render::rel_age(message.enqueued_at, now)),
                 render::cell(
                     message
@@ -764,18 +783,11 @@ fn list_messages(
                         .unwrap_or_else(|| "-".to_owned()),
                 )
                 .dash(),
-                render::cell(
-                    message
-                        .text
-                        .as_deref()
-                        .map(preview)
-                        .unwrap_or_else(|| "-".to_owned()),
-                )
-                .dash(),
+                message_cell,
             ];
             if show_channel {
                 row.insert(
-                    4,
+                    3,
                     render::cell(message.channel.as_deref().unwrap_or("-"))
                         .fg(render::palette::META)
                         .dash(),
@@ -806,6 +818,10 @@ fn projected_messages(ledger: &rimz::Ledger) -> Result<Vec<MessageListRow>> {
         };
         rows.insert(row.message_id.to_string(), row);
     }
+    for message in ledger.list_message_history()? {
+        let row = MessageListRow::from_record(message);
+        rows.insert(row.message_id.to_string(), row);
+    }
     for message in ledger.list_messages()? {
         let row = MessageListRow::from_record(message);
         rows.insert(row.message_id.to_string(), row);
@@ -813,16 +829,83 @@ fn projected_messages(ledger: &rimz::Ledger) -> Result<Vec<MessageListRow>> {
     Ok(rows.into_values().collect())
 }
 
-fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
-    let (_workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
+#[derive(Clone, Debug, Serialize)]
+struct MessageTimelineRow {
+    method: String,
+    at: Timestamp,
+    attempts: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MessageDeliveryJson {
+    check: deliver::DeliveryCheck,
+    verdict: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct MessageShowJson {
+    message: MessageListRow,
+    timeline: Vec<MessageTimelineRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivery: Option<MessageDeliveryJson>,
+}
+
+fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let ledger = open_ledger(&workspace)?;
+    let cached_snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
     let Some(message) = projected_messages(&ledger)?
         .into_iter()
         .find(|message| message.message_id == message_id)
     else {
         bail!("message {message_id} not found");
     };
-    let agents: Vec<&AgentState> = snapshot.root_agents().collect();
+    let timeline = message_timeline(&ledger, &message_id)?;
+    let live_messages = ledger.list_messages()?;
     let now = Timestamp::now();
+    let delivery = if message.status.is_open() {
+        match live_messages
+            .iter()
+            .find(|record| record.message_id == message.message_id)
+        {
+            Some(record) => {
+                let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+                if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone())
+                {
+                    snapshot = snapshot
+                        .with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+                }
+                let check = deliver::explain(record, &live_messages, &snapshot, now);
+                let agents: Vec<&AgentState> = snapshot.root_agents().collect();
+                let target = message_target(&message, &agents);
+                Some(MessageDeliveryJson {
+                    verdict: delivery_verdict(&check, &target, now),
+                    check,
+                })
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    if json {
+        let rendered = serde_json::to_string_pretty(&MessageShowJson {
+            message,
+            timeline,
+            delivery,
+        })?;
+        #[expect(clippy::print_stdout, reason = "json emitter")]
+        {
+            println!("{rendered}");
+        }
+        return Ok(());
+    }
+
+    let agents: Vec<&AgentState> = cached_snapshot.root_agents().collect();
+    let target = message_target(&message, &agents);
+    let mut out = render::out();
     let mut kv = render::KeyVals::new();
     kv.push("id", render::cell(message.message_id.to_string()));
     kv.push(
@@ -830,31 +913,46 @@ fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
         render::cell(message.status.as_str()).fg(render::status::message(message.status)),
     );
     kv.push(
-        "target",
-        render::cell(message_target(&message, &agents)).fg(render::palette::META),
-    );
-    kv.push(
         "from",
         render::cell(message.sender.render()).fg(render::palette::META),
     );
+    kv.push("to", render::cell(target.clone()).fg(render::palette::META));
     kv.push(
         "channel",
         render::cell(message.channel.clone().unwrap_or_else(|| "-".to_owned())).dash(),
     );
+    if message.body != MessageBody::Prompt {
+        kv.push("body", render::cell(message.body.as_str()));
+    }
+    if message.gate != DeliveryGate::Done {
+        kv.push("gate", render::cell(message.gate.as_str()));
+    }
+    if !message.enter {
+        kv.push("enter", render::cell("false"));
+    }
+    if message.force {
+        kv.push("force", render::cell("true"));
+    }
     kv.push(
         "created",
-        render::cell(render::rel_age(message.enqueued_at, now)),
+        render::cell(time_with_absolute(message.enqueued_at, now)),
     );
     kv.push(
         "delivered",
         render::cell(
             message
                 .delivered_at
-                .map(|delivered| render::rel_age(delivered, now))
+                .map(|delivered| time_with_absolute(delivered, now))
                 .unwrap_or_else(|| "-".to_owned()),
         )
         .dash(),
     );
+    if let Some(not_before) = message.not_before {
+        kv.push(
+            "schedule",
+            render::cell(time_until_with_absolute(not_before, now)),
+        );
+    }
     kv.push("attempts", render::cell(message.attempts.to_string()));
     kv.push(
         "unconfirmed_sends",
@@ -864,56 +962,149 @@ fn status_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
         "last_error",
         render::cell(message.last_error.clone().unwrap_or_else(|| "-".to_owned())).dash(),
     );
-    kv.push(
-        "text",
-        render::cell(
-            message
-                .text
+    kv.render(&mut out)?;
+    writeln!(out, "text:")?;
+    if let Some(text) = message.text.as_deref() {
+        write_indented_block(&mut out, text)?;
+    } else {
+        writeln!(
+            out,
+            "  ({status} {at}; {location})",
+            status = message.status.as_str(),
+            at = time_with_absolute(message.delivered_at.unwrap_or(message.updated_at), now),
+            location = textless_location(&message, &target)
+        )?;
+    }
+    writeln!(out)?;
+    writeln!(out, "timeline:")?;
+    if timeline.is_empty() {
+        writeln!(out, "  -")?;
+    } else {
+        for event in &timeline {
+            let reason = event
+                .reason
                 .as_deref()
-                .map(preview)
-                .unwrap_or_else(|| "-".to_owned()),
-        )
-        .dash(),
-    );
-    kv.render(&mut render::out())?;
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| format!("  {reason}"))
+                .unwrap_or_default();
+            writeln!(
+                out,
+                "  {}  {}  attempts={}{}",
+                event.method,
+                time_with_absolute(event.at, now),
+                event.attempts,
+                reason
+            )?;
+        }
+    }
+    if let Some(delivery) = delivery {
+        render_delivery_check(&mut out, &delivery.check, &delivery.verdict, now)?;
+    }
     Ok(())
 }
 
-fn remove_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
+fn message_timeline(
+    ledger: &rimz::Ledger,
+    message_id: &MessageId,
+) -> Result<Vec<MessageTimelineRow>> {
+    let mut rows = Vec::new();
+    for event in ledger.read_events()? {
+        let EventKind::Message { method, payload } = event.kind() else {
+            continue;
+        };
+        if payload.message_id != *message_id {
+            continue;
+        }
+        rows.push(MessageTimelineRow {
+            method: method.as_str().to_owned(),
+            at: event.timestamp,
+            attempts: payload.attempts,
+            reason: payload.reason,
+        });
+    }
+    Ok(rows)
+}
+
+fn remove_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    if !ledger.remove_message(&message_id, &workspace.session_name, "remove")? {
-        bail!("message {message_id} is not queued or claimed");
+    let mut failed = false;
+    for message_id in message_ids {
+        if ledger.remove_message(&message_id, &workspace.session_name, "remove")? {
+            #[expect(clippy::print_stdout, reason = "command result")]
+            {
+                println!("removed {message_id}");
+            }
+        } else {
+            failed = true;
+            #[expect(clippy::print_stdout, reason = "command result")]
+            {
+                println!("{message_id} is not queued or claimed");
+            }
+        }
+    }
+    if failed {
+        std::process::exit(1);
     }
     Ok(())
 }
 
 fn clear_messages(
-    target: String,
+    target: Option<String>,
     worktree: Option<String>,
     channel_flag: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    rimz::harness::target::require_mention(&target)?;
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
     let channel = current_channel(&workspace);
-    let agent = super::resolve_agent_one(
-        &snapshot,
-        &target,
-        worktree.as_deref().or(channel_flag.as_deref()),
-        channel.as_deref(),
-    )?;
-    let count = ledger.clear_messages_for(
-        &agent.kind,
-        &agent.agent_id,
-        agent.name.as_deref(),
-        &workspace.session_name,
-    )?;
+    if let Some(target) = target {
+        rimz::harness::target::require_mention(&target)?;
+        let agent = super::resolve_agent_one(
+            &snapshot,
+            &target,
+            worktree.as_deref().or(channel_flag.as_deref()),
+            channel.as_deref(),
+        )?;
+        let removed = ledger.clear_messages_for(
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+            &workspace.session_name,
+        )?;
+        print_removed_summary(&format!("for {target}"), &removed);
+        return Ok(());
+    }
+    let lane = worktree
+        .as_deref()
+        .or(channel_flag.as_deref())
+        .or(channel.as_deref())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "message clear needs an @agent target or scoped channel; pass --channel NAME or run from a Rimz channel"
+            )
+        })?;
+    let removed = ledger.clear_channel_messages(lane, &workspace.session_name)?;
+    print_removed_summary(&format!("in #{lane}"), &removed);
+    Ok(())
+}
+
+fn print_removed_summary(scope: &str, removed: &[MessageRecord]) {
+    let ids: Vec<String> = removed
+        .iter()
+        .map(|message| message.message_id.to_string())
+        .collect();
     #[expect(clippy::print_stdout, reason = "command result is removal count")]
     {
-        println!("{count}");
+        if ids.is_empty() {
+            println!("removed 0 message(s) {scope}");
+        } else {
+            println!(
+                "removed {} message(s) {scope}: {}",
+                ids.len(),
+                ids.join(", ")
+            );
+        }
     }
-    Ok(())
 }
 
 fn render_add_output(output: &AddOutput, status: MessageStatus) -> String {
@@ -1161,6 +1352,233 @@ fn message_target(message: &MessageListRow, agents: &[&AgentState]) -> String {
         .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
 }
 
+fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> String {
+    let Some(filter) = filter_channel else {
+        return rendered;
+    };
+    let Some((base, channel)) = rendered.rsplit_once('#') else {
+        return rendered;
+    };
+    if rimz::harness::target::channel_in_lane(channel, filter) {
+        base.to_owned()
+    } else {
+        rendered
+    }
+}
+
+fn message_cell(message: &MessageListRow) -> render::Cell {
+    if let Some(text) = message.text.as_deref() {
+        return render::cell(preview(text));
+    }
+    if let Some(reason) = message
+        .last_error
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        return render::cell(reason.to_owned()).fg(render::palette::FAINT);
+    }
+    render::cell("-").dash()
+}
+
+fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
+    format!("{} ({ts})", render::rel_age(ts, now))
+}
+
+fn time_until_with_absolute(ts: Timestamp, now: Timestamp) -> String {
+    format!("{} ({ts})", render::rel_until(ts, now))
+}
+
+fn write_indented_block(out: &mut impl Write, text: &str) -> Result<()> {
+    if text.is_empty() {
+        writeln!(out, "  ")?;
+        return Ok(());
+    }
+    for line in text.split('\n') {
+        writeln!(out, "  {line}")?;
+    }
+    Ok(())
+}
+
+fn textless_location(message: &MessageListRow, target: &str) -> String {
+    if let Some(reason) = message
+        .last_error
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        return format!("content not retained in the event log; {reason}");
+    }
+    if message.status == MessageStatus::Delivered {
+        format!("content in `rimz transcript {target}`")
+    } else {
+        "content not retained in the event log".to_owned()
+    }
+}
+
+fn render_delivery_check(
+    out: &mut impl Write,
+    check: &deliver::DeliveryCheck,
+    verdict: &str,
+    now: Timestamp,
+) -> Result<()> {
+    writeln!(out)?;
+    writeln!(out, "delivery check:")?;
+    let mut kv = render::KeyVals::new().indent(2);
+    let schedule = if check.schedule.ready {
+        match check.schedule.retry_after {
+            Some(retry_after) if retry_after > now => {
+                format!(
+                    "ok; retry wake {}",
+                    time_until_with_absolute(retry_after, now)
+                )
+            }
+            Some(retry_after) => format!("ok; retry wake {}", time_with_absolute(retry_after, now)),
+            None => "ok".to_owned(),
+        }
+    } else {
+        check
+            .schedule
+            .not_before
+            .map(|not_before| format!("opens {}", time_until_with_absolute(not_before, now)))
+            .unwrap_or_else(|| "not ready".to_owned())
+    };
+    kv.push("schedule", condition_cell(check.schedule.ready, schedule));
+    let fifo = if check.fifo.head {
+        "ok".to_owned()
+    } else {
+        check
+            .fifo
+            .blocker
+            .as_ref()
+            .map(|blocker| format!("behind {blocker}"))
+            .unwrap_or_else(|| "head unavailable".to_owned())
+    };
+    kv.push("fifo", condition_cell(check.fifo.head, fifo));
+    kv.push(
+        "agent",
+        condition_cell(
+            check.agent.present,
+            if check.agent.present {
+                "ok".to_owned()
+            } else {
+                "receiver gone".to_owned()
+            },
+        ),
+    );
+    let gate_ready = gate_ready(check);
+    let gate = if check.gate.resume_recovered == Some(false) {
+        "waiting for provider recovery".to_owned()
+    } else if check.gate.open {
+        match check.gate.status {
+            Some(status) => format!("ok (status {})", status.as_str()),
+            None => "ok".to_owned(),
+        }
+    } else {
+        match check.gate.status {
+            Some(status) => format!(
+                "closed (status {}, gate {})",
+                status.as_str(),
+                check.gate.gate
+            ),
+            None => format!("closed (gate {})", check.gate.gate),
+        }
+    };
+    kv.push("gate", condition_cell(gate_ready, gate));
+    let ask = if check.ask.clear {
+        if check.ask.force {
+            "ok (--force)".to_owned()
+        } else {
+            "ok".to_owned()
+        }
+    } else {
+        check
+            .ask
+            .request_id
+            .as_ref()
+            .map(|request_id| format!("pending ask {request_id}"))
+            .unwrap_or_else(|| "pending ask".to_owned())
+    };
+    kv.push("ask", condition_cell(check.ask.clear, ask));
+    let pane = if check.pane.present {
+        check
+            .pane
+            .pane_id
+            .as_ref()
+            .map(|pane_id| format!("ok ({pane_id})"))
+            .unwrap_or_else(|| "ok".to_owned())
+    } else if let Some(pane_id) = &check.pane.pinned_pane_id {
+        format!("pinned pane {pane_id} not live")
+    } else {
+        "no live pane".to_owned()
+    };
+    kv.push("pane", condition_cell(check.pane.present, pane));
+    kv.render(out)?;
+    writeln!(out, "  {verdict}")?;
+    Ok(())
+}
+
+fn condition_cell(ok: bool, text: String) -> render::Cell {
+    let style = if ok {
+        render::palette::GOOD
+    } else {
+        render::palette::WARN
+    };
+    render::cell(text).fg(style)
+}
+
+fn delivery_verdict(check: &deliver::DeliveryCheck, target: &str, now: Timestamp) -> String {
+    if !check.schedule.ready {
+        return check
+            .schedule
+            .not_before
+            .map(|not_before| {
+                format!(
+                    "scheduled: opens {}",
+                    time_until_with_absolute(not_before, now)
+                )
+            })
+            .unwrap_or_else(|| "scheduled: waiting for readiness floor".to_owned());
+    }
+    if !check.fifo.head {
+        return check
+            .fifo
+            .blocker
+            .as_ref()
+            .map(|blocker| format!("blocked: behind {blocker}"))
+            .unwrap_or_else(|| "blocked: FIFO head unavailable".to_owned());
+    }
+    if !check.agent.present {
+        return format!("stuck: receiver {target} is gone");
+    }
+    if !check.gate.open {
+        let status = check
+            .gate
+            .status
+            .map(|status| status.as_str())
+            .unwrap_or("unknown");
+        return format!(
+            "waiting: {target} is {status}; gate '{}' opens at next turn end",
+            check.gate.gate
+        );
+    }
+    if check.gate.resume_recovered == Some(false) {
+        return format!("waiting: {target} is paused; resume gate opens after provider recovery");
+    }
+    if let Some(request_id) = &check.ask.request_id {
+        return format!("waiting: pending ask {request_id} reserves input");
+    }
+    if !check.pane.present {
+        return match &check.pane.pinned_pane_id {
+            Some(pane_id) => format!("stuck: pinned pane {pane_id} is not live for {target}"),
+            None => format!("stuck: no live pane for {target}"),
+        };
+    }
+    "ready: delivery conditions pass".to_owned()
+}
+
+fn gate_ready(check: &deliver::DeliveryCheck) -> bool {
+    check.gate.open && check.gate.resume_recovered != Some(false)
+}
+
 fn preview(text: &str) -> String {
     const MAX: usize = 80;
     let preview = text.replace(['\r', '\n', '\t'], " ");
@@ -1199,6 +1617,23 @@ mod tests {
         let message = MessageListRow::from_record(message);
         let agents: Vec<&AgentState> = snapshot.root_agents().collect();
         assert_eq!(message_target(&message, &agents), "@coder#project");
+    }
+
+    #[test]
+    fn scoped_handle_drops_matching_lane_suffix() {
+        assert_eq!(
+            scoped_handle("@coder#project".to_owned(), Some("project")),
+            "@coder"
+        );
+        assert_eq!(
+            scoped_handle("@coder#project/forge".to_owned(), Some("project")),
+            "@coder"
+        );
+        assert_eq!(
+            scoped_handle("@coder#ops".to_owned(), Some("project")),
+            "@coder#ops"
+        );
+        assert_eq!(scoped_handle("you".to_owned(), Some("project")), "you");
     }
 
     fn workspace_id() -> WorkspaceId {
