@@ -35,6 +35,7 @@ mod stats;
 mod statusline;
 mod transcript;
 mod trust;
+mod uninstall;
 mod version;
 mod web;
 mod workspace;
@@ -66,6 +67,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Event(args)) => event::run(args, &globals),
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
+        Some(Subcmd::Uninstall(args)) => uninstall::run(args, &globals),
         Some(Subcmd::Channel(args)) => channel::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
@@ -166,6 +168,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Event(_)) => ("event", None, None),
         Some(Subcmd::Feed(_)) => ("feed", None, None),
         Some(Subcmd::Gc(_)) => ("gc", None, None),
+        Some(Subcmd::Uninstall(_)) => ("uninstall", None, None),
         Some(Subcmd::Channel(_)) => ("channel", None, None),
         Some(Subcmd::Worktree(_)) => ("worktree", None, None),
         Some(Subcmd::Agents(_)) => ("agents", None, None),
@@ -450,6 +453,9 @@ enum Subcmd {
     Feed(feed::FeedArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
+    /// Remove Rimz from this machine: hooks, rooms, runtime footprint.
+    /// Use --state, --config, or --all to purge durable state and config.
+    Uninstall(uninstall::UninstallArgs),
     /// Create, list, and remove named channels.
     Channel(channel::ChannelArgs),
     /// Create, list, and remove Rimz-owned git worktrees.

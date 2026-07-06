@@ -148,6 +148,10 @@ Set room overrides in Rimz's config, the file it reads on attach. Optional keys 
 
 Your own Zellij and tmux config still owns everything Rimz leaves alone — the theme, true-color output, your default shell, copy-mode keybindings, and status-bar styling — and a baseline keeps the multiplexer pleasant in your sessions outside Rimz too. The [Zellij setup guide](./zellij.md) and the [tmux setup guide](./tmux.md) give the essential and recommended settings for each.
 
+## Uninstall
+
+Run `rimz uninstall --all` from outside a Rimz room to remove installed hooks, live rooms, runtime/cache/data roots, durable state, per-machine config, and the installed binary. Project-local `.rimz/` dirs and Rimz-owned worktrees stay in place for manual review.
+
 ## Troubleshooting
 
 ### `can't find crate for core`

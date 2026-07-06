@@ -2,6 +2,7 @@ use std::io::Write as _;
 
 use super::*;
 use crate::cli::room::{detected_installable_adapters, render_dry_run};
+use rimz::agents::HookUninstallReport;
 
 pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
     if dry_run {
@@ -79,12 +80,8 @@ pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
             }
         }
         None => {
-            let adapters = rimz::agents::ADAPTERS
-                .iter()
-                .copied()
-                .filter(|adapter| adapter.managed_hook_artifacts_present())
-                .collect::<Vec<_>>();
-            if adapters.is_empty() {
+            let reports = uninstall_managed_hooks()?;
+            if reports.is_empty() {
                 #[expect(clippy::print_stdout, reason = "user-visible uninstall report")]
                 {
                     println!("[]");
@@ -96,10 +93,6 @@ pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
                 )?;
                 return Ok(());
             }
-            let mut reports = Vec::new();
-            for integration in adapters {
-                reports.push(integration.uninstall_hooks()?);
-            }
             let rendered = serde_json::to_string_pretty(&reports)?;
             #[expect(clippy::print_stdout, reason = "user-visible uninstall report")]
             {
@@ -108,4 +101,17 @@ pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub(crate) fn uninstall_managed_hooks() -> Result<Vec<HookUninstallReport>> {
+    let adapters = rimz::agents::ADAPTERS
+        .iter()
+        .copied()
+        .filter(|adapter| adapter.managed_hook_artifacts_present())
+        .collect::<Vec<_>>();
+    let mut reports = Vec::new();
+    for integration in adapters {
+        reports.push(integration.uninstall_hooks()?);
+    }
+    Ok(reports)
 }

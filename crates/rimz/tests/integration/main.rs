@@ -47,6 +47,7 @@ mod start;
 mod transcript;
 mod transcript_watch;
 mod trust;
+mod uninstall;
 mod wakeup_pipe;
 mod web;
 mod workspace;
