@@ -106,7 +106,7 @@ fn problem_row_from_record(message: &MessageRecord, agents: &[&AgentState]) -> M
         message_id: message.message_id.to_string(),
         status: message.status.as_str().to_owned(),
         target: address::message_target(
-            None,
+            message.address.as_deref(),
             &message.kind,
             &message.agent_id,
             message.agent_name.as_deref(),
