@@ -613,7 +613,9 @@ fn message_list_uses_stored_address_after_receiver_leaves_snapshot() {
         String::from_utf8_lossy(&digest.stderr)
     );
     let digest = String::from_utf8_lossy(&digest.stdout);
-    assert!(digest.contains("@claude#address-lane"));
+    assert!(digest.contains("#address-lane"));
+    assert!(digest.contains("@claude"));
+    assert!(!digest.contains("@claude#address-lane"));
     assert!(!digest.contains("claude:sess-address"));
 }
 

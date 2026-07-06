@@ -781,7 +781,8 @@ fn list_messages(
         }
     } else {
         let agents: Vec<&AgentState> = snapshot.root_agents().collect();
-        render_message_digest(messages, &agents, &lane_scope, hidden)?;
+        let mut out = render::out();
+        render_message_digest(&mut out, messages, &agents, &lane_scope, hidden, status)?;
     }
     Ok(())
 }
@@ -1386,37 +1387,67 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
 }
 
 fn render_message_digest(
+    out: &mut impl Write,
     messages: Vec<MessageListRow>,
     agents: &[&AgentState],
     lane_scope: &LaneScope,
     hidden: usize,
+    status: Option<MessageStatus>,
 ) -> Result<()> {
-    let mut out = render::out();
+    if messages.is_empty() {
+        writeln!(
+            out,
+            "{}",
+            render::paint(
+                render::palette::FAINT,
+                &empty_message_digest(lane_scope, status)
+            )
+        )?;
+        return Ok(());
+    }
+
     let now = Timestamp::now();
-    let snippet_width = render::terminal_columns(120).saturating_sub(2);
-    let mut first = true;
-    let mut previous_channel: Option<Option<String>> = None;
-    for message in messages {
-        if !first {
-            writeln!(out)?;
-        }
-        if matches!(lane_scope, LaneScope::All)
-            && previous_channel.as_ref() != Some(&message.channel)
-        {
+    if matches!(lane_scope, LaneScope::All) {
+        for (index, (channel, rows)) in message_digest_groups(messages).into_iter().enumerate() {
+            if index > 0 {
+                writeln!(out)?;
+            }
             writeln!(
                 out,
                 "{}",
-                render::paint(
-                    render::palette::HEADER,
-                    &lane_header(message.channel.as_deref())
-                )
+                render::paint(render::palette::HEADER, &lane_header(channel.as_deref()))
             )?;
+            render_message_rows(out, rows, agents, now, 2, 4)?;
         }
-        let target = scoped_handle(message_target(&message, agents), lane_scope.named());
-        let sender = scoped_handle(message.sender.render(), lane_scope.named());
+    } else {
+        render_message_rows(out, messages, agents, now, 0, 2)?;
+    }
+    if hidden > 0 {
         writeln!(
             out,
-            "{}{}{}  {}  {}  {}",
+            "... {hidden} older messages hidden (--limit 0 for all)"
+        )?;
+    }
+    Ok(())
+}
+
+fn render_message_rows(
+    out: &mut impl Write,
+    messages: Vec<MessageListRow>,
+    agents: &[&AgentState],
+    now: Timestamp,
+    row_indent: usize,
+    snippet_indent: usize,
+) -> Result<()> {
+    let row_pad = " ".repeat(row_indent);
+    let snippet_pad = " ".repeat(snippet_indent);
+    let snippet_width = render::terminal_columns(120).saturating_sub(snippet_indent);
+    for message in messages {
+        let target = scoped_handle(message_target(&message, agents), message.channel.as_deref());
+        let sender = scoped_handle(message.sender.render(), message.channel.as_deref());
+        writeln!(
+            out,
+            "{row_pad}{}{}{}  {}  {}  {}",
             rendered_sender(&message.sender, &sender),
             render::paint(render::palette::FAINT, " → "),
             render::paint(render::palette::META.bold(), &target),
@@ -1427,17 +1458,48 @@ fn render_message_digest(
             render::rel_age(message.enqueued_at, now),
             render::paint(render::palette::FAINT, message.message_id.as_str())
         )?;
-        writeln!(out, "  {}", message_snippet(&message, snippet_width))?;
-        previous_channel = Some(message.channel.clone());
-        first = false;
-    }
-    if hidden > 0 {
         writeln!(
             out,
-            "... {hidden} older messages hidden (--limit 0 for all)"
+            "{snippet_pad}{}",
+            message_snippet(&message, snippet_width)
         )?;
     }
     Ok(())
+}
+
+fn empty_message_digest(lane_scope: &LaneScope, status: Option<MessageStatus>) -> String {
+    let qualifier = status.map(MessageStatus::as_str).unwrap_or_default();
+    let kind = if qualifier.is_empty() {
+        "messages".to_owned()
+    } else {
+        format!("{qualifier} messages")
+    };
+    let mut line = match lane_scope {
+        LaneScope::All => format!("no {kind}"),
+        LaneScope::Main => format!("no {kind} in the main lane"),
+        LaneScope::Named(channel) => format!("no {kind} in {}", lane_header(Some(channel))),
+    };
+    if !matches!(lane_scope, LaneScope::All) {
+        line.push_str(" — rimz message list --all shows every channel");
+    }
+    line
+}
+
+fn message_digest_groups(
+    messages: Vec<MessageListRow>,
+) -> Vec<(Option<String>, Vec<MessageListRow>)> {
+    let mut groups: Vec<(Option<String>, Vec<MessageListRow>)> = Vec::new();
+    for message in messages {
+        if let Some((_, rows)) = groups
+            .iter_mut()
+            .find(|(channel, _)| channel == &message.channel)
+        {
+            rows.push(message);
+        } else {
+            groups.push((message.channel.clone(), vec![message]));
+        }
+    }
+    groups
 }
 
 fn rendered_sender(sender: &MessageSender, rendered: &str) -> String {
@@ -1481,16 +1543,31 @@ fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> String {
 
 fn message_snippet(message: &MessageListRow, width: usize) -> String {
     if let Some(text) = message.text.as_deref() {
-        return preview(text, width);
+        return preview(&collapse_home_in_snippet(text), width);
     }
     if let Some(reason) = message
         .last_error
         .as_deref()
         .filter(|reason| !reason.is_empty())
     {
-        return render::paint(render::palette::FAINT, &preview(reason, width));
+        return render::paint(
+            render::palette::FAINT,
+            &preview(&collapse_home_in_snippet(reason), width),
+        );
     }
     render::paint(render::palette::FAINT, "-")
+}
+
+fn collapse_home_in_snippet(text: &str) -> String {
+    let home = std::env::var("HOME").ok();
+    collapse_home_in_snippet_to(home.as_deref(), text)
+}
+
+fn collapse_home_in_snippet_to(home: Option<&str>, text: &str) -> String {
+    let Some(home) = home.filter(|home| !home.is_empty() && *home != "/") else {
+        return text.to_owned();
+    };
+    text.replace(home, "~")
 }
 
 fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
@@ -1827,8 +1904,139 @@ mod tests {
         assert_eq!(preview("abcdef", 3), "...");
     }
 
+    #[test]
+    fn message_digest_groups_all_lanes_once_by_latest_activity() {
+        let output = render_digest(
+            vec![
+                message_row("sess-docs-new", Some("docs"), "new docs"),
+                message_row("sess-ops", Some("ops"), "ops"),
+                message_row("sess-docs-old", Some("docs"), "old docs"),
+            ],
+            LaneScope::All,
+            None,
+        );
+
+        assert_eq!(output.matches("#docs").count(), 1);
+        assert_eq!(output.matches("#ops").count(), 1);
+        assert!(output.find("#docs").unwrap() < output.find("new docs").unwrap());
+        assert!(output.find("new docs").unwrap() < output.find("old docs").unwrap());
+        assert!(output.find("old docs").unwrap() < output.find("#ops").unwrap());
+
+        let lines: Vec<&str> = output.lines().collect();
+        let snippet = lines
+            .iter()
+            .position(|line| line.contains("new docs"))
+            .unwrap();
+        assert!(lines[snippet - 1].starts_with("  "));
+        assert!(lines[snippet].starts_with("    "));
+    }
+
+    #[test]
+    fn message_digest_scopes_handles_by_row_lane() {
+        let output = render_digest(
+            vec![
+                message_row_with_sender(
+                    "sess-same",
+                    Some("main"),
+                    "own lane",
+                    agent_sender("planner", Some("main")),
+                ),
+                message_row_with_sender(
+                    "sess-cross",
+                    Some("main"),
+                    "cross lane",
+                    agent_sender("reviewer", Some("docs")),
+                ),
+            ],
+            LaneScope::All,
+            None,
+        );
+
+        assert!(output.contains("@planner"));
+        assert!(!output.contains("@planner#main"));
+        assert!(output.contains("@reviewer#docs"));
+    }
+
+    #[test]
+    fn message_digest_empty_state_describes_scope_and_status() {
+        let all = render_digest(Vec::new(), LaneScope::All, None);
+        assert!(all.contains("no messages"));
+        assert!(!all.contains("shows every channel"));
+
+        let main = render_digest(Vec::new(), LaneScope::Main, None);
+        assert!(main.contains("no messages in the main lane"));
+        assert!(main.contains("rimz message list --all shows every channel"));
+
+        let named = render_digest(
+            Vec::new(),
+            LaneScope::Named("ops".to_owned()),
+            Some(MessageStatus::Queued),
+        );
+        assert!(named.contains("no queued messages in #ops"));
+        assert!(named.contains("rimz message list --all shows every channel"));
+    }
+
+    #[test]
+    fn collapse_home_in_snippet_handles_mid_text_home_and_no_home() {
+        assert_eq!(
+            collapse_home_in_snippet_to(
+                Some("/home/dev"),
+                "see /home/dev/worktree/plan.md then /tmp"
+            ),
+            "see ~/worktree/plan.md then /tmp"
+        );
+        assert_eq!(
+            collapse_home_in_snippet_to(None, "see /home/dev/worktree"),
+            "see /home/dev/worktree"
+        );
+        assert_eq!(collapse_home_in_snippet_to(Some("/"), "/tmp"), "/tmp");
+        assert_eq!(collapse_home_in_snippet_to(Some(""), "/tmp"), "/tmp");
+    }
+
     fn workspace_id() -> WorkspaceId {
         WorkspaceId::parse("ws_000000000000000000000000").unwrap()
+    }
+
+    fn render_digest(
+        messages: Vec<MessageListRow>,
+        lane_scope: LaneScope,
+        status: Option<MessageStatus>,
+    ) -> String {
+        let mut out = Vec::new();
+        render_message_digest(&mut out, messages, &[], &lane_scope, 0, status).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    fn message_row(id: &str, channel: Option<&str>, text: &str) -> MessageListRow {
+        message_row_with_sender(id, channel, text, MessageSender::Human)
+    }
+
+    fn message_row_with_sender(
+        id: &str,
+        channel: Option<&str>,
+        text: &str,
+        sender: MessageSender,
+    ) -> MessageListRow {
+        let message = MessageRecord::new(
+            workspace_id(),
+            &agent(id, AgentStatus::Idle),
+            text.to_owned(),
+            true,
+            DeliveryGate::Done,
+        )
+        .with_channel(channel.map(ToOwned::to_owned))
+        .with_sender(sender);
+        MessageListRow::from_record(message)
+    }
+
+    fn agent_sender(role: &str, channel: Option<&str>) -> MessageSender {
+        MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: None,
+            profile: None,
+            role: Some(role.to_owned()),
+            channel: channel.map(ToOwned::to_owned),
+        }
     }
 
     fn agent(id: &str, status: AgentStatus) -> AgentState {
