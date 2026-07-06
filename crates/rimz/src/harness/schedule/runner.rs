@@ -1,7 +1,7 @@
 //! Loop runner domain: shell checks, run locks, and budget-window gates.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -60,6 +60,12 @@ pub struct CheckOutcome {
     code: Option<i32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckEcho {
+    Capture,
+    Stream,
+}
+
 pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
     CheckRecord {
         code: outcome.code,
@@ -115,7 +121,12 @@ pub fn augment_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String
     )
 }
 
-pub fn run_check(dir: &Path, cmd: &str, timeout: Duration) -> Result<CheckOutcome> {
+pub fn run_check(
+    dir: &Path,
+    cmd: &str,
+    timeout: Duration,
+    echo: CheckEcho,
+) -> Result<CheckOutcome> {
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -125,8 +136,14 @@ pub fn run_check(dir: &Path, cmd: &str, timeout: Duration) -> Result<CheckOutcom
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("running loop check `{cmd}` in {}", dir.display()))?;
-    let stdout = drain_pipe(child.stdout.take());
-    let stderr = drain_pipe(child.stderr.take());
+    let stdout = drain_pipe(
+        child.stdout.take(),
+        (echo == CheckEcho::Stream).then_some(PipeForward::Stdout),
+    );
+    let stderr = drain_pipe(
+        child.stderr.take(),
+        (echo == CheckEcho::Stream).then_some(PipeForward::Stderr),
+    );
     let deadline = Instant::now() + timeout;
     let (status, timed_out) = loop {
         if let Some(status) = child
@@ -155,11 +172,47 @@ pub fn run_check(dir: &Path, cmd: &str, timeout: Duration) -> Result<CheckOutcom
     })
 }
 
-fn drain_pipe(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+#[derive(Clone, Copy)]
+enum PipeForward {
+    Stdout,
+    Stderr,
+}
+
+impl PipeForward {
+    fn write(self, bytes: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Stdout => {
+                let mut out = std::io::stdout().lock();
+                out.write_all(bytes)?;
+                out.flush()
+            }
+            Self::Stderr => {
+                let mut err = std::io::stderr().lock();
+                err.write_all(bytes)?;
+                err.flush()
+            }
+        }
+    }
+}
+
+fn drain_pipe(
+    pipe: Option<impl Read + Send + 'static>,
+    forward: Option<PipeForward>,
+) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut buf);
+            let mut chunk = [0; 8 * 1024];
+            while let Ok(read) = pipe.read(&mut chunk) {
+                if read == 0 {
+                    break;
+                }
+                let bytes = &chunk[..read];
+                buf.extend_from_slice(bytes);
+                if let Some(forward) = forward {
+                    let _ = forward.write(bytes);
+                }
+            }
         }
         buf
     })
@@ -239,6 +292,7 @@ mod tests {
             dir.path(),
             "printf out; printf err >&2",
             Duration::from_secs(1),
+            CheckEcho::Capture,
         )
         .expect("passed check");
         assert!(passed.passed);
@@ -246,8 +300,13 @@ mod tests {
         assert!(passed.output.contains("out"));
         assert!(passed.output.contains("err"));
 
-        let failed = run_check(dir.path(), "printf nope; exit 1", Duration::from_secs(1))
-            .expect("failed check");
+        let failed = run_check(
+            dir.path(),
+            "printf nope; exit 1",
+            Duration::from_secs(1),
+            CheckEcho::Capture,
+        )
+        .expect("failed check");
         assert!(!failed.passed);
         assert!(!failed.timed_out);
         assert_eq!(failed.code, Some(1));
@@ -258,8 +317,13 @@ mod tests {
     fn run_check_honours_timeout() {
         let dir = tempfile::tempdir().expect("tempdir");
 
-        let outcome =
-            run_check(dir.path(), "sleep 1", Duration::from_millis(50)).expect("timed-out check");
+        let outcome = run_check(
+            dir.path(),
+            "sleep 1",
+            Duration::from_millis(50),
+            CheckEcho::Capture,
+        )
+        .expect("timed-out check");
 
         assert!(!outcome.passed);
         assert!(outcome.timed_out);

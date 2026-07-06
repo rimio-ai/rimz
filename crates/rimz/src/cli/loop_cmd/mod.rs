@@ -34,9 +34,9 @@ use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult,
 };
 use rimz::harness::schedule::runner::{
-    CHECK_DEFAULT_TIMEOUT, acquire_run_lock, augment_prompt, check_only_result, check_record,
-    check_timeout, deadline_expired, polarity_fires, reset_window_already_running, run_check,
-    tail_output, window_already_running, window_reset_at,
+    CHECK_DEFAULT_TIMEOUT, CheckEcho, acquire_run_lock, augment_prompt, check_only_result,
+    check_record, check_timeout, deadline_expired, polarity_fires, reset_window_already_running,
+    run_check, tail_output, window_already_running, window_reset_at,
 };
 use rimz::harness::schedule::{
     self,

@@ -16,21 +16,16 @@ pub(super) fn list() -> Result<()> {
     let stats = run_log::stats(&state_home());
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let mut table = ui::Table::new([
-        "NAME", "SOURCE", "SPEC", "SCHEDULE", "NEXT", "ROOM", "RUNS", "LAST RUN", "RESULT", "NOTE",
-        "ROOT",
-    ])
-    .right(&[6]);
-    for (name, (entry, source)) in &tasks {
-        let parsed = schedule::parse_schedule(name, entry);
-        let when = match &parsed {
-            Ok(schedule) => schedule.describe(),
-            Err(err) => format!("invalid: {err}"),
-        };
+    let mut groups: BTreeMap<PathBuf, Vec<(&String, &TaskEntry)>> = BTreeMap::new();
+    for (name, (entry, _source)) in &tasks {
         let root = entry.resolved_root();
+        groups.entry(root).or_default().push((name, entry));
+    }
+    let mut table = ui::Table::new(["NAME", "TASK", "SCHEDULE", "NEXT", "LAST RUN"]);
+    for (root, entries) in groups {
         let runtime = runtime_for_root(&root);
-        let state = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
-            "open"
+        let room = if runtime.as_ref().is_some_and(fresh_sidebar_present) {
+            "room open"
         } else {
             "no room"
         };
@@ -38,50 +33,43 @@ pub(super) fn list() -> Result<()> {
             .as_ref()
             .map(rimz::harness::schedule::last_stamps)
             .unwrap_or_default();
-        let window_reset = window_reset_for(entry);
-        let next = parsed
-            .ok()
-            .and_then(|parsed| {
-                next_fire_text(
-                    name,
-                    &parsed.schedule,
-                    &stamps,
-                    &now_zoned,
-                    now,
-                    window_reset,
-                )
-            })
-            .map(ui::cell)
-            .unwrap_or_else(|| ui::cell("-").dash());
-        let task_stats = stats.get(name);
-        let runs = task_stats.map_or(0, |stats| stats.runs);
-        let last_run = if let Some(stats) = task_stats {
-            ui::cell(ui::rel_age(stats.last.at, now))
-        } else {
-            ui::cell("-").dash()
-        };
-        let result = task_stats
-            .map(|stats| loop_result_cell(stats.last.result, stats.streak))
-            .unwrap_or_else(|| ui::cell("-").dash());
-        let note = task_stats
-            .map(|stats| {
-                ui::cell(record_note(&stats.last).unwrap_or_else(|| "-".to_owned())).dash()
-            })
-            .unwrap_or_else(|| ui::cell("-").dash());
-        let root_text = root.to_string_lossy();
-        table.row([
-            ui::cell(name.as_str()).fg(ui::palette::ACCENT),
-            ui::cell(source.label()),
-            ui::cell(task_subject(entry)),
-            ui::cell(when),
-            next,
-            ui::cell(state),
-            ui::cell(runs.to_string()),
-            last_run,
-            result,
-            note,
-            ui::cell(ui::home_relative(root_text.as_ref())),
-        ]);
+        table.section(format!(
+            "{} — {room}",
+            ui::home_relative(root.to_string_lossy().as_ref())
+        ));
+        for (name, entry) in entries {
+            let parsed = schedule::parse_schedule(name, entry);
+            let when = match &parsed {
+                Ok(schedule) => schedule.describe(),
+                Err(err) => format!("invalid: {err}"),
+            };
+            let window_reset = window_reset_for(entry);
+            let next = parsed
+                .ok()
+                .and_then(|parsed| {
+                    next_fire_text(
+                        name,
+                        &parsed.schedule,
+                        &stamps,
+                        &now_zoned,
+                        now,
+                        window_reset,
+                    )
+                })
+                .map(ui::cell)
+                .unwrap_or_else(|| ui::cell("-").dash());
+            let last_run = stats
+                .get(name)
+                .map(|stats| last_run_cell(stats, now))
+                .unwrap_or_else(|| ui::cell("-").dash());
+            table.row([
+                ui::cell(name.as_str()).fg(ui::palette::ACCENT),
+                ui::cell(task_subject(entry)),
+                ui::cell(when),
+                next,
+                last_run,
+            ]);
+        }
     }
     table.render(&mut out)?;
     Ok(())
@@ -157,6 +145,7 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
             )
         })
         .unwrap_or_else(|| "-".to_owned());
+    let records = run_log::task_records(&state_home(), &args.name);
 
     let mut out = ui::out();
     writeln!(out, "loop `{}`", args.name)?;
@@ -170,9 +159,9 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
     );
     kv.push("room", ui::cell(room));
     kv.push("next", ui::cell(next));
+    kv.push("runs", ui::cell(records.len().to_string()));
     kv.render(&mut out)?;
 
-    let records = run_log::task_records(&state_home(), &args.name);
     if records.is_empty() {
         writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
         return Ok(());
@@ -187,7 +176,7 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
         table.row([
             ui::cell(ui::rel_age(record.at, now)),
             ui::cell(row.key.mode.map_or("-", LoopRunMode::label)).dash(),
-            loop_result_cell(row.key.result, row.count),
+            loop_result_record_cell(record, row.count),
             ui::cell(
                 record
                     .duration_ms
@@ -259,14 +248,36 @@ fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
     rows
 }
 
-fn loop_result_cell(result: LoopRunResult, count: usize) -> ui::Cell {
+fn last_run_cell(stats: &run_log::LoopRunStats, now: Timestamp) -> ui::Cell {
+    let mut label = run_display_label(&stats.last);
+    if stats.streak > 1 {
+        label.push_str(&format!(" ×{}", stats.streak));
+    }
+    let mut parts = vec![label, ui::rel_age(stats.last.at, now)];
+    if let Some(note) = record_note(&stats.last) {
+        parts.push(note);
+    }
+    ui::cell(parts.join(" · ")).fg(loop_result_style(stats.last.result))
+}
+
+fn loop_result_record_cell(record: &LoopRunRecord, count: usize) -> ui::Cell {
+    let result = record.result;
     let style = loop_result_style(result);
-    let label = if count > 1 {
-        format!("{} x{count}", result.label())
-    } else {
-        result.label().to_owned()
-    };
+    let mut label = run_display_label(record);
+    if count > 1 {
+        label.push_str(&format!(" ×{count}"));
+    }
     ui::cell(label).fg(style)
+}
+
+fn run_display_label(record: &LoopRunRecord) -> String {
+    if record.result == LoopRunResult::CheckSkipped {
+        return match record.check.as_ref() {
+            Some(check) if !check.timed_out && check.code == Some(0) => "check ok".to_owned(),
+            _ => "check failed".to_owned(),
+        };
+    }
+    record.result.label().to_owned()
 }
 
 pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
@@ -548,6 +559,24 @@ mod tests {
 
         failed.error = Some("outer error\nignored detail".to_owned());
         assert_eq!(record_note(&failed), Some("outer error".to_owned()));
+    }
+
+    #[test]
+    fn run_display_label_names_check_skipped_outcomes() {
+        let mut skipped = record(10, LoopRunResult::CheckSkipped);
+        skipped.check = Some(CheckRecord {
+            code: Some(0),
+            timed_out: false,
+            output: "ok".to_owned(),
+        });
+        assert_eq!(run_display_label(&skipped), "check ok");
+
+        skipped.check = Some(CheckRecord {
+            code: Some(1),
+            timed_out: false,
+            output: "not yet".to_owned(),
+        });
+        assert_eq!(run_display_label(&skipped), "check failed");
     }
 
     #[test]

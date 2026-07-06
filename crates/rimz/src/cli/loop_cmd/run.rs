@@ -15,6 +15,8 @@ struct RunOutcome {
     last_message: Option<String>,
     target: Option<String>,
     exit_code: Option<i32>,
+    polarity: Option<CheckOn>,
+    wake_subject: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -34,6 +36,8 @@ impl RunOutcome {
             last_message: None,
             target: None,
             exit_code: None,
+            polarity: None,
+            wake_subject: None,
         }
     }
 }
@@ -135,12 +139,33 @@ fn execute_task(
     let mut check_detail = None;
     let prompt_override = match entry.check.as_deref() {
         Some(cmd) => {
+            let echo = if mode == LoopRunMode::Manual {
+                CheckEcho::Stream
+            } else {
+                CheckEcho::Capture
+            };
+            if echo == CheckEcho::Stream {
+                let mut out = ui::out();
+                writeln!(
+                    out,
+                    "loop `{name}`: check {}",
+                    ui::paint(ui::palette::MUTED, cmd)
+                )?;
+                out.flush()?;
+            }
             let outcome = run_check(
                 &entry.resolved_root(),
                 cmd,
                 check_timeout(entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
+                echo,
             )?;
             let record = check_record(&outcome);
+            if echo == CheckEcho::Stream
+                && !record.output.is_empty()
+                && !record.output.ends_with('\n')
+            {
+                writeln!(ui::out())?;
+            }
             match action {
                 TaskAction::CheckOnly => {
                     if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
@@ -154,6 +179,8 @@ fn execute_task(
                     if !polarity_fires(entry.on, &outcome) {
                         let mut run = RunOutcome::new(LoopRunResult::CheckSkipped);
                         run.check = Some(record);
+                        run.polarity = Some(entry.on.unwrap_or_default());
+                        run.wake_subject = Some(task_subject(entry));
                         return Ok(run);
                     }
                     check_detail = Some(record);
@@ -374,6 +401,9 @@ fn write_run_summary(
     duration_ms: u64,
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
+    if outcome.result == LoopRunResult::CheckSkipped {
+        return write_check_skipped_summary(out, name, duration_ms, outcome);
+    }
     let result_style = super::render::loop_result_style(outcome.result);
     let exit_label = outcome_exit_label(outcome);
     if matches!(
@@ -425,6 +455,52 @@ fn write_run_summary(
         writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
     }
     Ok(())
+}
+
+fn write_check_skipped_summary(
+    out: &mut impl Write,
+    name: &str,
+    duration_ms: u64,
+    outcome: &RunOutcome,
+) -> std::io::Result<()> {
+    let label = match outcome.check.as_ref() {
+        Some(check) if check.timed_out => "check timed out".to_owned(),
+        Some(check) if check.code == Some(0) => {
+            format!("check passed (exit {})", check.code.unwrap_or_default())
+        }
+        Some(check) => match check.code {
+            Some(code) => format!("check failed (exit {code})"),
+            None => "check failed (signal)".to_owned(),
+        },
+        None => outcome.result.label().to_owned(),
+    };
+    write!(
+        out,
+        "loop `{name}`: {} in {}",
+        ui::paint(ui::palette::MUTED, &label),
+        render::format_duration_ms(duration_ms)
+    )?;
+    if let Some(subject) = outcome.wake_subject.as_deref() {
+        if outcome.check.as_ref().is_some_and(|check| check.timed_out) {
+            write!(out, " — {subject} not woken")?;
+        } else if let Some(polarity) = outcome.polarity {
+            write!(
+                out,
+                " — on={}, {subject} not woken",
+                check_on_label(polarity)
+            )?;
+        } else {
+            write!(out, " — {subject} not woken")?;
+        }
+    }
+    writeln!(out)
+}
+
+fn check_on_label(on: CheckOn) -> &'static str {
+    match on {
+        CheckOn::Fail => "fail",
+        CheckOn::Success => "success",
+    }
 }
 
 fn outcome_exit_label(outcome: &RunOutcome) -> Option<String> {
@@ -537,6 +613,73 @@ mod tests {
         assert!(out.contains("run: run_0123456789abcdef01234567"));
         assert!(out.contains("transcript: /tmp/transcript.jsonl"));
         assert!(out.contains("see: rimz loop show wake"));
+    }
+
+    #[test]
+    fn skipped_check_summary_names_polarity_and_unwoken_target() {
+        let mut outcome = RunOutcome::new(LoopRunResult::CheckSkipped);
+        outcome.check = Some(CheckRecord {
+            code: Some(0),
+            timed_out: false,
+            output: "ok".to_owned(),
+        });
+        outcome.polarity = Some(CheckOn::Fail);
+        outcome.wake_subject = Some("codex".to_owned());
+        let mut out = Vec::new();
+
+        write_run_summary(&mut out, "wake", 7_300, &outcome).unwrap();
+
+        let raw = String::from_utf8(out).unwrap();
+        assert!(raw.contains(&ui::paint(ui::palette::MUTED, "check passed (exit 0)")));
+        let out = anstream::adapter::strip_str(&raw).to_string();
+        assert_eq!(
+            out,
+            "loop `wake`: check passed (exit 0) in 7.3s — on=fail, codex not woken\n"
+        );
+    }
+
+    #[test]
+    fn skipped_failed_check_summary_names_success_guard() {
+        let mut outcome = RunOutcome::new(LoopRunResult::CheckSkipped);
+        outcome.check = Some(CheckRecord {
+            code: Some(1),
+            timed_out: false,
+            output: "no".to_owned(),
+        });
+        outcome.polarity = Some(CheckOn::Success);
+        outcome.wake_subject = Some("codex".to_owned());
+        let mut out = Vec::new();
+
+        write_run_summary(&mut out, "wake", 2_000, &outcome).unwrap();
+
+        let out = String::from_utf8(out).unwrap();
+        let out = anstream::adapter::strip_str(&out).to_string();
+        assert_eq!(
+            out,
+            "loop `wake`: check failed (exit 1) in 2.0s — on=success, codex not woken\n"
+        );
+    }
+
+    #[test]
+    fn skipped_timeout_summary_omits_polarity() {
+        let mut outcome = RunOutcome::new(LoopRunResult::CheckSkipped);
+        outcome.check = Some(CheckRecord {
+            code: None,
+            timed_out: true,
+            output: String::new(),
+        });
+        outcome.polarity = Some(CheckOn::Success);
+        outcome.wake_subject = Some("codex".to_owned());
+        let mut out = Vec::new();
+
+        write_run_summary(&mut out, "wake", 300_000, &outcome).unwrap();
+
+        let out = String::from_utf8(out).unwrap();
+        let out = anstream::adapter::strip_str(&out).to_string();
+        assert_eq!(
+            out,
+            "loop `wake`: check timed out in 5m — codex not woken\n"
+        );
     }
 
     #[test]

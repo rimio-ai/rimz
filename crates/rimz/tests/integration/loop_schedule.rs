@@ -58,15 +58,25 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
 
     let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
-        stdout.contains("SOURCE")
-            && stdout.contains("RUNS")
+        stdout.contains("NAME")
+            && stdout.contains("TASK")
+            && stdout.contains("SCHEDULE")
+            && stdout.contains("NEXT")
             && stdout.contains("LAST RUN")
-            && stdout.contains("RESULT"),
-        "loop list should show run-history columns: {stdout}"
+            && !stdout.contains("SOURCE")
+            && !stdout.contains("RUNS")
+            && !stdout.contains("RESULT"),
+        "loop list should show grouped compact columns: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("~/project") && line.contains("room")),
+        "loop list should group rows under the project root and room state: {stdout}"
     );
     assert!(
         stdout.lines().any(|line| {
-            line.starts_with("wake") && line.contains("  1  ") && line.contains("delivered")
+            line.starts_with("wake") && line.contains("@claude") && line.contains("delivered")
         }),
         "loop list should fold run history for wake: {stdout}"
     );
@@ -315,7 +325,7 @@ fn loop_check_failure_show_prints_exit_and_output() {
     assert!(
         stdout
             .lines()
-            .any(|line| { line.contains("failed x2") && line.contains(command) }),
+            .any(|line| { line.contains("failed ×2") && line.contains(command) }),
         "show should collapse repeated failures and print note: {stdout}"
     );
     assert!(
@@ -325,12 +335,12 @@ fn loop_check_failure_show_prints_exit_and_output() {
 
     let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
-        stdout.contains("NOTE"),
-        "list should include NOTE: {stdout}"
+        !stdout.contains("NOTE"),
+        "list should merge notes into LAST RUN: {stdout}"
     );
     assert!(
         stdout.lines().any(|line| {
-            line.starts_with("missing") && line.contains("failed x2") && line.contains(command)
+            line.starts_with("missing") && line.contains("failed ×2") && line.contains(command)
         }),
         "list should print failure streak and note: {stdout}"
     );
@@ -345,8 +355,19 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "healthy", "--bind", "@claude", "--every", "15m", "--check", "true",
-            "--on", "fail", "--prompt", "fix it",
+            "loop",
+            "add",
+            "healthy",
+            "--bind",
+            "@claude",
+            "--every",
+            "15m",
+            "--check",
+            "printf probe-line",
+            "--on",
+            "fail",
+            "--prompt",
+            "fix it",
         ],
     );
     loop_ok(&env, &["loop", "run", "healthy"]);
@@ -362,6 +383,14 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
             .last()
             .map(|record| record.result),
         Some(LoopRunResult::CheckSkipped)
+    );
+    let fire_stdout = loop_ok(&env, &["loop", "fire", "healthy"]);
+    assert!(
+        fire_stdout.contains("probe-line")
+            && fire_stdout.contains("check passed (exit 0)")
+            && fire_stdout.contains("on=fail")
+            && fire_stdout.contains("not woken"),
+        "manual fire should stream check output and explain no wake: {fire_stdout}"
     );
 
     loop_ok(
