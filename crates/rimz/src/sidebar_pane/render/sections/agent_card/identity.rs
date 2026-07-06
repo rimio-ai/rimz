@@ -276,6 +276,34 @@ mod tests {
     }
 
     #[test]
+    fn attention_name_keeps_kind_role_handle_in_full() {
+        let theme = truecolor_theme();
+
+        let spans =
+            attention_name_spans(&theme, &[], "claude-docsmith", "claude", normal_attention());
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content.as_ref(), "claude-docsmith");
+    }
+
+    #[test]
+    fn attention_name_clips_long_profile_with_single_cell_ellipsis() {
+        let theme = truecolor_theme();
+
+        let spans = attention_name_spans(
+            &theme,
+            &[],
+            "opencode-docsmithery",
+            "opencode",
+            normal_attention(),
+        );
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content.as_ref(), "opencode-docsmith…");
+        assert_eq!(spans[0].width(), NAME_MAX);
+    }
+
+    #[test]
     fn attention_name_registered_kind_uses_descriptor_brand_without_provider_panel() {
         let theme = truecolor_theme();
 

@@ -35,11 +35,10 @@ use self::{description::*, gauge::*, identity::*};
 use super::process::{composed_row, process_detail_line, process_row_line};
 use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
 
-/// Width budget for the agent handle on line 1: short team roles (`planner`,
-/// `coder`) and agent kinds (`claude`, `codex`) fit comfortably, and a longer
-/// profile clips with `…` rather than pushing the model/effort tokens off the
-/// line.
-const NAME_MAX: usize = 12;
+/// Width budget for the agent handle on line 1: kind-role handles through
+/// `opencode-docsmith` fit, and longer profiles clip with `…` rather than
+/// pushing the model/effort tokens off the line.
+const NAME_MAX: usize = 18;
 
 /// A just-started agent: idle, sitting on the `Some(0)` baseline context gauge
 /// with no real usage or spend history behind it yet. Its 0% bar and zeroed stat

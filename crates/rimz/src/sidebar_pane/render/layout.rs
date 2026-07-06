@@ -97,10 +97,7 @@ pub(super) fn ellipsize(text: &str, max_cells: usize) -> String {
     if max_cells == 0 {
         return String::new();
     }
-    if max_cells <= 3 {
-        return ".".repeat(max_cells);
-    }
-    format!("{}...", take_cells(text, max_cells - 3))
+    format!("{}…", take_cells(text, max_cells - 1))
 }
 
 fn take_cells(content: &str, width: usize) -> String {
@@ -115,4 +112,37 @@ fn take_cells(content: &str, width: usize) -> String {
         taken.push(ch);
     }
     taken
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ellipsize_returns_fitting_text_unchanged() {
+        assert_eq!(ellipsize("coder", 5), "coder");
+        assert_eq!(ellipsize("", 0), "");
+    }
+
+    #[test]
+    fn ellipsize_clips_with_single_cell_glyph() {
+        let clipped = ellipsize("claude-docsmith", 12);
+
+        assert_eq!(clipped, "claude-docs…");
+        assert_eq!(text_width(&clipped), 12);
+    }
+
+    #[test]
+    fn ellipsize_handles_tiny_budgets() {
+        assert_eq!(ellipsize("coder", 0), "");
+        assert_eq!(ellipsize("coder", 1), "…");
+    }
+
+    #[test]
+    fn ellipsize_clips_wide_chars_on_cell_boundaries() {
+        let clipped = ellipsize("a漢bc", 4);
+
+        assert_eq!(clipped, "a漢…");
+        assert_eq!(text_width(&clipped), 4);
+    }
 }
