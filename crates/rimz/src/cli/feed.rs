@@ -421,13 +421,8 @@ fn record_resolved_agent_ask_answer(ledger: &Ledger, item: &Option<FeedItem>) {
         rimz::chat::ChatKind::Answer,
         text.clone(),
     );
-    entry.channel = rimz::harness::target::compose_channel(
-        None,
-        item.worktree_path
-            .as_deref()
-            .and_then(rimz::harness::target::path_basename),
-        None,
-    );
+    // lane: basename fallback; item carries no stamped channel.
+    entry.channel = rimz::chat::entry_channel(None, item.worktree_path.as_deref());
     entry.request_id = Some(item.request_id.clone());
     entry.from = Some(resolution_from(resolution));
     entry.answers = vec![rimz::chat::AskAnswer {

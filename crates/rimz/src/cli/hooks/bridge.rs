@@ -187,13 +187,8 @@ fn chat_ask_entry(
         .map(|message| message.trim().to_owned())
         .filter(|message| !message.is_empty());
     let text = last.unwrap_or_default();
-    let channel = rimz::harness::target::compose_channel(
-        None,
-        item.worktree_path
-            .as_deref()
-            .and_then(rimz::harness::target::path_basename),
-        None,
-    );
+    // lane: basename fallback; item carries no stamped channel.
+    let channel = rimz::chat::entry_channel(None, item.worktree_path.as_deref());
     let mut entry = rimz::chat::ChatEntry::new(
         item.created_at,
         rimz::ids::AgentKind::new_unchecked(item.source.clone()),

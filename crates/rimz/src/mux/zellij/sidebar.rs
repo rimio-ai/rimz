@@ -33,8 +33,9 @@ const CLIENT_PROBE_SETTLE: Duration = Duration::from_millis(100);
 // Birth can land Zellij's layout focus on the sidebar in a detached session
 // under load, and a single `focus-pane-id` can lag before it lands. Re-issue
 // and re-check a bounded number of times until the work pane holds focus.
-const BIRTH_FOCUS_ATTEMPTS: u32 = 8;
+const BIRTH_FOCUS_ATTEMPTS: u32 = 30;
 const BIRTH_FOCUS_RETRY_DELAY: Duration = Duration::from_millis(100);
+const BIRTH_FOCUS_CLEAN_SAMPLES: u32 = 3;
 // Confirmation must outlast Zellij's background-create bootstrap-client linger.
 // A false negative only defers one recoverable add pass; a false positive can
 // leak an unmounted sidebar serve pair.
@@ -357,8 +358,10 @@ impl ZellijBackend {
     /// sidebar pane, focus that tab's leftmost live work pane instead. Re-checks
     /// and re-issues across a bounded window because Zellij can lag a
     /// `focus-pane-id` before it lands under load. Returns once focus is off the
-    /// sidebar everywhere, or when no stranded tab has a work pane to move to.
+    /// sidebar everywhere across a few stable samples, or when no stranded tab
+    /// has a work pane to move to.
     fn focus_work_pane_if_sidebar_is_focused(&self, session: &str, workspace_id: &WorkspaceId) {
+        let mut clean_samples = 0;
         for attempt in 0..BIRTH_FOCUS_ATTEMPTS {
             let Ok(panes) = self.topology_panes_for_workspace(
                 session,
@@ -374,8 +377,14 @@ impl ZellijBackend {
                 .map(|pane| pane.tab_position)
                 .collect();
             if stranded_tabs.is_empty() {
-                return;
+                clean_samples += 1;
+                if clean_samples >= BIRTH_FOCUS_CLEAN_SAMPLES {
+                    return;
+                }
+                std::thread::sleep(BIRTH_FOCUS_RETRY_DELAY);
+                continue;
             }
+            clean_samples = 0;
             let mut acted = false;
             for tab_position in stranded_tabs {
                 if let Some(raw_id) = leftmost_live_work_pane(&panes, tab_position) {

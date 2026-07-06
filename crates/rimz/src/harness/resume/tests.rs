@@ -341,6 +341,7 @@ fn resumes_root_agents_most_recent_first() {
         &agents,
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -375,6 +376,7 @@ fn rebirth_resume_skips_provisional_launch_placeholder() {
         &agents,
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -400,6 +402,7 @@ fn disambiguates_reborn_tabs_with_the_same_basename() {
         &agents,
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -431,7 +434,7 @@ fn resume_command_replays_launch_identity() {
     agent.launch_group = Some("launch_group_1".to_owned());
     agent.launch_ordinal = Some(2);
     assert_eq!(
-        resume_command(Path::new("/bin/rimz"), &agent),
+        resume_command(Path::new("/bin/rimz"), &agent, agent.channel.as_deref()),
         vec![
             "/bin/rimz",
             "agents",
@@ -477,6 +480,7 @@ fn filters_subagents_paneless_and_ended_candidates() {
         ],
         &ended,
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -491,6 +495,7 @@ fn tombstones_a_missing_worktree() {
         &agents,
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| false,
         Path::new("/bin/rimz"),
     );
@@ -528,6 +533,7 @@ fn dedups_a_relaunched_agent_keeping_the_newest() {
         &agents,
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -567,6 +573,7 @@ fn collapses_a_relaunch_that_changed_branch_on_one_pane() {
         &agents,
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -605,6 +612,7 @@ fn keeps_two_same_kind_agents_in_one_worktree() {
         &agents,
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -627,7 +635,14 @@ fn caps_and_reports_the_overflow() {
         agent("claude", "a1", "/code/wt-1", Some("b1"), 5),
         agent("claude", "a2", "/code/wt-2", Some("b2"), 10),
     ];
-    let plan = plan_resume(&agents, &no_ended(), 1, |_| true, Path::new("/bin/rimz"));
+    let plan = plan_resume(
+        &agents,
+        &no_ended(),
+        1,
+        None,
+        |_| true,
+        Path::new("/bin/rimz"),
+    );
     assert_eq!(plan.tabs.len(), 1);
     // The freshest survives the cap; the older overflows.
     assert_eq!(
@@ -645,6 +660,7 @@ fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
         &agents,
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -667,6 +683,7 @@ fn named_channel_groups_by_explicit_channel_and_replays_identity() {
         &[design],
         &no_ended(),
         DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -696,11 +713,11 @@ fn worktree_team_resume_replays_flat_worktree_channel() {
     );
     planner.team = Some("pcr".to_owned());
     planner.role = Some("planner".to_owned());
-    let plan = plan_resume_with_project(
+    let plan = plan_resume(
         &[planner],
         &no_ended(),
         DEFAULT_RESUME_MAX,
-        Path::new("/code/project"),
+        Some(Path::new("/code/project")),
         |_| true,
         Path::new("/bin/rimz"),
     );

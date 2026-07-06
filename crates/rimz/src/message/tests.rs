@@ -324,7 +324,7 @@ fn sender_render_names_human_and_agent_address() {
             channel: Some("docs".to_owned()),
         }
         .render(),
-        "@lucid-atlas#docs"
+        "@planner#docs"
     );
     assert_eq!(
         MessageSender::Agent {

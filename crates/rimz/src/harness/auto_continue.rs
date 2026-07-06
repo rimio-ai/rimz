@@ -317,8 +317,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
                     return;
                 }
                 MessageStatus::Queued | MessageStatus::Claimed => Some(message.message_id.clone()),
-                MessageStatus::Created
-                | MessageStatus::Sent
+                MessageStatus::Sent
                 | MessageStatus::TimedOut
                 | MessageStatus::Errored
                 | MessageStatus::Removed

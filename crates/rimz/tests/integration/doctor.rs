@@ -447,7 +447,7 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
     assert_eq!(stuck_rows.len(), 1, "{stuck_rows:?}");
     assert_eq!(stuck_rows[0]["message_id"], stuck_id);
     assert_eq!(stuck_rows[0]["status"], "queued");
-    assert_eq!(stuck_rows[0]["target"], "@coder");
+    assert_eq!(stuck_rows[0]["target"], "@codex#project");
     assert!(
         stuck_rows[0]["problem"]
             .as_str()

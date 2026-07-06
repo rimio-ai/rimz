@@ -138,36 +138,6 @@ pub fn plan_resume(
     agents: &[AgentState],
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
     max: usize,
-    worktree_exists: impl Fn(&Path) -> bool,
-    rimz_bin: &Path,
-) -> ResumePlan {
-    plan_resume_inner(agents, ended, max, None, worktree_exists, rimz_bin)
-}
-
-/// Plan a resume with workspace-root context, so worktree-backed teams converge
-/// to the worktree channel while in-place teams keep `<dir>/<team>`.
-pub fn plan_resume_with_project(
-    agents: &[AgentState],
-    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
-    max: usize,
-    project_root: &Path,
-    worktree_exists: impl Fn(&Path) -> bool,
-    rimz_bin: &Path,
-) -> ResumePlan {
-    plan_resume_inner(
-        agents,
-        ended,
-        max,
-        Some(project_root),
-        worktree_exists,
-        rimz_bin,
-    )
-}
-
-fn plan_resume_inner(
-    agents: &[AgentState],
-    ended: &BTreeSet<(AgentKind, AgentSessionId)>,
-    max: usize,
     project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
     rimz_bin: &Path,
@@ -246,7 +216,7 @@ fn plan_resume_inner(
         // which replays the durable launch identity, applies trusted
         // `[[agents]]` env and the adapter's launch pins before spawning the
         // resume argv.
-        let command = resume_command_with_channel(rimz_bin, agent, channel.as_deref());
+        let command = resume_command(rimz_bin, agent, channel.as_deref());
         let tab_label = channel_label(channel.as_deref(), &cwd);
         let identity = resume_tab_identity(channel.as_deref(), &cwd);
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
@@ -618,16 +588,8 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
 }
 
 /// Wrapper argv for resuming one prior provider-native session with its durable
-/// Rimz launch identity.
-pub fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
-    resume_command_with_channel(rimz_bin, agent, agent.channel.as_deref())
-}
-
-pub fn resume_command_with_channel(
-    rimz_bin: &Path,
-    agent: &AgentState,
-    channel: Option<&str>,
-) -> Vec<String> {
+/// Rimz launch identity and rebirth channel.
+pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>) -> Vec<String> {
     let channel = agent
         .channel
         .as_deref()

@@ -1,6 +1,7 @@
 //! CLI parsing surface. Each subcommand has its own file under `cli/` and
 //! exposes a single `run(...)` entry called from `dispatch`.
 
+mod address;
 mod agents_cmd;
 mod agents_launch;
 mod channel;
@@ -210,28 +211,19 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
 
 /// The current channel a command runs in: an explicit named lane from
 /// `RIMZ_CHANNEL`, else the worktree directory basename when we are genuinely
-/// inside a separate worktree, else an in-place team as `<dir>/<team>`. A bare
-/// directory workspace (root == worktree) yields `None` for humans, but
-/// Rimz-launched members carry `RIMZ_CHANNEL` or `RIMZ_TEAM`, so their calls
-/// scope to that lane.
+/// inside a separate worktree. A bare directory workspace (root == worktree)
+/// yields `None` for humans; Rimz-launched team members carry `RIMZ_CHANNEL`,
+/// so their calls scope to the stamped team lane.
 pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
     if let Ok(channel) = std::env::var(rimz::harness::run::ENV_CHANNEL)
         && !channel.is_empty()
     {
         return Some(channel);
     }
-    let team = std::env::var(rimz::harness::run::ENV_TEAM).ok();
-    current_channel_for_team(workspace, team.as_deref())
-}
-
-fn current_channel_for_team(
-    workspace: &rimz::ResolvedWorkspace,
-    team: Option<&str>,
-) -> Option<String> {
     rimz::harness::target::resolve_room_channel(
         &workspace.project_root,
         &workspace.worktree_root,
-        team,
+        None,
         None,
     )
 }
@@ -244,7 +236,13 @@ fn current_channel_for_team(
 pub(crate) fn ambiguous_fanout(verb: &str, target: &str, labels: &[String]) -> anyhow::Error {
     let list = labels
         .iter()
-        .map(|label| format!("@{label}"))
+        .map(|label| {
+            if label.starts_with('@') {
+                label.clone()
+            } else {
+                format!("@{label}")
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
     anyhow::anyhow!(
@@ -752,27 +750,52 @@ mod tests {
     }
 
     #[test]
-    fn current_channel_scopes_in_place_team_members() {
+    fn room_channel_stamps_in_place_team_members() {
         let workspace = workspace("/code/team-channel", "/code/team-channel", None);
 
         assert_eq!(
-            current_channel_for_team(&workspace, Some("pcr")).as_deref(),
+            rimz::harness::target::resolve_room_channel(
+                &workspace.project_root,
+                &workspace.worktree_root,
+                Some("pcr"),
+                None,
+            )
+            .as_deref(),
             Some("team-channel/pcr")
         );
-        assert_eq!(current_channel_for_team(&workspace, None), None);
+        assert_eq!(
+            rimz::harness::target::resolve_room_channel(
+                &workspace.project_root,
+                &workspace.worktree_root,
+                None,
+                None,
+            ),
+            None
+        );
     }
 
     #[test]
-    fn current_channel_ignores_branch_for_lane_identity() {
+    fn room_channel_ignores_branch_for_lane_identity() {
         let branch = workspace("/code/project", "/code/project", Some("feat/auth"));
         assert_eq!(
-            current_channel_for_team(&branch, Some("pcr")).as_deref(),
-            Some("project/pcr")
+            rimz::harness::target::resolve_room_channel(
+                &branch.project_root,
+                &branch.worktree_root,
+                None,
+                None,
+            ),
+            None
         );
 
         let child_worktree = workspace("/code/project", "/code/project-wt/auth", None);
         assert_eq!(
-            current_channel_for_team(&child_worktree, Some("pcr")).as_deref(),
+            rimz::harness::target::resolve_room_channel(
+                &child_worktree.project_root,
+                &child_worktree.worktree_root,
+                None,
+                None,
+            )
+            .as_deref(),
             Some("auth")
         );
     }
@@ -818,14 +841,20 @@ mod tests {
         let before = workspace("/code/project", "/code/project-wt/auth", Some("feat/auth"));
         let after = workspace("/code/project", "/code/project-wt/auth", Some("scratch"));
 
-        assert_eq!(
-            current_channel_for_team(&before, Some("pcr")),
-            current_channel_for_team(&after, Some("pcr"))
+        let before_channel = rimz::harness::target::resolve_room_channel(
+            &before.project_root,
+            &before.worktree_root,
+            None,
+            None,
         );
-        assert_eq!(
-            current_channel_for_team(&before, Some("pcr")).as_deref(),
-            Some("auth")
+        let after_channel = rimz::harness::target::resolve_room_channel(
+            &after.project_root,
+            &after.worktree_root,
+            None,
+            None,
         );
+        assert_eq!(before_channel, after_channel);
+        assert_eq!(before_channel.as_deref(), Some("auth"));
     }
 
     #[test]

@@ -1,6 +1,5 @@
 //! Live message queue store backed by one JSONL file per workspace.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -15,7 +14,6 @@ const QUEUE_FILE: &str = "messages.jsonl";
 const HISTORY_FILE: &str = "history.jsonl";
 const HISTORY_MAX_BYTES: u64 = 512 * 1024;
 const HISTORY_KEEP_RECORDS: usize = 500;
-const LEGACY_TERMINAL_DIR: &str = "terminal";
 
 #[derive(Debug, thiserror::Error)]
 pub enum MessageStoreErr {
@@ -116,9 +114,6 @@ pub fn list_pending(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
 fn read_queue(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     let path = queue_path(messages_dir);
     if !path.exists() {
-        if migrate_legacy(messages_dir)? {
-            return read_queue_file(&path);
-        }
         return Ok(Vec::new());
     }
     read_queue_file(&path)
@@ -195,81 +190,6 @@ fn prune_history(path: &Path) -> Result<()> {
     let keep_from = messages.len() - HISTORY_KEEP_RECORDS;
     write_messages_file(path, &messages[keep_from..])?;
     Ok(())
-}
-
-fn migrate_legacy(messages_dir: &Path) -> Result<bool> {
-    let terminal_dir = messages_dir.join(LEGACY_TERMINAL_DIR);
-    let mut paths = legacy_json_paths(&terminal_dir)?;
-    paths.extend(legacy_json_paths(messages_dir)?);
-    if paths.is_empty() && !terminal_dir.exists() {
-        return Ok(false);
-    }
-
-    let mut live = BTreeMap::new();
-    for path in &paths {
-        let message = read_legacy_message(path)?;
-        if message.status.is_open() || message.status == MessageStatus::Sent {
-            live.insert(message.message_id.to_string(), message);
-        }
-    }
-    let messages = live.into_values().collect::<Vec<_>>();
-    write_queue(messages_dir, &messages)?;
-
-    for path in paths {
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-            Err(source) => return Err(MessageStoreErr::Io { path, source }),
-        }
-    }
-    match fs::remove_dir_all(&terminal_dir) {
-        Ok(()) => {}
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-        Err(source) => {
-            return Err(MessageStoreErr::Io {
-                path: terminal_dir,
-                source,
-            });
-        }
-    }
-    Ok(true)
-}
-
-fn legacy_json_paths(dir: &Path) -> Result<Vec<PathBuf>> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => {
-            return Err(MessageStoreErr::Io {
-                path: dir.to_path_buf(),
-                source,
-            });
-        }
-    };
-    let mut paths = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|source| MessageStoreErr::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    Ok(paths)
-}
-
-fn read_legacy_message(path: &Path) -> Result<MessageRecord> {
-    let bytes = fs::read(path).map_err(|source| MessageStoreErr::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| MessageStoreErr::Json {
-        path: path.to_path_buf(),
-        source,
-    })
 }
 
 fn queue_path(messages_dir: &Path) -> PathBuf {
@@ -405,71 +325,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_layout_migrates_live_records_and_discards_terminal_records() {
-        let dir = tempdir().unwrap();
-        let messages_dir = dir.path().join("messages");
-        let terminal_dir = messages_dir.join("terminal");
-        std::fs::create_dir_all(&terminal_dir).unwrap();
-        let agent = agent();
-        let queued = MessageRecord::new(
-            WorkspaceId::from_project_root(dir.path()),
-            &agent,
-            "queued".to_owned(),
-            true,
-            DeliveryGate::Done,
-        );
-        let mut sent = MessageRecord::new(
-            WorkspaceId::from_project_root(dir.path()),
-            &agent,
-            "sent".to_owned(),
-            true,
-            DeliveryGate::Done,
-        );
-        sent.status = MessageStatus::Sent;
-        let mut delivered = MessageRecord::new(
-            WorkspaceId::from_project_root(dir.path()),
-            &agent,
-            "delivered".to_owned(),
-            true,
-            DeliveryGate::Done,
-        );
-        delivered.status = MessageStatus::Delivered;
-        write_legacy(
-            &messages_dir.join(format!("{}.json", queued.message_id)),
-            &queued,
-        );
-        write_legacy(
-            &terminal_dir.join(format!("{}.json", sent.message_id)),
-            &sent,
-        );
-        write_legacy(
-            &terminal_dir.join(format!("{}.json", delivered.message_id)),
-            &delivered,
-        );
-
-        let messages = list(&messages_dir).unwrap();
-
-        assert_eq!(messages.len(), 2);
-        assert!(
-            messages
-                .iter()
-                .any(|message| message.message_id == queued.message_id)
-        );
-        assert!(
-            messages
-                .iter()
-                .any(|message| message.message_id == sent.message_id)
-        );
-        assert!(queue_path(&messages_dir).exists());
-        assert!(
-            !messages_dir
-                .join(format!("{}.json", queued.message_id))
-                .exists()
-        );
-        assert!(!terminal_dir.exists());
-    }
-
-    #[test]
     fn torn_trailing_line_is_ignored() {
         let dir = tempdir().unwrap();
         let messages_dir = dir.path().join("messages");
@@ -490,10 +345,6 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id, message.message_id);
-    }
-
-    fn write_legacy(path: &Path, message: &MessageRecord) {
-        std::fs::write(path, serde_json::to_vec_pretty(message).unwrap()).unwrap();
     }
 
     fn fixed_message_id(value: u64) -> MessageId {

@@ -13,7 +13,7 @@
 //! agent.
 //!
 //! The channel is the workspace segment the room groups by — an explicit named
-//! lane, else a worktree name, else an in-place named team appended as
+//! lane, else a worktree name, else an in-place named team stamped at launch as
 //! `<dir>/<team>`, else a directory basename. Callers pass the *current*
 //! channel; an explicit `#name`, `--channel name`, or `--worktree name` overrides it. A
 //! `None` current channel means **all
@@ -24,9 +24,9 @@
 use std::path::Path;
 
 use crate::agents::AgentState;
-use crate::ids::{AgentKind, PaneId};
+use crate::ids::PaneId;
 use crate::ledger::snapshot::{PaneAgent, SidebarSnapshot};
-use crate::message::MessageSender;
+use crate::message::{MessageSender, identity_handle};
 
 pub use crate::ledger::snapshot::compose_channel;
 
@@ -97,20 +97,18 @@ trait Candidate<'a>: Copy {
     /// name/profile matcher returns every profile match and lets arity decide.
     fn profile(self) -> Option<&'a str>;
     fn role(self) -> Option<&'a str>;
-    fn team(self) -> Option<&'a str>;
     fn channel(self) -> Option<&'a str>;
     fn session_id(self) -> Option<&'a str>;
     fn worktree_path(self) -> Option<&'a str>;
     fn pane_id(self) -> Option<&'a PaneId>;
 
-    /// The channel label: stamped lane, else worktree-directory basename plus
-    /// team when present, else a placeholder.
+    /// The channel label: stamped lane, else worktree-directory basename, else a
+    /// placeholder.
     fn channel_label(self) -> String {
         compose_channel(
             self.channel(),
             self.worktree_path()
                 .and_then(|path| path.rsplit('/').next()),
-            self.team(),
         )
         .unwrap_or_else(|| "no-worktree".to_owned())
     }
@@ -123,7 +121,6 @@ trait Candidate<'a>: Copy {
             self.channel(),
             self.worktree_path()
                 .and_then(|path| path.rsplit('/').next()),
-            self.team(),
         );
         channel.as_deref() == Some(filter)
             || self
@@ -147,9 +144,6 @@ impl<'a> Candidate<'a> for &'a AgentState {
     }
     fn role(self) -> Option<&'a str> {
         self.role.as_deref()
-    }
-    fn team(self) -> Option<&'a str> {
-        self.team.as_deref()
     }
     fn channel(self) -> Option<&'a str> {
         self.channel.as_deref()
@@ -180,9 +174,6 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     }
     fn role(self) -> Option<&'a str> {
         self.role.as_deref()
-    }
-    fn team(self) -> Option<&'a str> {
-        self.team.as_deref()
     }
     fn channel(self) -> Option<&'a str> {
         self.channel.as_deref()
@@ -585,7 +576,7 @@ fn prefer_exact_session<'a, C: Candidate<'a>>(selector: &str, candidates: Vec<C>
 }
 
 /// Whether `agent` lives in the channel `filter` names — explicit channel,
-/// directory channel, team channel, worktree path, or that path's basename. A
+/// directory channel, worktree path, or that path's basename. A
 /// display-side wrapper over the resolver's [`Candidate::in_worktree`], so
 /// channel membership keeps one definition.
 pub fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
@@ -633,8 +624,8 @@ pub fn path_basename(path: &str) -> Option<&str> {
 }
 
 /// The room channel a launch runs in: an explicit named lane wins, else a
-/// separate worktree's directory name, else an in-place `<dir>/<team>`, else
-/// `None`. This is the launch-side peer of the CLI's current-channel
+/// separate worktree's directory name, else an in-place `<dir>/<team>` stamped
+/// here, else `None`. This is the launch-side peer of the CLI's current-channel
 /// resolution, so stamped agent identity and human commands agree.
 pub fn resolve_room_channel(
     project_root: &Path,
@@ -651,15 +642,14 @@ pub fn resolve_room_channel(
             .map(|name| name.to_string_lossy().into_owned());
     }
     let team = team.filter(|team| !team.is_empty())?;
-    compose_channel(
-        None,
-        project_root.file_name().and_then(|name| name.to_str()),
-        Some(team),
-    )
+    match project_root.file_name().and_then(|name| name.to_str()) {
+        Some(dir) if !dir.is_empty() => Some(format!("{dir}/{team}")),
+        _ => Some(team.to_owned()),
+    }
 }
 
 /// The agent's channel — the lane it cooperates in: stamped lane, else
-/// worktree directory basename plus in-place team when present.
+/// worktree directory basename.
 /// `None` when the agent runs outside any channel context.
 /// The display-side `Option` peer of the resolver's [`Candidate::channel_label`].
 pub fn agent_channel(agent: &AgentState) -> Option<String> {
@@ -669,7 +659,6 @@ pub fn agent_channel(agent: &AgentState) -> Option<String> {
             .worktree_path
             .as_deref()
             .and_then(|path| path.rsplit('/').next()),
-        agent.team.as_deref(),
     )
 }
 
@@ -787,26 +776,12 @@ pub fn sender_prefix(
         ));
     }
     let include_channel = channel.as_deref() != target_channel;
-    let mut handle = identity_handle(kind, name.as_deref(), profile.as_deref(), role.as_deref());
+    let mut handle = identity_handle(kind, profile.as_deref(), role.as_deref());
     if include_channel && let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
         handle.push('#');
         handle.push_str(channel);
     }
     Some(format!("from {handle}: "))
-}
-
-pub fn identity_handle(
-    kind: &AgentKind,
-    name: Option<&str>,
-    profile: Option<&str>,
-    role: Option<&str>,
-) -> String {
-    let base = role
-        .filter(|value| !value.is_empty())
-        .or_else(|| name.filter(|value| !value.is_empty()))
-        .or_else(|| profile.filter(|value| !value.is_empty()))
-        .unwrap_or_else(|| kind.as_str());
-    format!("@{base}")
 }
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
@@ -906,7 +881,10 @@ fn render_candidates<'a, C: Candidate<'a>>(candidates: &[C]) -> String {
                 .pane_id()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "no-pane".to_owned());
-            format!("{name} {kind} {worktree} {pane}")
+            match candidate.role().or_else(|| candidate.profile()) {
+                Some(selector) => format!("{selector} {name} {kind} {worktree} {pane}"),
+                None => format!("{name} {kind} {worktree} {pane}"),
+            }
         })
         .collect::<Vec<_>>()
         .join(", ");

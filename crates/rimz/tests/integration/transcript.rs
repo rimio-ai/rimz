@@ -12,27 +12,6 @@ use crate::common::Env;
 const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
 
 #[test]
-fn transcript_flat_channel_reads_legacy_team_sublane_entries() {
-    let env = Env::new();
-    let ledger = env.ledger();
-    let paths = ledger.paths().clone();
-    let mut entry = ChatEntry::new(
-        Timestamp::from_second(1_700_000_000).expect("timestamp"),
-        AgentKind::new_unchecked("codex"),
-        AgentSessionId::from("sess-legacy-team"),
-        ChatKind::Prompt,
-        "legacy team prompt".to_owned(),
-    );
-    entry.channel = Some("web-token/forge".to_owned());
-    rimz::chat::append(&paths, &entry).expect("append chat");
-
-    let out = run_ok(env.rimz().args(["transcript", "#web-token", "--all"]));
-
-    assert!(out.contains("#web-token"), "{out}");
-    assert!(out.contains("legacy team prompt"), "{out}");
-}
-
-#[test]
 fn transcript_renders_durable_turns_asks_answers_and_channels() {
     let env = Env::new();
     if env.skip_if_sandboxed() {

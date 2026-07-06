@@ -203,11 +203,7 @@ pub struct PaneAgent {
     /// for a sessionless pane or a roleless launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
-    /// The `[agents.teams]` team the bound session launched under, copied from
-    /// the rollup so in-place team panes resolve within their team channel.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team: Option<String>,
-    /// Named channel copied from the bound session.
+    /// Routing lane copied from the bound session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// The bound session, or `None` for a wired pane with no session yet.
@@ -226,50 +222,49 @@ pub struct PaneAgent {
 }
 
 impl PaneAgent {
-    /// A human handle: pet name, else `kind-ordinal`, else kind.
+    /// A human handle: role, profile, pet name, `kind-ordinal`, else kind.
     pub fn label(&self) -> String {
-        match &self.name {
-            Some(name) => name.clone(),
-            None => match self.kind_ordinal {
-                Some(ordinal) => format!("{}-{}", self.kind, ordinal),
-                None => self.kind.to_string(),
-            },
+        if let Some(role) = self.role.as_deref().filter(|role| !role.is_empty()) {
+            return role.to_owned();
+        }
+        if let Some(profile) = self
+            .profile
+            .as_deref()
+            .filter(|profile| !profile.is_empty())
+        {
+            return profile.to_owned();
+        }
+        if let Some(name) = self.name.as_deref().filter(|name| !name.is_empty()) {
+            return name.to_owned();
+        }
+        match self.kind_ordinal {
+            Some(ordinal) => format!("{}-{}", self.kind, ordinal),
+            None => self.kind.to_string(),
         }
     }
 
     /// The channel this pane participates in: stamped lane, else worktree
-    /// directory basename plus team when present. `None` means the pane is
-    /// outside a known worktree and team.
+    /// directory basename. `None` means the pane is outside a known worktree.
     pub fn channel(&self) -> Option<String> {
         compose_channel(
             self.channel.as_deref(),
             self.worktree_path
                 .as_deref()
                 .and_then(|path| path.rsplit('/').next()),
-            self.team.as_deref(),
         )
     }
 }
 
-/// Compose a routing channel from launch identity. A stamped lane wins, then an
-/// in-place named team extends the directory channel as `<dir>/<team>`.
-pub fn compose_channel(
-    explicit: Option<&str>,
-    dir_basename: Option<&str>,
-    team: Option<&str>,
-) -> Option<String> {
+/// Compose a routing channel for read-side fallback. A launch-stamped lane
+/// wins; otherwise the worktree directory basename is the fallback for agents
+/// not launched by this Rimz binary.
+pub fn compose_channel(explicit: Option<&str>, dir_basename: Option<&str>) -> Option<String> {
     if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
         return Some(channel.to_owned());
     }
-    match (
-        dir_basename.filter(|dir| !dir.is_empty()),
-        team.filter(|team| !team.is_empty()),
-    ) {
-        (Some(dir), Some(team)) => Some(format!("{dir}/{team}")),
-        (Some(dir), None) => Some(dir.to_owned()),
-        (None, Some(team)) => Some(team.to_owned()),
-        (None, None) => None,
-    }
+    dir_basename
+        .filter(|dir| !dir.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

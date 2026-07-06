@@ -60,18 +60,12 @@ impl MessageSender {
             Self::Human => "you".to_owned(),
             Self::Agent {
                 kind,
-                name,
                 profile,
                 role,
                 channel,
+                ..
             } => {
-                let handle = role
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .or_else(|| name.as_deref().filter(|value| !value.is_empty()))
-                    .or_else(|| profile.as_deref().filter(|value| !value.is_empty()))
-                    .unwrap_or_else(|| kind.as_str());
-                let mut rendered = format!("@{handle}");
+                let mut rendered = identity_handle(kind, profile.as_deref(), role.as_deref());
                 if let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
                     rendered.push('#');
                     rendered.push_str(channel);
@@ -80,6 +74,14 @@ impl MessageSender {
             }
         }
     }
+}
+
+pub fn identity_handle(kind: &AgentKind, profile: Option<&str>, role: Option<&str>) -> String {
+    let base = role
+        .filter(|value| !value.is_empty())
+        .or_else(|| profile.filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| kind.as_str());
+    format!("@{base}")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,7 +170,6 @@ impl std::fmt::Display for AutoCompact {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageStatus {
-    Created,
     #[serde(alias = "pending")]
     Queued,
     Claimed,
@@ -200,7 +201,6 @@ impl MessageStatus {
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Created => "created",
             Self::Queued => "queued",
             Self::Claimed => "claimed",
             Self::Sent => "sent",
@@ -421,10 +421,6 @@ impl MessageRecord {
     pub fn with_sender(mut self, sender: MessageSender) -> Self {
         self.sender = sender;
         self
-    }
-
-    pub fn same_agent(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> bool {
-        self.kind == *kind && self.agent_id == *agent_id
     }
 
     /// Whether this record belongs to the logical agent card `(kind, agent_id)`:

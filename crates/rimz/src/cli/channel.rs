@@ -178,15 +178,11 @@ struct LiveChannelAgents<'a> {
     agents: Vec<&'a AgentState>,
 }
 
-fn live_backing(channel: &str, explicit_named: bool) -> String {
+fn live_backing(_channel: &str, explicit_named: bool) -> String {
     if explicit_named {
         return "named".to_owned();
     }
-    if channel.contains('/') {
-        "team".to_owned()
-    } else {
-        "directory".to_owned()
-    }
+    "directory".to_owned()
 }
 
 fn worktree_channels(workspace: &rimz::ResolvedWorkspace) -> Result<BTreeSet<String>> {

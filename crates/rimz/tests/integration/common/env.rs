@@ -63,6 +63,20 @@ pub struct Env {
     pub project_root: PathBuf,
     pub workspace_id: WorkspaceId,
     pub runtime_root: PathBuf,
+    /// A session-scrubbed process whose `/proc` environment the journey hook
+    /// fallback reads as launch identity (see [`Env::agent_owner_pid`]). Spawned
+    /// on first use, shared across every harness of one test, and kept alive for
+    /// the test's whole span.
+    agent_owner: std::sync::OnceLock<Child>,
+}
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        if let Some(owner) = self.agent_owner.get_mut() {
+            let _ = owner.kill();
+            let _ = owner.wait();
+        }
+    }
 }
 
 impl Env {
@@ -87,6 +101,7 @@ impl Env {
             project_root,
             workspace_id,
             runtime_root,
+            agent_owner: std::sync::OnceLock::new(),
         };
         // Pre-create the heartbeat dir so resolver-heartbeat writes never race
         // the ledger creating it.
@@ -177,6 +192,27 @@ impl Env {
     }
 
     // --- hooks ---
+
+    /// The pid of this test's long-lived, session-scrubbed owner process. A
+    /// journey hook stamps it as `RIMZ_AGENT_PID`, so the lifecycle fallback
+    /// reads a clean `/proc` environment — a developer's ambient room channel
+    /// never leaks into a fixture. The process is spawned once and outlives every
+    /// [`RoomHarness`], so a detach/reattach never kills the simulated agent it
+    /// owns and the reattach reads a still-live owner.
+    pub fn agent_owner_pid(&self) -> u32 {
+        self.agent_owner
+            .get_or_init(|| {
+                Command::new("sleep")
+                    .arg("600")
+                    .scrub_session_env()
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn journey agent owner")
+            })
+            .id()
+    }
 
     /// `rimz hooks feed --source <source>` with all three stdio piped, ready
     /// for extra `.env(...)` before spawning.

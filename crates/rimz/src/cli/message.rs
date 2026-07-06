@@ -9,6 +9,7 @@ use clap::{Args, Subcommand};
 use jiff::Timestamp;
 use serde::Serialize;
 
+use super::address;
 use super::send::{self, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
@@ -16,10 +17,10 @@ use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use rimz::ledger::event::{EventEnvelope, EventKind, MessageEventPayload};
-use rimz::message::dispatch::{AddContext, AddOutput, AddSpec, SteerContext, SteerSpec};
+use rimz::message::dispatch::{DispatchContext, DispatchOutcome, SendMode};
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
-    card_matches, parse_schedule_at,
+    parse_schedule_at,
 };
 use rimz::message::{deliver, dispatch};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
@@ -179,11 +180,12 @@ fn message_add(
         .as_deref()
         .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
         .transpose()?;
-    add_message(
+    dispatch_message(
         target,
         worktree,
         channel,
         text,
+        MessageDispatchMode::Boundary,
         MessageSpec {
             enter: !no_enter,
             gate,
@@ -192,7 +194,6 @@ fn message_add(
             no_from,
             wait,
             not_before,
-            stamp_channel: true,
         },
         FanoutFlags { all, create },
         globals,
@@ -210,11 +211,12 @@ pub(crate) fn to_session(
     let mut globals = globals.clone();
     globals.root = Some(root.to_path_buf());
     tracing::debug!(kind, session, "queueing loop wake-up");
-    add_message(
+    dispatch_message(
         format!("@{session}"),
         None,
         None,
         text,
+        MessageDispatchMode::Boundary,
         MessageSpec {
             enter: true,
             gate,
@@ -223,7 +225,6 @@ pub(crate) fn to_session(
             no_from: false,
             wait: None,
             not_before: None,
-            stamp_channel: false,
         },
         FanoutFlags {
             all: false,
@@ -239,7 +240,6 @@ fn steer_message(
     text: Vec<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    rimz::harness::target::require_mention(&target)?;
     let SendFlags {
         worktree,
         channel: channel_flag,
@@ -256,90 +256,23 @@ fn steer_message(
     send::validate_wait(!no_enter, wait)?;
     let auto_compact = smart_compact.or_else(|| super::machine_config().harness.smart_compact);
     let text = resolve_message(&text, file.as_deref())?;
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
-    if auto_compact.is_some()
-        && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-    {
-        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
-    }
-    let channel = current_channel(&workspace);
-    let sender = send::sender_from_env(channel.as_deref(), no_from);
-    let durable_agents = dispatch::durable_target_agents(&ledger)?;
-    let targets = match dispatch::queue_targets(
-        &snapshot,
-        Some(&durable_agents),
-        &target,
-        worktree.as_deref().or(channel_flag.as_deref()),
-        channel.as_deref(),
-        false,
-    ) {
-        Ok(targets) => targets,
-        Err(_) if create => {
-            return super::agents_cmd::create_on_miss(
-                &target,
-                worktree.as_deref(),
-                channel_flag.as_deref(),
-                channel.as_deref(),
-                &text,
-                globals,
-            );
-        }
-        Err(err) => {
-            record_resolution_bounce(
-                &ledger,
-                &workspace,
-                &target,
-                channel.as_deref(),
-                &sender,
-                text.len(),
-                &err,
-            )?;
-            let err = map_queue_target_err(&target, err);
-            return message_miss(&snapshot, channel.as_deref(), &err);
-        }
-    };
-
-    if targets.len() > 1 && !all && !rimz::harness::target::is_broadcast(&target) {
-        let labels: Vec<String> = targets.iter().map(dispatch::QueueTarget::label).collect();
-        return Err(super::ambiguous_fanout("message --steer", &target, &labels));
-    }
-    let text = if targets.len() > 1 || rimz::harness::target::is_broadcast(&target) {
-        rimz::harness::target::group_prefixed(&target, &text)
-    } else {
-        text
-    };
-    let wait = if let Some(timeout) = wait {
-        Some((timeout, ledger.wait_fold_base()?))
-    } else {
-        None
-    };
-    let result = dispatch::steer_for_targets(
-        SteerContext {
-            workspace: &workspace,
-            ledger: &ledger,
-            snapshot: &snapshot,
-            scope_channel: channel.as_deref(),
-            sender: &sender,
-        },
-        &targets,
-        &text,
-        SteerSpec {
+    dispatch_message(
+        target,
+        worktree,
+        channel_flag,
+        text,
+        MessageDispatchMode::Steer,
+        MessageSpec {
             enter: !no_enter,
+            gate: DeliveryGate::Any,
             force,
             auto_compact,
+            no_from,
+            wait,
+            not_before: None,
         },
-    )?;
-
-    report_steer(
-        &ledger,
-        &workspace.session_name,
-        wait,
-        &target,
-        targets.len(),
-        &result.outcomes,
-        &result.compacted,
+        FanoutFlags { all, create },
+        globals,
     )
 }
 
@@ -347,6 +280,12 @@ fn steer_message(
 struct FanoutFlags {
     all: bool,
     create: bool,
+}
+
+#[derive(Clone, Copy)]
+enum MessageDispatchMode {
+    Steer,
+    Boundary,
 }
 
 fn message_miss(
@@ -425,7 +364,6 @@ struct MessageSpec {
     no_from: bool,
     wait: Option<Duration>,
     not_before: Option<Timestamp>,
-    stamp_channel: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -535,24 +473,15 @@ impl MessageListRow {
             compacted_context_tokens: payload.compacted_context_tokens,
         })
     }
-
-    fn same_agent_card(&self, agent: &AgentState) -> bool {
-        card_matches(
-            &self.kind,
-            &self.agent_id,
-            self.agent_name.as_deref(),
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-        )
-    }
 }
 
-fn add_message(
+#[allow(clippy::too_many_arguments)]
+fn dispatch_message(
     target: String,
     worktree: Option<String>,
     channel_flag: Option<String>,
     text: String,
+    mode: MessageDispatchMode,
     spec: MessageSpec,
     flags: FanoutFlags,
     globals: &GlobalFlags,
@@ -560,73 +489,156 @@ fn add_message(
     rimz::harness::target::require_mention(&target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
     let channel = current_channel(&workspace);
     let sender = send::sender_from_env(channel.as_deref(), spec.no_from);
-    let mut pending = ledger.list_pending_messages()?;
-    let rollup_only = dispatch::rollup_targets_all_park_without_live(
-        &snapshot,
-        &target,
-        worktree.as_deref().or(channel_flag.as_deref()),
-        channel.as_deref(),
-        &pending,
-        spec.gate,
-        spec.force,
-    );
-    if !rollup_only {
-        snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
-        // Smart compaction reads context fill. Immediate message sends share the
-        // live path, so fold the disposable context sidecars before any send-now
-        // decision that might compact first.
-        if spec.auto_compact.is_some()
-            && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        {
-            snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
-        }
-    }
-    let durable_agents = dispatch::durable_target_agents(&ledger)?;
-    let targets = match super::map_resolve(
-        &target,
-        dispatch::queue_targets(
-            &snapshot,
-            Some(&durable_agents),
-            &target,
-            worktree.as_deref().or(channel_flag.as_deref()),
-            channel.as_deref(),
-            rollup_only,
-        ),
-    ) {
-        Ok(targets) => targets,
-        Err(err) => {
-            // Create-on-miss launches a fresh agent with this text as its first
-            // prompt, so the launch carries the work and no message record is made.
-            if flags.create {
-                return super::agents_cmd::create_on_miss(
+    let mut pending = Vec::new();
+    let rollup_only = match mode {
+        MessageDispatchMode::Steer => false,
+        MessageDispatchMode::Boundary => {
+            pending = ledger.list_pending_messages()?;
+            let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+            let rollup_only = dispatch::rollup_targets_all_park_without_live(
+                &snapshot,
+                &target,
+                worktree.as_deref().or(channel_flag.as_deref()),
+                channel.as_deref(),
+                &pending,
+                spec.gate,
+                spec.force,
+            );
+            if rollup_only {
+                let durable_agents = dispatch::durable_target_agents(&ledger)?;
+                let Some(targets) = resolve_message_targets(
+                    &ledger,
+                    &workspace,
+                    &snapshot,
+                    &sender,
                     &target,
                     worktree.as_deref(),
                     channel_flag.as_deref(),
                     channel.as_deref(),
                     &text,
+                    flags.create,
                     globals,
+                    &durable_agents,
+                    true,
+                )?
+                else {
+                    return Ok(());
+                };
+                return dispatch_resolved_message(
+                    mode, &workspace, &ledger, &snapshot, pending, &sender, target, text, spec,
+                    flags, targets, channel,
                 );
             }
-            if let Some(target_err) = err.downcast_ref::<rimz::TargetErr>() {
-                record_resolution_bounce(
-                    &ledger,
-                    &workspace,
-                    &target,
-                    channel.as_deref(),
-                    &sender,
-                    text.len(),
-                    target_err,
-                )?;
-            }
-            return message_miss(&snapshot, channel.as_deref(), &err);
+            false
         }
     };
+    let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    // Smart compaction reads context fill. Immediate message sends share the
+    // live path, so fold the disposable context sidecars before any send-now
+    // decision that might compact first.
+    if spec.auto_compact.is_some()
+        && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+    {
+        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    }
+    let durable_agents = dispatch::durable_target_agents(&ledger)?;
+    let Some(targets) = resolve_message_targets(
+        &ledger,
+        &workspace,
+        &snapshot,
+        &sender,
+        &target,
+        worktree.as_deref(),
+        channel_flag.as_deref(),
+        channel.as_deref(),
+        &text,
+        flags.create,
+        globals,
+        &durable_agents,
+        rollup_only,
+    )?
+    else {
+        return Ok(());
+    };
+    dispatch_resolved_message(
+        mode, &workspace, &ledger, &snapshot, pending, &sender, target, text, spec, flags, targets,
+        channel,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_message_targets<'a>(
+    ledger: &rimz::Ledger,
+    workspace: &ResolvedWorkspace,
+    snapshot: &'a SidebarSnapshot,
+    sender: &MessageSender,
+    target: &str,
+    worktree: Option<&str>,
+    channel_flag: Option<&str>,
+    channel: Option<&str>,
+    text: &str,
+    create: bool,
+    globals: &GlobalFlags,
+    durable_agents: &'a [AgentState],
+    rollup_only: bool,
+) -> Result<Option<Vec<dispatch::QueueTarget<'a>>>> {
+    match dispatch::queue_targets(
+        snapshot,
+        Some(durable_agents),
+        target,
+        worktree.or(channel_flag),
+        channel,
+        rollup_only,
+    ) {
+        Ok(targets) => Ok(Some(targets)),
+        Err(err) => {
+            // Create-on-miss launches a fresh agent with this text as its first
+            // prompt, so the launch carries the work and no message record is made.
+            if create {
+                return super::agents_cmd::create_on_miss(
+                    target,
+                    worktree,
+                    channel_flag,
+                    channel,
+                    text,
+                    globals,
+                )
+                .map(|()| None);
+            }
+            record_resolution_bounce(ledger, workspace, target, channel, sender, text.len(), &err)?;
+            let err = map_queue_target_err(target, err);
+            message_miss(snapshot, channel, &err).map(|()| None)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_resolved_message(
+    mode: MessageDispatchMode,
+    workspace: &ResolvedWorkspace,
+    ledger: &rimz::Ledger,
+    snapshot: &SidebarSnapshot,
+    mut pending: Vec<MessageRecord>,
+    sender: &MessageSender,
+    target: String,
+    text: String,
+    spec: MessageSpec,
+    flags: FanoutFlags,
+    targets: Vec<dispatch::QueueTarget<'_>>,
+    channel: Option<String>,
+) -> Result<()> {
     if targets.len() > 1 && !flags.all && !rimz::harness::target::is_broadcast(&target) {
-        let labels: Vec<String> = targets.iter().map(dispatch::QueueTarget::label).collect();
-        return Err(super::ambiguous_fanout("deliver to", &target, &labels));
+        let labels: Vec<String> = targets
+            .iter()
+            .map(|target| target.label(snapshot))
+            .collect();
+        let verb = match mode {
+            MessageDispatchMode::Steer => "message --steer",
+            MessageDispatchMode::Boundary => "deliver to",
+        };
+        return Err(super::ambiguous_fanout(verb, &target, &labels));
     }
     let text = if targets.len() > 1 || rimz::harness::target::is_broadcast(&target) {
         rimz::harness::target::group_prefixed(&target, &text)
@@ -638,57 +650,46 @@ fn add_message(
     } else {
         None
     };
-    let result = dispatch::add_for_targets(
-        AddContext {
-            workspace: &workspace,
-            ledger: &ledger,
-            snapshot: &snapshot,
-            pending: &mut pending,
+    let result = dispatch::dispatch_for_targets(
+        DispatchContext {
+            workspace,
+            ledger,
+            snapshot,
+            pending: matches!(mode, MessageDispatchMode::Boundary).then_some(&mut pending),
             scope_channel: channel.as_deref(),
-            sender: &sender,
+            sender,
         },
         &targets,
         &text,
-        AddSpec {
-            enter: spec.enter,
-            gate: spec.gate,
-            force: spec.force,
-            auto_compact: spec.auto_compact,
-            not_before: spec.not_before,
-            stamp_channel: spec.stamp_channel,
+        match mode {
+            MessageDispatchMode::Steer => SendMode::Steer {
+                enter: spec.enter,
+                force: spec.force,
+                auto_compact: spec.auto_compact,
+            },
+            MessageDispatchMode::Boundary => SendMode::Boundary {
+                enter: spec.enter,
+                gate: spec.gate,
+                force: spec.force,
+                auto_compact: spec.auto_compact,
+                not_before: spec.not_before,
+            },
         },
     )?;
-    for label in &result.compacted {
-        #[expect(clippy::print_stdout, reason = "command result")]
-        {
-            println!("compacted {label}");
-        }
-    }
-    let mut failed = false;
-    let wait_deadline = spec.wait.map(|timeout| std::time::Instant::now() + timeout);
-    for output in &result.outputs {
-        if let Some(deadline) = wait_deadline {
-            if !wait_and_print_message(
-                &ledger,
-                &workspace.session_name,
-                &output.label,
-                &output.message_id,
-                wait_base.unwrap_or(0),
-                deadline,
-            )? {
-                failed = true;
-            }
-        } else {
-            #[expect(clippy::print_stdout, reason = "command result")]
-            {
-                println!("{}", render_add_output(output, output.status));
-            }
-        }
-    }
-    if failed {
-        std::process::exit(1);
-    }
-    Ok(())
+    let wait = spec.wait.map(|timeout| (timeout, wait_base.unwrap_or(0)));
+    report_dispatch(
+        match mode {
+            MessageDispatchMode::Steer => ReportMode::Steer,
+            MessageDispatchMode::Boundary => ReportMode::Boundary,
+        },
+        ledger,
+        &workspace.session_name,
+        wait,
+        &target,
+        targets.len(),
+        &result.outcomes,
+        &result.compacted,
+    )
 }
 
 fn list_messages(
@@ -725,7 +726,16 @@ fn list_messages(
     if let Some(raw) = target {
         rimz::harness::target::require_mention(&raw)?;
         let agent = super::resolve_agent_one(&snapshot, &raw, None, filter_channel)?;
-        messages.retain(|message| message.same_agent_card(agent));
+        messages.retain(|message| {
+            rimz::message::card_matches(
+                &message.kind,
+                &message.agent_id,
+                message.agent_name.as_deref(),
+                &agent.kind,
+                &agent.agent_id,
+                agent.name.as_deref(),
+            )
+        });
     }
     messages.sort_by(|a, b| {
         b.enqueued_at
@@ -1130,19 +1140,6 @@ fn print_removed_summary(scope: &str, removed: &[MessageRecord]) {
     }
 }
 
-fn render_add_output(output: &AddOutput, status: MessageStatus) -> String {
-    match status {
-        MessageStatus::Sent => format!("sent to {} ({})", output.label, output.message_id),
-        MessageStatus::Queued => format!("queued for {} ({})", output.label, output.message_id),
-        other => format!(
-            "{} {} ({})",
-            other.as_str(),
-            output.label,
-            output.message_id
-        ),
-    }
-}
-
 fn wait_and_print_message(
     ledger: &rimz::Ledger,
     session_name: &str,
@@ -1160,38 +1157,98 @@ fn wait_and_print_message(
     Ok(status == MessageStatus::Delivered)
 }
 
-/// Report a `--steer` fan-out. A lone agent that was skipped fails with the
-/// same message the single-target path always returned; a broadcast prints its
-/// sent/skipped summary and succeeds.
-fn report_steer(
+#[derive(Clone, Copy)]
+enum ReportMode {
+    Steer,
+    Boundary,
+}
+
+fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
+    match outcome {
+        DispatchOutcome::Sent { label, message_id } => {
+            Some(format!("sent to {label} ({message_id})"))
+        }
+        DispatchOutcome::Queued { label, message_id } => {
+            Some(format!("queued for {label} ({message_id})"))
+        }
+        DispatchOutcome::SkippedPending { .. } => None,
+    }
+}
+
+/// Report a unified dispatch. Boundary sends keep the old one-line-per-target
+/// output; steer fan-out keeps the summary line and pending-ask bail.
+#[allow(clippy::too_many_arguments)]
+fn report_dispatch(
+    mode: ReportMode,
     ledger: &rimz::Ledger,
     session_name: &str,
     wait: Option<(Duration, u64)>,
     target: &str,
     total: usize,
-    outcomes: &[dispatch::SteerOutcome],
+    outcomes: &[DispatchOutcome],
     compacted: &[String],
 ) -> Result<()> {
+    if matches!(mode, ReportMode::Boundary) {
+        for label in compacted {
+            #[expect(clippy::print_stdout, reason = "command result")]
+            {
+                println!("compacted {label}");
+            }
+        }
+        if let Some((timeout, wait_base)) = wait {
+            let mut failed = false;
+            let deadline = std::time::Instant::now() + timeout;
+            for outcome in outcomes {
+                let (label, message_id) = match outcome {
+                    DispatchOutcome::Sent { label, message_id }
+                    | DispatchOutcome::Queued { label, message_id } => (label, message_id),
+                    DispatchOutcome::SkippedPending { .. } => continue,
+                };
+                if !wait_and_print_message(
+                    ledger,
+                    session_name,
+                    label,
+                    message_id,
+                    wait_base,
+                    deadline,
+                )? {
+                    failed = true;
+                }
+            }
+            if failed {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        for outcome in outcomes {
+            if let Some(line) = render_dispatch_outcome(outcome) {
+                #[expect(clippy::print_stdout, reason = "command result")]
+                {
+                    println!("{line}");
+                }
+            }
+        }
+        return Ok(());
+    }
+
     let sent = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            dispatch::SteerOutcome::Sent { label, message_id } => {
-                Some(format!("{label} ({message_id})"))
-            }
+            DispatchOutcome::Sent { label, message_id } => Some(format!("{label} ({message_id})")),
             _ => None,
         })
         .collect::<Vec<_>>();
     let sent_labels = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            dispatch::SteerOutcome::Sent { label, .. } => Some(label.as_str()),
+            DispatchOutcome::Sent { label, .. } => Some(label.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>();
     let queued = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            dispatch::SteerOutcome::Queued { label, message_id } => {
+            DispatchOutcome::Queued { label, message_id } => {
                 Some(format!("{label} ({message_id})"))
             }
             _ => None,
@@ -1200,7 +1257,7 @@ fn report_steer(
     let pending = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            dispatch::SteerOutcome::SkippedPending {
+            DispatchOutcome::SkippedPending {
                 label, message_id, ..
             } => Some(format!("{label} ({message_id})")),
             _ => None,
@@ -1211,9 +1268,9 @@ fn report_steer(
         let deadline = std::time::Instant::now() + timeout;
         for outcome in outcomes {
             let (label, message_id, compactable) = match outcome {
-                dispatch::SteerOutcome::Sent { label, message_id } => (label, message_id, true),
-                dispatch::SteerOutcome::Queued { label, message_id } => (label, message_id, false),
-                dispatch::SteerOutcome::SkippedPending { .. } => continue,
+                DispatchOutcome::Sent { label, message_id } => (label, message_id, true),
+                DispatchOutcome::Queued { label, message_id } => (label, message_id, false),
+                DispatchOutcome::SkippedPending { .. } => continue,
             };
             if compactable {
                 print_compacted_if_needed(label, compacted);
@@ -1252,7 +1309,7 @@ fn report_steer(
             return Ok(());
         }
         match outcomes.first() {
-            Some(dispatch::SteerOutcome::SkippedPending {
+            Some(DispatchOutcome::SkippedPending {
                 label,
                 message_id,
                 request_id,
@@ -1301,10 +1358,7 @@ fn wait_status_label(status: MessageStatus) -> &'static str {
         MessageStatus::Removed => "removed",
         MessageStatus::Abandoned => "abandoned",
         MessageStatus::Archived => "archived",
-        MessageStatus::Created
-        | MessageStatus::Queued
-        | MessageStatus::Claimed
-        | MessageStatus::Sent => "timed out",
+        MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent => "timed out",
     }
 }
 
@@ -1349,7 +1403,6 @@ pub(crate) fn parse_gate(raw: &str) -> std::result::Result<DeliveryGate, String>
 
 fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
     match raw {
-        "created" => Ok(MessageStatus::Created),
         "queued" | "pending" => Ok(MessageStatus::Queued),
         "claimed" => Ok(MessageStatus::Claimed),
         "sent" => Ok(MessageStatus::Sent),
@@ -1364,15 +1417,13 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
 }
 
 fn message_target(message: &MessageListRow, agents: &[&AgentState]) -> String {
-    if let Some(address) = &message.address {
-        return address.clone();
-    }
-    agents
-        .iter()
-        .copied()
-        .find(|agent| message.same_agent_card(agent))
-        .map(|agent| rimz::harness::target::agent_handle(agent, agents, true))
-        .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id))
+    address::message_target(
+        message.address.as_deref(),
+        &message.kind,
+        &message.agent_id,
+        message.agent_name.as_deref(),
+        agents,
+    )
 }
 
 fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> String {

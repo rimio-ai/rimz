@@ -47,7 +47,14 @@ pub(super) fn handle_lifecycle_hook(
         globals,
         fallback_expiry,
     );
-    record_native_answer(workspace, ledger, agent, event_name, payload);
+    record_native_answer(
+        workspace,
+        ledger,
+        agent,
+        event_name,
+        payload,
+        recorded.as_ref(),
+    );
     let model_hint = recorded
         .as_ref()
         .and_then(|recorded| recorded.model_hint.as_deref());

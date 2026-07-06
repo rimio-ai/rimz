@@ -40,7 +40,7 @@ Paste and submit land back-to-back as one atomic interaction: the close marker, 
 
 ### Sender prefix
 
-By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels. The recipient lane comes from its registered channel, live pane channel, or addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands. The handle uses the shortest unique selector: the role when unique in scope, then the profile when unique, else the kind, else the petname. `--no-from` delivers without the sender prefix. The receiver's turn-start hook parses the prefix once and records a first-class `Message` entry in the transcript log with structured `from`; the delivery queue record remains queue bookkeeping, not a transcript source.
+By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels. The recipient lane comes from its registered channel, live pane channel, or addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands. The handle uses the shortest unique selector: the role when unique in scope, then the profile when unique, else the kind, else the kind ordinal, else the petname. `--no-from` delivers without the sender prefix. The receiver's turn-start hook parses the prefix once and records a first-class `Message` entry in the transcript log with structured `from`; the delivery queue record remains queue bookkeeping, not a transcript source.
 
 A fan-out also prefixes the text with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
@@ -83,19 +83,18 @@ The full record is the field catalog; the [lifecycle](#message-lifecycle) below 
 ## Message lifecycle
 
 ```text
-Created ──► Queued ──► Claimed ──► Sent ──► Delivered
-   │           │          │          │
-   │           │          │          └──► TimedOut   (unconfirmed-send cap)
-   │           │          ├──► (revert to Queued on pre-send failure)
-   │           │          └──► Abandoned   (pre-send retry cap)
-   │           │
-   │           ├──► Removed    (user)
-   │           └──► Archived   (receiver ended, channel teardown)
+Queued ──► Claimed ──► Sent ──► Delivered
+   │          │          │
+   │          │          └──► TimedOut   (unconfirmed-send cap)
+   │          ├──► (revert to Queued on pre-send failure)
+   │          └──► Abandoned   (pre-send retry cap)
    │
-   └──► Errored   (unresolved receiver bounce)
+   ├──► Removed    (user)
+   ├──► Archived   (receiver ended, channel teardown)
+   └──► Errored    (unresolved receiver bounce)
 ```
 
-- `Created` never rests in the queue file: every user-visible send first persists as `Queued`, and a live send moves that same record to `Sent` after the pane write succeeds.
+- Every user-visible send first persists as `Queued`, and a live send moves that same record to `Sent` after the pane write succeeds.
 - `Queued` and `Claimed` are open (`is_open`): the message is live in the queue.
 - `Sent` means bytes were written to the pane; the record stays live in the queue until confirmation or reconciliation makes a terminal decision.
 - `Delivered` means the agent acknowledged the text: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`.
@@ -221,14 +220,16 @@ Every target lives in a channel. A channel is a cooperation lane inside one room
 
 ### Backings and labels
 
-Four backings can produce a channel:
+Launch resolves one stamped lane and writes it to `RIMZ_CHANNEL`, the launch event, and the rollup. `resolve_room_channel` uses this precedence: explicit `--channel`, then Rimz-owned worktree directory name, then in-place team as `<dir>/<team>`, then no lane for a bare directory room. Read paths use that stamped lane, falling back only to the worktree basename for agents that lack a stamp.
 
-- **Named channel**: a durable bare name created by `rimz channel new design` or first use through `--channel design`; it carries `RIMZ_CHANNEL=design`.
-- **Worktree channel**: a Rimz-owned Git worktree; the worktree name is the stable label and the worktree path stays addressable, including team launches inside that worktree.
-- **Team channel**: an in-place named team under one plain directory, labelled `<dir>/<team>` and carried by `RIMZ_CHANNEL=<dir>/<team>` plus `RIMZ_TEAM`.
-- **Directory channel**: the directory basename used when a live agent has no named, worktree, or team identity.
+The launch inputs are:
 
-Label precedence is explicit named channel, then worktree name, then in-place `<dir>/<team>`, then directory basename. This single rule feeds target resolution, rendered handles, sidebar grouping, `agents list`, pane overlays, and recovery. Branch names stay display metadata on the worktree card and do not define lane identity.
+- **Named channel**: a durable bare name created by `rimz channel new design` or first use through `--channel design`; it stamps `RIMZ_CHANNEL=design`.
+- **Worktree channel**: a Rimz-owned Git worktree; the worktree directory name is the stable lane and the worktree path stays addressable.
+- **In-place team launch**: a named team under one plain directory; launch stamps `<dir>/<team>` into `RIMZ_CHANNEL` and keeps `RIMZ_TEAM` as cohort identity.
+- **Directory fallback**: the directory basename used for unstamped live agents.
+
+Lane equality scopes target resolution, rendered handles, sidebar grouping, `agents list`, pane overlays, message list, transcripts, and recovery. Branch names stay display metadata on the worktree card and do not define lane identity.
 
 Worktree identity follows the agent's own resolved checkout, not the room tree: hooks resolve the git toplevel from the agent's cwd at any depth, so a nested checkout an agent actually works in is its own worktree channel, while non-git agents at the room root or in non-git subdirs fold into the room's root lane. How the sidebar renders these lanes on screen — pods, headers, glyphs, group roots — is [sidebar.md § Ranking and grouping](../sidebar/sidebar.md#ranking-and-grouping).
 
@@ -236,7 +237,7 @@ Worktree identity follows the agent's own resolved checkout, not the room tree: 
 
 Named channels live in `channels.json` beside `workspace.json` in the workspace ledger. The record stores the bare name and creation time; writes hold the workspace lock and use temp-file-plus-rename.
 
-The registry stores only named channels. Worktree channels use their `rimz-worktree.json` marker as durable truth, while team and directory channels derive from live launch identity. `rimz channel list` unions the registry, Rimz-owned worktrees, and live channels from the snapshot.
+The registry stores only named channels. Worktree channels use their `rimz-worktree.json` marker as durable truth, while in-place team and directory lanes derive from the stamped live launch identity. `rimz channel list` unions the registry, Rimz-owned worktrees, and live channels from the snapshot.
 
 The sidebar stays presence-driven: a group appears when a pane is running in that channel. An empty named channel persists in `channels.json`, appears in `rimz channel list`, and reopens as an empty `#channel` tab on room rebirth. Named-channel records stay until `rimz channel rm`; `rimz gc` acts on worktrees only.
 
@@ -248,7 +249,7 @@ Named channels and Rimz-owned worktrees reserve the same bare channel namespace.
 
 `--worktree` and `--channel` are separate launch intents. A worktree launch creates or reuses Git backing; a named-channel launch stays in the room root and records only the bare lane. Inline `#design` and `--channel design` reconcile through the same target parser, so mismatched channel names fail before delivery.
 
-Commands run inside a named-channel tab inherit `RIMZ_CHANNEL`, so `@claude` scopes to that lane by default. Human shells in a bare directory room have no current channel and reach the whole room unless an address or flag supplies one.
+Commands run inside a named-channel, worktree, or in-place team pane inherit `RIMZ_CHANNEL`, so `@claude` scopes to that stamped lane by default. Human shells in a bare directory room have no current channel and reach the whole room unless an address or flag supplies one.
 
 ## The message store
 
@@ -262,7 +263,7 @@ events.log.jsonl          terminal message.* audit events
 
 `messages/messages.jsonl` holds only live records. A terminal transition appends the final record to `messages/history.jsonl`, removes it from the queue file, then appends the terminal `message.*` event. The history append uses the same JSONL tolerance as the live queue and is pruned after append when the file passes 512 KiB by rewriting the newest 500 `msg_`-ordered records. The event log still carries no message content. All writes hold the workspace lock; queue rewrites use temp-file-plus-rename through the ledger atomic helpers, and history appends use the ledger append helper.
 
-The store exposes `list()` (live records), `list_history()` (terminal records with text), and `list_pending()` (`Queued` records only). On first access, a legacy `messages/<msg_id>.json` plus `messages/terminal/` layout migrates live `Queued`, `Claimed`, and `Sent` records into the JSONL file and discards terminal files already represented by the event log. Store implementation: [`ledger/message_store.rs`](../../../crates/rimz/src/ledger/message_store.rs); ledger mutations: [`ledger/writer/queue.rs`](../../../crates/rimz/src/ledger/writer/queue.rs).
+The store exposes `list()` (live records), `list_history()` (terminal records with text), and `list_pending()` (`Queued` records only). A missing `messages/messages.jsonl` means the workspace has no live queue records; pre-JSONL message files stay unread and the event log remains the source for terminal history. Store implementation: [`ledger/message_store.rs`](../../../crates/rimz/src/ledger/message_store.rs); ledger mutations: [`ledger/writer/queue.rs`](../../../crates/rimz/src/ledger/writer/queue.rs).
 
 ## Transcript
 

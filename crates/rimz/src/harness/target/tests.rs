@@ -218,17 +218,17 @@ fn current_channel_scoping_rules() {
 }
 
 #[test]
-fn in_place_team_channel_uses_directory_and_team() {
+fn stamped_in_place_team_channel_scopes_without_team_fallback() {
     let mut snapshot = empty_snapshot();
     let mut planner = agent("claude", "session-planner", None, "terminal_1");
     planner.worktree_path = Some("/code/team-channel".to_owned());
-    planner.team = Some("pcr".to_owned());
+    planner.channel = Some("team-channel/pcr".to_owned());
     let mut coder = agent("codex", "session-coder", None, "terminal_2");
     coder.worktree_path = Some("/code/team-channel".to_owned());
-    coder.team = Some("pcr".to_owned());
+    coder.channel = Some("team-channel/pcr".to_owned());
     let mut other = agent("codex", "session-other", None, "terminal_3");
     other.worktree_path = Some("/code/team-channel".to_owned());
-    other.team = Some("docs".to_owned());
+    other.channel = Some("team-channel/docs".to_owned());
     snapshot.agents = vec![planner, coder, other];
 
     assert_eq!(
@@ -237,7 +237,7 @@ fn in_place_team_channel_uses_directory_and_team() {
     );
     assert_eq!((&snapshot.agents[0]).channel_label(), "team-channel/pcr");
     assert!((&snapshot.agents[0]).in_worktree("team-channel/pcr"));
-    assert!((&snapshot.agents[0]).in_worktree("team-channel"));
+    assert!(!(&snapshot.agents[0]).in_worktree("team-channel"));
 
     let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, Some("team-channel/pcr"))
         .unwrap()
@@ -303,23 +303,14 @@ fn launch_stamped_worktree_team_channel_renders_flat_worktree() {
 }
 
 #[test]
-fn channel_in_lane_accepts_team_sublanes() {
-    assert!(channel_in_lane("message-list/forge", "message-list"));
-    assert!(channel_in_lane("message-list", "message-list"));
-    assert!(!channel_in_lane("message-list-2/forge", "message-list"));
-    assert!(!channel_in_lane("ops", "docs"));
-    assert!(!channel_in_lane("dir/forge", "dir/other"));
-}
-
-#[test]
 fn agent_channel_and_in_worktree_use_directory_not_branch() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
     team_agent.team = Some("pcr".to_owned());
     team_agent.worktree_branch = Some("scratch".to_owned());
 
-    assert_eq!(agent_channel(&team_agent).as_deref(), Some("auth/pcr"));
-    assert_eq!((&team_agent).channel_label(), "auth/pcr");
-    assert!((&team_agent).in_worktree("auth/pcr"));
+    assert_eq!(agent_channel(&team_agent).as_deref(), Some("auth"));
+    assert_eq!((&team_agent).channel_label(), "auth");
+    assert!(!(&team_agent).in_worktree("auth/pcr"));
     assert!((&team_agent).in_worktree("auth"));
     assert!(!(&team_agent).in_worktree("scratch"));
     assert!(!(&team_agent).in_worktree("feat/auth"));
@@ -836,16 +827,16 @@ fn sender_prefix_falls_back_to_stored_identity_when_sender_is_absent() {
 
     assert_eq!(
         sender_prefix(&sender, &peers, Some("main")).unwrap(),
-        "from @lucid-atlas#docs: "
+        "from @reviewer#docs: "
     );
     assert_eq!(
         sender_prefix(&sender, &peers, Some("docs")).unwrap(),
-        "from @lucid-atlas: "
+        "from @reviewer: "
     );
 }
 
 #[test]
-fn sender_prefix_fallback_keeps_petname_when_alias_matches_another_peer() {
+fn sender_prefix_fallback_uses_profile_before_petname() {
     let mut snapshot = empty_snapshot();
     let mut other_planner = agent("claude", "session-other", Some("auth"), "terminal_2");
     other_planner.name = Some("bright-lark".to_owned());
@@ -862,7 +853,7 @@ fn sender_prefix_fallback_keeps_petname_when_alias_matches_another_peer() {
 
     assert_eq!(
         sender_prefix(&sender, &peers, Some("auth")).unwrap(),
-        "from @calm-fox: "
+        "from @planner: "
     );
 }
 
@@ -927,7 +918,6 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
         name: None,
         profile: None,
         role: None,
-        team: None,
         channel: None,
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
@@ -945,7 +935,6 @@ fn fresh_pane(kind: &str, raw_pane: &str) -> PaneAgent {
         name: None,
         profile: None,
         role: None,
-        team: None,
         channel: None,
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
@@ -971,7 +960,6 @@ fn bound_pane(
         name: Some(name.to_owned()),
         profile: None,
         role: None,
-        team: None,
         channel: None,
         agent_id: Some(AgentSessionId::from(session)),
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),

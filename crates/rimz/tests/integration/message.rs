@@ -455,10 +455,25 @@ fn message_list_matches_channel_lanes_and_limits_rows() {
     );
     let scoped: serde_json::Value = serde_json::from_slice(&scoped.stdout).expect("json");
     let scoped = scoped.as_array().unwrap();
-    assert_eq!(scoped.len(), 2);
+    assert_eq!(scoped.len(), 1);
     assert!(scoped.iter().any(|row| row["message_id"] == docs));
-    assert!(scoped.iter().any(|row| row["message_id"] == docs_team));
+    assert!(!scoped.iter().any(|row| row["message_id"] == docs_team));
     assert!(!scoped.iter().any(|row| row["message_id"] == ops));
+
+    let team_scoped = env
+        .rimz()
+        .args(["message", "list", "--channel", "docs/forge", "--json"])
+        .output()
+        .expect("team lane list");
+    assert!(
+        team_scoped.status.success(),
+        "team lane list failed: {}",
+        String::from_utf8_lossy(&team_scoped.stderr)
+    );
+    let team_scoped: serde_json::Value = serde_json::from_slice(&team_scoped.stdout).expect("json");
+    let team_scoped = team_scoped.as_array().unwrap();
+    assert_eq!(team_scoped.len(), 1);
+    assert!(team_scoped.iter().any(|row| row["message_id"] == docs_team));
 
     let limited = env
         .rimz()
@@ -1290,7 +1305,7 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_single_sigil_sent(&out.stdout);
-    assert_text_then_enter(&trace_log, "from @swift-otter: ping");
+    assert_text_then_enter(&trace_log, "from @codex: ping");
     let sent = env
         .read_events()
         .into_iter()

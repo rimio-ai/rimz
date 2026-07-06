@@ -1377,7 +1377,7 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
         } => {
             if let Some(rimz::harness::resume::CohortSeed::Resume(agent)) = options.resume_seed {
                 return Ok(PaneCmd {
-                    argv: rimz::harness::resume::resume_command_with_channel(
+                    argv: rimz::harness::resume::resume_command(
                         options.rimz_bin,
                         agent,
                         options.channel,

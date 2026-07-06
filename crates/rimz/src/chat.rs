@@ -98,6 +98,15 @@ impl ChatEntry {
     }
 }
 
+/// Chat transcript lane: launch-stamped channel when known, else worktree
+/// basename fallback for older agent payloads that carry only a path.
+pub fn entry_channel(stamped: Option<&str>, worktree_path: Option<&str>) -> Option<String> {
+    crate::ledger::snapshot::compose_channel(
+        stamped,
+        worktree_path.and_then(|path| path.rsplit('/').next().filter(|value| !value.is_empty())),
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AskQuestion {
     pub question: String,

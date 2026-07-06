@@ -632,9 +632,8 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// The `[agents.teams]` team this agent launched under, stamped by the
-    /// launch event and carried forward like `role`. In-place team launches use
-    /// it as the channel suffix after the directory name; worktree team launches
-    /// use the worktree name without a team suffix.
+    /// launch event and carried forward like `role`. It identifies the launch
+    /// cohort for resume; routing uses the launch-stamped `channel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     /// Inline multi-agent launch cohort, stamped by `RIMZ_LAUNCH_GROUP` and
@@ -646,9 +645,9 @@ pub struct AgentState {
     /// agent-cell index. Roleless team cells leave it unset and tail the block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_ordinal: Option<u32>,
-    /// A named cooperation lane, stamped by `RIMZ_CHANNEL` and carried forward
-    /// like `team`. When present it is the routing channel ahead of worktree
-    /// name, team, and directory fallback.
+    /// The routing lane stamped by `RIMZ_CHANNEL` at launch and carried forward
+    /// like `team`. When absent, read paths fall back to the worktree directory
+    /// basename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     pub status: AgentStatus,

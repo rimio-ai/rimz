@@ -171,10 +171,7 @@ impl Ledger {
                     Ok(existing)
                         if matches!(
                             existing.status,
-                            MessageStatus::Created
-                                | MessageStatus::Queued
-                                | MessageStatus::Claimed
-                                | MessageStatus::Sent
+                            MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
                         ) =>
                     {
                         let mut existing = existing;
@@ -431,7 +428,7 @@ impl Ledger {
                     Ok(existing)
                         if matches!(
                             existing.status,
-                            MessageStatus::Created | MessageStatus::Queued | MessageStatus::Claimed
+                            MessageStatus::Queued | MessageStatus::Claimed
                         ) =>
                     {
                         let mut existing = existing;

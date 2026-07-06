@@ -131,7 +131,6 @@ impl MessageEventMethod {
 
     pub const fn for_terminal_status(status: MessageStatus) -> Option<Self> {
         match status {
-            MessageStatus::Created => None,
             MessageStatus::Queued => None,
             MessageStatus::Claimed => None,
             MessageStatus::Sent => None,

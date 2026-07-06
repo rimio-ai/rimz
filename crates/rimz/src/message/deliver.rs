@@ -60,7 +60,9 @@ pub fn deliver_one(
     else {
         return Ok(false);
     };
-    debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
+    debug_assert!(
+        message.kind == candidate.message.kind && message.agent_id == candidate.message.agent_id
+    );
     debug_assert_eq!(message.message_id, candidate.message.message_id);
     let mut claimed = vec![message];
     for tail in &candidate.batch_tail {
@@ -608,7 +610,6 @@ mod tests {
                 name: agent.name.clone(),
                 profile: agent.profile.clone(),
                 role: agent.role.clone(),
-                team: agent.team.clone(),
                 channel: agent.channel.clone(),
                 agent_id: Some(agent.agent_id.clone()),
                 pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_3"),

@@ -8,6 +8,7 @@ pub(super) fn record_native_answer(
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
+    recorded: Option<&RecordedLifecycle>,
 ) {
     let Some(answers) = agent.native_ask_answer(event_name, payload) else {
         return;
@@ -48,10 +49,9 @@ pub(super) fn record_native_answer(
         .filter(|path| !path.is_empty())
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned(workspace.worktree_root.display().to_string()));
-    let channel = rimz::harness::target::compose_channel(
-        None,
-        rimz::harness::target::path_basename(&worktree_path),
-        None,
+    let channel = rimz::chat::entry_channel(
+        recorded.and_then(|recorded| recorded.observation.launch.channel.as_deref()),
+        Some(worktree_path.as_ref()),
     );
     let mut entry = rimz::chat::ChatEntry::new(
         jiff::Timestamp::now(),
@@ -90,13 +90,9 @@ pub(super) fn record_chat_conversation(
         return Ok(());
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
-    let channel = rimz::harness::target::compose_channel(
+    let channel = rimz::chat::entry_channel(
         observation.launch.channel.as_deref(),
-        observation
-            .worktree_path
-            .as_deref()
-            .and_then(rimz::harness::target::path_basename),
-        observation.launch.team.as_deref(),
+        observation.worktree_path.as_deref(),
     )
     .or_else(|| {
         workspace

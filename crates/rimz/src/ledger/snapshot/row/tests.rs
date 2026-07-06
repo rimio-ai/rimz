@@ -6,23 +6,13 @@ fn row_time() -> Timestamp {
 }
 
 #[test]
-fn compose_channel_uses_explicit_then_worktree_team() {
+fn compose_channel_uses_explicit_then_worktree_basename() {
     assert_eq!(
-        compose_channel(Some("design"), Some("auth"), Some("pcr")).as_deref(),
+        compose_channel(Some("design"), Some("auth")).as_deref(),
         Some("design")
     );
-    assert_eq!(
-        compose_channel(None, Some("auth"), Some("pcr")).as_deref(),
-        Some("auth/pcr")
-    );
-    assert_eq!(
-        compose_channel(None, Some("auth"), None).as_deref(),
-        Some("auth")
-    );
-    assert_eq!(
-        compose_channel(None, None, Some("pcr")).as_deref(),
-        Some("pcr")
-    );
+    assert_eq!(compose_channel(None, Some("auth")).as_deref(), Some("auth"));
+    assert_eq!(compose_channel(None, None), None);
 }
 
 #[test]

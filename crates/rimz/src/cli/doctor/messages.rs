@@ -2,8 +2,11 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use rimz::agents::AgentState;
 use rimz::ledger::event::{EventKind, MessageEventPayload};
 use rimz::message::{MessageRecord, MessageStatus};
+
+use crate::cli::address;
 
 use super::super::open_ledger;
 use super::model::{MessageProblemRow, Messages, OpenCounts, Probe};
@@ -32,6 +35,11 @@ pub(super) fn collect_messages(ws: &rimz::ResolvedWorkspace) -> Probe<Messages> 
     };
     let mut open = OpenCounts::default();
     let mut stuck = Vec::new();
+    let snapshot = ledger.snapshot_cached().ok();
+    let agents = snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.root_agents().collect::<Vec<_>>())
+        .unwrap_or_default();
     for message in &live {
         match message.status {
             MessageStatus::Queued => open.queued += 1,
@@ -40,7 +48,7 @@ pub(super) fn collect_messages(ws: &rimz::ResolvedWorkspace) -> Probe<Messages> 
             _ => continue,
         }
         if stuck_open(message) {
-            stuck.push(problem_row_from_record(message));
+            stuck.push(problem_row_from_record(message, &agents));
         }
     }
 
@@ -65,7 +73,7 @@ pub(super) fn collect_messages(ws: &rimz::ResolvedWorkspace) -> Probe<Messages> 
         {
             continue;
         }
-        let row = problem_row_from_event(event.timestamp, payload);
+        let row = problem_row_from_event(event.timestamp, payload, &agents);
         match failures.get(&row.message_id) {
             Some(existing) if existing.at >= row.at => {}
             _ => {
@@ -93,14 +101,16 @@ fn stuck_open(message: &MessageRecord) -> bool {
     message.attempts > 1 || message.unconfirmed_sends > 0 || message.last_error.is_some()
 }
 
-fn problem_row_from_record(message: &MessageRecord) -> MessageProblemRow {
+fn problem_row_from_record(message: &MessageRecord, agents: &[&AgentState]) -> MessageProblemRow {
     MessageProblemRow {
         message_id: message.message_id.to_string(),
         status: message.status.as_str().to_owned(),
-        target: target(
+        target: address::message_target(
+            None,
+            &message.kind,
+            &message.agent_id,
             message.agent_name.as_deref(),
-            message.kind.as_str(),
-            message.agent_id.as_str(),
+            agents,
         ),
         at: message.updated_at,
         problem: problem_text(
@@ -111,9 +121,14 @@ fn problem_row_from_record(message: &MessageRecord) -> MessageProblemRow {
     }
 }
 
-fn problem_row_from_event(at: Timestamp, payload: MessageEventPayload) -> MessageProblemRow {
+fn problem_row_from_event(
+    at: Timestamp,
+    payload: MessageEventPayload,
+    agents: &[&AgentState],
+) -> MessageProblemRow {
     let MessageEventPayload {
         message_id,
+        address,
         kind,
         agent_id,
         agent_name,
@@ -134,17 +149,16 @@ fn problem_row_from_event(at: Timestamp, payload: MessageEventPayload) -> Messag
     MessageProblemRow {
         message_id: message_id.to_string(),
         status: status.as_str().to_owned(),
-        target: target(agent_name.as_deref(), kind.as_str(), agent_id.as_str()),
+        target: address::message_target(
+            address.as_deref(),
+            &kind,
+            &agent_id,
+            agent_name.as_deref(),
+            agents,
+        ),
         at,
         problem,
     }
-}
-
-fn target(agent_name: Option<&str>, kind: &str, agent_id: &str) -> String {
-    agent_name
-        .filter(|name| !name.is_empty())
-        .map(|name| format!("@{name}"))
-        .unwrap_or_else(|| format!("{kind}:{agent_id}"))
 }
 
 fn problem_text(attempts: u32, unconfirmed_sends: u32, detail: Option<&str>) -> String {

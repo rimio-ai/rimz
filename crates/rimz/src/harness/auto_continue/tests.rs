@@ -149,7 +149,6 @@ fn live_pane() -> PaneAgent {
         name: None,
         profile: None,
         role: None,
-        team: None,
         channel: None,
         agent_id: Some("sess".into()),
         pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),

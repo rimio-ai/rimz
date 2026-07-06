@@ -70,6 +70,7 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
         &projection.agents,
         &projection.ended,
         rimz::harness::resume::DEFAULT_RESUME_MAX,
+        None,
         |_| true,
         Path::new("/bin/rimz"),
     )
@@ -345,6 +346,7 @@ fn missing_worktree_candidate_is_tombstoned_not_reported() {
         &projection.agents,
         &projection.ended,
         rimz::harness::resume::DEFAULT_RESUME_MAX,
+        None,
         |_| false,
         Path::new("/bin/rimz"),
     );

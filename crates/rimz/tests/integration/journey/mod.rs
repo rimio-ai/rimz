@@ -144,6 +144,11 @@ impl<'a> RoomHarness<'a> {
 
         let mut cmd = CommandBuilder::new(&bin);
         cmd.scrub_session_env();
+        // Pin the renderer to the tempdir workspace root. Left unset, the mux
+        // process inherits the suite's cwd — a developer's real Rimz worktree —
+        // and the producer's git detection derives that worktree's channel,
+        // grouping fixture agents under a stray `# <real-worktree>` lane.
+        cmd.cwd(env.project_root.as_os_str());
         cmd.args([
             "sidebar",
             "serve",
@@ -283,20 +288,25 @@ impl<'a> RoomHarness<'a> {
     /// Run an installed hook while projecting a specific team role/profile
     /// instead of the source's default journey identity.
     pub fn agent_hook_as(&self, role: &str, source: &str, payload: &Value) {
-        self.agent_hook_with_identity(
-            source,
-            payload,
-            launch_identity(role, &format!("{source}-{role}")),
-            None,
-        );
+        let identity = launch_identity(role, &format!("{source}-{role}"));
+        self.agent_hook_with_identity(source, payload, identity, None);
     }
 
     /// Run an installed hook with one role's full team identity.
     pub fn agent_hook_as_team(&self, role: &str, team: &str, source: &str, payload: &Value) {
+        let channel = format!(
+            "{}/{}",
+            self.env
+                .project_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("project"),
+            team
+        );
         self.agent_hook_with_identity(
             source,
             payload,
-            launch_team_identity(role, team, &format!("{source}-{role}")),
+            launch_team_identity(role, team, &channel, &format!("{source}-{role}")),
             None,
         );
     }
@@ -397,6 +407,10 @@ impl<'a> RoomHarness<'a> {
         if let Some(runtime) = runtime {
             env.push(("XDG_RUNTIME_DIR".to_owned(), runtime.display().to_string()));
         }
+        env.push((
+            "RIMZ_AGENT_PID".to_owned(),
+            self.env.agent_owner_pid().to_string(),
+        ));
         env.extend(identity);
         env
     }
@@ -580,9 +594,18 @@ fn launch_identity(role: &str, profile: &str) -> Vec<(String, String)> {
     ]
 }
 
-fn launch_team_identity(role: &str, team: &str, profile: &str) -> Vec<(String, String)> {
+fn launch_team_identity(
+    role: &str,
+    team: &str,
+    channel: &str,
+    profile: &str,
+) -> Vec<(String, String)> {
     let mut identity = launch_identity(role, profile);
     identity.push((rimz::harness::run::ENV_TEAM.to_owned(), team.to_owned()));
+    identity.push((
+        rimz::harness::run::ENV_CHANNEL.to_owned(),
+        channel.to_owned(),
+    ));
     identity
 }
 

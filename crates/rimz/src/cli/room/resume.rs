@@ -269,23 +269,14 @@ fn plan_agent_resume_at(
         .cloned()
         .collect::<Vec<_>>();
     let team_panes = team.iter().map(planned_team_pane_count).sum::<usize>();
-    let flat = match project_root {
-        Some(project_root) => rimz::harness::resume::plan_resume_with_project(
-            &flat_agents,
-            &projection.ended,
-            resume_cfg.max.saturating_sub(team_panes),
-            project_root,
-            |path| path.is_dir(),
-            &rimz_bin,
-        ),
-        None => rimz::harness::resume::plan_resume(
-            &flat_agents,
-            &projection.ended,
-            resume_cfg.max.saturating_sub(team_panes),
-            |path| path.is_dir(),
-            &rimz_bin,
-        ),
-    };
+    let flat = rimz::harness::resume::plan_resume(
+        &flat_agents,
+        &projection.ended,
+        resume_cfg.max.saturating_sub(team_panes),
+        project_root,
+        |path| path.is_dir(),
+        &rimz_bin,
+    );
     Ok(RoomResumePlan { flat, team })
 }
 

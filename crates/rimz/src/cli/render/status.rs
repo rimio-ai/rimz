@@ -38,10 +38,7 @@ pub(crate) fn run(status: RunStatus) -> anstyle::Style {
 pub(crate) fn message(status: MessageStatus) -> anstyle::Style {
     match status {
         MessageStatus::Delivered => palette::GOOD,
-        MessageStatus::Created
-        | MessageStatus::Queued
-        | MessageStatus::Claimed
-        | MessageStatus::Sent => palette::COOL,
+        MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent => palette::COOL,
         MessageStatus::TimedOut | MessageStatus::Errored | MessageStatus::Abandoned => {
             palette::WARN
         }

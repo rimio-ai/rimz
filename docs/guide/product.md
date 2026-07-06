@@ -53,7 +53,7 @@ Running a fleet locally, you might have four Claude Code or Codex sessions in fl
 
 Between questions, you send messages. `rimz message --steer @claude "focus on the failing parser test"` types into the agent's pane immediately, and holds off when a pending ask owns the next keystroke. `rimz message --on done @codex "open a PR summary"` sends immediately when Codex is free and parks durably when it is not, so you hand off follow-up work without watching for the turn boundary.
 
-Targets read like Slack: `@<who>` names the agent — `@codex` (a kind), `@planner` (a profile you defined), `@swift-otter` (one specific agent), or `@all` for everyone — and `#<channel>` names the worktree or in-place team channel, defaulting to the one you are in. Reaching several at once takes an explicit `--all`, and `--create` launches the agent straight from its address when it isn't running yet. The full address grammar and delivery gates live in [the agent-control reference](../reference/cli/agents.md#message-an-agent).
+Targets read like Slack: `@<who>` names the agent — `@codex` (a kind), `@planner` (a profile you defined), `@swift-otter` (one specific agent), or `@all` for everyone — and `#<channel>` names the stamped lane, defaulting to the one you are in. Reaching several at once takes an explicit `--all`, and `--create` launches the agent straight from its address when it isn't running yet. The full address grammar and delivery gates live in [the agent-control reference](../reference/cli/agents.md#message-an-agent).
 
 ## Run it on a server
 

@@ -299,8 +299,21 @@ mod tests {
         legacy["snapshot_version"] = serde_json::json!(0);
         atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
 
+        // Read on a fresh thread. The parse cache is thread-local and keyed on
+        // `(path, mtime, len)`; rewriting version 5 to 0 keeps the byte length
+        // identical, so on a coarse-mtime filesystem the republish lands in the
+        // same mtime tick and the warm cache would serve the prior (current-
+        // version) parse. A production version change is always a cold-cache
+        // event — a new binary rebuilds from scratch — so a cold reader is the
+        // faithful check that the on-disk mismatch is rejected.
+        let rejected = std::thread::scope(|scope| {
+            scope
+                .spawn(|| read_fresh_latest(&paths).is_none())
+                .join()
+                .unwrap()
+        });
         assert!(
-            read_fresh_latest(&paths).is_none(),
+            rejected,
             "old latest.json with a mismatched version is not fresh"
         );
         let rebuilt = build_from(&paths).unwrap();

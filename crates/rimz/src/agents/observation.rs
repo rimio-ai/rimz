@@ -42,7 +42,7 @@ pub struct LaunchParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// The `[agents.teams]` team name the launcher selected, passed through
-    /// `RIMZ_TEAM`. The reducer projects it to the routing channel.
+    /// `RIMZ_TEAM`. It is role/cohort/resume identity; routing uses `channel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     /// The inline multi-agent launch cohort the launcher minted, passed through
@@ -54,8 +54,8 @@ pub struct LaunchParams {
     /// layouts use agent-cell order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_ordinal: Option<u32>,
-    /// The named channel the launcher selected, passed through `RIMZ_CHANNEL`.
-    /// The reducer projects it to the routing channel ahead of worktree/team.
+    /// The routing lane the launcher selected, passed through `RIMZ_CHANNEL`.
+    /// In-place teams already arrive as a stamped `<dir>/<team>` lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// Display ordinal within this kind for the current room incarnation.

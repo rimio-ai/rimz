@@ -151,9 +151,8 @@ pub(super) fn build_identities(entries: &[ChatEntry]) -> HashMap<AgentKey, Ident
     let mut identities = HashMap::new();
     for entry in entries {
         let candidate = Identity {
-            base_handle: rimz::harness::target::identity_handle(
+            base_handle: rimz::message::identity_handle(
                 &entry.kind,
-                entry.name.as_deref(),
                 entry.profile.as_deref(),
                 entry.role.as_deref(),
             ),
@@ -375,9 +374,7 @@ pub(super) fn candidate_label(key: &AgentKey, identity: &Identity) -> String {
 }
 
 pub(super) fn channel_matches(entry_channel: Option<&str>, filter: Option<&str>) -> bool {
-    filter.is_none_or(|filter| {
-        entry_channel.is_some_and(|entry| rimz::harness::target::channel_in_lane(entry, filter))
-    })
+    filter.is_none_or(|filter| entry_channel == Some(filter))
 }
 
 pub(super) fn entry_key(entry: &ChatEntry) -> AgentKey {

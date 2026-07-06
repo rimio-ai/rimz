@@ -83,7 +83,7 @@ pub(super) fn handle_for(
             include_channel,
         );
     }
-    let base = rimz::harness::target::identity_handle(&entry.kind, None, None, None);
+    let base = rimz::message::identity_handle(&entry.kind, None, None);
     render_handle(&base, entry.channel.as_deref(), include_channel)
 }
 
