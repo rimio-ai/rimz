@@ -19,8 +19,8 @@ use rimz::web::{
     ParsedWebStatus, WebClientColors, WebOpenPayload, WebServerStatus, WebStartOptions,
     WebStatusPayload, WebTokenCommand, ZellijWebEndpoint, active_zellij_config_path,
     effective_base_url, endpoint_from_status_base, join_session_url, merge_web_client_config,
-    parse_status, parse_token_count, parse_token_names, web_help_spec, web_start_spec,
-    web_status_spec, web_stop_spec, web_token_spec,
+    parse_status, parse_token_count, web_help_spec, web_start_spec, web_status_spec, web_stop_spec,
+    web_token_spec,
 };
 
 #[derive(Debug, Args)]
@@ -108,9 +108,6 @@ enum WebTokenSubcmd {
         /// Create a read-only watcher token.
         #[arg(long)]
         read_only: bool,
-        /// Optional token name.
-        #[arg(long)]
-        name: Option<String>,
     },
     /// List token names and creation dates.
     List,
@@ -118,9 +115,9 @@ enum WebTokenSubcmd {
     Revoke { name: String },
     /// Revoke all tokens.
     RevokeAll,
-    /// Provision the room's login token if needed. Internal remote-web helper.
+    /// Provision the machine's login token if needed. Internal remote-web helper.
     #[command(hide = true)]
-    Ensure { session: String },
+    Ensure,
 }
 
 pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
@@ -150,15 +147,15 @@ pub fn run(args: WebArgs, globals: &GlobalFlags) -> Result<()> {
         }
         WebSubcmd::Stop => run_inherited(web_stop_spec()),
         WebSubcmd::Token { command } => match command {
-            WebTokenSubcmd::Create { read_only, name } => {
-                run_inherited(web_token_spec(&WebTokenCommand::Create { read_only, name }))
+            WebTokenSubcmd::Create { read_only } => {
+                run_inherited(web_token_spec(&WebTokenCommand::Create { read_only }))
             }
             WebTokenSubcmd::List => run_inherited(web_token_spec(&WebTokenCommand::List)),
             WebTokenSubcmd::Revoke { name } => {
                 run_inherited(web_token_spec(&WebTokenCommand::Revoke { name }))
             }
             WebTokenSubcmd::RevokeAll => run_inherited(web_token_spec(&WebTokenCommand::RevokeAll)),
-            WebTokenSubcmd::Ensure { session } => run_token_ensure(&session),
+            WebTokenSubcmd::Ensure => run_token_ensure(),
         },
     }
 }
@@ -206,7 +203,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
     print_url(&payload.url)?;
-    write_login_token_outcome(&session, ensure_login_token(&session));
+    write_login_token_outcome(ensure_login_token());
     if !args.print {
         open_browser_best_effort(&payload.url);
     }
@@ -219,7 +216,7 @@ enum LoginTokenOutcome {
     Failed(String),
 }
 
-fn ensure_login_token(session: &str) -> LoginTokenOutcome {
+fn ensure_login_token() -> LoginTokenOutcome {
     let list = web_token_spec(&WebTokenCommand::List);
     let output = match list.output_raw() {
         Ok(output) => output,
@@ -228,17 +225,11 @@ fn ensure_login_token(session: &str) -> LoginTokenOutcome {
     if !output.status.success() {
         return LoginTokenOutcome::Failed(command_output_detail(&output));
     }
-    if parse_token_names(&output.stdout)
-        .iter()
-        .any(|name| name == session)
-    {
+    if parse_token_count(&output.stdout) > 0 {
         return LoginTokenOutcome::AlreadyProvisioned;
     }
 
-    let create = web_token_spec(&WebTokenCommand::Create {
-        read_only: false,
-        name: Some(session.to_owned()),
-    });
+    let create = web_token_spec(&WebTokenCommand::Create { read_only: false });
     match create.output_raw() {
         Ok(output) if output.status.success() => LoginTokenOutcome::Minted(output.stdout),
         Ok(output) => LoginTokenOutcome::Failed(command_output_detail(&output)),
@@ -246,8 +237,8 @@ fn ensure_login_token(session: &str) -> LoginTokenOutcome {
     }
 }
 
-fn run_token_ensure(session: &str) -> Result<()> {
-    match ensure_login_token(session) {
+fn run_token_ensure() -> Result<()> {
+    match ensure_login_token() {
         LoginTokenOutcome::Minted(token) => {
             let mut stdout = std::io::stdout().lock();
             write_bytes_with_trailing_newline(&mut stdout, &token)?;
@@ -257,7 +248,7 @@ fn run_token_ensure(session: &str) -> Result<()> {
             let mut stderr = std::io::stderr().lock();
             writeln!(
                 stderr,
-                "Zellij web login token already provisioned for this room (named `{session}`); run `rimz web token create` for a fresh one."
+                "Zellij web login token already provisioned on this machine; run `rimz web token create` for a fresh one."
             )?;
             Ok(())
         }
@@ -265,7 +256,7 @@ fn run_token_ensure(session: &str) -> Result<()> {
     }
 }
 
-fn write_login_token_outcome(session: &str, outcome: LoginTokenOutcome) {
+fn write_login_token_outcome(outcome: LoginTokenOutcome) {
     let mut stderr = std::io::stderr().lock();
     match outcome {
         LoginTokenOutcome::Minted(token) => {
@@ -278,7 +269,7 @@ fn write_login_token_outcome(session: &str, outcome: LoginTokenOutcome) {
         LoginTokenOutcome::AlreadyProvisioned => {
             let _ = writeln!(
                 stderr,
-                "Zellij web login token already provisioned for this room (named `{session}`); run `rimz web token create` for a fresh one."
+                "Zellij web login token already provisioned on this machine; run `rimz web token create` for a fresh one."
             );
         }
         LoginTokenOutcome::Failed(detail) => {

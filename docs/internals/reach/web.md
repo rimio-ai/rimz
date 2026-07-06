@@ -18,13 +18,13 @@ rimz web url [PATH] [--session <name>] [--json]
 rimz web status [--json]
 rimz web start [--daemonize] [--ip <ip>] [--port <port>] [--cert <path>] [--key <path>]
 rimz web stop
-rimz web token create [--read-only] [--name <name>]
+rimz web token create [--read-only]
 rimz web token list
 rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is `rimz web open`. `open` resolves the workspace, assumes Zellij unless the command explicitly passes `--mux tmux`, ensures the Rimz room exists with the normal sidebar layout, loads and grants the presence plugin, asks that plugin to enable browser sharing for the session, starts `zellij web --start --daemonize` when allowed and offline, prints the URL, provisions a login token named after the session for human output, prints the token value once when newly minted, and opens the local browser unless `--print` or `--json` is set. Later opens reuse the session-named token entry in Zellij's hashed token store and print a short note instead of minting a new value. `url` resolves the same session and prints the URL without starting the server, birthing a room, changing sharing state, or provisioning a token; it requires an existing Rimz workspace record so a URL never points at a bare Zellij session. `--session <name>` targets an existing Rimz workspace session by exact session name for local scripting and remote prep.
+`rimz web` is `rimz web open`. `open` resolves the workspace, assumes Zellij unless the command explicitly passes `--mux tmux`, ensures the Rimz room exists with the normal sidebar layout, loads and grants the presence plugin, asks that plugin to enable browser sharing for the session, starts `zellij web --start --daemonize` when allowed and offline, prints the URL, provisions an unnamed login token for human output when the Zellij web server has none, prints the token value once when newly minted, and opens the local browser unless `--print` or `--json` is set. Later opens for any room reuse the machine-wide Zellij web token store and print a short note instead of minting a new value. `url` resolves the same session and prints the URL without starting the server, birthing a room, changing sharing state, or provisioning a token; it requires an existing Rimz workspace record so a URL never points at a bare Zellij session. `--session <name>` targets an existing Rimz workspace session by exact session name for local scripting and remote prep.
 
 `status`, `start`, `stop`, and `token` are thin wrappers over Zellij's web CLI. Token commands relay only Zellij's output. `status --json`, `open --json`, and `url --json` emit versioned JSON with `version = "rimz.web.v1"`; the `open`/`url` payload includes `url`, `session`, `base_url`, `ip`, `port`, and `token_count`.
 
@@ -83,7 +83,7 @@ That remote `rimz web open` resolves or verifies the workspace, births the Rimz 
 
 The prep command births browser panes under `xterm-256color`, the xterm.js-compatible terminfo, because Zellij's session server forks their `TERM` from this non-PTY command and would otherwise leave ncurses apps with the unusable `unknown` default.
 
-Remote web provisions and relays a Zellij login token under a short banner before opening the browser when the remote session has no session-named token yet. Local `rimz web open` uses the same session-named provisioning for human output, so repeat opens reuse the token entry while the value lives only in Zellij's hashed store. `token_count` remains in `rimz.web.v1` as server state, not as proof this browser is logged in or that the user still holds a token value. Rimz never stores the token and never puts it in the URL.
+Remote web provisions and relays a Zellij login token under a short banner before opening the browser when the remote Zellij web server has no token yet. Local `rimz web open` uses the same machine-wide provisioning for human output, so repeat opens reuse any existing token entry while the value lives only in Zellij's hashed store. `token_count` remains in `rimz.web.v1` as server state, not as proof this browser is logged in or that the user still holds a token value. Rimz never stores the token and never puts it in the URL.
 
 The local tunnel uses a stable deterministic port derived from the session name in `8300..8399`, scanning to the next free port on collision; `--web-port <port>` overrides it and fails if the port is already in use. The tunnel always forwards to remote `127.0.0.1:<remote-web-port>` and uses the same established-link reconnect policy as remote attach unless `--no-reconnect` is set. The browser URL is `http://127.0.0.1:<local-port>/<session>`, so browser cookies remain tied to a stable local origin across reconnects and repeat runs.
 

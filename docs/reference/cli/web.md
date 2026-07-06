@@ -8,13 +8,13 @@ rimz web url [PATH] [--session <name>] [--json]
 rimz web status [--json]
 rimz web start [--daemonize] [--ip <ip>] [--port <port>] [--cert <path>] [--key <path>]
 rimz web stop
-rimz web token create [--read-only] [--name <name>]
+rimz web token create [--read-only]
 rimz web token list
 rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the Rimz room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and, on the first open for the room, a Zellij login token named after the session; later opens reuse it. `--json` emits the `rimz.web.v1` payload without provisioning a token. `--session <name>` targets an existing Rimz workspace session by exact session name. `--print` skips browser launch, and `--no-start` refuses when `zellij web` is offline.
+`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the Rimz room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and, when the Zellij web server has no login tokens, mints one Zellij login token for the machine; later opens for any room reuse the server-wide token store. `--json` emits the `rimz.web.v1` payload without provisioning a token. `--session <name>` targets an existing Rimz workspace session by exact session name. `--print` skips browser launch, and `--no-start` refuses when `zellij web` is offline.
 
 `url` prints the route without birthing a room or starting the server. It requires an existing Rimz workspace record, so a script never receives a URL that would create a bare Zellij session without the Rimz sidebar.
 

@@ -314,7 +314,7 @@ Blank payload reads STDIN line-buffered with plugin backpressure; plugin `cli_pi
 
 ### `web`
 
-`zellij web [--start|--stop|--status] [-d/--daemonize] [--ip] [--port]` (defaults `127.0.0.1:8082`) `[--cert/--key]` (required off-localhost). Token auth: `--create-token [--token-name]` (shown once), `--create-read-only-token` (watcher-only), `--revoke-token <name>`, `--revoke-all-tokens`, `--list-tokens`. Pairs with the `web_server*` / `web_sharing` config options and `attach`'s token flags. Rimz's use lives in [web.md](../../internals/reach/web.md).
+`zellij web [--start|--stop|--status] [-d/--daemonize] [--ip] [--port]` (defaults `127.0.0.1:8082`) `[--cert/--key]` (required off-localhost). Token auth: `--create-token` (shown once) and `--create-read-only-token` (watcher-only) are clap-`exclusive(true)` creation flags and auto-name tokens as `token_N`; `--token-name` cannot accompany them. Token management uses `--revoke-token <name>`, `--revoke-all-tokens`, and `--list-tokens`. Pairs with the `web_server*` / `web_sharing` config options and `attach`'s token flags. Rimz's use lives in [web.md](../../internals/reach/web.md).
 
 ### `setup` and sessions
 

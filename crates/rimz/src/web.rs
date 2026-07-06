@@ -194,14 +194,9 @@ impl WebClientColors {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WebTokenCommand {
-    Create {
-        read_only: bool,
-        name: Option<String>,
-    },
+    Create { read_only: bool },
     List,
-    Revoke {
-        name: String,
-    },
+    Revoke { name: String },
     RevokeAll,
 }
 
@@ -274,15 +269,12 @@ pub fn web_stop_spec() -> CommandSpec {
 pub fn web_token_spec(command: &WebTokenCommand) -> CommandSpec {
     let mut spec = CommandSpec::new(zellij_program()).arg("web");
     match command {
-        WebTokenCommand::Create { read_only, name } => {
+        WebTokenCommand::Create { read_only } => {
             spec = spec.arg(if *read_only {
                 "--create-read-only-token"
             } else {
                 "--create-token"
             });
-            if let Some(name) = name {
-                spec = spec.args(["--token-name".to_owned(), name.clone()]);
-            }
         }
         WebTokenCommand::List => spec = spec.arg("--list-tokens"),
         WebTokenCommand::Revoke { name } => {
@@ -657,14 +649,8 @@ mod tests {
             Some("/zellij-web.kdl")
         );
 
-        let token = web_token_spec(&WebTokenCommand::Create {
-            read_only: true,
-            name: Some("watch".to_owned()),
-        });
-        assert_eq!(
-            token.args,
-            ["web", "--create-read-only-token", "--token-name", "watch"]
-        );
+        let token = web_token_spec(&WebTokenCommand::Create { read_only: true });
+        assert_eq!(token.args, ["web", "--create-read-only-token"]);
     }
 
     #[test]

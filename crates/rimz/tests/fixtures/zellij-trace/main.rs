@@ -60,6 +60,17 @@ fn main() {
             | Some("--create-read-only-token")
             | Some("--revoke-token")
             | Some("--revoke-all-tokens") => {
+                if matches!(
+                    cli.get(1).map(String::as_str),
+                    Some("--create-token" | "--create-read-only-token")
+                ) && cli.len() > 2
+                {
+                    write_stderr(&format!(
+                        "error: The argument '{}' cannot be used with one or more of the other specified arguments",
+                        cli[1]
+                    ));
+                    std::process::exit(1);
+                }
                 if cli.get(1).is_some_and(|arg| arg == "--start")
                     && let Ok(stdout) = env::var("RIMZ_TEST_ZELLIJ_WEB_START_STDOUT")
                 {

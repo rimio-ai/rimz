@@ -82,7 +82,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     if !prep.stderr.is_empty() {
         std::io::stderr().lock().write_all(&prep.stderr)?;
     }
-    relay_web_token(remote, &payload.session);
+    relay_web_token(remote);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
     let tunnel_spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
@@ -107,8 +107,8 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     guard.wait()
 }
 
-fn relay_web_token(remote: &RemoteConnect, session: &str) {
-    let spec = rimz::remote::web::web_token_ensure_spec(&remote.target, session);
+fn relay_web_token(remote: &RemoteConnect) {
+    let spec = rimz::remote::web::web_token_ensure_spec(&remote.target);
     let output = match spec.to_command().output() {
         Ok(output) => output,
         Err(err) => {

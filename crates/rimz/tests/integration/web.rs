@@ -374,17 +374,11 @@ fn web_open_human_mints_and_shows_login_token() {
     assert!(stderr.contains("rimz-tok-123"), "{stderr}");
     let log = std::fs::read_to_string(log).expect("read zellij log");
     assert!(log.contains("web\t--create-token"), "{log}");
-    assert!(
-        log.contains(&format!(
-            "--create-token\t--token-name\t{}",
-            workspace.session_name
-        )),
-        "{log}"
-    );
+    assert!(!log.contains("--token-name"), "{log}");
 }
 
 #[test]
-fn web_open_skips_mint_when_room_token_exists() {
+fn web_open_skips_mint_when_any_token_exists() {
     let env = Env::new();
     env.record(&env.project_root);
     let workspace =
@@ -411,10 +405,7 @@ fn web_open_skips_mint_when_room_token_exists() {
         )
         .env(
             "RIMZ_TEST_ZELLIJ_WEB_TOKENS",
-            format!(
-                "{}: created at 2026-07-05 09:00:00\n",
-                workspace.session_name
-            ),
+            "token_1: created at 2026-07-05 09:00:00\n",
         )
         .bounded_output()
         .expect("run rimz web open");
@@ -429,7 +420,10 @@ fn web_open_skips_mint_when_room_token_exists() {
         format!("http://127.0.0.1:8082/{}\n", workspace.session_name)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("already provisioned"), "{stderr}");
+    assert!(
+        stderr.contains("already provisioned on this machine"),
+        "{stderr}"
+    );
     let log = std::fs::read_to_string(log).expect("read zellij log");
     assert!(log.contains("web\t--list-tokens"), "{log}");
     assert!(!log.contains("web\t--create-token"), "{log}");
