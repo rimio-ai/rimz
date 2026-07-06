@@ -392,6 +392,8 @@ pub(super) struct RawPane {
     pub(super) terminal_command: Option<String>,
     #[serde(default)]
     pub(super) pane_command: Option<String>,
+    #[serde(default)]
+    pub(super) pane_cwd: Option<String>,
 }
 
 impl RawPane {
@@ -466,6 +468,7 @@ impl From<PaneTopologyPane> for RawPane {
             title: pane.title,
             terminal_command: pane.terminal_command,
             pane_command: pane.pane_command,
+            pane_cwd: pane.pane_cwd,
         }
     }
 }

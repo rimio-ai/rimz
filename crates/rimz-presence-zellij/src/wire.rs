@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::policy::{self, FocusPatch, PaneFields};
+use crate::policy::{self, FocusPatch, PaneBaseline, PaneFields};
 
 /// The pipe message name the focus-sidebar keybind sends to this plugin. The
 /// chord (rimz-injected or a documented `config.kdl` bind) pipes this name, and
@@ -325,6 +325,7 @@ pub fn topology_json(
     focused_pane: Option<u32>,
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     foreground: &BTreeMap<u32, String>,
+    baseline: &BTreeMap<u32, PaneBaseline>,
 ) -> Option<String> {
     let payload = policy::published_topology_payload(
         session_name?,
@@ -332,6 +333,7 @@ pub fn topology_json(
         focused_pane,
         Some(tabs),
         foreground,
+        baseline,
     )?;
     serde_json::to_string(&payload).ok()
 }
@@ -367,6 +369,7 @@ mod tests {
             pane_columns: Some(80),
             title: format!("pane-{id}"),
             pane_command: None,
+            pane_cwd: None,
             terminal_command: Some("zsh".to_owned()),
         }
     }
@@ -374,11 +377,45 @@ mod tests {
     #[test]
     fn topology_json_carries_focused_pane() {
         let tabs = BTreeMap::from([(0, vec![pane(7)])]);
-        let json = topology_json(Some("session-1"), 42, Some(7), &tabs, &BTreeMap::new())
-            .expect("topology serializes");
+        let json = topology_json(
+            Some("session-1"),
+            42,
+            Some(7),
+            &tabs,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("topology serializes");
         let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
         assert_eq!(payload["focused_pane"], 7);
+    }
+
+    #[test]
+    fn topology_json_carries_baseline_cwd() {
+        let mut implicit = pane(7);
+        implicit.terminal_command = None;
+        let tabs = BTreeMap::from([(0, vec![implicit])]);
+        let baseline = BTreeMap::from([(
+            7,
+            PaneBaseline {
+                command: "zsh".to_owned(),
+                cwd: Some("/repo/main".to_owned()),
+            },
+        )]);
+        let json = topology_json(
+            Some("session-1"),
+            42,
+            Some(7),
+            &tabs,
+            &BTreeMap::new(),
+            &baseline,
+        )
+        .expect("topology serializes");
+        let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
+
+        assert_eq!(payload["panes"][0]["pane_command"], "zsh");
+        assert_eq!(payload["panes"][0]["pane_cwd"], "/repo/main");
     }
 
     #[test]

@@ -476,6 +476,10 @@ fn topology_pane_from_list_panes_json(
             .or_else(|| pane.get("command"))
             .and_then(|value| value.as_str())
             .map(str::to_owned),
+        pane_cwd: pane
+            .get("pane_cwd")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
         terminal_command: pane
             .get("terminal_command")
             .and_then(|value| value.as_str())

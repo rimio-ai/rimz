@@ -61,7 +61,15 @@ pub struct PaneFields {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_command: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneBaseline {
+    pub command: String,
+    pub cwd: Option<String>,
 }
 
 /// Stable pane fields folded before the wasm shell allocates projected
@@ -140,12 +148,13 @@ pub fn published_topology_payload(
     focused_pane: Option<u32>,
     tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
     foreground: &BTreeMap<u32, String>,
+    baseline: &BTreeMap<u32, PaneBaseline>,
 ) -> Option<TopologyPayload> {
     let mut tabs = tabs?.clone();
     if tabs.is_empty() {
         return None;
     }
-    apply_foreground_commands(&mut tabs, foreground);
+    apply_foreground_commands(&mut tabs, foreground, baseline);
     Some(TopologyPayload::from_tabs(
         session_name,
         produced_at_ms,
@@ -249,6 +258,7 @@ pub fn focus_shortcut_if_only_focus_changed(
                 || previous.pane_x != next.pane_x
                 || previous.pane_columns != next.pane_columns
                 || previous.pane_command != next.pane_command
+                || previous.pane_cwd != next.pane_cwd
                 || previous.terminal_command != next.terminal_command
             {
                 return None;
@@ -420,15 +430,38 @@ pub fn foreground_command_update(
 pub fn apply_foreground_commands(
     tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
     foreground: &BTreeMap<u32, String>,
+    baseline: &BTreeMap<u32, PaneBaseline>,
 ) {
     for pane in tabs.values_mut().flatten() {
         if pane.is_plugin {
             continue;
         }
-        if let Some(command) = foreground.get(&pane.id) {
-            pane.pane_command = Some(command.clone());
-        }
+        pane.pane_command = foreground.get(&pane.id).cloned().or_else(|| {
+            baseline
+                .get(&pane.id)
+                .map(|baseline| baseline.command.clone())
+        });
+        pane.pane_cwd = baseline
+            .get(&pane.id)
+            .and_then(|baseline| baseline.cwd.clone());
     }
+}
+
+pub fn panes_needing_baseline(
+    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    foreground: &BTreeMap<u32, String>,
+    baseline: &BTreeMap<u32, PaneBaseline>,
+) -> Vec<u32> {
+    tabs.values()
+        .flatten()
+        .filter(|pane| {
+            pane.is_live_terminal()
+                && pane.terminal_command.as_deref().is_none_or(str::is_empty)
+                && !foreground.contains_key(&pane.id)
+                && !baseline.contains_key(&pane.id)
+        })
+        .map(|pane| pane.id)
+        .collect()
 }
 
 /// The focused sidebar pane after switching to `active_tab`, if Zellij restored

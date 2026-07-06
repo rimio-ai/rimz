@@ -5,8 +5,8 @@
 //! fields Rimz needs for pane projection, plus the plugin-retained live
 //! foreground command. `terminal_command` remains the pane's spawn command;
 //! `pane_command` is the foreground display command.
-//! Process id, cwd, and resource enrichment still come from the existing
-//! `/proc` lanes.
+//! `pane_cwd` carries the plugin's cwd baseline for implicit shell panes;
+//! `/proc` remains the fallback for process id, cwd, and resource enrichment.
 
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +47,8 @@ pub struct PaneTopologyPane {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_command: Option<String>,
 }
@@ -101,5 +103,36 @@ mod tests {
 
         let encoded = serde_json::to_value(&cache).expect("topology serializes");
         assert!(encoded.get(field.as_str()).is_none());
+    }
+
+    #[test]
+    fn pane_cwd_round_trips_and_legacy_payloads_parse() {
+        let cache: PaneTopologyCache = serde_json::from_str(
+            r#"{
+                "session_name": "rimz-test",
+                "produced_at_ms": 42,
+                "panes": [{
+                    "id": 7,
+                    "tab_position": 0,
+                    "pane_command": "zsh",
+                    "pane_cwd": "/repo/main"
+                }]
+            }"#,
+        )
+        .expect("topology with cwd parses");
+
+        assert_eq!(cache.panes[0].pane_cwd.as_deref(), Some("/repo/main"));
+        let encoded = serde_json::to_value(&cache).expect("topology serializes");
+        assert_eq!(encoded["panes"][0]["pane_cwd"], "/repo/main");
+
+        let legacy: PaneTopologyCache = serde_json::from_str(
+            r#"{
+                "session_name": "rimz-test",
+                "produced_at_ms": 42,
+                "panes": [{ "id": 8, "tab_position": 0, "pane_command": "zsh" }]
+            }"#,
+        )
+        .expect("legacy topology parses");
+        assert_eq!(legacy.panes[0].pane_cwd, None);
     }
 }

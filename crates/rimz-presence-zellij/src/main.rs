@@ -11,8 +11,8 @@ mod shell {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::policy::{
-        self, CorrectionAction, FocusCorrection, FocusPatch, ForegroundCommandUpdate, PaneFields,
-        Poke, PokePolicy, RawStablePaneFields, TimerGate,
+        self, CorrectionAction, FocusCorrection, FocusPatch, ForegroundCommandUpdate, PaneBaseline,
+        PaneFields, Poke, PokePolicy, RawStablePaneFields, TimerGate,
     };
     use rimz_presence_zellij::wire::{
         self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, SHARE_SESSION_PIPE,
@@ -28,6 +28,7 @@ mod shell {
         last_raw_stable_hash: Option<u64>,
         tab_names: BTreeMap<usize, String>,
         foreground: BTreeMap<u32, String>,
+        baseline: BTreeMap<u32, PaneBaseline>,
         active_tab: Option<usize>,
         active_focused_pane: Option<u32>,
         session_focused_pane: Option<u32>,
@@ -139,7 +140,17 @@ mod shell {
                         // Zellij can deliver partial pane manifests; omitted tabs
                         // retain their previous state instead of collapsing the room.
                         let mut next_tabs = policy::merged_room(&self.tabs, &projected);
-                        policy::apply_foreground_commands(&mut next_tabs, &self.foreground);
+                        let baseline_ids = policy::panes_needing_baseline(
+                            &next_tabs,
+                            &self.foreground,
+                            &self.baseline,
+                        );
+                        self.probe_baselines(baseline_ids);
+                        policy::apply_foreground_commands(
+                            &mut next_tabs,
+                            &self.foreground,
+                            &self.baseline,
+                        );
                         let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
                         let focus_patch =
                             policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
@@ -198,6 +209,20 @@ mod shell {
                             self.active_tab,
                             self.session_focused_pane,
                         );
+                    } else {
+                        let baseline_ids = policy::panes_needing_baseline(
+                            &self.tabs,
+                            &self.foreground,
+                            &self.baseline,
+                        );
+                        if self.probe_baselines(baseline_ids) {
+                            policy::apply_foreground_commands(
+                                &mut self.tabs,
+                                &self.foreground,
+                                &self.baseline,
+                            );
+                            self.signal_change(now);
+                        }
                     }
                 }
                 Event::TabUpdate(tabs) => {
@@ -366,6 +391,11 @@ mod shell {
                 self.pending_pregrant_change = true;
                 return;
             }
+            let baseline_ids =
+                policy::panes_needing_baseline(&self.tabs, &self.foreground, &self.baseline);
+            if self.probe_baselines(baseline_ids) {
+                policy::apply_foreground_commands(&mut self.tabs, &self.foreground, &self.baseline);
+            }
             self.run_wake(wire::WakeRequest::Changed, now);
         }
 
@@ -491,6 +521,7 @@ mod shell {
                 focused,
                 &self.tabs,
                 &self.foreground,
+                &self.baseline,
             );
             let Some(argv) = wire::wake_argv(&self.wake_context(), request, topology.as_deref())
             else {
@@ -534,6 +565,26 @@ mod shell {
             run_command(&refs, BTreeMap::new());
         }
 
+        fn probe_baselines(&mut self, ids: Vec<u32>) -> bool {
+            let mut changed = false;
+            for id in ids {
+                let pane_id = PaneId::Terminal(id);
+                let Ok(args) = get_pane_running_command(pane_id) else {
+                    continue;
+                };
+                let Some(command) = policy::joined_foreground_command(&args) else {
+                    continue;
+                };
+                let cwd = get_pane_cwd(pane_id)
+                    .ok()
+                    .and_then(|cwd| cwd.into_os_string().into_string().ok())
+                    .filter(|cwd| !cwd.is_empty());
+                self.baseline.insert(id, PaneBaseline { command, cwd });
+                changed = true;
+            }
+            changed
+        }
+
         fn set_foreground_command(&mut self, pane_id: &PaneId, command: Option<String>) {
             let PaneId::Terminal(id) = pane_id else {
                 return;
@@ -546,9 +597,26 @@ mod shell {
                     self.foreground.remove(id);
                 }
             }
+            if command.is_none() && self.granted {
+                let baseline_ids =
+                    policy::panes_needing_baseline(&self.tabs, &self.foreground, &self.baseline);
+                if baseline_ids.iter().any(|candidate| candidate == id) {
+                    self.probe_baselines(vec![*id]);
+                }
+            }
+            let pane_command = self.foreground.get(id).cloned().or_else(|| {
+                self.baseline
+                    .get(id)
+                    .map(|baseline| baseline.command.clone())
+            });
+            let pane_cwd = self
+                .baseline
+                .get(id)
+                .and_then(|baseline| baseline.cwd.clone());
             for pane in self.tabs.values_mut().flatten() {
                 if !pane.is_plugin && pane.id == *id {
-                    pane.pane_command = command;
+                    pane.pane_command = pane_command.clone();
+                    pane.pane_cwd = pane_cwd.clone();
                     return;
                 }
             }
@@ -572,6 +640,7 @@ mod shell {
             policy::remove_pane_from_tabs(&mut self.tabs, is_plugin, id);
             if !is_plugin {
                 self.foreground.remove(&id);
+                self.baseline.remove(&id);
                 if let Some(policy) = self.policy.as_mut() {
                     policy.forget_pane(id);
                 }
@@ -610,6 +679,7 @@ mod shell {
                         pane_columns: Some(pane.pane_columns as u64),
                         title: pane.title.clone(),
                         pane_command: None,
+                        pane_cwd: None,
                         terminal_command: pane.terminal_command.clone(),
                     })
                     .collect();

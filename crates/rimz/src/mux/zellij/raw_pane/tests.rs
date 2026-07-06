@@ -302,7 +302,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
             hosted_agent_process_start: None,
             command,
             spawn_command: p.spawn_command().map(str::to_owned),
-            cwd: None,
+            cwd: p.pane_cwd.take(),
             resumed_session_id: None,
             elevated_agent: None,
             first_seen_at_ms: None,
@@ -318,7 +318,8 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
     assert_eq!(listing.panes[1].command, None);
     assert!(listing.panes[1].is_floating);
     assert_eq!(listing.panes[1].spawn_command.as_deref(), Some("codex"));
-    assert_eq!(listing.panes[1].cwd, None);
+    assert_eq!(listing.panes[0].cwd.as_deref(), Some("/repo/main"));
+    assert_eq!(listing.panes[1].cwd.as_deref(), Some("/repo/main"));
     assert_eq!(listing.panes[1].view_id.as_deref(), Some("tab_4"));
 }
 

@@ -15,6 +15,7 @@ fn pane(id: u32) -> PaneFields {
         pane_columns: Some(80),
         title: format!("pane-{id}"),
         pane_command: None,
+        pane_cwd: None,
         terminal_command: Some("zsh".to_owned()),
     }
 }
@@ -128,6 +129,14 @@ fn excluded_fields_hold_the_hash() {
         manifest_hash(&tabs(vec![foreground])),
         "pane_command is excluded by projection",
     );
+
+    let mut with_cwd = pane(1);
+    with_cwd.pane_cwd = Some("/repo/main".to_owned());
+    assert_eq!(
+        base,
+        manifest_hash(&tabs(vec![with_cwd])),
+        "pane_cwd is excluded by projection",
+    );
 }
 
 #[test]
@@ -162,11 +171,151 @@ fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
 fn published_topology_payload_carries_resolved_focus() {
     let manifest = tabs(vec![pane(1), focused(pane(2))]);
     let resolved = resolved_focused_pane_id(&manifest, Some(0), None);
-    let payload =
-        published_topology_payload("rimz-test", 42, resolved, Some(&manifest), &BTreeMap::new())
-            .expect("topology payload publishes");
+    let payload = published_topology_payload(
+        "rimz-test",
+        42,
+        resolved,
+        Some(&manifest),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .expect("topology payload publishes");
 
     assert_eq!(payload.focused_pane, Some(2));
+}
+
+#[test]
+fn panes_needing_baseline_selects_implicit_idle_live_panes() {
+    let mut implicit = pane(1);
+    implicit.terminal_command = None;
+    let mut spawn_command = pane(2);
+    spawn_command.terminal_command = Some("zsh".to_owned());
+    let mut with_foreground = pane(3);
+    with_foreground.terminal_command = None;
+    let mut with_baseline = pane(4);
+    with_baseline.terminal_command = None;
+    let mut plugin = plugin_pane(5);
+    plugin.terminal_command = None;
+    let mut floating = pane(6);
+    floating.terminal_command = None;
+    floating.is_floating = true;
+    let mut held = pane(7);
+    held.terminal_command = None;
+    held.is_held = true;
+    let room = tabs(vec![
+        implicit,
+        spawn_command,
+        with_foreground,
+        with_baseline,
+        plugin,
+        floating,
+        held,
+    ]);
+    let foreground = BTreeMap::from([(3, "vim".to_owned())]);
+    let baseline = BTreeMap::from([(
+        4,
+        PaneBaseline {
+            command: "zsh".to_owned(),
+            cwd: Some("/repo/main".to_owned()),
+        },
+    )]);
+
+    assert_eq!(
+        panes_needing_baseline(&room, &foreground, &baseline),
+        vec![1],
+    );
+}
+
+#[test]
+fn apply_foreground_commands_uses_foreground_then_baseline_and_cwd() {
+    let mut first = pane(1);
+    first.terminal_command = None;
+    let mut second = pane(2);
+    second.terminal_command = None;
+    let mut room = tabs(vec![first, second]);
+    let foreground = BTreeMap::from([(1, "vim README.md".to_owned())]);
+    let baseline = BTreeMap::from([
+        (
+            1,
+            PaneBaseline {
+                command: "zsh".to_owned(),
+                cwd: Some("/repo/main".to_owned()),
+            },
+        ),
+        (
+            2,
+            PaneBaseline {
+                command: "fish".to_owned(),
+                cwd: Some("/repo/side".to_owned()),
+            },
+        ),
+    ]);
+
+    apply_foreground_commands(&mut room, &foreground, &baseline);
+
+    let panes = room.get(&0).expect("tab exists");
+    assert_eq!(panes[0].pane_command.as_deref(), Some("vim README.md"));
+    assert_eq!(panes[0].pane_cwd.as_deref(), Some("/repo/main"));
+    assert_eq!(panes[1].pane_command.as_deref(), Some("fish"));
+    assert_eq!(panes[1].pane_cwd.as_deref(), Some("/repo/side"));
+}
+
+#[test]
+fn published_topology_payload_carries_baseline_cwd() {
+    let mut implicit = pane(1);
+    implicit.terminal_command = None;
+    let manifest = tabs(vec![implicit]);
+    let baseline = BTreeMap::from([(
+        1,
+        PaneBaseline {
+            command: "zsh".to_owned(),
+            cwd: Some("/repo/main".to_owned()),
+        },
+    )]);
+    let payload = published_topology_payload(
+        "rimz-test",
+        42,
+        Some(1),
+        Some(&manifest),
+        &BTreeMap::new(),
+        &baseline,
+    )
+    .expect("topology payload publishes");
+    let encoded = serde_json::to_value(payload).expect("payload serializes");
+
+    assert_eq!(encoded["panes"][0]["pane_command"], "zsh");
+    assert_eq!(encoded["panes"][0]["pane_cwd"], "/repo/main");
+}
+
+#[test]
+fn forgetting_foreground_reveals_baseline_command() {
+    let mut implicit = pane(1);
+    implicit.terminal_command = None;
+    let mut room = tabs(vec![implicit]);
+    let mut foreground = BTreeMap::from([(1, "sleep 5".to_owned())]);
+    let baseline = BTreeMap::from([(
+        1,
+        PaneBaseline {
+            command: "zsh".to_owned(),
+            cwd: Some("/repo/main".to_owned()),
+        },
+    )]);
+
+    apply_foreground_commands(&mut room, &foreground, &baseline);
+    assert_eq!(
+        room.get(&0).unwrap()[0].pane_command.as_deref(),
+        Some("sleep 5"),
+    );
+    assert_eq!(
+        foreground_command_update(&[], false),
+        ForegroundCommandUpdate::Forget,
+    );
+    foreground.remove(&1);
+    apply_foreground_commands(&mut room, &foreground, &baseline);
+
+    let pane = &room.get(&0).unwrap()[0];
+    assert_eq!(pane.pane_command.as_deref(), Some("zsh"));
+    assert_eq!(pane.pane_cwd.as_deref(), Some("/repo/main"));
 }
 
 // --- focus_shortcut: focus-only moves take the optimistic CLI patch ---
@@ -246,6 +395,16 @@ fn focus_shortcut_rejects_non_focus_changes() {
         focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![foreground_changed])),
         None,
         "a foreground change is not a focus-only patch",
+    );
+
+    let cwd_changed = PaneFields {
+        pane_cwd: Some("/repo/main".to_owned()),
+        ..pane(1)
+    };
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![cwd_changed])),
+        None,
+        "a cwd change is not a focus-only patch",
     );
 
     let floating = PaneFields {

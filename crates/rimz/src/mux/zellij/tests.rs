@@ -97,7 +97,8 @@ exit 0
                 pane_x: Some(0),
                 title: Some("zsh".to_owned()),
                 pane_command: Some("zsh".to_owned()),
-                terminal_command: Some("/bin/zsh".to_owned()),
+                pane_cwd: Some(project_root.to_string_lossy().into_owned()),
+                terminal_command: None,
             }],
         },
     )
@@ -116,6 +117,11 @@ exit 0
     assert_eq!(listing.panes[0].pane_id.raw(), "terminal_7");
     assert_eq!(listing.panes[0].view_id.as_deref(), Some("tab_0"));
     assert_eq!(listing.panes[0].command.as_deref(), Some("zsh"));
+    assert_eq!(listing.panes[0].spawn_command, None);
+    assert_eq!(
+        listing.panes[0].cwd.as_deref(),
+        Some(project_root.to_string_lossy().as_ref()),
+    );
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).unwrap_or_default();
     assert!(
         !log.contains("action list-panes") && !log.contains("rimz:dump_topology"),
@@ -208,6 +214,7 @@ fn add_sidebar_timeout_never_closes_stdout_only_hint() {
                 pane_x: Some(0),
                 title: Some("zsh".to_owned()),
                 pane_command: Some("zsh".to_owned()),
+                pane_cwd: None,
                 terminal_command: Some("zsh".to_owned()),
             }],
         },
@@ -381,6 +388,7 @@ exit 0
                 pane_x: Some(0),
                 title: Some("zsh".to_owned()),
                 pane_command: Some("zsh".to_owned()),
+                pane_cwd: None,
                 terminal_command: Some("zsh".to_owned()),
             }],
         },
