@@ -4,15 +4,13 @@ use crate::agents::{
 };
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::{AnimationSpec, ScrollbarMode};
-use crate::feed::FeedKind;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::pane::PaneRef;
-use crate::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};
+use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use serde_json::json;
+use ratatui::text::Line;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -29,7 +27,6 @@ mod ansi;
 mod budget;
 mod capping;
 mod fleet;
-mod fold;
 mod fuzz;
 mod gallery;
 mod link;
@@ -75,19 +72,6 @@ fn provider_panel_lines(
         now,
     );
     (lines, hits)
-}
-
-fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
-    let content_width = line.width();
-    let pad = width.saturating_sub(content_width) / 2;
-    if pad == 0 {
-        return line;
-    }
-    let style = line.style;
-    let mut spans = Vec::with_capacity(line.spans.len() + 1);
-    spans.push(Span::raw(" ".repeat(pad)));
-    spans.extend(line.spans);
-    Line::from(spans).style(style)
 }
 
 fn snapshot_to_screen(snapshot: &SidebarSnapshot, width: u16, height: u16) -> String {
@@ -170,7 +154,7 @@ fn assert_snapshot(name: &str, screen: String) {
     });
 }
 
-fn snapshot_with(items: Vec<FeedItem>, mut agents: Vec<AgentState>) -> SidebarSnapshot {
+fn snapshot_with(_items: Vec<()>, mut agents: Vec<AgentState>) -> SidebarSnapshot {
     let mut panes = Vec::new();
     for (idx, agent) in agents.iter_mut().enumerate() {
         if agent.parent_agent_id.is_some() {
@@ -187,17 +171,9 @@ fn snapshot_with(items: Vec<FeedItem>, mut agents: Vec<AgentState>) -> SidebarSn
         agent.pane = Some(live.clone());
         panes.push(live);
     }
-    for item in &items {
-        if let Some(live) = &item.pane
-            && panes.iter().all(|pane| pane.pane_id != live.pane_id)
-        {
-            panes.push(live.clone());
-        }
-    }
-
     let mut snapshot = SidebarSnapshot::build_with_carryover(
         fixed_workspace(),
-        items,
+        Vec::<()>::new(),
         Vec::new(),
         agents,
         fixed_now(),
@@ -255,6 +231,7 @@ fn agent(
         subagent_description: None,
         subagent_started_at: None,
         turn_started_at: None,
+        waiting_since: None,
         compacting_since: None,
         compaction_count: 0,
         last_compact_command_tokens: None,
@@ -400,55 +377,6 @@ fn ui_at_phase(phase: u64) -> UiState {
     }
 }
 
-/// A fully-enriched single-agent group, rendered as raw card lines at a
-/// fixed width. Returns the group lines (header first), each flattened to its
-/// text — the seam the structural card tests share.
-fn card_lines(selected_index: usize) -> Vec<String> {
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    claude.context = Some(claude_context(fixed_now()));
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
-    let theme = Theme::fixed(true);
-    let mut row_index = 0;
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
-    worktree_group_lines(
-        &theme,
-        &snapshot.worktree_groups[0],
-        &snapshot.providers,
-        snapshot.now,
-        54,
-        &snapshot.theme.display.context_meter,
-        snapshot.theme.display.card_density,
-        None,
-        false,
-        &mut row_index,
-        selected_index,
-        0,
-        &CostRolls::default(),
-        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
-        &mut lines,
-        &mut map,
-        &mut more_hits,
-    );
-    lines
-        .into_iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect()
-}
-
 /// Render one worktree group's lines, asserting the hit-test map stays in
 /// lockstep so callers can read either the spans or their text.
 fn group_lines(
@@ -534,11 +462,6 @@ fn bottom_tally() -> crate::SpendTally {
         },
         ..Default::default()
     }
-}
-
-fn is_hairline(text: &str) -> bool {
-    let trimmed = text.trim();
-    !trimmed.is_empty() && trimmed.chars().all(|ch| ch == '─')
 }
 
 /// Build a metered provider panel from two rate-limit windows, for the

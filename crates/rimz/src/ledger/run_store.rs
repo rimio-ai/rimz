@@ -3,7 +3,7 @@
 //! Run records are cold-path durable state: a waiting CLI may exit, a user may
 //! inspect the result later with `rimz agents show`, and the final assistant text
 //! is the product output. Writes therefore use fsyncing temp-file-plus-rename,
-//! unlike feed/cache sidecars whose correctness rides the event log.
+//! unlike cache sidecars whose correctness rides the event log.
 
 use std::fs;
 use std::io;

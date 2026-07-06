@@ -139,44 +139,6 @@ fn agent_panes_are_uncapped() {
 }
 
 #[test]
-fn standalone_ask_is_not_an_agent_pane() {
-    // A pending ask on a shell pane renders an agent-shaped attention row whose
-    // name is its source — but it is not a live agent, so it never enters
-    // agent_panes and `@codex` can never message that shell pane.
-    let shell = pane("%shell", "zsh", "/repo/main");
-    let mut item = FeedItem::new(
-        workspace(),
-        Surface::Script,
-        FeedKind::Question,
-        "Should I proceed?",
-        // A source that collides with an agent kind name — the trap the old
-        // row-shape harvest fell into.
-        "codex",
-        // Not `agent-hook`, so it renders as a standalone attention row.
-        "cli",
-    );
-    item.worktree_path = Some("/repo/main".to_owned());
-    item.pane = Some(shell.clone());
-
-    let snapshot = room(vec![item], Vec::new()).with_live_panes(vec![shell], None);
-
-    let row_names: Vec<&str> = snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-        .map(|row| row.name.as_str())
-        .collect();
-    assert!(
-        row_names.contains(&"codex"),
-        "the standalone ask renders a codex-named agent row: {row_names:?}"
-    );
-    assert!(
-        snapshot.agent_panes.is_empty(),
-        "a standalone ask never enters agent_panes"
-    );
-}
-
-#[test]
 fn stamped_lazy_agent_holds_pane_across_non_agent_child_commands() {
     for (label, command, hosted_kind, expect_agent) in [
         ("own foreground still binds", "codex", Some("codex"), true),

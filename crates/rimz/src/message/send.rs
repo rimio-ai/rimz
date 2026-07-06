@@ -5,7 +5,6 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use crate::agents::AgentState;
-use crate::feed::pending_ask_in_snapshot;
 use crate::ids::{AgentSessionId, MessageId, WorkspaceId};
 use crate::ledger::event::EventKind;
 use crate::ledger::event_log;
@@ -35,22 +34,21 @@ pub enum SendErr {
 }
 
 /// What happened to one live-pane send in a fan-out. Every resolved pane target
-/// carries a live pane, so the only soft skip is a pending ask reserving the
-/// next input.
+/// carries a live pane, so the only soft skip is Waiting reserving the next
+/// input.
 pub enum Outcome {
     Sent {
         label: String,
         message_id: MessageId,
     },
-    SkippedPending {
+    SkippedWaiting {
         label: String,
         message_id: MessageId,
-        request_id: String,
     },
 }
 
-/// How a live-pane send is delivered: whether to send past a pending ask,
-/// and pacing state.
+/// How a live-pane send is delivered: whether to send past Waiting, and pacing
+/// state.
 pub struct LiveSend {
     pub force: bool,
     pub pacer: Pacer,
@@ -153,7 +151,7 @@ pub fn send_batch_to_live_pane(
             Ok(Outcome::Sent { message_id, .. }) => {
                 compacted = Some(message_id);
             }
-            Ok(skipped @ Outcome::SkippedPending { .. }) => {
+            Ok(skipped @ Outcome::SkippedWaiting { .. }) => {
                 return Ok(SentPrompt {
                     outcome: skipped,
                     compacted: None,
@@ -222,14 +220,10 @@ fn write_batch(
         .expect("write_batch requires at least one message");
     debug_assert!(batch.iter().all(|message| message.enter == head.enter));
     let label = handle_for_pane_target(snapshot, target, bound);
-    if !send.force
-        && let Some(agent) = bound
-        && let Some(ask) = pending_ask_in_snapshot(agent, snapshot)
-    {
-        return Ok(Outcome::SkippedPending {
+    if !send.force && bound.is_some_and(AgentState::is_awaiting_input) {
+        return Ok(Outcome::SkippedWaiting {
             label,
             message_id: head.message_id.clone(),
-            request_id: ask.request_id.to_string(),
         });
     }
     let pane_id = &target.pane_id;
@@ -350,7 +344,7 @@ pub fn already_compacted_at(ledger: &Ledger, agent: &AgentState, command: &str, 
 }
 
 /// The rollup session behind a bound pane target. A lazy pane carries no session,
-/// so it never gates on pending asks or context compaction.
+/// so it never gates on Waiting or context compaction.
 pub fn bound_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     target: &PaneAgent,
@@ -479,6 +473,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

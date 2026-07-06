@@ -12,7 +12,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::ids::{AgentKind, AgentSessionId, RequestId};
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::{StatePaths, atomic, lock};
 
 const FILE_DAYS: u32 = 7;
@@ -62,8 +62,6 @@ pub struct ChatEntry {
     pub role: Option<String>,
     pub entry: ChatKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<RequestId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -89,7 +87,6 @@ impl ChatEntry {
             profile: None,
             role: None,
             entry,
-            request_id: None,
             from: None,
             text,
             questions: Vec::new(),

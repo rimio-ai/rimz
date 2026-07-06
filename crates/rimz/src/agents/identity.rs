@@ -65,8 +65,8 @@ pub(crate) enum RootIdentity {
     /// a subagent. The caller drops it: the lifecycle channel is bracket-grained
     /// for children (only `Subagent*` folds to the child's rollup), per-tool
     /// child activity rides the child-keyed heartbeat, and folding the event
-    /// onto the parent would advance the parent's `last_activity` past a
-    /// pending ask — un-folding its `waiting` row while it is still blocked.
+    /// onto the parent would advance the parent's `last_activity` past its
+    /// waiting mark while it is still blocked.
     ForeignChild,
 }
 

@@ -867,6 +867,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         subagent_description: None,
         subagent_started_at: None,
         turn_started_at: lifecycle.turn_started_at,
+        waiting_since: lifecycle.waiting_since,
         compacting_since: lifecycle.compacting_since,
         compaction_count: lifecycle.compaction_count,
         last_compact_command_tokens: carried.last_compact_command_tokens,
@@ -964,6 +965,7 @@ fn assemble_launch_state(
         subagent_description: None,
         subagent_started_at: None,
         turn_started_at: Some(event.timestamp),
+        waiting_since: None,
         compacting_since: None,
         compaction_count: carried.compaction_count,
         last_compact_command_tokens: carried.last_compact_command_tokens,
@@ -979,6 +981,7 @@ struct LifecycleProjection {
     compacting_since: Option<Timestamp>,
     compaction_count: u32,
     turn_started_at: Option<Timestamp>,
+    waiting_since: Option<Timestamp>,
     registered_at: Option<Timestamp>,
 }
 
@@ -1021,12 +1024,20 @@ fn lifecycle_projection(
     } else {
         prior.and_then(|p| p.turn_started_at)
     };
+    let waiting_since = if matches!(signal, lifecycle::LifecycleSignal::AwaitingInput { .. }) {
+        Some(timestamp)
+    } else if next.status == AgentStatus::Waiting {
+        prior.and_then(|p| p.waiting_since)
+    } else {
+        None
+    };
     LifecycleProjection {
         status: next.status,
         phase: next.phase,
         compacting_since,
         compaction_count,
         turn_started_at,
+        waiting_since,
         registered_at: prior.and_then(|p| p.registered_at).or(Some(timestamp)),
     }
 }

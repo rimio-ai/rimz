@@ -3,15 +3,11 @@ use std::io;
 use std::path::Path;
 
 use jiff::Timestamp;
-use serde_json::json;
 
-use crate::feed::{AbandonReason, FeedItem, FeedStatus, Resolution, ResolutionMethod};
 use crate::harness::run::{RunRecord, RunStatus};
-use crate::ledger::event::EventEnvelope;
 
 use super::super::{
-    Ledger, LedgerErr, ResetRecordsOutcome, Result, event_log, feed_store, lock, run_store,
-    snapshot,
+    Ledger, LedgerErr, ResetRecordsOutcome, Result, event_log, lock, run_store, snapshot,
 };
 
 fn remove_file_if_exists(path: &Path) -> Result<bool> {
@@ -34,44 +30,6 @@ fn remove_dir_if_exists(path: &Path) -> Result<bool> {
             source,
         }),
     }
-}
-
-fn remove_dir_contents(path: &Path) -> Result<usize> {
-    let entries = match fs::read_dir(path) {
-        Ok(entries) => entries,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(0),
-        Err(source) => {
-            return Err(LedgerErr::Io {
-                path: path.to_path_buf(),
-                source,
-            });
-        }
-    };
-    let mut removed = 0;
-    for entry in entries {
-        let entry = entry.map_err(|source| LedgerErr::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let child = entry.path();
-        let meta = fs::symlink_metadata(&child).map_err(|source| LedgerErr::Io {
-            path: child.clone(),
-            source,
-        })?;
-        if meta.is_dir() {
-            fs::remove_dir_all(&child).map_err(|source| LedgerErr::Io {
-                path: child.clone(),
-                source,
-            })?;
-        } else {
-            fs::remove_file(&child).map_err(|source| LedgerErr::Io {
-                path: child.clone(),
-                source,
-            })?;
-        }
-        removed += 1;
-    }
-    Ok(removed)
 }
 
 fn count_dir_entries_recursive(path: &Path) -> Result<usize> {
@@ -154,44 +112,6 @@ fn remove_matching_files(root: &Path, prefixes: &[&str]) -> Result<usize> {
     Ok(removed)
 }
 
-fn abandon_pending_for_reset_locked(
-    paths: &super::super::StatePaths,
-    session_name: &str,
-) -> Result<Vec<FeedItem>> {
-    let mut abandoned = Vec::new();
-    for mut item in feed_store::list_pending(&paths.feed_dir)? {
-        if item.status != FeedStatus::Pending {
-            continue;
-        }
-        let mut resolution = Resolution::new(
-            json!({ "abandoned": true }),
-            ResolutionMethod::WorkspaceReset,
-        );
-        resolution.reason = Some(AbandonReason::WorkspaceReset.as_str().to_owned());
-        item.status = FeedStatus::Abandoned;
-        item.resolution = Some(resolution);
-        item.updated_at = Timestamp::now();
-        feed_store::write(&paths.feed_dir, &item)?;
-        event_log::append(
-            &paths.events_log,
-            &EventEnvelope::new(
-                item.workspace_id.clone(),
-                session_name,
-                "rimz",
-                "cli",
-                "feed.abandon",
-                json!({
-                    "request_id": item.request_id,
-                    "surface": item.surface,
-                    "reason": AbandonReason::WorkspaceReset.as_str(),
-                }),
-            ),
-        )?;
-        abandoned.push(item);
-    }
-    Ok(abandoned)
-}
-
 fn cancel_active_runs_for_reset_locked(paths: &super::super::StatePaths) -> Result<Vec<RunRecord>> {
     let mut canceled = Vec::new();
     for mut record in run_store::list(&paths.runs_dir)? {
@@ -220,20 +140,17 @@ impl Ledger {
 
     fn reset_records_with<F>(
         &self,
-        session_name: &str,
+        _session_name: &str,
         hard: bool,
         rotate: F,
     ) -> Result<ResetRecordsOutcome>
     where
         F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
     {
-        let (mut outcome, abandoned_items, canceled_runs) = {
+        let (mut outcome, canceled_runs) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
 
-            let abandoned = abandon_pending_for_reset_locked(&self.inner.paths, session_name)?;
-            let abandoned_pending = abandoned.len();
-            let feed_items_cleared = feed_store::list(&self.inner.paths.feed_dir)?.len();
             let canceled_runs = cancel_active_runs_for_reset_locked(&self.inner.paths)?;
             let runs_canceled = canceled_runs.len();
 
@@ -265,7 +182,6 @@ impl Ledger {
                 remove_file_if_exists(&self.inner.paths.latest_snapshot)?;
             }
 
-            remove_dir_contents(&self.inner.paths.feed_dir)?;
             self.inner.paths.ensure_dirs()?;
 
             let mut state_entries_removed = 0;
@@ -282,8 +198,6 @@ impl Ledger {
 
             (
                 ResetRecordsOutcome {
-                    abandoned_pending,
-                    feed_items_cleared,
                     runs_canceled,
                     state_entries_removed,
                     runtime_removed: false,
@@ -291,15 +205,10 @@ impl Ledger {
                     carryover_agents,
                     hard,
                 },
-                abandoned,
                 canceled_runs,
             )
         };
 
-        for item in &abandoned_items {
-            self.wake_per_request_best_effort(item);
-            self.wake_sidebars_best_effort(&item.request_id);
-        }
         for record in &canceled_runs {
             self.wake_run_best_effort(record);
         }
@@ -316,6 +225,7 @@ mod tests {
 
     use super::*;
     use crate::ids::WorkspaceId;
+    use crate::ledger::event::EventEnvelope;
     use crate::ledger::paths::{RuntimePaths, StatePaths};
 
     #[test]

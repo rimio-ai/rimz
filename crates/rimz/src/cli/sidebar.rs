@@ -993,7 +993,6 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
                 .or_else(|| row.worktree_path.clone()),
             task: row.task().map(str::to_owned),
             pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
-            request_id: row.request_id().cloned(),
             root: row.worktree_path.clone(),
             new_status: row.status(),
         })

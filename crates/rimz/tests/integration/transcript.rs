@@ -1,7 +1,6 @@
 use serde_json::json;
 
 use rimz::chat::{ChatEntry, ChatKind};
-use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId};
 
 use crate::common::Env;
@@ -38,8 +37,6 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
         "other prompt",
         "other answer",
     );
-    native_permission_to_allow(&env, "sess-transcript-a", branch, &claude_path);
-
     let single = run_ok(
         env.rimz()
             .args(["transcript", "sess-transcript-a", "--worktree", branch]),
@@ -50,8 +47,6 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
     assert!(single.contains("@claude"), "{single}");
     assert!(single.contains("  final answer"), "{single}");
     assert!(!single.contains("needs attention"), "{single}");
-    assert!(single.contains("you → @claude"), "{single}");
-    assert!(single.contains("  allow"), "{single}");
     assert!(
         !single.contains("draft answer"),
         "durable log stores the turn-final assistant message only:\n{single}"
@@ -67,8 +62,6 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
     assert!(channel.contains("  second prompt"), "{channel}");
     assert!(channel.contains("@codex"), "{channel}");
     assert!(channel.contains("  second answer"), "{channel}");
-    assert!(channel.contains("you → @claude"), "{channel}");
-    assert!(channel.contains("  allow"), "{channel}");
     assert!(!channel.contains("other prompt"), "{channel}");
 
     let all = run_ok(env.rimz().args(["transcript", "@all"]));
@@ -99,25 +92,26 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
             .as_str()
             .is_some_and(|text| text.contains("needs attention"))
     }));
-    assert!(entries.iter().any(|entry| {
-        entry["from"] == "you" && entry["to"] == "@claude" && entry["text"] == "allow"
-    }));
-
     push_pending_agent_ask(&env, "sess-transcript-a");
     let show = run_ok(env.rimz().args(["agents", "show", "sess-transcript-a"]));
     assert!(show.contains("ask:"), "{show}");
-    assert!(
-        show.contains("approve patch: choose one [allow, deny]"),
-        "{show}"
-    );
+    assert!(show.contains("approve patch [allow, deny]"), "{show}");
     let transcript_after_pending =
         run_ok(
             env.rimz()
                 .args(["transcript", "sess-transcript-a", "--worktree", branch]),
         );
     assert!(
-        !transcript_after_pending.contains("approve patch"),
-        "live pending asks are no longer overlaid on transcript output:\n{transcript_after_pending}"
+        transcript_after_pending.contains("approve patch"),
+        "{transcript_after_pending}"
+    );
+    assert!(
+        transcript_after_pending.contains("◌ unanswered"),
+        "{transcript_after_pending}"
+    );
+    assert!(
+        !transcript_after_pending.contains("needs attention"),
+        "{transcript_after_pending}"
     );
 }
 
@@ -246,89 +240,6 @@ fn transcript_records_native_ask_question_context_and_answer() {
             })
         })
     }));
-
-    let feed = env.feed_list_json();
-    let items = feed.as_array().expect("feed items");
-    assert!(
-        items.iter().all(|item| item["status"] != "pending"),
-        "{feed}"
-    );
-}
-
-#[test]
-fn resolving_agent_ask_through_cli_appends_transcript_answer() {
-    let env = Env::new();
-    let mut item = FeedItem::new(
-        env.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "allow?",
-        "claude",
-        "agent-hook",
-    );
-    item.payload = json!({ "session_id": "sess-answer" });
-    item.worktree_branch = Some("feature-answer".to_owned());
-    item.worktree_path = Some(env.home_root.join("feature-answer").display().to_string());
-    let request_id = item.request_id.clone();
-    env.ledger()
-        .push_feed_item(&item, "rimz-test")
-        .expect("push");
-
-    let resolve = env.resolve(request_id.as_str(), r#"{"choice":"allow"}"#, "you", "cli");
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let entries = rimz::chat::read_all(env.ledger().paths()).expect("transcript");
-    assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
-    assert_eq!(entry.entry, ChatKind::Answer);
-    assert_eq!(entry.agent_id.as_str(), "sess-answer");
-    assert_eq!(entry.channel.as_deref(), Some("feature-answer"));
-    assert_eq!(entry.from.as_deref(), Some("you"));
-    assert_eq!(entry.text, "allow");
-}
-
-#[test]
-fn dismissing_agent_ask_through_cli_does_not_append_transcript_answer() {
-    let env = Env::new();
-    let mut item = FeedItem::new(
-        env.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "allow?",
-        "claude",
-        "agent-hook",
-    );
-    item.payload = json!({ "session_id": "sess-dismiss" });
-    item.worktree_branch = Some("feature-dismiss".to_owned());
-    item.worktree_path = Some(env.home_root.join("feature-dismiss").display().to_string());
-    let request_id = item.request_id.clone();
-    env.ledger()
-        .push_feed_item(&item, "rimz-test")
-        .expect("push");
-
-    let dismiss = env
-        .rimz()
-        .args([
-            "feed",
-            "dismiss",
-            request_id.as_str(),
-            "--reason",
-            "not now",
-        ])
-        .output()
-        .expect("spawn feed dismiss");
-    assert!(
-        dismiss.status.success(),
-        "dismiss failed: {}",
-        String::from_utf8_lossy(&dismiss.stderr)
-    );
-
-    let entries = rimz::chat::read_all(env.ledger().paths()).expect("transcript");
-    assert!(entries.is_empty(), "{entries:?}");
 }
 
 #[test]
@@ -880,51 +791,6 @@ fn register_live_codex_turn(
     owner
 }
 
-fn native_permission_to_allow(
-    env: &Env,
-    session_id: &str,
-    branch: &str,
-    transcript: &std::path::Path,
-) {
-    let transcript = transcript.to_string_lossy().into_owned();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "PermissionRequest",
-        "session_id": session_id,
-        "tool_name": "Bash",
-        "tool_input": { "command": "echo hi" },
-        "worktree_branch": branch,
-        "worktree_path": env.home_root.join(branch).display().to_string(),
-        "transcript_path": transcript,
-    }))
-    .expect("payload");
-    let mut cmd = env.hook_command("claude");
-    scrub_launch_identity(&mut cmd);
-    cmd.env("RIMZ_AGENT_PID", "");
-    cmd.env(rimz::harness::run::ENV_AGENT_ROLE, "claude");
-    let output = env
-        .spawn_payload(cmd, &payload)
-        .wait_with_output()
-        .expect("wait hook");
-    assert!(
-        output.status.success(),
-        "hook failed\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty(), "native hook returns neutral");
-
-    let request_id = env
-        .poll_pending_request_id(std::time::Instant::now() + std::time::Duration::from_secs(5))
-        .expect("native_ui item should appear in feed");
-
-    let resolve = env.resolve(&request_id, r#"{"choice":"allow"}"#, "you", "cli");
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-}
-
 fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
     let mut owner = dummy_agent_process();
     run_hook_for_owner(env, source, payload, owner.id());
@@ -995,20 +861,24 @@ fn stamp_worktree_path(env: &Env, payload: &mut serde_json::Value) {
 }
 
 fn push_pending_agent_ask(env: &Env, session_id: &str) {
-    let mut item = FeedItem::new(
-        env.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "approve patch",
+    run_hook(
+        env,
         "claude",
-        "agent-hook",
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": session_id,
+            "tool_name": "AskUserQuestion",
+            "tool_input": {
+                "questions": [{
+                    "question": "approve patch",
+                    "options": [
+                        { "label": "allow" },
+                        { "label": "deny" }
+                    ]
+                }]
+            },
+        }),
     );
-    item.body = Some("choose one".to_owned());
-    item.options = vec!["allow".to_owned(), "deny".to_owned()];
-    item.payload = json!({ "session_id": session_id });
-    env.ledger()
-        .push_feed_item(&item, "rimz-test")
-        .expect("push pending ask");
 }
 
 fn run_ok(cmd: &mut std::process::Command) -> String {

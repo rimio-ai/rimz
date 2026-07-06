@@ -53,12 +53,22 @@ lifecycle_signal_kinds! {
     TurnStarted => "turn_started",
     TurnEnded => "turn_ended",
     ToolUsed => "tool_used",
+    AwaitingInput => "awaiting_input",
     SubagentStarted => "subagent_started",
     SubagentStopped => "subagent_stopped",
     Compacting => "compacting",
     CompactionEnded => "compaction_ended",
     Ended => "ended",
     Lost => "lost",
+}
+
+/// Which native prompt is blocking the agent's own UI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AskKind {
+    Permission,
+    PlanApproval,
+    Question,
 }
 
 /// The agent-agnostic intent each native lifecycle event carries. An adapter's
@@ -107,6 +117,10 @@ pub enum LifecycleSignal {
         #[serde(default)]
         edits: bool,
     },
+    /// The agent opened a native blocking prompt and is waiting for input in
+    /// its own pane. Rimz observes attention here; it does not mint a decision
+    /// record or collect an answer.
+    AwaitingInput { kind: AskKind },
     /// The agent began compacting its context window (Claude `PreCompact`,
     /// Codex `PreCompact`). A transient head, not a status change.
     Compacting,
@@ -140,6 +154,7 @@ impl LifecycleSignal {
             Self::SubagentStarted => LifecycleSignalKind::SubagentStarted,
             Self::SubagentStopped { .. } => LifecycleSignalKind::SubagentStopped,
             Self::ToolUsed { .. } => LifecycleSignalKind::ToolUsed,
+            Self::AwaitingInput { .. } => LifecycleSignalKind::AwaitingInput,
             Self::Compacting => LifecycleSignalKind::Compacting,
             Self::CompactionEnded { .. } => LifecycleSignalKind::CompactionEnded,
             Self::Ended => LifecycleSignalKind::Ended,
@@ -162,6 +177,7 @@ impl LifecycleSignal {
             Self::SubagentStarted => "subagent_started",
             Self::SubagentStopped { .. } => "subagent_stopped",
             Self::ToolUsed { .. } => "tool_used",
+            Self::AwaitingInput { .. } => "awaiting_input",
             Self::Compacting => "compacting",
             Self::CompactionEnded { .. } => "compaction_ended",
             Self::Ended => "ended",
@@ -238,6 +254,10 @@ pub struct Transition {
     /// this signal leaves it. Any non-`Compacting` signal closes an open
     /// bracket; an unbracketed close signal closes nothing.
     pub compaction_closed: bool,
+    /// A waiting state was durably cleared without otherwise changing status.
+    /// Blocking permission prompts can resume through a non-mutating PreToolUse
+    /// edge; recording that no-op is what clears `waiting_since` on replay.
+    pub waiting_cleared: bool,
     /// A turn boundary opened or re-opened. Explicit starts stamp a fresh
     /// prompt boundary except when a prompt wakes a parked running row and
     /// resumes the same logical turn; reconciled progress and auto-compaction
@@ -271,6 +291,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
                 },
             },
             compaction_closed: false,
+            waiting_cleared: false,
             opened_turn: false,
         };
     }
@@ -281,6 +302,8 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     let status = map_status(signal, prior_status, &mut kind);
     let phase = map_phase(signal, prior_phase, status);
     let compaction_closed = was_compacting && !compacting;
+    let waiting_cleared =
+        prior_status == Some(AgentStatus::Waiting) && status != AgentStatus::Waiting;
     let opened_turn = opened_turn(signal, prior_status, prior_phase, status);
 
     if matches!(signal, LifecycleSignal::CompactionEnded { .. })
@@ -302,6 +325,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
         },
         kind,
         compaction_closed,
+        waiting_cleared,
         opened_turn,
     }
 }
@@ -338,6 +362,7 @@ fn map_status(
     match signal {
         LifecycleSignal::Registered => AgentStatus::Idle,
         LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => AgentStatus::Running,
+        LifecycleSignal::AwaitingInput { .. } => AgentStatus::Waiting,
         // A finished child resolves to a terminal verdict, so the parent's
         // expanded list reads `✓`/`!` instead of a resting `○`.
         LifecycleSignal::SubagentStopped { errored } => {
@@ -366,7 +391,7 @@ fn map_status(
             // it is resting (or it is unknown), reconcile to running. Attention
             // states (anything not resting) are left alone.
             match prior_status {
-                Some(AgentStatus::Running) => AgentStatus::Running,
+                Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Running,
                 Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
                     *kind = TransitionKind::Reconciled {
                         from: resting,
@@ -387,7 +412,7 @@ fn map_status(
         // Status preserved; only the head is stamped.
         LifecycleSignal::Compacting => prior_status.unwrap_or(AgentStatus::Idle),
         LifecycleSignal::CompactionEnded { auto: Some(true) } => match prior_status {
-            Some(AgentStatus::Running) => AgentStatus::Running,
+            Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Running,
             Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
                 *kind = TransitionKind::Reconciled {
                     from: resting,
@@ -404,9 +429,18 @@ fn map_status(
                 AgentStatus::Running
             }
         },
+        LifecycleSignal::CompactionEnded { auto: Some(false) }
+            if prior_status == Some(AgentStatus::Waiting) =>
+        {
+            AgentStatus::Running
+        }
         LifecycleSignal::CompactionEnded { auto: Some(false) } => AgentStatus::Idle,
         LifecycleSignal::CompactionEnded { auto: None } => {
-            prior_status.unwrap_or(AgentStatus::Idle)
+            if prior_status == Some(AgentStatus::Waiting) {
+                AgentStatus::Running
+            } else {
+                prior_status.unwrap_or(AgentStatus::Idle)
+            }
         }
         // Handled above.
         LifecycleSignal::Ended | LifecycleSignal::Lost => {
@@ -422,6 +456,7 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
     // like it preserves the status.
     let phase = match signal {
         LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => TurnPhase::Reasoning,
+        LifecycleSignal::AwaitingInput { .. } => TurnPhase::Idle,
         // A shell command during the reasoning phase is work, but the turn has
         // still written nothing — the thinking head carries forward. Anywhere else a
         // completed tool is visible work (acting): a phase that left reasoning
@@ -454,7 +489,11 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
     // The phase axis exists only inside a running turn — a resting or
     // attention status always reads `Idle`, by construction.
     if status == AgentStatus::Running {
-        phase
+        if phase == TurnPhase::Idle {
+            TurnPhase::Reasoning
+        } else {
+            phase
+        }
     } else {
         TurnPhase::Idle
     }

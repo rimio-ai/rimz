@@ -158,52 +158,6 @@ fn compact_density_running_waiting_without_context_use_baseline_gauge() {
 }
 
 #[test]
-fn compact_density_standalone_waiting_without_context_omits_gauge() {
-    let mut item = FeedItem::new(
-        fixed_workspace(),
-        Surface::Script,
-        FeedKind::Question,
-        "Deploy staging?",
-        "deploy.sh",
-        "cli",
-    );
-    item.pane = Some(pane("%deploy", "deploy.sh", "/repo/main"));
-
-    let mut selected = density_agent(
-        "selected-1",
-        "selector",
-        AgentStatus::Idle,
-        Some("selected other"),
-        0,
-    );
-    selected.worktree_path = Some("/repo/other".to_owned());
-    selected.worktree_branch = Some("other".to_owned());
-
-    let mut snapshot = snapshot_with(vec![item], vec![selected]);
-    snapshot.theme.display.card_density = CardDensityMode::Compact;
-
-    let rendered = snapshot_to_screen_with_alert_and_ui(
-        &snapshot,
-        None,
-        &UiState {
-            selected_index: 1,
-            ..Default::default()
-        },
-        54,
-        17,
-    );
-
-    assert!(
-        rendered.contains("Deploy staging?"),
-        "standalone waiting row keeps its description:\n{rendered}"
-    );
-    assert!(
-        !rendered.contains('▣') && !rendered.contains('▢') && !rendered.contains('▤'),
-        "a no-context standalone waiting row has no meter or token-stat row:\n{rendered}"
-    );
-}
-
-#[test]
 fn compact_density_selected_card_opens_to_full_form() {
     let mut parent = density_agent(
         "claude-1",

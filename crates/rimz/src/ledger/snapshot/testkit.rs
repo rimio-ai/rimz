@@ -18,7 +18,6 @@ use crate::agents::{
     AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentTurnError, RateLimitWindow,
     TurnErrorClass,
 };
-use crate::feed::FeedItem;
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::ledger::event::EventEnvelope;
 use crate::pane::PaneRef;
@@ -44,22 +43,19 @@ pub(super) fn workspace() -> WorkspaceId {
 /// Build a snapshot at the [`epoch`] — the one construction path the
 /// scenarios share. Enrichment chains (`with_live_panes`, `with_agent_context`,
 /// …) hang off the returned snapshot as in production.
-pub(super) fn room(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
+pub(super) fn room(items: Vec<()>, agents: Vec<AgentState>) -> SidebarSnapshot {
     SidebarSnapshot::build_with_agents(workspace(), items, agents, epoch())
 }
 
 /// Build a snapshot at the [`epoch`] and admit each root agent through a
 /// synthetic live pane. Tests that assert row projection, ranking, caps, or
 /// display status use this instead of the frameless [`room`] constructor.
-pub(super) fn room_with_agent_panes(
-    items: Vec<FeedItem>,
-    agents: Vec<AgentState>,
-) -> SidebarSnapshot {
+pub(super) fn room_with_agent_panes(items: Vec<()>, agents: Vec<AgentState>) -> SidebarSnapshot {
     room_with_agent_panes_and_budgets(items, agents, std::collections::BTreeMap::new())
 }
 
 pub(super) fn room_with_agent_panes_and_budgets(
-    items: Vec<FeedItem>,
+    items: Vec<()>,
     mut agents: Vec<AgentState>,
     account_budgets: std::collections::BTreeMap<AgentKind, AccountBudget>,
 ) -> SidebarSnapshot {
@@ -177,6 +173,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         subagent_description: None,
         subagent_started_at: None,
         turn_started_at: None,
+        waiting_since: (status == AgentStatus::Waiting).then_some(timestamp),
         compacting_since: None,
         compaction_count: 0,
         last_compact_command_tokens: None,
@@ -236,6 +233,9 @@ impl AgentStateFx for AgentState {
         let at = Timestamp::from_second(epoch().as_second() - secs).unwrap();
         self.last_activity = at;
         self.last_seen = at;
+        if self.status == AgentStatus::Waiting {
+            self.waiting_since = Some(at);
+        }
         self
     }
 
@@ -349,15 +349,6 @@ pub(super) fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,
-    }
-}
-
-pub(super) fn pane_started(raw: &str, cwd: &str, start: Timestamp) -> PaneRef {
-    PaneRef {
-        pane_process_start: Some(start),
-        elevated_agent: None,
-        first_seen_at_ms: None,
-        ..pane(raw, "claude", cwd)
     }
 }
 

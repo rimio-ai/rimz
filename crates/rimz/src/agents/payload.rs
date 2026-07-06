@@ -5,17 +5,17 @@
 
 use serde_json::Value;
 
-use crate::feed::FeedKind;
+use super::AskKind;
 
 use super::{AgentHookClass, ClassifiedHook};
 
 pub(crate) fn classify_agent_hook(
     event_name: &str,
-    feed_kind: Option<FeedKind>,
+    ask_kind: Option<AskKind>,
     lifecycle_events: &[&str],
 ) -> ClassifiedHook {
-    let class = if feed_kind.is_some() {
-        AgentHookClass::BlockingFeed
+    let class = if ask_kind.is_some() {
+        AgentHookClass::AwaitingUser
     } else if lifecycle_events.contains(&event_name) {
         AgentHookClass::Lifecycle
     } else {
@@ -23,7 +23,7 @@ pub(crate) fn classify_agent_hook(
     };
     ClassifiedHook {
         class,
-        feed_kind,
+        ask_kind,
         event_name: event_name.to_owned(),
     }
 }

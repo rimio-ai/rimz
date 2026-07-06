@@ -10,7 +10,6 @@ struct RowSpec {
     text: String,
     branch: String,
     status: AgentStatus,
-    options: usize,
     sub_agents: usize,
 }
 
@@ -101,9 +100,6 @@ fn build_adversarial_snapshot(
                 card.description = Some(spec.text.clone());
                 card.model = Some(spec.text.clone());
                 card.effort = Some(spec.text.clone());
-                card.options = (0..spec.options)
-                    .map(|option| format!("{}-{option}", spec.text))
-                    .collect();
                 card.sub_agents = sub_agents(spec.sub_agents, &spec.text);
                 card.turn_error_label = Some(spec.text.clone());
             }
@@ -140,20 +136,14 @@ fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
 }
 
 fn row_spec() -> impl Strategy<Value = RowSpec> {
-    (
-        weird_text(),
-        weird_text(),
-        0_u8..6,
-        0_usize..24,
-        0_usize..24,
-    )
-        .prop_map(|(text, branch, status, options, sub_agents)| RowSpec {
+    (weird_text(), weird_text(), 0_u8..6, 0_usize..24).prop_map(
+        |(text, branch, status, sub_agents)| RowSpec {
             text,
             branch,
             status: status_from(status),
-            options,
             sub_agents,
-        })
+        },
+    )
 }
 
 fn provider_spec() -> impl Strategy<Value = ProviderSpec> {

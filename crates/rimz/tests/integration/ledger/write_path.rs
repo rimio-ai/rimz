@@ -1,33 +1,35 @@
-//! The 2026-06 write-path contract: a mutation's critical section is feed
-//! write + event append only; the snapshot publishes off the lock through
-//! `locks/publish.lock` (group commit); readers are lock-free and recover
-//! any commit the publisher missed by folding the delta themselves.
+//! The write-path contract: a mutation's critical section is the event append
+//! only; the snapshot publishes off the lock through `locks/publish.lock`
+//! (group commit); readers are lock-free and recover any commit the publisher
+//! missed by folding the delta themselves.
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::ledger::event::AgentLaunchState;
-use rimz::ledger::{AgentLaunchAppend, AgentLaunchName, AgentLaunchRequest, AskExpiry, snapshot};
-use rimz::{
-    EventEnvelope, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, RuntimeOwner,
-    RuntimeOwnerKind, RuntimeScope, Surface,
-};
+use rimz::ledger::{AgentLaunchAppend, AgentLaunchName, AgentLaunchRequest, snapshot};
+use rimz::{EventEnvelope, RuntimeScope};
 use serde_json::json;
-
-fn native_ask(h: &crate::common::Harness, title: &str, session_id: &str) -> FeedItem {
-    let mut item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        title,
-        "claude",
-        "agent-hook",
-    );
-    item.payload = json!({ "session_id": session_id });
-    item
-}
 
 fn lifecycle(h: &crate::common::Harness, event_name: &str, agent_id: &str) -> EventEnvelope {
     crate::common::lifecycle_event(h, "rimz-test", event_name, agent_id)
+}
+
+fn lifecycle_for_workspace(
+    workspace_id: rimz::WorkspaceId,
+    event_name: &str,
+    agent_id: &str,
+) -> EventEnvelope {
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(agent_id)),
+        LifecycleSignal::Registered,
+    );
+    EventEnvelope::agent_lifecycle(
+        workspace_id,
+        "rimz-test",
+        "claude",
+        event_name,
+        &observation,
+    )
 }
 
 fn named_codex_lifecycle(
@@ -48,17 +50,6 @@ fn named_codex_lifecycle(
         event_name,
         &observation,
     )
-}
-
-/// A pid whose process has already exited and been reaped — `owner_is_live`
-/// reads `/proc/<pid>` and finds nothing.
-fn dead_pid() -> u32 {
-    let mut child = std::process::Command::new("true")
-        .spawn()
-        .expect("spawn true");
-    let pid = child.id();
-    child.wait().expect("wait true");
-    pid
 }
 
 fn log_len(h: &crate::common::Harness) -> u64 {
@@ -137,222 +128,24 @@ fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
 }
 
 #[test]
-fn resolve_leaves_latest_reflecting_the_resolve_event() {
-    // Stage A regression: the publish must reflect the resolve's own event
-    // append, so the very next read is served O(1) instead of re-folding.
-    let h = crate::common::Harness::new();
-    let item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "allow?",
-        "claude",
-        "agent-hook",
-    );
-    let request_id = item.request_id.clone();
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
-    // Make the resolve's tail due (the push seeded the cadence stamp): the
-    // subject is what a publish reflects when it runs, not the cadence.
-    force_next_publish(&h);
-    h.ledger
-        .resolve_feed_item(
-            &request_id,
-            Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::Cli),
-            "rimz-test",
-        )
-        .expect("resolve");
-
-    let latest = snapshot::read_fresh_latest(h.ledger.paths())
-        .expect("latest.json reflects the full log right after a due resolve");
-    assert_eq!(
-        latest.reflects_log.expect("stamped").offset,
-        log_len(&h),
-        "the stamp claims exactly the live log"
-    );
-
-    // The decided item left the pending scan but stays an audit fact.
-    let terminal_file = h
-        .ledger
-        .paths()
-        .feed_dir
-        .join("terminal")
-        .join(format!("{request_id}.json"));
-    assert!(terminal_file.exists(), "terminal item relocated");
-    assert_eq!(
-        h.ledger.load_feed_item(&request_id).expect("load").status,
-        FeedStatus::Resolved
-    );
-    assert_eq!(
-        h.ledger.list_feed_items().expect("audit list").len(),
-        1,
-        "the audit list spans the partition"
-    );
-}
-
-#[test]
-fn dead_owner_sweep_is_debounced_to_the_interval() {
-    let h = crate::common::Harness::new();
-
-    // First write stamps the sweep; then a pending item whose owner is dead.
-    h.ledger
-        .append_event(&lifecycle(&h, "SessionStart", "a"))
-        .expect("stamping write");
-    let mut orphan = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Script,
-        FeedKind::Question,
-        "owner died",
-        "rimz",
-        "cli",
-    );
-    orphan.runtime_owner = Some(RuntimeOwner::new(
-        RuntimeOwnerKind::Script,
-        "feed-ask",
-        dead_pid(),
-        None,
-    ));
-    let orphan_id = orphan.request_id.clone();
-    h.ledger.push_feed_item(&orphan, "rimz-test").expect("push");
-
-    // A write inside the interval does not re-scan: the orphan stays pending.
-    h.ledger
-        .append_event(&lifecycle(&h, "UserPromptSubmit", "a"))
-        .expect("write inside the interval");
-    assert_eq!(
-        h.ledger.load_feed_item(&orphan_id).expect("load").status,
-        FeedStatus::Pending,
-        "no sweep inside the debounce window"
-    );
-
-    // Age the stamp past the interval; the next write sweeps inline.
-    let stamp = h.ledger.paths().locks_dir.join("abandon-sweep.stamp");
-    std::fs::File::open(&stamp)
-        .expect("sweep stamp exists")
-        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3))
-        .expect("age stamp");
-    h.ledger
-        .append_event(&lifecycle(&h, "Stop", "a"))
-        .expect("write past the interval");
-
-    let after = h.ledger.load_feed_item(&orphan_id).expect("load");
-    assert_eq!(after.status, FeedStatus::Abandoned);
-    assert_eq!(
-        after
-            .resolution
-            .expect("abandon resolution")
-            .reason
-            .as_deref(),
-        Some("owner_process_exited")
-    );
-    let events = h.ledger.read_events().expect("events");
-    assert!(
-        events.iter().any(|e| e.method == "feed.abandon"),
-        "the sweep appends the durable audit record"
-    );
-}
-
-#[test]
-fn superseding_push_expires_priors_then_pushes_in_one_cycle() {
-    let h = crate::common::Harness::new();
-    let stale = native_ask(&h, "stale ask", "live");
-    h.ledger.push_feed_item(&stale, "rimz-test").expect("push");
-
-    let fresh = native_ask(&h, "fresh ask", "live");
-    // Make the combined cycle's tail due; the assertion below is about what
-    // its one publish covers.
-    force_next_publish(&h);
-    h.ledger
-        .push_feed_item_superseding(&fresh, Some(("claude", "live")), "rimz-test")
-        .map(|_| ())
-        .expect("superseding push");
-
-    assert_eq!(
-        h.ledger
-            .load_feed_item(&stale.request_id)
-            .expect("load")
-            .status,
-        FeedStatus::Abandoned,
-        "a fresh ask supersedes the session's prior native_ui ask"
-    );
-    assert_eq!(
-        h.ledger
-            .load_feed_item(&fresh.request_id)
-            .expect("load")
-            .status,
-        FeedStatus::Pending
-    );
-
-    // One combined cycle, ordered: the expiry lands before the push it makes
-    // way for.
-    let events = h.ledger.read_events().expect("events");
-    let expire_at = events
-        .iter()
-        .position(|e| {
-            e.method == "feed.expire"
-                && e.params_value().get("reason").and_then(|v| v.as_str()) == Some("agent_moved_on")
-        })
-        .expect("feed.expire");
-    let push_at = events
-        .iter()
-        .rposition(|e| e.method == "feed.push")
-        .expect("feed.push");
-    assert!(
-        expire_at < push_at,
-        "feed.expire precedes the superseding feed.push in the log"
-    );
-
-    // The off-lock publish reflects the whole combined cycle.
-    let latest = snapshot::read_fresh_latest(h.ledger.paths()).expect("fresh");
-    assert_eq!(latest.reflects_log.expect("stamped").offset, log_len(&h));
-}
-
-#[test]
-fn combined_append_expires_the_sessions_asks_in_the_same_cycle() {
-    let h = crate::common::Harness::new();
-    let ask = native_ask(&h, "pending at session end", "ending");
-    h.ledger.push_feed_item(&ask, "rimz-test").expect("push");
-
-    let expired = h
-        .ledger
-        .append_event_and_expire(
-            &lifecycle(&h, "SessionEnd", "ending"),
-            Some(("claude", "ending", AskExpiry::SessionEnded)),
-        )
-        .expect("append + expire");
-    assert_eq!(expired, 1);
-    assert_eq!(
-        h.ledger
-            .load_feed_item(&ask.request_id)
-            .expect("load")
-            .status,
-        FeedStatus::Abandoned
-    );
-    let events = h.ledger.read_events().expect("events");
-    assert!(events.iter().any(|e| e.method == "feed.expire"
-        && e.params_value().get("reason").and_then(|v| v.as_str()) == Some("agent_session_ended")));
-}
-
-#[test]
 fn concurrent_writers_group_commit_the_newest_state() {
     const WRITERS: usize = 8;
-    const PUSHES_EACH: usize = 5;
+    const EVENTS_EACH: usize = 5;
     let h = crate::common::Harness::new();
 
     let handles: Vec<_> = (0..WRITERS)
         .map(|w| {
             let ledger = h.ledger.clone();
-            let workspace = h.workspace_id.clone();
+            let workspace_id = h.workspace_id.clone();
             std::thread::spawn(move || {
-                for i in 0..PUSHES_EACH {
-                    let item = FeedItem::new(
-                        workspace.clone(),
-                        Surface::Script,
-                        FeedKind::Question,
-                        format!("writer {w} push {i}"),
-                        "rimz",
-                        "cli",
-                    );
-                    ledger.push_feed_item(&item, "rimz-test").expect("push");
+                for i in 0..EVENTS_EACH {
+                    ledger
+                        .append_event(&lifecycle_for_workspace(
+                            workspace_id.clone(),
+                            "SessionStart",
+                            &format!("writer-{w}-{i}"),
+                        ))
+                        .expect("append");
                 }
             })
         })
@@ -363,9 +156,12 @@ fn concurrent_writers_group_commit_the_newest_state() {
 
     let events = h.ledger.read_events().expect("events");
     assert_eq!(
-        events.iter().filter(|e| e.method == "feed.push").count(),
-        WRITERS * PUSHES_EACH,
-        "every concurrent push landed durably"
+        events
+            .iter()
+            .filter(|e| e.method == "agent.lifecycle")
+            .count(),
+        WRITERS * EVENTS_EACH,
+        "every concurrent append landed durably"
     );
     // Freshness is the fold's job: the lock-free read reaches the log's end
     // no matter which tails the cadence gate skipped.
@@ -539,7 +335,7 @@ fn rotation_serializes_with_writers_and_drops_no_append() {
     // across the active log plus every archive: nothing vanishes, whichever
     // interleaving the flock grants.
     const WRITERS: usize = 4;
-    const PUSHES_EACH: usize = 3;
+    const EVENTS_EACH: usize = 3;
     const ROTATIONS: usize = 3;
     let h = crate::common::Harness::new();
 
@@ -547,20 +343,18 @@ fn rotation_serializes_with_writers_and_drops_no_append() {
     let mut handles: Vec<std::thread::JoinHandle<()>> = (0..WRITERS)
         .map(|w| {
             let ledger = h.ledger.clone();
-            let workspace = h.workspace_id.clone();
+            let workspace_id = h.workspace_id.clone();
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                for i in 0..PUSHES_EACH {
-                    let item = FeedItem::new(
-                        workspace.clone(),
-                        Surface::Script,
-                        FeedKind::Question,
-                        format!("writer {w} push {i}"),
-                        "rimz",
-                        "cli",
-                    );
-                    ledger.push_feed_item(&item, "rimz-test").expect("push");
+                for i in 0..EVENTS_EACH {
+                    ledger
+                        .append_event(&lifecycle_for_workspace(
+                            workspace_id.clone(),
+                            "SessionStart",
+                            &format!("rot-writer-{w}-{i}"),
+                        ))
+                        .expect("append");
                 }
             })
         })
@@ -579,35 +373,30 @@ fn rotation_serializes_with_writers_and_drops_no_append() {
         handle.join().expect("thread");
     }
 
-    let mut pushes = h
+    let mut appended = h
         .ledger
         .read_events()
         .expect("active log")
         .iter()
-        .filter(|event| event.method == "feed.push")
+        .filter(|event| event.method == "agent.lifecycle")
         .count();
     if let Ok(entries) = std::fs::read_dir(&h.ledger.paths().events_archive_dir) {
         for entry in entries {
             let path = entry.expect("archive entry").path();
-            pushes += rimz::ledger::event_log::read_all(&path)
+            appended += rimz::ledger::event_log::read_all(&path)
                 .expect("archived log")
                 .iter()
-                .filter(|event| event.method == "feed.push")
+                .filter(|event| event.method == "agent.lifecycle")
                 .count();
         }
     }
     assert_eq!(
-        pushes,
-        WRITERS * PUSHES_EACH,
-        "every push survives the rename boundary, in the active log or an archive"
+        appended,
+        WRITERS * EVENTS_EACH,
+        "every append survives the rename boundary, in the active log or an archive"
     );
 
-    // The post-race read path is coherent: every pushed item is still listed
-    // and a fresh projection serves without error.
-    assert_eq!(
-        h.ledger.list_feed_items().expect("list").len(),
-        WRITERS * PUSHES_EACH
-    );
+    // The post-race read path is coherent.
     h.ledger
         .runtime_projection(RuntimeScope::Runtime)
         .expect("projection after the race");

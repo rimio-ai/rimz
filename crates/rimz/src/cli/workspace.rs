@@ -136,10 +136,6 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
         render::cell(new_workspace.project_root.display().to_string()).fg(render::palette::ACCENT),
     );
     kv.push(
-        "feed items",
-        render::cell(outcome.feed_items_rewritten.to_string()),
-    );
-    kv.push(
         "messages",
         render::cell(outcome.messages_rewritten.to_string()),
     );

@@ -168,48 +168,45 @@ fn internal_app_server_hook_is_suppressed_and_records_nothing() {
 }
 
 #[test]
-fn permission_hook_with_no_allowlisted_resolver_stays_native_ui() {
+fn permission_hook_sets_waiting_status() {
     for (source, payload) in permission_cases() {
         let env = Env::new();
         let output = env.run_hook(source, &payload);
         assert_hook_succeeded_neutral(source, output);
 
-        let items = env.feed_list_json();
-        let items = items.as_array().expect("array");
-        assert_eq!(items.len(), 1, "{source} should create one feed item");
-        assert_eq!(items[0]["surface"], "native_ui");
-        assert_eq!(items[0]["status"], "pending");
-        assert_eq!(items[0]["source"], source);
+        let parsed = env.snapshot_json();
+        let agents = parsed["agents"].as_array().expect("agents array");
+        assert_eq!(agents.len(), 1, "{source} should roll up one agent");
+        assert_eq!(agents[0]["kind"], source);
+        assert_eq!(agents[0]["status"], "waiting");
+        assert!(agents[0]["waiting_since"].as_str().is_some());
     }
 }
 
 #[test]
-fn permission_hook_native_ui_item_can_be_recorded_as_pane_answered() {
+fn permission_waiting_clears_on_tool_use() {
     let env = Env::new();
     let output = env.run_hook("claude", &permission_payload("Bash"));
     assert_hook_succeeded_neutral("claude", output);
 
-    let items = env.feed_list_json();
-    let items = items.as_array().expect("array");
-    assert_eq!(items.len(), 1);
-    let request_id = items[0]["request_id"].as_str().expect("request id");
-
-    let resolve = env.resolve(
-        request_id,
-        r#"{"choice":"allow"}"#,
-        "auto-policy",
-        "pane-send",
+    let output = env.run_hook(
+        "claude",
+        &serde_json::to_string(&json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-claude-permission",
+            "tool_name": "Bash",
+        }))
+        .expect("payload"),
     );
     assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
+        output.status.success(),
+        "post-tool stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 
-    let resolved = env.feed_show_json(request_id);
-    assert_eq!(resolved["status"], "resolved");
-    assert_eq!(resolved["resolution"]["by"], "auto-policy");
-    assert_eq!(resolved["resolution"]["method"], "pane_send");
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["status"], "running");
+    assert!(parsed["agents"][0]["waiting_since"].is_null());
 }
 
 #[test]
@@ -319,19 +316,18 @@ fn assert_agent_pane(snapshot: &Value, agent_id: &str, pane_id: &str) {
 }
 
 #[test]
-fn pi_tool_call_with_no_resolver_emits_neutral_and_no_feed_item() {
+fn pi_tool_call_emits_neutral_and_no_waiting_row() {
     // Pi has no native permission prompt (`native_ask_ui` = false): with no
-    // native UI the hook must answer neutral (empty stdout = the tool runs)
-    // and push NO feed item — nothing could ever answer one.
+    // native UI the hook must answer neutral (empty stdout = the tool runs).
     let env = Env::new();
     let output = env.run_hook("pi", &pi_tool_call_payload("bash"));
     assert_hook_succeeded_neutral("pi", output);
 
-    let items = env.feed_list_json();
+    let parsed = env.snapshot_json();
     assert_eq!(
-        items.as_array().expect("array").len(),
+        parsed["agents"].as_array().expect("agents array").len(),
         0,
-        "pi must not orphan an unanswerable native_ui item: {items}"
+        "pi must not orphan an unanswerable waiting row: {parsed}"
     );
 }
 
@@ -429,13 +425,14 @@ fn codex_subagent_permission_without_parent_frame_stays_metadata_only() {
         0,
         "a child-only ask has no frame-backed parent card: {groups:?}"
     );
-    let needs_attention = parsed["needs_attention"].as_array().expect("needs");
+    let agents = parsed["agents"].as_array().expect("agents");
     assert_eq!(
-        needs_attention.len(),
+        agents.len(),
         1,
-        "the pending ask remains ledger metadata"
+        "the child waiting state remains ledger metadata"
     );
-    assert_eq!(needs_attention[0]["payload"]["agent_id"], "child-thread-1");
+    assert_eq!(agents[0]["agent_id"], "child-thread-1");
+    assert_eq!(agents[0]["status"], "waiting");
 }
 
 #[test]
@@ -495,8 +492,8 @@ fn claude_in_subagent_tool_event_does_not_disturb_parent() {
 }
 
 #[test]
-fn pending_native_ui_ask_survives_backgrounded_child_tool() {
-    // The asking-while-running regression lock: a parent blocked on a native_ui
+fn waiting_agent_survives_backgrounded_child_tool() {
+    // The asking-while-running regression lock: a parent blocked on a native
     // ask must stay `waiting` while a backgrounded subagent works. Before the
     // foreign-id drop, the child's mutating PostToolUse advanced the parent's
     // `last_activity` past the ask and the `waiting` fold dropped.
@@ -521,17 +518,13 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
         "prompt": "fix the sidebar reload bug",
     }));
 
-    // Blocking asks land native_ui and pending.
+    // Blocking asks set Waiting.
     run(&json!({
         "hook_event_name": "PreToolUse",
         "tool_name": "AskUserQuestion",
         "tool_input": { "questions": [{ "question": "which fix shape?" }] },
         "session_id": "sess-claude-parent",
     }));
-    let items = env.feed_list_json();
-    assert_eq!(items[0]["surface"], "native_ui");
-    assert_eq!(items[0]["status"], "pending");
-    let request_id = items[0]["request_id"].as_str().expect("id").to_owned();
 
     // The backgrounded child keeps working while the parent blocks.
     run(&json!({
@@ -549,7 +542,6 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
         .collect();
     assert_eq!(rows.len(), 1, "one waiting parent row expected: {rows:?}");
     assert_eq!(rows[0]["status"], "waiting");
-    assert_eq!(rows[0]["request_id"], request_id.as_str());
 }
 
 #[test]
@@ -602,7 +594,7 @@ fn manual_compact_then_pre_tool_use_resumes_running() {
 // empty and the agent's own UI is the answer surface.
 
 #[test]
-fn claude_pre_tool_blocking_events_use_native_ui_without_resolver() {
+fn claude_pre_tool_blocking_events_set_waiting() {
     for (tool, expected_kind) in [
         ("ExitPlanMode", "plan_approval"),
         ("AskUserQuestion", "question"),
@@ -619,19 +611,28 @@ fn claude_pre_tool_blocking_events_use_native_ui_without_resolver() {
             "neutral Claude blocking hook must keep stdout empty"
         );
 
-        let items = env.feed_list_json();
-        let items = items.as_array().expect("array");
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["surface"], "native_ui", "{tool}");
-        assert_eq!(items[0]["status"], "pending", "{tool}");
-        assert_eq!(items[0]["kind"], expected_kind, "{tool}");
+        let parsed = env.snapshot_json();
+        let agents = parsed["agents"].as_array().expect("agents array");
+        assert_eq!(agents.len(), 1, "{tool}");
+        assert_eq!(agents[0]["status"], "waiting", "{tool}");
+        let event = env
+            .read_events()
+            .into_iter()
+            .rev()
+            .find(|event| event.method == "agent.lifecycle")
+            .expect("lifecycle event");
+        assert_eq!(
+            event.params_value()["signal"]["kind"],
+            expected_kind,
+            "{tool}"
+        );
     }
 }
 
 // --- Codex PreToolUse blocking events ---
 
 #[test]
-fn codex_request_user_input_uses_native_ui_without_resolver() {
+fn codex_request_user_input_sets_waiting() {
     let env = Env::new();
     let output = env.run_hook("codex", &codex_pre_tool_use_payload());
     assert!(
@@ -644,12 +645,17 @@ fn codex_request_user_input_uses_native_ui_without_resolver() {
         "neutral Codex blocking hook must keep stdout empty"
     );
 
-    let items = env.feed_list_json();
-    let items = items.as_array().expect("array");
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["surface"], "native_ui");
-    assert_eq!(items[0]["status"], "pending");
-    assert_eq!(items[0]["kind"], "question");
+    let parsed = env.snapshot_json();
+    let agents = parsed["agents"].as_array().expect("agents array");
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["status"], "waiting");
+    let event = env
+        .read_events()
+        .into_iter()
+        .rev()
+        .find(|event| event.method == "agent.lifecycle")
+        .expect("lifecycle event");
+    assert_eq!(event.params_value()["signal"]["kind"], "question");
 }
 
 // --- Claude lifecycle and install/uninstall ---

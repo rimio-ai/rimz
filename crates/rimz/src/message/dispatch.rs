@@ -5,10 +5,9 @@ use std::collections::BTreeSet;
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
-use crate::feed::pending_ask_in_snapshot;
 use crate::ids::MessageId;
 use crate::message::{
-    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, gate_open,
+    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, gate_open_for_agent,
     message_interval_from_env, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
@@ -90,10 +89,9 @@ pub enum DispatchOutcome {
         label: String,
         message_id: MessageId,
     },
-    SkippedPending {
+    SkippedWaiting {
         label: String,
         message_id: MessageId,
-        request_id: String,
     },
 }
 
@@ -137,9 +135,8 @@ enum LiveAttempt {
         message_id: MessageId,
         compacted: bool,
     },
-    SkippedPending {
+    SkippedWaiting {
         message_id: MessageId,
-        request_id: String,
     },
     ParkInstead,
 }
@@ -175,8 +172,7 @@ impl QueueTarget<'_> {
         let open = match self.bound(snapshot) {
             None => true,
             Some(agent) => {
-                gate_open(gate, agent.effective_status())
-                    && (force || pending_ask_in_snapshot(agent, snapshot).is_none())
+                gate_open_for_agent(gate, agent, force) && (force || !agent.is_awaiting_input())
             }
         };
         if !open {
@@ -340,7 +336,7 @@ pub fn rollup_targets_all_park_without_live(
 }
 
 fn agent_needs_live_queue_resolution(
-    snapshot: &SidebarSnapshot,
+    _snapshot: &SidebarSnapshot,
     pending: &[MessageRecord],
     agent: &AgentState,
     gate: DeliveryGate,
@@ -349,8 +345,8 @@ fn agent_needs_live_queue_resolution(
 ) -> bool {
     agent.agent_id.is_provisional()
         || agent_kind_registers_lazily(agent)
-        || (gate_open(gate, agent.effective_status())
-            && (force || pending_ask_in_snapshot(agent, snapshot).is_none())
+        || (gate_open_for_agent(gate, agent, force)
+            && (force || !agent.is_awaiting_input())
             && queue_head(
                 pending.iter(),
                 &agent.kind,
@@ -487,25 +483,21 @@ pub fn dispatch_for_targets(
                     });
                     continue;
                 }
-                LiveAttempt::SkippedPending {
-                    message_id,
-                    request_id,
-                } => {
+                LiveAttempt::SkippedWaiting { message_id } => {
                     if mode.is_steer() {
                         ctx.ledger.record_send_error(
                             &message,
-                            &format!("pending ask {request_id} reserves input"),
+                            "agent is waiting on input in its pane",
                             &ctx.workspace.session_name,
                         )?;
-                        outcomes.push(DispatchOutcome::SkippedPending {
+                        outcomes.push(DispatchOutcome::SkippedWaiting {
                             label: handle,
                             message_id,
-                            request_id,
                         });
                     } else {
                         ctx.ledger.record_message_delivery_failure(
                             &message_id,
-                            &format!("pending ask {request_id} reserves input"),
+                            "agent is waiting on input in its pane",
                             &ctx.workspace.session_name,
                         )?;
                         push_pending(&mut ctx.pending, message);
@@ -618,14 +610,9 @@ fn send_live_with_recovery(
             message_id,
             compacted: sent.compacted.is_some(),
         }),
-        send::Outcome::SkippedPending {
-            message_id,
-            request_id,
-            ..
-        } => Ok(LiveAttempt::SkippedPending {
-            message_id,
-            request_id,
-        }),
+        send::Outcome::SkippedWaiting { message_id, .. } => {
+            Ok(LiveAttempt::SkippedWaiting { message_id })
+        }
     }
 }
 
@@ -653,10 +640,7 @@ fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
 mod tests {
     use super::*;
 
-    use serde_json::json;
-
     use crate::agents::{AgentStatus, TurnPhase};
-    use crate::feed::{FeedItem, FeedKind, Surface};
     use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
     use crate::pane::PaneRef;
 
@@ -811,18 +795,16 @@ mod tests {
         snapshot
     }
 
-    fn snapshot_with_ask(agent: AgentState, pane: PaneAgent) -> SidebarSnapshot {
-        let mut item = FeedItem::new(
+    fn snapshot_with_ask(mut agent: AgentState, pane: PaneAgent) -> SidebarSnapshot {
+        agent.status = AgentStatus::Waiting;
+        agent.phase = TurnPhase::Idle;
+        agent.waiting_since = Some(agent.last_activity);
+        let mut snapshot = SidebarSnapshot::build_with_agents(
             workspace_id(),
-            Surface::NativeUi,
-            FeedKind::Permission,
-            "approve?",
-            agent.kind.as_str(),
-            "agent-hook",
+            Vec::<()>::new(),
+            vec![agent],
+            now(),
         );
-        item.payload = json!({ "session_id": agent.agent_id.as_str() });
-        let mut snapshot =
-            SidebarSnapshot::build_with_agents(workspace_id(), vec![item], vec![agent], now());
         snapshot.agent_panes = vec![pane];
         snapshot
     }
@@ -873,6 +855,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

@@ -1,4 +1,4 @@
-//! The ledger write path: every mutation's lock → feed-write → event-append
+//! The ledger write path: every mutation's lock → event-append
 //! critical section, and the off-lock wakeup + publish tail that follows a
 //! commit. The read side (snapshots, projections) stays in `mod.rs`; nothing
 //! here is imported outside the ledger module.
@@ -9,23 +9,20 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::agents::LaunchParams;
-use crate::feed::FeedItem;
 use crate::ledger::event::{AgentLaunchPayload, EventEnvelope};
 use crate::pane::RuntimeOwnerKind;
 use crate::workspace::ResolvedWorkspace;
 
 use super::{
-    AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AskExpiry,
+    AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest,
     EventLogRotationOutcome, Ledger, LedgerErr, Result, StatePaths, WorkspaceRewriteOutcome,
-    event_log, feed_store, lock, message_store, runtime, snapshot, workspace_record,
+    event_log, lock, message_store, runtime, snapshot, workspace_record,
 };
 
 mod debounce;
-mod expiry;
 mod publish;
 mod queue;
 mod reset;
-mod resolve;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PublishPolicy {
@@ -37,7 +34,6 @@ pub(super) enum PublishPolicy {
 pub(super) struct Txn<'a> {
     pub(super) paths: &'a StatePaths,
     events: Vec<EventEnvelope>,
-    wake_items: Vec<FeedItem>,
     publish: PublishPolicy,
 }
 
@@ -49,10 +45,6 @@ impl Txn<'_> {
             self.publish = PublishPolicy::Debounced;
         }
         Ok(())
-    }
-
-    pub(super) fn wake_item(&mut self, item: &FeedItem) {
-        self.wake_items.push(item.clone());
     }
 
     pub(super) fn set_publish(&mut self, publish: PublishPolicy) {
@@ -109,7 +101,6 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
 
     let (cache, merged_agents, resume_outcomes) = snapshot::catch_up_rollup(paths)?;
     let live_agents = runtime::RuntimeProjection::from_parts(
-        Vec::new(),
         cache.tombstones.iter().cloned().collect(),
         cache.lost.iter().cloned().collect(),
         merged_agents,
@@ -158,7 +149,6 @@ impl Ledger {
             let mut txn = Txn {
                 paths: &self.inner.paths,
                 events: Vec::new(),
-                wake_items: Vec::new(),
                 publish,
             };
             let out = f(&mut txn)?;
@@ -167,9 +157,6 @@ impl Ledger {
 
         for event in &txn.events {
             self.wake_sidebars_for_event_best_effort(event);
-        }
-        for item in &txn.wake_items {
-            self.wake_per_request_best_effort(item);
         }
         match txn.publish {
             PublishPolicy::Debounced => self.publish_snapshot_best_effort(),
@@ -183,7 +170,7 @@ impl Ledger {
     }
 
     /// Persist the project-root index used by maintenance commands. This does
-    /// not change feed state and does not wake sidebars.
+    /// not change agent state and does not wake sidebars.
     #[must_use = "durability barrier; check the result"]
     pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
         self.commit(PublishPolicy::Skip, |txn| {
@@ -196,28 +183,21 @@ impl Ledger {
     /// Rewrite durable workspace identity after a project root move.
     ///
     /// The caller has already moved the state directory to the new
-    /// `<workspace_id>` path. This method updates feed files, event envelopes,
-    /// the workspace metadata record, and the rebuilt snapshot under one
-    /// workspace lock.
+    /// `<workspace_id>` path. This method updates event envelopes, the
+    /// workspace metadata record, and the rebuilt snapshot under one workspace
+    /// lock.
     #[must_use = "durability barrier; check the result"]
     pub fn rewrite_workspace_identity(
         &self,
         workspace: &ResolvedWorkspace,
     ) -> Result<WorkspaceRewriteOutcome> {
-        let (feed_items_rewritten, messages_rewritten, events_rewritten) = {
+        let (messages_rewritten, events_rewritten) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             // Also fence the snapshot publishers: this rewrite replaces the
             // caches in place, and a publisher mid-fold must not clobber
             // them. Ordering is workspace → publish; publishers take only
             // the publish lock, so the pair can never deadlock.
             let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
-
-            let mut items = feed_store::list(&self.inner.paths.feed_dir)?;
-            let feed_items_rewritten = items.len();
-            for item in &mut items {
-                item.workspace_id = workspace.workspace_id.clone();
-                feed_store::write(&self.inner.paths.feed_dir, item)?;
-            }
 
             let mut messages = message_store::list(&self.inner.paths.messages_dir)?;
             let messages_rewritten = messages.len();
@@ -239,21 +219,23 @@ impl Ledger {
             invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Reseed)?;
             snapshot::rebuild(&self.inner.paths)?;
 
-            (feed_items_rewritten, messages_rewritten, events_rewritten)
+            (messages_rewritten, events_rewritten)
         };
 
         Ok(WorkspaceRewriteOutcome {
             workspace_id: workspace.workspace_id.clone(),
-            feed_items_rewritten,
             messages_rewritten,
             events_rewritten,
         })
     }
 
-    /// Append a freestanding event (no feed item write).
+    /// Append a freestanding event.
     #[must_use = "durability barrier; check the result"]
     pub fn append_event(&self, event: &EventEnvelope) -> Result<()> {
-        self.append_event_and_expire(event, None).map(|_| ())
+        self.commit(PublishPolicy::Skip, |txn| {
+            txn.append(event)?;
+            Ok(())
+        })
     }
 
     /// Allocate final agent card identities from the durable agent fold and
@@ -265,7 +247,6 @@ impl Ledger {
         append: &AgentLaunchAppend,
     ) -> Result<Vec<AgentLaunchIdentity>> {
         self.commit(PublishPolicy::Skip, |txn| {
-            expiry::sweep_dead_owned_items_debounced(txn, &append.session_name)?;
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
             let identities = allocate_agent_launch_identities(requests, &base_agents)?;
             let events = identities
@@ -276,68 +257,6 @@ impl Ledger {
                 txn.append(event)?;
             }
             Ok(identities)
-        })
-    }
-
-    /// Append a lifecycle event and expire the session's superseded pending
-    /// asks under one lock cycle with one snapshot rebuild — the
-    /// highest-cadence hook path (a turn boundary from every live agent)
-    /// pays one flock acquire instead of two. `expiry` carries
-    /// `(source, agent_id, scope)`; `None` is a plain append. Returns the
-    /// number of asks expired.
-    #[must_use = "durability barrier; check the result"]
-    pub fn append_event_and_expire(
-        &self,
-        event: &EventEnvelope,
-        expiry: Option<(&str, &str, AskExpiry)>,
-    ) -> Result<usize> {
-        self.commit(PublishPolicy::Skip, |txn| {
-            expiry::sweep_dead_owned_items_debounced(txn, &event.session_name)?;
-            txn.append(event)?;
-            let expired = match expiry {
-                Some((source, agent_id, scope)) => expiry::expire_agent_asks_locked(
-                    txn,
-                    source,
-                    agent_id,
-                    &event.session_name,
-                    scope,
-                )?,
-                None => Vec::new(),
-            };
-            Ok(expired.len())
-        })
-    }
-
-    /// Write a new feed item to disk, append a `feed.push` event, and rebuild
-    /// the latest snapshot. The whole sequence is taken under the workspace
-    /// lock so partial writes can't surface to the sidebar.
-    #[must_use = "durability barrier; check the result"]
-    pub fn push_feed_item(&self, item: &FeedItem, session_name: &str) -> Result<()> {
-        self.push_feed_item_superseding(item, None, session_name)
-    }
-
-    /// [`Self::push_feed_item`] plus same-cycle superseding.
-    #[must_use = "durability barrier; check the result"]
-    pub fn push_feed_item_superseding(
-        &self,
-        item: &FeedItem,
-        supersede: Option<(&str, &str)>,
-        session_name: &str,
-    ) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
-            expiry::sweep_dead_owned_items_debounced(txn, session_name)?;
-            if let Some((source, agent_id)) = supersede {
-                expiry::expire_agent_asks_locked(
-                    txn,
-                    source,
-                    agent_id,
-                    session_name,
-                    AskExpiry::MovedOn,
-                )?;
-            }
-            feed_store::write(&txn.paths.feed_dir, item)?;
-            txn.append(&EventEnvelope::feed_pushed(item, session_name))?;
-            Ok(())
         })
     }
 
@@ -402,15 +321,9 @@ impl Ledger {
             } else {
                 super::atomic::PruneOutcome::default()
             };
-            let terminal_pruned = feed_store::prune_terminal(
-                &self.inner.paths.feed_dir,
-                archive_older_than.unwrap_or(event_log::DEFAULT_RETENTION),
-            )?;
-
             EventLogRotationOutcome {
                 rotation,
                 pruned,
-                terminal_pruned,
                 carryover_agents,
             }
         };
@@ -917,6 +830,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

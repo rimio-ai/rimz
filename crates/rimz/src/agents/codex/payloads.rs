@@ -67,18 +67,22 @@ pub struct CodexSubagentStart {
 pub struct CodexPreToolUse {
     #[serde(flatten)]
     pub common: CodexCommon,
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
     pub tool_name: Option<String>,
     pub tool_use_id: Option<String>,
     pub tool_input: Option<Value>,
 }
 
-/// Blocking feed event. `tool_name` and `tool_input` are available in
-/// `classify_hook` for enriching the feed item.
+/// Blocking ask event. `tool_name` and `tool_input` are available in
+/// `classify_hook` for naming the waiting kind.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexPermissionRequest {
     #[serde(flatten)]
     pub common: CodexCommon,
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
     pub tool_name: Option<String>,
     /// Full tool input object; `tool_input.description` (if present) is reached
     /// as `tool_input.get("description")`.

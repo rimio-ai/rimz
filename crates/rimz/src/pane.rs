@@ -1,7 +1,7 @@
 //! Shared pane identity and runtime owner primitives.
 //!
-//! Pane references are live-view routing metadata shared by feed items, agent
-//! rollups, mux snapshots, and sidebar projections. They stay outside the
+//! Pane references are live-view routing metadata shared by agent rollups, mux
+//! snapshots, and sidebar projections. They stay outside the
 //! ledger snapshot modules so live-presence types do not depend on durable
 //! read/write layers.
 
@@ -76,8 +76,8 @@ pub struct ElevatedAgent {
     pub uid: u32,
 }
 
-/// Lean pane location attached to a feed item. Carried for routing humans to
-/// the right pane — never used for correctness-critical state.
+/// Lean pane location for routing humans to the right pane — never used for
+/// correctness-critical state.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PaneRef {
     pub pane_id: PaneId,

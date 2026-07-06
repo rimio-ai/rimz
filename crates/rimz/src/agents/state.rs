@@ -1,8 +1,7 @@
 //! Agent rollup state, displayed-status projections, and context severity.
 //!
 //! This is the provider-agnostic model the ledger reducer writes and the
-//! sidebar projects. Feed items reference agents by session id, but the
-//! rollup itself lives with the agent integration layer.
+//! sidebar projects. The rollup itself lives with the agent integration layer.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -66,8 +65,8 @@ impl AgentStatus {
         }
     }
 
-    /// Attention-class: a human (or a resolver) may want this row. `Waiting`
-    /// and `Failed` are actionable; `Paused` is attention-class but parked. The
+    /// Attention-class: a human may want this row. `Waiting` and `Failed` are
+    /// actionable; `Paused` is attention-class but parked. The
     /// producer's ranking buckets use the full set; the renderer's
     /// triage key and heat-breath use the actionable subset
     /// ([`Self::is_actionable`]). Dispatch sites delegate to these predicates
@@ -94,9 +93,8 @@ impl AgentStatus {
 /// The context meter's four-tier severity ramp — calm → yellow → amber → red.
 /// Classified once ([`ContextSeverity::classify`]) from the configured
 /// `[theme.display.context_meter]` bands and stamped on each agent's sidebar row where the
-/// config is folded onto the snapshot, so the renderer's color ramp and a
-/// future hook flow (e.g. a resolver triggering `/compact` at amber) read one
-/// verdict instead of re-deriving it. Ordered, so a threshold reads
+/// config is folded onto the snapshot, so the renderer's color ramp and future
+/// notification hooks read one verdict instead of re-deriving it. Ordered, so a threshold reads
 /// `severity >= Amber`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -138,11 +136,9 @@ impl ContextSeverity {
 }
 
 /// A threshold-crossing an agent's observed state can trip — the typed shape a
-/// future hook flow emits and a resolver handler acts on, riding the same feed
-/// notification handlers can inspect (an auto-compact policy matching
-/// `ContextSeverity { to: Amber, .. }` and answering with `rimz pane send
-/// /compact`, exactly as the pane-send reference resolver acts on a recognised
-/// prompt today). Defined now so the seam is typed against the verdicts the
+/// future notification or automation hook can inspect (an auto-compact policy
+/// matching `ContextSeverity { to: Amber, .. }` and sending `rimz pane send
+/// /compact`). Defined now so the seam is typed against the verdicts the
 /// snapshot already stamps ([`ContextSeverity`] on each row,
 /// [`AgentStatus::is_attention`] on the buckets); emission and handling are
 /// deliberately unbuilt — see the hook-readiness note in
@@ -757,6 +753,12 @@ pub struct AgentState {
     /// logical turn and carries this stamp forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
+    /// Timestamp of the native prompt that put this session in `Waiting`.
+    /// Activity after this instant proves the prompt was answered in the
+    /// agent's own UI, so read paths project the row back to work even before
+    /// the next lifecycle boundary arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_since: Option<Timestamp>,
     /// When this agent last began compacting its context window — the timestamp
     /// of its most-recent compaction-start signal (`PreCompact` or Pi
     /// `session_before_compact`). Set by the rollup, cleared by the session's
@@ -833,6 +835,8 @@ struct AgentStateWire {
     subagent_description: Option<String>,
     subagent_started_at: Option<Timestamp>,
     turn_started_at: Option<Timestamp>,
+    #[serde(default)]
+    waiting_since: Option<Timestamp>,
     compacting_since: Option<Timestamp>,
     #[serde(default)]
     compaction_count: u32,
@@ -891,6 +895,7 @@ impl From<AgentStateWire> for AgentState {
             subagent_description: wire.subagent_description,
             subagent_started_at: wire.subagent_started_at,
             turn_started_at: wire.turn_started_at,
+            waiting_since: wire.waiting_since,
             compacting_since: wire.compacting_since,
             compaction_count: wire.compaction_count,
             last_compact_command_tokens: wire.last_compact_command_tokens,
@@ -961,6 +966,16 @@ impl AgentState {
             | TurnErrorClass::PausedOverloaded => AgentStatus::Paused,
             TurnErrorClass::Unknown | TurnErrorClass::Failed => self.status,
         }
+    }
+
+    /// True when the current `Waiting` state still predates all observed agent
+    /// activity. A later activity heartbeat means the user answered in the
+    /// native UI and the row should stop reserving input.
+    pub fn is_awaiting_input(&self) -> bool {
+        self.status == AgentStatus::Waiting
+            && self
+                .waiting_since
+                .is_some_and(|waiting_since| self.last_activity <= waiting_since)
     }
 
     /// Provider API error currently explaining this row's displayed state. The
@@ -1292,6 +1307,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

@@ -60,7 +60,6 @@ pub struct StatePaths {
     pub snapshots_dir: PathBuf,
     pub latest_snapshot: PathBuf,
     pub rollup_cache: PathBuf,
-    pub feed_dir: PathBuf,
     pub messages_dir: PathBuf,
     pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
@@ -88,7 +87,6 @@ impl StatePaths {
             .join("workspaces")
             .join(workspace_id.as_str());
         let snapshots_dir = root.join("snapshots");
-        let feed_dir = root.join("feed");
         let messages_dir = root.join("messages");
         let transcript_dir = root.join("transcript");
         let runs_dir = root.join("runs");
@@ -101,7 +99,6 @@ impl StatePaths {
             latest_snapshot: snapshots_dir.join("latest.json"),
             rollup_cache: snapshots_dir.join("rollup.json"),
             snapshots_dir,
-            feed_dir,
             messages_dir,
             transcript_dir,
             runs_dir,
@@ -119,7 +116,6 @@ impl StatePaths {
 
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.snapshots_dir)?;
-        mkdir_p(&self.feed_dir)?;
         mkdir_p(&self.runs_dir)?;
         mkdir_p(&self.locks_dir)?;
         Ok(())
@@ -151,12 +147,12 @@ pub struct RuntimePaths {
     /// everywhere in the workspace.
     pub read_marks_dir: PathBuf,
     /// Holds one latest-wins agent-context sidecar per session. Written by CLI
-    /// producer paths (statusline feed, hook/local transcript refresh, detached
+    /// producer paths (statusline, hook/local transcript refresh, detached
     /// helpers, snapshot producer backstops) and folded by snapshot reads.
     pub agent_context_dir: PathBuf,
     /// Holds one latest-wins subagent-context sidecar per child (Claude's
     /// `subagentStatusLine` enrichment: description, token count, start time).
-    /// Written by the feed process, read by the snapshot CLI — never the sidebar.
+    /// Written by CLI producers, read by the snapshot CLI — never the sidebar.
     /// Kept apart from `agent_context/` so each reader deserializes only its own
     /// record shape.
     pub subagent_context_dir: PathBuf,

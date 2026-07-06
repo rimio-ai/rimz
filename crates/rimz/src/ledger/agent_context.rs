@@ -1,7 +1,7 @@
 //! Latest-wins per-session agent-context sidecar.
 //!
 //! High-frequency enrichment is written here by the context producers — the
-//! statusline feed, hook ingestion/local transcript refresh, and detached
+//! statusline, hook ingestion/local transcript refresh, and detached
 //! helpers (CLI paths), plus the elder renderer's producer-side triggers (the
 //! in-process snapshot-produce backstop and the transcript watcher,
 //! `sidebar_pane::app::transcript_watch`) — as one atomic file per
@@ -15,7 +15,7 @@
 //! shared enrichment fold; writes stay producer-side (CLI paths and the
 //! elder's triggers above) and are cache-class — rename atomicity, no fsync,
 //! rebuilt from provider state. "Sidebar is read-only on the ledger" is about
-//! durable truth: nothing here reaches the event log or feed store, and the
+//! durable truth: nothing here reaches the event log, and the
 //! `cargo xtask invariants` greps enforce that boundary.
 
 use std::cell::RefCell;

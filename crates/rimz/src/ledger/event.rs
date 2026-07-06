@@ -6,7 +6,6 @@ use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 
 use crate::agents::{AgentLifecycleObservation, LaunchParams};
-use crate::feed::FeedItem;
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
 };
@@ -275,8 +274,8 @@ pub enum EventKind<'a> {
     SessionRebirth,
     SessionDeath(SessionDeathPayload),
     /// Deliberate carrier for audit/user events that have not graduated to a
-    /// folded typed variant yet, including `feed.*`, `event.emit`, and unknown
-    /// methods from older or newer binaries.
+    /// folded typed variant yet, including old `feed.*`/`event.emit` frames and
+    /// unknown methods from older or newer binaries.
     Other {
         method: &'a str,
         params: &'a RawValue,
@@ -467,22 +466,6 @@ impl EventEnvelope {
                     params: &self.params,
                 }),
         }
-    }
-
-    /// Convenience constructor for a `feed.push` event from a `FeedItem`.
-    pub fn feed_pushed(item: &FeedItem, session_name: impl Into<String>) -> Self {
-        Self::new(
-            item.workspace_id.clone(),
-            session_name,
-            item.source.clone(),
-            item.source_kind.clone(),
-            "feed.push",
-            json!({
-                "request_id": item.request_id,
-                "surface": item.surface,
-                "kind": item.kind,
-            }),
-        )
     }
 
     /// Convenience constructor for an `agent.lifecycle` event. The CLI hook

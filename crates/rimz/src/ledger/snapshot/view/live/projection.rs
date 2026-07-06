@@ -2,14 +2,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use jiff::Timestamp;
 
-use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::AgentState;
 use crate::diag::record::DiagEvent;
-use crate::feed::{FeedItem, pending_ask_for};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::snapshot::panes::{
     AgentPaneRow, LazyAgentPairingResult, agent_for_pane, agent_pane_for_pane,
-    compute_lazy_agent_pairings, pane_start_matches, stamped_agent_for_pane,
+    compute_lazy_agent_pairings, stamped_agent_for_pane,
 };
 use crate::ledger::snapshot::process::{
     pane_command_is_known, pane_worktree_path, row_from_process,
@@ -17,7 +15,7 @@ use crate::ledger::snapshot::process::{
 use crate::ledger::snapshot::row::{PaneAgent, SidebarRow};
 use crate::pane::PaneRef;
 
-use super::super::rows::{row_from_agent, row_from_standalone_item};
+use super::super::rows::row_from_agent;
 
 pub(super) struct LazyAgentPaneProjection<'a> {
     pub(super) wired_kinds: &'a [String],
@@ -56,7 +54,6 @@ pub(crate) fn row_identity_violations<'a>(
 
 pub(super) fn rows_from_panes(
     agents: &[AgentState],
-    needs_attention: &[FeedItem],
     panes: &[PaneRef],
     lazy_agents: LazyAgentPaneProjection<'_>,
     panes_produced_at_ms: Option<u64>,
@@ -68,7 +65,6 @@ pub(super) fn rows_from_panes(
     let mut seen_panes = HashSet::new();
     let mut bound_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
     let mut bound_agent_panes: HashMap<(AgentKind, AgentSessionId), PaneId> = HashMap::new();
-    let standalone_items = standalone_items_by_pane(needs_attention, panes);
     let computed_pairings;
     let lazy_pairings = if let Some(pairings) = lazy_agents.pairings {
         pairings
@@ -84,7 +80,6 @@ pub(super) fn rows_from_panes(
             });
             continue;
         }
-        let standalone_ask = standalone_items.get(&pane.pane_id).copied();
         if let Some(agent) = stamped_agent_for_pane(pane, agents) {
             let key = (agent.kind.clone(), agent.agent_id.clone());
             if let Some(bound_pane) = bound_agent_panes.get(&key) {
@@ -104,7 +99,6 @@ pub(super) fn rows_from_panes(
                 &mut bound_agent_panes,
                 agent,
                 pane,
-                pane_ask(agent, standalone_ask, needs_attention),
                 now,
             ));
         } else if let Some(bind) = agent_pane_for_pane(
@@ -123,14 +117,10 @@ pub(super) fn rows_from_panes(
                     &mut bound_agent_panes,
                     agent,
                     pane,
-                    pane_ask(agent, standalone_ask, needs_attention),
                     now,
                 )),
                 AgentPaneRow::Idle(row) => {
-                    let mut row = *row;
-                    if let Some(ask) = standalone_ask {
-                        fold_ask_onto_row(&mut row, ask);
-                    }
+                    let row = *row;
                     // A wired pane carries only its kind and pane — no session,
                     // pet name, or ordinal until a lifecycle hook binds one.
                     agent_panes.push(PaneAgent {
@@ -161,8 +151,6 @@ pub(super) fn rows_from_panes(
                     }
                 }
             }
-        } else if let Some(item) = standalone_ask {
-            rows.push(row_from_standalone_item(item, pane));
         } else if newborn_unknown_cwd(pane, panes_produced_at_ms) {
             diagnostics.push(DiagEvent::NewbornQuarantined {
                 pane_id: pane.pane_id.clone(),
@@ -182,46 +170,6 @@ pub(super) fn rows_from_panes(
     }
 }
 
-/// The newest pending standalone (non-agent-hook) ask per frame-admitted pane.
-fn standalone_items_by_pane<'a>(
-    needs_attention: &'a [FeedItem],
-    panes: &[PaneRef],
-) -> HashMap<PaneId, &'a FeedItem> {
-    let mut by_pane = HashMap::new();
-    for item in needs_attention {
-        if item.source_kind == "agent-hook" {
-            continue;
-        }
-        let Some(pane) = frame_pane_for_item(item, panes) else {
-            continue;
-        };
-        by_pane
-            .entry(pane.pane_id.clone())
-            .and_modify(|current: &mut &'a FeedItem| {
-                if item.updated_at > current.updated_at {
-                    *current = item;
-                }
-            })
-            .or_insert(item);
-    }
-    by_pane
-}
-
-fn frame_pane_for_item<'a>(item: &FeedItem, panes: &'a [PaneRef]) -> Option<&'a PaneRef> {
-    let requested = item.pane.as_ref()?;
-    panes
-        .iter()
-        .find(|pane| pane.pane_id == requested.pane_id && pane_start_matches(requested, pane))
-}
-
-fn pane_ask<'a>(
-    agent: &AgentState,
-    standalone_ask: Option<&'a FeedItem>,
-    needs_attention: &'a [FeedItem],
-) -> Option<&'a FeedItem> {
-    standalone_ask.or_else(|| most_relevant_ask(agent, needs_attention))
-}
-
 /// Push a bound agent's row and return the [`PaneAgent`] for `agent_panes`. The
 /// pane comes from the live frame, not the session's own (often unstamped for a
 /// daemon-routed agent) record — so resolution reaches the bound pane.
@@ -231,7 +179,6 @@ fn push_agent_row(
     bound_panes: &mut HashMap<(AgentKind, AgentSessionId), PaneId>,
     agent: &AgentState,
     pane: &PaneRef,
-    ask: Option<&FeedItem>,
     now: Timestamp,
 ) -> PaneAgent {
     let key = (agent.kind.clone(), agent.agent_id.clone());
@@ -241,9 +188,6 @@ fn push_agent_row(
     let mut row = row_from_agent(agent, now);
     row.worktree_path = row.worktree_path.or_else(|| worktree_path.clone());
     row.pane = Some(pane.clone());
-    if let Some(ask) = ask {
-        fold_ask_onto_row(&mut row, ask);
-    }
     rows.push(row);
     PaneAgent {
         kind: agent.kind.clone(),
@@ -265,28 +209,4 @@ fn newborn_unknown_cwd(pane: &PaneRef, panes_produced_at_ms: Option<u64>) -> boo
         && pane.first_seen_at_ms == panes_produced_at_ms
         && pane_worktree_path(pane).is_none()
         && pane_command_is_known(pane)
-}
-
-fn most_relevant_ask<'a>(
-    agent: &AgentState,
-    needs_attention: &'a [FeedItem],
-) -> Option<&'a FeedItem> {
-    pending_ask_for(agent, needs_attention.iter())
-}
-
-fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
-    row.last_activity = ask.updated_at;
-    let Some(agent) = row.as_agent_mut() else {
-        return;
-    };
-    agent.status = AgentStatus::Waiting;
-    agent.phase = TurnPhase::Idle;
-    agent.request_id = Some(ask.request_id.clone());
-    agent.surface = Some(ask.surface);
-    agent.options = ask.options.clone();
-}
-
-#[cfg(test)]
-pub(crate) fn fold_ask_onto_row_for_test(row: &mut SidebarRow, ask: &FeedItem) {
-    fold_ask_onto_row(row, ask);
 }

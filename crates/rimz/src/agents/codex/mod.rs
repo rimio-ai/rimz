@@ -1,7 +1,7 @@
 //! Codex hook adapter.
 //!
 //! Classifies `PermissionRequest` and blocking `PreToolUse` questions
-//! (`request_user_input`) onto the feed, plus the lifecycle events
+//! (`request_user_input`) onto Waiting, plus the lifecycle events
 //! (`SessionStart` registers idle, `SubagentStart` / `UserPromptSubmit` move
 //! to running, `SubagentStop` returns the child to idle, `Stop` completes the
 //! root turn — success, or failed on an error signal); neutral hook output is
@@ -49,9 +49,10 @@ use self::install::{
 #[cfg(test)]
 use self::install::{has_rimz_hook_command, snake_event_token};
 use self::payloads::{
-    CodexPostCompact, CodexSessionStart, CodexSubagentStart, CodexSubagentStop,
-    CodexUserPromptSubmit, parse_post_compact, parse_pre_tool_use, parse_session_start, parse_stop,
-    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
+    CodexPermissionRequest, CodexPostCompact, CodexPreToolUse, CodexSessionStart,
+    CodexSubagentStart, CodexSubagentStop, CodexUserPromptSubmit, parse_permission_request,
+    parse_post_compact, parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start,
+    parse_subagent_stop, parse_user_prompt_submit,
 };
 pub(crate) use self::process::is_codex_cli_cmdline;
 pub use self::process::{
@@ -72,6 +73,7 @@ pub use self::transcript::{
     refine_turn_death_from_frame, refresh_transcript_context, session_origin,
     turn_death_needs_pane_confirmation,
 };
+use super::AskKind;
 use super::context::AgentContext;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
@@ -90,12 +92,11 @@ use super::{
     resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::chat::AskQuestion;
-use crate::feed::FeedKind;
 use crate::harness::run::PermissionMode;
 
 /// Per-hook timeout written into the Codex config (seconds). Hooks write a
-/// feed item and return neutral immediately, so the value is a short guard for
-/// local I/O failures rather than an answer window.
+/// Waiting state and return neutral immediately, so the value is a short guard
+/// for local I/O failures rather than an answer window.
 const CODEX_HOOK_TIMEOUT_SECS: i64 = 10;
 
 /// Codex's GPT-5.5 backend input ceiling — the observed 272k-token limit above
@@ -186,10 +187,10 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // real function calls with this name and no `AskUserQuestion` or
         // `ExitPlanMode` calls. Re-verify against a teed `PreToolUse` stdin
         // before renaming this hook vocabulary.
-        blocking: &[("request_user_input", FeedKind::Question)],
+        blocking: &[("request_user_input", AskKind::Question)],
     },
     capabilities: Capabilities {
-        blocking_feed: true,
+        blocking_asks: true,
         native_ask_ui: true,
         rich_context: true,
         transcript_tail_context: true,
@@ -356,6 +357,12 @@ const CODEX_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
         },
     ),
     (
+        LifecycleSignalKind::AwaitingInput,
+        HookCoverage::Native {
+            event: "PermissionRequest",
+        },
+    ),
+    (
         LifecycleSignalKind::SubagentStarted,
         HookCoverage::Native {
             event: "SubagentStart",
@@ -402,9 +409,8 @@ const CODEX_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
 /// turn-boundary events (`UserPromptSubmit`, `Stop`) carry no matcher.
 /// `UserPromptSubmit` is state signal — it moves the root agent to running and
 /// carries the task. The broad `PreToolUse`/`PostToolUse` hooks fire on every
-/// tool call; they keep the sidebar's enrichment current and feed
-/// `rimz feed list --audit` depth, with their payload content gated by
-/// `[privacy] payload_mode`.
+/// tool call; they keep the sidebar's enrichment current, with their payload
+/// content gated by `[privacy] payload_mode`.
 const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("SessionStart", Some("startup|resume|clear|compact")),
     ("UserPromptSubmit", None),
@@ -535,14 +541,14 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
-        let feed_kind = match event_name {
-            "PermissionRequest" => Some(FeedKind::Permission),
+        let ask_kind = match event_name {
+            "PermissionRequest" => Some(AskKind::Permission),
             "PreToolUse" => self
                 .descriptor()
                 .blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()),
             _ => None,
         };
-        classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
+        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
     }
 
     #[cfg(test)]
@@ -558,14 +564,14 @@ impl AgentAdapter for CodexAdapter {
             ClassificationSample::new(
                 "PermissionRequest",
                 serde_json::json!({ "session_id": "sess-1", "tool_name": "shell" }),
-                AgentHookClass::BlockingFeed,
-                Some(FeedKind::Permission),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Permission),
             ),
             ClassificationSample::new(
                 "PreToolUse",
                 serde_json::json!({ "session_id": "sess-1", "tool_name": "request_user_input" }),
-                AgentHookClass::BlockingFeed,
-                Some(FeedKind::Question),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Question),
             ),
             ClassificationSample::new(
                 "PreToolUse",
@@ -660,7 +666,7 @@ impl AgentAdapter for CodexAdapter {
 
     fn moves_on(&self, event_name: &str) -> bool {
         // Same turn-boundary signal as Claude: a fresh prompt or the root Stop
-        // means the agent is past any native_ui ask it raised mid-turn. A
+        // means the agent is past any native prompt it raised mid-turn. A
         // SubagentStop is a child finishing, not the human answering, so it does
         // not clear the root's asks.
         matches!(event_name, "Stop" | "UserPromptSubmit")
@@ -685,6 +691,7 @@ impl AgentAdapter for CodexAdapter {
             event_name,
             payload,
             &parts,
+            &signal,
         )?;
         let root_identity_event = parent_agent_id.is_none()
             && matches!(
@@ -865,10 +872,28 @@ struct CodexLifecycleParts {
     user_prompt: Option<CodexUserPromptSubmit>,
     subagent_start: Option<CodexSubagentStart>,
     subagent_stop: Option<CodexSubagentStop>,
+    pre_tool_use: Option<CodexPreToolUse>,
+    permission_request: Option<CodexPermissionRequest>,
     post_compact: Option<CodexPostCompact>,
 }
 
 type CodexSubagent<'a> = (&'a Option<String>, &'a Option<String>, &'a Option<String>);
+
+fn codex_child_event<'a>(
+    agent_id: &'a Option<String>,
+    agent_type: &'a Option<String>,
+    session_id: &'a Option<String>,
+) -> Option<CodexSubagent<'a>> {
+    let child = agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let parent = session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    (child != parent).then_some((agent_id, agent_type, session_id))
+}
 
 impl CodexLifecycleParts {
     fn parse(event_name: &str, payload: &Value) -> Self {
@@ -878,11 +903,14 @@ impl CodexLifecycleParts {
                 .then(|| parse_user_prompt_submit(payload)),
             subagent_start: (event_name == "SubagentStart").then(|| parse_subagent_start(payload)),
             subagent_stop: (event_name == "SubagentStop").then(|| parse_subagent_stop(payload)),
+            pre_tool_use: (event_name == "PreToolUse").then(|| parse_pre_tool_use(payload)),
+            permission_request: (event_name == "PermissionRequest")
+                .then(|| parse_permission_request(payload)),
             post_compact: (event_name == "PostCompact").then(|| parse_post_compact(payload)),
         }
     }
 
-    fn subagent(&self) -> Option<CodexSubagent<'_>> {
+    fn subagent_for_signal(&self, signal: &LifecycleSignal) -> Option<CodexSubagent<'_>> {
         self.subagent_start
             .as_ref()
             .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
@@ -890,6 +918,17 @@ impl CodexLifecycleParts {
                 self.subagent_stop
                     .as_ref()
                     .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
+            })
+            .or_else(|| {
+                self.permission_request.as_ref().and_then(|p| {
+                    codex_child_event(&p.agent_id, &p.agent_type, &p.common.common.session_id)
+                })
+            })
+            .or_else(|| match signal {
+                LifecycleSignal::AwaitingInput { .. } => self.pre_tool_use.as_ref().and_then(|p| {
+                    codex_child_event(&p.agent_id, &p.agent_type, &p.common.common.session_id)
+                }),
+                _ => None,
             })
     }
 }
@@ -916,14 +955,27 @@ fn map_codex_lifecycle_signal(
             errored: stop_payload_errored(payload) || turn_error.is_some(),
             parked_on_background: false,
         }),
+        "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
+            kind: AskKind::Permission,
+        }),
         "PostToolUse" if descriptor.tool_mutates(payload) => Some(LifecycleSignal::ToolUsed {
             mutates: true,
             edits: descriptor.tool_edits_files(payload),
         }),
-        "PreToolUse" => Some(LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
-        }),
+        "PreToolUse" => {
+            match descriptor.blocking_tool_kind(
+                parts
+                    .pre_tool_use
+                    .as_ref()
+                    .and_then(|p| p.tool_name.as_deref()),
+            ) {
+                Some(kind) => Some(LifecycleSignal::AwaitingInput { kind }),
+                None => Some(LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                }),
+            }
+        }
         "PreCompact" => Some(LifecycleSignal::Compacting),
         "PostCompact" => Some(LifecycleSignal::CompactionEnded {
             auto: parts
@@ -979,8 +1031,9 @@ fn resolve_codex_observation_identity(
     event_name: &str,
     payload: &Value,
     parts: &CodexLifecycleParts,
+    signal: &LifecycleSignal,
 ) -> Option<ObservationIdentity> {
-    match parts.subagent() {
+    match parts.subagent_for_signal(signal) {
         Some((child, _, parent)) => match resolve_subagent_identity(
             kind,
             event_name,
@@ -1017,10 +1070,11 @@ fn build_codex_observation(
     let usage = transcript.usage;
     let usage_effort = usage.effort.clone();
     let is_subagent = parent_agent_id.is_some();
+    let subagent = parts.subagent_for_signal(&signal);
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
     observation.parent_agent_id = parent_agent_id;
-    observation.task = codex_task(payload, parts.subagent());
+    observation.task = codex_task(payload, subagent);
     observation.prompt =
         sanitize_user_prompt(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
     observation.transcript_path = transcript

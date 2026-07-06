@@ -2449,7 +2449,7 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
 /// Headless sends work with zero attached clients and while the presence watch
 /// is the sole attached client. The latter is the tmux 3.7 regression guard:
 /// the watch must stay writable so `send-keys` can resolve a writable client for
-/// `rimz message`, `pane send`, and resolver sends.
+/// `rimz message` and `pane send`.
 #[test]
 fn headless_sends_work_with_no_client_and_presence_watch() {
     require_tmux!();

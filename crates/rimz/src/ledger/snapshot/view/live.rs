@@ -17,9 +17,7 @@ use projection::{LazyAgentPaneProjection, rows_from_panes};
 mod projection;
 
 #[cfg(test)]
-pub(crate) use projection::{
-    fold_ask_onto_row_for_test as fold_ask_onto_row, row_identity_violations,
-};
+pub(crate) use projection::row_identity_violations;
 
 impl SidebarSnapshot {
     /// Fold live multiplexer panes into the sidebar view-model. This reducer is
@@ -78,7 +76,6 @@ impl SidebarSnapshot {
     ) -> Vec<DiagEvent> {
         let mut projection = rows_from_panes(
             &self.agents,
-            &self.needs_attention,
             panes,
             LazyAgentPaneProjection {
                 wired_kinds: &self.wired_kinds,

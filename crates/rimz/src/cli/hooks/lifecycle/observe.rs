@@ -9,7 +9,6 @@ pub(super) fn record_lifecycle_observation(
     event_name: &str,
     payload: &Value,
     globals: &GlobalFlags,
-    fallback_expiry: Option<(&str, AskExpiry)>,
 ) -> Option<RecordedLifecycle> {
     if let Some(mut observation) = agent.observe_lifecycle(event_name, payload) {
         attach_agent_owner(agent.descriptor().kind, &mut observation);
@@ -77,12 +76,8 @@ pub(super) fn record_lifecycle_observation(
         // it reconciling a resting row or closing a compaction bracket. If the
         // transition read fails, the proof-of-work signal drops and the bracket
         // closes on the next durable lifecycle signal.
+        let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
         let append_lifecycle = append_lifecycle_event(&observation.signal, transition);
-        let append_expiry = observation
-            .agent_id
-            .as_deref()
-            .zip(expiry_scope_for_signal(&observation.signal))
-            .map(|(agent_id, scope)| (agent.descriptor().kind, agent_id, scope));
         let appended_lifecycle = if append_lifecycle {
             let event_observation = event_lifecycle_observation(&observation);
             let envelope = EventEnvelope::agent_lifecycle(
@@ -92,8 +87,8 @@ pub(super) fn record_lifecycle_observation(
                 event_name,
                 &event_observation,
             );
-            match ledger.append_event_and_expire(&envelope, append_expiry) {
-                Ok(_) => true,
+            match ledger.append_event(&envelope) {
+                Ok(()) => true,
                 Err(err) => {
                     warn!(
                         agent = agent.descriptor().kind,
@@ -111,32 +106,8 @@ pub(super) fn record_lifecycle_observation(
             model_hint,
             observation,
             appended_lifecycle,
+            waiting_cleared,
         });
-    }
-
-    if let Some((agent_id, scope)) = fallback_expiry {
-        // A boundary event the adapter doesn't observe still expires the
-        // session's superseded asks through the standalone path.
-        let result = match scope {
-            AskExpiry::SessionEnded => ledger.expire_agent_session(
-                agent.descriptor().kind,
-                agent_id,
-                &workspace.session_name,
-            ),
-            AskExpiry::MovedOn => ledger.expire_agent_native_ui_asks(
-                agent.descriptor().kind,
-                agent_id,
-                &workspace.session_name,
-            ),
-        };
-        if let Err(err) = result {
-            warn!(
-                agent = agent.descriptor().kind,
-                event = %event_name,
-                error = %err,
-                "lifecycle: failed to expire the session's pending asks",
-            );
-        }
     }
     None
 }
@@ -162,35 +133,6 @@ pub(super) fn event_lifecycle_observation(
     // Lazy adapters can first recover their pane binding on TurnStarted, so the
     // reducer needs every event pane stamp that focus recovery supplies.
     Cow::Owned(trimmed)
-}
-
-pub(super) fn expiry_scope_for_event_name(
-    agent: &dyn AgentAdapter,
-    event_name: &str,
-) -> Option<AskExpiry> {
-    // Fallback for boundary events the adapter intentionally does not observe:
-    // the adapter's native predicates still carry the answer for these paths.
-    if agent.ends_session(event_name) {
-        Some(AskExpiry::SessionEnded)
-    } else if agent.moves_on(event_name) {
-        Some(AskExpiry::MovedOn)
-    } else {
-        None
-    }
-}
-
-pub(super) fn expiry_scope_for_signal(signal: &LifecycleSignal) -> Option<AskExpiry> {
-    // A lifecycle boundary can strand the session's pending native_ui asks:
-    // the agent answers those in its own UI and never reports back, so they
-    // pile up as duplicate attention. Session end expires every surface; a
-    // live session moving on expires only native_ui asks.
-    match signal {
-        LifecycleSignal::Ended => Some(AskExpiry::SessionEnded),
-        LifecycleSignal::TurnStarted | LifecycleSignal::TurnEnded { .. } => {
-            Some(AskExpiry::MovedOn)
-        }
-        _ => None,
-    }
 }
 
 /// Fold this observation's signal onto the prior rollup state through the shared
@@ -298,6 +240,7 @@ pub(in crate::cli::hooks) fn append_lifecycle_event(
     !proof_of_work_pre_tool(signal)
         || transition.is_some_and(|transition| {
             transition.compaction_closed
+                || transition.waiting_cleared
                 || matches!(transition.kind, TransitionKind::Reconciled { .. })
         })
 }

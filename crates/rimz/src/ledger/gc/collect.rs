@@ -495,8 +495,8 @@ mod tests {
 
         let stale_socket = rt.sock_dir.join("sidebar.stale.sock");
         fs::write(&stale_socket, b"socket placeholder").unwrap();
-        let feed_socket = rt.sock_dir.join("feed.123456789abc.sock");
-        fs::write(&feed_socket, b"feed socket placeholder").unwrap();
+        let run_socket = rt.sock_dir.join("run.123456789abc.sock");
+        fs::write(&run_socket, b"run socket placeholder").unwrap();
 
         let stale_sidebar = SidebarHeartbeat::new(
             workspace_id.clone(),
@@ -509,11 +509,11 @@ mod tests {
         let stale_sidebar_path = rt.heartbeat_dir.join("sidebar.stale.json");
         write_json(&stale_sidebar_path, &stale_sidebar);
 
-        let legacy_resolver_path = rt.heartbeat_dir.join("resolver.opus-policy.json");
-        fs::write(&legacy_resolver_path, b"{}").unwrap();
+        let legacy_unknown_path = rt.heartbeat_dir.join("unknown.opus-policy.json");
+        fs::write(&legacy_unknown_path, b"{}").unwrap();
 
         let old = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&stale_socket, &stale_sidebar_path, &legacy_resolver_path] {
+        for path in [&stale_socket, &stale_sidebar_path, &legacy_unknown_path] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
 
@@ -525,8 +525,8 @@ mod tests {
         assert_eq!(report.sidebar_sockets_removed, 1);
         assert!(!stale_sidebar_path.exists());
         assert!(!stale_socket.exists());
-        assert!(legacy_resolver_path.exists());
-        assert!(feed_socket.exists(), "feed sockets are not GC-owned");
+        assert!(legacy_unknown_path.exists());
+        assert!(run_socket.exists(), "run sockets are not GC-owned");
     }
 
     #[test]

@@ -117,13 +117,12 @@ pub(super) fn split_rendered_handle(handle: &str) -> (&str, Option<&str>) {
 }
 
 pub(super) fn dedup_asks(entries: Vec<ChatEntry>) -> Vec<ChatEntry> {
-    let mut latest_asks: HashMap<RequestId, (usize, jiff::Timestamp)> = HashMap::new();
+    let mut latest_asks: HashMap<AgentKey, (usize, jiff::Timestamp)> = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
-        if entry.entry == ChatKind::Ask
-            && let Some(request_id) = entry.request_id.as_ref()
-        {
+        if entry.entry == ChatKind::Ask {
+            let key = entry_key(entry);
             latest_asks
-                .entry(request_id.clone())
+                .entry(key)
                 .and_modify(|prior| {
                     if entry.at >= prior.1 {
                         *prior = (index, entry.at);
@@ -136,10 +135,9 @@ pub(super) fn dedup_asks(entries: Vec<ChatEntry>) -> Vec<ChatEntry> {
         .into_iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            if entry.entry == ChatKind::Ask
-                && let Some(request_id) = entry.request_id.as_ref()
-            {
-                return (latest_asks.get(request_id).map(|(latest, _)| *latest) == Some(index))
+            if entry.entry == ChatKind::Ask {
+                let key = entry_key(&entry);
+                return (latest_asks.get(&key).map(|(latest, _)| *latest) == Some(index))
                     .then_some(entry);
             }
             Some(entry)

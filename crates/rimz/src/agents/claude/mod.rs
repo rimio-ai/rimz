@@ -46,6 +46,7 @@ use self::payloads::{
     parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start,
     parse_subagent_stop, parse_user_prompt_submit,
 };
+use super::AskKind;
 use super::RemoteControlStatus;
 #[cfg(test)]
 use super::StatusLineChange;
@@ -66,7 +67,6 @@ use super::{
 };
 use crate::agents::TurnErrorClass;
 use crate::chat::{AskAnswer, AskQuestion};
-use crate::feed::FeedKind;
 use crate::harness::run::PermissionMode;
 
 /// Everything `const` about Claude Code, in one place. See
@@ -90,12 +90,12 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         mutating: &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"],
         editing: &["Edit", "Write", "MultiEdit", "NotebookEdit"],
         blocking: &[
-            ("ExitPlanMode", FeedKind::PlanApproval),
-            ("AskUserQuestion", FeedKind::Question),
+            ("ExitPlanMode", AskKind::PlanApproval),
+            ("AskUserQuestion", AskKind::Question),
         ],
     },
     capabilities: Capabilities {
-        blocking_feed: true,
+        blocking_asks: true,
         native_ask_ui: true,
         rich_context: true,
         transcript_tail_context: false,
@@ -254,6 +254,12 @@ const CLAUDE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
         },
     ),
     (
+        LifecycleSignalKind::AwaitingInput,
+        HookCoverage::Native {
+            event: "PermissionRequest",
+        },
+    ),
+    (
         LifecycleSignalKind::SubagentStarted,
         HookCoverage::Native {
             event: "SubagentStart",
@@ -293,22 +299,21 @@ const CLAUDE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
 ];
 
 /// Per-hook timeout written into the Claude config (seconds). Hooks write a
-/// feed item and return neutral immediately, so the value is a short guard for
-/// local I/O failures rather than an answer window.
+/// Waiting state and return neutral immediately, so the value is a short guard
+/// for local I/O failures rather than an answer window.
 const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
 
 /// Installed events. Tuple is `(event_name, optional_matcher)`. Rimz installs
 /// every event as a single broad hook with no matcher: the helper classifies
 /// each call from the payload's `tool_name`, so `PreToolUse: ExitPlanMode` and
-/// `PreToolUse: AskUserQuestion` still route to their blocking feed kinds off
+/// `PreToolUse: AskUserQuestion` still route to their blocking ask kinds off
 /// the broad `PreToolUse` hook. A dedicated `ExitPlanMode|AskUserQuestion`
 /// matcher would only double-fire — Claude runs every matching matcher group,
 /// and the broad entry already matches those tools. The broad
-/// `PreToolUse`/`PostToolUse` hooks also keep the sidebar's enrichment current
-/// and feed `rimz feed list --audit` depth, with their payload content gated by
-/// `[privacy] payload_mode`. The matcher slot stays in the tuple because the
-/// reclaim path still reasons about on-disk matchers left by users or older
-/// builds.
+/// `PreToolUse`/`PostToolUse` hooks also keep the sidebar's enrichment current,
+/// with their payload content gated by `[privacy] payload_mode`. The matcher
+/// slot stays in the tuple because the reclaim path still reasons about
+/// on-disk matchers left by users or older builds.
 const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("SessionStart", None),
     ("SessionEnd", None),
@@ -346,9 +351,9 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "PostCompact",
 ];
 
-/// Ask events that should run synchronously so the feed write completes before
-/// Claude continues to its own prompt. Installing one with `_rimz_sync = false`
-/// in an existing Rimz-managed config is a hard error.
+/// Ask events that should run synchronously so the waiting observation lands
+/// before Claude continues to its own prompt. Installing one with
+/// `_rimz_sync = false` in an existing Rimz-managed config is a hard error.
 const BLOCKING_EVENTS: &[(&str, Option<&str>)] = &[("PermissionRequest", None)];
 
 const HOOKS_KEY: &str = "hooks";
@@ -496,8 +501,8 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
-        let feed_kind = match event_name {
-            "PermissionRequest" => Some(FeedKind::Permission),
+        let ask_kind = match event_name {
+            "PermissionRequest" => Some(AskKind::Permission),
             // ExitPlanMode / AskUserQuestion self-classify off the tool name on
             // the broad PreToolUse hook; every other tool call is plain lifecycle.
             "PreToolUse" => self
@@ -506,7 +511,7 @@ impl AgentAdapter for ClaudeAdapter {
             _ => None,
         };
 
-        classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
+        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
     }
 
     #[cfg(test)]
@@ -522,20 +527,20 @@ impl AgentAdapter for ClaudeAdapter {
             ClassificationSample::new(
                 "PermissionRequest",
                 serde_json::json!({ "session_id": "sess-1", "tool_name": "Bash" }),
-                AgentHookClass::BlockingFeed,
-                Some(FeedKind::Permission),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Permission),
             ),
             ClassificationSample::new(
                 "PreToolUse",
                 serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
-                AgentHookClass::BlockingFeed,
-                Some(FeedKind::PlanApproval),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::PlanApproval),
             ),
             ClassificationSample::new(
                 "PreToolUse",
                 serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
-                AgentHookClass::BlockingFeed,
-                Some(FeedKind::Question),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Question),
             ),
             ClassificationSample::new(
                 "PreToolUse",
@@ -643,7 +648,7 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn moves_on(&self, event_name: &str) -> bool {
         // A new prompt starts a fresh turn; a Stop ends the current one. Either
-        // way the agent is past any native_ui ask it raised mid-turn — Claude's
+        // way the agent is past any native prompt it raised mid-turn — Claude's
         // *main thread* blocks on its own prompt and emits no events until the
         // human answers it, so by the time one of these arrives the ask is
         // settled in its UI. A backgrounded subagent does keep emitting while
@@ -946,14 +951,22 @@ fn map_claude_lifecycle_signal(
             errored: stop_payload_errored(payload),
             parked_on_background: !parts.pending_background.is_empty(),
         }),
+        "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
+            kind: AskKind::Permission,
+        }),
         "PostToolUse" if descriptor.tool_mutates(payload) => Some(LifecycleSignal::ToolUsed {
             mutates: true,
             edits: descriptor.tool_edits_files(payload),
         }),
-        "PreToolUse" => Some(LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
-        }),
+        "PreToolUse" => {
+            match descriptor.blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()) {
+                Some(kind) => Some(LifecycleSignal::AwaitingInput { kind }),
+                None => Some(LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                }),
+            }
+        }
         "PreCompact" => Some(LifecycleSignal::Compacting),
         "PostCompact" => Some(LifecycleSignal::CompactionEnded {
             auto: parts

@@ -5,8 +5,7 @@ use jiff::Timestamp;
 use super::*;
 use crate::agents::AgentState;
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{FeedItem, FeedKind, Surface};
-use crate::ids::{MuxName, PaneId, RequestId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::sidebar::unread::{OpenedUnread, opened_unread};
 
@@ -25,7 +24,7 @@ fn snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
     snapshot_with_items(Vec::new(), agents)
 }
 
-fn snapshot_with_items(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
+fn snapshot_with_items(items: Vec<()>, agents: Vec<AgentState>) -> SidebarSnapshot {
     let panes = agents
         .iter()
         .filter_map(|agent| agent.pane.clone())
@@ -174,6 +173,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
         subagent_description: None,
         subagent_started_at: None,
         turn_started_at: None,
+        waiting_since: None,
         compacting_since: None,
         compaction_count: 0,
         last_compact_command_tokens: None,
@@ -196,33 +196,6 @@ fn agent_with_context(
         task: Some(task.to_owned()),
         ..agent(id, status, false)
     }
-}
-
-fn agent_ask(source: &str, session_id: &str) -> FeedItem {
-    let mut item = FeedItem::new(
-        workspace(),
-        Surface::NativeUi,
-        FeedKind::Question,
-        format!("{source} needs attention"),
-        source,
-        "agent-hook",
-    );
-    item.worktree_path = Some("/tmp/rimz-notify".to_owned());
-    item.payload = serde_json::json!({ "session_id": session_id });
-    item
-}
-
-fn script_ask_for_pane(pane: PaneRef) -> FeedItem {
-    let mut item = FeedItem::new(
-        workspace(),
-        Surface::Script,
-        FeedKind::Question,
-        "approve deploy?",
-        "deploy",
-        "script",
-    );
-    item.pane = Some(pane);
-    item
 }
 
 #[test]
@@ -267,65 +240,19 @@ fn projected_ask_rows_notify_as_waiting() {
     let mut state = NotificationState::default();
     let prefs = prefs();
 
-    // An agent-backed projected ask: the rollup keeps the raw running lifecycle
-    // while the row paints Waiting, and the notification carries the agent id.
-    let agent = agent("a1", AgentStatus::Running, false);
-    let mut ask = agent_ask("claude", "a1");
-    ask.updated_at = agent.last_activity + Duration::from_secs(1);
-    let next = snapshot_with_items(vec![ask], vec![agent]);
-    assert_eq!(
-        next.agents[0].status,
-        AgentStatus::Running,
-        "the rollup keeps the raw lifecycle state"
-    );
+    let mut agent = agent("a1", AgentStatus::Waiting, false);
+    agent.waiting_since = Some(agent.last_activity);
+    let next = snapshot_with_items(Vec::<()>::new(), vec![agent]);
     assert_eq!(
         next.worktree_groups[0].rows[0].status(),
         Some(AgentStatus::Waiting),
-        "the row carries the displayed status the sidebar paints"
+        "the row carries the displayed status the sidebar paints",
     );
 
     let out = evaluate_opened(&mut state, next, &["a1"], &prefs, 100);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].notification_kind, NotificationKind::Waiting);
     assert_eq!(out[0].agents[0].agent_id, AgentSessionId::from("a1"));
-
-    // A standalone script ask row, seeded from a live pane with no agent: it
-    // reaches Waiting, notifies, and carries its own label.
-    let mut state = NotificationState::default();
-    let pane = PaneRef {
-        pane_id: PaneId::from_parts(MuxName::Tmux, "%deploy"),
-        session_name: "rimz-test".to_owned(),
-        view_id: Some("view-1".to_owned()),
-        view_kind: None,
-        view_name: None,
-        is_focused: false,
-        is_floating: false,
-        command: Some("deploy".to_owned()),
-        spawn_command: None,
-        cwd: Some("/tmp/rimz-notify".to_owned()),
-        pane_pid: None,
-        pane_process_start: None,
-        hosted_agent_kind: None,
-        hosted_agent_process_start: None,
-        resumed_session_id: None,
-        elevated_agent: None,
-        first_seen_at_ms: None,
-    };
-    let item = script_ask_for_pane(pane.clone());
-    let request_id = item.request_id.to_string();
-    let next =
-        SidebarSnapshot::build_with_agents(workspace(), vec![item], Vec::new(), Timestamp::now())
-            .with_live_panes(vec![pane], None);
-
-    assert_eq!(next.worktree_groups[0].rows[0].id, request_id);
-    assert_eq!(
-        next.worktree_groups[0].rows[0].status(),
-        Some(AgentStatus::Waiting)
-    );
-    let out = evaluate_opened(&mut state, next, &[&request_id], &prefs, 100);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].notification_kind, NotificationKind::Waiting);
-    assert_eq!(out[0].agents[0].label, "approve deploy?");
 }
 
 #[test]
@@ -723,10 +650,9 @@ fn command_spawn_receives_notification_env() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("env.txt");
     let command = format!(
-        "printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" \"${{RIMZ_NOTIFY_UNREAD-unset}}\" \"$RIMZ_NOTIFY_REQUEST_ID\" \"$RIMZ_NOTIFY_PANE\" \"$RIMZ_NOTIFY_ROOT\" > {}",
+        "printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" \"${{RIMZ_NOTIFY_UNREAD-unset}}\" \"$RIMZ_NOTIFY_PANE\" \"$RIMZ_NOTIFY_ROOT\" > {}",
         sh_quote(&out)
     );
-    let request_id = RequestId::parse("req_0123456789abcdef0123456789abcdef").expect("request id");
     let notification = Notification {
         agents: vec![NotificationAgent {
             kind: AgentKind::new_unchecked("claude"),
@@ -736,7 +662,6 @@ fn command_spawn_receives_notification_env() {
             worktree: None,
             task: None,
             pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%9")),
-            request_id: Some(request_id),
             root: Some("/repo".to_owned()),
             new_status: Some(AgentStatus::Waiting),
         }],
@@ -752,7 +677,7 @@ fn command_spawn_receives_notification_env() {
     };
     assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
 
-    let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\nreq_0123456789abcdef0123456789abcdef\ntmux:%9\n/repo\n";
+    let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\ntmux:%9\n/repo\n";
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut text = String::new();
     while Instant::now() < deadline {
@@ -809,7 +734,6 @@ fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
             worktree: Some("feat/ntfy".to_owned()),
             task: Some("\"; rm -rf /".to_owned()),
             pane_id: None,
-            request_id: None,
             root: None,
             new_status: Some(AgentStatus::Waiting),
         }],

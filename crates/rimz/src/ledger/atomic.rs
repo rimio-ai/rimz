@@ -135,9 +135,8 @@ pub fn write_private_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> R
 
 /// Like [`write_temp_then_rename`] but skips the temp-file and parent-dir
 /// fsyncs. For everything whose correctness rides rename atomicity rather
-/// than crash durability: feed files (CAS state re-checked under the
-/// workspace lock, with the event log as the audit trail), liveness files
-/// (sidebar heartbeats, agent activity), and rebuilt-on-next-tick caches
+/// than crash durability: liveness files (sidebar heartbeats, agent activity),
+/// and rebuilt-on-next-tick caches
 /// (snapshots, diff stats, the agent-context sidecar). Two fsyncs per write
 /// add disk latency to paths the UI (or a hook) waits on, and for these
 /// files "survives a power cut" buys nothing — the rename is still atomic,

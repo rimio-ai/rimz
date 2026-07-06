@@ -1,6 +1,6 @@
 //! Reduced workspace snapshot. The sidebar consumes this via
-//! `rimz sidebar snapshot --json`; correctness lives in the feed files and
-//! event log this is derived from.
+//! `rimz sidebar snapshot --json`; correctness lives in the event log this is
+//! derived from.
 //!
 //! The pipeline reads bottom-up: [`fold`] resumes the event-log rollup,
 //! [`project`] reduces lifecycle events into agent state, [`panes`] binds
@@ -24,7 +24,6 @@ use std::path::PathBuf;
 
 use crate::ledger::atomic;
 use crate::ledger::event_log::EventLogErr;
-use crate::ledger::feed_store::FeedStoreErr;
 
 pub(crate) use assemble::rebuild;
 pub use assemble::{build_from, build_with_cursor, read_fresh_latest};
@@ -47,8 +46,6 @@ pub use row::{
     AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarRow,
     SidebarSubAgent, compose_channel,
 };
-#[cfg(test)]
-pub(crate) use view::fold_ask_onto_row;
 pub(crate) use view::format_plan_label;
 pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
@@ -60,8 +57,6 @@ pub use view::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotErr {
-    #[error(transparent)]
-    FeedStore(#[from] FeedStoreErr),
     #[error(transparent)]
     EventLog(#[from] EventLogErr),
     #[error(transparent)]

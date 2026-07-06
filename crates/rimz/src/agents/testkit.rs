@@ -1,24 +1,8 @@
-//! Shared fixtures for the adapter unit tests: a canonical agent ask and the
-//! exhaustive lifecycle-signal enumeration the totality tests sweep.
+//! Shared fixtures for the adapter unit tests: the exhaustive lifecycle-signal
+//! enumeration the totality tests sweep.
 
-use std::path::Path;
-
+use crate::agents::AskKind;
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::feed::{FeedItem, FeedKind, Surface};
-use crate::ids::WorkspaceId;
-
-/// The canonical pending native ask for one agent kind.
-pub(crate) fn feed_item(kind: FeedKind, agent_kind: &str) -> FeedItem {
-    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/rimz-test"));
-    FeedItem::new(
-        workspace,
-        Surface::NativeUi,
-        kind,
-        "allow?",
-        agent_kind,
-        "agent-hook",
-    )
-}
 
 /// Every [`LifecycleSignal`] value, with each payload-carrying variant swept
 /// over its full flag space — the enumeration the state machine's totality
@@ -32,6 +16,13 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
         LifecycleSignal::Ended,
         LifecycleSignal::Lost,
     ];
+    for kind in [
+        AskKind::Permission,
+        AskKind::PlanApproval,
+        AskKind::Question,
+    ] {
+        signals.push(LifecycleSignal::AwaitingInput { kind });
+    }
     for auto in [None, Some(false), Some(true)] {
         signals.push(LifecycleSignal::CompactionEnded { auto });
     }

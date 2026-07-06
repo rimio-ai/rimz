@@ -2,10 +2,9 @@
 //!
 //! Two channels:
 //!
-//! * **Per-request feed socket** — a script `feed ask` caller bound a socket
-//!   via [`crate::bridge::bind`]; when `feed resolve` writes a decision, or
-//!   reset closes the request without one, the writer sends a small datagram so
-//!   the waiter can exit before its polling tick fires.
+//! * **Run socket** — a supervised `rimz agents -p` caller bound a socket via
+//!   [`crate::bridge::bind_run`]; when the run completes, the writer sends a
+//!   small datagram so the waiter can exit before its polling tick fires.
 //! * **Sidebar wakeup sockets** — each live sidebar instance writes a
 //!   heartbeat JSON under `runtime/heartbeat/sidebar.*.json` carrying the
 //!   path of a datagram socket it owns. After every mutation we walk the
@@ -26,8 +25,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tracing::debug;
 
-use crate::bridge::{WakeupFrame, feed_socket_path, run_socket_path};
-use crate::feed::{FeedItem, FeedStatus};
+use crate::bridge::{WakeupFrame, run_socket_path};
 use crate::harness::run::RunRecord;
 use crate::ledger::RuntimePaths;
 use crate::ledger::event::{EventEnvelope, EventKind};
@@ -51,38 +49,6 @@ pub enum WakeupErr {
 
 pub type Result<T> = std::result::Result<T, WakeupErr>;
 
-/// Send a terminal datagram to the per-request socket bound by a waiting script.
-/// No-op for `native_ui` and still-pending items.
-pub fn wake_per_request(rt: &RuntimePaths, item: &FeedItem) -> Result<()> {
-    if !item.surface.hook_blocks() {
-        return Ok(());
-    }
-    let target = feed_socket_path(rt, &item.request_id);
-    if !target.exists() {
-        // Common: a `feed ask` script exited before resolution (e.g. timed
-        // out and removed its socket), or the waiter hasn't bound yet on a
-        // very-fast race. The feed file on disk is still authoritative.
-        return Ok(());
-    }
-    let frame = match item.status {
-        FeedStatus::Resolved => WakeupFrame::FeedResolved {
-            workspace_id: item.workspace_id.clone(),
-            request_id: item.request_id.clone(),
-            nonce: item.nonce.clone(),
-        },
-        FeedStatus::TimedOut | FeedStatus::Abandoned => WakeupFrame::FeedTerminal {
-            workspace_id: item.workspace_id.clone(),
-            request_id: item.request_id.clone(),
-            nonce: item.nonce.clone(),
-            status: item.status,
-        },
-        FeedStatus::Pending => return Ok(()),
-    };
-    let payload = serde_json::to_vec(&frame)?;
-    send_datagram(&payload, &target);
-    Ok(())
-}
-
 /// Send a `run_completed` datagram to the supervised agents waiter. The run record on
 /// disk is authoritative; this socket only cuts latency for the blocking CLI.
 pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) -> Result<()> {
@@ -102,11 +68,10 @@ pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) -> Result<()> {
 
 /// Walk the runtime heartbeat dir and post a typed `LedgerDelta` event to
 /// each fresh sidebar's `wakeup_socket`. Per-target failures are logged
-/// and skipped — they never error the write that triggered us. Feed
-/// mutations and context-sidecar writes (Claude's statusline `$`/token
-/// update, the Codex rollout refresh) both land here, so a cost change
-/// repaints within a wakeup instead of waiting for the renderer's next
-/// poll tick.
+/// and skipped — they never error the write that triggered us. Event-log
+/// mutations and context-sidecar writes (Claude's statusline `$`/token update,
+/// the Codex rollout refresh) both land here, so a cost change repaints within
+/// a wakeup instead of waiting for the renderer's next poll tick.
 pub fn wake_sidebars(rt: &RuntimePaths) -> Result<()> {
     broadcast_sidebar_event(
         rt,

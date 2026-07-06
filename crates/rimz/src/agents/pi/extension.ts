@@ -214,11 +214,10 @@ export default function rimz(pi) {
   });
 
   // The blocking pre-tool gate. Pi awaits this handler, so rimz returns the
-  // neutral no-op immediately. Pi has no native ask UI, so no feed item is
+  // neutral no-op immediately. Pi has no native ask UI, so no waiting state is
   // created and every non-deny outcome — empty stdout, a parse
   // failure, a spawn error, a missing binary — resolves to "let the tool
-  // run": pi has no native permission prompt, so blocking is opt-in via a
-  // resolver and never a failure mode.
+  // run": pi has no native permission prompt, so blocking stays in pi itself.
   pi.on("tool_call", (ev, ctx) =>
     new Promise((resolve) => {
       const allow = () => resolve(undefined);

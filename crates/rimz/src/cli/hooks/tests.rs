@@ -82,6 +82,7 @@ fn transition(kind: TransitionKind, compaction_closed: bool) -> Transition {
         },
         kind,
         compaction_closed,
+        waiting_cleared: false,
         opened_turn: false,
     }
 }

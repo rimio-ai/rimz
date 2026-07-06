@@ -7,16 +7,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use jiff::Timestamp;
-
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, TurnPhase};
+use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::{
     ADAPTERS, AgentAdapter, AgentHookClass, ClassificationSample, ConcernCoverage, HookCoverage,
     IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
 };
 use crate::agents::AgentStatus;
-use crate::feed::{FeedKind, Surface};
-use crate::ledger::snapshot::{AgentCard, RowCard, SidebarRow, fold_ask_onto_row};
+use crate::agents::AskKind;
 
 #[test]
 fn classify_matches_corpus() {
@@ -75,14 +72,14 @@ fn capability_honesty() {
         let kind = adapter.descriptor().kind;
         let capabilities = adapter.descriptor().capabilities;
         let samples = corpus(*adapter);
-        let feed_kinds = producible_feed_kinds(&samples);
+        let ask_kinds = producible_ask_kinds(&samples);
         let has_blocking = samples
             .iter()
-            .any(|sample| sample.expected.class == AgentHookClass::BlockingFeed);
+            .any(|sample| sample.expected.class == AgentHookClass::AwaitingUser);
 
         assert_eq!(
-            capabilities.blocking_feed, has_blocking,
-            "{kind} blocking_feed capability must match the declared corpus"
+            capabilities.blocking_asks, has_blocking,
+            "{kind} blocking_asks capability must match the declared corpus"
         );
 
         // Subagent honesty (capability ⟹ an observed subagent lifecycle sample) is
@@ -90,10 +87,10 @@ fn capability_honesty() {
 
         if !capabilities.native_ask_ui {
             assert!(
-                !feed_kinds
+                !ask_kinds
                     .iter()
-                    .any(|kind| matches!(kind, FeedKind::PlanApproval | FeedKind::Question)),
-                "{kind} declares no native ask UI but classifies native ask feed kinds"
+                    .any(|kind| matches!(kind, AskKind::PlanApproval | AskKind::Question)),
+                "{kind} declares no native ask UI but classifies native ask kinds"
             );
         }
 
@@ -236,30 +233,29 @@ fn realtime_cost_matches_coverage() {
 }
 
 #[test]
-fn pending_ask_projects_to_waiting() {
+fn awaiting_input_projects_to_waiting() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;
-        for feed_kind in producible_feed_kinds(&corpus(*adapter)) {
-            let mut row = agent_row(kind);
-            let item = super::testkit::feed_item(feed_kind, kind);
-
-            fold_ask_onto_row(&mut row, &item);
-
-            assert_eq!(
-                row.status(),
-                Some(AgentStatus::Waiting),
-                "{kind} pending {feed_kind:?} should project to waiting"
+        for ask_kind in producible_ask_kinds(&corpus(*adapter)) {
+            let prior = LifecycleState {
+                status: AgentStatus::Running,
+                phase: TurnPhase::Reasoning,
+                compacting: false,
+            };
+            let transition = step(
+                Some(&prior),
+                &LifecycleSignal::AwaitingInput { kind: ask_kind },
             );
-            assert_eq!(row.phase(), TurnPhase::Idle, "{kind} waiting phase");
+
             assert_eq!(
-                row.request_id(),
-                Some(&item.request_id),
-                "{kind} waiting row carries request id"
+                transition.next.status,
+                AgentStatus::Waiting,
+                "{kind} pending {ask_kind:?} should project to waiting"
             );
             assert_eq!(
-                row.surface(),
-                Some(Surface::NativeUi),
-                "{kind} waiting row carries ask surface"
+                transition.next.phase,
+                TurnPhase::Idle,
+                "{kind} waiting phase"
             );
         }
     }
@@ -275,10 +271,10 @@ fn corpus(adapter: &dyn AgentAdapter) -> Vec<ClassificationSample> {
     samples
 }
 
-fn producible_feed_kinds(samples: &[ClassificationSample]) -> Vec<FeedKind> {
+fn producible_ask_kinds(samples: &[ClassificationSample]) -> Vec<AskKind> {
     let mut kinds = Vec::new();
     for sample in samples {
-        if let Some(kind) = sample.expected.feed_kind
+        if let Some(kind) = sample.expected.ask_kind
             && !kinds.contains(&kind)
         {
             kinds.push(kind);
@@ -310,20 +306,20 @@ fn assert_coverage_honest(
         ),
         IntegrationConcern::Permission => assert_eq!(
             wired,
-            has_feed_kind(samples, FeedKind::Permission),
-            "{kind} Permission coverage must match classified permission feed samples"
+            has_ask_kind(samples, AskKind::Permission),
+            "{kind} Permission coverage must match classified permission ask samples"
         ),
         IntegrationConcern::PlanApproval => assert_eq!(
             wired,
-            has_feed_kind(samples, FeedKind::PlanApproval)
-                || has_blocking_tool_kind(descriptor, FeedKind::PlanApproval),
-            "{kind} PlanApproval coverage must match blocking plan feed/tool classification"
+            has_ask_kind(samples, AskKind::PlanApproval)
+                || has_blocking_tool_kind(descriptor, AskKind::PlanApproval),
+            "{kind} PlanApproval coverage must match blocking plan ask/tool classification"
         ),
         IntegrationConcern::UserQuestion => assert_eq!(
             wired,
-            has_feed_kind(samples, FeedKind::Question)
-                || has_blocking_tool_kind(descriptor, FeedKind::Question),
-            "{kind} UserQuestion coverage must match blocking question feed/tool classification"
+            has_ask_kind(samples, AskKind::Question)
+                || has_blocking_tool_kind(descriptor, AskKind::Question),
+            "{kind} UserQuestion coverage must match blocking question ask/tool classification"
         ),
         IntegrationConcern::Compaction => assert_eq!(
             wired,
@@ -512,18 +508,18 @@ fn materialize_spend_fixture(dir: &Path, fixture: &SpendFixture) -> PathBuf {
     path
 }
 
-fn has_feed_kind(samples: &[ClassificationSample], feed_kind: FeedKind) -> bool {
+fn has_ask_kind(samples: &[ClassificationSample], ask_kind: AskKind) -> bool {
     samples
         .iter()
-        .any(|sample| sample.expected.feed_kind == Some(feed_kind))
+        .any(|sample| sample.expected.ask_kind == Some(ask_kind))
 }
 
-fn has_blocking_tool_kind(descriptor: &super::AgentDescriptor, feed_kind: FeedKind) -> bool {
+fn has_blocking_tool_kind(descriptor: &super::AgentDescriptor, ask_kind: AskKind) -> bool {
     descriptor
         .tools
         .blocking
         .iter()
-        .any(|(_, kind)| *kind == feed_kind)
+        .any(|(_, kind)| *kind == ask_kind)
 }
 
 fn observes_turn_lifecycle(adapter: &dyn AgentAdapter, samples: &[ClassificationSample]) -> bool {
@@ -590,25 +586,4 @@ fn installed_event_classifies(
                     .class
                     != AgentHookClass::Unknown
         })
-}
-
-fn agent_row(kind: &str) -> SidebarRow {
-    SidebarRow {
-        id: "agent-hook".to_owned(),
-        name: kind.to_owned(),
-        pane: None,
-        worktree_path: None,
-        worktree_branch: None,
-        channel: None,
-        unread: false,
-        inactive: false,
-        archived: false,
-        attention_score: 0,
-        last_activity: Timestamp::from_second(1).unwrap(),
-        card: RowCard::Agent(Box::new(AgentCard {
-            status: AgentStatus::Running,
-            phase: TurnPhase::Reasoning,
-            ..AgentCard::default()
-        })),
-    }
 }

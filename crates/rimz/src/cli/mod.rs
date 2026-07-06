@@ -10,8 +10,6 @@ mod config;
 mod coverage;
 mod daemon;
 mod doctor;
-mod event;
-mod feed;
 mod gc;
 mod help;
 mod hooks;
@@ -67,8 +65,6 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
         Some(Subcmd::ListPets(args)) => list_pets::run(args, &globals),
         Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
-        Some(Subcmd::Event(args)) => event::run(args, &globals),
-        Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Uninstall(args)) => uninstall::run(args, &globals),
         Some(Subcmd::Channel(args)) => channel::run(args, &globals),
@@ -140,6 +136,12 @@ where
             Some("run") => anyhow::bail!(
                 "`rimz run` has moved to `rimz agents <spec> <prompt> -p`; use `rimz agents show|wait|stop <ref>` for run records"
             ),
+            Some("event") => anyhow::bail!(
+                "`rimz event` has been removed; use `rimz message`, `rimz agents -p`, or pane primitives for automation"
+            ),
+            Some("feed") => anyhow::bail!(
+                "`rimz feed` has been removed; blocking agent prompts now surface as Waiting state in the agent pane"
+            ),
             Some("tab") => anyhow::bail!(
                 "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `[agents.teams]`"
             ),
@@ -167,8 +169,6 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Stats(_)) => ("stats", None, None),
         Some(Subcmd::ListPets(_)) => ("list-pets", None, None),
         Some(Subcmd::ListThemes(_)) => ("list-themes", None, None),
-        Some(Subcmd::Event(_)) => ("event", None, None),
-        Some(Subcmd::Feed(_)) => ("feed", None, None),
         Some(Subcmd::Gc(_)) => ("gc", None, None),
         Some(Subcmd::Uninstall(_)) => ("uninstall", None, None),
         Some(Subcmd::Channel(_)) => ("channel", None, None),
@@ -452,10 +452,6 @@ enum Subcmd {
     ListPets(list_pets::ListPetsArgs),
     /// List the bundled sidebar theme names.
     ListThemes(list_themes::ListThemesArgs),
-    /// Emit generic events into the workspace ledger.
-    Event(event::EventArgs),
-    /// Feed primitives: ask, push, list, show, resolve, dismiss.
-    Feed(feed::FeedArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
     /// Remove Rimz from this machine.
@@ -720,6 +716,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

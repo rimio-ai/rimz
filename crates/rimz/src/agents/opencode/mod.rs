@@ -21,6 +21,7 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
+use super::AskKind;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
     PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
@@ -33,7 +34,6 @@ use super::{
     HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, RefreshTrigger,
     Result, SubagentIdentity, classify_agent_hook, resolve_subagent_identity, sanitize_user_prompt,
 };
-use crate::feed::FeedKind;
 use crate::ids::AgentSessionId;
 
 static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
@@ -55,7 +55,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        blocking_feed: true,
+        blocking_asks: true,
         native_ask_ui: true,
         rich_context: true,
         transcript_tail_context: false,
@@ -216,6 +216,12 @@ const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
         },
     ),
     (
+        LifecycleSignalKind::AwaitingInput,
+        HookCoverage::Native {
+            event: "permission_ask",
+        },
+    ),
+    (
         LifecycleSignalKind::SubagentStarted,
         HookCoverage::Native {
             event: "SubagentStart",
@@ -297,8 +303,8 @@ impl AgentAdapter for OpencodeAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        let feed_kind = (event_name == "permission_ask").then_some(FeedKind::Permission);
-        classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
+        let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
+        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
     }
 
     #[cfg(test)]
@@ -314,8 +320,8 @@ impl AgentAdapter for OpencodeAdapter {
             ClassificationSample::new(
                 "permission_ask",
                 json!({ "session_id": "ses_1", "tool_name": "bash" }),
-                AgentHookClass::BlockingFeed,
-                Some(FeedKind::Permission),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Permission),
             ),
             ClassificationSample::new(
                 "session_created",
@@ -404,6 +410,9 @@ impl AgentAdapter for OpencodeAdapter {
         let parsed = payloads::parse_payload(payload);
         let signal = match event_name {
             "session_created" => LifecycleSignal::Registered,
+            "permission_ask" => LifecycleSignal::AwaitingInput {
+                kind: AskKind::Permission,
+            },
             "chat_message" => LifecycleSignal::TurnStarted,
             "session_idle" => LifecycleSignal::TurnEnded {
                 errored: false,

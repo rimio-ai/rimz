@@ -796,6 +796,7 @@ fn codex_origin_overrides_read_transcript_and_worktree_from_snapshot() {
         subagent_description: None,
         subagent_started_at: None,
         turn_started_at: None,
+        waiting_since: None,
         compacting_since: None,
         compaction_count: 0,
         last_compact_command_tokens: None,

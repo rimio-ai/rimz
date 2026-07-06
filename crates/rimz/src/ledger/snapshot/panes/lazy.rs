@@ -361,8 +361,6 @@ fn idle_agent_row(
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
-            request_id: None,
-            surface: None,
             task: None,
             prompt: None,
             description: None,
@@ -386,7 +384,6 @@ fn idle_agent_row(
             context_severity: None,
             // No session yet — the pane's process start is this row's spawn key.
             registered_at: None,
-            options: Vec::new(),
             sub_agents: Vec::new(),
             compacting: false,
             compaction_count: 0,

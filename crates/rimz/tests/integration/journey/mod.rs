@@ -9,8 +9,8 @@
 //! "Running an agent" is simulated faithfully: Rimz only ever observes agents
 //! through their hooks, and the work pane itself is opaque to it. So firing
 //! `rimz hooks feed --source claude` through an installed hook is the end-user
-//! act of running an agent. The harness's pane presence is
-//! a fixture; real focus, steering, and launched binaries live in `deep.rs`.
+//! act of running an agent. The harness's pane presence is a fixture; real
+//! focus, steering, and launched binaries live in `deep.rs`.
 //!
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
@@ -458,16 +458,6 @@ impl PaneRoster {
                 continue;
             };
             roster.start(&agent.agent_id, &agent.kind, cwd);
-        }
-        for item in &snapshot.needs_attention {
-            if item.source_kind == "agent-hook" {
-                continue;
-            }
-            if let Some(pane) = &item.pane {
-                roster
-                    .extra_panes
-                    .insert(item.request_id.to_string(), pane.clone());
-            }
         }
         roster
     }

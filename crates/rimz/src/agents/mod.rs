@@ -47,7 +47,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::chat::{AskAnswer, AskQuestion};
-use crate::feed::FeedKind;
 use crate::harness::run::PermissionMode;
 
 pub use context::{
@@ -66,8 +65,8 @@ pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };
 pub use lifecycle::{
-    LifecycleSignal, LifecycleSignalKind, LifecycleState, Transition, TransitionKind, TurnPhase,
-    step,
+    AskKind, LifecycleSignal, LifecycleSignalKind, LifecycleState, Transition, TransitionKind,
+    TurnPhase, step,
 };
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
@@ -169,18 +168,18 @@ pub enum PresetErr {
 pub enum AgentHookClass {
     /// Non-blocking event that may carry a status/mode/task transition for
     /// the agent rollup (`SessionStart`, `UserPromptSubmit`, `Stop`, …). Per
-    /// `docs/internals/agents/agent.md` there are two runtime channels — lifecycle
-    /// and feed. Whether a lifecycle event records anything is decided by
+    /// `docs/internals/agents/agent.md`, lifecycle is the durable state channel.
+    /// Whether a lifecycle event records anything is decided by
     /// [`AgentAdapter::observe_lifecycle`] returning `Some`.
     Lifecycle,
-    BlockingFeed,
+    AwaitingUser,
     Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassifiedHook {
     pub class: AgentHookClass,
-    pub feed_kind: Option<FeedKind>,
+    pub ask_kind: Option<AskKind>,
     pub event_name: String,
 }
 
@@ -213,14 +212,14 @@ impl ClassificationSample {
         event_name: &'static str,
         payload: Value,
         class: AgentHookClass,
-        feed_kind: Option<FeedKind>,
+        ask_kind: Option<AskKind>,
     ) -> Self {
         Self {
             event_name,
             payload,
             expected: ClassifiedHook {
                 class,
-                feed_kind,
+                ask_kind,
                 event_name: event_name.to_owned(),
             },
         }
@@ -525,20 +524,15 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
-    /// Whether this event ends an agent session. When true the CLI expires the
-    /// session's pending asks: a permission prompt whose agent has exited is
-    /// no longer answerable, so it must not linger as attention. Defaults to
-    /// `false`; adapters override for their session-exit event.
+    /// Whether this event ends an agent session. Defaults to `false`; adapters
+    /// override for their session-exit event.
     fn ends_session(&self, _event_name: &str) -> bool {
         false
     }
 
-    /// Whether this event means a still-live session moved on from any pending
-    /// native_ui ask — a new prompt or the end of its turn. When true the CLI
-    /// expires the session's pending native_ui asks: the agent answered (or
-    /// dismissed) them in its own UI and never reports back, so they would
-    /// otherwise pile up as duplicate attention. Bridge asks are untouched.
-    /// Defaults to `false`; adapters override for their turn-boundary events.
+    /// Whether this event means a still-live session moved on from a native
+    /// prompt — a new prompt or the end of its turn. Defaults to `false`;
+    /// adapters override for their turn-boundary events.
     fn moves_on(&self, _event_name: &str) -> bool {
         false
     }

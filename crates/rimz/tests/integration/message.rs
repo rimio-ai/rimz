@@ -5,10 +5,9 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use rimz::agents::{
-    AgentLifecycleObservation, AgentRateLimits, AgentTurnError, LaunchParams, LifecycleSignal,
-    RateLimitWindow, TurnErrorClass,
+    AgentLifecycleObservation, AgentRateLimits, AgentTurnError, AskKind, LaunchParams,
+    LifecycleSignal, RateLimitWindow, TurnErrorClass,
 };
-use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
 use rimz::ledger::event::{
     AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod,
@@ -1062,7 +1061,7 @@ fn queue_refuses_without_installed_hooks() {
 }
 
 #[test]
-fn steer_refuses_pending_ask_before_touching_pane() {
+fn steer_refuses_waiting_agent_before_touching_pane() {
     let env = Env::new();
     register_running_agent(&env, "sess-steer", "feature-s", &[("TMUX_PANE", "%1")]);
     push_pending_agent_ask(&env, "sess-steer");
@@ -1072,10 +1071,10 @@ fn steer_refuses_pending_ask_before_touching_pane() {
         .args(["message", "--steer", "@claude", "--", "continue"])
         .output()
         .expect("steer");
-    assert!(!out.status.success(), "steer should fail on pending ask");
+    assert!(!out.status.success(), "steer should fail while agent waits");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("has pending ask") && stderr.contains("--force"),
+        stderr.contains("is waiting on your input") && stderr.contains("--force"),
         "unexpected stderr: {stderr}"
     );
     assert!(
@@ -2334,11 +2333,11 @@ fn steer_auto_compact_leaves_a_window_below_threshold_alone() {
     assert_text_then_enter(&trace_log, "go");
 }
 
-/// A pending ask reserves the agent's next input, so a queued message defers at
+/// A waiting agent reserves the next input, so a queued message defers at
 /// the open gate rather than landing on top of the ask — it stays pending for a
 /// later boundary, and nothing is pasted.
 #[test]
-fn queue_pending_ask_defers_unforced_and_force_delivers() {
+fn queue_waiting_agent_defers_unforced_and_force_delivers() {
     {
         let env = Env::new();
         env.install_agent_hooks("claude");
@@ -2373,7 +2372,7 @@ fn queue_pending_ask_defers_unforced_and_force_delivers() {
         assert_eq!(
             env.ledger().list_pending_messages().unwrap().len(),
             1,
-            "a pending ask defers delivery; the message stays queued"
+            "a waiting agent defers delivery; the message stays queued"
         );
         assert!(
             trace_lines(&trace_log)
@@ -2416,7 +2415,7 @@ fn queue_pending_ask_defers_unforced_and_force_delivers() {
 
         assert!(
             env.ledger().list_pending_messages().unwrap().is_empty(),
-            "--force delivers past the pending ask inline"
+            "--force delivers past the waiting agent inline"
         );
         assert_text_then_enter(&trace_log, "go");
     }
@@ -2629,7 +2628,7 @@ fn steer_fanout_summary() {
 }
 
 /// A skipped agent never aborts a broadcast: both targeted agents have a pane,
-/// but one holds a pending ask, so it is skipped while the other still receives
+/// but one waits on input, so it is skipped while the other still receives
 /// the steer, and the command summarizes and succeeds rather than failing on the
 /// first skip.
 #[test]
@@ -2641,7 +2640,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
         "feature-ska",
         &[("ZELLIJ_PANE_ID", "7")],
     );
-    // A second pane-bound card, blocked by a pending ask — it can only be skipped.
+    // A second pane-bound card, blocked by waiting input — it can only be skipped.
     register_running_agent(
         &env,
         "sess-skip-b",
@@ -2665,7 +2664,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("sent 1 agent(s)") && stdout.contains("pending ask"),
+        stdout.contains("sent 1 agent(s)") && stdout.contains("waiting in pane"),
         "summary names the sent and skipped agents: {stdout}"
     );
 }
@@ -3111,18 +3110,21 @@ fn assert_single_sigil_sent(stdout: &[u8]) {
 }
 
 fn push_pending_agent_ask(env: &Env, session_id: &str) {
-    let mut item = FeedItem::new(
-        env.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "approve?",
-        "claude",
-        "agent-hook",
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(session_id)),
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Permission,
+        },
     );
-    item.payload = json!({ "session_id": session_id });
     env.ledger()
-        .push_feed_item(&item, "rimz-test")
-        .expect("push pending ask");
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "PermissionRequest",
+            &observation,
+        ))
+        .expect("append waiting signal");
 }
 
 fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
@@ -3197,7 +3199,7 @@ fn seed_provisional_codex_launch(
 }
 
 /// `steer @codex` reaches a bare codex started in a pane before its first turn:
-/// the resolver folds the live pane frame, finds the synthesized idle row, and
+/// the selector folds the live pane frame, finds the synthesized idle row, and
 /// pastes into its pane — reproducing and fixing the `no agent matches @codex`
 /// failure. The pane fixture stands in for the mux, and codex must be wired
 /// (hooks installed) for the idle row to synthesize.

@@ -15,7 +15,7 @@ use delivery::*;
 use identity::{
     agent_identity_env, env_run_id, validate_agent_name_env, validate_non_empty_identity_env,
 };
-use observe::{expiry_scope_for_event_name, record_lifecycle_observation};
+use observe::record_lifecycle_observation;
 use rotate::*;
 
 pub(super) use identity::fill_root_launch_identity;
@@ -33,20 +33,8 @@ pub(super) fn handle_lifecycle_hook(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let agent_id = payload_agent_id(payload);
-    let fallback_expiry_scope = expiry_scope_for_event_name(agent, event_name);
-    let fallback_expiry = match (agent_id, fallback_expiry_scope) {
-        (Some(agent_id), Some(scope)) => Some((agent_id, scope)),
-        _ => None,
-    };
-    let recorded = record_lifecycle_observation(
-        workspace,
-        ledger,
-        agent,
-        event_name,
-        payload,
-        globals,
-        fallback_expiry,
-    );
+    let recorded =
+        record_lifecycle_observation(workspace, ledger, agent, event_name, payload, globals);
     record_native_answer(
         workspace,
         ledger,
@@ -126,6 +114,7 @@ struct RecordedLifecycle {
     model_hint: Option<String>,
     observation: AgentLifecycleObservation,
     appended_lifecycle: bool,
+    waiting_cleared: bool,
 }
 
 struct AgentContextHook<'a> {
@@ -312,6 +301,7 @@ mod tests {
                 model_hint: None,
                 observation: compact_observation,
                 appended_lifecycle: false,
+                waiting_cleared: false,
             },
             "session",
         );
@@ -344,6 +334,7 @@ mod tests {
                 model_hint: None,
                 observation: real_observation,
                 appended_lifecycle: false,
+                waiting_cleared: false,
             },
             "session",
         );
@@ -502,6 +493,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

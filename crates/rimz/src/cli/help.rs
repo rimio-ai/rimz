@@ -21,10 +21,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
             "loop",
         ],
     ),
-    (
-        "Decisions, hooks, and trust",
-        &["feed", "event", "hooks", "trust"],
-    ),
+    ("Hooks and trust", &["hooks", "trust"]),
     (
         "Configure and maintain",
         &[

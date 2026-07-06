@@ -375,7 +375,7 @@ fn record_resolution_bounce(
 }
 
 /// How a queued message delivers: submit with Enter, the turn-boundary gate,
-/// whether to deliver past a pending ask, and an optional compact-first threshold.
+/// whether to deliver past Waiting, and an optional compact-first threshold.
 struct MessageSpec {
     enter: bool,
     gate: DeliveryGate,
@@ -1141,7 +1141,7 @@ fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
         DispatchOutcome::Queued { label, message_id } => {
             Some(format!("queued for {label} ({message_id})"))
         }
-        DispatchOutcome::SkippedPending { .. } => None,
+        DispatchOutcome::SkippedWaiting { .. } => None,
     }
 }
 
@@ -1172,7 +1172,7 @@ fn report_dispatch(
                 let (label, message_id) = match outcome {
                     DispatchOutcome::Sent { label, message_id }
                     | DispatchOutcome::Queued { label, message_id } => (label, message_id),
-                    DispatchOutcome::SkippedPending { .. } => continue,
+                    DispatchOutcome::SkippedWaiting { .. } => continue,
                 };
                 if !wait_and_print_message(
                     ledger,
@@ -1227,9 +1227,9 @@ fn report_dispatch(
     let pending = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            DispatchOutcome::SkippedPending {
-                label, message_id, ..
-            } => Some(format!("{label} ({message_id})")),
+            DispatchOutcome::SkippedWaiting { label, message_id } => {
+                Some(format!("{label} ({message_id})"))
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1240,7 +1240,7 @@ fn report_dispatch(
             let (label, message_id, compactable) = match outcome {
                 DispatchOutcome::Sent { label, message_id } => (label, message_id, true),
                 DispatchOutcome::Queued { label, message_id } => (label, message_id, false),
-                DispatchOutcome::SkippedPending { .. } => continue,
+                DispatchOutcome::SkippedWaiting { .. } => continue,
             };
             if compactable {
                 print_compacted_if_needed(label, compacted);
@@ -1279,13 +1279,9 @@ fn report_dispatch(
             return Ok(());
         }
         match outcomes.first() {
-            Some(DispatchOutcome::SkippedPending {
-                label,
-                message_id,
-                request_id,
-            }) => {
+            Some(DispatchOutcome::SkippedWaiting { label, message_id }) => {
                 bail!(
-                    "{label} ({message_id}) has pending ask {request_id}; resolve it or pass --force"
+                    "{label} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
                 )
             }
             _ => bail!("no agent matches `{target}`"),
@@ -1302,7 +1298,7 @@ fn report_dispatch(
         line.push_str(&format!("; compacted: {}", compacted.join(", ")));
     }
     if !pending.is_empty() {
-        line.push_str(&format!("; skipped pending ask: {}", pending.join(", ")));
+        line.push_str(&format!("; waiting in pane: {}", pending.join(", ")));
     }
     #[expect(clippy::print_stdout, reason = "message fan-out summary")]
     {
@@ -1724,21 +1720,16 @@ fn render_delivery_check(
         }
     };
     kv.push("gate", condition_cell(gate_ready, gate));
-    let ask = if check.ask.clear {
+    let ask = if !check.ask.waiting {
         if check.ask.force {
             "ok (--force)".to_owned()
         } else {
             "ok".to_owned()
         }
     } else {
-        check
-            .ask
-            .request_id
-            .as_ref()
-            .map(|request_id| format!("pending ask {request_id}"))
-            .unwrap_or_else(|| "pending ask".to_owned())
+        "waiting in pane".to_owned()
     };
-    kv.push("ask", condition_cell(check.ask.clear, ask));
+    kv.push("ask", condition_cell(!check.ask.waiting, ask));
     let pane = if check.pane.present {
         check
             .pane
@@ -1809,8 +1800,8 @@ fn delivery_verdict(check: &deliver::DeliveryCheck, target: &str, now: Timestamp
     if check.gate.resume_recovered == Some(false) {
         return format!("waiting: {target} is paused; resume gate opens after provider recovery");
     }
-    if let Some(request_id) = &check.ask.request_id {
-        return format!("waiting: pending ask {request_id} reserves input");
+    if check.ask.waiting {
+        return format!("waiting: {target} is waiting on input in its pane");
     }
     if !check.pane.present {
         return match &check.pane.pinned_pane_id {
@@ -2138,6 +2129,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

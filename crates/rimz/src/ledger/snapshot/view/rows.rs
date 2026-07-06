@@ -1,10 +1,7 @@
 use jiff::Timestamp;
 
-use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentState, AgentStatus};
-use crate::feed::{FeedItem, FeedStatus};
 use crate::ledger::snapshot::row::{AgentCard, RowCard, SidebarRow};
-use crate::pane::PaneRef;
 
 pub(in crate::ledger::snapshot) fn row_from_agent(
     agent: &AgentState,
@@ -13,8 +10,13 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
     // `SidebarRow.status` is the *displayed* status. It starts as the raw rollup
     // value and is projected in `project_display_status` once the row knows its
     // subagents and its account's rate-limit budget (stall → `failed`,
-    // spent-budget → `paused`); a pending ask folds `waiting` on upstream.
+    // spent-budget → `paused`); native prompts already live on the rollup.
     // The rollup in `snapshot.agents` always keeps the true status.
+    let (status, phase) = if agent.is_awaiting_input() {
+        (AgentStatus::Waiting, crate::agents::TurnPhase::Idle)
+    } else {
+        (agent.status, agent.phase)
+    };
     SidebarRow {
         id: agent.agent_id.to_string(),
         name: agent.kind.to_string(),
@@ -28,10 +30,8 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
         attention_score: 0,
         last_activity: agent.last_activity,
         card: RowCard::Agent(Box::new(AgentCard {
-            status: agent.status,
-            phase: agent.phase,
-            request_id: None,
-            surface: None,
+            status,
+            phase,
             task: agent.task.clone(),
             prompt: agent.prompt.clone(),
             description: agent.description.clone(),
@@ -51,7 +51,6 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
             context: agent.context.clone(),
             context_severity: None,
             registered_at: agent.registered_at,
-            options: Vec::new(),
             sub_agents: Vec::new(),
             compacting: is_compacting(agent, now),
             compaction_count: agent.compaction_count,
@@ -75,66 +74,4 @@ fn agent_context_window(agent: &AgentState) -> Option<u64> {
         crate::agents::descriptor_by_kind(agent.kind.as_str())
             .and_then(|descriptor| descriptor.default_context_window)
     })
-}
-
-/// A standalone attention row for a pending script ask on a pane no agent row
-/// claims. The caller has already proven `pane` is present in the
-/// current frame; the row refreshes its pane reference from that frame so
-/// jumps, focus, view id, command, cwd, and process start all read from live
-/// mux truth. Infallible by construction: both attention lists hold only
-/// pending items (`build_with_agents` filters), and agent-hook asks fold onto
-/// their session's row instead of standing alone.
-pub(super) fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> SidebarRow {
-    debug_assert_eq!(item.status, FeedStatus::Pending);
-    debug_assert_ne!(item.source_kind, "agent-hook");
-    let id = agent_id_from_item(item).unwrap_or_else(|| item.request_id.to_string());
-    SidebarRow {
-        id,
-        name: item.source.clone(),
-        pane: Some(pane.clone()),
-        worktree_path: item.worktree_path.clone().or_else(|| pane.cwd.clone()),
-        worktree_branch: item.worktree_branch.clone(),
-        channel: None,
-        unread: false,
-        inactive: false,
-        archived: false,
-        attention_score: 0,
-        last_activity: item.updated_at,
-        card: RowCard::Agent(Box::new(AgentCard {
-            status: AgentStatus::Waiting,
-            // A waiting row is blocked on the human, not reasoning — no turn phase.
-            phase: TurnPhase::Idle,
-            request_id: Some(item.request_id.clone()),
-            surface: Some(item.surface),
-            task: Some(item.title.clone()),
-            prompt: None,
-            description: None,
-            model: None,
-            effort: None,
-            handle: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            context_severity: None,
-            registered_at: None,
-            options: item.options.clone(),
-            sub_agents: Vec::new(),
-            compacting: false,
-            compaction_count: 0,
-            turn_error_label: None,
-        })),
-    }
-}
-
-pub(super) fn agent_id_from_item(item: &FeedItem) -> Option<String> {
-    item.agent_session_id().map(ToOwned::to_owned)
 }

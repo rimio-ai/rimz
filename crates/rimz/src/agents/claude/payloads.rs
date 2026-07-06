@@ -164,8 +164,8 @@ pub struct ClaudePostCompact {
     pub trigger: CompactTrigger,
 }
 
-/// Blocking feed event. `tool_name` and `tool_input` are available in
-/// `classify_hook` for enriching the feed item; they don't affect the decision
+/// Blocking ask event. `tool_name` and `tool_input` are available in
+/// `classify_hook` for naming the waiting kind; they don't affect the decision
 /// shape (which is `behavior: allow|deny`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]

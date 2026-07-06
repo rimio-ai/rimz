@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal, TurnPhase};
 use crate::agents::{AgentState, AgentStatus};
-use crate::feed::{FeedItem, Surface};
 use crate::harness::schedule::runner::tail_output;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, RunId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
 use crate::ledger::lock::WorkspaceLock;
 use crate::ledger::run_store::{self, RunStoreErr};
 use crate::ledger::{SidebarSnapshot, StatePaths};
@@ -165,12 +164,6 @@ impl RunRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct RunPendingAsk {
-    pub request_id: RequestId,
-    pub surface: Surface,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RunLiveStatus {
     pub agent_status: AgentStatus,
     pub phase: TurnPhase,
@@ -178,8 +171,6 @@ pub struct RunLiveStatus {
     pub pane_id: Option<PaneId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_ask: Option<RunPendingAsk>,
 }
 
 pub fn create(paths: &StatePaths, record: &RunRecord) -> Result<()> {
@@ -342,7 +333,6 @@ pub fn live_status(record: &RunRecord, snapshot: &SidebarSnapshot) -> Option<Run
             .map(|pane| pane.pane_id.clone())
             .or_else(|| record.pane_id.clone()),
         context_pct: agent_context_pct(agent),
-        pending_ask: pending_ask_for(agent, snapshot),
     })
 }
 
@@ -357,23 +347,6 @@ fn agent_context_pct(agent: &AgentState) -> Option<u8> {
         .filter(|tokens| tokens.context_window_size.is_some())
         .and_then(|tokens| tokens.used_percentage)
         .or(agent.context_pct)
-}
-
-fn pending_ask_for(agent: &AgentState, snapshot: &SidebarSnapshot) -> Option<RunPendingAsk> {
-    snapshot
-        .needs_attention
-        .iter()
-        .find(|item| item_matches_agent(item, agent))
-        .map(|item| RunPendingAsk {
-            request_id: item.request_id.clone(),
-            surface: item.surface,
-        })
-}
-
-fn item_matches_agent(item: &FeedItem, agent: &AgentState) -> bool {
-    item.source_kind == "agent-hook"
-        && item.source == agent.kind.as_str()
-        && item.agent_session_id() == Some(agent.agent_id.as_str())
 }
 
 /// Terminal run status produced by one agent lifecycle signal.
@@ -404,10 +377,8 @@ mod tests {
 
     use crate::agents::AgentState;
     use crate::agents::LifecycleSignal;
-    use crate::feed::FeedKind;
     use crate::ids::MuxName;
     use crate::pane::PaneRef;
-    use serde_json::json;
     use tempfile::tempdir;
 
     fn setup() -> (tempfile::TempDir, StatePaths, RunRecord) {
@@ -642,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn live_status_joins_agent_state_and_pending_ask() {
+    fn live_status_joins_agent_state() {
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
         let mut record = RunRecord::new(
             workspace_id.clone(),
@@ -656,33 +627,23 @@ mod tests {
         let pane_id = PaneId::from_parts(MuxName::Tmux, "%7");
         let mut pane = PaneRef::from_id(pane_id.clone());
         pane.session_name = "rimz-test".to_owned();
-        let mut agent = agent_state("claude", "sess-1", AgentStatus::Running);
-        agent.phase = TurnPhase::Reasoning;
+        let mut agent = agent_state("claude", "sess-1", AgentStatus::Waiting);
+        agent.phase = TurnPhase::Idle;
         agent.pane = Some(pane);
         agent.context_pct = Some(42);
-        let mut ask = FeedItem::new(
-            workspace_id.clone(),
-            Surface::NativeUi,
-            FeedKind::Permission,
-            "Approve?",
-            "claude",
-            "agent-hook",
-        );
-        ask.payload = json!({ "session_id": "sess-1" });
-        let request_id = ask.request_id.clone();
+        agent.waiting_since = Some(Timestamp::UNIX_EPOCH);
         let snapshot = SidebarSnapshot::build_with_agents(
             workspace_id,
-            vec![ask],
+            Vec::<()>::new(),
             vec![agent],
             Timestamp::UNIX_EPOCH,
         );
 
         let live = live_status(&record, &snapshot).expect("live status");
-        assert_eq!(live.agent_status, AgentStatus::Running);
-        assert_eq!(live.phase, TurnPhase::Reasoning);
+        assert_eq!(live.agent_status, AgentStatus::Waiting);
+        assert_eq!(live.phase, TurnPhase::Idle);
         assert_eq!(live.pane_id.as_ref(), Some(&pane_id));
         assert_eq!(live.context_pct, Some(42));
-        assert_eq!(live.pending_ask.unwrap().request_id, request_id);
     }
 
     #[test]

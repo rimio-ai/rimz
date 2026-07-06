@@ -2,9 +2,7 @@ use std::time::{Duration, SystemTime};
 
 use tracing::warn;
 
-use crate::feed::FeedItem;
 use crate::harness::run::RunRecord;
-use crate::ids::RequestId;
 use crate::ledger::event::EventEnvelope;
 
 use super::super::{Ledger, LedgerErr, Result, StatePaths, event_log, lock, snapshot, wakeup};
@@ -156,32 +154,12 @@ impl Ledger {
         }
     }
 
-    pub(super) fn wake_per_request_best_effort(&self, item: &FeedItem) {
-        if let Err(err) = wakeup::wake_per_request(&self.inner.runtime, item) {
-            warn!(
-                request_id = %item.request_id,
-                error = %err,
-                "per-request wakeup failed after ledger commit"
-            );
-        }
-    }
-
     pub(super) fn wake_run_best_effort(&self, record: &RunRecord) {
         if let Err(err) = wakeup::wake_run(&self.inner.runtime, record) {
             warn!(
                 run_id = %record.run_id,
                 error = %err,
                 "run wakeup failed after ledger commit"
-            );
-        }
-    }
-
-    pub(super) fn wake_sidebars_best_effort(&self, request_id: &RequestId) {
-        if let Err(err) = wakeup::wake_sidebars(&self.inner.runtime) {
-            warn!(
-                request_id = %request_id,
-                error = %err,
-                "sidebar wakeup failed after ledger commit"
             );
         }
     }

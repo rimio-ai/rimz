@@ -33,10 +33,16 @@ pub(super) fn project_display_status(
         let Some(agent) = row.as_agent_mut() else {
             continue;
         };
-        let status = agent.status;
-        // A human-blocked `waiting` ask outranks every derived state.
+        let mut status = agent.status;
+        // A human-blocked native prompt outranks every derived state. A later
+        // activity heartbeat means the prompt was answered in the pane.
         if status == AgentStatus::Waiting {
-            continue;
+            if source_agent.is_some_and(AgentState::is_awaiting_input) {
+                continue;
+            }
+            agent.status = AgentStatus::Running;
+            agent.phase = TurnPhase::Reasoning;
+            status = AgentStatus::Running;
         }
         let effective_status = source_agent
             .map(AgentState::effective_status)

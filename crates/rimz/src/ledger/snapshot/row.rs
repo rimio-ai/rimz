@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentContext, AgentTokenUsage, usable_description};
 use crate::agents::{AgentStatus, ContextSeverity};
-use crate::feed::Surface;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
 
 /// One frame-admitted sidebar row. The base names the row and pane; [`RowCard`]
@@ -111,14 +110,6 @@ impl SidebarRow {
 
     pub fn phase(&self) -> TurnPhase {
         self.as_agent().map_or(TurnPhase::Idle, |agent| agent.phase)
-    }
-
-    pub fn request_id(&self) -> Option<&RequestId> {
-        self.as_agent().and_then(|agent| agent.request_id.as_ref())
-    }
-
-    pub fn surface(&self) -> Option<Surface> {
-        self.as_agent().and_then(|agent| agent.surface)
     }
 
     pub fn task(&self) -> Option<&str> {
@@ -278,11 +269,6 @@ pub struct AgentCard {
     /// "background" marker.
     #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
     pub phase: TurnPhase,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<RequestId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub surface: Option<Surface>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     /// The session's latest user prompt, carried forward from `AgentState`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -337,8 +323,6 @@ pub struct AgentCard {
     /// session's first cost; row ordering keys on pane creation, not this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<String>,
     /// Subagents this agent spawned this turn, nested under the parent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_agents: Vec<SidebarSubAgent>,
@@ -359,8 +343,6 @@ impl Default for AgentCard {
         Self {
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
-            request_id: None,
-            surface: None,
             task: None,
             prompt: None,
             description: None,
@@ -380,7 +362,6 @@ impl Default for AgentCard {
             context: None,
             context_severity: None,
             registered_at: None,
-            options: Vec::new(),
             sub_agents: Vec::new(),
             compacting: false,
             compaction_count: 0,

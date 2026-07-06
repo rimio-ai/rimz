@@ -9,9 +9,8 @@
 
 use std::time::{Duration, Instant, SystemTime};
 
+use rimz::EventEnvelope;
 use rimz::ledger::atomic::testkit::fsync_count;
-use rimz::{EventEnvelope, FeedItem, FeedKind, Resolution, ResolutionMethod, Surface};
-use serde_json::json;
 
 use crate::common::Harness;
 
@@ -24,13 +23,10 @@ fn log_sync_stamp(h: &Harness) -> std::path::PathBuf {
 }
 
 #[test]
-fn warm_append_push_and_resolve_perform_zero_fsyncs() {
-    // The full hot decision path — supersede scan, feed write, event
-    // append, resolve CAS, terminal relocation, checkpoint publish — is
-    // fsync-free: feed files are cache-class (rename atomicity carries the
-    // CAS), the append is write()-only, and the published snapshots are
-    // cache-class. Durability rides the debounced group sync and the
-    // audit log alone.
+fn warm_appends_perform_zero_fsyncs() {
+    // Steady-state appends are write()-only, and published snapshots are
+    // cache-class. Durability rides the debounced group sync and the audit log
+    // alone.
     let h = Harness::new();
     h.ledger
         .append_event(&lifecycle(&h, "warmup"))
@@ -42,30 +38,13 @@ fn warm_append_push_and_resolve_perform_zero_fsyncs() {
     h.ledger
         .append_event(&lifecycle(&h, "steady"))
         .expect("steady append");
-    let item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "allow?",
-        "claude",
-        "agent-hook",
-    );
     h.ledger
-        .push_feed_item_superseding(&item, Some(("claude", "live")), "rimz-perf")
-        .map(|_| ())
-        .expect("push");
-    h.ledger
-        .resolve_feed_item(
-            &item.request_id,
-            Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::Cli),
-            "rimz-perf",
-        )
-        .expect("resolve");
+        .append_event(&lifecycle(&h, "steady-2"))
+        .expect("second steady append");
     assert_eq!(
         fsync_count() - before,
         0,
-        "steady-state appends and a warm push + resolve cycle perform no \
-         fsync anywhere — critical section or tail"
+        "steady-state appends perform no fsync anywhere — critical section or tail"
     );
 }
 

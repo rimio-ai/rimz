@@ -20,9 +20,8 @@
 //!
 //! One wired event is an ask: `tool_call`, pi's pre-tool gate, whose extension
 //! handler pi awaits. Pi draws no permission prompt of its own
-//! (`native_ask_ui: false`), so the hook returns neutral immediately and no
-//! `native_ui` feed item is pushed: Rimz does not pose questions pi would not
-//! have asked. Subagents and background tasks stay declared off
+//! (`native_ask_ui: false`), so the hook returns neutral immediately and Rimz
+//! records no waiting state. Subagents and background tasks stay declared off
 //! (`docs/externals/agent-adapter/pi-reference.md`) and the absences render
 //! deliberately.
 
@@ -38,6 +37,7 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
+use super::AskKind;
 use super::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, RateLimitWindow,
     WindowSource,
@@ -55,7 +55,6 @@ use super::{
     HookUninstallReport, Result, agent_config_path, classify_agent_hook, optional_payload_string,
     sanitize_user_prompt,
 };
-use crate::feed::FeedKind;
 use crate::ids::AgentSessionId;
 
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
@@ -87,10 +86,10 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capabilities: Capabilities {
         // `tool_call` is pi's awaited pre-tool gate. Pi has no native ask UI,
         // so Rimz records no ask and returns neutral.
-        blocking_feed: true,
+        blocking_asks: true,
         // Pi never asks natively — no permission prompts, plan approvals, or
         // questions — so Rimz has no surface to route to. It returns neutral
-        // with no `native_ui` feed item.
+        // with no waiting state.
         native_ask_ui: false,
         rich_context: false,
         transcript_tail_context: false,
@@ -252,6 +251,12 @@ const PI_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
         },
     ),
     (
+        LifecycleSignalKind::AwaitingInput,
+        HookCoverage::Absent {
+            reason: "pi has no native ask UI",
+        },
+    ),
+    (
         LifecycleSignalKind::SubagentStarted,
         HookCoverage::Absent {
             reason: "pi has no subagents",
@@ -346,8 +351,8 @@ impl AgentAdapter for PiAdapter {
         // `tool_call` is pi's only blocking gate — every tool routes through
         // it, so it classifies as a permission ask. Everything else rides the
         // lifecycle channel.
-        let feed_kind = (event_name == "tool_call").then_some(FeedKind::Permission);
-        classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
+        let ask_kind = (event_name == "tool_call").then_some(AskKind::Permission);
+        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
     }
 
     #[cfg(test)]
@@ -363,8 +368,8 @@ impl AgentAdapter for PiAdapter {
             ClassificationSample::new(
                 "tool_call",
                 json!({ "session_id": "sess-1", "tool_name": "bash" }),
-                AgentHookClass::BlockingFeed,
-                Some(FeedKind::Permission),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Permission),
             ),
             ClassificationSample::new(
                 "session_start",
@@ -520,8 +525,8 @@ impl AgentAdapter for PiAdapter {
 
     fn moves_on(&self, event_name: &str) -> bool {
         // A new prompt starts a fresh turn; an agent_end completes the current
-        // one. Pi raises no native asks today, so this only future-proofs the
-        // native_ui expiry against enrichment-sourced asks.
+        // one. Pi raises no native asks today, so this only future-proofs
+        // enrichment-sourced ask handling.
         matches!(event_name, "before_agent_start" | "agent_end")
     }
 

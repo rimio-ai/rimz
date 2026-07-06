@@ -5,7 +5,6 @@
 //! this filter and read durable history as written.
 
 use crate::agents::AgentState;
-use crate::feed::{FeedItem, Surface};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use std::collections::BTreeSet;
@@ -26,7 +25,6 @@ pub enum AgentLiveness {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RuntimeProjection {
-    pub items: Vec<FeedItem>,
     pub ended: BTreeSet<(AgentKind, AgentSessionId)>,
     pub lost: BTreeSet<(AgentKind, AgentSessionId)>,
     pub agents: Vec<AgentState>,
@@ -34,7 +32,6 @@ pub struct RuntimeProjection {
 
 impl RuntimeProjection {
     pub fn from_parts(
-        items: Vec<FeedItem>,
         ended: BTreeSet<(AgentKind, AgentSessionId)>,
         lost: BTreeSet<(AgentKind, AgentSessionId)>,
         agents: Vec<AgentState>,
@@ -42,13 +39,11 @@ impl RuntimeProjection {
     ) -> Self {
         match scope {
             RuntimeScope::Audit => Self {
-                items,
                 ended,
                 lost,
                 agents,
             },
             RuntimeScope::Runtime => Self {
-                items: items.into_iter().filter(item_is_runtime_visible).collect(),
                 ended,
                 lost,
                 agents: agents
@@ -58,18 +53,6 @@ impl RuntimeProjection {
             },
         }
     }
-}
-
-/// Runtime visibility for a feed item. The owner-required liveness gate is a
-/// script concern: a script that exits must not strand its prompt as attention.
-/// Agent and bridge asks are governed by the agent rollup join in the snapshot
-/// reducer (`agent_hook_session_stale`), so a missing owner there is not by
-/// itself a reason to hide — only a *known-dead* owner suppresses them.
-fn item_is_runtime_visible(item: &FeedItem) -> bool {
-    if item.surface == Surface::Script {
-        return item.runtime_owner.as_ref().is_some_and(owner_is_live);
-    }
-    item.runtime_owner.as_ref().is_none_or(owner_is_live)
 }
 
 /// Runtime visibility for an agent. Liveness suppresses; it never gates an
@@ -186,10 +169,7 @@ mod tests {
     use super::*;
     use crate::agents::AgentStatus;
     use crate::agents::TurnPhase;
-    use crate::feed::{FeedKind, Surface};
-    use crate::ids::WorkspaceId;
     use jiff::Timestamp;
-    use std::path::Path;
 
     fn agent(owner: Option<RuntimeOwner>) -> AgentState {
         AgentState {
@@ -229,6 +209,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,
@@ -236,72 +217,6 @@ mod tests {
             last_activity: Timestamp::UNIX_EPOCH,
             registered_at: Some(Timestamp::UNIX_EPOCH),
         }
-    }
-
-    #[test]
-    fn runtime_projection_filters_items_by_owner_and_scope() {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let item = |surface, owner| {
-            let mut item = FeedItem::new(
-                workspace.clone(),
-                surface,
-                FeedKind::Question,
-                "deploy?",
-                "rimz",
-                "cli",
-            );
-            item.runtime_owner = owner;
-            item
-        };
-
-        let runtime = RuntimeProjection::from_parts(
-            vec![
-                item(
-                    Surface::Script,
-                    Some(current_process_owner(RuntimeOwnerKind::Script, "live")),
-                ),
-                item(Surface::Script, None),
-                item(Surface::NativeUi, None),
-                #[cfg(unix)]
-                item(
-                    Surface::Script,
-                    Some(RuntimeOwner::new(
-                        RuntimeOwnerKind::Script,
-                        "dead",
-                        u32::MAX,
-                        None,
-                    )),
-                ),
-                #[cfg(target_os = "linux")]
-                item(
-                    Surface::Script,
-                    Some(RuntimeOwner::new(
-                        RuntimeOwnerKind::Script,
-                        "reused",
-                        std::process::id(),
-                        Some("definitely-not-this-process".to_owned()),
-                    )),
-                ),
-            ],
-            BTreeSet::new(),
-            BTreeSet::new(),
-            Vec::new(),
-            RuntimeScope::Runtime,
-        );
-        assert_eq!(
-            runtime.items.len(),
-            2,
-            "live script and ownerless native_ui stay; ownerless/dead scripts drop"
-        );
-
-        let audit = RuntimeProjection::from_parts(
-            vec![item(Surface::Script, None)],
-            BTreeSet::new(),
-            BTreeSet::new(),
-            Vec::new(),
-            RuntimeScope::Audit,
-        );
-        assert_eq!(audit.items.len(), 1, "audit keeps durable history");
     }
 
     #[test]
@@ -320,7 +235,6 @@ mod tests {
         };
 
         let projection = RuntimeProjection::from_parts(
-            Vec::new(),
             BTreeSet::new(),
             BTreeSet::new(),
             agents,

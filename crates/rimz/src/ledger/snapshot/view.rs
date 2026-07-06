@@ -15,7 +15,6 @@ use super::panes::SidebarOwnView;
 use super::row::PaneAgent;
 use crate::agents::AgentState;
 use crate::agents::SpendTally;
-use crate::feed::{FeedItem, FeedStatus, Surface};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
 #[cfg(test)]
@@ -35,20 +34,18 @@ mod score;
 
 pub(crate) use providers::format_plan_label;
 
+pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use model::{
     PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
     WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use reap::RuntimeReapInputs;
-use reap::{agent_hook_session_stale, is_agent_native_item};
-
-pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 
 #[cfg(test)]
 pub(super) use aggregate::{attach_sub_agents, sub_agent_from_state};
 #[cfg(test)]
-pub(crate) use live::{fold_ask_onto_row, row_identity_violations};
+pub(crate) use live::row_identity_violations;
 #[cfg(test)]
 pub(super) use rows::row_from_agent;
 
@@ -76,9 +73,6 @@ pub const SNAPSHOT_VERSION: u32 = 6;
 /// caps, status tallies, and row metadata are resolved here so renderers only
 /// paint semantics into glyphs.
 ///
-/// `needs_attention` is load-bearing: it is the reducer input the live-pane
-/// fold reads when panes are folded in (`with_live_panes`). The sidebar
-/// renderer reads `worktree_groups`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SidebarSnapshot {
     #[serde(default)]
@@ -122,7 +116,6 @@ pub struct SidebarSnapshot {
     #[serde(skip, default = "Timestamp::now")]
     pub now: Timestamp,
     pub worktree_groups: Vec<SidebarWorktreeGroup>,
-    pub needs_attention: Vec<FeedItem>,
     pub agents: Vec<AgentState>,
     /// The wired agent kinds whose Rimz hooks are installed. Gates the idle
     /// synthesis in `rows_from_panes`: a launched-but-unbound pane for a wired
@@ -278,11 +271,11 @@ impl SidebarSnapshot {
     #[cfg(test)]
     pub fn build(
         workspace_id: WorkspaceId,
-        items: Vec<FeedItem>,
+        _items: Vec<()>,
         events: Vec<EventEnvelope>,
         now: Timestamp,
     ) -> Self {
-        Self::build_with_carryover(workspace_id, items, events, Vec::new(), now)
+        Self::build_with_carryover(workspace_id, Vec::<()>::new(), events, Vec::new(), now)
     }
 
     /// Build a snapshot, folding `carryover_agents` into the agent rollup so
@@ -291,47 +284,21 @@ impl SidebarSnapshot {
     #[cfg(test)]
     pub fn build_with_carryover(
         workspace_id: WorkspaceId,
-        items: Vec<FeedItem>,
+        _items: Vec<()>,
         events: Vec<EventEnvelope>,
         carryover_agents: Vec<AgentState>,
         now: Timestamp,
     ) -> Self {
         let agents = agent_rollup_with_carryover(&events, carryover_agents);
-        Self::build_with_agents(workspace_id, items, agents, now)
+        Self::build_with_agents(workspace_id, Vec::<()>::new(), agents, now)
     }
 
     pub fn build_with_agents(
         workspace_id: WorkspaceId,
-        mut items: Vec<FeedItem>,
+        _items: Vec<()>,
         agents: Vec<AgentState>,
         now: Timestamp,
     ) -> Self {
-        items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
-
-        let mut needs_attention = Vec::new();
-        for item in items {
-            // A pending agent-hook ask outlives its agent only as data: once the
-            // session that raised it is gone from the live rollup it is no longer
-            // attention, just history. This is what stops a fresh agent from
-            // inheriting a dead session's 18h-old permission prompt.
-            let stale =
-                item.status == FeedStatus::Pending && agent_hook_session_stale(&item, &agents);
-            match (item.status, item.surface) {
-                (FeedStatus::Pending, Surface::NativeUi)
-                    if is_agent_native_item(&item) && !stale =>
-                {
-                    needs_attention.push(item);
-                }
-                (FeedStatus::Pending, Surface::Script) => {
-                    needs_attention.push(item);
-                }
-                // Resolved and otherwise-inactive items are history, not
-                // presence or attention: the sidebar never renders them, so they
-                // are dropped here rather than carried in the view-model.
-                _ => {}
-            }
-        }
-
         let display_name = workspace_id.as_str().to_owned();
         Self {
             snapshot_version: SNAPSHOT_VERSION,
@@ -346,7 +313,6 @@ impl SidebarSnapshot {
             truth_degraded: None,
             now,
             worktree_groups: Vec::new(),
-            needs_attention,
             agents,
             wired_kinds: Vec::new(),
             wired_default_models: BTreeMap::new(),

@@ -29,81 +29,50 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     spinner.set("sweeping runtime hints…");
     let report = gc::collect_runtime(args.older_than).context("collecting runtime garbage")?;
     spinner.set("repairing ledger…");
-    let (
-        abandoned,
-        messages_archived,
-        messages_reconciled,
-        repaired,
-        carryover_pruned,
-        terminal_pruned,
-    ) = match WorkspaceResolver::resolve(".", globals.root.clone()) {
-        Ok(workspace) => match open_ledger(&workspace) {
-            Ok(ledger) => {
-                // Repair before the sweep: the sweep's forced publish folds the
-                // log and would self-heal a corpse itself, leaving this explicit
-                // repair nothing to find — and the report below silent about a
-                // cut this very run made.
-                let repaired = ledger
-                    .repair_event_log()
-                    .context("repairing the event log")?;
-                spinner.set("abandoning dead items…");
-                let abandoned = ledger
-                    .abandon_dead_owned_items(&workspace.session_name)
-                    .context("abandoning dead owned feed items")?;
-                spinner.set("archiving orphan messages…");
-                let messages_archived = ledger
-                    .archive_orphan_messages(&workspace.session_name)
-                    .context("archiving orphan messages")?;
-                let reconcile = ledger
-                    .reconcile_stale_sent_messages(
-                        &workspace.session_name,
-                        jiff::Timestamp::now(),
-                        rimz::message::delivery_window_from_env(),
-                        rimz::message::max_delivery_attempts_from_env(),
+    let (messages_archived, messages_reconciled, repaired, carryover_pruned) =
+        match WorkspaceResolver::resolve(".", globals.root.clone()) {
+            Ok(workspace) => match open_ledger(&workspace) {
+                Ok(ledger) => {
+                    // Repair before the sweep: the sweep's forced publish folds the
+                    // log and would self-heal a corpse itself, leaving this explicit
+                    // repair nothing to find — and the report below silent about a
+                    // cut this very run made.
+                    let repaired = ledger
+                        .repair_event_log()
+                        .context("repairing the event log")?;
+                    spinner.set("archiving orphan messages…");
+                    let messages_archived = ledger
+                        .archive_orphan_messages(&workspace.session_name)
+                        .context("archiving orphan messages")?;
+                    let reconcile = ledger
+                        .reconcile_stale_sent_messages(
+                            &workspace.session_name,
+                            jiff::Timestamp::now(),
+                            rimz::message::delivery_window_from_env(),
+                            rimz::message::max_delivery_attempts_from_env(),
+                        )
+                        .context("reconciling sent messages")?;
+                    spinner.set("pruning ledger caches...");
+                    let carryover_pruned = ledger
+                        .prune_carryover(rimz::ledger::event_log::DEFAULT_RETENTION)
+                        .context("pruning carryover agents")?;
+                    (
+                        messages_archived,
+                        reconcile.requeued + reconcile.timed_out,
+                        Some(repaired),
+                        carryover_pruned,
                     )
-                    .context("reconciling sent messages")?;
-                spinner.set("pruning ledger caches...");
-                let carryover_pruned = ledger
-                    .prune_carryover(rimz::ledger::event_log::DEFAULT_RETENTION)
-                    .context("pruning carryover agents")?;
-                let terminal_pruned = rimz::ledger::feed_store::prune_terminal(
-                    &ledger.paths().feed_dir,
-                    rimz::ledger::event_log::DEFAULT_RETENTION,
-                )
-                .context("pruning terminal feed")?;
-                (
-                    abandoned,
-                    messages_archived,
-                    reconcile.requeued + reconcile.timed_out,
-                    Some(repaired),
-                    carryover_pruned,
-                    terminal_pruned,
-                )
-            }
-            Err(err) => {
-                tracing::debug!(
-                    error = %err,
-                    "workspace ledger unavailable; runtime gc continues"
-                );
-                (
-                    0,
-                    0,
-                    0,
-                    None,
-                    0,
-                    rimz::ledger::atomic::PruneOutcome::default(),
-                )
-            }
-        },
-        Err(_) => (
-            0,
-            0,
-            0,
-            None,
-            0,
-            rimz::ledger::atomic::PruneOutcome::default(),
-        ),
-    };
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        error = %err,
+                        "workspace ledger unavailable; runtime gc continues"
+                    );
+                    (0, 0, None, 0)
+                }
+            },
+            Err(_) => (0, 0, None, 0),
+        };
     spinner.set("reaping dead schedules…");
     let schedules_reaped =
         super::loop_cmd::reap_dead_delivery_schedules().context("reaping dead loop schedules")?;
@@ -117,11 +86,9 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         runtime: report,
         temps,
         repaired,
-        feed_abandoned: abandoned,
         queue_archived: messages_archived,
         queue_reconciled: messages_reconciled,
         carryover_pruned,
-        terminal_pruned,
         schedules_reaped,
         prune,
         worktrees,
@@ -138,11 +105,9 @@ struct GcOutcome {
     runtime: gc::GcReport,
     temps: gc::TempSweepReport,
     repaired: Option<RepairOutcome>,
-    feed_abandoned: usize,
     queue_archived: usize,
     queue_reconciled: usize,
     carryover_pruned: usize,
-    terminal_pruned: rimz::ledger::atomic::PruneOutcome,
     schedules_reaped: usize,
     prune: gc::WorkspacePruneReport,
     worktrees: WorktreeSweep,
@@ -291,17 +256,14 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         .runtime
         .bytes_removed
         .saturating_add(out.temps.bytes_removed)
-        .saturating_add(out.terminal_pruned.bytes_removed)
         .saturating_add(out.prune.bytes_removed())
         .saturating_add(out.worktrees.bytes);
     let active = reclaimed > 0
         || runtime_items(&out.runtime) > 0
         || out.temps.files_removed > 0
-        || out.feed_abandoned > 0
         || out.queue_archived > 0
         || out.queue_reconciled > 0
         || out.carryover_pruned > 0
-        || out.terminal_pruned.files_removed > 0
         || out.schedules_reaped > 0
         || out.repaired.as_ref().is_some_and(RepairOutcome::truncated)
         || !out.prune.removed.is_empty()
@@ -367,31 +329,15 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             cell(runtime_breakdown(&out.runtime)),
         ]);
     }
-    if out.terminal_pruned.files_removed > 0 {
-        table.row([
-            cell("feed"),
-            cell(plural(
-                out.terminal_pruned.files_removed,
-                "terminals",
-                "terminal",
-            )),
-            cell(fmt_bytes(out.terminal_pruned.bytes_removed)),
-            cell("settled items"),
-        ]);
-    }
     if out.worktrees.swept > 0
         || !out.prune.removed.is_empty()
         || out.temps.files_removed > 0
         || runtime_items > 0
-        || out.terminal_pruned.files_removed > 0
     {
         writeln!(w)?;
         table.render(w)?;
     }
 
-    if out.feed_abandoned > 0 {
-        report_note(w, &format!("feed abandoned: {}", out.feed_abandoned))?;
-    }
     if out.queue_archived > 0 {
         report_note(w, &format!("messages archived: {}", out.queue_archived))?;
     }
@@ -550,14 +496,9 @@ mod tests {
                 bytes_removed: 68,
             },
             repaired: None,
-            feed_abandoned: 3,
             queue_archived: 0,
             queue_reconciled: 0,
             carryover_pruned: 1,
-            terminal_pruned: rimz::ledger::atomic::PruneOutcome {
-                files_removed: 1,
-                bytes_removed: 512,
-            },
             schedules_reaped: 0,
             prune: gc::WorkspacePruneReport {
                 removed: vec![gc::RemovedWorkspace {
@@ -581,7 +522,6 @@ mod tests {
         assert!(out.contains("workspaces"));
         assert!(out.contains("runtime"));
         assert!(out.contains("temp"));
-        assert!(out.contains("feed"));
         assert!(out.contains("carryover agents pruned"));
         assert!(out.contains("orphans"));
         assert!(out.contains("heartbeat"));

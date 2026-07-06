@@ -1,7 +1,7 @@
 //! Latest-wins per-subagent context sidecar.
 //!
 //! Claude's `subagentStatusLine` enrichment (a child's description, token count,
-//! and start time) is written here by the feed process — one atomic file per
+//! and start time) is written here by the hook/statusline CLI process — one atomic file per
 //! `(kind, agent_id)` child under the runtime `subagent_context/` dir — and
 //! folded into the snapshot read-side by
 //! [`crate::ledger::snapshot::SidebarSnapshot::with_subagent_context`]. Like its
@@ -9,7 +9,7 @@
 //! log: this is display-only latency, not truth ("Ledger first",
 //! `docs/internals/sidebar/ledger.md`).
 //!
-//! Ownership: the WRITER is always the feed process (the `rimz` CLI). The
+//! Ownership: the WRITER is always a Rimz CLI producer. The
 //! sidebar renderer reads this data only through the snapshot JSON, never this
 //! module, so "sidebar is read-only on the ledger" holds.
 
@@ -57,7 +57,7 @@ impl sidecar::SidecarRecord for SubagentContextRecord {
 /// pin a vanished child.
 const CONTEXT_TTL_SECS: i64 = 3 * 60 * 60;
 
-/// Persist (latest-wins) one child's context. WRITER = the feed process.
+/// Persist (latest-wins) one child's context. WRITER = a Rimz CLI producer.
 /// Atomic temp+rename (no fsync — disposable sidecar) via
 /// [`write_temp_then_rename_cache`].
 pub fn write(

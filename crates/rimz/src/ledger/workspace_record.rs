@@ -1,8 +1,8 @@
 //! Workspace metadata stored beside the ledger.
 //!
 //! `workspace.json` lets maintenance commands reason about known ledgers
-//! after the project root has moved or disappeared. The ledger and feed files
-//! remain the correctness source for requests; this record is an index for
+//! after the project root has moved or disappeared. The ledger event log
+//! remains the correctness source; this record is an index for
 //! operator workflows such as `rimz gc`.
 
 use std::fs;

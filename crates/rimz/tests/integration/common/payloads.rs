@@ -1,8 +1,4 @@
-//! Agent hook-payload fixtures and the environment probes example tests lean
-//! on (`python3` availability and socket support).
-
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+//! Agent hook-payload fixtures.
 
 use rimz::EventEnvelope;
 use rimz::agents::lifecycle::LifecycleSignal;
@@ -10,7 +6,6 @@ use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::ids::AgentSessionId;
 use serde_json::json;
 
-use super::env::Env;
 use super::harness::Harness;
 
 /// One `agent.lifecycle` event envelope, registered-signal shaped — the
@@ -119,39 +114,4 @@ pub fn pi_tool_call_payload(tool_name: &str) -> String {
         "tool_input": { "command": "echo hi" },
     }))
     .expect("payload")
-}
-
-/// Absolute path to a reference resolver script under `examples/resolvers/`.
-/// One place owns the `crates/<crate>` → workspace-root climb that every
-/// example-resolver test would otherwise hand-roll.
-pub fn example_resolver_script(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates/")
-        .parent()
-        .expect("workspace root")
-        .join("examples/resolvers")
-        .join(name)
-}
-
-/// Whether `python3` is on PATH — example-resolver tests self-skip without it.
-pub fn python3_present() -> bool {
-    Command::new("python3")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Shared self-skip gate for the example-resolver tests: both need `python3`
-/// on PATH and an environment that permits AF_UNIX sockets. Returns `true` when
-/// the test should bail early.
-pub fn skip_preconditions(env: &Env) -> bool {
-    if !python3_present() {
-        tracing::warn!("skipping: python3 not on PATH");
-        return true;
-    }
-    env.skip_if_sandboxed()
 }

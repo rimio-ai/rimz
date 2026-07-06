@@ -1,5 +1,5 @@
-//! Durable workspace state — ledger paths, atomic helpers, event log, feed
-//! item store, snapshots.
+//! Durable workspace state — ledger paths, atomic helpers, event log, and
+//! snapshots.
 //!
 //! Module split (the local contract lives in `AGENTS.md` beside this file):
 //!
@@ -10,12 +10,10 @@
 //!   lock.rs         workspace advisory lock
 //!   event_log.rs    framed append-log façade
 //!   event_log/      frame codec, rotation, recovery, unit tests
-//!   pending_terminal.rs feed pending/terminal file-store invariant
-//!   feed_store.rs   feed item wrappers + status CAS
 //!   message_store.rs live message queue JSONL store
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
-//!   writer/         debounce, publish, expiry, resolve, queue, reset
+//!   writer/         debounce, publish, queue, reset
 //!   gc.rs           maintenance façade
 //!   gc/             runtime collection and dead-workspace pruning
 //!   snapshot/       reduced snapshot rebuild
@@ -38,13 +36,11 @@ pub mod agent_context;
 pub mod atomic;
 pub mod event;
 pub mod event_log;
-pub mod feed_store;
 pub mod gc;
 pub mod lock;
 pub mod message_store;
 pub(crate) mod parse_cache;
 pub mod paths;
-pub(crate) mod pending_terminal;
 pub mod run_store;
 pub mod runtime;
 pub(crate) mod sidecar;
@@ -60,11 +56,9 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::feed::{AbandonReason, FeedItem, FeedStatus, Surface};
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, RunId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
 use crate::ledger::event::{AgentLaunchState, EventEnvelope};
 
-pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
 pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
@@ -75,17 +69,6 @@ pub use crate::ledger::snapshot::{
     lead_unread_row, triage_key,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
-
-/// Why a session's pending agent-hook asks are being expired. The variant
-/// both scopes which surfaces are eligible and supplies the audit reason, so
-/// the two can never drift apart.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AskExpiry {
-    /// The session ended outright; expire every surface it left pending.
-    SessionEnded,
-    /// A live session moved on; expire only its native_ui asks.
-    MovedOn,
-}
 
 /// Terminal audit-only message outcome for a target that never resolved to a
 /// durable receiver card.
@@ -99,26 +82,10 @@ pub struct UnresolvedMessage<'a> {
     pub reason: &'a str,
 }
 
-impl AskExpiry {
-    fn reason(self) -> AbandonReason {
-        match self {
-            Self::SessionEnded => AbandonReason::AgentSessionEnded,
-            Self::MovedOn => AbandonReason::AgentMovedOn,
-        }
-    }
-
-    fn includes(self, surface: Surface) -> bool {
-        match self {
-            Self::SessionEnded => true,
-            Self::MovedOn => surface == Surface::NativeUi,
-        }
-    }
-}
-
 /// High-level handle to a workspace's durable state. Cheap to clone — the
 /// inner state lives behind an `Arc`. Reads here are lock-free; every
 /// mutator (in `writer.rs`) takes the workspace lock for its critical
-/// section and writes through the `event_log`, `feed_store`, and `snapshot`
+/// section and writes through the `event_log` and `snapshot`
 /// modules directly.
 #[derive(Clone, Debug)]
 pub struct Ledger {
@@ -137,8 +104,6 @@ pub enum LedgerErr {
     Path(#[from] paths::PathErr),
     #[error(transparent)]
     EventLog(#[from] event_log::EventLogErr),
-    #[error(transparent)]
-    FeedStore(#[from] feed_store::FeedStoreErr),
     #[error(transparent)]
     MessageStore(#[from] message_store::MessageStoreErr),
     #[error(transparent)]
@@ -164,24 +129,8 @@ pub enum LedgerErr {
 pub type Result<T> = std::result::Result<T, LedgerErr>;
 
 #[derive(Clone, Debug)]
-pub struct ResolveOutcome {
-    pub request_id: RequestId,
-    pub effective: bool,
-    pub late: bool,
-    pub resolved_item: Option<FeedItem>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TimeoutOutcome {
-    pub request_id: RequestId,
-    pub status: FeedStatus,
-    pub transitioned: bool,
-}
-
-#[derive(Clone, Debug)]
 pub struct WorkspaceRewriteOutcome {
     pub workspace_id: WorkspaceId,
-    pub feed_items_rewritten: usize,
     pub messages_rewritten: usize,
     pub events_rewritten: usize,
 }
@@ -190,7 +139,6 @@ pub struct WorkspaceRewriteOutcome {
 pub struct EventLogRotationOutcome {
     pub rotation: event_log::RotationOutcome,
     pub pruned: atomic::PruneOutcome,
-    pub terminal_pruned: atomic::PruneOutcome,
     pub carryover_agents: usize,
 }
 
@@ -248,8 +196,6 @@ pub struct AgentLaunchAppend {
 
 #[derive(Clone, Debug)]
 pub struct ResetRecordsOutcome {
-    pub abandoned_pending: usize,
-    pub feed_items_cleared: usize,
     pub runs_canceled: usize,
     pub state_entries_removed: usize,
     pub runtime_removed: bool,
@@ -279,17 +225,8 @@ impl Ledger {
         &self.inner.paths.workspace_lock
     }
 
-    pub fn load_feed_item(&self, request_id: &RequestId) -> Result<FeedItem> {
-        Ok(feed_store::load(&self.inner.paths.feed_dir, request_id)?)
-    }
-
-    pub fn list_feed_items(&self) -> Result<Vec<FeedItem>> {
-        Ok(feed_store::list(&self.inner.paths.feed_dir)?)
-    }
-
-    /// Project the live runtime state (feed items + event-log agent rollup)
-    /// for the CLI read entry points (`cli::doctor`, `cli::feed list`,
-    /// resume planning).
+    /// Project the live runtime state (event-log agent rollup) for CLI read
+    /// entry points and resume planning.
     ///
     /// Lock-free. The agent rollup resumes from the persisted fold base, so
     /// an in-flight tail frame a reader races is simply not folded yet — it
@@ -299,12 +236,11 @@ impl Ledger {
         &self,
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
-        let items = feed_store::list(&self.inner.paths.feed_dir)?;
         let (cache, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
         let ended = cache.tombstones.into_iter().collect();
         let lost = cache.lost.into_iter().collect();
         Ok(runtime::RuntimeProjection::from_parts(
-            items, ended, lost, agents, scope,
+            ended, lost, agents, scope,
         ))
     }
 

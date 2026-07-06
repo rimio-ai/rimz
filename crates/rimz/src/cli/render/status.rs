@@ -5,7 +5,6 @@
 
 use rimz::agents::AgentStatus;
 use rimz::agents::TurnPhase;
-use rimz::feed::FeedStatus;
 use rimz::harness::run::RunStatus;
 use rimz::message::MessageStatus;
 use rimz::trust::TrustState;
@@ -43,16 +42,6 @@ pub(crate) fn message(status: MessageStatus) -> anstyle::Style {
             palette::WARN
         }
         MessageStatus::Removed | MessageStatus::Archived => palette::MUTED,
-    }
-}
-
-/// A feed item's resolution status.
-pub(crate) fn feed(status: FeedStatus) -> anstyle::Style {
-    match status {
-        FeedStatus::Resolved => palette::GOOD,
-        FeedStatus::Pending => palette::COOL,
-        FeedStatus::TimedOut => palette::WARN,
-        FeedStatus::Abandoned => palette::MUTED,
     }
 }
 

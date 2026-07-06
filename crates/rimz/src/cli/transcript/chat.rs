@@ -9,7 +9,6 @@ pub(super) fn render_entry_for_log_entry(
 ) -> RenderEntry {
     RenderEntry {
         kind: entry.entry,
-        request_id: entry.request_id.clone(),
         agent: entry_key(entry),
         chat: chat_entry_for_log_entry(entry, identities, include_channel),
     }
@@ -227,14 +226,10 @@ pub(super) struct AnswerPairs {
 
 pub(super) fn pair_answers(entries: &[RenderEntry]) -> AnswerPairs {
     let mut folded = AnswerPairs::default();
-    let mut open_by_request: HashMap<RequestId, usize> = HashMap::new();
     let mut open_by_agent: HashMap<AgentKey, Vec<usize>> = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
         match entry.kind {
             ChatKind::Ask => {
-                if let Some(request_id) = entry.request_id.as_ref() {
-                    open_by_request.insert(request_id.clone(), index);
-                }
                 open_by_agent
                     .entry(entry.agent.clone())
                     .or_default()
@@ -250,13 +245,7 @@ pub(super) fn pair_answers(entries: &[RenderEntry]) -> AnswerPairs {
                     }
                     None
                 };
-                let ask = if let Some(request_id) = entry.request_id.as_ref() {
-                    open_by_request
-                        .remove(request_id)
-                        .filter(|ask| !folded.answer_by_ask.contains_key(ask))
-                } else {
-                    by_agent()
-                };
+                let ask = by_agent();
                 if let Some(ask) = ask {
                     folded.answer_by_ask.insert(ask, index);
                     folded.suppressed_answers.insert(index);

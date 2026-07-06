@@ -18,7 +18,6 @@ pub(super) fn sidebar_fixture_snapshot(
         truth_degraded: None,
         now,
         worktree_groups: Vec::new(),
-        needs_attention: Vec::new(),
         agents: Vec::new(),
         wired_kinds: vec!["codex".to_owned()],
         wired_default_models: std::collections::BTreeMap::new(),
@@ -1833,7 +1832,6 @@ fn agent_row_with(
     let mut card = rimz::AgentCard {
         status,
         phase,
-        surface: Some(rimz::Surface::NativeUi),
         task: (!is_idle).then(|| task.to_owned()),
         model: Some(model.to_owned()),
         effort: Some("xhigh".to_owned()),

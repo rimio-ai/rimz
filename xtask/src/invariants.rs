@@ -139,7 +139,6 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
     let sidebar_root = root.join("crates/rimz/src/sidebar");
     for needle in [
         concat!("ledger", "::", "writer"),
-        concat!("feed_", "store"),
         concat!("::", "bridge"),
         concat!("bridge", "::"),
         concat!("::", "broker"),
@@ -149,7 +148,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
             files,
             needle,
             |path| !path.starts_with(&sidebar_root),
-            "crates/rimz/src/sidebar is read-only on the ledger: no writer, feed-store, bridge, or broker imports",
+            "crates/rimz/src/sidebar is read-only on the ledger: no writer, bridge, or broker imports",
         )?;
     }
     Ok(())
@@ -251,14 +250,7 @@ fn ensure_participant_identity(root: &Path, files: &[PathBuf]) -> Result<()> {
             let participant_cli = path.starts_with(&cli_root)
                 && matches!(
                     path.file_name().and_then(OsStr::to_str),
-                    Some(
-                        "hooks.rs"
-                            | "event.rs"
-                            | "statusline.rs"
-                            | "feed.rs"
-                            | "pane.rs"
-                            | "sidebar.rs"
-                    )
+                    Some("hooks.rs" | "statusline.rs" | "pane.rs" | "sidebar.rs")
                 );
             !participant_cli
         },

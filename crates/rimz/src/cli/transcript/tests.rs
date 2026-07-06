@@ -18,7 +18,6 @@ fn agent_key_for(kind: &str, session_id: &str) -> AgentKey {
 fn render_entry(kind: ChatKind, from: &str, to: Option<&str>, at: &str, text: &str) -> RenderEntry {
     RenderEntry {
         kind,
-        request_id: None,
         agent: agent_key(),
         chat: ChatLine {
             from: from.to_owned(),
@@ -243,9 +242,7 @@ fn mention_painting_highlights_agents_and_channels() {
 
 #[test]
 fn structured_ask_card_folds_selected_answer_with_note() {
-    let request_id = RequestId::new();
     let mut ask = ask_entry("2026-06-28T18:00:00Z", "I checked both paths.");
-    ask.request_id = Some(request_id.clone());
     ask.chat.questions = vec![rimz::chat::AskQuestion {
         question: "Choose deployment path?".to_owned(),
         options: vec![
@@ -254,7 +251,6 @@ fn structured_ask_card_folds_selected_answer_with_note() {
         ],
     }];
     let mut answer = answer_entry("2026-06-28T18:01:00Z", "safe");
-    answer.request_id = Some(request_id);
     answer.chat.answers = vec![rimz::chat::AskAnswer {
         question: Some("Choose deployment path?".to_owned()),
         chosen: vec!["safe".to_owned()],
@@ -339,10 +335,8 @@ fn structured_ask_card_renders_other_and_multi_question_answers() {
 
 #[test]
 fn text_ask_card_folds_text_answer_or_stays_unanswered() {
-    let mut ask = ask_entry("2026-06-28T18:00:00Z", "Choose path? [safe, fast]");
-    ask.request_id = Some(RequestId::new());
-    let mut answer = answer_entry("2026-06-28T18:01:00Z", "safe");
-    answer.request_id = ask.request_id.clone();
+    let ask = ask_entry("2026-06-28T18:00:00Z", "Choose path? [safe, fast]");
+    let answer = answer_entry("2026-06-28T18:01:00Z", "safe");
 
     let answered = render(&[ask.clone(), answer], jiff::civil::date(2026, 6, 28));
     let unanswered = render(&[ask], jiff::civil::date(2026, 6, 28));
@@ -421,11 +415,11 @@ fn card_lines_wrap_with_spine_and_option_hanging_indent() {
 }
 
 #[test]
-fn request_id_answer_without_matching_ask_stays_plain() {
-    let mut ask = ask_entry("2026-06-28T18:00:00Z", "Native question?");
-    ask.request_id = Some(RequestId::new());
+fn answer_without_matching_agent_ask_stays_plain() {
+    let ask = ask_entry("2026-06-28T18:00:00Z", "Native question?");
     let mut answer = answer_entry("2026-06-28T18:01:00Z", "allow");
-    answer.request_id = Some(RequestId::new());
+    answer.agent = agent_key_for("codex", "sess-2");
+    answer.chat.to = Some("@codex".to_owned());
 
     let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
 
@@ -433,7 +427,7 @@ fn request_id_answer_without_matching_ask_stays_plain() {
         out.contains("  ▌ Native question?\n  ▌ ◌ unanswered"),
         "{out}"
     );
-    assert!(out.contains("you → @claude"), "{out}");
+    assert!(out.contains("you → @codex"), "{out}");
     assert!(out.contains("  allow"), "{out}");
 }
 

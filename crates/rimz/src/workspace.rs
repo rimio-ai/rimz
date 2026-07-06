@@ -9,7 +9,7 @@
 //!
 //! Identity is then *pinned per session*: session birth stamps
 //! [`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`] into the mux environment, and
-//! participating commands (hooks, `rimz event`/`feed`, statusline helpers)
+//! participating commands (hooks, statusline helpers)
 //! resolve through [`WorkspaceResolver::resolve_participant`], which honors
 //! that pin before the static ladder — so an agent in a nested repo inside a
 //! directory workspace still writes to the room it lives in. A daemon-routed
@@ -282,7 +282,7 @@ enum ResolveMode {
     /// only, so a deliberate per-repo room can be created from inside a
     /// parent room. The directory tier accepts any directory.
     Create,
-    /// Room participation (hooks, `rimz event`/`feed`, statusline): the
+    /// Room participation (hooks, statusline): the
     /// session's env pin wins over the static ladder, so a pane's writes land
     /// in the room it lives in. Never refuses — a hook on the agent's
     /// critical path degrades to the static ladder, never errors on identity.

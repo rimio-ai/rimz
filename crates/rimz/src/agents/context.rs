@@ -1,7 +1,7 @@
 //! Agent-agnostic, session-scoped context enrichment.
 //!
 //! [`AgentContext`] is the normalized shape for the rich, high-frequency
-//! per-session data an agent publishes out of band — Claude's statusline feed,
+//! per-session data an agent publishes out of band — Claude's statusline,
 //! Codex's rollout tail plus app-server metadata, and future provider surfaces.
 //! It is display-only and redactable: it never drives routing, ranking, or a
 //! decision (the no-transcript-correctness rule). Each agent integration

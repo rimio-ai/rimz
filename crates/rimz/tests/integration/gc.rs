@@ -14,7 +14,7 @@ use serde_json::json;
 use crate::common::Env;
 
 #[test]
-fn gc_removes_stale_sidebar_heartbeat_and_leaves_legacy_resolver_file() {
+fn gc_removes_stale_sidebar_heartbeat_and_leaves_unknown_file() {
     let env = Env::new();
     let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
     rt.ensure_dirs().expect("runtime dirs");
@@ -30,14 +30,14 @@ fn gc_removes_stale_sidebar_heartbeat_and_leaves_legacy_resolver_file() {
     let heartbeat_path = rt.heartbeat_dir.join("sidebar.old.json");
     rimz::ledger::atomic::write_temp_then_rename(&heartbeat_path, &heartbeat)
         .expect("write heartbeat");
-    let legacy_resolver = rt.heartbeat_dir.join("resolver.opus-policy.json");
-    std::fs::write(&legacy_resolver, br#"{"legacy":true}"#).expect("write legacy resolver file");
+    let unknown_file = rt.heartbeat_dir.join("unknown.opus-policy.json");
+    std::fs::write(&unknown_file, br#"{"legacy":true}"#).expect("write unknown file");
     let old = SystemTime::now() - Duration::from_secs(7200);
     std::fs::File::open(&heartbeat_path)
         .unwrap()
         .set_modified(old)
         .unwrap();
-    std::fs::File::open(&legacy_resolver)
+    std::fs::File::open(&unknown_file)
         .unwrap()
         .set_modified(old)
         .unwrap();
@@ -54,8 +54,8 @@ fn gc_removes_stale_sidebar_heartbeat_and_leaves_legacy_resolver_file() {
         "stale heartbeat should be removed"
     );
     assert!(
-        legacy_resolver.exists(),
-        "legacy resolver heartbeat is no longer a runtime GC target"
+        unknown_file.exists(),
+        "unknown heartbeat file is not a runtime GC target"
     );
 }
 

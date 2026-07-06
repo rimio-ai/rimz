@@ -1,62 +1,6 @@
 use super::*;
 
 #[test]
-fn render_worktree_attention_map() {
-    let workspace = fixed_workspace();
-    let mut native = FeedItem::new(
-        workspace.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "psql DROP TABLE invoices",
-        "claude",
-        "agent-hook",
-    );
-    native.worktree_path = Some("/home/me/query-engine".to_owned());
-    native.updated_at = fixed_now() - Duration::from_secs(12 * 60);
-    native.payload = json!({ "session_id": "claude-1" });
-    let mut script = FeedItem::new(
-        workspace,
-        Surface::Script,
-        FeedKind::Question,
-        "Deploy staging?",
-        "deploy.sh",
-        "cli",
-    );
-    script.options = vec!["yes".to_owned(), "no".to_owned()];
-    script.updated_at = fixed_now() - Duration::from_secs(5 * 60);
-    let mut deploy_pane = pane("%deploy", "deploy.sh", "");
-    deploy_pane.cwd = None;
-    script.pane = Some(deploy_pane);
-    let mut permission = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Waiting,
-        Some("/home/me/query-engine"),
-        Some("main"),
-        None,
-    );
-    permission.prompt = Some("investigate destructive query guard".to_owned());
-    permission.last_activity = native.updated_at;
-    let mut running = agent(
-        "codex-1",
-        "codex",
-        AgentStatus::Running,
-        Some("/home/me/query-engine"),
-        Some("main"),
-        Some("add tests"),
-    );
-    running.model = Some("GPT-5.5".to_owned());
-    running.effort = Some("high".to_owned());
-    running.last_activity = fixed_now() - Duration::from_secs(8);
-
-    let snapshot = snapshot_with(vec![native, script], vec![permission, running]);
-
-    assert_snapshot(
-        "worktree_attention_map",
-        snapshot_to_screen(&snapshot, 38, 20),
-    );
-}
-#[test]
 fn render_directory_room_root_pod_is_name_only() {
     // A directory room: a git-backed row's resolved worktree keeps the full
     // `⑂` pod header with its git cluster, while the room's own pod renders

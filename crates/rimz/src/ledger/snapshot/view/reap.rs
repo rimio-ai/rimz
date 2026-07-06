@@ -4,7 +4,6 @@ use jiff::Timestamp;
 
 use crate::agents::AgentState;
 use crate::agents::SessionOrigin;
-use crate::feed::FeedItem;
 use crate::ids::{AgentSessionId, PaneId};
 use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_owned};
 use crate::ledger::snapshot::process::{
@@ -14,7 +13,6 @@ use crate::pane::{PaneRef, RuntimeOwnerKind};
 use crate::remote_control;
 
 use super::SidebarSnapshot;
-use super::rows::agent_id_from_item;
 
 /// Inputs for the runtime-side session reaps. Every field is optional and an
 /// absent input keeps every session (the tri-state fail-safe).
@@ -44,7 +42,7 @@ impl SidebarSnapshot {
     /// not its own CLI's, so process liveness — which keeps it while the daemon
     /// lives ([`drop_dead_agents_with`]) — can never reap it. Without this a closed
     /// remote-control conversation lingers as a ghost and binds its stale
-    /// status, model, tokens, and pending ask onto a live `codex` pane by cwd
+    /// status, model, and tokens onto a live `codex` pane by cwd
     /// ([`agent_pane_for_pane`]).
     ///
     /// Tri-state, and fail-safe by construction (the loaded-thread set and live
@@ -397,44 +395,4 @@ fn same_live_daemon_kind_pane(
         }
         _ => false,
     }
-}
-
-pub(super) fn is_agent_native_item(item: &FeedItem) -> bool {
-    item.source_kind == "agent-hook"
-}
-
-/// True when an agent-hook ask names a session (`agent_id`/`session_id`) that is
-/// no longer the live occupant of its pane. The rollup is the liveness source of
-/// truth — gated by `SessionEnd` and process-liveness — so an ask is stale when
-/// either its session has left the rollup entirely, or a strictly-newer root
-/// session of the same kind has taken over the worktree. The latter reaps the
-/// zombie case: a pidless `SessionStart`-only session never ends and never gets
-/// reaped by process liveness, so without supersession its old permission prompt
-/// pins itself onto the freshly launched session sharing the pane. Subagents
-/// never supersede their parent: they share the parent's pane and worktree but do
-/// not own the human decision surface. Asks with no session id can't be proven
-/// stale and are kept.
-pub(super) fn agent_hook_session_stale(item: &FeedItem, agents: &[AgentState]) -> bool {
-    if item.source_kind != "agent-hook" {
-        return false;
-    }
-    let Some(agent_id) = agent_id_from_item(item) else {
-        return false;
-    };
-    let Some(session) = agents
-        .iter()
-        .find(|agent| agent.kind == item.source && agent.agent_id == agent_id)
-    else {
-        return true;
-    };
-    if session.parent_agent_id.is_some() {
-        return false;
-    }
-    agents.iter().any(|other| {
-        other.parent_agent_id.is_none()
-            && other.kind == session.kind
-            && other.agent_id != session.agent_id
-            && other.worktree_path == session.worktree_path
-            && other.last_activity > session.last_activity
-    })
 }

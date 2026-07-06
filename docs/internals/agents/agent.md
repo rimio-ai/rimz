@@ -213,7 +213,7 @@ An agent is one source among many: anything a hook does, a script can do through
 
 Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables, integration coverage) and one registry line. The methods, by role (signatures live in the trait):
 
-- **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the [`FeedKind`](../../../crates/rimz/src/feed.rs).
+- **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the feed kind.
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs). `None` means "no transition here", so high-frequency events stay silent.
 - **`render_neutral`** emits the agent-native no-op for blocking asks. Hooks write feed items and return neutral; the agent's own UI stays open as the answer surface.
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../../crates/rimz/src/agents/context.rs); **`local_context_refresh`** derives sidecar fields from local provider state on hook or producer tick triggers; **`context_refresh_spawn`** maps hook or tick triggers to a detached `rimz` helper when a provider's rich context transport needs one.
@@ -230,7 +230,7 @@ Two invariants hold the seam shut:
 
 **Lifecycle: fast, non-blocking.** Drives agent status, the turn phase, task, and enrichment. Each flows through `observe_lifecycle`; an event carrying no transition returns `None` and records nothing.
 
-**Blocking-feed: records the ask and returns neutral.** A permission request, plan approval, or user question becomes a [`FeedItem`](../../../crates/rimz/src/feed.rs) when the agent has its own ask UI. Rimz writes a `native_ui` item, returns the agent-native no-op immediately, and leaves the prompt visible in the agent's pane. An agent whose descriptor declares `native_ask_ui` off (pi) gets the same neutral no-op with **no feed item**, since there is no native prompt an item could route the human to.
+**Blocking-feed: records the ask and returns neutral.** A permission request, plan approval, or user question becomes a feed item when the agent has its own ask UI. Rimz writes a `native_ui` item, returns the agent-native no-op immediately, and leaves the prompt visible in the agent's pane. An agent whose descriptor declares `native_ask_ui` off (pi) gets the same neutral no-op with **no feed item**, since there is no native prompt an item could route the human to.
 
 Blocking decision hooks must be **sync**: an async one would ignore the decision printed on stdout, so the installer rejects it.
 

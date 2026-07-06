@@ -21,24 +21,19 @@ pub(super) fn record_native_answer(
         return;
     };
 
-    // A native answer is recorded only when there is a pending native_ui ask to clear.
-    match ledger.expire_agent_native_ui_asks(
-        agent.descriptor().kind,
-        agent_id,
-        &workspace.session_name,
-    ) {
-        Ok(0) => return,
-        Ok(_) => {}
-        Err(err) => {
-            warn!(
-                agent = agent.descriptor().kind,
-                event = %event_name,
-                agent_id,
-                error = %err,
-                "lifecycle: failed to expire the answered native ask",
-            );
-            return;
-        }
+    let awaiting = recorded.is_some_and(|recorded| recorded.waiting_cleared)
+        || ledger
+            .snapshot_cached()
+            .ok()
+            .and_then(|snapshot| {
+                snapshot.agents.into_iter().find(|state| {
+                    state.kind == agent.descriptor().kind && state.agent_id == agent_id
+                })
+            })
+            .is_some_and(|state| state.is_awaiting_input())
+        || has_open_native_ask(ledger, agent.descriptor().kind, agent_id);
+    if !awaiting {
+        return;
     }
 
     let worktree_path = payload
@@ -71,6 +66,26 @@ pub(super) fn record_native_answer(
             "lifecycle: failed to record native ask answer",
         );
     }
+}
+
+fn has_open_native_ask(ledger: &Ledger, kind: &str, agent_id: &str) -> bool {
+    let kind = rimz::ids::AgentKind::new_unchecked(kind);
+    let agent_id = rimz::ids::AgentSessionId::from(agent_id);
+    let Ok(entries) = rimz::chat::read_all(ledger.paths()) else {
+        return false;
+    };
+    let mut open = 0usize;
+    for entry in entries
+        .into_iter()
+        .filter(|entry| entry.kind == kind && entry.agent_id == agent_id)
+    {
+        match entry.entry {
+            rimz::chat::ChatKind::Ask => open += 1,
+            rimz::chat::ChatKind::Answer if open > 0 => open -= 1,
+            _ => {}
+        }
+    }
+    open > 0
 }
 
 pub(super) fn record_chat_conversation(
@@ -151,6 +166,22 @@ pub(super) fn record_chat_conversation(
                     &entry_base(rimz::chat::ChatKind::Assistant, message),
                 )?;
             }
+        }
+        LifecycleSignal::AwaitingInput { .. } => {
+            let questions = agent
+                .ask_question_detail(event_name, payload)
+                .unwrap_or_default();
+            if questions.is_empty() {
+                return Ok(());
+            }
+            let last = agent
+                .last_assistant_message(event_name, payload, observation)
+                .map(|message| message.trim().to_owned())
+                .filter(|message| !message.is_empty())
+                .unwrap_or_default();
+            let mut entry = entry_base(rimz::chat::ChatKind::Ask, last);
+            entry.questions = questions;
+            rimz::chat::append(ledger.paths(), &entry)?;
         }
         _ => {}
     }

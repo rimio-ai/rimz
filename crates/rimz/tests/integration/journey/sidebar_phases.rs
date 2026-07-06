@@ -6,14 +6,10 @@
 //! layout/tabs/focus live in `backend/zellij.rs`; the actual mux-pane content
 //! smokes live in `journey/deep.rs`.
 
-use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::MuxName;
-use rimz::ledger::runtime::current_process_owner;
-use rimz::pane::RuntimeOwnerKind;
 
 use super::{
-    RoomHarness, SETTLE, permission_request, post_tool_use, process_pane, session_start,
-    user_prompt_submit,
+    RoomHarness, SETTLE, permission_request, post_tool_use, session_start, user_prompt_submit,
 };
 use crate::common::Env;
 
@@ -180,21 +176,14 @@ fn turn_phase_flips_thinking_to_working_on_first_edit() {
 }
 
 /// Phase 4 — a fleet across worktrees. Agents spread across `main` and
-/// `feature-migration`, plus a script paused at a gate. Grouping and the
-/// worktree headers are implemented; the script lands in the `external`
-/// catch-all (a dim `┄ external ┄┄┄` divider) because it is not tied to a
-/// worktree.
+/// `feature-migration`, and one agent waits on input. Grouping and the worktree
+/// headers stay stable while the waiting row drives the room tally.
 #[test]
 fn phase4_fleet_groups_and_tallies() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
     }
-    // A catch-all script paused at a gate. The CLI always attaches the cwd
-    // worktree, so push straight to the ledger with no worktree to land it in
-    // the `external` catch-all (scripts not tied to a worktree render there).
-    push_workspace_script_ask_fixture(&env, "promote release?");
-
     let room = RoomHarness::launch(&env, MuxName::Tmux);
     room.onboard(&["codex", "claude"]);
     room.agent_hook("codex", &session_start("m1", "GPT-5.5", "high", "main"));
@@ -203,11 +192,8 @@ fn phase4_fleet_groups_and_tallies() {
         "codex",
         &session_start("f1", "GPT-5.5", "low", "feature-migration"),
     );
+    room.agent_hook("codex", &permission_request("m1", "DO_NOT_RENDER_ME"));
 
-    // The seal/lane mark only the *selected* worktree, and the default selection
-    // lands on the floating `waiting` script ask in the external catch-all — so
-    // both worktree headers render as bare bold labels here. (Phase 1 covers the
-    // selected-worktree seal, where the lone agent's worktree is the selection.)
     let screen = room.wait_for(|s| s.contains("feature-migration"), SETTLE);
     assert!(
         screen.contains("main"),
@@ -218,12 +204,8 @@ fn phase4_fleet_groups_and_tallies() {
         "the feature-migration worktree group renders:\n{screen}"
     );
     assert!(
-        screen.contains("┄ external"),
-        "scripts not tied to a worktree live in the external catch-all:\n{screen}"
-    );
-    assert!(
-        screen.contains("promote release?"),
-        "the script's ask shows its title:\n{screen}"
+        screen.contains("? coder"),
+        "the waiting agent is marked:\n{screen}"
     );
     assert!(
         screen.contains("? 1"),
@@ -301,35 +283,4 @@ fn thinking_row(screen: &str, name: &str) -> bool {
     ]
     .iter()
     .any(|frame| screen.contains(&format!("{frame} {name}")))
-}
-
-/// Push a script `Question` item straight to the ledger with no worktree so it
-/// lands in the `workspace` group. The public `rimz feed ask --no-block`
-/// command always attaches the caller's current worktree, so this remains the
-/// narrow fixture setup for the workspace-level script state the CLI cannot
-/// produce yet.
-fn push_workspace_script_ask_fixture(env: &Env, title: &str) {
-    let mut item = FeedItem::new(
-        env.workspace_id.clone(),
-        Surface::Script,
-        FeedKind::Question,
-        title,
-        "deploy",
-        "script",
-    );
-    item.runtime_owner = Some(current_process_owner(
-        RuntimeOwnerKind::Script,
-        item.request_id.to_string(),
-    ));
-    let mut pane = process_pane(
-        MuxName::Tmux,
-        90,
-        "deploy",
-        env.project_root.display().to_string(),
-    );
-    pane.cwd = None;
-    item.pane = Some(pane);
-    env.ledger()
-        .push_feed_item(&item, "rimz-journey")
-        .expect("push script ask");
 }

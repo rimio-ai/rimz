@@ -320,11 +320,11 @@ pub fn enrich(
     }
 
     // Fold each session's rich statusline context onto its agent state
-    // (read-only; the feed process is the writer). Both the context sidecar
+    // (read-only; CLI producers write it). Both the context sidecar
     // and the per-tool activity heartbeats fold only onto existing agents, so
     // an empty room skips both directory scans — the common idle case.
-    // Activity lands before the pane overlay so age, ranking, the ask-fold
-    // guard, and the stall window all see the truer per-tool value rather than
+    // Activity lands before the pane overlay so age, ranking, waiting guards,
+    // and the stall window all see the truer per-tool value rather than
     // the turn-grained event timestamp.
     if !snapshot.agents.is_empty() {
         snapshot = snapshot.with_agent_context(crate::ledger::agent_context::read_all(runtime));

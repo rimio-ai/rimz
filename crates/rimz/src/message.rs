@@ -263,8 +263,8 @@ pub struct MessageRecord {
     pub text: String,
     pub enter: bool,
     pub gate: DeliveryGate,
-    /// Deliver even when a pending ask reserves the agent's next input. Mirrors
-    /// `message --steer --force`; without it a pending ask defers delivery to a later
+    /// Deliver even when Waiting reserves the agent's next input. Mirrors
+    /// `message --steer --force`; without it Waiting defers delivery to a later
     /// boundary.
     #[serde(default)]
     pub force: bool,
@@ -395,7 +395,7 @@ impl MessageRecord {
         self
     }
 
-    /// Deliver past a pending ask at the boundary, mirroring `message --steer --force`.
+    /// Deliver past Waiting at the boundary, mirroring `message --steer --force`.
     #[must_use]
     pub fn with_force(mut self, force: bool) -> Self {
         self.force = force;
@@ -514,6 +514,11 @@ pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
         ),
         DeliveryGate::Resume => status == AgentStatus::Paused,
     }
+}
+
+pub fn gate_open_for_agent(gate: DeliveryGate, agent: &AgentState, force: bool) -> bool {
+    gate_open(gate, agent.effective_status())
+        || (force && gate != DeliveryGate::Resume && agent.is_awaiting_input())
 }
 
 /// The oldest ordinary queued message for one logical agent card, the next to

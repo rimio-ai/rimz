@@ -91,30 +91,3 @@ fn child_without_turn_boundary_uses_ghost_ttl_backstop() {
         assert_eq!(!rows[0].sub_agents().is_empty(), expect_kept, "{label}");
     }
 }
-
-#[test]
-fn newer_subagent_does_not_expire_parent_attention() {
-    // A child shares the parent's pane and worktree, so it can be newer than
-    // the parent without superseding the parent's human decision surface.
-    let item = agent_ask(FeedKind::Permission, "claude", "parent-claude");
-
-    let parent = agent("claude", "parent-claude", AgentStatus::Running, 1_000)
-        .worktree("/repo/main")
-        .in_pane("%1");
-    let mut child = agent("claude", "child-claude", AgentStatus::Idle, 2_000)
-        .worktree("/repo/main")
-        .in_pane("%1");
-    child.parent_agent_id = Some("parent-claude".into());
-
-    let snapshot = room(vec![item.clone()], vec![parent, child])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
-
-    assert_eq!(
-        snapshot.needs_attention[0].request_id, item.request_id,
-        "the child must not make the parent's ask stale"
-    );
-    let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.id, "parent-claude");
-    assert_eq!(row.status(), Some(AgentStatus::Waiting));
-    assert_eq!(row.request_id().cloned(), Some(item.request_id));
-}

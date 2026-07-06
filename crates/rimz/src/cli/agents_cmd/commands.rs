@@ -1,7 +1,6 @@
 use super::*;
 
 use crate::cli::render;
-use rimz::feed::pending_ask_for;
 
 pub(super) fn list_agents(
     json: bool,
@@ -214,11 +213,10 @@ pub(super) fn show_agent(
         }
     }
     let run = newest_run_by_ref(&ledger, &reference, agent.as_ref())?;
-    let feed_items = ledger.list_feed_items()?;
-    let ask_item = agent
-        .as_ref()
-        .and_then(|agent| pending_ask_for(agent, feed_items.iter()));
-    let ask = ask_item.map(crate::cli::transcript::ask_view);
+    let ask = match agent.as_ref() {
+        Some(agent) => crate::cli::transcript::latest_ask_view(&workspace, agent)?,
+        None => None,
+    };
     let pane_capture = if capture {
         let agent = agent.as_ref().ok_or_else(|| {
             anyhow::anyhow!("no live agent matches `{reference}`; nothing to capture")
@@ -341,7 +339,7 @@ fn resolve_audit_agent(
     }
     let snapshot = rimz::SidebarSnapshot::build_with_agents(
         workspace.workspace_id.clone(),
-        Vec::new(),
+        Vec::<()>::new(),
         audit.agents,
         jiff::Timestamp::now(),
     )
@@ -1747,6 +1745,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

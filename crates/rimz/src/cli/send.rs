@@ -22,7 +22,7 @@ pub(crate) struct SendFlags {
     /// Type the text but leave it unsubmitted — no Enter after it lands.
     #[arg(long)]
     pub(crate) no_enter: bool,
-    /// Send even when a pending ask is attached to the agent.
+    /// Send even when the agent is Waiting.
     #[arg(long)]
     pub(crate) force: bool,
     /// Fan out to every agent the address matches. Without it, a selector that

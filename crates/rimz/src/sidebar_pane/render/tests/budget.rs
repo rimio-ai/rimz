@@ -181,7 +181,6 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 pr_state: None,
             })
             .collect(),
-        needs_attention: Vec::new(),
         agents: Vec::new(),
         wired_kinds: Vec::new(),
         wired_default_models: std::collections::BTreeMap::new(),

@@ -13,8 +13,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
 use rimz::chat::{AskOption, ChatEntry, ChatKind};
-use rimz::feed::FeedItem;
-use rimz::ids::{AgentKind, AgentSessionId, RequestId};
+use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -37,12 +36,10 @@ pub struct TranscriptArgs {
 
 #[derive(Serialize)]
 pub(crate) struct AskView {
-    pub request_id: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     pub options: Vec<String>,
-    pub surface: rimz::Surface,
 }
 
 #[derive(Serialize)]
@@ -81,7 +78,6 @@ type AgentKey = (AgentKind, AgentSessionId);
 #[derive(Clone, Debug)]
 pub(crate) struct RenderEntry {
     kind: ChatKind,
-    request_id: Option<RequestId>,
     agent: AgentKey,
     pub(crate) chat: ChatLine,
 }
@@ -115,8 +111,8 @@ mod scope;
 
 use chat::{format_marker_when, render_chat_to, render_entry_for_log_entry};
 use scope::{
-    build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_matches_focus,
-    keep_last, live_boundary, live_root_agents, resolve_scope,
+    build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_key,
+    entry_matches_focus, keep_last, live_boundary, live_root_agents, resolve_scope,
 };
 #[cfg(test)]
 use {chat::*, scope::*};
@@ -347,18 +343,69 @@ fn write_archive_hint(
     Ok(())
 }
 
-pub(crate) fn ask_view(item: &FeedItem) -> AskView {
+pub(crate) fn latest_ask_view(
+    workspace: &rimz::ResolvedWorkspace,
+    agent: &rimz::agents::AgentState,
+) -> Result<Option<AskView>> {
+    if !agent.is_awaiting_input() {
+        return Ok(None);
+    }
+    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing state paths")?;
+    let key = (agent.kind.clone(), agent.agent_id.clone());
+    let mut answered_after = false;
+    for entry in dedup_asks(rimz::chat::read_all(&paths)?).into_iter().rev() {
+        if entry_key(&entry) != key {
+            continue;
+        }
+        match entry.entry {
+            ChatKind::Answer => answered_after = true,
+            ChatKind::Ask if !answered_after => return Ok(Some(ask_view_from_entry(&entry))),
+            ChatKind::Ask => return Ok(None),
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
+fn ask_view_from_entry(entry: &ChatEntry) -> AskView {
+    let first_question = entry.questions.first();
     AskView {
-        request_id: item.request_id.to_string(),
-        title: item.title.clone(),
-        body: item.body.clone(),
-        options: item.options.clone(),
-        surface: item.surface,
+        title: first_question
+            .map(|question| question.question.clone())
+            .or_else(|| (!entry.text.is_empty()).then(|| entry.text.clone()))
+            .unwrap_or_else(|| "waiting for input".to_owned()),
+        body: (!entry.text.is_empty())
+            .then(|| entry.text.clone())
+            .filter(|body| Some(body) != first_question.map(|question| &question.question)),
+        options: first_question
+            .map(|question| {
+                question
+                    .options
+                    .iter()
+                    .map(|option| option.label.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
 pub(crate) fn ask_summary(ask: &AskView) -> String {
-    rimz::feed::ask_summary(&ask.title, ask.body.as_deref(), &ask.options)
+    ask_summary_parts(&ask.title, ask.body.as_deref(), &ask.options)
+}
+
+fn ask_summary_parts(title: &str, body: Option<&str>, options: &[String]) -> String {
+    let mut text = title.to_owned();
+    if let Some(body) = body.map(str::trim).filter(|body| !body.is_empty()) {
+        text.push_str(": ");
+        text.push_str(body);
+    }
+    if !options.is_empty() {
+        text.push_str(" [");
+        text.push_str(&options.join(", "));
+        text.push(']');
+    }
+    text
 }
 
 fn print_json(value: &impl Serialize) -> Result<()> {

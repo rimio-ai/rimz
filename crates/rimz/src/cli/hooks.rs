@@ -2,9 +2,9 @@
 //! agent decision channel; stderr is for diagnostics. The CLI marks the
 //! whole subtree `hide = true` because users don't run it by hand.
 //!
-//! Ask hooks write a `native_ui` feed item when the agent has its own prompt
-//! surface, then return the agent-native neutral no-op immediately. The
-//! agent's UI stays the answer surface.
+//! Ask hooks record `Waiting` when the agent has its own prompt surface, then
+//! return the agent-native neutral no-op immediately. The agent's UI stays the
+//! answer surface.
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -23,34 +23,30 @@ use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, Transiti
 use rimz::agents::{
     AgentAdapter, AgentHookClass, AgentLifecycleObservation, AgentState, adapter_by_kind,
 };
-use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{MuxName, PaneId};
-use rimz::ledger::AskExpiry;
 use rimz::ledger::runtime::process_owner;
 use rimz::ledger::snapshot::pane_start_allows_bind;
 use rimz::mux::ClientFocusOptions;
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
-mod ask;
 mod binding;
 mod binding_select;
-mod feed_item;
 mod install;
 mod lifecycle;
 mod owner;
+mod payload_ids;
 mod proctree;
 
 #[cfg(test)]
 mod tests;
 
-use ask::handle_blocking_feed;
 use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
-use feed_item::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
 use lifecycle::handle_lifecycle_hook;
 use owner::{attach_agent_owner, attach_agent_pane};
+use payload_ids::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
 use proctree::sibling_agent_pins;
 pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(1_000);
@@ -158,10 +154,23 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     let agent = adapter_by_kind(&source)?;
     let classified = agent.classify_hook(&event_name, &payload);
 
-    if classified.class != AgentHookClass::BlockingFeed {
+    if classified.class != AgentHookClass::AwaitingUser {
         return handle_lifecycle_hook(&workspace, &ledger, agent, &event_name, &payload, globals);
     }
 
-    let feed_kind = classified.feed_kind.unwrap_or(FeedKind::Generic);
-    handle_blocking_feed(&workspace, &ledger, agent, &event_name, feed_kind, payload)
+    if agent.descriptor().capabilities.native_ask_ui {
+        handle_lifecycle_hook(&workspace, &ledger, agent, &event_name, &payload, globals)?;
+    }
+    emit_neutral(agent, &event_name)
+}
+
+fn emit_neutral(agent: &dyn AgentAdapter, event_name: &str) -> Result<()> {
+    if let Some(payload) = agent.render_neutral(event_name)? {
+        let rendered = serde_json::to_string(&payload)?;
+        #[expect(clippy::print_stdout, reason = "hook stdout is the decision channel")]
+        {
+            println!("{rendered}");
+        }
+    }
+    Ok(())
 }

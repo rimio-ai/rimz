@@ -1,5 +1,5 @@
 //! Projection scenarios over the sidebar view-model, grouped by concern:
-//! feed classification, provider aggregation, worktree grouping, subagent
+//! provider aggregation, worktree grouping, subagent
 //! nesting, pane binding, lazy-agent binding, displayed status, ranking, and
 //! rate-limit windows.
 //!
@@ -8,7 +8,6 @@
 //! rate-limit resets) are exact — the suite never reads the wall clock.
 
 mod agent_panes;
-mod feed;
 mod grouping;
 mod lazy_bind;
 mod pane_binding;
@@ -30,7 +29,6 @@ use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::{LifecycleSignal, TurnPhase};
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally, SpendWindow};
 use crate::agents::{AgentState, AgentStatus};
-use crate::feed::{FeedItem, FeedKind, FeedStatus, Surface};
 use crate::ids::AgentKind;
 use crate::ledger::snapshot::project::reduce_agent_states;
 use crate::ledger::snapshot::row::SidebarRow;
@@ -38,22 +36,6 @@ use crate::ledger::snapshot::testkit::*;
 use crate::ledger::subagent_context::SubagentContextRecord;
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::workspace::RootClass;
-
-/// A pending agent-hook ask naming `session_id`, homed at `/repo/main` like
-/// the agents it joins.
-fn agent_ask(kind: FeedKind, source: &str, session_id: &str) -> FeedItem {
-    let mut item = FeedItem::new(
-        workspace(),
-        Surface::NativeUi,
-        kind,
-        format!("{source} needs attention"),
-        source,
-        "agent-hook",
-    );
-    item.worktree_path = Some("/repo/main".to_owned());
-    item.payload = serde_json::json!({ "session_id": session_id });
-    item
-}
 
 fn default_stall_secs() -> i64 {
     i64::from(crate::agents::DEFAULT_STALL_AFTER_SECS)

@@ -4,7 +4,7 @@
 //! Two entry points, one module each:
 //! - [`Env`] (`env`) drives the `rimz` binary out of process (the CLI tier):
 //!   XDG roots scoped to a tempdir, the workspace resolved from the project
-//!   root, and helpers for hook/feed round trips every CLI test repeats.
+//!   root, and helpers for hook round trips every CLI test repeats.
 //! - [`Harness`] (`harness`) opens a real [`rimz::Ledger`] in process (the
 //!   library tier) for tests that drive ledger APIs directly.
 //!
@@ -22,8 +22,7 @@ pub use env::{Env, af_unix_bind_sandboxed, canonical, tmux_pane};
 pub use harness::Harness;
 pub use payloads::{
     claude_pre_tool_use_payload, codex_permission_payload, codex_pre_tool_use_payload,
-    example_resolver_script, lifecycle_event, permission_payload, pi_tool_call_payload,
-    skip_preconditions,
+    lifecycle_event, permission_payload, pi_tool_call_payload,
 };
 #[cfg(unix)]
 pub use shim::cargo_bin;

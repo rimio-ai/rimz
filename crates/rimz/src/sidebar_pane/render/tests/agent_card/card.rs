@@ -456,27 +456,10 @@ fn render_api_error_dead_turn_card() {
 #[test]
 fn render_omits_history_sections() {
     let workspace = fixed_workspace();
-    let mut answered = FeedItem::new(
-        workspace.clone(),
-        Surface::Script,
-        FeedKind::Question,
-        "Deploy staging?",
-        "deploy.sh",
-        "cli",
-    );
-    answered.status = FeedStatus::Resolved;
-    let event = EventEnvelope::new(
-        workspace.clone(),
-        "rimz-test",
-        "rimz",
-        "cli",
-        "event.emit",
-        json!({ "kind": "build.started", "title": "Building web" }),
-    );
     let mut snapshot = SidebarSnapshot::build_with_carryover(
         workspace,
-        vec![answered],
-        vec![event],
+        Vec::<()>::new(),
+        Vec::new(),
         vec![],
         fixed_now(),
     );

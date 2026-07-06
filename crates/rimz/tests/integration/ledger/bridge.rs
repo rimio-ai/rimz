@@ -1,147 +1,9 @@
-//! Synthetic hook driver. Exercises the per-request bridge socket and the
-//! sidebar wakeup walk against real ledger writes — no subprocess.
+//! Sidebar wakeup walk against real ledger writes — no subprocess.
 
 use std::time::Duration;
 
-use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, WakeupFrame};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
-use rimz::{
-    FeedItem, FeedKind, FeedStatus, MuxName, Resolution, ResolutionMethod, SidebarInstanceId,
-    Surface,
-};
-use serde_json::json;
-
-fn fresh_script_item(workspace_id: rimz::WorkspaceId) -> FeedItem {
-    FeedItem::new(
-        workspace_id,
-        Surface::Script,
-        FeedKind::Question,
-        "Deploy staging?",
-        "rimz",
-        "cli",
-    )
-}
-
-fn expected_from(item: &FeedItem) -> ExpectedFrame {
-    ExpectedFrame {
-        workspace_id: item.workspace_id.clone(),
-        request_id: item.request_id.clone(),
-        nonce: item.nonce.clone(),
-    }
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn cap_timeout_returns_neutral() {
-    let h = crate::common::Harness::new();
-    if h.skip_if_sandboxed() {
-        return;
-    }
-    let item = fresh_script_item(h.workspace_id.clone());
-    let request_id = item.request_id.clone();
-    let expected = expected_from(&item);
-
-    let (sock, _path) = bridge::bind(&h.runtime_paths, &request_id).expect("bind");
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
-
-    let outcome =
-        bridge::wait_for_resolution_owning(sock, expected, Some(Duration::from_millis(100)))
-            .await
-            .expect("wait_for_resolution_owning");
-    assert_eq!(outcome, BridgeOutcome::Neutral);
-
-    let after = h.ledger.load_feed_item(&request_id).expect("reload");
-    assert_eq!(
-        after.status.to_string(),
-        "pending",
-        "the ledger entry is unchanged by a bridge timeout — caller decides next steps",
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn terminal_feed_wakeup_returns_terminal() {
-    use tokio::net::UnixDatagram;
-
-    let h = crate::common::Harness::new();
-    if h.skip_if_sandboxed() {
-        return;
-    }
-    let item = fresh_script_item(h.workspace_id.clone());
-    let request_id = item.request_id.clone();
-    let expected = expected_from(&item);
-
-    let (sock, sock_path) = bridge::bind(&h.runtime_paths, &request_id).expect("bind");
-    let frame = WakeupFrame::FeedTerminal {
-        workspace_id: item.workspace_id.clone(),
-        request_id,
-        nonce: item.nonce.clone(),
-        status: FeedStatus::Abandoned,
-    };
-    let bytes = serde_json::to_vec(&frame).expect("serialize terminal frame");
-    UnixDatagram::unbound()
-        .expect("sender")
-        .send_to(&bytes, &sock_path)
-        .await
-        .expect("send terminal frame");
-
-    let outcome = bridge::wait_for_resolution_owning(sock, expected, Some(Duration::from_secs(5)))
-        .await
-        .expect("wait_for_resolution_owning");
-    assert_eq!(outcome, BridgeOutcome::Terminal);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn mismatched_nonce_is_dropped_real_resolve_wins() {
-    use tokio::net::UnixDatagram;
-
-    let h = crate::common::Harness::new();
-    if h.skip_if_sandboxed() {
-        return;
-    }
-    let item = fresh_script_item(h.workspace_id.clone());
-    let request_id = item.request_id.clone();
-    let expected = expected_from(&item);
-
-    let (sock, sock_path) = bridge::bind(&h.runtime_paths, &request_id).expect("bind");
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
-
-    // Send a hand-crafted frame with the wrong nonce. The bridge must drop it.
-    let bad_frame = WakeupFrame::FeedResolved {
-        workspace_id: item.workspace_id.clone(),
-        request_id: request_id.clone(),
-        nonce: "this-nonce-is-wrong".to_owned(),
-    };
-    let bad_bytes = serde_json::to_vec(&bad_frame).expect("serialize bad frame");
-    let sender = UnixDatagram::unbound().expect("sender");
-    sender
-        .send_to(&bad_bytes, &sock_path)
-        .await
-        .expect("send bad frame");
-
-    let ledger = h.ledger.clone();
-    let req_for_task = request_id.clone();
-    // The bad frame above is already enqueued; the resolve's real frame lands
-    // behind it in the socket buffer, so no sleep is needed to order them.
-    let resolver = tokio::task::spawn_blocking(move || {
-        ledger.resolve_feed_item(
-            &req_for_task,
-            Resolution::new(json!({ "choice": "yes" }), ResolutionMethod::Cli),
-            "rimz-test",
-        )
-    });
-
-    let outcome = bridge::wait_for_resolution_owning(sock, expected, Some(Duration::from_secs(5)))
-        .await
-        .expect("wait_for_resolution_owning");
-    resolver.await.expect("resolver join").expect("resolve");
-    assert_eq!(outcome, BridgeOutcome::Resolved);
-
-    // The wrong-nonce frame changed nothing: the real resolve is what landed,
-    // decision payload and all.
-    let after = h.ledger.load_feed_item(&request_id).expect("reload");
-    assert_eq!(after.status.to_string(), "resolved");
-    let decision = after.resolution.expect("resolution").decision;
-    assert_eq!(decision, json!({ "choice": "yes" }));
-}
+use rimz::{MuxName, SidebarInstanceId};
 
 #[test]
 fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protocol() {
@@ -173,9 +35,9 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
 
     let stale_sock_path = h.runtime_paths.sock_dir.join("sidebar.stale.sock");
     let stale_recv = UnixDatagram::bind(&stale_sock_path).expect("bind stale");
-    // The wakeup walk runs synchronously inside `push_feed_item`, so a wrongly
-    // sent datagram would already be buffered by the time we read — a short
-    // timeout proves the negative just as well as a long one.
+    // The wakeup walk runs synchronously inside the writer, so a wrongly sent
+    // datagram would already be buffered by the time we read — a short timeout
+    // proves the negative just as well as a long one.
     stale_recv
         .set_read_timeout(Some(Duration::from_millis(50)))
         .expect("set read timeout stale");
@@ -217,15 +79,14 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
     )
     .expect("write wrong protocol hb");
 
-    let item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Generic,
-        "wake me up",
-        "rimz",
-        "cli",
-    );
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
+    h.ledger
+        .append_event(&crate::common::lifecycle_event(
+            &h,
+            "rimz-test",
+            "SessionStart",
+            "wake-me",
+        ))
+        .expect("append event");
 
     let mut buf = [0u8; 4096];
     let (n, _) = fresh_recv
@@ -291,15 +152,14 @@ fn wake_sidebars_restat_skips_when_mtime_aged_past_ttl() {
     file.set_modified(aged).expect("backdate mtime");
     drop(file);
 
-    let item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Generic,
-        "wake me",
-        "rimz",
-        "cli",
-    );
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
+    h.ledger
+        .append_event(&crate::common::lifecycle_event(
+            &h,
+            "rimz-test",
+            "SessionStart",
+            "wake-me",
+        ))
+        .expect("append event");
 
     let mut buf = [0u8; 4096];
     let recv_result = recv.recv_from(&mut buf);

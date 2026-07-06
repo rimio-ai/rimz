@@ -156,19 +156,7 @@ pub(crate) fn print_reset_report(
         }
         writeln!(
             stderr,
-            "Records: abandoned {} pending item{}, cleared {} feed item{}, canceled {} run{}, removed {} debug entr{}, runtime {}.",
-            records.abandoned_pending,
-            if records.abandoned_pending == 1 {
-                ""
-            } else {
-                "s"
-            },
-            records.feed_items_cleared,
-            if records.feed_items_cleared == 1 {
-                ""
-            } else {
-                "s"
-            },
+            "Records: canceled {} run{}, removed {} debug entr{}, runtime {}.",
             records.runs_canceled,
             if records.runs_canceled == 1 { "" } else { "s" },
             records.state_entries_removed,

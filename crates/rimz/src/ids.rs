@@ -1,7 +1,7 @@
 //! Strongly-typed identifiers.
 //!
 //! Every ID that travels through the ledger, the wakeup socket, or the agent
-//! hook protocol is a newtype. Rimz-minted long IDs (`RequestId`, `EventId`,
+//! hook protocol is a newtype. Rimz-minted long IDs (`RunId`, `EventId`,
 //! `SidebarInstanceId`) use UUIDv7, while message IDs use a shorter
 //! time-sortable token. IDs derived from external truth (`WorkspaceId`,
 //! `PaneId`) keep their natural shape.
@@ -254,7 +254,6 @@ fn validate_uuid_id(
     Ok(())
 }
 
-uuid_v7_id!(RequestId, "req", "Per-feed-item request identifier.");
 uuid_v7_id!(RunId, "run", "Per-supervised-run identifier.");
 uuid_v7_id!(EventId, "evt", "Per-event identifier in the event log.");
 uuid_v7_id!(
@@ -526,7 +525,7 @@ impl std::borrow::Borrow<str> for AgentSessionId {
 /// Normalized pane identifier: `<mux>:<raw_pane_id>` (e.g. `zellij:terminal_3`).
 ///
 /// Raw pane IDs stay inside backend adapters. This type is what travels in
-/// feed items, env vars, and `rimz pane` CLI calls.
+/// env vars and `rimz pane` CLI calls.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct PaneId(String);
@@ -654,20 +653,12 @@ mod tests {
     }
 
     #[test]
-    fn request_ids_are_unique_and_prefixed() {
-        let a = RequestId::new();
-        let b = RequestId::new();
-        assert_ne!(a, b);
-        assert!(a.as_str().starts_with("req_"));
-    }
-
-    #[test]
     fn uuid_prefixed_ids_reject_non_canonical_input() {
-        assert!(RequestId::parse("req_0123456789abcdef0123456789abcdef").is_ok());
-        assert!(RequestId::parse("evt_0123456789abcdef0123456789abcdef").is_err());
-        assert!(RequestId::parse("req_short").is_err());
-        assert!(RequestId::parse("req_0123456789abcdef0123456789abcdeg").is_err());
-        assert!(RequestId::parse("req_0123456789abcdef0123456789ABCDEF").is_err());
+        assert!(RunId::parse("run_0123456789abcdef0123456789abcdef").is_ok());
+        assert!(RunId::parse("evt_0123456789abcdef0123456789abcdef").is_err());
+        assert!(RunId::parse("run_short").is_err());
+        assert!(RunId::parse("run_0123456789abcdef0123456789abcdeg").is_err());
+        assert!(RunId::parse("run_0123456789abcdef0123456789ABCDEF").is_err());
         assert!(EventId::parse("evt_0123456789abcdef0123456789abcdef").is_ok());
         assert!(SidebarInstanceId::parse("sb_0123456789abcdef0123456789abcdef").is_ok());
     }
@@ -695,21 +686,21 @@ mod tests {
 
     #[test]
     fn uuid_prefixed_ids_reject_bad_json_values() {
-        let parsed: Result<RequestId, _> =
-            serde_json::from_str("\"req_0123456789abcdef0123456789abcdef\"");
+        let parsed: Result<RunId, _> =
+            serde_json::from_str("\"run_0123456789abcdef0123456789abcdef\"");
         assert!(parsed.is_ok());
 
-        let parsed: Result<RequestId, _> = serde_json::from_str("\"not-a-request-id\"");
+        let parsed: Result<RunId, _> = serde_json::from_str("\"not-a-run-id\"");
         assert!(parsed.is_err());
     }
 
     #[test]
     fn short_returns_the_12_hex_tail() {
         // `short()` slices from the end, so it works across prefixes of different
-        // lengths ("req" vs "sb").
+        // lengths ("run" vs "sb").
         for (short, full) in [
             {
-                let id = RequestId::new();
+                let id = RunId::new();
                 (id.short().to_owned(), id.as_str().to_owned())
             },
             {

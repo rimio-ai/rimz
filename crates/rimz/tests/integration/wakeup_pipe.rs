@@ -13,7 +13,7 @@
 //!
 //! `unsafe_code = "forbid"` is workspace-wide and includes test targets, so
 //! we cannot mutate process env from inside this test. Instead we run the
-//! whole ledger write through a `rimz feed push` subprocess and seed its
+//! whole ledger write through a `rimz hooks feed` subprocess and seed its
 //! env. The subprocess constructs its own `Ledger` rooted at the test's
 //! `XDG_STATE_HOME`/`XDG_RUNTIME_DIR` overrides, walks the heartbeats we
 //! planted there, and sends one wakeup datagram per fresh sidebar — never
@@ -21,8 +21,9 @@
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -161,26 +162,30 @@ fn write_sidebar_heartbeat(
 }
 
 fn run_wakeup_trigger(rimz_bin: &Path, trace_bin: &Path, fixture: &WakeupFixture) {
-    let output = Command::new(rimz_bin)
+    let mut child = Command::new(rimz_bin)
         .scrub_session_env()
-        .args([
-            "feed",
-            "push",
-            "--kind",
-            "generic",
-            "--title",
-            "trigger wakeup",
-        ])
+        .args(["hooks", "feed", "--source", "claude"])
         .current_dir(&fixture.project_root)
         .env("XDG_STATE_HOME", &fixture.state_root)
         .env("XDG_RUNTIME_DIR", &fixture.runtime_root)
         .env("RIMZ_ZELLIJ_BIN", trace_bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &fixture.log_path)
-        .output()
-        .expect("spawn rimz feed push");
+        .env("RIMZ_AGENT_PID", std::process::id().to_string())
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn rimz hooks feed");
+    child
+        .stdin
+        .take()
+        .expect("hook stdin")
+        .write_all(
+            br#"{"hook_event_name":"SessionStart","session_id":"wake-trigger","permission_mode":"default"}"#,
+        )
+        .expect("write hook payload");
+    let output = child.wait_with_output().expect("wait rimz hooks feed");
     assert!(
         output.status.success(),
-        "rimz feed push failed: stderr={}",
+        "rimz hooks feed failed: stderr={}",
         String::from_utf8_lossy(&output.stderr),
     );
 }

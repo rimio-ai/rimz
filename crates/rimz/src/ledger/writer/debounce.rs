@@ -5,17 +5,6 @@ use tracing::warn;
 
 use super::super::{StatePaths, atomic};
 
-/// How often the write path is willing to pay the dead-owner sweep. Read-side
-/// expel hides a dead-owner item from runtime views the instant it dies, so
-/// the sweep only owes the durable `abandoned` record within this window.
-const ABANDON_SWEEP_INTERVAL: Duration = Duration::from_secs(2);
-
-/// Stamp recording the last dead-owner sweep. Lives beside the workspace lock
-/// so feed-dir scans (item lists, gc's history classification) never see it.
-pub(super) fn abandon_sweep_stamp(paths: &StatePaths) -> PathBuf {
-    paths.locks_dir.join("abandon-sweep.stamp")
-}
-
 /// Age of a debounce stamp's mtime. `None` when the stamp is missing or
 /// unreadable, or its mtime sits in the future (clock skew) — every gate
 /// reads `None` as due, erring toward one redundant run, never a stale skip.
@@ -30,10 +19,6 @@ pub(super) fn stamp_age(path: &std::path::Path) -> Option<Duration> {
 /// again.
 pub(super) fn touch_stamp(path: &std::path::Path) {
     let _ = std::fs::write(path, b"");
-}
-
-pub(super) fn abandon_sweep_due(paths: &StatePaths) -> bool {
-    stamp_age(&abandon_sweep_stamp(paths)).is_none_or(|age| age >= ABANDON_SWEEP_INTERVAL)
 }
 
 /// How long appended event-log bytes may ride the page cache before a write

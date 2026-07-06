@@ -36,8 +36,7 @@ pub(crate) use self::compose::compose_lines;
 use self::compose::lead_unread;
 #[cfg(test)]
 use self::compose::{
-    auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, pad_chrome,
-    scroll_thumb,
+    auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, scroll_thumb,
 };
 pub(crate) use self::ui_state::MoreHit;
 pub use self::ui_state::{Alert, UiState};

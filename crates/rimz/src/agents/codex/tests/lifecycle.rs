@@ -159,6 +159,48 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     assert_eq!(stop.task.as_deref(), Some("review"));
     assert_eq!(stop.parent_agent_id.as_deref(), Some("sess-parent"));
 
+    let permission = CodexAdapter
+        .observe_lifecycle(
+            "PermissionRequest",
+            &json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-thread-1",
+                "agent_type": "review",
+                "tool_name": "shell",
+            }),
+        )
+        .unwrap();
+    assert_eq!(permission.agent_id.as_deref(), Some("child-thread-1"));
+    assert_eq!(
+        permission.signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Permission
+        }
+    );
+    assert_eq!(permission.task.as_deref(), Some("review"));
+    assert_eq!(permission.parent_agent_id.as_deref(), Some("sess-parent"));
+
+    let question = CodexAdapter
+        .observe_lifecycle(
+            "PreToolUse",
+            &json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-thread-1",
+                "agent_type": "review",
+                "tool_name": "request_user_input",
+            }),
+        )
+        .unwrap();
+    assert_eq!(question.agent_id.as_deref(), Some("child-thread-1"));
+    assert_eq!(
+        question.signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question
+        }
+    );
+    assert_eq!(question.task.as_deref(), Some("review"));
+    assert_eq!(question.parent_agent_id.as_deref(), Some("sess-parent"));
+
     for (event, payload) in [
         (
             "PostToolUse",

@@ -9,7 +9,6 @@ use rimz::WorkspaceId;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::agents::{AgentState, AgentStatus};
-use rimz::feed::{FeedItem, FeedKind, Surface};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::ledger::event::EventEnvelope;
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
@@ -29,19 +28,7 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
     let old_paths = env.state_path_for(&old_root);
     let new_paths = env.state_path_for(&new_root);
 
-    let item = FeedItem::new(
-        old_id.clone(),
-        Surface::Script,
-        FeedKind::Question,
-        "deploy?",
-        "rimz",
-        "cli",
-    );
-    let request_id = item.request_id.clone();
     let old_ledger = env.ledger_for(&old_root);
-    old_ledger
-        .push_feed_item(&item, "old-session")
-        .expect("push old item");
 
     let agent = message_agent();
     let pending_message = MessageRecord::new(
@@ -92,9 +79,6 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
     assert!(new_paths.root.exists(), "new ledger dir should exist");
 
     let migrated = env.ledger_for(&new_root);
-    let loaded = migrated.load_feed_item(&request_id).expect("load item");
-    assert_eq!(loaded.workspace_id, new_id);
-
     let messages = migrated.list_messages().expect("list messages");
     let pending = messages
         .iter()
@@ -158,6 +142,7 @@ fn message_agent() -> AgentState {
         subagent_description: None,
         subagent_started_at: None,
         turn_started_at: None,
+        waiting_since: None,
         compacting_since: None,
         compaction_count: 0,
         last_compact_command_tokens: None,

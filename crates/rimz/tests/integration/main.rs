@@ -18,7 +18,6 @@ mod coverage;
 mod daemon_content;
 mod doctor;
 mod examples;
-mod feed_runtime;
 mod gc;
 mod hooks;
 mod journey;

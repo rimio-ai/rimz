@@ -209,7 +209,8 @@ pub fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool 
         .is_none_or(|start| last_activity >= start)
 }
 
-pub(super) fn pane_start_matches(expected: &PaneRef, actual: &PaneRef) -> bool {
+#[cfg(test)]
+fn pane_start_matches(expected: &PaneRef, actual: &PaneRef) -> bool {
     match (expected.pane_process_start, actual.pane_process_start) {
         (Some(expected), Some(actual)) => expected == actual,
         _ => true,

@@ -220,7 +220,7 @@ fn compaction_edges_keep_the_head_orthogonal_to_status_and_phase() {
             "auto compaction resumes from idle",
             Some(state(AgentStatus::Idle, TurnPhase::Idle, true)),
             LifecycleSignal::CompactionEnded { auto: Some(true) },
-            state(AgentStatus::Running, TurnPhase::Idle, false),
+            state(AgentStatus::Running, TurnPhase::Reasoning, false),
             TransitionKind::Reconciled {
                 from: AgentStatus::Idle,
                 reason: "auto-compaction resumed a turn",

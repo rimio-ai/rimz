@@ -158,31 +158,3 @@ fn deeply_nested_git_backed_row_gets_own_worktree_pod() {
         ],
     );
 }
-
-#[test]
-fn stale_branch_row_never_relabels_the_root_pod() {
-    // A row claiming a branch at a non-repo room root is stale by definition
-    // (the root has no git story); the pod keeps its directory name.
-    let live = pane("%scratch", "rimz-ask", "/tmp/scratch");
-    let mut item = FeedItem::new(
-        workspace(),
-        Surface::Script,
-        FeedKind::Question,
-        "Should I proceed?",
-        "rimz",
-        "cli",
-    );
-    item.worktree_path = Some("/tmp/scratch".to_owned());
-    item.worktree_branch = Some("main".to_owned());
-    item.pane = Some(live.clone());
-
-    let snapshot = room(vec![item], Vec::new())
-        .with_root_class(RootClass::Directory)
-        .with_project_root(Some(PathBuf::from("/tmp/scratch")))
-        .with_live_panes(vec![live], None);
-
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    let group = &snapshot.worktree_groups[0];
-    assert_eq!(group.kind, SidebarWorktreeKind::Root);
-    assert_eq!(group.label, "scratch");
-}

@@ -13,7 +13,6 @@ use super::view::{SNAPSHOT_VERSION, SidebarSnapshot};
 use crate::agents::AgentState;
 use crate::ledger::atomic::{self};
 use crate::ledger::event_log::{self};
-use crate::ledger::feed_store::{self};
 use crate::ledger::parse_cache::ParseCache;
 use crate::ledger::paths::StatePaths;
 use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
@@ -26,8 +25,8 @@ use crate::workspace::RootClass;
 /// attach. Caller owns a write serialization point (the workspace lock, or
 /// the publish single-flight).
 ///
-/// Cost is O(delta bytes + pending items) per call: the fold resumes from
-/// the persisted base. Archived event logs are never rescanned; rotation
+/// Cost is O(delta bytes) per call: the fold resumes from the persisted base.
+/// Archived event logs are never rescanned; rotation
 /// pre-projects the agent rollup into `agents.carryover.json` and reseeds
 /// the fold base, so the reducer stays bounded.
 pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
@@ -36,8 +35,8 @@ pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
     // The fold base lands first: its extent always runs at or past
     // `latest.json`'s stamp, so a crash between the two leaves a stale view
     // that the next catch-up refreshes from the newer base. Both writes are
-    // cache-class — crash-durability lives in the event log and the feed
-    // files; a torn-after-power-cut cache parses to a miss and cold-rebuilds.
+    // cache-class — crash-durability lives in the event log; a
+    // torn-after-power-cut cache parses to a miss and cold-rebuilds.
     write_rollup_cache(&paths.rollup_cache, &rollup)?;
     atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &snapshot)?;
     Ok(snapshot)
@@ -67,14 +66,10 @@ fn assemble_snapshot(
     // The one clock read this projection makes: every window verdict below
     // (reap TTLs, stall, compaction) folds against this single instant.
     let now = Timestamp::now();
-    // Pending items only: the view folds nothing else, and the pending scan
-    // stays O(pending) regardless of feed history.
-    let items = feed_store::list_pending(&paths.feed_dir)?;
     // Apply the same runtime liveness expel the live read does, so the
     // persisted `latest.json` matches what a reader would have projected —
-    // never resurrecting a dead-pid agent or an ownerless-script ask.
+    // never resurrecting a dead-pid agent.
     let projection = RuntimeProjection::from_parts(
-        items,
         std::collections::BTreeSet::new(),
         std::collections::BTreeSet::new(),
         agents,
@@ -82,7 +77,7 @@ fn assemble_snapshot(
     );
     let mut snapshot = SidebarSnapshot::build_with_agents(
         paths.workspace_id.clone(),
-        projection.items,
+        Vec::<()>::new(),
         projection.agents,
         now,
     );

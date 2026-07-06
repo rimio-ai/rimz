@@ -9,10 +9,9 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::agents::AgentStatus;
-use crate::feed::pending_ask_in_snapshot;
-use crate::ids::{MessageId, MuxName, PaneId, RequestId};
+use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
-    DeliveryGate, MessageRecord, MessageStatus, delivery_window_from_env, gate_open,
+    DeliveryGate, MessageRecord, MessageStatus, delivery_window_from_env, gate_open_for_agent,
     max_delivery_attempts_from_env, message_interval_from_env, queue_batch_tail, queue_head,
     queue_head_for_message,
 };
@@ -106,13 +105,13 @@ pub fn deliver_one(
             Ok(true)
         }
         Ok(send::SentPrompt {
-            outcome: send::Outcome::SkippedPending { request_id, .. },
+            outcome: send::Outcome::SkippedWaiting { .. },
             ..
         }) => {
             for message in &claimed {
                 ledger.record_message_delivery_failure(
                     &message.message_id,
-                    &format!("pending ask {request_id} reserves input"),
+                    "agent is waiting on input in its pane",
                     &workspace.session_name,
                 )?;
             }
@@ -261,10 +260,8 @@ pub struct GateCheck {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AskCheck {
-    pub clear: bool,
+    pub waiting: bool,
     pub force: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<RequestId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -313,7 +310,7 @@ pub fn explain(
         .iter()
         .find(|agent| message.same_agent_card(agent));
     let status = agent.map(crate::agents::AgentState::effective_status);
-    let open = status.is_some_and(|status| gate_open(message.gate, status));
+    let open = agent.is_some_and(|agent| gate_open_for_agent(message.gate, agent, message.force));
     let resume_recovered =
         match (message.gate, agent, open) {
             (DeliveryGate::Resume, Some(agent), true) => {
@@ -324,10 +321,7 @@ pub fn explain(
             }
             _ => None,
         };
-    let request_id = agent
-        .and_then(|agent| (!message.force).then(|| pending_ask_in_snapshot(agent, snapshot)))
-        .flatten()
-        .map(|item| item.request_id.clone());
+    let waiting = !message.force && agent.is_some_and(crate::agents::AgentState::is_awaiting_input);
     let pane = agent.and_then(|agent| {
         snapshot.agent_panes.iter().find(|pane| {
             dispatch::pane_matches_agent(pane, agent)
@@ -350,9 +344,8 @@ pub fn explain(
             resume_recovered,
         },
         ask: AskCheck {
-            clear: request_id.is_none(),
+            waiting,
             force: message.force,
-            request_id,
         },
         pane: PaneCheck {
             present: pane.is_some(),
@@ -401,7 +394,7 @@ fn delivery_candidate(
         return Ok(None);
     };
     let status = agent.effective_status();
-    if !gate_open(message.gate, status) {
+    if !gate_open_for_agent(message.gate, agent, message.force) {
         return Ok(None);
     }
     if message.gate == DeliveryGate::Resume
@@ -411,9 +404,9 @@ fn delivery_candidate(
     {
         return Ok(None);
     }
-    // A pending ask reserves the agent's next input, so it defers delivery —
+    // A waiting agent reserves the next input, so it defers delivery —
     // unless the message was queued with `--force`, mirroring `message --steer --force`.
-    if !message.force && pending_ask_in_snapshot(agent, &snapshot).is_some() {
+    if !message.force && agent.is_awaiting_input() {
         return Ok(None);
     }
     let batch_tail = queue_batch_tail(pending.iter(), &message, status, now)
@@ -479,10 +472,8 @@ pub(crate) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     use crate::agents::{AgentState, TurnPhase};
-    use crate::feed::{FeedItem, FeedKind, Surface};
     use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
     use crate::ledger::snapshot::PaneAgent;
 
@@ -541,26 +532,16 @@ mod tests {
     }
 
     #[test]
-    fn explain_reports_pending_ask() {
+    fn explain_reports_waiting_agent() {
         let now = Timestamp::now();
-        let agent = agent("sess-ask", AgentStatus::Idle);
-        let mut item = FeedItem::new(
-            workspace_id(),
-            Surface::NativeUi,
-            FeedKind::Permission,
-            "approve?",
-            "claude",
-            "agent-hook",
-        );
-        item.payload = json!({ "session_id": "sess-ask" });
-        item.updated_at = agent.last_activity + jiff::SignedDuration::from_secs(1);
-        let snapshot = snapshot(agent.clone(), true, vec![item], now);
+        let mut agent = agent("sess-ask", AgentStatus::Waiting);
+        agent.waiting_since = Some(agent.last_activity);
+        let snapshot = snapshot(agent.clone(), true, Vec::new(), now);
         let message = message(&agent, 1, "blocked");
 
         let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
 
-        assert!(!check.ask.clear);
-        assert!(check.ask.request_id.is_some());
+        assert!(check.ask.waiting);
         assert!(check.pane.present);
     }
 
@@ -597,7 +578,7 @@ mod tests {
     fn snapshot(
         agent: AgentState,
         with_pane: bool,
-        items: Vec<FeedItem>,
+        items: Vec<()>,
         now: Timestamp,
     ) -> SidebarSnapshot {
         let mut snapshot =
@@ -684,6 +665,7 @@ mod tests {
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
+            waiting_since: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

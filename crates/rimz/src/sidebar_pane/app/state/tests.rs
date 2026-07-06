@@ -443,7 +443,6 @@ fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
     active_alert(&cold_second.health);
     assert!(cold_second.last_snapshot.is_none());
     assert_eq!(cold_second.snapshot.workspace_id, ws);
-    assert!(cold_second.snapshot.needs_attention.is_empty());
 
     let heartbeat_first = compute_next_state(
         &ws,

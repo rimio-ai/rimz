@@ -1,12 +1,11 @@
 //! Out-of-process CLI harness: drives the `rimz` binary with XDG roots scoped
-//! to a tempdir, the workspace resolved from the project root, and the
-//! hook/feed round-trip helpers every CLI test repeats.
+//! to a tempdir, the workspace resolved from the project root, and the hook
+//! helpers every CLI test repeats.
 
 use std::io::{self, Write};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
 
 use super::command::ScrubSessionEnvExt;
 use rimz::pane::PaneRef;
@@ -206,13 +205,12 @@ impl Env {
         child
     }
 
-    /// Spawn the hook and feed it `payload`, returning the live child so the
-    /// test can drive the ledger while the hook writes its feed item.
+    /// Spawn the hook and feed it `payload`, returning the live child.
     pub fn spawn_hook(&self, source: &str, payload: &str) -> Child {
         self.spawn_payload(self.hook_command(source), payload)
     }
 
-    /// Run the hook to completion — the one-shot native_ui / neutral path.
+    /// Run the hook to completion — the one-shot waiting / neutral path.
     pub fn run_hook(&self, source: &str, payload: &str) -> Output {
         self.spawn_hook(source, payload)
             .wait_with_output()
@@ -357,93 +355,6 @@ impl Env {
         rimz::ledger::subagent_context::read_all(&self.runtime_paths())
     }
 
-    // --- feed commands ---
-
-    pub fn feed_ask_no_block(&self, title: &str, options: &[&str]) -> String {
-        self.feed_ask_no_block_in(&self.project_root, title, options)
-    }
-
-    pub fn feed_ask_no_block_in(&self, cwd: &Path, title: &str, options: &[&str]) -> String {
-        let mut cmd = self.rimz();
-        cmd.current_dir(cwd)
-            .args(["feed", "ask", "--title", title, "--no-block"]);
-        if !options.is_empty() {
-            cmd.arg("--options").arg(options.join(","));
-        }
-        let out = cmd.output().expect("spawn feed ask --no-block");
-        assert!(
-            out.status.success(),
-            "feed ask --no-block failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        );
-        let request_id = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        assert!(
-            !request_id.is_empty(),
-            "feed ask --no-block printed no request id"
-        );
-        request_id
-    }
-
-    pub fn resolve(&self, request_id: &str, decision: &str, by: &str, method: &str) -> Output {
-        self.rimz()
-            .args([
-                "feed",
-                "resolve",
-                request_id,
-                "--decision",
-                decision,
-                "--by",
-                by,
-                "--method",
-                method,
-            ])
-            .output()
-            .expect("spawn feed resolve")
-    }
-
-    pub fn feed_list_json(&self) -> Value {
-        let out = self
-            .rimz()
-            .args(["feed", "list", "--json"])
-            .output()
-            .expect("spawn feed list");
-        assert!(
-            out.status.success(),
-            "feed list failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        serde_json::from_slice(&out.stdout).expect("feed list json")
-    }
-
-    pub fn feed_list_audit_json(&self) -> Value {
-        let out = self
-            .rimz()
-            .args(["feed", "list", "--json", "--audit"])
-            .output()
-            .expect("spawn feed list --audit");
-        assert!(
-            out.status.success(),
-            "feed list --audit failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        serde_json::from_slice(&out.stdout).expect("feed list audit json")
-    }
-
-    pub fn feed_show_json(&self, request_id: &str) -> Value {
-        let out = self
-            .rimz()
-            .args(["feed", "show", request_id, "--json"])
-            .output()
-            .expect("spawn feed show");
-        assert!(
-            out.status.success(),
-            "feed show failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        serde_json::from_slice(&out.stdout).expect("feed show json")
-    }
-
     pub fn snapshot_json(&self) -> Value {
         let out = self
             .rimz()
@@ -498,32 +409,6 @@ impl Env {
             .expect("write pane fixture temp");
         std::fs::rename(&tmp, &path).expect("publish pane fixture");
         path
-    }
-
-    // --- polling ---
-
-    pub fn poll_pending_request_id(&self, until: Instant) -> Option<String> {
-        while Instant::now() < until {
-            let out = self
-                .rimz()
-                .args(["feed", "list", "--json"])
-                .output()
-                .expect("feed list");
-            if out.status.success() {
-                let parsed: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
-                if let Some(arr) = parsed.as_array() {
-                    for item in arr {
-                        if item["status"] == "pending" {
-                            return item["request_id"].as_str().map(ToOwned::to_owned);
-                        }
-                    }
-                }
-            }
-            // Each iteration spawns a fresh `rimz`, so back off well above the
-            // spawn cost rather than hammering process creation every 20 ms.
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        None
     }
 
     // --- ledger access (per project root) ---

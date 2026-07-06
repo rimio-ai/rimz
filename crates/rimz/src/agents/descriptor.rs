@@ -9,9 +9,7 @@
 
 use serde_json::Value;
 
-use crate::feed::FeedKind;
-
-use super::lifecycle::LifecycleSignalKind;
+use super::lifecycle::{AskKind, LifecycleSignalKind};
 
 /// Static identity, branding, capabilities, and classification tables for one
 /// agent. See the module doc for the descriptor-vs-trait split.
@@ -31,7 +29,7 @@ pub struct AgentDescriptor {
     /// `anthropic`, `openai`, …). Used for account labeling and
     /// provider-specific probes.
     pub sub_providers: &'static [&'static str],
-    /// Tool-name classification tables for lifecycle and blocking feed use.
+    /// Tool-name classification tables for lifecycle and native blocking prompts.
     pub tools: ToolClassification,
     /// What this agent can and cannot do — consumed by the sidebar and doctor
     /// so a missing surface renders as a declared absence, never an
@@ -160,7 +158,7 @@ pub enum PlanLabel {
     TitleCaseOnly,
 }
 
-/// The agent's tool vocabulary, classified for lifecycle and blocking feed use.
+/// The agent's tool vocabulary, classified for lifecycle and native blocking prompts.
 #[derive(Debug)]
 pub struct ToolClassification {
     /// Tools that mutate the workspace — write files or run commands. A
@@ -171,9 +169,9 @@ pub struct ToolClassification {
     /// from reasoning to acting. A shell tool mutates but does not edit, so a
     /// research turn that only runs commands keeps the thinking head.
     pub editing: &'static [&'static str],
-    /// Tools whose pre-use hook is a blocking ask, paired with the feed kind
+    /// Tools whose pre-use hook is a blocking ask, paired with the ask kind
     /// they raise. Empty when the agent's blocking gate is an event, not a tool.
-    pub blocking: &'static [(&'static str, FeedKind)],
+    pub blocking: &'static [(&'static str, AskKind)],
 }
 
 macro_rules! integration_concerns {
@@ -295,20 +293,18 @@ impl HookCoverage {
 /// transport), `context_usage` and `account_spend` (the token/cost read
 /// paths), `registers_lazily` (cwd session binding),
 /// `hook_install` (the install and doctor surfaces), and `native_ask_ui`
-/// (whether an unresolved blocking ask becomes a `native_ui` feed item). The
+/// (whether an unresolved blocking ask has a native pane prompt). The
 /// rest state the adapter contract up front — pinned by each adapter's tests,
 /// consumed as shared sites grow capability-aware.
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
-    /// Can natively hold a turn open for a permission/plan/question decision
-    /// (the blocking-feed channel).
-    pub blocking_feed: bool,
+    /// Can natively hold a turn open for a permission/plan/question decision.
+    pub blocking_asks: bool,
     /// Renders its own ask UI in the pane — permission prompts, plan
-    /// approvals, questions — so a blocking ask can hand off to the agent's
-    /// surface as a `native_ui` feed item. An agent
-    /// without one (pi gates tools only through the extension) resolves the
-    /// same ask neutrally with no feed item: there is no surface the item
-    /// could route the human to, so pushing one would strand it waiting.
+    /// approvals, questions — so Rimz can mark the agent waiting while the
+    /// prompt stays in the native UI. An agent without one (pi gates tools
+    /// only through the extension) resolves the same ask neutrally with no
+    /// waiting state: there is no native prompt to route the human to.
     pub native_ask_ui: bool,
     /// Surfaces provider-owned rich context beyond the local lifecycle and
     /// transcript tail, such as account windows, official model labels, PR
@@ -398,7 +394,7 @@ impl AgentDescriptor {
     }
 
     /// Whether a pre-tool-use payload names a blocking ask tool.
-    pub fn blocking_tool_kind(&self, tool_name: Option<&str>) -> Option<FeedKind> {
+    pub fn blocking_tool_kind(&self, tool_name: Option<&str>) -> Option<AskKind> {
         let name = tool_name?;
         self.tools
             .blocking
@@ -419,8 +415,8 @@ mod tests {
     use serde_json::json;
 
     use super::program_names_kind;
+    use crate::agents::AskKind;
     use crate::agents::registry::ADAPTERS;
-    use crate::feed::FeedKind;
 
     #[test]
     fn every_descriptor_keeps_editing_a_subset_of_mutating() {
@@ -448,11 +444,11 @@ mod tests {
         assert!(claude.tool_edits_files(&json!({ "tool_name": "Write" })));
         assert_eq!(
             claude.blocking_tool_kind(Some("ExitPlanMode")),
-            Some(FeedKind::PlanApproval)
+            Some(AskKind::PlanApproval)
         );
         assert_eq!(
             claude.blocking_tool_kind(Some("AskUserQuestion")),
-            Some(FeedKind::Question)
+            Some(AskKind::Question)
         );
         assert_eq!(claude.blocking_tool_kind(Some("request_user_input")), None);
 
@@ -462,7 +458,7 @@ mod tests {
         assert!(!codex.tool_edits_files(&json!({ "tool_name": "shell" })));
         assert_eq!(
             codex.blocking_tool_kind(Some("request_user_input")),
-            Some(FeedKind::Question)
+            Some(AskKind::Question)
         );
         assert_eq!(codex.blocking_tool_kind(Some("ExitPlanMode")), None);
         assert_eq!(codex.blocking_tool_kind(Some("update_plan")), None);
