@@ -252,7 +252,13 @@ fn terminal_message_history_keeps_text_for_list_and_show() {
     );
     let shown = String::from_utf8_lossy(&shown.stdout);
     assert!(shown.contains("kept body"));
-    assert!(shown.contains("message.delivered"));
+    assert!(shown.contains("TIMELINE"));
+    assert!(shown.contains("\n  delivered  "));
+    assert!(!shown.contains("message.delivered"));
+    assert!(!shown.contains("attempts:"));
+    assert!(!shown.contains("unconfirmed_sends:"));
+    assert!(!shown.contains("last_error:"));
+    assert_second_precision_created(&shown);
 }
 
 #[test]
@@ -273,9 +279,11 @@ fn message_show_reports_delivery_blocker_and_timeline() {
         String::from_utf8_lossy(&shown.stderr)
     );
     let shown = String::from_utf8_lossy(&shown.stdout);
-    assert!(shown.contains("delivery check:"));
+    assert!(shown.contains("DELIVERY CHECK"));
     assert!(shown.contains("is running; gate 'done' opens at next turn end"));
-    assert!(shown.contains("message.queued"));
+    assert!(shown.contains("TIMELINE"));
+    assert!(shown.contains("\n  queued  "));
+    assert!(!shown.contains("message.queued"));
 }
 
 #[test]
@@ -2892,6 +2900,20 @@ fn queued_id_from_stdout(stdout: &[u8]) -> String {
         .and_then(|(_, id)| id.strip_suffix(')'))
         .map(str::to_owned)
         .unwrap_or_else(|| panic!("expected `queued for @target (msg_...)`, got `{trimmed}`"))
+}
+
+fn assert_second_precision_created(shown: &str) {
+    let line = shown
+        .lines()
+        .find(|line| line.trim_start().starts_with("created:"))
+        .expect("created row");
+    let absolute = line
+        .rsplit_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("created row has absolute timestamp: {line}"));
+    assert_eq!(absolute.len(), "2026-07-06T12:47:26Z".len(), "{line}");
+    assert!(absolute.contains('T') && absolute.ends_with('Z'), "{line}");
+    assert!(!absolute.contains('.'), "{line}");
 }
 
 fn sent_id_from_stdout(stdout: &[u8]) -> String {

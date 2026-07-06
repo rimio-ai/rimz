@@ -904,18 +904,23 @@ fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Res
     }
 
     let agents: Vec<&AgentState> = cached_snapshot.root_agents().collect();
-    let target = message_target(&message, &agents);
+    let target = scoped_handle(
+        message_target(&message, &agents),
+        message.channel.as_deref(),
+    );
+    let sender = scoped_handle(message.sender.render(), message.channel.as_deref());
     let mut out = render::out();
-    let mut kv = render::KeyVals::new();
-    kv.push("id", render::cell(message.message_id.to_string()));
-    kv.push(
-        "status",
-        render::cell(message.status.as_str()).fg(render::status::message(message.status)),
-    );
-    kv.push(
-        "from",
-        render::cell(message.sender.render()).fg(render::palette::META),
-    );
+    writeln!(
+        out,
+        "{} — {}",
+        render::paint(render::palette::ACCENT.bold(), message.message_id.as_str()),
+        render::paint(
+            render::status::message(message.status),
+            message.status.as_str()
+        )
+    )?;
+    let mut kv = render::KeyVals::new().indent(2);
+    kv.push("from", render::cell(sender).fg(render::palette::META));
     kv.push("to", render::cell(target.clone()).fg(render::palette::META));
     kv.push(
         "channel",
@@ -937,65 +942,85 @@ fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Res
         "created",
         render::cell(time_with_absolute(message.enqueued_at, now)),
     );
-    kv.push(
-        "delivered",
-        render::cell(
-            message
-                .delivered_at
-                .map(|delivered| time_with_absolute(delivered, now))
-                .unwrap_or_else(|| "-".to_owned()),
-        )
-        .dash(),
-    );
+    if let Some(delivered) = message.delivered_at {
+        kv.push(
+            "delivered",
+            render::cell(time_with_absolute(delivered, now)),
+        );
+    }
     if let Some(not_before) = message.not_before {
         kv.push(
             "schedule",
             render::cell(time_until_with_absolute(not_before, now)),
         );
     }
-    kv.push("attempts", render::cell(message.attempts.to_string()));
-    kv.push(
-        "unconfirmed_sends",
-        render::cell(message.unconfirmed_sends.to_string()),
-    );
-    kv.push(
-        "last_error",
-        render::cell(message.last_error.clone().unwrap_or_else(|| "-".to_owned())).dash(),
-    );
+    if message.attempts > 0 {
+        kv.push("attempts", render::cell(message.attempts.to_string()));
+    }
+    if message.unconfirmed_sends > 0 {
+        kv.push(
+            "unconfirmed_sends",
+            render::cell(message.unconfirmed_sends.to_string()),
+        );
+    }
+    if let Some(last_error) = message.last_error.as_deref() {
+        kv.push("last_error", render::cell(last_error));
+    }
     kv.render(&mut out)?;
-    writeln!(out, "text:")?;
+    writeln!(out)?;
+    writeln!(out, "{}", render::paint(render::palette::HEADER, "TEXT"))?;
     if let Some(text) = message.text.as_deref() {
         write_indented_block(&mut out, text)?;
     } else {
-        writeln!(
-            out,
-            "  ({status} {at}; {location})",
-            status = message.status.as_str(),
-            at = time_with_absolute(message.delivered_at.unwrap_or(message.updated_at), now),
-            location = textless_location(&message, &target)
-        )?;
+        writeln!(out, "  ({})", textless_location(&message, &target))?;
     }
     writeln!(out)?;
-    writeln!(out, "timeline:")?;
+    writeln!(
+        out,
+        "{}",
+        render::paint(render::palette::HEADER, "TIMELINE")
+    )?;
     if timeline.is_empty() {
         writeln!(out, "  -")?;
     } else {
-        for event in &timeline {
-            let reason = event
+        let show_attempts = timeline.iter().any(|event| event.attempts > 0);
+        let show_note = timeline.iter().any(|event| {
+            event
                 .reason
                 .as_deref()
-                .filter(|reason| !reason.is_empty())
-                .map(|reason| format!("  {reason}"))
-                .unwrap_or_default();
-            writeln!(
-                out,
-                "  {}  {}  attempts={}{}",
-                event.method,
-                time_with_absolute(event.at, now),
-                event.attempts,
-                reason
-            )?;
+                .is_some_and(|reason| !reason.is_empty())
+        });
+        let mut headers = vec!["EVENT", "WHEN"];
+        if show_attempts {
+            headers.push("ATTEMPT");
         }
+        if show_note {
+            headers.push("NOTE");
+        }
+        let mut table = render::Table::new(headers).indent(2);
+        for event in &timeline {
+            let label = event
+                .method
+                .strip_prefix("message.")
+                .unwrap_or(&event.method);
+            let mut row = vec![
+                render::cell(label.to_owned()),
+                render::cell(time_with_absolute(event.at, now)),
+            ];
+            if show_attempts {
+                row.push(render::cell(event.attempts.to_string()));
+            }
+            if show_note {
+                let reason = event
+                    .reason
+                    .as_deref()
+                    .filter(|reason| !reason.is_empty())
+                    .unwrap_or("-");
+                row.push(render::cell(reason).dash());
+            }
+            table.row(row);
+        }
+        table.render(&mut out)?;
     }
     if let Some(delivery) = delivery {
         render_delivery_check(&mut out, &delivery.check, &delivery.verdict, now)?;
@@ -1381,11 +1406,13 @@ fn message_cell(message: &MessageListRow) -> render::Cell {
 }
 
 fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
-    format!("{} ({ts})", render::rel_age(ts, now))
+    let absolute = ts.strftime("%Y-%m-%dT%H:%M:%SZ");
+    format!("{} ({absolute})", render::rel_age(ts, now))
 }
 
 fn time_until_with_absolute(ts: Timestamp, now: Timestamp) -> String {
-    format!("{} ({ts})", render::rel_until(ts, now))
+    let absolute = ts.strftime("%Y-%m-%dT%H:%M:%SZ");
+    format!("{} ({absolute})", render::rel_until(ts, now))
 }
 
 fn write_indented_block(out: &mut impl Write, text: &str) -> Result<()> {
@@ -1421,7 +1448,11 @@ fn render_delivery_check(
     now: Timestamp,
 ) -> Result<()> {
     writeln!(out)?;
-    writeln!(out, "delivery check:")?;
+    writeln!(
+        out,
+        "{}",
+        render::paint(render::palette::HEADER, "DELIVERY CHECK")
+    )?;
     let mut kv = render::KeyVals::new().indent(2);
     let schedule = if check.schedule.ready {
         match check.schedule.retry_after {
