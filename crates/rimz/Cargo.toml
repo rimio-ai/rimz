@@ -124,15 +124,15 @@ workspace = true
 # Duplicated from the workspace root: profiles apply only from the build root,
 # so a standalone `cargo install rimz` build ignores the workspace profile and
 # would lose fail-fast release arithmetic plus the release size settings.
-# Keeping this here preserves overflow-checks, stripping, ThinLTO, and one
-# codegen unit for published-crate builds. Cost: workspace builds emit one
+# Keeping this here preserves overflow-checks, stripping, ThinLTO, and parallel
+# release codegen for published-crate builds. Cost: workspace builds emit one
 # "profiles for the non-root package `rimz` will be ignored" warning — expected,
 # not a failure.
 [profile.release]
 overflow-checks = true
 strip = "symbols"
 lto = "thin"
-codegen-units = 1
+codegen-units = 16
 
 [dependencies]
 anstream.workspace = true

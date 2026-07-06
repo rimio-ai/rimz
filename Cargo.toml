@@ -208,13 +208,15 @@ strip = "none"
 # Keep release arithmetic fail-fast: a sidebar width/count underflow should
 # panic at the faulting expression and enter the normal recovery/diagnostic
 # path rather than wrap into a huge allocation and abort silently. Shipped
-# artifacts are symbol-stripped and thin-LTO'd to keep install size down without
-# switching from the release default speed-oriented opt-level.
+# artifacts are symbol-stripped and thin-LTO'd to keep install size down and
+# retain cross-unit optimization. Sixteen codegen units let the 236k-line `rimz`
+# leaf crate use available cores; one unit serialized release rebuilds to one
+# core for roughly 2-4 minutes.
 [profile.release]
 overflow-checks = true
 strip = "symbols"
 lto = "thin"
-codegen-units = 1
+codegen-units = 16
 
 # The integration suite spawns the `rimz` binary hundreds of times; an
 # unoptimized dependency tree (serde, clap, jiff, ratatui) dominates per-spawn

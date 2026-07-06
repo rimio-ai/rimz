@@ -77,7 +77,9 @@ fn emit_build_version() {
     let package_version = env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION set by cargo");
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let vcs_info = manifest.join(".cargo_vcs_info.json");
-    println!("cargo:rerun-if-changed={}", vcs_info.display());
+    // Cargo treats a missing rerun-if-changed path as always dirty, forcing a
+    // full crate rebuild on every git-checkout build.
+    emit_rerun_if_exists(&vcs_info);
     // Packaged/registry builds carry `.cargo_vcs_info.json` (cargo writes it even
     // under --allow-dirty). The crate dir isn't a git repo but an enclosing dir
     // might be, so skip the git walk and use the crate version verbatim.
@@ -131,6 +133,11 @@ fn emit_git_rerun_paths(manifest: &Path) {
     }
     if let Some(packed_refs) = git_path(manifest, "packed-refs") {
         emit_rerun_if_exists(&packed_refs);
+    }
+    // Keep the `.dirty` suffix fresh across staged-state changes now that the
+    // build script no longer re-runs unconditionally.
+    if let Some(index) = git_path(manifest, "index") {
+        emit_rerun_if_exists(&index);
     }
 }
 
