@@ -5,11 +5,8 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-use crate::MuxName;
 use crate::SidebarSnapshot;
-use crate::sidebar_pane::pets::{
-    BEGIN_SYNC, END_SYNC, PetRenderCaps, PixelPainter, detect_pet_render_caps,
-};
+use crate::sidebar_pane::pets::{BEGIN_SYNC, END_SYNC, PixelPainter, detect_pet_render_env};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::tui::{MouseCapture, TerminalModeGuard};
 
@@ -21,12 +18,7 @@ struct GalleryState {
     paint: FramePainter,
 }
 
-pub fn serve_fixture(
-    snapshot: SidebarSnapshot,
-    refresh_ms: u16,
-    mux: MuxName,
-    session_name: &str,
-) -> super::Result<()> {
+pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Off)?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -34,8 +26,8 @@ pub fn serve_fixture(
     terminal.clear()?;
 
     let mut ui = UiState::default();
-    let caps = detect_pet_render_caps(mux, session_name, PetRenderCaps::default());
-    let mut paint = FramePainter::new(caps, mux == MuxName::Tmux);
+    let (caps, wrap_pixels) = detect_pet_render_env();
+    let mut paint = FramePainter::new(caps, wrap_pixels);
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 
@@ -56,19 +48,14 @@ pub fn serve_fixture(
     Ok(())
 }
 
-pub fn serve_gallery(
-    columns: Vec<(SidebarSnapshot, usize)>,
-    refresh_ms: u16,
-    mux: MuxName,
-    session_name: &str,
-) -> super::Result<()> {
+pub fn serve_gallery(columns: Vec<(SidebarSnapshot, usize)>, refresh_ms: u16) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let caps = detect_pet_render_caps(mux, session_name, PetRenderCaps::default());
+    let (caps, wrap_pixels) = detect_pet_render_env();
     let id_base = PixelPainter::runtime_id_base();
     let mut states = columns
         .into_iter()
@@ -81,7 +68,7 @@ pub fn serve_gallery(
             snapshot,
             paint: FramePainter::with_id_base(
                 id_base.wrapping_add((index as u32) << 12),
-                mux == MuxName::Tmux,
+                wrap_pixels,
                 caps,
             ),
         })

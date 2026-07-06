@@ -102,8 +102,8 @@ enum SidebarSubcmd {
         #[arg(long)]
         theme_scheme: Option<String>,
     },
-    /// Open a live sidebar feature gallery. Hidden — contributor visual review
-    /// tool, not a user-facing sidebar verb.
+    /// Open a live sidebar feature gallery in a room tab or inline outside a
+    /// mux session. Hidden — contributor visual review tool.
     #[command(hide = true)]
     Gallery {
         #[arg(long)]
@@ -279,15 +279,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             watch,
             theme_mode,
             theme_scheme,
-        } => fixture(
-            globals,
-            state,
-            width,
-            height,
-            watch,
-            theme_mode,
-            theme_scheme,
-        ),
+        } => fixture(state, width, height, watch, theme_mode, theme_scheme),
         SidebarSubcmd::Gallery { pets } => gallery(globals, pets),
         SidebarSubcmd::GalleryRender { pets } => gallery_render(pets),
         SidebarSubcmd::Wake {
@@ -605,7 +597,6 @@ fn render(width: u16, height: u16) -> Result<()> {
 }
 
 fn fixture(
-    globals: &GlobalFlags,
     state: SidebarFixtureState,
     width: u16,
     height: u16,
@@ -622,22 +613,18 @@ fn fixture(
     }
     if watch {
         let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
-        let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-            .context("resolving current workspace")?;
-        let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-        return rimz::sidebar_pane::app::serve_fixture(
-            snapshot,
-            refresh_ms,
-            mux,
-            &workspace.session_name,
-        )
-        .context("serving sidebar fixture");
+        return rimz::sidebar_pane::app::serve_fixture(snapshot, refresh_ms)
+            .context("serving sidebar fixture");
     }
     rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, None, width, height)
         .context("rendering sidebar fixture")
 }
 
 fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
+    if rimz::mux::ambient_pane_id().is_none() {
+        // No room can host a tab; the compositor owns this terminal.
+        return gallery_render(pets);
+    }
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
@@ -686,11 +673,7 @@ fn gallery_render(pets: bool) -> Result<()> {
     let machine_config = super::machine_config();
     let refresh_ms = machine_config.theme.display.resolved_refresh_ms();
     let columns = gallery_render_columns(pets, &machine_config.theme)?;
-    let workspace =
-        WorkspaceResolver::resolve_participant(".", None).context("resolving gallery workspace")?;
-    let mux = rimz::mux::auto_detect_backend(None)?;
-    rimz::sidebar_pane::app::serve_gallery(columns, refresh_ms, mux, &workspace.session_name)
-        .context("serving sidebar gallery")
+    rimz::sidebar_pane::app::serve_gallery(columns, refresh_ms).context("serving sidebar gallery")
 }
 
 fn gallery_render_columns(
