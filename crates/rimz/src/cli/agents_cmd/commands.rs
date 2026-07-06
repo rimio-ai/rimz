@@ -713,7 +713,9 @@ pub(super) fn logs_agent(
             .iter()
             .map(|entry| entry.chat.clone())
             .collect();
-        supervised::output::print_json(&serde_json::json!({ "entries": entries }))?;
+        render::finish(write_json_pretty(
+            &serde_json::json!({ "entries": entries }),
+        ))?;
     } else if view.entries.is_empty() {
         let mut out = render::err();
         writeln!(
@@ -729,7 +731,9 @@ pub(super) fn logs_agent(
     } else {
         let tz = crate::cli::machine_config().time_zone();
         let mut out = render::out();
-        crate::cli::transcript::render_lines_to(&mut out, &view, &tz)?;
+        finish_transcript_render(crate::cli::transcript::render_lines_to(
+            &mut out, &view, &tz,
+        ))?;
     }
     Ok(())
 }
@@ -759,12 +763,14 @@ fn follow_agent_logs(
     };
     if json {
         for entry in &initial.entries {
-            write_json_line(&entry.chat)?;
+            render::finish(write_json_line(&entry.chat))?;
         }
     } else if !initial.entries.is_empty() {
         let tz = crate::cli::machine_config().time_zone();
         let mut out = render::out();
-        crate::cli::transcript::render_lines_to(&mut out, &initial, &tz)?;
+        finish_transcript_render(crate::cli::transcript::render_lines_to(
+            &mut out, &initial, &tz,
+        ))?;
     }
 
     let tz = crate::cli::machine_config().time_zone();
@@ -779,7 +785,7 @@ fn follow_agent_logs(
         seen = view.entries.len();
         if json {
             for entry in new_entries {
-                write_json_line(&entry.chat)?;
+                render::finish(write_json_line(&entry.chat))?;
             }
         } else {
             let mut out = render::out();
@@ -792,19 +798,30 @@ fn follow_agent_logs(
                 newest_archived_at: None,
                 empty_message: None,
             };
-            render::finish(
-                crate::cli::transcript::render_lines_to(&mut out, &delta, &tz)
-                    .map_err(|err| std::io::Error::other(err.to_string())),
-            )?;
+            finish_transcript_render(crate::cli::transcript::render_lines_to(
+                &mut out, &delta, &tz,
+            ))?;
         }
     }
 }
 
-fn write_json_line(value: &impl serde::Serialize) -> Result<()> {
+fn finish_transcript_render(write: Result<()>) -> Result<()> {
+    render::finish(write.map_err(|err| match err.downcast::<std::io::Error>() {
+        Ok(err) => err,
+        Err(err) => std::io::Error::other(err),
+    }))
+}
+
+fn write_json_line(value: &impl serde::Serialize) -> std::io::Result<()> {
+    let line = serde_json::to_string(value).map_err(std::io::Error::other)?;
     let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, value)?;
-    writeln!(stdout)?;
-    Ok(())
+    writeln!(stdout, "{line}")
+}
+
+fn write_json_pretty(value: &impl serde::Serialize) -> std::io::Result<()> {
+    let pretty = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{pretty}")
 }
 
 pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) -> Result<()> {

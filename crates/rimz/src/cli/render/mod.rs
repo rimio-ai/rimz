@@ -295,13 +295,7 @@ impl Table {
             let fixed: usize = widths.iter().take(last).sum::<usize>() + gaps;
             let available = max_total_width.saturating_sub(fixed);
             if available < widths[last] {
-                let floor = 8;
-                let allowed = if available >= floor {
-                    available
-                } else {
-                    available.max(1)
-                };
-                widths[last] = allowed.min(widths[last]);
+                widths[last] = available.max(1).min(widths[last]);
             }
         }
         let header_cells: Vec<Cell> = self
