@@ -21,18 +21,20 @@ env:
   # `-D warnings` is the deny-warnings gate.
   RUSTFLAGS: -D warnings
   RUST_BACKTRACE: 1
-  SCCACHE_GHA_ENABLED: "on"
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   checks:
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
     # The rimz-ci image keeps the no-persistence job container model while
-    # starting warm: Rust, cargo plugins, cargo-vet, tmux, Zellij, mold,
-    # sccache, and the release toolchain are baked once by ci-image.yml. The
-    # workspace path stays stable for cargo cache keys, concurrent jobs stay
-    # isolated, and every run skips per-job toolchain bootstrap. The private
-    # Gitea package pulls with a dedicated read:package PAT.
+    # starting warm: Rust, cargo plugins, cargo-vet, the cargo registry, tmux,
+    # Zellij, mold, sccache, and the release toolchain are baked once by
+    # ci-image.yml. The workspace path stays stable for Cargo fingerprints,
+    # concurrent jobs stay isolated, and every run skips per-job toolchain
+    # bootstrap. The private Gitea package pulls with a dedicated read:package
+    # PAT.
     container:
       image: ${{ vars.RIMZ_CI_IMAGE }}
       options: --init
@@ -55,35 +57,12 @@ jobs:
             echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
             exit 1
           }
-
-      - uses: actions/checkout@v6
-
-      - name: Cargo registry cache
-        # rust-cache keeps the registry and git index warm; sccache owns
-        # compiled output reuse.
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target/ci"
-          prefix-key: "rimz-ci"
-          cache-bin: false
-          cache-targets: false
-
-      - name: Configure sccache
-        run: |
-          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          export CARGO_HOME="$cargo_home"
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$CARGO_HOME/bin:$PATH"
-          if ! sccache_path="$(command -v sccache)"; then
+          command -v sccache >/dev/null || {
             echo "::error::sccache missing from rimz-ci image — dispatch ci-image.yml to rebuild/push it and repoint RIMZ_CI_IMAGE"
             exit 1
-          fi
-          dirname "$sccache_path" >> "$GITHUB_PATH"
-          {
-            echo "SCCACHE_PATH=$sccache_path"
-            echo "ACTIONS_CACHE_SERVICE_V2=on"
-            echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:-}"
-            echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-}"
-          } >> "$GITHUB_ENV"
+          }
+
+      - uses: actions/checkout@v6
 
       - name: cargo xtask checks
         run: |
@@ -98,12 +77,12 @@ jobs:
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
     # Supply-chain gates run off the checks/test critical path, one step each.
-    # `deny` runs offline: advisories come from the image, and yanked metadata
-    # comes from the index rebuilt through the runners' `[source.crates-io]`
-    # nexus mirror and aliased to the canonical crates.io index path cargo-deny
-    # reads from Cargo.lock. `vet` and `semver` fetch the crates.io
-    # index/baseline directly, bypass the mirror, and retry transient egress.
-    # All three gates block the job.
+    # `deny` runs offline: advisories and the canonical crates.io index come from
+    # the image, then `cargo fetch --locked` pulls only lock-drift rows through
+    # the runners' `[source.crates-io]` nexus mirror and merges them back to the
+    # canonical index path cargo-deny reads from Cargo.lock. `vet` and `semver`
+    # fetch the crates.io index/baseline directly, bypass the mirror, and retry
+    # transient egress. All three gates block the job.
     container:
       image: ${{ vars.RIMZ_CI_IMAGE }}
       options: --init
@@ -120,42 +99,18 @@ jobs:
             echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
             exit 1
           }
-
-      - uses: actions/checkout@v6
-
-      - name: Cargo registry cache
-        # A warm registry/index feeds deny local yanked data and trims vet/semver egress.
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target/ci"
-          prefix-key: "rimz-ci"
-          cache-bin: false
-          cache-targets: false
-
-      - name: Configure sccache
-        run: |
-          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          export CARGO_HOME="$cargo_home"
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$CARGO_HOME/bin:$PATH"
-          if ! sccache_path="$(command -v sccache)"; then
+          command -v sccache >/dev/null || {
             echo "::error::sccache missing from rimz-ci image — dispatch ci-image.yml to rebuild/push it and repoint RIMZ_CI_IMAGE"
             exit 1
-          fi
-          dirname "$sccache_path" >> "$GITHUB_PATH"
-          {
-            echo "SCCACHE_PATH=$sccache_path"
-            echo "ACTIONS_CACHE_SERVICE_V2=on"
-            echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:-}"
-            echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-}"
-          } >> "$GITHUB_ENV"
+          }
+
+      - uses: actions/checkout@v6
 
       - name: cargo xtask deny
         # Blocking: policy, advisory, yanked, license, and source failures red
         # the externals job.
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          # Keep Cargo's runtime home at the runner default so rust-cache's
-          # restored registry and git cache are the paths `cargo` reads.
           cargo_home="${CARGO_HOME:-$HOME/.cargo}"
           export CARGO_HOME="$cargo_home"
           mkdir -p "$CARGO_HOME"
@@ -167,31 +122,27 @@ jobs:
               cargo deny fetch db
             fi
           fi
-          # rust-cache can restore crate archives without sparse index rows for
-          # every locked crate. Rebuild the index through the runner's nexus
-          # mirror so the yanked check reads it offline instead of reaching
-          # crates.io directly.
-          rm -rf "$CARGO_HOME/registry/index"
+          canonical="$CARGO_HOME/registry/index/index.crates.io-1949cf8c6b5b557f"
           cargo fetch --locked
           # cargo-deny resolves yanked metadata by the canonical crates.io source
-          # URL recorded in Cargo.lock, while cargo fetch writes the runner's
-          # source-replaced mirror index. Mirror the freshly rebuilt index to the
-          # canonical cache path cargo-deny probes.
-          canonical="$CARGO_HOME/registry/index/index.crates.io-1949cf8c6b5b557f"
-          if [ ! -d "$canonical" ]; then
-            mirror_index="$(find "$CARGO_HOME/registry/index" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-            test -n "$mirror_index"
-            cp -a "$mirror_index" "$canonical"
-          fi
-          # Offline: advisories from the baked DB, yanked from the aliased mirror index.
-          RIMZ_DENY_OFFLINE=1 mold -run cargo xtask deny
+          # URL recorded in Cargo.lock. When the runner mirror writes lock-drift
+          # sparse index rows under its source-replaced cache key, merge those
+          # rows into the baked canonical index cargo-deny probes.
+          mkdir -p "$canonical"
+          for mirror_index in "$CARGO_HOME"/registry/index/*; do
+            [ -d "$mirror_index" ] || continue
+            [ "$mirror_index" = "$canonical" ] && continue
+            cp -a "$mirror_index"/. "$canonical"/
+          done
+          # Offline: advisories and yanked metadata from the local cargo home.
+          RIMZ_DENY_OFFLINE=1 cargo xtask deny
 
       - name: cargo xtask vet
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           # Retry transient crates.io egress failures rather than failing the run.
           n=0
-          until mold -run cargo xtask vet; do
+          until cargo xtask vet; do
             n=$((n+1))
             if [ "$n" -ge 3 ]; then
               echo "::error::vet checks failed after 3 attempts"
@@ -206,7 +157,7 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           # Retry transient crates.io egress failures rather than failing the run.
           n=0
-          until mold -run cargo xtask semver; do
+          until cargo xtask semver; do
             n=$((n+1))
             if [ "$n" -ge 3 ]; then
               echo "::error::semver checks failed after 3 attempts"
@@ -239,33 +190,12 @@ jobs:
             echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
             exit 1
           }
-
-      - uses: actions/checkout@v6
-
-      - name: Cargo registry cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target/ci"
-          prefix-key: "rimz-ci"
-          cache-bin: false
-          cache-targets: false
-
-      - name: Configure sccache
-        run: |
-          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          export CARGO_HOME="$cargo_home"
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$CARGO_HOME/bin:$PATH"
-          if ! sccache_path="$(command -v sccache)"; then
+          command -v sccache >/dev/null || {
             echo "::error::sccache missing from rimz-ci image — dispatch ci-image.yml to rebuild/push it and repoint RIMZ_CI_IMAGE"
             exit 1
-          fi
-          dirname "$sccache_path" >> "$GITHUB_PATH"
-          {
-            echo "SCCACHE_PATH=$sccache_path"
-            echo "ACTIONS_CACHE_SERVICE_V2=on"
-            echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:-}"
-            echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-}"
-          } >> "$GITHUB_ENV"
+          }
+
+      - uses: actions/checkout@v6
 
       - name: cargo xtask test (compile)
         id: compile

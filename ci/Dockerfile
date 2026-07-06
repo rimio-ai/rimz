@@ -97,6 +97,13 @@ RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
  && uv python install "${PYTHON_VERSION}" --default \
  && python3 --version
 
+# Bake the Cargo registry/index into the image so Gitea PR jobs can skip a
+# shared writable rust-cache restore and fetch only lockfile drift.
+COPY Cargo.toml Cargo.lock crates/ xtask/ /tmp/registry-warm/
+RUN ( cd /tmp/registry-warm && cargo fetch --locked ) \
+ && rm -rf /tmp/registry-warm \
+ && test -d /usr/local/cargo/registry/index/index.crates.io-1949cf8c6b5b557f
+
 RUN rustc -V \
  && cargo nextest --version \
  && cargo deny --version \

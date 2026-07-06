@@ -165,6 +165,10 @@ fn git_stdout(manifest: &Path, args: &[&str]) -> Option<String> {
         .arg("-C")
         .arg(manifest)
         .args(args)
+        // `git status` must not rewrite the index we fingerprint above: on a
+        // fresh checkout that self-invalidates Cargo's build-script fingerprint
+        // and forces one spurious `rimz` leaf-crate rebuild.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()?;
     output
