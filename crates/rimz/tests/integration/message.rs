@@ -63,7 +63,7 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
 
     let listed = env
         .rimz()
-        .args(["message", "list", "--json"])
+        .args(["message", "list", "--all", "--json"])
         .output()
         .expect("queue list");
     assert!(
@@ -190,10 +190,14 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
         .rimz()
         .args(["message", "list", "--all"])
         .output()
-        .expect("table list");
-    assert!(table.status.success(), "table list failed");
+        .expect("digest list");
+    assert!(table.status.success(), "digest list failed");
     let table = String::from_utf8_lossy(&table.stdout);
-    assert!(table.contains("CREATED") && table.contains("DELIVERED"));
+    assert!(table.contains("→"));
+    assert!(table.contains("#ops"));
+    assert!(table.contains("#docs"));
+    assert!(table.contains("ops task"));
+    assert!(!table.contains("CREATED"));
     assert!(!table.contains("ATTEMPTS"));
 
     let status = env
@@ -402,7 +406,8 @@ fn clear_without_target_removes_scoped_channel_lane() {
 fn bare_message_lists_and_unknown_words_suggest_subcommands() {
     let env = Env::new();
     register_running_agent(&env, "sess-bare-list", "bare-list", &[]);
-    let message_id = queue_direct_channel_message(&env, "bare-list", "hello inbox");
+    let lane_message_id = queue_direct_channel_message(&env, "bare-list", "lane inbox");
+    let main_message_id = queue_main_message(&env, "hello inbox");
 
     let listed = env.rimz().args(["message"]).output().expect("bare message");
     assert!(
@@ -411,10 +416,27 @@ fn bare_message_lists_and_unknown_words_suggest_subcommands() {
         String::from_utf8_lossy(&listed.stderr)
     );
     let listed = String::from_utf8_lossy(&listed.stdout);
-    assert!(listed.contains("FROM"));
-    assert!(listed.contains("TO"));
-    assert!(listed.contains("MESSAGE"));
-    assert!(listed.contains(&message_id));
+    assert!(listed.contains("→"));
+    assert!(listed.contains(&main_message_id));
+    assert!(listed.contains("hello inbox"));
+    assert!(!listed.contains(&lane_message_id));
+    assert!(!listed.contains("FROM"));
+    assert!(!listed.contains("TO"));
+    assert!(!listed.contains("MESSAGE"));
+
+    let all = env
+        .rimz()
+        .args(["message", "list", "--all"])
+        .output()
+        .expect("all message list");
+    assert!(
+        all.status.success(),
+        "all message list failed: {}",
+        String::from_utf8_lossy(&all.stderr)
+    );
+    let all = String::from_utf8_lossy(&all.stdout);
+    assert!(all.contains("#bare-list"));
+    assert!(all.contains(&lane_message_id));
 
     let id_hint = env
         .rimz()
@@ -505,19 +527,33 @@ fn message_list_matches_channel_lanes_and_limits_rows() {
     let unlimited: serde_json::Value = serde_json::from_slice(&unlimited.stdout).expect("json");
     assert_eq!(unlimited.as_array().unwrap().len(), 3);
 
-    let all_table = env
+    let all_digest = env
+        .rimz()
+        .args(["message", "list", "--all", "--limit", "0"])
+        .output()
+        .expect("all digest list");
+    assert!(
+        all_digest.status.success(),
+        "all digest list failed: {}",
+        String::from_utf8_lossy(&all_digest.stderr)
+    );
+    let all_digest = String::from_utf8_lossy(&all_digest.stdout);
+    assert!(all_digest.contains("#docs"));
+    assert!(all_digest.contains("#docs/forge"));
+    assert!(all_digest.contains("#ops"));
+
+    let limited_digest = env
         .rimz()
         .args(["message", "list", "--all", "--limit", "2"])
         .output()
-        .expect("limited table list");
+        .expect("limited digest list");
     assert!(
-        all_table.status.success(),
-        "limited table list failed: {}",
-        String::from_utf8_lossy(&all_table.stderr)
+        limited_digest.status.success(),
+        "limited digest list failed: {}",
+        String::from_utf8_lossy(&limited_digest.stderr)
     );
-    let all_table = String::from_utf8_lossy(&all_table.stdout);
-    assert!(all_table.contains("CHANNEL"));
-    assert!(all_table.contains("1 older messages hidden (--limit 0 for all)"));
+    let limited_digest = String::from_utf8_lossy(&limited_digest.stdout);
+    assert!(limited_digest.contains("1 older messages hidden (--limit 0 for all)"));
 
     let scoped_table = env
         .rimz()
@@ -530,7 +566,55 @@ fn message_list_matches_channel_lanes_and_limits_rows() {
         String::from_utf8_lossy(&scoped_table.stderr)
     );
     let scoped_table = String::from_utf8_lossy(&scoped_table.stdout);
-    assert!(!scoped_table.contains("CHANNEL"));
+    assert!(!scoped_table.contains("#ops"));
+    assert!(scoped_table.contains("ops task"));
+    assert!(scoped_table.contains("→"));
+}
+
+#[test]
+fn message_list_uses_stored_address_after_receiver_leaves_snapshot() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-address", "address-lane", &[]);
+
+    let message_id = queue_add(&env, "@claude", "durable handle");
+    let listed = env
+        .rimz()
+        .args(["message", "list", "--channel", "address-lane", "--json"])
+        .output()
+        .expect("message list json");
+    assert!(
+        listed.status.success(),
+        "message list json failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
+    assert_eq!(parsed[0]["message_id"], message_id);
+    assert_eq!(parsed[0]["address"], "@claude#address-lane");
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": "sess-address",
+            "worktree_branch": "address-lane",
+        }),
+        &[],
+    );
+
+    let digest = env
+        .rimz()
+        .args(["message", "list", "--all"])
+        .output()
+        .expect("message list digest");
+    assert!(
+        digest.status.success(),
+        "message list digest failed: {}",
+        String::from_utf8_lossy(&digest.stderr)
+    );
+    let digest = String::from_utf8_lossy(&digest.stdout);
+    assert!(digest.contains("@claude#address-lane"));
+    assert!(!digest.contains("claude:sess-address"));
 }
 
 #[test]
@@ -587,7 +671,7 @@ fn scheduled_message_parks_with_not_before_and_wake_stamp() {
 
     let listed = env
         .rimz()
-        .args(["message", "list", "--json"])
+        .args(["message", "list", "--all", "--json"])
         .output()
         .expect("message list");
     assert!(
@@ -2930,6 +3014,27 @@ fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String 
         DeliveryGate::Done,
     )
     .with_channel(Some(channel.to_owned()));
+    let message_id = message.message_id.to_string();
+    env.ledger()
+        .queue_message(&message, "rimz-test")
+        .expect("queue message");
+    message_id
+}
+
+fn queue_main_message(env: &Env, text: &str) -> String {
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.parent_agent_id.is_none())
+        .expect("agent");
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        text.to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
     let message_id = message.message_id.to_string();
     env.ledger()
         .queue_message(&message, "rimz-test")

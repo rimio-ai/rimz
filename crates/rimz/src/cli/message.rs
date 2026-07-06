@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
 use serde::Serialize;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::address;
 use super::send::{self, SendFlags, resolve_message};
@@ -143,6 +144,25 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 const DEFAULT_MESSAGE_LIST_LIMIT: usize = 200;
+
+enum LaneScope {
+    All,
+    Main,
+    Named(String),
+}
+
+impl LaneScope {
+    fn named(&self) -> Option<&str> {
+        match self {
+            Self::Named(channel) => Some(channel),
+            Self::All | Self::Main => None,
+        }
+    }
+
+    fn includes_archived(&self) -> bool {
+        matches!(self, Self::All)
+    }
+}
 
 /// Shared enqueue for parked messages: resolve the prompt from inline argv or
 /// `--file`, then split the mirrored `SendFlags` into the delivery spec and the
@@ -411,7 +431,7 @@ impl MessageListRow {
     fn from_record(message: MessageRecord) -> Self {
         Self {
             message_id: message.message_id,
-            address: None,
+            address: message.address,
             kind: message.kind,
             agent_id: message.agent_id,
             agent_name: message.agent_name,
@@ -704,23 +724,30 @@ fn list_messages(
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
     let mut messages = projected_messages(&ledger)?;
     let ambient_channel = current_channel(&workspace);
-    let default_channel = if all {
-        None
+    let lane_scope = if all {
+        LaneScope::All
+    } else if let Some(channel) = channel {
+        LaneScope::Named(channel)
+    } else if let Some(channel) = ambient_channel {
+        LaneScope::Named(channel)
     } else {
-        ambient_channel.as_deref()
+        LaneScope::Main
     };
-    let filter_channel = channel.as_deref().or(default_channel);
-    if let Some(filter) = filter_channel {
-        messages.retain(|message| message.channel.as_deref() == Some(filter));
+    match &lane_scope {
+        LaneScope::All => {}
+        LaneScope::Main => messages.retain(|message| message.channel.is_none()),
+        LaneScope::Named(channel) => {
+            messages.retain(|message| message.channel.as_deref() == Some(channel.as_str()));
+        }
     }
     if let Some(status) = status {
         messages.retain(|message| message.status == status);
-    } else if !all {
+    } else if !lane_scope.includes_archived() {
         messages.retain(|message| message.status != MessageStatus::Archived);
     }
     if let Some(raw) = target {
         rimz::harness::target::require_mention(&raw)?;
-        let agent = super::resolve_agent_one(&snapshot, &raw, None, filter_channel)?;
+        let agent = super::resolve_agent_one(&snapshot, &raw, None, lane_scope.named())?;
         messages.retain(|message| {
             rimz::message::card_matches(
                 &message.kind,
@@ -753,61 +780,8 @@ fn list_messages(
             println!("{rendered}");
         }
     } else {
-        // Address each message by the live agent's canonical handle; a message
-        // whose agent has since left falls back to the durable `kind:id`.
         let agents: Vec<&AgentState> = snapshot.root_agents().collect();
-        let now = Timestamp::now();
-        let show_channel = filter_channel.is_none();
-        let mut headers = vec![
-            "ID",
-            "FROM",
-            "TO",
-            "STATUS",
-            "CREATED",
-            "DELIVERED",
-            "MESSAGE",
-        ];
-        if show_channel {
-            headers.insert(3, "CHANNEL");
-        }
-        let mut table = render::Table::new(headers);
-        for message in messages {
-            let target = scoped_handle(message_target(&message, &agents), filter_channel);
-            let sender = scoped_handle(message.sender.render(), filter_channel);
-            let message_cell = message_cell(&message);
-            let mut row = vec![
-                render::cell(message.message_id.to_string()).fg(render::palette::ACCENT),
-                render::cell(sender).fg(render::palette::META),
-                render::cell(target).fg(render::palette::META),
-                render::cell(message.status.as_str()).fg(render::status::message(message.status)),
-                render::cell(render::rel_age(message.enqueued_at, now)),
-                render::cell(
-                    message
-                        .delivered_at
-                        .map(|delivered| render::rel_age(delivered, now))
-                        .unwrap_or_else(|| "-".to_owned()),
-                )
-                .dash(),
-                message_cell,
-            ];
-            if show_channel {
-                row.insert(
-                    3,
-                    render::cell(message.channel.as_deref().unwrap_or("-"))
-                        .fg(render::palette::META)
-                        .dash(),
-                );
-            }
-            table.row(row);
-        }
-        let mut out = render::out();
-        table.render(&mut out)?;
-        if hidden > 0 {
-            writeln!(
-                out,
-                "... {hidden} older messages hidden (--limit 0 for all)"
-            )?;
-        }
+        render_message_digest(messages, &agents, &lane_scope, hidden)?;
     }
     Ok(())
 }
@@ -1411,12 +1385,82 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
     }
 }
 
+fn render_message_digest(
+    messages: Vec<MessageListRow>,
+    agents: &[&AgentState],
+    lane_scope: &LaneScope,
+    hidden: usize,
+) -> Result<()> {
+    let mut out = render::out();
+    let now = Timestamp::now();
+    let snippet_width = render::terminal_columns(120).saturating_sub(2);
+    let mut first = true;
+    let mut previous_channel: Option<Option<String>> = None;
+    for message in messages {
+        if !first {
+            writeln!(out)?;
+        }
+        if matches!(lane_scope, LaneScope::All)
+            && previous_channel.as_ref() != Some(&message.channel)
+        {
+            writeln!(
+                out,
+                "{}",
+                render::paint(
+                    render::palette::HEADER,
+                    &lane_header(message.channel.as_deref())
+                )
+            )?;
+        }
+        let target = scoped_handle(message_target(&message, agents), lane_scope.named());
+        let sender = scoped_handle(message.sender.render(), lane_scope.named());
+        writeln!(
+            out,
+            "{}{}{}  {}  {}  {}",
+            rendered_sender(&message.sender, &sender),
+            render::paint(render::palette::FAINT, " → "),
+            render::paint(render::palette::META.bold(), &target),
+            render::paint(
+                render::status::message(message.status),
+                message.status.as_str()
+            ),
+            render::rel_age(message.enqueued_at, now),
+            render::paint(render::palette::FAINT, message.message_id.as_str())
+        )?;
+        writeln!(out, "  {}", message_snippet(&message, snippet_width))?;
+        previous_channel = Some(message.channel.clone());
+        first = false;
+    }
+    if hidden > 0 {
+        writeln!(
+            out,
+            "... {hidden} older messages hidden (--limit 0 for all)"
+        )?;
+    }
+    Ok(())
+}
+
+fn rendered_sender(sender: &MessageSender, rendered: &str) -> String {
+    match sender {
+        MessageSender::Human => render::paint(render::palette::COOL, rendered),
+        MessageSender::Agent { .. } => render::paint(render::palette::META.bold(), rendered),
+    }
+}
+
+fn lane_header(channel: Option<&str>) -> String {
+    channel
+        .filter(|channel| !channel.is_empty())
+        .map(|channel| format!("#{channel}"))
+        .unwrap_or_else(|| "(main)".to_owned())
+}
+
 fn message_target(message: &MessageListRow, agents: &[&AgentState]) -> String {
     address::message_target(
         message.address.as_deref(),
         &message.kind,
         &message.agent_id,
         message.agent_name.as_deref(),
+        message.channel.as_deref(),
         agents,
     )
 }
@@ -1435,18 +1479,18 @@ fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> String {
     }
 }
 
-fn message_cell(message: &MessageListRow) -> render::Cell {
+fn message_snippet(message: &MessageListRow, width: usize) -> String {
     if let Some(text) = message.text.as_deref() {
-        return render::cell(preview(text));
+        return preview(text, width);
     }
     if let Some(reason) = message
         .last_error
         .as_deref()
         .filter(|reason| !reason.is_empty())
     {
-        return render::cell(reason.to_owned()).fg(render::palette::FAINT);
+        return render::paint(render::palette::FAINT, &preview(reason, width));
     }
-    render::cell("-").dash()
+    render::paint(render::palette::FAINT, "-")
 }
 
 fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
@@ -1659,18 +1703,29 @@ fn gate_ready(check: &deliver::DeliveryCheck) -> bool {
     check.gate.open && check.gate.resume_recovered != Some(false)
 }
 
-fn preview(text: &str) -> String {
-    const MAX: usize = 80;
+fn preview(text: &str, width: usize) -> String {
     let preview = text.replace(['\r', '\n', '\t'], " ");
-    let mut chars = preview.chars();
-    let short: String = chars.by_ref().take(MAX).collect();
-    if chars.next().is_some() {
-        let mut shortened = preview.chars().take(MAX - 3).collect::<String>();
-        shortened.push_str("...");
-        shortened
-    } else {
-        short
+    if preview.width() <= width {
+        return preview;
     }
+    if width == 0 {
+        return String::new();
+    }
+    if width <= 3 {
+        return ".".repeat(width);
+    }
+    let mut shortened = String::new();
+    let mut used = 0;
+    for ch in preview.chars() {
+        let char_width = ch.width().unwrap_or(0);
+        if used + char_width > width - 3 {
+            break;
+        }
+        shortened.push(ch);
+        used += char_width;
+    }
+    shortened.push_str("...");
+    shortened
 }
 
 #[cfg(test)]
@@ -1700,6 +1755,53 @@ mod tests {
     }
 
     #[test]
+    fn message_target_uses_stored_address_before_fallbacks() {
+        let message = MessageRecord::new(
+            workspace_id(),
+            &agent("sess-coder", AgentStatus::Idle),
+            "work".to_owned(),
+            true,
+            DeliveryGate::Done,
+        )
+        .with_channel(Some("project".to_owned()))
+        .with_address(Some("@saved#project".to_owned()));
+        let message = MessageListRow::from_record(message);
+
+        assert_eq!(message_target(&message, &[]), "@saved#project");
+    }
+
+    #[test]
+    fn message_target_falls_back_to_agent_name_and_channel_when_agent_is_gone() {
+        let message = MessageRecord::new(
+            workspace_id(),
+            &agent("sess-coder", AgentStatus::Idle),
+            "work".to_owned(),
+            true,
+            DeliveryGate::Done,
+        )
+        .with_channel(Some("project".to_owned()));
+        let message = MessageListRow::from_record(message);
+
+        assert_eq!(message_target(&message, &[]), "@sess-coder-name#project");
+    }
+
+    #[test]
+    fn message_target_falls_back_to_kind_id_for_nameless_records() {
+        let mut receiver = agent("sess-coder", AgentStatus::Idle);
+        receiver.name = None;
+        let message = MessageRecord::new(
+            workspace_id(),
+            &receiver,
+            "work".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        let message = MessageListRow::from_record(message);
+
+        assert_eq!(message_target(&message, &[]), "claude:sess-coder");
+    }
+
+    #[test]
     fn scoped_handle_drops_matching_lane_suffix() {
         assert_eq!(
             scoped_handle("@coder#project".to_owned(), Some("project")),
@@ -1716,6 +1818,13 @@ mod tests {
             "@coder#ops"
         );
         assert_eq!(scoped_handle("you".to_owned(), Some("project")), "you");
+    }
+
+    #[test]
+    fn preview_respects_width_and_flattens_control_whitespace() {
+        assert_eq!(preview("a\nb\tc", 10), "a b c");
+        assert_eq!(preview("abcdef", 4), "a...");
+        assert_eq!(preview("abcdef", 3), "...");
     }
 
     fn workspace_id() -> WorkspaceId {

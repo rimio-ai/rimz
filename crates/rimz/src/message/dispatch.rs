@@ -377,6 +377,7 @@ fn live_prompt_for_target(
     let send::MessageDraft {
         text,
         body,
+        address,
         enter,
         gate,
         sender,
@@ -387,6 +388,7 @@ fn live_prompt_for_target(
         return MessageRecord::new(workspace_id, agent, text, enter, gate)
             .with_body(body)
             .with_force(force)
+            .with_address(address)
             .with_channel(
                 crate::harness::target::agent_channel(agent).or_else(|| {
                     crate::harness::target::recipient_channel(pane, bound, scope_channel)
@@ -404,6 +406,7 @@ fn live_prompt_for_target(
         send::MessageDraft {
             text,
             body,
+            address,
             enter,
             gate,
             sender,
@@ -452,6 +455,7 @@ pub fn dispatch_for_targets(
                 send::MessageDraft {
                     text: text.to_owned(),
                     body: MessageBody::Prompt,
+                    address: Some(handle.clone()),
                     enter: mode.enter(),
                     gate: mode.gate(),
                     sender: ctx.sender.clone(),
@@ -541,6 +545,7 @@ pub fn dispatch_for_targets(
             mode.gate(),
         )
         .with_force(mode.force())
+        .with_address(Some(handle.clone()))
         .with_channel(crate::harness::target::agent_channel(agent))
         .with_sender(ctx.sender.clone())
         .with_auto_compact(mode.auto_compact())

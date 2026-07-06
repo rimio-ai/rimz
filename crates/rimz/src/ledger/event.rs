@@ -161,8 +161,8 @@ impl MessageEventMethod {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageEventPayload {
     pub message_id: MessageId,
-    /// Raw unresolved target for a terminal bounce. Resolved message events keep
-    /// kind/agent_id as the durable receiver key.
+    /// Receiver handle as resolved at enqueue for terminal rows. Terminal
+    /// bounces carry the raw unresolved target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
     pub kind: AgentKind,
@@ -199,7 +199,7 @@ impl MessageEventPayload {
     pub fn from_record(message: &MessageRecord, reason: Option<&str>) -> Self {
         Self {
             message_id: message.message_id.clone(),
-            address: None,
+            address: message.address.clone(),
             kind: message.kind.clone(),
             agent_id: message.agent_id.clone(),
             agent_name: message.agent_name.clone(),

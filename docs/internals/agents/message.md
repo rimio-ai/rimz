@@ -59,6 +59,7 @@ A record stores:
 | `message_id` | `msg_` prefixed, time-sortable |
 | `workspace_id` | owning workspace |
 | `kind`, `agent_id`, `agent_name` | receiver identity; name enables provisional-to-registered FIFO folding |
+| `address` | receiver handle resolved at enqueue, used by `message list` and `message show` after the live card leaves |
 | `channel` | receiver channel at enqueue time |
 | `sender` | `Human` or `Agent { kind, name, profile, role, channel }`, attribution only, never the body |
 | `body` | `Prompt` (default) or `Command` (a `/compact` or adapter command) |
@@ -249,7 +250,7 @@ Named channels and Rimz-owned worktrees reserve the same bare channel namespace.
 
 `--worktree` and `--channel` are separate launch intents. A worktree launch creates or reuses Git backing; a named-channel launch stays in the room root and records only the bare lane. Inline `#design` and `--channel design` reconcile through the same target parser, so mismatched channel names fail before delivery.
 
-Commands run inside a named-channel, worktree, or in-place team pane inherit `RIMZ_CHANNEL`, so `@claude` scopes to that stamped lane by default. Human shells in a bare directory room have no current channel and reach the whole room unless an address or flag supplies one.
+Commands run inside a named-channel, worktree, or in-place team pane inherit `RIMZ_CHANNEL`, so `@claude` scopes to that stamped lane by default. Human shells in a bare directory room have no current channel and reach the whole room for target resolution unless an address or flag supplies one; `message list` uses that no-lane context as the main-lane inbox and `--all` widens it.
 
 ## The message store
 
@@ -296,13 +297,13 @@ Every status transition appends a typed event to `events.log.jsonl`. The event m
 
 `message.queued` · `message.sent` · `message.delivered` · `message.timed_out` · `message.errored` · `message.removed` · `message.abandoned` · `message.archived`
 
-The payload carries `message_id`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, `unconfirmed_sends`, timestamps, compaction baseline, and `reason` (on error or abandon). Unresolved bounces also carry `address`, the raw target that failed. Message content stays in the live message record, never in the event.
+The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, `unconfirmed_sends`, timestamps, compaction baseline, and `reason` (on error or abandon). For resolved records, `address` is the enqueue-time receiver handle the terminal list and show views render when no live card remains; unresolved bounces carry the raw target that failed. Message content stays in the live message record, never in the event.
 
 ## Subcommands
 
-The user-facing surface — flags, synopses, examples, the `message list` columns — is [cli/agents.md § Message an agent](../../reference/cli/agents.md#message-an-agent). What the commands do underneath:
+The user-facing surface — flags, synopses, examples, and the `message list` digest — is [cli/agents.md § Message an agent](../../reference/cli/agents.md#message-an-agent). What the commands do underneath:
 
-- `message list` and `message show <msg_id>` merge three sources: live rows come from `messages/messages.jsonl`, terminal rows with text come from `messages/history.jsonl`, and old or unresolved terminal rows fall back to `message.*` events without text because content never enters the event log.
+- `message list` and `message show <msg_id>` merge three sources: live rows come from `messages/messages.jsonl`, terminal rows with text come from `messages/history.jsonl`, and old or unresolved terminal rows fall back to `message.*` events without text because content never enters the event log. The receiver handle comes from the record's enqueue-time `address` first, then the live snapshot, then the stored `agent_name` plus channel, then `kind:agent_id`.
 - `message remove <msg_id>...` settles each named live record to `Removed`; `message clear <target>` settles every open record for one card, and targetless `message clear` settles every open record in the scoped channel lane.
 
 Two hidden helpers are the pipeline's execution arms, spawned detached with nulled stdio, never run by humans:

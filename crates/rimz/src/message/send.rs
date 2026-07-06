@@ -59,6 +59,7 @@ pub struct LiveSend {
 pub struct MessageDraft {
     pub text: String,
     pub body: MessageBody,
+    pub address: Option<String>,
     pub enter: bool,
     pub gate: DeliveryGate,
     pub sender: MessageSender,
@@ -99,6 +100,7 @@ pub fn message_for_target(
         bound,
         scope_channel,
     ))
+    .with_address(draft.address)
     .with_sender(draft.sender)
     .with_body(draft.body)
     .with_force(draft.force)
@@ -317,6 +319,7 @@ pub fn compact_message_for_target(
         MessageDraft {
             text: command.to_owned(),
             body: MessageBody::Command,
+            address: prompt.address.clone(),
             enter: true,
             gate: prompt.gate,
             sender: prompt.sender.clone(),

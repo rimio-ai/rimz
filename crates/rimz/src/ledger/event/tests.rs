@@ -423,6 +423,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("sess-1"),
         agent_name: Some("lucid-atlas".to_owned()),
+        address: None,
         channel: None,
         sender: MessageSender::Human,
         body: MessageBody::Prompt,

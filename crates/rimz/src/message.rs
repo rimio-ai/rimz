@@ -251,6 +251,9 @@ pub struct MessageRecord {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// Receiver handle as resolved at enqueue, e.g. `@coder#auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     #[serde(default)]
@@ -347,6 +350,7 @@ impl MessageRecord {
             kind,
             agent_id,
             agent_name,
+            address: None,
             channel: None,
             sender: MessageSender::Human,
             body: MessageBody::Prompt,
@@ -369,6 +373,12 @@ impl MessageRecord {
             compacted_context_tokens: None,
             batch_id: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_address(mut self, address: Option<String>) -> Self {
+        self.address = address;
+        self
     }
 
     /// Attach a context-fill threshold that delivers a `/compact` ahead of the
