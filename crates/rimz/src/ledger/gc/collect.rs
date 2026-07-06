@@ -37,8 +37,9 @@ pub(crate) fn collect_runtime_under(runtime_root: &Path, older_than: Duration) -
             continue;
         };
         if WorkspaceId::parse(name).is_err() {
-            // `shared/` holds bounded user-scoped singleton caches, so runtime
-            // GC intentionally skips it.
+            // `shared/` holds election locks and probe markers; probe markers
+            // are collected below, and legacy pre-migration data caches are
+            // swept by RuntimePaths::ensure_dirs at startup.
             continue;
         }
         report.runtime_roots_scanned += 1;

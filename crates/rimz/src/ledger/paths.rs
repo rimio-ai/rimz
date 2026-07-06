@@ -165,6 +165,18 @@ pub struct RuntimePaths {
     pub agent_activity_dir: PathBuf,
 }
 
+/// Data-cache filenames that lived in the runtime `shared/` dir before
+/// c44f3ec6 moved them to `persistent_shared_root`. Swept on ensure so stale
+/// pre-migration copies stop pinning tmpfs (RAM).
+const LEGACY_RUNTIME_SHARED_CACHES: [&str; 6] = [
+    "accounts.json",
+    "rate_limits.json",
+    "credits.json",
+    "provider-spending.json",
+    "spending.json",
+    "pricing-cache.json",
+];
+
 impl RuntimePaths {
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
         Self::for_workspace_with_shared_root(
@@ -363,6 +375,20 @@ impl RuntimePaths {
         ensure_private_runtime_dir(rimz_root)?;
         ensure_private_runtime_dir(&self.root)?;
         ensure_private_runtime_dir(&self.shared_root)?;
+        if self.shared_root != self.persistent_shared_root {
+            for name in LEGACY_RUNTIME_SHARED_CACHES {
+                let path = self.shared_root.join(name);
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => tracing::debug!(
+                        path = %path.display(),
+                        error = %err,
+                        "legacy runtime shared cache sweep failed"
+                    ),
+                }
+            }
+        }
         mkdir_p(&self.persistent_shared_root)?;
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
@@ -658,6 +684,50 @@ mod tests {
 
         assert!(paths.persistent_shared_root.is_dir());
         assert!(paths.shared_root.is_dir());
+    }
+
+    #[test]
+    fn ensure_dirs_sweeps_legacy_runtime_shared_caches() {
+        let temp = short_tempdir();
+        let state_root = temp.path().join("state");
+        let runtime_root = temp.path().join("runtime");
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let paths = RuntimePaths::for_workspace_with_shared_root(
+            workspace_id,
+            &runtime_root,
+            state_root.join("rimz").join("shared"),
+        )
+        .unwrap();
+        fs::create_dir_all(&paths.shared_root).unwrap();
+        for name in LEGACY_RUNTIME_SHARED_CACHES {
+            fs::write(paths.shared_root.join(name), b"legacy").unwrap();
+        }
+        let lock = paths.shared_root.join("spending.lock");
+        let probe = paths.shared_root.join("session-context-probe.x");
+        fs::write(&lock, b"lock").unwrap();
+        fs::write(&probe, b"probe").unwrap();
+
+        paths.ensure_dirs().unwrap();
+
+        for name in LEGACY_RUNTIME_SHARED_CACHES {
+            assert!(!paths.shared_root.join(name).exists(), "{name} swept");
+        }
+        assert!(lock.exists());
+        assert!(probe.exists());
+    }
+
+    #[test]
+    fn ensure_dirs_keeps_shared_cache_when_roots_match() {
+        let temp = short_tempdir();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let paths = RuntimePaths::under(workspace_id, temp.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let cache = paths.shared_root.join("spending.json");
+        fs::write(&cache, b"live").unwrap();
+
+        paths.ensure_dirs().unwrap();
+
+        assert!(cache.exists());
     }
 
     #[test]

@@ -196,17 +196,17 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
     let old_usage_marker = rt.shared_root.join("usage-probe.opencode");
     let recent_usage_marker = rt.shared_root.join("usage-probe.codex");
     let fresh_marker = rt.shared_root.join("usage-probe.pi");
-    let accounts = rt.shared_root.join("accounts.json");
+    let spending_lock = rt.shared_root.join("spending.lock");
     for path in [
         &old_session_marker,
         &recent_session_marker,
         &old_usage_marker,
         &recent_usage_marker,
         &fresh_marker,
-        &accounts,
     ] {
         std::fs::write(path, b"probe").expect("write probe marker");
     }
+    std::fs::write(&spending_lock, b"lock").expect("write lock");
 
     let old = SystemTime::now() - Duration::from_secs(7200);
     for path in [
@@ -215,7 +215,7 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
         &old_runtime_shared,
         &old_session_marker,
         &old_usage_marker,
-        &accounts,
+        &spending_lock,
     ] {
         std::fs::File::open(path)
             .unwrap()
@@ -247,7 +247,7 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
     assert!(recent_usage_marker.exists());
     assert!(fresh_temp.exists());
     assert!(fresh_marker.exists());
-    assert!(accounts.exists());
+    assert!(spending_lock.exists());
 }
 
 #[test]
