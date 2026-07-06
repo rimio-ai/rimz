@@ -266,6 +266,62 @@ fn account_key_change_bypasses_fresh_oauth_stamp() {
 }
 
 #[test]
+fn unknown_prior_account_key_stays_fresh_for_current_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.shared_credits_path();
+    let now = unix_now_ms();
+    write_credits_cache(
+        &path,
+        &CreditsCache {
+            refreshed_at_ms: now,
+            entries: BTreeMap::from([(
+                "codex".to_owned(),
+                ProviderCreditsEntry {
+                    observed_at_ms: 10,
+                    oauth_read_at_ms: now,
+                    auth_settled: false,
+                    credentials_stamp: None,
+                    account_key: None,
+                    plan: Some("plus".to_owned()),
+                    ok: true,
+                    extra_credits: Some(ExtraCredits::known(None, Some(1.0), None)),
+                    reset_credits: None,
+                },
+            )]),
+        },
+    );
+
+    let mut calls = 0;
+    assert!(
+        merge_provider_credits_entry_if_due(
+            &runtime,
+            "codex",
+            None,
+            Some("current".to_owned()),
+            || {
+                calls += 1;
+                ProviderCreditsEntry {
+                    observed_at_ms: unix_now_ms(),
+                    oauth_read_at_ms: unix_now_ms(),
+                    auth_settled: false,
+                    credentials_stamp: None,
+                    account_key: None,
+                    plan: Some("pro".to_owned()),
+                    ok: true,
+                    extra_credits: Some(ExtraCredits::known(None, Some(2.0), None)),
+                    reset_credits: None,
+                }
+            },
+        )
+        .is_none()
+    );
+    assert_eq!(calls, 0);
+}
+
+#[test]
 fn failed_oauth_after_account_key_change_does_not_carry_prior_account() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
@@ -314,6 +370,59 @@ fn failed_oauth_after_account_key_change_does_not_carry_prior_account() {
     assert_eq!(entry.extra_credits, None);
     assert_eq!(entry.reset_credits, None);
     assert_eq!(entry.plan, None);
+}
+
+#[test]
+fn failed_oauth_with_unknown_prior_account_key_carries_prior_display() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    runtime.ensure_dirs().unwrap();
+    merge_provider_credits_entry(
+        &runtime,
+        "codex",
+        ProviderCreditsEntry {
+            observed_at_ms: 42,
+            oauth_read_at_ms: 1,
+            auth_settled: false,
+            credentials_stamp: None,
+            account_key: None,
+            plan: Some("plus".to_owned()),
+            ok: true,
+            extra_credits: Some(ExtraCredits::known(None, Some(5.0), None)),
+            reset_credits: None,
+        },
+    );
+
+    merge_provider_credits_entry_if_due(
+        &runtime,
+        "codex",
+        None,
+        Some("current".to_owned()),
+        || ProviderCreditsEntry {
+            observed_at_ms: unix_now_ms(),
+            oauth_read_at_ms: unix_now_ms(),
+            auth_settled: false,
+            credentials_stamp: None,
+            account_key: None,
+            plan: None,
+            ok: false,
+            extra_credits: None,
+            reset_credits: None,
+        },
+    );
+
+    let entry = read_credits_cache(&runtime.shared_credits_path())
+        .entries
+        .remove("codex")
+        .expect("codex entry");
+    assert!(entry.ok);
+    assert_eq!(entry.account_key.as_deref(), Some("current"));
+    assert_eq!(entry.plan.as_deref(), Some("plus"));
+    assert_eq!(
+        entry.extra_credits,
+        Some(ExtraCredits::known(None, Some(5.0), None))
+    );
 }
 
 #[test]

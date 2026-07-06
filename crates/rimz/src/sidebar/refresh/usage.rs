@@ -24,7 +24,8 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{CREDITS_TTL, OAUTH_USAGE_TTL};
 
 use super::credits::{
-    ProviderCreditsEntry, merge_provider_credits_entry_if_due, read_credits_cache,
+    ProviderCreditsEntry, account_key_mismatch, merge_provider_credits_entry_if_due,
+    read_credits_cache,
 };
 use super::{SidebarSnapshot, drop_kind_rate_limits, merge_account_rate_limits};
 
@@ -73,7 +74,9 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
     if read_credits_cache(&runtime.shared_credits_path())
         .entries
         .get(kind)
-        .is_some_and(|entry| entry.account_key.as_deref() != account_key.as_deref())
+        .is_some_and(|entry| {
+            account_key_mismatch(entry.account_key.as_deref(), account_key.as_deref())
+        })
     {
         tracing::info!(
             target: crate::observability::BREADCRUMB_TARGET,

@@ -112,18 +112,18 @@ pub fn merge_provider_credits_entry_if_due(
     if entry.oauth_read_at_ms == 0 {
         entry.oauth_read_at_ms = unix_now_ms();
     }
-    let prior_matches_account = prior
-        .as_ref()
-        .is_some_and(|prior| prior.account_key.as_deref() == current_account_key.as_deref());
+    let prior_account_mismatch = prior.as_ref().is_some_and(|prior| {
+        account_key_mismatch(prior.account_key.as_deref(), current_account_key.as_deref())
+    });
     if !entry.ok {
-        if prior_matches_account && let Some(prior) = prior.as_ref() {
+        if !prior_account_mismatch && let Some(prior) = prior.as_ref() {
             entry.observed_at_ms = prior.observed_at_ms;
             entry.ok = prior.ok;
             entry.extra_credits = prior.extra_credits.clone();
             entry.reset_credits = prior.reset_credits.clone();
             entry.plan = prior.plan.clone();
         }
-    } else if entry.reset_credits.is_none() && prior_matches_account {
+    } else if entry.reset_credits.is_none() && !prior_account_mismatch {
         // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
         // and failed writes must not erase the last successful reset read.
         entry.reset_credits = prior.as_ref().and_then(|entry| entry.reset_credits.clone());
@@ -189,7 +189,7 @@ fn oauth_read_is_fresh(
     if entry.oauth_read_at_ms == 0 {
         return false;
     }
-    if entry.account_key.as_deref() != current_account_key {
+    if account_key_mismatch(entry.account_key.as_deref(), current_account_key) {
         return false;
     }
     let ttl = if entry.auth_settled {
@@ -201,6 +201,10 @@ fn oauth_read_is_fresh(
         OAUTH_USAGE_TTL
     };
     now_ms.saturating_sub(entry.oauth_read_at_ms) <= ttl.as_millis() as u64
+}
+
+pub(crate) fn account_key_mismatch(prior: Option<&str>, current: Option<&str>) -> bool {
+    prior.is_some() && prior != current
 }
 
 fn entry_is_displayable(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {
