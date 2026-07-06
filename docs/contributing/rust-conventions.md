@@ -278,7 +278,7 @@ Compile jobs route through `sccache` backed by the Actions cache, and `rust-cach
 
 The `rimz-ci` image bakes Node for Actions, the pinned Rust toolchain with required components and targets, the cargo gate plugins, `cargo-vet`, `sccache`, a warm RustSec advisory database, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, the single source of truth for containerized CI and release jobs.
 
-On Gitea, a weekly schedule dispatches the default `ci-image.yml` refresh automatically: it refreshes the baked RustSec advisory DB on the current `RIMZ_CI_IMAGE` base, pushes a new immutable `rimz-ci:<tag>`, then repoints the repository variable that consuming workflows read. Manual dispatch remains the path for immediate advisory refreshes and for toolchain changes; for toolchain changes, edit `ci/Dockerfile` first, then dispatch with `full=true` so the image rebuilds from the Dockerfile before repointing.
+On Gitea, a weekly schedule dispatches the default `ci-image.yml` refresh automatically: it refreshes the baked RustSec advisory DB on the current `RIMZ_CI_IMAGE` base, pushes a new immutable `rimz-ci:<tag>`, then repoints the repository variable that consuming workflows read. Manual dispatch remains the path for immediate advisory refreshes and toolchain changes; for toolchain changes, edit `ci/Dockerfile` first, then dispatch with `full=true` so the image rebuilds from the Dockerfile before repointing.
 
 ## Release packaging
 
