@@ -25,7 +25,7 @@ use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
 use crate::cli::{
     AttachArgs, GlobalFlags, StartArgs, confirm_with_default, first_run, machine_config,
-    open_store, record_workspace, render, setup, sidebar,
+    open_store, render, setup, sidebar,
 };
 
 use attach_exec::{
@@ -436,7 +436,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     | RoomEntry::AttachCwd { workspace, .. } = &entry
     {
         let rimz_bin = room_owner_bin();
-        record_workspace(workspace)?;
         record_room_bin(workspace, rimz_bin.as_path())?;
     }
 
