@@ -45,8 +45,8 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
                 let mut snapshot = crate::cli::resolution_snapshot(&workspace, &store, globals)?;
                 if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone())
                 {
-                    snapshot = snapshot
-                        .with_agent_context(rimz::store::agent_context::read_all(&runtime));
+                    snapshot =
+                        snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
                 }
                 let check = deliver::explain(record, &live_messages, &snapshot, now);
                 let agents: Vec<&AgentState> = snapshot.root_agents().collect();

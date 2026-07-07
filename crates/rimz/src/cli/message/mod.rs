@@ -17,14 +17,14 @@ use crate::cli::render;
 use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
-use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
-use rimz::store::{EditOutcome, MessageEdit};
 use rimz::message::dispatch::{DispatchContext, DispatchOutcome, SendMode};
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
     parse_schedule_at,
 };
 use rimz::message::{deliver, dispatch as message_dispatch};
+use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
+use rimz::store::{EditOutcome, MessageEdit};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 #[derive(Debug, Args)]

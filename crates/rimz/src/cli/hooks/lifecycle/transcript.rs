@@ -180,7 +180,7 @@ pub(super) fn turn_error_refresh_event(event_name: &str) -> bool {
     matches!(event_name, "Stop")
 }
 
-pub(super) fn merge_turn_error_marker_and_chat(
+pub(super) fn merge_turn_error_marker_and_transcript(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
