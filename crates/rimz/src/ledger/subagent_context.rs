@@ -17,7 +17,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::SubagentContext;
@@ -46,16 +45,7 @@ impl sidecar::SidecarRecord for SubagentContextRecord {
     fn agent_id(&self) -> &str {
         self.agent_id.as_str()
     }
-
-    fn observed_at_secs(&self) -> i64 {
-        self.context.observed_at.as_second()
-    }
 }
-
-/// Drop a sidecar older than this even if the child's stop was missed — matched
-/// to the agent-context sibling's ghost-session TTL so stale enrichment cannot
-/// pin a vanished child.
-const CONTEXT_TTL_SECS: i64 = 3 * 60 * 60;
 
 /// Persist (latest-wins) one child's context. WRITER = a Rimz CLI producer.
 /// Atomic temp+rename (no fsync — disposable sidecar) via
@@ -83,29 +73,20 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-/// Read every live child's context. Tolerant: an unreadable, malformed, or
-/// past-TTL file is skipped, never fatal — enrichment, not correctness.
+/// Read every child's context sidecar. Tolerant: an unreadable or malformed
+/// file is skipped, never fatal — enrichment, not correctness. Liveness gating
+/// happens at the rollup join.
 /// Steady-state cost on a long-lived thread is one stat per file; only a
 /// changed file re-reads and re-parses (see [`SUBAGENT_PARSE_CACHE`]).
 pub fn read_all(runtime: &RuntimePaths) -> Vec<SubagentContextRecord> {
-    read_all_at(runtime, Timestamp::now())
-}
-
-fn read_all_at(runtime: &RuntimePaths, now: Timestamp) -> Vec<SubagentContextRecord> {
-    SUBAGENT_PARSE_CACHE.with(|cache| {
-        sidecar::read_all(
-            &runtime.subagent_context_dir,
-            cache,
-            now.as_second(),
-            CONTEXT_TTL_SECS,
-        )
-    })
+    SUBAGENT_PARSE_CACHE.with(|cache| sidecar::read_all(&runtime.subagent_context_dir, cache))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+    use jiff::Timestamp;
 
     fn runtime() -> (tempfile::TempDir, RuntimePaths) {
         let dir = tempfile::tempdir().unwrap();
@@ -139,5 +120,18 @@ mod tests {
             all[0].context.description.as_deref(),
             Some("locate the render seam")
         );
+    }
+
+    #[test]
+    fn old_record_is_read_liveness_gating_is_the_rollups_job() {
+        let (_dir, runtime) = runtime();
+        let old = Timestamp::from_second(0).unwrap();
+        write(&runtime, "claude", "child-old", &ctx(old)).unwrap();
+
+        let all = read_all(&runtime);
+
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].agent_id, "child-old");
+        assert_eq!(all[0].context.observed_at, old);
     }
 }

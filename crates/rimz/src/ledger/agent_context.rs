@@ -70,17 +70,7 @@ impl sidecar::SidecarRecord for AgentContextRecord {
     fn agent_id(&self) -> &str {
         self.agent_id.as_str()
     }
-
-    fn observed_at_secs(&self) -> i64 {
-        self.context.observed_at.as_second()
-    }
 }
-
-/// Drop a sidecar older than this even if its `SessionEnd` tombstone was
-/// missed — matched to the snapshot's ghost-session TTL so stale cost or
-/// rate-limit data cannot pin a vanished pidless session (parity pinned by
-/// `context_sidecar_ttl_matches_the_ghost_session_ttl` in the view tests).
-pub(crate) const CONTEXT_TTL_SECS: i64 = 3 * 60 * 60;
 
 /// Persist (latest-wins) one session's context from a CLI producer.
 /// Atomic temp+rename (no fsync — disposable sidecar) via
@@ -416,23 +406,13 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-/// Read every live session's context. Tolerant: an unreadable, malformed, or
-/// past-TTL file is skipped, never fatal — enrichment, not correctness.
+/// Read every session's context sidecar. Tolerant: an unreadable or malformed
+/// file is skipped, never fatal — enrichment, not correctness. Liveness gating
+/// happens at the rollup join.
 /// Steady-state cost on a long-lived thread is one stat per file; only a
 /// changed file re-reads and re-parses (see [`CONTEXT_PARSE_CACHE`]).
 pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
-    read_all_at(runtime, Timestamp::now())
-}
-
-fn read_all_at(runtime: &RuntimePaths, now: Timestamp) -> Vec<AgentContextRecord> {
-    CONTEXT_PARSE_CACHE.with(|cache| {
-        sidecar::read_all(
-            &runtime.agent_context_dir,
-            cache,
-            now.as_second(),
-            CONTEXT_TTL_SECS,
-        )
-    })
+    CONTEXT_PARSE_CACHE.with(|cache| sidecar::read_all(&runtime.agent_context_dir, cache))
 }
 
 /// Remove a session's sidecar (a `SessionEnd` tombstone, or reap). Best-effort:

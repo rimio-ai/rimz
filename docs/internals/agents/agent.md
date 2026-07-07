@@ -303,7 +303,7 @@ Some agents publish far richer per-session data out of band than their hooks car
 
 This is high-frequency, display-only enrichment, so it does **not** ride the event log. Rimz writes a **latest-wins per-session sidecar**, one atomic file per `(kind, agent_id)` under the runtime `agent_context/` dir, from CLI producer paths (statusline feed, hook ingestion, detached refresh helpers, the Codex stat-gated backstop). `rimz sidebar snapshot` folds each record onto its `AgentState`.
 
-The sidecar lives wholly off the durable path (ledger first; sidebar wakeups are latency, not truth) and dies with the session: a session-end event tombstones it, and a read past the ghost-session TTL drops it even if the tombstone was missed. The file sits under the per-uid runtime root (mode `0700`), no broader exposure than the heartbeat or diff-stats caches.
+The sidecar lives wholly off the durable path (ledger first; sidebar wakeups are latency, not truth) and dies with the session: a session-end event tombstones it, a missed tombstone becomes invisible when the rollup row is reaped and the snapshot join has no surviving row to enrich, and `rimz gc` sweeps old files. The file sits under the per-uid runtime root (mode `0700`), no broader exposure than the heartbeat or diff-stats caches.
 
 ## Adding an agent
 

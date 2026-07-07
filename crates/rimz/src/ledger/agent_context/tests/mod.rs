@@ -45,4 +45,17 @@ fn write_then_read_round_trips() {
     assert_eq!(all[0].context.model_id.as_deref(), Some("claude-opus-4-8"));
 }
 
+#[test]
+fn old_record_is_read_liveness_gating_is_the_rollups_job() {
+    let (_dir, runtime) = runtime();
+    let old = Timestamp::from_second(0).unwrap();
+    write(&runtime, "claude", "sess-old", &ctx(old)).unwrap();
+
+    let all = read_all(&runtime);
+
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].agent_id, "sess-old");
+    assert_eq!(all[0].context.observed_at, old);
+}
+
 mod merge;

@@ -25,7 +25,6 @@ pub(crate) trait SidecarRecord: Serialize + DeserializeOwned + Clone {
 
     fn kind(&self) -> &str;
     fn agent_id(&self) -> &str;
-    fn observed_at_secs(&self) -> i64;
 }
 
 pub(crate) struct ParsedSidecar<R> {
@@ -76,8 +75,6 @@ pub(crate) fn remove<R: SidecarRecord>(
 pub(crate) fn read_all<R: SidecarRecord>(
     dir: &Path,
     cache: &RefCell<HashMap<PathBuf, ParsedSidecar<R>>>,
-    now_secs: i64,
-    ttl_secs: i64,
 ) -> Vec<R> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -112,9 +109,6 @@ pub(crate) fn read_all<R: SidecarRecord>(
             }
         };
         let Some(record) = record else { continue };
-        if now_secs - record.observed_at_secs() > ttl_secs {
-            continue;
-        }
         out.push(record);
     }
     cache.retain(|path, _| seen.contains(path));
@@ -127,8 +121,6 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
-    const TTL_SECS: i64 = 60;
-
     thread_local! {
         static TEST_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedSidecar<TestRecord>>> =
             RefCell::new(HashMap::new());
@@ -138,7 +130,7 @@ mod tests {
     struct TestRecord {
         kind: String,
         agent_id: String,
-        observed_at_secs: i64,
+        observed_at: i64,
         note: String,
     }
 
@@ -152,23 +144,19 @@ mod tests {
         fn agent_id(&self) -> &str {
             &self.agent_id
         }
-
-        fn observed_at_secs(&self) -> i64 {
-            self.observed_at_secs
-        }
     }
 
-    fn record(agent_id: &str, observed_at_secs: i64) -> TestRecord {
+    fn record(agent_id: &str, observed_at: i64) -> TestRecord {
         TestRecord {
             kind: "codex".to_owned(),
             agent_id: agent_id.to_owned(),
-            observed_at_secs,
+            observed_at,
             note: "cached".to_owned(),
         }
     }
 
-    fn read_all_at(dir: &Path, now_secs: i64) -> Vec<TestRecord> {
-        TEST_PARSE_CACHE.with(|cache| read_all(dir, cache, now_secs, TTL_SECS))
+    fn read_all_test(dir: &Path) -> Vec<TestRecord> {
+        TEST_PARSE_CACHE.with(|cache| read_all(dir, cache))
     }
 
     #[test]
@@ -189,34 +177,22 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("test.bogus.json"), b"not json").unwrap();
 
-        assert!(read_all_at(dir.path(), 1_700_000_000).is_empty());
+        assert!(read_all_test(dir.path()).is_empty());
     }
 
     #[test]
-    fn past_ttl_record_is_skipped() {
-        // A missed tombstone ages out on the TTL exactly: a record *at* the
-        // cutoff is still served, one second past it is gone — an off-by-one
-        // in either direction fails one arm.
+    fn old_record_is_served_liveness_gating_is_the_rollups_job() {
         let dir = tempdir().unwrap();
-        write_record(dir.path(), &record("sess-at", 1_700_000_000 - TTL_SECS)).unwrap();
-        write_record(
-            dir.path(),
-            &record("sess-past", 1_700_000_000 - TTL_SECS - 1),
-        )
-        .unwrap();
+        write_record(dir.path(), &record("sess-old", 0)).unwrap();
 
-        let ids: Vec<_> = read_all_at(dir.path(), 1_700_000_000)
-            .into_iter()
-            .map(|record| record.agent_id)
-            .collect();
-        assert_eq!(ids, vec!["sess-at".to_owned()]);
+        assert_eq!(read_all_test(dir.path())[0].agent_id, "sess-old");
     }
 
     #[test]
     fn unchanged_stat_skips_the_reparse() {
         let dir = tempdir().unwrap();
         write_record(dir.path(), &record("sess-1", 1_700_000_000)).unwrap();
-        assert_eq!(read_all_at(dir.path(), 1_700_000_000)[0].agent_id, "sess-1");
+        assert_eq!(read_all_test(dir.path())[0].agent_id, "sess-1");
 
         let path = path(dir.path(), TestRecord::FILE_PREFIX, "codex", "sess-1");
         let original = std::fs::read(&path).unwrap();
@@ -230,7 +206,7 @@ mod tests {
         drop(file);
 
         assert_eq!(
-            read_all_at(dir.path(), 1_700_000_000)[0].agent_id,
+            read_all_test(dir.path())[0].agent_id,
             "sess-1",
             "same (mtime, len) serves the cached parse"
         );
@@ -239,7 +215,7 @@ mod tests {
         file.set_modified(mtime + std::time::Duration::from_secs(3))
             .unwrap();
         drop(file);
-        assert_eq!(read_all_at(dir.path(), 1_700_000_000)[0].agent_id, "sess-9");
+        assert_eq!(read_all_test(dir.path())[0].agent_id, "sess-9");
     }
 
     #[test]
@@ -250,7 +226,7 @@ mod tests {
 
         remove::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
 
-        let ids: Vec<_> = read_all_at(dir.path(), 1_700_000_000)
+        let ids: Vec<_> = read_all_test(dir.path())
             .into_iter()
             .map(|record| record.agent_id)
             .collect();
@@ -262,7 +238,7 @@ mod tests {
     fn read_one_reads_directly_without_the_parse_cache() {
         let dir = tempdir().unwrap();
         write_record(dir.path(), &record("sess-1", 1_700_000_000)).unwrap();
-        assert_eq!(read_all_at(dir.path(), 1_700_000_000)[0].note, "cached");
+        assert_eq!(read_all_test(dir.path())[0].note, "cached");
 
         let path = path(dir.path(), TestRecord::FILE_PREFIX, "codex", "sess-1");
         let original = std::fs::read(&path).unwrap();
@@ -283,7 +259,7 @@ mod tests {
             "direct reads bypass the stat-keyed parse cache"
         );
         assert_eq!(
-            read_all_at(dir.path(), 1_700_000_000)[0].note,
+            read_all_test(dir.path())[0].note,
             "cached",
             "same (mtime, len) still serves the cached parse"
         );

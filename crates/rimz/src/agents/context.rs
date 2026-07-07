@@ -84,8 +84,8 @@ pub struct AgentContext {
     /// past it drops the row back to its lifecycle status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_complete: Option<Timestamp>,
-    /// When the producer observed this record. The snapshot reaper drops a
-    /// sidecar past the ghost-session TTL even if a `SessionEnd` was missed.
+    /// When the producer observed this record. Snapshot liveness comes from
+    /// the rollup row; a sidecar without a surviving row is not joined.
     pub observed_at: Timestamp,
 }
 
@@ -119,8 +119,8 @@ pub struct SubagentContext {
     /// value is missing or unparseable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<Timestamp>,
-    /// When the producer observed this record. The snapshot reaper drops a
-    /// sidecar past the ghost-session TTL even if a stop was missed.
+    /// When the producer observed this record. Snapshot liveness comes from
+    /// the rollup row; a sidecar without a surviving row is not joined.
     pub observed_at: Timestamp,
 }
 
