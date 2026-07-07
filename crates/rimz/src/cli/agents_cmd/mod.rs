@@ -210,10 +210,16 @@ enum AgentsSubcmd {
     /// List agent cards in the current room.
     #[command(aliases = ["ls", "ps"])]
     List {
+        /// Scope to one lane: `#channel`, worktree, branch, or directory name.
+        #[arg(value_name = "SCOPE", conflicts_with_all = ["worktree", "all"])]
+        scope: Option<String>,
+        /// Emit JSON.
         #[arg(long)]
         json: bool,
+        /// Include every lane, not just the current channel.
         #[arg(long)]
         all: bool,
+        /// Filter to one lane by worktree name or path (flag spelling of SCOPE).
         #[arg(long, conflicts_with = "all")]
         worktree: Option<String>,
     },
@@ -221,6 +227,7 @@ enum AgentsSubcmd {
     #[command(alias = "inspect")]
     Show {
         reference: String,
+        /// Emit JSON.
         #[arg(long)]
         json: bool,
         /// Also capture the agent pane's visible area.
@@ -233,12 +240,16 @@ enum AgentsSubcmd {
     /// Show one agent transcript.
     Logs {
         reference: String,
+        /// Keep the last N chat lines.
         #[arg(short = 'n', long = "tail")]
         tail: Option<usize>,
+        /// Print new lines as they land.
         #[arg(short = 'f', long, conflicts_with = "all")]
         follow: bool,
+        /// Include prior-session history.
         #[arg(long)]
         all: bool,
+        /// Emit JSON.
         #[arg(long)]
         json: bool,
     },
@@ -249,18 +260,23 @@ enum AgentsSubcmd {
     /// Wait for a supervised run or for an interactive agent to become idle.
     Wait {
         reference: String,
+        /// Stop waiting after this duration.
         #[arg(long, value_parser = crate::cli::agents_cmd::supervised::parse_timeout)]
         timeout: Option<Duration>,
+        /// Tail the transcript while waiting.
         #[arg(long)]
         stream: bool,
+        /// Replay the transcript from the top before tailing.
         #[arg(long, requires = "stream")]
         from_start: bool,
+        /// Emit JSON.
         #[arg(long, conflicts_with = "stream")]
         json: bool,
     },
     /// Stop a supervised run or close an agent pane.
     Stop {
         reference: String,
+        /// Stop every agent the address matches.
         #[arg(long)]
         all: bool,
     },
@@ -341,10 +357,11 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),
         Some(AgentsSubcmd::List {
+            scope,
             json,
             all,
             worktree,
-        }) => return list_agents(json, all, worktree, globals),
+        }) => return list_agents(json, all, scope.or(worktree), globals),
         Some(AgentsSubcmd::Show {
             reference,
             json,
@@ -377,6 +394,23 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         reject_launch_flags_without_spec(&args)?;
         return list_agents(args.json, false, args.worktree, globals);
     }
+    if let Some(spec) = args.spec.as_deref() {
+        match top_level_spec_route(spec) {
+            TopLevelSpecRoute::ScopedList => {
+                reject_launch_flags_without_spec(&args)?;
+                if args.prompt.is_some() {
+                    bail!(
+                        "scope `{spec}` takes no prompt; use `rimz agents {spec}` or `rimz agents list {spec}`"
+                    );
+                }
+                return list_agents(args.json, false, Some(spec.to_owned()), globals);
+            }
+            TopLevelSpecRoute::Address => bail!(
+                "`{spec}` is an agent address, not a launch spec; try `rimz agents show {spec}`, `rimz message {spec} \"…\"`, or `rimz agents list`"
+            ),
+            TopLevelSpecRoute::Launch => {}
+        }
+    }
     if args.print {
         return match run_print(args, globals) {
             Ok(Some(record)) => std::process::exit(record.status.exit_code()),
@@ -390,6 +424,23 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         );
     }
     launch_layout(args, globals, true)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TopLevelSpecRoute {
+    ScopedList,
+    Address,
+    Launch,
+}
+
+fn top_level_spec_route(spec: &str) -> TopLevelSpecRoute {
+    if spec.starts_with('#') {
+        TopLevelSpecRoute::ScopedList
+    } else if spec.starts_with('@') {
+        TopLevelSpecRoute::Address
+    } else {
+        TopLevelSpecRoute::Launch
+    }
 }
 
 fn exit_print_usage_error(err: anyhow::Error) -> ! {

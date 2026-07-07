@@ -166,6 +166,16 @@ mod parse {
             Some(AgentsSubcmd::List { json: true, .. })
         ));
 
+        let parsed =
+            AgentsHarness::try_parse_from(["rimz", "list", "#docs"]).expect("parse scoped list");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::List {
+                scope: Some(scope),
+                ..
+            }) if scope == "#docs"
+        ));
+
         let parsed = AgentsHarness::try_parse_from(["rimz", "--json"]).expect("parse bare json");
         assert!(parsed.args.command.is_none());
         assert!(parsed.args.spec.is_none());
@@ -348,6 +358,13 @@ mod parse {
             let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject flag");
             assert!(err.to_string().contains(fragment), "{err:#}");
         }
+    }
+
+    #[test]
+    fn top_level_scope_and_agent_address_do_not_parse_as_launch_specs() {
+        assert_eq!(top_level_spec_route("#docs"), TopLevelSpecRoute::ScopedList);
+        assert_eq!(top_level_spec_route("@coder"), TopLevelSpecRoute::Address);
+        assert_eq!(top_level_spec_route("claude"), TopLevelSpecRoute::Launch);
     }
 
     #[test]

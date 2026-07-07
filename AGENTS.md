@@ -32,6 +32,23 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
 - **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, and privacy settings are product behaviour.
 
+## Room quick reference
+
+Addresses are `@handle[#channel]`; full grammar lives in [agents.md](./docs/reference/cli/agents.md).
+
+```sh
+rimz agents                          # agent cards, current channel
+rimz agents '#auth'                  # one lane's cards
+rimz agents show @coder              # card: activity, context, messages, transcript
+rimz agents logs @coder -n 20        # transcript tail (-f follows)
+rimz message @coder "rebase first"   # park for the next turn boundary
+rimz message --steer @coder "stop"   # interrupt the live turn now
+rimz message show msg_<id>           # why a message hasn't landed
+rimz pane list                       # every pane, labelled with @handles
+rimz pane capture @coder             # what the agent's pane shows right now
+rimz loop show <task>                # schedule, next fire, run forensics
+```
+
 ## Implementation rules
 
 - `AGENTS.md` and `CLAUDE.md` are one file via symlink; edits to either land in both.

@@ -1,7 +1,8 @@
 use crate::common::Env;
 use jiff::Timestamp;
+use rimz::agents::LifecycleSignal;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
-use rimz::ids::AgentKind;
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewKind};
 use serde_json::json;
 use std::io::Write as _;
 use std::process::Command;
@@ -479,6 +480,155 @@ fn assert_agents_list_requires_live_room(env: &Env, args: &[&str]) {
         stderr.contains("rimz start") && stderr.contains("rimz attach"),
         "guidance should name start and attach: {stderr}"
     );
+}
+
+#[test]
+fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
+    let env = Env::new();
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    register_list_agent(&env, &workspace, "sess-auth", "claude", "auth", "%1");
+    register_list_agent(&env, &workspace, "sess-ops", "codex", "ops", "%2");
+    publish_pane_frame(
+        &env,
+        &workspace.session_name,
+        vec![
+            list_pane(
+                &workspace.session_name,
+                "%1",
+                "claude",
+                &env.home_root.join("auth"),
+            ),
+            list_pane(
+                &workspace.session_name,
+                "%2",
+                "codex",
+                &env.home_root.join("ops"),
+            ),
+        ],
+    );
+
+    let top_level = run_agents_json_list(&env, &workspace.session_name, &["agents", "#auth"]);
+    assert_agent_ids(&top_level, &["sess-auth"]);
+
+    let subcommand =
+        run_agents_json_list(&env, &workspace.session_name, &["agents", "list", "#auth"]);
+    assert_agent_ids(&subcommand, &["sess-auth"]);
+
+    let out = env
+        .rimz()
+        .args(["agents", "@coder"])
+        .output()
+        .expect("agents address hint");
+    assert!(!out.status.success(), "address-as-spec must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("agent address, not a launch spec")
+            && stderr.contains("rimz agents show @coder")
+            && stderr.contains("rimz message @coder"),
+        "hint should name address verbs: {stderr}"
+    );
+}
+
+fn register_list_agent(
+    env: &Env,
+    workspace: &rimz::ResolvedWorkspace,
+    session_id: &str,
+    kind: &str,
+    branch: &str,
+    pane_raw: &str,
+) {
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(session_id)),
+        LifecycleSignal::Registered,
+    );
+    observation.worktree_path = Some(env.home_root.join(branch).display().to_string());
+    observation.worktree_branch = Some(branch.to_owned());
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane_raw));
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            workspace.session_name.clone(),
+            kind,
+            "SessionStart",
+            &observation,
+        ))
+        .expect("append lifecycle");
+}
+
+fn list_pane(
+    session_name: &str,
+    raw: &str,
+    command: &str,
+    cwd: &std::path::Path,
+) -> rimz::pane::PaneRef {
+    rimz::pane::PaneRef {
+        pane_id: PaneId::from_parts(MuxName::Tmux, raw),
+        session_name: session_name.to_owned(),
+        view_id: Some("@0".to_owned()),
+        view_kind: Some(ViewKind::Window),
+        view_name: Some("room".to_owned()),
+        is_focused: false,
+        is_floating: false,
+        command: Some(command.to_owned()),
+        spawn_command: None,
+        cwd: Some(cwd.display().to_string()),
+        pane_pid: None,
+        pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
+        resumed_session_id: None,
+        elevated_agent: None,
+        first_seen_at_ms: None,
+    }
+}
+
+fn publish_pane_frame(env: &Env, session_name: &str, panes: Vec<rimz::pane::PaneRef>) {
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    let frame = rimz::sidebar::frame::assemble_frame(
+        panes,
+        rimz::sidebar::timing::unix_now_ms(),
+        session_name,
+    );
+    rimz::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
+        .expect("publish pane frame");
+}
+
+fn run_agents_json_list(env: &Env, session_name: &str, args: &[&str]) -> serde_json::Value {
+    let trace_log = env.project_root.join(format!("{}.log", args.join("-")));
+    let mut command = env.rimz();
+    command
+        .args(["--mux", "zellij"])
+        .args(args)
+        .arg("--json")
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{session_name} [Created 1s ago]\n"),
+        );
+    let out = command.output().expect("agents list json");
+    assert!(
+        out.status.success(),
+        "agents list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("agents json")
+}
+
+fn assert_agent_ids(json: &serde_json::Value, expected: &[&str]) {
+    let actual: Vec<&str> = json
+        .as_array()
+        .expect("agent array")
+        .iter()
+        .map(|agent| agent["agent_id"].as_str().expect("agent_id"))
+        .collect();
+    assert_eq!(actual, expected, "scoped list returned {json:#}");
+}
+
+fn zellij_trace_shim() -> std::path::PathBuf {
+    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
 
 #[test]

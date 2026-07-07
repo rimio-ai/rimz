@@ -21,6 +21,7 @@ pub struct PaneArgs {
 enum PaneSubcmd {
     /// List panes known to the active multiplexer.
     List {
+        /// Emit JSON.
         #[arg(long)]
         json: bool,
         /// Session to list. Defaults to the cwd's workspace session.
@@ -29,17 +30,22 @@ enum PaneSubcmd {
     },
     /// Capture a pane's visible text.
     Capture {
-        pane_id: String,
+        /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        target: String,
+        /// Capture only the last N lines.
         #[arg(long)]
         lines: Option<u16>,
+        /// Emit JSON.
         #[arg(long)]
         json: bool,
+        /// Keep ANSI colors/attributes.
         #[arg(long)]
         ansi: bool,
     },
     /// Send text or named keys to a pane as if typed.
     Send {
-        pane_id: String,
+        /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        target: String,
         /// Press Enter after text and explicit keys.
         #[arg(long)]
         enter: bool,
@@ -51,7 +57,8 @@ enum PaneSubcmd {
     },
     /// Focus a pane.
     Focus {
-        pane_id: String,
+        /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        target: String,
         /// Session to re-check before focusing when process-start metadata is provided.
         #[arg(long)]
         session_name: Option<String>,
@@ -77,35 +84,115 @@ enum PaneSubcmd {
 }
 
 pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let backend = rimz::mux::backend_for(mux);
-
     match args.command {
-        PaneSubcmd::List { json, session_name } => list(&*backend, globals, json, session_name),
+        PaneSubcmd::List { json, session_name } => {
+            let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+            let backend = rimz::mux::backend_for(mux);
+            list(&*backend, globals, json, session_name)
+        }
         PaneSubcmd::Capture {
-            pane_id,
+            target,
             lines,
             json,
             ansi,
-        } => capture(&*backend, pane_id, lines, json, ansi),
+        } => {
+            let target = resolve_pane_target(&target, globals)?;
+            let backend = rimz::mux::backend_for(target.pane.mux());
+            capture(&*backend, &target.pane, lines, json, ansi)
+        }
         PaneSubcmd::Send {
-            pane_id,
+            target,
             enter,
             key,
             text,
         } => {
-            let pane = PaneId::parse(&pane_id)?;
-            send(backend.as_ref(), &pane, text.as_deref(), &key, enter)
+            let target = resolve_pane_target(&target, globals)?;
+            let backend = rimz::mux::backend_for(target.pane.mux());
+            send(backend.as_ref(), &target.pane, text.as_deref(), &key, enter)
         }
         PaneSubcmd::Focus {
-            pane_id,
+            target,
             session_name,
             pane_process_start,
             ..
-        } => focus(&*backend, pane_id, session_name, pane_process_start),
-        PaneSubcmd::Split => split(&*backend, globals),
-        PaneSubcmd::Detach { session_name } => detach(&*backend, globals, session_name),
+        } => {
+            let target = resolve_pane_target(&target, globals)?;
+            let backend = rimz::mux::backend_for(target.pane.mux());
+            focus(
+                &*backend,
+                &target.pane,
+                session_name.or(target.session_name),
+                pane_process_start,
+            )
+        }
+        PaneSubcmd::Split => {
+            let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+            let backend = rimz::mux::backend_for(mux);
+            split(&*backend, globals)
+        }
+        PaneSubcmd::Detach { session_name } => {
+            let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+            let backend = rimz::mux::backend_for(mux);
+            detach(&*backend, globals, session_name)
+        }
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PaneTarget {
+    Id(PaneId),
+    Address(String),
+}
+
+struct ResolvedPaneTarget {
+    pane: PaneId,
+    /// Address targets resolve through a workspace, so carry its session for
+    /// Zellij focus validation. Raw pane-id targets keep historical behavior.
+    session_name: Option<String>,
+}
+
+fn classify_pane_target(raw: &str) -> Result<PaneTarget> {
+    if raw.starts_with('@') {
+        return Ok(PaneTarget::Address(raw.to_owned()));
+    }
+    PaneId::parse(raw).map(PaneTarget::Id).map_err(|_| {
+        anyhow::anyhow!(
+            "invalid pane target `{raw}`: expected a pane id (`zellij:terminal_3`, `tmux:%1`) or an agent address (`@coder`, `@coder#lane`); run `rimz pane list` to see panes"
+        )
+    })
+}
+
+fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneTarget> {
+    match classify_pane_target(raw)? {
+        PaneTarget::Id(pane) => Ok(ResolvedPaneTarget {
+            pane,
+            session_name: None,
+        }),
+        PaneTarget::Address(address) => {
+            let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+            let store = crate::cli::open_store(&workspace)?;
+            let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+            let agent = crate::cli::resolve_agent_one(
+                &snapshot,
+                &address,
+                None,
+                crate::cli::current_channel(&workspace).as_deref(),
+            )?;
+            let pane = agent
+                .pane
+                .as_ref()
+                .map(|pane| pane.pane_id.clone())
+                .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
+            Ok(ResolvedPaneTarget {
+                pane,
+                session_name: Some(workspace.session_name),
+            })
+        }
+    }
+}
+
+fn agent_name(agent: &AgentState) -> &str {
+    agent.name.as_deref().unwrap_or(agent.agent_id.as_str())
 }
 
 /// List the room as panes: every pane grouped by its native tab, each labelled
@@ -358,13 +445,12 @@ fn pane_json<'a>(
 
 fn capture(
     backend: &dyn MuxBackend,
-    pane_id: String,
+    pane: &PaneId,
     lines: Option<u16>,
     json: bool,
     ansi: bool,
 ) -> Result<()> {
-    let pane = PaneId::parse(&pane_id)?;
-    let capture = backend.capture_pane(&pane, lines, ansi)?;
+    let capture = backend.capture_pane(pane, lines, ansi)?;
     if json {
         let rendered = serde_json::to_string_pretty(&capture)?;
         #[expect(clippy::print_stdout, reason = "json emitter")]
@@ -382,19 +468,18 @@ fn capture(
 
 fn focus(
     backend: &dyn MuxBackend,
-    pane_id: String,
+    pane: &PaneId,
     session_name: Option<String>,
     pane_process_start: Option<String>,
 ) -> Result<()> {
-    let pane = PaneId::parse(&pane_id)?;
     validate_pane_not_reused(
         backend,
-        &pane,
+        pane,
         session_name.as_deref(),
         pane_process_start.as_deref(),
     )?;
     backend
-        .focus_pane(&pane, session_name.as_deref())
+        .focus_pane(pane, session_name.as_deref())
         .map_err(Into::into)
 }
 
@@ -500,6 +585,30 @@ mod tests {
     use jiff::Timestamp;
     use rimz::agents::AgentStatus;
     use rimz::ids::MuxName;
+
+    #[test]
+    fn classify_pane_target_accepts_ids_and_agent_addresses() {
+        assert_eq!(
+            classify_pane_target("zellij:terminal_3").expect("zellij pane id"),
+            PaneTarget::Id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+        );
+        assert_eq!(
+            classify_pane_target("tmux:%1").expect("tmux pane id"),
+            PaneTarget::Id(PaneId::from_parts(MuxName::Tmux, "%1"))
+        );
+        assert_eq!(
+            classify_pane_target("@coder#lane").expect("agent address"),
+            PaneTarget::Address("@coder#lane".to_owned())
+        );
+    }
+
+    #[test]
+    fn classify_pane_target_error_points_at_addresses_and_pane_list() {
+        let err = classify_pane_target("garbage").expect_err("invalid target");
+        let message = err.to_string();
+        assert!(message.contains("agent address (`@coder`, `@coder#lane`)"));
+        assert!(message.contains("rimz pane list"));
+    }
 
     fn pane(raw: &str, view: &str, name: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
         PaneRef {

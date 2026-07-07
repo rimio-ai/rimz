@@ -6,7 +6,7 @@ use rimz::config::{GlyphRole, ThemeConfig};
 pub(super) fn list_agents(
     json: bool,
     all: bool,
-    worktree: Option<String>,
+    scope: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
@@ -31,7 +31,7 @@ pub(super) fn list_agents(
     )
     .context("reading the room snapshot")?;
 
-    let channel = list_channel_filter(all, worktree.as_deref(), &workspace);
+    let channel = list_channel_filter(all, scope.as_deref(), &workspace);
     let in_room = in_room_agent_ids(&snapshot);
     let agents: Vec<&AgentState> = snapshot
         .agents
@@ -177,11 +177,11 @@ fn list_channel_filter(
 
 fn list_channel_filter_for_current(
     all: bool,
-    worktree: Option<&str>,
+    scope: Option<&str>,
     current_channel: Option<String>,
 ) -> Option<String> {
-    match (worktree, all) {
-        (Some(worktree), _) => Some(worktree.to_owned()),
+    match (scope, all) {
+        (Some(scope), _) => Some(scope.trim_start_matches('#').to_owned()),
         (None, true) => None,
         (None, false) => current_channel,
     }
@@ -1648,6 +1648,11 @@ mod tests {
     fn list_channel_filter_resolves_explicit_all_and_current_channel() {
         assert_eq!(
             list_channel_filter_for_current(true, Some("manual"), Some("feature".to_owned()))
+                .as_deref(),
+            Some("manual")
+        );
+        assert_eq!(
+            list_channel_filter_for_current(false, Some("#manual"), Some("feature".to_owned()))
                 .as_deref(),
             Some("manual")
         );

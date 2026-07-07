@@ -15,7 +15,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 ## Addressing agents
 
-`message`, `transcript`, and the `agents show`/`logs`/`focus`/`wait`/`stop`/`refresh` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the stamped lane,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
+`message`, `transcript`, `pane capture`/`send`/`focus`, and the `agents show`/`logs`/`focus`/`wait`/`stop`/`refresh` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the stamped lane,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
 
 **Handles that name one agent:**
 
@@ -116,7 +116,9 @@ Supervised runs need installed and trusted hooks, because hooks are the completi
 
 ```sh
 rimz agents                              # room root-agent cards, current channel
+rimz agents '#auth-refresh'              # one lane's cards
 rimz agents ps --all                     # every room channel; alias for list
+rimz agents list '#auth-refresh'         # same lane filter through the list verb
 rimz agents list --worktree auth-refresh # one room branch / worktree / dir
 rimz agents inspect swift-otter          # describe-style card, cost, messages, transcript tail
 rimz agents show swift-otter --capture   # report plus the pane's visible text
@@ -215,8 +217,9 @@ A single-agent target builds that same channel log and filters it to messages th
 
 ```sh
 rimz pane list
-rimz pane capture zellij:terminal_4 --lines 80                                # read the visible buffer
-rimz pane send zellij:terminal_4 --key ctrl-u --enter -- "cargo xtask test"   # clear line, type, run
+rimz pane capture @codex#auth-refresh --lines 80                             # read an agent's visible buffer
+rimz pane capture zellij:terminal_4 --lines 80                                # read a precise pane id
+rimz pane send @codex#auth-refresh --key ctrl-u --enter -- "cargo xtask test" # clear line, type, run
 rimz pane focus tmux:%3
 rimz pane split
 rimz pane detach
@@ -233,7 +236,7 @@ rimz pane detach
     process                -         ~/code/qe-wt/auth-refresh   zellij:terminal_5
 ```
 
-The agent labels are a best-effort overlay folded from the workspace snapshot, so a pane the multiplexer has handed back to a shell reads `process`; the tab grouping always works, even with no snapshot reachable. `--json` emits the tab tree with a per-pane `kind`, `command`, `cwd`, and `pid`, and an `agent` object for agent panes. `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention. Named keys are `enter`, `escape`, `tab`, `backspace`, the four arrows, `ctrl-c`, `ctrl-d`, and `ctrl-u`, with aliases like `return`, `esc`, and `bs`.
+The agent labels are a best-effort overlay folded from the workspace snapshot, so a pane the multiplexer has handed back to a shell reads `process`; the tab grouping always works, even with no snapshot reachable. `--json` emits the tab tree with a per-pane `kind`, `command`, `cwd`, and `pid`, and an `agent` object for agent panes. `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention. These three target either a pane id or an agent address, and pane ids choose their own backend (`tmux:%3` uses tmux, `zellij:terminal_4` uses Zellij) instead of the ambient session. Named keys are `enter`, `escape`, `tab`, `backspace`, the four arrows, `ctrl-c`, `ctrl-d`, and `ctrl-u`, with aliases like `return`, `esc`, and `bs`.
 
 Pane capture is untrusted terminal text — a script matches bounded patterns before sending anything back, and `pane send` is the same explicit input path as `message --steer`. The operator-facing safety rules are in [security.md](../../guide/security.md).
 
