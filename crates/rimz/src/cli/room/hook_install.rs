@@ -5,17 +5,10 @@ use std::io::{BufRead, IsTerminal, Write};
 use anyhow::Result;
 use rimz::agents::{HookInstallPreview, HookInstallReport, StatusLineChange};
 use similar::TextDiff;
-use unicode_width::UnicodeWidthStr;
 
-use crate::cli::render;
+use crate::cli::{first_run, render};
 
 const DIFF_CONTEXT_LINES: usize = 3;
-const CARD_TEXT_WIDTH: usize = 44;
-
-const CONSENT_INTRO: &str = "Rimz routes attention across your coding agents into one sidebar.";
-const CONSENT_BOUNDARY: &str =
-    "These hooks only report events to Rimz. They never answer a prompt for you.";
-const CONSENT_REVERSIBLE: &str = "Reversible any time with `rimz hooks uninstall`.";
 
 pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::AgentAdapter> {
     let mut detected = Vec::new();
@@ -42,7 +35,7 @@ pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::
     detected
 }
 
-pub(super) fn ensure_detected_agent_hooks() -> Result<()> {
+pub(crate) fn ensure_detected_agent_hooks() -> Result<bool> {
     let mut missing = Vec::new();
 
     for agent in detected_installable_adapters() {
@@ -56,19 +49,20 @@ pub(super) fn ensure_detected_agent_hooks() -> Result<()> {
     }
 
     if missing.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     if !std::io::stdin().is_terminal() {
         print_noninteractive_notice(&missing)?;
-        return Ok(());
+        return Ok(true);
     }
 
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     let mut out = render::err();
     let selected = prompt_consent(&missing, &mut input, &mut out)?;
-    install_selected(&selected, &mut out)
+    install_selected(&selected, &mut out)?;
+    Ok(true)
 }
 
 fn prompt_consent(
@@ -162,14 +156,12 @@ fn write_untrusted_hooks_notice(
 
 fn write_intro(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
     write_intro_context(out, previews)?;
-    writeln!(out, "One quick question. {CONSENT_REVERSIBLE}")?;
+    writeln!(out, "One quick question. {}", first_run::CONSENT_REVERSIBLE)?;
     Ok(())
 }
 
 fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
-    for line in intro_card_lines(render::terminal_columns(80)) {
-        writeln!(out, "{line}")?;
-    }
+    first_run::write_intro_card(out)?;
     writeln!(out)?;
     let agent_word = if previews.len() == 1 {
         "agent"
@@ -195,64 +187,6 @@ fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> 
         "Each hook is one line like:  rimz hooks feed --source <agent>."
     )?;
     Ok(())
-}
-
-fn intro_card_lines(term_cols: usize) -> Vec<String> {
-    let card_text = intro_card_text();
-    let box_width = CARD_TEXT_WIDTH + 4;
-    if term_cols < box_width {
-        return card_text
-            .iter()
-            .map(|line| {
-                if line.is_empty() {
-                    String::new()
-                } else {
-                    format!("  {line}")
-                }
-            })
-            .collect();
-    }
-
-    let rule = "─".repeat(CARD_TEXT_WIDTH + 2);
-    let mut lines = Vec::with_capacity(card_text.len() + 2);
-    lines.push(format!("╭{rule}╮"));
-    for line in card_text {
-        let pad = CARD_TEXT_WIDTH.saturating_sub(line.width());
-        lines.push(format!("│ {line}{:pad$} │", "", pad = pad));
-    }
-    lines.push(format!("╰{rule}╯"));
-    lines
-}
-
-fn intro_card_text() -> Vec<String> {
-    let mut lines = vec!["rimz · first-run setup".to_owned(), String::new()];
-    lines.extend(wrap_words(CONSENT_INTRO, CARD_TEXT_WIDTH));
-    lines.push(String::new());
-    lines.extend(wrap_words(CONSENT_BOUNDARY, CARD_TEXT_WIDTH));
-    lines
-}
-
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let next_width = if current.is_empty() {
-            word.width()
-        } else {
-            current.width() + 1 + word.width()
-        };
-        if next_width > width && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
 }
 
 fn write_agent_body(
@@ -360,7 +294,7 @@ fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPrevi
         write_agent_body(out, preview, idx, previews.len())?;
     }
     writeln!(out)?;
-    writeln!(out, "{CONSENT_REVERSIBLE}")?;
+    writeln!(out, "{}", first_run::CONSENT_REVERSIBLE)?;
     writeln!(
         out,
         "No terminal input is available, so Rimz installs nothing and continues into the room.",
@@ -546,7 +480,7 @@ mod tests {
         assert!(rendered.contains("claude · 1 of 2"));
         assert!(rendered.contains("codex · 2 of 2"));
         assert!(!rendered.contains("quick question"));
-        assert_eq!(rendered.matches(CONSENT_REVERSIBLE).count(), 1);
+        assert_eq!(rendered.matches(first_run::CONSENT_REVERSIBLE).count(), 1);
         assert!(rendered.contains(
             "No terminal input is available, so Rimz installs nothing and continues into the room."
         ));
@@ -554,11 +488,11 @@ mod tests {
 
     #[test]
     fn intro_card_lines_use_border_when_wide_and_plain_when_narrow() {
-        let wide = intro_card_lines(80).join("\n");
+        let wide = first_run::intro_card_lines(80).join("\n");
         assert!(wide.contains('╭'));
         assert!(wide.contains('╰'));
 
-        let narrow = intro_card_lines(20).join("\n");
+        let narrow = first_run::intro_card_lines(20).join("\n");
         assert!(!narrow.contains('╭'));
         assert!(narrow.contains("These hooks only report events to Rimz."));
         assert!(narrow.contains("never answer a prompt for you."));

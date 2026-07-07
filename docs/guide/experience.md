@@ -20,13 +20,11 @@ cd ~/code/query-engine   # a real, small project they already have
 rimz
 ```
 
-The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux) and the agents (Claude, Codex), writes the per-machine config templates under `~/.config/rimz/`, and discovers or asks for everything else in flow — no wizard, hand-created config file, or account between the reader and the first frame.
+The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux) and the agents (Claude, Codex), writes the per-machine config templates under `~/.config/rimz/`, and asks the few choices it cannot detect — no hand-created config file or account between the reader and the first frame.
 
-The first run on a machine writes `config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, and `remote.toml` when they are missing, prints where to customize them, then opens with one consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config. The gate is a terminal-native transcript left in scrollback, so the summary, choice, and result read top-to-bottom.
+The first run on a machine writes `config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, and `remote.toml` when they are missing, then opens with one consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config. The same first-run transcript shows the live glyph probe and pet opt-in, so the summary, choices, and results read top-to-bottom.
 
 ```
-rimz: initialized config under ~/.config/rimz — customize files there (`rimz config path`).
-
 ╭──────────────────────────────────────────────╮
 │ rimz · first-run setup                       │
 │                                              │
@@ -56,6 +54,15 @@ One quick question. Reversible any time with `rimz hooks uninstall`.
 ✓ claude  13 hooks → ~/.claude/settings.json
 ✓ codex  10 hooks → ~/.codex/config.toml
 All set — your agents appear in the sidebar as they run.
+
+  ▐▐▐▐▐▐▐▐▐▐▐▐  (smooth color gradient)
+                  (distinct icons)
+
+  Icons and gradient render cleanly? [y/N]
+  Want a pet? It lives in the sidebar and reacts to your fleet. [y/N]
+Next: docs/guide/setup.md for setup, `rimz config` for preferences.
+Hands-off loop knobs live in ~/.config/rimz/loop.toml.
+Opening the room...
 ```
 
 The gate answers the two fears before they are spoken.

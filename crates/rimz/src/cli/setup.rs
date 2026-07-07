@@ -3,13 +3,13 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use rimz::ids::MuxName;
 use rimz::trust::TrustState;
 use rimz::workspace::WorkspaceResolver;
 
-use super::{GlobalFlags, config};
+use super::{GlobalFlags, config, first_run, room};
 use crate::cli::render;
 
 #[derive(Debug, Args)]
@@ -52,6 +52,10 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
         write_fresh_config()?;
     }
     report_remote_template()?;
+    let hook_intro_rendered = room::ensure_detected_agent_hooks()?;
+    let config = rimz::config::MachineConfig::load().context("loading per-machine config")?;
+    let defaults = first_run::Defaults::from_config(&config);
+    first_run::run(defaults, hook_intro_rendered)?;
     print_line("Run `rimz start` when ready.")?;
     Ok(())
 }

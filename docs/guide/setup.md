@@ -5,7 +5,7 @@ Rimz runs with zero configuration, and one setup pass makes it a comfortable dai
 The fast path is three commands and a room. The rest of the page is what each step does and the settings worth choosing while you are here.
 
 ```sh
-rimz setup            # detect the machine, write default config
+rimz setup            # detect the machine, write config, choose hooks and appearance
 rimz hooks install    # wire every detected agent's hooks into Rimz
 rimz doctor           # confirm the machine is ready
 cd ~/code/your-project && rimz
@@ -13,7 +13,7 @@ cd ~/code/your-project && rimz
 
 ## Initialize the config
 
-`rimz setup` prints a first-run report — the selected multiplexer, workspace root, trust state, config path, detected agent binaries, and hook install status — and writes any missing per-machine config under `~/.config/rimz/`. On an interactive terminal it offers to keep an existing config and refresh it against the current templates; `rimz setup --yes` takes the non-interactive path (merge existing files, write missing ones, no hook installs or trust grants), which suits a server provisioning script.
+`rimz setup` prints a first-run report — the selected multiplexer, workspace root, trust state, config path, detected agent binaries, and hook install status — and writes any missing per-machine config under `~/.config/rimz/`. On an interactive terminal it offers to keep an existing config and refresh it against the current templates, offers hook install for detected agents, shows a live color-and-icon probe, and asks whether to enable a sidebar pet. The first `rimz` run on a terminal asks the same hook, glyph, and pet questions when it creates the config. `rimz setup --yes` takes the non-interactive path (merge existing files, write missing ones, no hook installs or trust grants), which suits a server provisioning script.
 
 Four files carry the settings this guide touches:
 
@@ -44,7 +44,7 @@ rimz hooks install              # every detected agent on PATH (claude, codex, p
 rimz hooks install claude       # one agent kind
 ```
 
-The install is additive — your existing hooks stay — and each report names the file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, Rimz wraps the command so the sidebar reads live context, and restores yours on uninstall. The first `rimz` run offers the same install with a consent prompt and diff preview, so `rimz hooks install` is mainly for adding an agent later or re-checking the surface. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
+The install is additive — your existing hooks stay — and each report names the file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, Rimz wraps the command so the sidebar reads live context, and restores yours on uninstall. The first `rimz` run and interactive `rimz setup` offer the same install with a consent prompt and diff preview, so `rimz hooks install` is mainly for adding an agent later or re-checking the surface. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
 
 ## True color
 
@@ -64,9 +64,11 @@ style = "modern"       # truecolor + Nerd Font icons; "default" = auto color + U
 
 Schemes, palette slots, and the full display model are in [theming](../reference/theme.md).
 
+The first-run glyph probe writes `style = "modern"` for you when the gradient is smooth and the sampled sidebar icons render cleanly.
+
 ## Pets
 
-Pets add a small animated companion to the sidebar's provider dashboard, following the fleet's state. Enable one in `~/.config/rimz/theme.toml`:
+Pets add a small animated companion to the sidebar's provider dashboard, following the fleet's state. The setup pet question writes `enabled = true` for the default `rocky` pet; enable or change one manually in `~/.config/rimz/theme.toml`:
 
 ```toml
 [theme.pets]

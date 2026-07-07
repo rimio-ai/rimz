@@ -86,6 +86,10 @@ pub fn theme_glyphs(
     move |role| glyphs.glyph(role).to_owned()
 }
 
+pub fn nerd_font_probe_glyphs() -> [&'static str; 8] {
+    theme::nerd_font_probe_glyphs()
+}
+
 pub fn draw_with_ui(
     frame: &mut Frame<'_>,
     snapshot: &SidebarSnapshot,

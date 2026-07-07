@@ -1,9 +1,13 @@
 //! Integration coverage for `rimz config` and the conservative `rimz setup`.
 
+use std::io::{Read, Write};
+use std::time::{Duration, Instant};
+
 use assert_cmd::assert::OutputAssertExt;
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use predicates::str::contains;
 
-use crate::common::Env;
+use crate::common::{Env, ScrubSessionEnvExt};
 
 fn machine_config_path(env: &Env) -> std::path::PathBuf {
     env.config_root().join("rimz").join("config.toml")
@@ -24,6 +28,74 @@ fn loop_config_path(env: &Env) -> std::path::PathBuf {
 fn write_machine_file(path: &std::path::Path, text: &str) {
     std::fs::create_dir_all(path.parent().expect("config file parent")).expect("mkdir config");
     std::fs::write(path, text).expect("write config seed");
+}
+
+fn run_setup_pty(env: &Env, input: &str) -> String {
+    let pty = native_pty_system();
+    let pair = pty
+        .openpty(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    cmd.scrub_session_env();
+    cmd.arg("setup");
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("XDG_STATE_HOME", env.state_root());
+    cmd.env("XDG_RUNTIME_DIR", &env.runtime_root);
+    cmd.env("XDG_CONFIG_HOME", env.config_root());
+    cmd.env("HOME", &env.home_root);
+    cmd.env("SHELL", "/bin/sh");
+    cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
+    let empty_path = env.home_root.join("empty-bin");
+    std::fs::create_dir_all(&empty_path).expect("mkdir empty PATH");
+    cmd.env("PATH", empty_path);
+    cmd.env_remove("ENV");
+    cmd.env_remove("BASH_ENV");
+    cmd.env_remove("ZDOTDIR");
+    cmd.env_remove("RUST_LOG");
+
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn rimz setup");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+    let mut writer = pair.master.take_writer().expect("pty writer");
+    writer
+        .write_all(input.as_bytes())
+        .expect("write setup input");
+    writer.flush().expect("flush setup input");
+    drop(writer);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut status = None;
+    while Instant::now() < deadline {
+        if let Some(done) = child.try_wait().expect("poll rimz setup") {
+            status = Some(done);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let status = status.unwrap_or_else(|| panic!("rimz setup did not exit; output:\n{output}"));
+    assert!(
+        status.success(),
+        "rimz setup failed with {status:?}; output:\n{output}"
+    );
+    output
 }
 
 #[test]
@@ -216,12 +288,17 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
 fn setup_without_tty_reports_and_writes_nothing() {
     let env = Env::new();
 
-    env.rimz()
-        .arg("setup")
-        .assert()
-        .success()
-        .stdout(contains("Rimz setup"))
-        .stdout(contains("changed nothing"));
+    let output = env.rimz().arg("setup").output().expect("run setup");
+    assert!(output.status.success(), "setup exits zero");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(stdout.contains("Rimz setup"));
+    assert!(stdout.contains("changed nothing"));
+    assert!(!stdout.contains("Icons and gradient render cleanly?"));
+    assert!(!stderr.contains("Icons and gradient render cleanly?"));
+    assert!(!stdout.contains("Want a pet?"));
+    assert!(!stderr.contains("Want a pet?"));
 
     assert!(!machine_config_path(&env).exists());
 }
@@ -230,12 +307,20 @@ fn setup_without_tty_reports_and_writes_nothing() {
 fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     let env = Env::new();
 
-    env.rimz()
+    let output = env
+        .rimz()
         .args(["setup", "--yes"])
-        .assert()
-        .success()
-        .stdout(contains("Wrote"))
-        .stdout(contains("No hooks or trust grants were changed"));
+        .output()
+        .expect("run setup --yes");
+    assert!(output.status.success(), "setup --yes exits zero");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Wrote"));
+    assert!(stdout.contains("No hooks or trust grants were changed"));
+    assert!(!stdout.contains("Icons and gradient render cleanly?"));
+    assert!(!stderr.contains("Icons and gradient render cleanly?"));
+    assert!(!stdout.contains("Want a pet?"));
+    assert!(!stderr.contains("Want a pet?"));
 
     let text = std::fs::read_to_string(machine_config_path(&env)).expect("read setup config");
     assert!(text.contains("[resume]"));
@@ -243,6 +328,52 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     assert!(theme_config_path(&env).exists());
     assert!(agents_config_path(&env).exists());
     assert!(loop_config_path(&env).exists());
+    let theme_text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
+    assert!(
+        !theme_text
+            .lines()
+            .any(|line| line.trim() == "enabled = true"),
+        "--yes should not opt into pets:\n{theme_text}"
+    );
+}
+
+#[test]
+fn setup_pty_writes_and_reruns_first_run_answers() {
+    let env = Env::new();
+
+    let output = run_setup_pty(&env, "y\ny\n");
+
+    assert!(output.contains("Icons and gradient render cleanly?"));
+    assert!(output.contains("Want a pet?"));
+    assert!(output.contains("modern style"));
+    assert!(output.contains("rocky joins the room"));
+    let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
+    assert!(
+        text.contains("style = \"modern\""),
+        "modern style set:\n{text}"
+    );
+    assert!(
+        text.contains("[theme.pets]") && text.contains("enabled = true"),
+        "pet enabled:\n{text}"
+    );
+
+    let output = run_setup_pty(&env, "\nn\nn\n");
+
+    assert!(output.contains("Keep your current config? [Y/n]"));
+    assert!(output.contains("Icons and gradient render cleanly?"));
+    assert!(output.contains("Want a pet? It lives in the sidebar and reacts to your fleet."));
+    assert!(output.matches("[Y/n]").count() >= 3);
+    assert!(output.contains("default style"));
+    assert!(output.contains("pet disabled"));
+    let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
+    assert!(
+        text.contains("style = \"default\""),
+        "default style set:\n{text}"
+    );
+    assert!(
+        text.contains("[theme.pets]") && text.contains("enabled = false"),
+        "pet disabled:\n{text}"
+    );
 }
 
 #[test]

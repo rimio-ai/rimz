@@ -10,6 +10,7 @@ mod config;
 mod coverage;
 mod daemon;
 mod doctor;
+mod first_run;
 mod gc;
 mod help;
 mod hooks;

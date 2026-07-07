@@ -24,8 +24,8 @@ use rimz::mux::{
 use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
 use crate::cli::{
-    AttachArgs, GlobalFlags, StartArgs, confirm_with_default, machine_config, record_workspace,
-    render, setup, sidebar,
+    AttachArgs, GlobalFlags, StartArgs, confirm_with_default, first_run, machine_config,
+    record_workspace, render, setup, sidebar,
 };
 
 use attach_exec::{
@@ -33,8 +33,9 @@ use attach_exec::{
 };
 use coroner::{inspect_previous_incarnation, report_previous_session_death};
 use daemon_view::{build_daemon_view, maybe_launch_remote_control};
-use hook_install::ensure_detected_agent_hooks;
-pub(crate) use hook_install::{detected_installable_adapters, render_dry_run};
+pub(crate) use hook_install::{
+    detected_installable_adapters, ensure_detected_agent_hooks, render_dry_run,
+};
 use resume::{materialize_room_resume, plan_room_resume, record_rebirth_boundary, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;
 use session_record::retire_renamed_session;
@@ -77,6 +78,7 @@ enum RoomEntry<'a> {
         workspace: rimz::ResolvedWorkspace,
         args: &'a StartArgs,
         mux: MuxName,
+        first_run: bool,
     },
     StartWeb {
         workspace: rimz::ResolvedWorkspace,
@@ -185,7 +187,10 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
     report_start_notices(&workspace)?;
-    if setup::ensure_default_config()? {
+    let config_was_missing = !rimz::config::MachineConfig::config_path().exists();
+    let initialized_config = setup::ensure_default_config()?;
+    let first_run = config_was_missing && rimz::config::MachineConfig::config_path().exists();
+    if initialized_config && !(first_run && std::io::stdin().is_terminal()) {
         let config_path = rimz::config::MachineConfig::config_path();
         let config_dir = config_path.parent().unwrap_or(config_path.as_path());
         let mut err = std::io::stderr().lock();
@@ -200,6 +205,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
             workspace,
             args: &args,
             mux,
+            first_run,
         },
         globals,
     )
@@ -214,16 +220,7 @@ pub(crate) fn ensure_workspace_room_for_web(
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let mux = MuxName::Zellij;
-    if setup::ensure_default_config()? {
-        let config_path = rimz::config::MachineConfig::config_path();
-        let config_dir = config_path.parent().unwrap_or(config_path.as_path());
-        let mut err = std::io::stderr().lock();
-        writeln!(
-            err,
-            "rimz: initialized config under {} — customize files there (`rimz config path`).",
-            render::home_relative(&config_dir.display().to_string())
-        )?;
-    }
+    setup::ensure_default_config()?;
     prepare_room(
         RoomEntry::StartWeb {
             workspace: workspace.clone(),
@@ -321,19 +318,13 @@ struct ReadyRoom {
 }
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
-    let machine_config = machine_config();
-    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
-    let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
-    // One terminal probe per command flow: the width picks every sidebar
-    // pane's birth size; the pair sizes a detached tmux birth.
-    let detected_size = rimz::mux::detect_terminal_size();
-    let remote_control = &machine_config.remote_control;
+    let mut machine_config = machine_config();
     if matches!(entry, RoomEntry::Start { .. } | RoomEntry::StartWeb { .. }) {
         // Fail-fast precondition for installed agents: fixable host misconfiguration
         // aborts the launch here with the fix, before hook-install or session side
         // effects. An enabled host whose agent is not installed is an inert toggle,
         // skipped here so the room still starts; `rimz doctor` surfaces it.
-        rimz::remote_control::preflight(remote_control)?;
+        rimz::remote_control::preflight(&machine_config.remote_control)?;
     }
 
     let mux = match &entry {
@@ -357,10 +348,35 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     };
 
     run_room_preflights(&entry, mux)?;
-    if matches!(entry, RoomEntry::Start { .. } | RoomEntry::StartWeb { .. }) {
-        ensure_detected_agent_hooks()?;
+    let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) {
+        ensure_detected_agent_hooks()?
+    } else {
+        false
+    };
+    if let RoomEntry::Start {
+        first_run: true, ..
+    } = &entry
+        && std::io::stdin().is_terminal()
+    {
+        let defaults = first_run::Defaults::from_config(&machine_config);
+        first_run::run(defaults, hook_intro_rendered)?;
+        let mut out = render::err();
+        writeln!(out, "Opening the room...")?;
+        match rimz::config::MachineConfig::load() {
+            Ok(config) => machine_config = std::sync::Arc::new(config),
+            Err(err) => tracing::warn!(
+                error = %err,
+                "first-run config reload failed; using startup config for this room"
+            ),
+        }
     }
 
+    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
+    let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
+    // One terminal probe per command flow: the width picks every sidebar
+    // pane's birth size; the pair sizes a detached tmux birth.
+    let detected_size = rimz::mux::detect_terminal_size();
+    let remote_control = &machine_config.remote_control;
     let backend = rimz::mux::backend_for(mux);
     if let RoomEntry::Start { workspace, .. }
     | RoomEntry::StartWeb { workspace, .. }

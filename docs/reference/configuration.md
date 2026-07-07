@@ -26,13 +26,13 @@ Per-machine settings load leniently: a missing file is the default config, unkno
 ## Get started
 
 ```sh
-rimz                       # first start writes missing config and opens the room
+rimz                       # first start writes missing config, asks setup questions, opens the room
 rimz setup                 # detect this machine and write or refresh config
 rimz config init           # write config.toml, theme.toml, agents.toml, and loop.toml
 rimz config init --print   # print the commented templates without writing
 ```
 
-Most people run `rimz` inside a project or `rimz setup` once, then edit the few lines they care about. First start and setup write missing per-machine config without prompting, including `remote.toml`; setup keeps an existing config, refreshes it against the current templates, and reports any keys it skips.
+Most people run `rimz` inside a project or `rimz setup` once, then edit the few lines they care about. First start on an interactive terminal writes missing per-machine config, offers hook install, asks the live glyph probe, and asks whether to enable a pet; non-interactive first start writes the same defaults without prompting. Interactive setup repeats those questions after the config refresh step. `rimz setup --yes` writes or merges files without hook, trust, or appearance changes.
 
 **The generated template is the field reference.** Every persisted section and default scalar ships as commented TOML with an inline note, so `rimz config init --print` is the authoritative, always-current list of keys and defaults. This page explains the *model and the knobs that are easy to misread*, and leaves the full field list to the template. Leaving a line commented keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override.
 
@@ -394,7 +394,7 @@ glyphs = "auto"
 voice = true
 ```
 
-An opt-in animated companion in the provider dashboard. Full setup is in [theme.md → Pets](./theme.md#pets); render mechanics, cache layout, and sheet geometry are in [pets.md](../internals/sidebar/pets.md).
+An opt-in animated companion in the provider dashboard. The first-run and setup pet question writes `enabled = true` for the default `rocky` pet. Full setup is in [theme.md → Pets](./theme.md#pets); render mechanics, cache layout, and sheet geometry are in [pets.md](../internals/sidebar/pets.md).
 
 ### Sidebar Bands
 

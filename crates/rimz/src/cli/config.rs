@@ -243,8 +243,13 @@ fn get(args: GetArgs) -> Result<()> {
 }
 
 fn set(args: SetArgs) -> Result<()> {
-    let requested_key = parse_key(&args.key)?;
-    let value = parse_set_value(&requested_key, &args.value);
+    set_config_key(&args.key, &args.value)?;
+    print_line(&format!("set {}", args.key))
+}
+
+pub(crate) fn set_config_key(key: &str, raw_value: &str) -> Result<()> {
+    let requested_key = parse_key(key)?;
+    let value = parse_set_value(&requested_key, raw_value);
     let key = normalize_set_key(&requested_key, &value)?;
     validate_set_key(&key)?;
     let (path, template) = file_for_key(&key);
@@ -257,7 +262,7 @@ fn set(args: SetArgs) -> Result<()> {
     let rendered = doc.to_string();
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
-    print_line(&format!("set {}", args.key))
+    Ok(())
 }
 
 fn apply_logical_key(

@@ -68,6 +68,19 @@ const VALUE_FLASH_INK: Color = Color::Indexed(150);
 /// tones live in [`Semantic::DEFAULT`].
 pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
 
+pub(crate) fn nerd_font_probe_glyphs() -> [&'static str; 8] {
+    [
+        glyphs::nerd_font_glyph(GlyphRole::CockpitWorkspace).expect("workspace icon"),
+        glyphs::nerd_font_glyph(GlyphRole::CockpitAgents).expect("agents icon"),
+        glyphs::nerd_font_glyph(GlyphRole::TokensTotal).expect("tokens icon"),
+        glyphs::nerd_font_glyph(GlyphRole::WorktreeBranch).expect("branch icon"),
+        glyphs::nerd_font_glyph(GlyphRole::ChannelHash).expect("channel icon"),
+        glyphs::nerd_font_glyph(GlyphRole::KeysFocus).expect("focus icon"),
+        glyphs::nerd_font_glyph(GlyphRole::KeysUnread).expect("unread icon"),
+        glyphs::nerd_font_glyph(GlyphRole::ChromeInfinity).expect("infinity icon"),
+    ]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
     no_color: bool,

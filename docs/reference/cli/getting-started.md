@@ -5,7 +5,7 @@ Rimz opens one room for the project you are in and keeps that room attachable �
 The shared model behind these — how Rimz picks the room, and when it attaches versus prints the attach command — is in [cli.md → Start and attach a workspace](../cli.md#start-and-attach-a-workspace). This page is the per-command detail.
 
 ```sh
-rimz setup                 # one-time: detect the machine, write default config
+rimz setup                 # one-time: detect the machine, write config, choose hooks and appearance
 cd ~/code/query-engine
 rimz                        # open the room and drop in
 ```
@@ -83,7 +83,7 @@ rimz list [-a|--all] [--json]
 rimz setup [--yes]
 ```
 
-`rimz setup` prints a first-run report — selected multiplexer, workspace root and class, trust state, config path, detected agent binaries, and hook install status. In an interactive terminal it offers to keep and refresh an existing config against the current templates (skipping incompatible keys with a warning) or to overwrite cleanly. `--yes` takes the non-interactive path: merge existing files, write missing ones, and make no hook installs or trust grants. For an explicit clean reset, use `rimz config init --force`; the config model is in [configuration.md](../configuration.md).
+`rimz setup` prints a first-run report — selected multiplexer, workspace root and class, trust state, config path, detected agent binaries, and hook install status. In an interactive terminal it offers to keep and refresh an existing config against the current templates (skipping incompatible keys with a warning) or to overwrite cleanly, offers hook install for detected agents with missing hooks, then asks the color-and-icon probe and pet questions. `--yes` takes the non-interactive path: merge existing files, write missing ones, and make no hook installs, trust grants, or appearance changes. For an explicit clean reset, use `rimz config init --force`; the config model is in [configuration.md](../configuration.md).
 
 ```sh
 rimz doctor [--audit] [--json] [--output PATH]
