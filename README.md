@@ -20,6 +20,7 @@
   <a href="#get-started">Get started</a> ·
   <a href="#what-it-does">What it does</a> ·
   <a href="#everyday-moves">Everyday moves</a> ·
+  <a href="#configuration">Configuration</a> ·
   <a href="#agent-compatibility-matrix">Agents</a> ·
   <a href="#documentation">Docs</a> ·
   <a href="#install">Install</a>
@@ -160,7 +161,7 @@ rimz agents claude "Run the migration audit." -p --detach   # prints a pet name,
 rimz agents wait swift-otter --stream                       # block on it later
 ```
 
-**Keep the fleet moving while you sleep.** Scheduled pings start a provider's budget window on your clock, and check-guarded loops watch CI or tests and wake an agent on the result. Auto-continue (`[resume] auto_continue`) and smart compaction (`[harness] smart_compact`) switch on in config; the [setup guide](./docs/guide/setup.md#keep-the-fleet-moving) walks all four.
+**Keep the fleet moving while you sleep.** Scheduled pings start a provider's budget window on your clock, and check-guarded loops watch CI or tests and wake an agent on the result. Auto-continue and smart compaction complete the hands-off set; [Configuration](#configuration) below has the lines that switch them on.
 
 ```sh
 rimz loop add morning --spec claude-ping --at 07:00 --days weekdays   # prime the 5h window
@@ -186,7 +187,34 @@ rimz setup                                  # detect the machine, write default 
 rimz config set theme "Catppuccin Mocha"    # edit one key; Rimz routes it to the owning file
 ```
 
-The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, true color, pets, the hands-off loop behaviors, and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration reference](./docs/reference/configuration.md).
+### True color, Nerd Font, pets
+
+Pick a terminal that advertises truecolor (Ghostty, WezTerm, Kitty, Alacritty all do) and the room renders 24-bit color out of the box, inside Rimz tmux rooms and over `rimz remote` too. With a Nerd Font in the terminal, two blocks in `~/.config/rimz/theme.toml` upgrade the glyphs and add a companion; interactive `rimz setup` offers both after a live probe.
+
+```toml
+[theme]
+style = "modern"    # truecolor + Nerd Font icons; "default" = auto color + Unicode
+
+[theme.pets]
+enabled = true      # an animated companion on the provider dashboard
+pet = "rocky"       # `rimz list-pets` previews every built-in
+```
+
+### Auto-continue and smart compaction
+
+Two lines in `~/.config/rimz/config.toml` keep agents working unattended. Auto-continue picks parked turns back up: a rate-limit park resumes the moment the provider's budget window resets, and transient API errors retry on a backoff ramp. Smart compaction makes `rimz message` compact-first, so a prompt lands against a fresh context window instead of dying at the ceiling.
+
+```toml
+[resume]
+auto_continue = true     # off by default; resumes rate-limit and API-error parks
+
+[harness]
+smart_compact = "70%"    # compact before a message once context passes the threshold
+```
+
+Add a [scheduled ping](#everyday-moves) to start each provider's budget window on your clock, and the fleet only needs you for real decisions.
+
+The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, appearance, the hands-off behaviors, and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration reference](./docs/reference/configuration.md).
 
 ## Agent compatibility matrix
 
