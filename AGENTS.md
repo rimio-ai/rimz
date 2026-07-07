@@ -82,7 +82,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [installation.md](./docs/guide/installation.md) — source-install prerequisites and Rust toolchain for Linux and macOS.
 - [setup.md](./docs/guide/setup.md) — first-pass machine setup: config init, hooks, true color, pets, loop knobs, Zellij/tmux baselines.
 - [product.md](./docs/guide/product.md) — the working tour: the room, the loop, and the scenarios from local fleet to scripted pipeline.
-- [experience.md](./docs/guide/experience.md) — the first-run-to-fleet experience, section by section.
+- [experience.md](./docs/guide/experience.md) — the first session walked step by step: install, consent gate, first agent, first fleet.
 - [attention.md](./docs/guide/attention.md) — attention routing and card ranking: the glance-to-pane loop, unread inbox, time windows, team state, git verdict.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.
 

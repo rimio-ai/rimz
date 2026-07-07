@@ -1,28 +1,25 @@
-# The Rimz experience: first run to fleet
+# The first session: install to fleet
 
-> This doc follows the felt experience from the first keystroke to a ten-agent fleet; [product.md](./product.md) is the working tour and [DESIGN.md](../../DESIGN.md) holds the invariants. The frames below are illustrative sketches; the machine-checked rendering of every glyph, meter, and zone is the [interface reference](../interface/sidebar.md).
+> This page walks your first session, from install to a working fleet: what you type, what appears on screen, and why. [product.md](./product.md) is the working tour of everything Rimz does; the exact rendering of every glyph, meter, and zone is the [interface reference](../interface/sidebar.md). The frames below follow the renderer's real structure with illustrative values.
 
-The reader this doc is written for runs Claude Code and Codex agents all day, several at once, and is tired of flipping tabs to find the one that is blocked. They saw Rimz on Hacker News an hour ago and want to feel the value in under five minutes or they close the tab.
+Rimz makes one promise, and this walk tests it end to end: it names the agent that needs you and takes you straight to its pane, where you answer in the agent's own UI. Everything else (the consent gate, the cards, the ranking, the reattach) serves that loop.
 
-Two invariants run underneath the whole walk. Rimz is honest by default ([DESIGN.md → Invariants](../../DESIGN.md#invariants)): the column shows the truth about what is running, and when a fetch fails it labels the frame out loud. And Rimz notifies and routes: its whole job is to name the agent that needs you and take you straight to its pane, where you answer in the agent's own UI, where the full context lives.
-
-## First run: consent, then the room
-
-Discovery happens before the terminal. The reader reads the Hacker News post, clicks through to a landing page that earns the install in three lines (one room per project, a sidebar that tells you which agent needs you, survives detach and reattach from anywhere), and runs a single command.
+## Install, then one command
 
 ```sh
-# one of:
-brew tap rimio/rimz && brew install rimz
-cargo install --locked rimz
-curl -fsSL https://rimz.sh/install | sh
+cargo install --locked rimz     # or: brew tap rimio/homebrew-rimz && brew install rimz
 
-cd ~/code/query-engine   # a real, small project they already have
+cd ~/code/query-engine          # any project you already have
 rimz
 ```
 
-The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux) and the agents (Claude, Codex), writes the per-machine config templates under `~/.config/rimz/`, and asks the few choices it cannot detect; no hand-created config file or account stands between the reader and the first frame.
+`rimz` needs Zellij (0.44+) or tmux (3.5+) on the machine; `rimz doctor` confirms your build clears the floor, and [installation.md](./installation.md) covers building from source.
 
-The first run on a machine writes `config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, and `remote.toml` when they are missing, then opens with one consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config. The same first-run transcript shows the live glyph probe and pet opt-in, so the summary, choices, and results read top-to-bottom.
+The first run detects your multiplexer and your agents, writes the per-machine config set under `~/.config/rimz/` (`config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, `remote.toml`, every key commented with its default), and asks only what it cannot detect. No account, no daemon, no hand-written config stands between you and the first frame.
+
+## The consent gate
+
+One question comes before the room: showing what an agent is doing means adding reporting hooks to the agent's own config, and Rimz never edits your agent config without asking. The same first-run flow carries the appearance probe and the pet opt-in, so the whole exchange reads top to bottom:
 
 ```
 ╭──────────────────────────────────────────────╮
@@ -56,235 +53,165 @@ One quick question. Reversible any time with `rimz hooks uninstall`.
 All set — your agents appear in the sidebar as they run.
 
   ▐▐▐▐▐▐▐▐▐▐▐▐  (smooth color gradient)
-                  (distinct icons)
+                  (distinct icons)
 
-  Icons and gradient render cleanly? [y/N]
-  Want a pet? It lives in the sidebar and reacts to your fleet. [y/N]
+  Icons and gradient render cleanly? [y/N] y
+  Want a pet? It lives in the sidebar and reacts to your fleet. [y/N] y
+✓ modern style: truecolor + Nerd Font icons
+✓ rocky joins the room (rimz list-pets: more)
 Next: docs/guide/setup.md for setup, `rimz config` for preferences.
 Hands-off loop knobs live in ~/.config/rimz/loop.toml.
 Opening the room...
 ```
 
-The gate answers the two fears before they are spoken.
+The gate answers the reasonable fears before you ask them.
 
-- The change is additive and names the exact config path; readers who want the full patch run `rimz hooks install --dry-run` before consenting.
-- The boundary is stated in the consent itself: the hooks report events, and answering a prompt stays with the reader.
-- Every exit stays open: Enter wires every listed agent, `n` or EOF installs nothing, and an unwired agent still shows up as a plain process row with a hint on how to wire it later.
-- Install is per-machine state: later runs go straight to the room, and `rimz doctor` reports per-agent status.
-- A committed project config is its own separate gate with its own diff ([trust.md](../internals/sidebar/trust.md)); a toy project never shows it.
+- The change is additive and names the exact file it touches; `rimz hooks install --dry-run` prints the full unified diff before you consent.
+- The boundary is in the consent itself: hooks report events, and answering a prompt stays with you.
+- Every exit stays open: Enter wires every listed agent, `n` (or no terminal input) installs nothing, and an unwired agent still shows up as a plain process row.
+- The choice is per-machine state: later runs go straight to the room, and `rimz doctor` reports per-agent hook status any time.
+- A committed project config (`.rimz/config.toml`) is a separate trust gate with its own diff ([security.md → Project trust](./security.md#project-trust)); a toy project never shows it.
 
-The authoritative wired set and config shape live in [agent.md → Hook install](../internals/agents/agent.md#hook-install-the-visible-security-step).
+Backing out is the mirror of opting in: `rimz hooks uninstall` removes exactly what the gate added and restores your statusline. The authoritative hook set and config shape live in [agent.md → Hook install](../internals/agents/agent.md#hook-install-the-visible-security-step).
 
-Backing out is the mirror of opting in, and the reader is told so right here: `rimz hooks uninstall` removes exactly what the gate added, the additive diff in reverse, and leaves the agents untouched. A tool you can cleanly remove is a tool worth trying.
+## The room, empty
 
-With consent done, Rimz makes sure the session exists and drops the reader in: a working shell pane on the right, focused and pristine, and the sidebar pinned left at about 30% width.
-
-On Zellij, one more one-time approval can greet them, a small floating prompt from Zellij itself asking to let Rimz's presence plugin watch pane state, focus panes after tab switches, and run commands. That plugin is the topology channel that tells Rimz which panes exist and keeps tab switches landing on work ([security.md](./security.md#the-zellij-presence-plugin)); `y` dismisses it for good across sessions, and declining leaves Zellij's native focus memory in place while `rimz doctor` names the permission fix.
+Consent done, Rimz creates the session and drops you in: a working shell pane on the right, focused, and the sidebar pinned left. Even empty, the column already shows its core idea, one row per pane:
 
 ```
  ⌘ query-engine
 
- ◎ 0
- ¤ 0
- ────────────────────────────────────────────
+ ◎ 0                              ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                        $0.00
+ ─────────────────────────────────────────────────
 
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌○ zsh
 
-                  ? for help
+                                       ? for help
 ```
 
-The column shows presence from the very first frame: the shell pane is itself a row. With nothing needing attention, the cockpit line is omitted and a dim hint points at the one next thing to do. The `⌘ query-engine` line is the project name the reader recognizes, and the `▏main` lane shows which worktree they are standing in. Even empty, the column has already demonstrated its core idea, one row per pane, before any agent exists.
+`⌘ query-engine` is the project you are standing in, the header counts sessions (`◎`) and live agents (`¤`) with the room's token and dollar tallies pinned right, and the shell pane is itself a row, grouped under the worktree you are standing in. With no agents in the room there is no attention line to scan yet.
 
-## The agent shows up, and starts working
+On Zellij, Rimz loads a small presence plugin that reports pane topology; its permission grant is seeded automatically into Zellij's own permission store, so no extra prompt appears. Revoking the grant in Zellij disables pane discovery until restored, and `rimz doctor` names the fix ([security.md → The Zellij presence plugin](./security.md#the-zellij-presence-plugin)).
 
-The reader types `claude` in the shell pane and just looks at its input box, without prompting it yet. Within about a second, the pane that read `○ zsh` becomes the agent's row. The same row, re-skinned into one entry, not a second one.
+## Your first agent
 
-```
- ⌘ query-engine
-
- ◎ 1
- ¤ 1
- ────────────────────────────────────────────
- ? 0   ! 0   ⏸ 0   ✓ 0              ⢿ 0   ○ 1
-
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌○ claude · Opus · xhigh
-▌  —
-▌  ▣ ──────────────────────────────────    0%
-
-                  ? for help
-```
-
-The reader did nothing extra, and their agent is in the sidebar, correctly named, with its model and effort. The session-start hook fired, the ledger overlaid identity onto the pane, and the row updated: no config, no flag, no restart. This is the activation moment, the first time the product does something for them, and the latency budget is tight: the row has to update within a second or two of the hook or the magic reads as lag. An idle agent fills no attention bucket; it is presence, not a cue.
-
-Then the reader gives Claude a task. The prompt and the first tool call move the row to `⢿ running`, and the task slot fills with the agent's reported task, or the first twenty or so characters of the prompt.
+Type `claude` in the shell pane. Within a second or two the row that read `○ zsh` becomes the agent's card, the same row re-skinned, not a second one:
 
 ```
- ⌘ query-engine
+ ? 0   ! 0   ⏸ 0   ✓ 0                 ⢿ 0   ○ 1
 
- ◎ 1
- ¤ 1
- ────────────────────────────────────────────
- ? 0   ! 0   ⏸ 0   ✓ 0              ⢿ 1   ○ 0
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌○ claude · Opus 4.8 · xhigh
+```
 
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌⢿ claude · Opus · xhigh
+You did nothing extra: the session-start hook fired, the ledger stamped identity onto the pane, and the row picked up the agent's name, model, and effort. No config, no flag, no restart. An idle agent with no prompt yet is a single identity line; the attention line above now shows the make-up of the fleet, all buckets at zero except one idle.
+
+Give Claude a task and the card fills out: the leading glyph animates (`⠁` while it reasons, `⣾` once it edits), the description line carries what it is on, and the context meter starts filling:
+
+```
+ ? 0   ! 0   ⏸ 0   ✓ 0                 ⢿ 1   ○ 0
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌⣾ claude · Opus 4.8 · xhigh · 200k         $0.42
 ▌  fix auth flow
-▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
-
-                  ? for help
+▌  ▣ ━━━━━━━━━━━━━━──────────────────────── 41.2%
 ```
 
-The attention buckets hold at `? 0  ! 0`, because running is not a cue to do anything; the reader goes to get coffee, or opens a second agent. Freshness is per-row, so a resting card stays calm with no age on it. A running agent that wedges escalates to the static `!` attention state once it falls silent past the stall window (thirty minutes by default). A coarse last-activity age surfaces in exactly one place, the expanded work line you opt into by selecting the row.
+A running agent is not a cue to do anything: the `?` and `!` buckets hold at zero, so you get coffee or open a second agent. A running agent that goes silent past the stall window (30 minutes by default, `[agents.attention]`) escalates to `!` on its own, so a wedged run cannot hide behind a spinner.
 
 ## The question reaches you
 
-This is the moment Rimz earns its place. Claude hits a permission prompt: the hook lands the waiting signal in the ledger, the row flips to `? waiting`, rises to the top of its worktree, the cockpit line counts it (`? 1`), and a native notification fires.
+This is the moment Rimz earns its place. Claude hits a permission prompt: the hook lands the waiting state in the ledger, the row flips to `?`, rises to the top of its worktree, and the cockpit counts it:
+
+```
+ ? 1   ! 0   ⏸ 0   ✓ 0                 ⢿ 0   ○ 0
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌? claude · Opus 4.8 · xhigh · 200k         $0.42
+▌  fix auth flow
+▌  ▣ ━━━━━━━━━━━━━━──────────────────────── 41.2%
+```
+
+Off screen, notifications carry the same state: a terminal bell plus a desktop banner (`Rimz: claude needs you` / `claude is waiting for input.`) on terminals that support it. The banner rides an escape sequence tmux forwards to Ghostty, iTerm2, or WezTerm; Zellij drops it today, so a notification handler (your own command, fired on the same cue) is the off-screen path there ([notifications](../internals/sidebar/notifications.md)). Several agents going waiting at once coalesce into one notification, a row that stays unread earns periodic reminders, and a missed notification loses nothing: the ledger is authoritative and the row stays `?` until you look.
+
+Select the row and you land in Claude's pane, reading the actual prompt: the real command it wants to run, approved or denied in Claude's own UI, where the full context and the safe defaults live. Your answer clears the row through the same hooks, and the transcript keeps the question and the answer. You never stopped to ask which of these terminals is blocked. That is the whole pitch, and it just worked.
+
+The same waiting state is a hook for automation later: a notification handler can wake a script that answers routine prompts right in the agent's pane, and anything it leaves alone stays `?` and still routes to you ([product.md → Engineer the loop](./product.md#engineer-the-loop)).
+
+## A fleet, and the keys that tame it
+
+Now the load the product was built for: five agents across two worktrees, plus a deploy script in a pane of its own. The column stays scannable:
 
 ```
  ⌘ query-engine
 
- ◎ 1
- ¤ 1
- ────────────────────────────────────────────
- ? 1   ! 0   ⏸ 0   ✓ 0              ⢿ 0   ○ 0
+ ◎ 12                     ◇ 88k ↘ 24k ↗ 64k ◌ 68k
+ ¤ 6 (2)                                    $4.20
+ ─────────────────────────────────────────────────
+ ? 1   ! 1   ⏸ 0   ✓ 0                 ⢿ 2   ○ 2
 
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌? claude · Opus · xhigh
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌? claude · Opus 4.8 · xhigh · 200k         $1.27
 ▌  fix auth flow
-▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
+▌  ▣ ━━━━━━━━━━━━━━──────────────────────── 41.2%
+▎⠁ claude · Sonnet 4.6 · high · 200k        $0.31
+▎  add tests
+▎  ▣ ━━━━━━──────────────────────────────── 18.0%
+▎⣾ codex · GPT 5.5 · high                   $0.88
+▎  refactor api
+▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━─────────────── 63.4%
 
-                                 ? for help
-```
-
-Even from another pane or another app, the OS notification reaches the reader:
-
-```
-  ⬤ claude needs you · query-engine
-    Permission — fix auth flow
-```
-
-They select the row, or click the notification, or hit the global triage key from the next section, and land in Claude's pane reading the actual prompt: the real command Claude wants to run, approved or denied in Claude's own UI. They were heads-down somewhere else and Rimz tapped them on the shoulder with exactly the right pane, one keystroke away. They never had to stop and ask which of these terminals is blocked. That is the whole pitch, and it just worked.
-
-The reasons it lands this way are small and deliberate. Every waiting row routes the reader to the agent's UI, where the full context and the safe defaults already live. Notifications are best-effort polish: clicking one focuses the terminal and pre-selects the row, but the ledger is authoritative, so a missed notification loses nothing. Three agents going waiting at once coalesce into one notification, and an agent that stays waiting past a threshold earns a single nudge rather than a stream.
-
-The same waiting state is a hook for automation later (the growing-into-it section below): a notification handler can wake a script that answers a routine prompt right in the agent's pane, and the row clears when the agent moves on. Anything the script skips stays `? waiting` and still routes to the pane.
-
-## A fleet, and the one key that tames it
-
-The reader does what they came to do: spins up four more agents across two worktrees, plus a deploy script in a pane of its own. This is the load the product was built for, and it stays scannable.
-
-```
- ⌘ query-engine
-
- ◎ 12                  ◇ 88k ↘ 24k ↗ 64k ◌ 68k
- ¤ 6                                    $4.20
- ────────────────────────────────────────────
- ? 1   ! 1   ⏸ 0   ✓ 0              ⢿ 2   ○ 2
-
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌? claude · Opus · xhigh
-▌  fix auth flow
-▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
-▏⠁ claude · Sonnet · high · 200k
-▏  add tests
-▏  ▣ ━━━━━━────────────────────────────   18%
-▏⢿ codex · GPT 5.5 · high
-▏  refactor api
-▏  ▣ ━━━━━━━━━━━━━━━━━━━━━─────────────   63%
-
- feature-migration                   +230 -23
- ! claude · Opus · xhigh · 1m
+ ⑂ feature-migration                ⇡3  +230 -23
+ ! claude · Opus 4.8 · xhigh                $1.74
    db migrate
-   ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────   84%
+   ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────── 84.1%
  ○ codex · GPT 5.5 · low
-   —
-   ▣ ──────────────────────────────────    0%
 
- ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
  ○ deploy.sh
 
-                                 ? for help
+                                       ? for help
 ```
 
-The cockpit line is the first thing the eye lands on: `? 1   ! 1`, one waiting and one failed, summed across every worktree, counting even rows hidden by a per-worktree cap. Above it, the header's token mix and `$4.20` running cost read the day's pace, the at-a-glance form of the provider dashboard. Ranking does the triage automatically: waiting and failed rows rise first, unread rows break ties inside the same status, idle agents and process rows settle below, and each worktree caps that tail with a dim `+K more` while keeping active, blocked, paused, finished, and focused rows on screen.
+The cockpit line is where the eye lands first: `? 1   ! 1`, one waiting and one failed, summed across every worktree. Above it, the token mix and `$4.20` read the day's pace, and `(2)` counts unread rows. Ranking does the triage: waiting and failed rows rise first, unread rows break ties, idle agents and process rows settle below, and each worktree caps its tail with a dim `+K more`. Exactly one row is ever in motion, the oldest one that needs you, so the eye lands on where to go next.
 
-The power move is going straight to the blocked pane. A single session-scoped Space keystroke focuses the next item that needs attention, in ranking order, without the reader ever focusing the sidebar. Twelve agents, one key, straight to the oldest blocked one; press it again for the next. Seeing the blocked pane and getting to it are different actions, and this key collapses them, so triage cost stays flat as the fleet grows. It is bound only inside the Rimz session, so the reader's global mux config is untouched.
+Two keys collapse seeing the blocked pane and getting to it into one motion:
 
-The grouping matches the reader's mental model. Groups are keyed on worktree isolation, since only same-worktree agents share files: a header marks each one, and the worktree the reader has selected reads as one bracketed lane, a thin spine down its full height with a faint dotted seal capping its header and the selected card inside it bolder.
+- `Alt+p` (config: `[sidebar] focus_key`) reaches the sidebar from any pane in the room, bound only inside the Rimz session, so your global mux config is untouched.
+- `Space` (or `n`) jumps to the next item that needs you, in ranking order, and focuses its pane; press it again for the next, `N` steps back.
 
-The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and always sorts last, below every project group. The room scales past one repo too: `rimz start` in `~/code` lets each git-backed agent group by its own checkout, with the same cockpit, ranking, and jump triage ([directory workspaces](../reference/cli.md#start-and-attach-a-workspace)).
+Twelve agents, two keys, straight to the oldest blocked one. Clicking works everywhere too: rows jump, cockpit buckets filter the column by status, and the `↑ N need you` banner appears when the lead unread card is scrolled out of view. `?` opens the keys-and-filter overlay in place, so all of this is learnable without leaving the room ([interface reference → Bottom chrome](../interface/sidebar.md#bottom-chrome)).
 
-The footer advertises `?`, and pressing it replaces the card body with the keys-and-filter overlay, so navigation, actions, status filters, and the sidebar-focus chord are learnable in place without leaving the room; [the sidebar interface reference](../interface/sidebar.md#bottom-chrome) shows the exact frame.
+The grouping matches how the work divides: only same-worktree agents share files, so each worktree reads as one bounded block, the one holding your selection bracketed as a lane. The `┄ external ┄` divider holds scripts, CI, and panes outside any worktree, and always sorts last. Every status reads by glyph shape under `NO_COLOR` and to color-blind eyes; color only reinforces ([DESIGN.md → Triage at a glance](../../DESIGN.md#triage-at-a-glance)).
 
-Glyph shape carries the meaning and color is a redundant second channel, so every status reads under `NO_COLOR` and to color-blind eyes; twelve agents on one line is the [triage-at-a-glance design](../../DESIGN.md#triage-at-a-glance) carrying a real fleet.
+## Leave, and come back from anywhere
 
-## Detach and reattach from anywhere
+Detach with your multiplexer's own key (Zellij `Ctrl-O d`, tmux `prefix d`). The room keeps running headless, agents working, hooks landing in the ledger while nobody renders. Hours later, from a laptop or a tablet:
 
-Opening a new tab or window and starting a fifth agent there changes the roster, not the layout. Every tab is born with its own sidebar pane, and all of them render the same room-wide snapshot, so the column is identical everywhere and selecting any row jumps to that agent's pane wherever it lives in the session. The sidebar's own pane is chrome, excluded from the roster, and it self-closes when the last working pane in its tab exits. Tabs are viewports; worktrees are the subdivision.
-
-Then the reader closes the laptop with the mux's own detach key (Zellij `Ctrl-O d`, tmux `prefix d`). The room keeps running headless on the host, and the ledger keeps queuing events while nobody renders. Hours later they reattach from a tablet on the train.
-
-```
-$ ssh dev-box rimz attach query-engine
-   reconstructing query-engine from ledger…
+```sh
+rimz remote connect dev-box:query-engine
 ```
 
-The same reattach has a first-class form: `rimz remote connect dev-box:query-engine` builds the guarded SSH and reconnects itself when the train wifi drops, and `rimz remote connect dev-box:~/code/query-engine` starts the room if it is not up yet. Named aliases live in `~/.config/rimz/remote.toml`, so `rimz remote connect prod` points at the same host without retyping it.
+The link is plain SSH with a supervisor that reconnects itself when the train wifi drops, and a `⇄ remote 210ms` badge in the sidebar footer reads link health. Save an alias once (`rimz remote add dev dev-box:~/code/query-engine`) and `rimz remote connect dev` is the whole trip; `--web` tunnels the same room to your local browser.
 
-The sidebar comes back exactly as the reader left it: every agent where it was, every question still waiting, ranked identically, plus whatever finished while they were gone, already triaged by the same ranking. The first usable frame paints from the ledger immediately, since a resize or attach is itself a wakeup, so reattach reconstructs from durable state with no loading screen.
+The sidebar comes back exactly as you left it: every agent where it was, every question still waiting, ranked identically, plus whatever finished while you were gone, already triaged. The first frame paints from the ledger immediately; there is no loading screen. Even a reboot only pauses the room: the ledger survives as flat files under `~/.local/state/rimz/`, and the next `rimz start` offers the whole fleet back, each agent resumed idle in its tab, one prompt from where it stopped ([product.md → Run it on a server](./product.md#run-it-on-a-server)).
 
-This is what changes how the reader works: start a run on the dev box, close everything, and pick it up on a phone at the airport. Continuity is ledger-owned ([DESIGN.md → Invariants](../../DESIGN.md#invariants)); the running processes are the host's job: systemd, tmux-resurrect, Zellij resurrect ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
+## When something is wrong, it says so
 
-## When something is wrong
-
-The honesty commitment gets tested when a fetch fails: the binary moved, the ledger directory vanished mid-write, a snapshot is half-written. The reader has to be able to tell a stale frame from a current one at a glance.
+Rimz reports what it cannot vouch for instead of quietly showing old data. When the refresh loop cannot read the room (a moved binary, a vanished ledger directory), the body keeps the last good frame and a sticky banner takes the bottom edge:
 
 ```
- ⌘ query-engine
-
- ◎ 1
- ¤ 1
- ────────────────────────────────────────────
- ? 0   ! 0   ⏸ 0   ✓ 0              ⢿ 1   ○ 0
-
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌⢿ claude · Opus · xhigh
-▌  fix auth flow
-▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
-
-
- ! Sidebar degraded for 8s: snapshot
- failed: ledger not found
+ ⚠ Sidebar degraded for 8s: snapshot failed: ledger not found
 ```
 
-The loop keeps the last good snapshot for the body but pins a sticky banner to the bottom edge, status-bar style, so the body truncates before the banner ever clips, and the banner explains why the UI is not updating and for how long. When a fetch finally succeeds the banner steps down to a dim `⚠ last alert 8s ago: … · x dismiss` notice, so a failure that flickered past stays visible, and it clears for good when the reader presses `x` (a fresh failure re-arms it).
+The banner names the cause and counts how long the frame has been stale. On recovery it steps down to a dim, dismissable notice (`⚠ last alert 8s ago: … · x dismiss`), so a failure that flickered past is still visible after the fact; `x` clears it and a fresh failure re-arms it.
 
-The footer steps aside while the alert is active, so a failed fetch reads as missing data rather than an empty room. A tool that says "I am degraded, here is why, and here is for how long" earns more trust than one that quietly keeps showing old data.
+The same honesty runs through trust and drift: an untrusted `.rimz/config.toml` keeps its command-running fields inert until you review the diff and run `rimz trust grant`, and a version mismatch after an upgrade lands in `rimz doctor` rather than a silently frozen pane. Banners, the trust state, and `rimz doctor` are the three places Rimz tells you what it currently cannot promise.
 
-The same honesty extends to trust and protocol. An untrusted `.rimz/config.toml` keeps its command-running fields inert until the reader runs `rimz trust grant` after reviewing the diff, and a sidebar whose protocol version drifts after an upgrade gets a `rimz doctor` mismatch report instead of a rail that silently stops updating. Banners, the trust state, and `rimz doctor` are the three places Rimz tells the reader what it cannot currently vouch for.
+## Where to go next
 
-## Growing into it: building on the room
-
-By now the reader is hooked on the loop of glance, jump, answer. What grows from here is harness and loop engineering: automation composed from the same public commands the reader has been typing, along paths they discover when they need them ([product.md → Engineer the loop](./product.md#engineer-the-loop)).
-
-Automation over the waiting state is the morning-after upgrade. Tired of approving `cargo check` for the eighth time, the reader wires a notification handler that wakes on waiting rows and answers the routine ones in the agent's own pane: a bounded-pattern script over `rimz pane capture` and `rimz pane send`, or a supervised agent delegate launched with `rimz agents <kind> -p`. Anything outside policy stays waiting and routes to the reader as before, which is what lets the fleet keep working while they sleep. Handler wiring is in [notifications.md](../internals/sidebar/notifications.md); the safety posture is in [security.md](./security.md).
-
-Unattended runs are the same idea without a person at the keyboard: `rimz agents <kind> "<prompt>" -p` runs one supervised turn a script can branch on, and `rimz loop` drives those turns on a clock or on a failing check; the detail lives in [product.md → Put your pipeline in the room](./product.md#put-your-pipeline-in-the-room).
-
-And because agents and scripts share one CLI, a deploy or migration script can steer the same fleet (hand work to a running agent with `rimz message`, run a judgment call as a supervised turn, read back transcripts) straight from the pipeline ([the pipeline scenario](./product.md#put-your-pipeline-in-the-room)).
-
-## The experience in one screen
-
-| Section | Reader does | Sees | Feels |
-| --- | --- | --- | --- |
-| First run | installs, consents, lands in the room | config pointer, one hook consent prompt, then `○ zsh` and a hint | reassured, then oriented |
-| The agent shows up | types `claude`, then prompts it | row re-skins to `○ claude`, then `⢿ running` | delight, then calm |
-| The question reaches you | gets notified, jumps to the pane | `? waiting`, an OS notification | the pitch lands |
-| The fleet | presses Space | grouped roster, `? 1  ! 1` | in control |
-| Detach, reattach | closes laptop, ssh back | the column reconstructed from the ledger | relief, then trust |
-| When wrong | hits a failure | a labeled degraded banner | trust through honesty |
-| Growing into it | wires a notification handler | routine rows clearing | leverage |
-
-The arc runs from curiosity to reassurance to delight to the pitch landing to mastery to trust. If the question moment does not land inside five minutes, nothing after it matters.
+- [setup.md](./setup.md) makes the machine yours: true color, pets, the hands-off loop knobs, and a modern Zellij/tmux baseline.
+- [product.md](./product.md) is the working tour beyond the first session: teams on features, loop engineering, and scripting agents like CLIs.
+- [attention.md](./attention.md) explains how the sidebar decides what needs you; the [interface reference](../interface/sidebar.md) renders every glyph and zone exactly.

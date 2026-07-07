@@ -2,7 +2,7 @@
 
 > The design these flows rest on (attention routing, ledger-owned durability, one CLI shared by agents and scripts) is [DESIGN.md](../../DESIGN.md).
 
-Rimz runs tens or hundreds of Claude Code, Codex, and Pi sessions in parallel, on a laptop or on a server you reach over SSH, inside the Zellij or tmux you already run, with your keybinds and the official apps untouched. This page is the working tour, ordered the way people scale, each step moving your leverage further from the keyboard: triage a fleet in one room, put a team on a feature, move it to a server, engineer the loop past your attention span, and script agents like any other CLI. The felt walk-through, first keystroke to a ten-agent fleet, is [experience.md](./experience.md).
+Rimz runs tens or hundreds of Claude Code, Codex, and Pi sessions in parallel, on a laptop or on a server you reach over SSH, inside the Zellij or tmux you already run, with your keybinds and the official apps untouched. This page is the working tour, ordered the way people scale, each step moving your leverage further from the keyboard: triage a fleet in one room, put a team on a feature, move it to a server, engineer the loop past your attention span, and script agents like any other CLI. The first session, install to a working fleet, is walked step by step in [experience.md](./experience.md).
 
 ## The room and the sidebar
 
