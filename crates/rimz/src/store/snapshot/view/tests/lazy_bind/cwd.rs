@@ -33,11 +33,8 @@ fn paneless_codex_cwd_fallback_binds_only_the_exact_codex_worktree_pane() {
         ),
     ] {
         let (label, agent_worktree, pane_command, pane_cwd, expect_agent) = case;
-        let snapshot = room(
-            Vec::new(),
-            vec![paneless_codex("sess-1", agent_worktree, 1_000)],
-        )
-        .with_live_panes(vec![pane("term1", pane_command, pane_cwd)], None);
+        let snapshot = room(vec![paneless_codex("sess-1", agent_worktree, 1_000)])
+            .with_live_panes(vec![pane("term1", pane_command, pane_cwd)], None);
 
         let rows = &snapshot.worktree_groups[0].rows;
         assert_eq!(rows.len(), 1, "{label}");
@@ -76,8 +73,7 @@ fn supervised_codex_uses_wrapper_worktree_path_for_idle_and_process_rows() {
         );
         pane.cwd = cwd;
 
-        let mut snapshot =
-            room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from(root)));
+        let mut snapshot = room(Vec::new()).with_project_root(Some(PathBuf::from(root)));
         if wired_agent {
             snapshot.wired_kinds = vec!["codex".to_owned()];
         }

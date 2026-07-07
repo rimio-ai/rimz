@@ -482,7 +482,6 @@ fn fold_applies_cached_credits_and_api_spend_ceiling() {
     let mut snapshot = SidebarSnapshot::build(
         crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
         Vec::new(),
-        Vec::new(),
         jiff::Timestamp::from_second(1_700_000_000).unwrap(),
     );
     snapshot.providers = vec![panel("claude", true), panel("codex", false)];
@@ -783,7 +782,6 @@ fn fold_applies_displayable_reset_credits_to_metered_panel() {
     let mut snapshot = SidebarSnapshot::build(
         crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
         Vec::new(),
-        Vec::new(),
         jiff::Timestamp::from_second(1_700_000_000).unwrap(),
     );
     snapshot.providers = vec![panel("codex", true), panel("claude", true)];
@@ -835,7 +833,6 @@ fn fold_applies_displayable_reset_credits_to_metered_panel() {
 fn fold_fills_missing_plan_from_displayable_credits_entry() {
     let mut snapshot = SidebarSnapshot::build(
         crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-        Vec::new(),
         Vec::new(),
         jiff::Timestamp::from_second(1_700_000_000).unwrap(),
     );

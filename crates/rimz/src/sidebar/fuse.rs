@@ -138,14 +138,10 @@ mod tests {
     }
 
     fn pulled(panes: Vec<PaneRef>, produced_at_ms: u64) -> SidebarSnapshot {
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            ws(),
-            Vec::new(),
-            Vec::new(),
-            jiff::Timestamp::now(),
-        )
-        .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
-        .with_live_panes(panes, None);
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(ws(), Vec::new(), jiff::Timestamp::now())
+                .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
+                .with_live_panes(panes, None);
         snapshot.panes_produced_at_ms = Some(produced_at_ms);
         snapshot
     }

@@ -20,7 +20,7 @@ fn paneless_agent_process_start_guard_controls_cwd_recovery() {
             elevated_agent: None,
             ..pane("term1", kind, "/repo/main")
         };
-        let snapshot = room(Vec::new(), vec![session]).with_live_panes(vec![live_pane], None);
+        let snapshot = room(vec![session]).with_live_panes(vec![live_pane], None);
 
         let rows = &snapshot.worktree_groups[0].rows;
         assert_eq!(rows.len(), 1, "{label}");
@@ -47,7 +47,7 @@ fn elevated_foreign_claude_marker_blocks_cwd_recovery() {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
         uid: 0,
     });
-    let snapshot = room(Vec::new(), vec![claude]).with_live_panes(vec![pane], None);
+    let snapshot = room(vec![claude]).with_live_panes(vec![pane], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
@@ -88,7 +88,7 @@ fn stale_codex_ghosts_predating_pane_start_render_idle_live_pane() {
         ghost.total_tokens = Some(126_621);
         ghost.model = Some("gpt-5.5".to_owned());
 
-        let mut snapshot = room(Vec::new(), vec![ghost]);
+        let mut snapshot = room(vec![ghost]);
         snapshot.wired_kinds = vec!["codex".to_owned()];
         let fresh_pane = PaneRef {
             pane_process_start: Some(epoch()),

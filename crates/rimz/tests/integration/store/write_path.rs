@@ -85,14 +85,12 @@ fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
         kind: AgentKind::new_unchecked("codex"),
         agent_id: AgentSessionId::from("launch_codex"),
         name: AgentLaunchName::Soft("ghost-pet".to_owned()),
-        profile: Some("codex-coder".to_owned()),
-        role: Some("coder".to_owned()),
-        model: None,
-        effort: None,
-        team: Some("pcr".to_owned()),
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
+        launch: rimz::agents::LaunchParams {
+            profile: Some("codex-coder".to_owned()),
+            role: Some("coder".to_owned()),
+            team: Some("pcr".to_owned()),
+            ..rimz::agents::LaunchParams::default()
+        },
         run_id: None,
     };
     let append = AgentLaunchAppend {

@@ -6,10 +6,10 @@ use std::time::{Duration, SystemTime};
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::WorkspaceId;
+use rimz::agents::AgentState;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
-use rimz::agents::{AgentState, AgentStatus};
-use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::ids::AgentSessionId;
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
 use rimz::store::event::EventEnvelope;
 
@@ -105,52 +105,7 @@ fn workspace_migrate_moves_store_and_rewrites_workspace_ids() {
 
 fn message_agent() -> AgentState {
     let now = jiff::Timestamp::now();
-    AgentState {
-        agent_id: AgentSessionId::from("claude-migrate"),
-        kind: AgentKind::new_unchecked("claude"),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        status: AgentStatus::Idle,
-        phase: rimz::agents::TurnPhase::Idle,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: None,
-        worktree_branch: None,
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        model: None,
-        effort: None,
-        recent_prompts: Vec::new(),
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: now,
-        last_activity: now,
-        registered_at: Some(now),
-    }
+    rimz::testkit::agent_state("claude", "claude-migrate", now)
 }
 
 #[test]

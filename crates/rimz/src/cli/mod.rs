@@ -680,50 +680,10 @@ mod tests {
         last_seen: jiff::Timestamp,
     ) -> rimz::agents::AgentState {
         rimz::agents::AgentState {
-            agent_id: id.into(),
-            kind: rimz::ids::AgentKind::new_unchecked("codex"),
             name: Some(id.to_owned()),
-            name_explicit: false,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
             status: rimz::agents::AgentStatus::Success,
-            phase: rimz::agents::TurnPhase::Idle,
-            pane: None,
-            runtime_owner: None,
-            parent_agent_id: None,
             worktree_path: Some(worktree_path.to_owned()),
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen,
-            last_activity: last_seen,
-            registered_at: Some(last_seen),
+            ..rimz::testkit::agent_state("codex", id, last_seen)
         }
     }
 
@@ -751,8 +711,7 @@ mod tests {
             rimz::RuntimeOwnerKind::Daemon,
             "ghost",
         ));
-        let mut snapshot =
-            rimz::SidebarSnapshot::build_with_agents(workspace_id, Vec::new(), vec![ghost], now);
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(workspace_id, vec![ghost], now);
         assert_eq!(
             super::worktree::agent_pinned_paths(&snapshot.agents, None),
             vec![PathBuf::from(worktree_path)]

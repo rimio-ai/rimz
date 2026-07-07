@@ -2,8 +2,8 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::agents::AgentLifecycleObservation;
+use crate::agents::AgentState;
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::message::{AutoCompact, DeliveryGate, MessageSender};
 use crate::store::event_log;
@@ -697,50 +697,5 @@ fn message_id(value: u64) -> MessageId {
 
 fn agent() -> AgentState {
     let now = Timestamp::now();
-    AgentState {
-        agent_id: AgentSessionId::from("sess-1"),
-        kind: AgentKind::new_unchecked("claude"),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        status: AgentStatus::Idle,
-        phase: crate::agents::TurnPhase::Idle,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: None,
-        worktree_branch: None,
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: now,
-        last_activity: now,
-        registered_at: Some(now),
-    }
+    crate::testkit::agent_state("claude", "sess-1", now)
 }

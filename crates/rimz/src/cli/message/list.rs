@@ -498,8 +498,7 @@ mod tests {
     fn message_target_keeps_single_sigil() {
         let mut coder = agent("sess-coder", AgentStatus::Idle);
         coder.role = Some("coder".to_owned());
-        let snapshot =
-            SidebarSnapshot::build_with_agents(workspace_id(), Vec::new(), vec![coder], now());
+        let snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![coder], now());
         let message = MessageRecord::new(
             workspace_id(),
             &snapshot.agents[0],

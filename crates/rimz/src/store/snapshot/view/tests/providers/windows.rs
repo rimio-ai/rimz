@@ -10,7 +10,7 @@ fn every_provider_paints_its_own_session_window() {
     let opencode = agent("opencode", "o1", AgentStatus::Idle, 10).limits(vec![reading.clone()]);
     let claude = agent("claude", "c1", AgentStatus::Idle, 10);
 
-    let snapshot = room(Vec::new(), vec![opencode, claude]).with_provider_aggregates(
+    let snapshot = room(vec![opencode, claude]).with_provider_aggregates(
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),

@@ -16,7 +16,7 @@ fn render_directory_room_root_pod_is_name_only() {
     let stamped = pane("%1", "claude", "/srv/agents/query-engine");
     claude.pane = Some(stamped.clone());
     let shell = pane("%2", "zsh", "/srv/agents");
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude])
+    let mut snapshot = snapshot_with(vec![claude])
         .with_root_class(crate::workspace::RootClass::Directory)
         .with_project_root(Some("/srv/agents".into()))
         .with_live_panes(vec![stamped, shell], None);
@@ -53,7 +53,7 @@ fn render_named_channel_header_uses_hash_glyph_and_bare_label() {
         Some("design API"),
     );
     design.channel = Some("design".to_owned());
-    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![design]), 36, 18);
+    let rendered = snapshot_to_screen(&snapshot_with(vec![design]), 36, 18);
 
     assert!(
         rendered.contains("# design"),
@@ -76,7 +76,7 @@ fn render_worktree_channel_leads_with_merge_glyph() {
         Some("reset flow"),
     );
     design.channel = Some("codex-resets".to_owned());
-    let mut snapshot = snapshot_with(Vec::new(), vec![design]);
+    let mut snapshot = snapshot_with(vec![design]);
     snapshot.worktree_groups[0].worktree_backed = true;
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Pristine);
@@ -103,7 +103,7 @@ fn render_worktree_channel_uses_fork_glyph_before_git_facts() {
         Some("reset flow"),
     );
     design.channel = Some("codex-resets".to_owned());
-    let mut snapshot = snapshot_with(Vec::new(), vec![design]);
+    let mut snapshot = snapshot_with(vec![design]);
     snapshot.worktree_groups[0].worktree_backed = true;
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
@@ -129,7 +129,7 @@ fn render_worktree_channel_leads_with_fork_glyph() {
         Some("reset flow"),
     );
     design.channel = Some("codex-resets".to_owned());
-    let mut snapshot = snapshot_with(Vec::new(), vec![design]);
+    let mut snapshot = snapshot_with(vec![design]);
     snapshot.worktree_groups[0].worktree_backed = true;
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
@@ -154,7 +154,7 @@ fn pristine_worktree_with_pr_state(pr_state: Option<crate::WorktreePrState>) -> 
         None,
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].diff_added = Some(0);
     snapshot.worktree_groups[0].diff_removed = Some(0);
     snapshot.worktree_groups[0].commits_ahead = Some(0);
@@ -231,7 +231,7 @@ fn render_worktree_clear_safe_to_remove() {
         None,
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].diff_added = Some(0);
     snapshot.worktree_groups[0].diff_removed = Some(0);
     snapshot.worktree_groups[0].commits_ahead = Some(0);
@@ -264,7 +264,7 @@ fn render_merged_worktree_pr_open_or_closed_outranks_merge_marker() {
         Some("feature-migration"),
         None,
     );
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     let group = &mut snapshot.worktree_groups[0];
     group.trunk = Some("main".to_owned());
     group.clean = Some(true);
@@ -309,7 +309,7 @@ fn render_content_landed_worktree_uses_marker_over_ancestry_delta() {
         None,
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].diff_added = Some(14);
     snapshot.worktree_groups[0].diff_removed = Some(3);
     snapshot.worktree_groups[0].commits_ahead = Some(2);
@@ -343,7 +343,7 @@ fn render_worktree_dirty_tree_keeps_the_cluster() {
         None,
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].diff_added = Some(0);
     snapshot.worktree_groups[0].diff_removed = Some(0);
     snapshot.worktree_groups[0].commits_ahead = Some(0);
@@ -376,7 +376,7 @@ fn render_trunk_worktree_skips_the_landed_marker() {
         None,
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].diff_added = Some(0);
     snapshot.worktree_groups[0].diff_removed = Some(0);
     snapshot.worktree_groups[0].commits_ahead = Some(0);
@@ -406,7 +406,7 @@ fn render_trunk_worktree_pr_state_keeps_plain_cluster() {
         None,
     );
     codex.last_activity = fixed_now() - Duration::from_secs(30);
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     let group = &mut snapshot.worktree_groups[0];
     group.diff_added = Some(3);
     group.diff_removed = Some(1);
@@ -435,7 +435,7 @@ fn render_merged_worktree_uses_merge_glyph_on_left() {
         Some("feature-migration"),
         None,
     );
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Merged);
 
@@ -461,7 +461,7 @@ fn render_reconciling_worktree_keeps_stats_and_merge_queue_marker() {
         Some("feature-migration"),
         None,
     );
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].diff_added = Some(3);
     snapshot.worktree_groups[0].diff_removed = Some(1);
     snapshot.worktree_groups[0].commits_ahead = Some(1);
@@ -486,7 +486,7 @@ fn render_diverged_worktree_uses_pr_state_marker() {
         Some("feature-migration"),
         None,
     );
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
     snapshot.worktree_groups[0].commits_ahead = Some(2);
@@ -505,7 +505,7 @@ fn render_diverged_worktree_uses_pr_state_marker() {
 /// line — no `⌂` glyph, the dim path opposite the name reads as a path.
 #[test]
 fn repo_header_shows_name_then_path() {
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    let mut snapshot = snapshot_with(Vec::new());
     snapshot.project_root = Some(std::path::PathBuf::from("/srv/code/query-engine"));
     let rendered = snapshot_to_screen(&snapshot, 44, 12);
     let first = rendered.lines().next().unwrap_or_default();

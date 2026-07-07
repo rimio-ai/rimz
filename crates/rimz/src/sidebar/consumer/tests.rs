@@ -182,8 +182,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
     // Publish the rollup (project root = the worktree) to `latest.json`, where
     // the consumer reads it fresh, and the live panes to `snapshot.json`. `own`
     // is excluded; a sibling pane becomes a row.
-    let mut rollup =
-        SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new(), Timestamp::now());
+    let mut rollup = SidebarSnapshot::build(workspace.clone(), Vec::new(), Timestamp::now());
     rollup = rollup.with_project_root(Some(worktree.clone()));
     let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
@@ -297,7 +296,6 @@ fn read_published_snapshot_folds_subagent_context() {
     child.task = None;
     let mut rollup = SidebarSnapshot::build_with_agents(
         workspace.clone(),
-        Vec::new(),
         vec![parent, child],
         Timestamp::now(),
     );
@@ -374,7 +372,7 @@ fn consumer_own_view_counts_siblings_in_its_own_tab() {
     // to `latest.json` where the consumer reads it fresh.
     let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
-    let rollup = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let rollup = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
 
     let orphan_own = PaneId::from_parts(MuxName::Zellij, "orphan_sb");
@@ -404,7 +402,7 @@ fn read_published_snapshot_is_frameless_until_the_producer_publishes() {
     // reporting a failed snapshot.
     let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
-    let mut rollup = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let mut rollup = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     rollup.display_name = "cold-room".to_owned();
     rollup.reflects_log = Some(crate::store::event_log::LogExtent {
         generation: 0,
@@ -462,12 +460,7 @@ fn no_frame_enrich_preserves_rollup_metadata_but_emits_no_groups() {
     let agent = root_agent("claude", "sess-1", None);
 
     let snapshot = enrich(
-        SidebarSnapshot::build_with_agents(
-            workspace,
-            Vec::<()>::new(),
-            vec![agent],
-            Timestamp::now(),
-        ),
+        SidebarSnapshot::build_with_agents(workspace, vec![agent], Timestamp::now()),
         None,
         &runtime,
         None,
@@ -501,7 +494,7 @@ fn enrich_maps_carried_frame_to_truth_notice() {
     }];
 
     let snapshot = enrich(
-        SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now()),
+        SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now()),
         Some(&frame),
         &runtime,
         None,
@@ -543,8 +536,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
         generation: 0,
         offset: 0,
     });
-    let mut alpha =
-        SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new(), Timestamp::now());
+    let mut alpha = SidebarSnapshot::build(workspace.clone(), Vec::new(), Timestamp::now());
     alpha.display_name = "alpha".to_owned();
     alpha.reflects_log = stamp;
     atomic::write_temp_then_rename(&state.latest_snapshot, &alpha).unwrap();
@@ -560,7 +552,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
 
     // Republish ONLY `latest.json` (a different length so the parse cache
     // cannot mask the change); the pane cache is untouched.
-    let mut bravo = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let mut bravo = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     bravo.display_name = "bravo-the-second-rollup".to_owned();
     bravo.reflects_log = stamp;
     atomic::write_temp_then_rename(&state.latest_snapshot, &bravo).unwrap();

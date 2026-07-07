@@ -80,7 +80,7 @@ fn build_adversarial_snapshot(
             state
         })
         .collect::<Vec<_>>();
-    let mut snapshot = snapshot_with(Vec::new(), agents);
+    let mut snapshot = snapshot_with(agents);
     snapshot.display_name = display_name;
     for (idx, group) in snapshot.worktree_groups.iter_mut().enumerate() {
         if let Some(row) = rows.get(idx % rows.len().max(1)) {

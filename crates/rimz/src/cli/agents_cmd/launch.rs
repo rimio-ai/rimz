@@ -547,10 +547,10 @@ pub(super) fn fresh_resume_launch_requests(
     let mut requests = launch_identity_requests(layout, None, None, team, team_roles, channel)?;
     if team.is_none() {
         for request in &mut requests {
-            if request.launch_group.is_some()
+            if request.launch.launch_group.is_some()
                 && let Some(group) = plan.launch_group.as_ref()
             {
-                request.launch_group = Some(group.clone());
+                request.launch.launch_group = Some(group.clone());
             }
         }
     }
@@ -1174,14 +1174,17 @@ pub(super) fn launch_identity_requests(
             kind: (*kind).clone(),
             agent_id: mint_launch_id(),
             name,
-            profile: profile.clone(),
-            role: role.clone(),
-            model: model.clone(),
-            effort: effort.clone(),
-            team: team.map(ToOwned::to_owned),
-            launch_group: inline_launch_group.clone(),
-            launch_ordinal,
-            channel: channel.map(ToOwned::to_owned),
+            launch: rimz::agents::LaunchParams {
+                profile: profile.clone(),
+                role: role.clone(),
+                model: model.clone(),
+                effort: effort.clone(),
+                team: team.map(ToOwned::to_owned),
+                launch_group: inline_launch_group.clone(),
+                launch_ordinal,
+                channel: channel.map(ToOwned::to_owned),
+                kind_ordinal: None,
+            },
             run_id: None,
         });
     }
@@ -1233,6 +1236,10 @@ pub(super) fn append_launch_event(
             identity.agent_id.as_str(),
         )
     });
+    let mut launch = identity.launch.clone();
+    launch.channel = launch
+        .channel
+        .or_else(|| params.channel.map(ToOwned::to_owned));
     let event = rimz::store::event::EventEnvelope::agent_launched(
         workspace.workspace_id.clone(),
         workspace.session_name.clone(),
@@ -1241,20 +1248,7 @@ pub(super) fn append_launch_event(
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
             agent_name_explicit: identity.name_explicit,
-            launch: rimz::agents::LaunchParams {
-                profile: identity.profile.clone(),
-                role: identity.role.clone(),
-                model: identity.model.clone(),
-                effort: identity.effort.clone(),
-                team: identity.team.clone(),
-                launch_group: identity.launch_group.clone(),
-                launch_ordinal: identity.launch_ordinal,
-                channel: identity
-                    .channel
-                    .clone()
-                    .or_else(|| params.channel.map(ToOwned::to_owned)),
-                kind_ordinal: None,
-            },
+            launch,
             state: params.state,
             run_id: identity.run_id.clone(),
             pane_id: params.pane_id,
@@ -1411,8 +1405,10 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
                         team: options.team,
                         launch_group: options
                             .launch
-                            .and_then(|launch| launch.launch_group.as_deref()),
-                        launch_ordinal: options.launch.and_then(|launch| launch.launch_ordinal),
+                            .and_then(|launch| launch.launch.launch_group.as_deref()),
+                        launch_ordinal: options
+                            .launch
+                            .and_then(|launch| launch.launch.launch_ordinal),
                         channel: options.channel,
                         model: model.as_deref(),
                         effort: effort.as_deref(),
@@ -1520,51 +1516,6 @@ mod tests {
     }
 
     fn test_agent(id: &str) -> AgentState {
-        AgentState {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked("codex"),
-            name: None,
-            name_explicit: false,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            status: rimz::agents::AgentStatus::Idle,
-            phase: rimz::agents::TurnPhase::Idle,
-            pane: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: jiff::Timestamp::UNIX_EPOCH,
-            last_activity: jiff::Timestamp::UNIX_EPOCH,
-            registered_at: Some(jiff::Timestamp::UNIX_EPOCH),
-        }
+        rimz::testkit::agent_state("codex", id, jiff::Timestamp::UNIX_EPOCH)
     }
 }

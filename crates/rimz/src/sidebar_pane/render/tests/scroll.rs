@@ -282,7 +282,7 @@ fn render_scroll_pins_tall_expanded_card_top() {
         child.total_tokens = Some(1_000 * (i + 1));
         agents.push(child);
     }
-    let snapshot = snapshot_with(Vec::new(), agents);
+    let snapshot = snapshot_with(agents);
 
     let rendered =
         snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 22);

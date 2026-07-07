@@ -241,7 +241,7 @@ mod tests {
     use crate::agents::lifecycle::TurnPhase;
     use crate::agents::{AgentRateLimits, RateLimitWindow};
     use crate::agents::{AgentState, AgentStatus};
-    use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+    use crate::ids::{PaneId, WorkspaceId};
     use crate::pane::PaneRef;
 
     use super::*;
@@ -325,12 +325,8 @@ mod tests {
         let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
         let now = Timestamp::now();
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            workspace,
-            Vec::new(),
-            vec![codex_agent("codex-1", now)],
-            now,
-        );
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(workspace, vec![codex_agent("codex-1", now)], now);
         snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
             "codex",
             Vec::new(),
@@ -351,7 +347,6 @@ mod tests {
     fn snapshot_with_agent(agent: AgentState) -> SidebarSnapshot {
         SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(std::path::Path::new("/tmp/usage-refresh")),
-            Vec::new(),
             vec![agent],
             Timestamp::now(),
         )
@@ -381,50 +376,11 @@ mod tests {
         observed_at: Timestamp,
     ) -> AgentState {
         AgentState {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked(kind),
-            name: None,
-            name_explicit: false,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             pane: Some(pane()),
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
             context,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: observed_at,
-            last_activity: observed_at,
-            registered_at: Some(observed_at),
+            ..crate::testkit::agent_state(kind, id, observed_at)
         }
     }
 

@@ -7,7 +7,7 @@ fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
     let pi = agent("pi", "p1", AgentStatus::Idle, 30);
     let by_provider = provider_spend([("claude", 1.0), ("codex", 5.0), ("pi", 3.0)]);
 
-    let mut snapshot = room(Vec::new(), vec![claude.clone(), codex.clone(), pi.clone()]);
+    let mut snapshot = room(vec![claude.clone(), codex.clone(), pi.clone()]);
     // The cap only trims the stacked dashboard; pin `never` so it bites here.
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 3;
@@ -37,7 +37,7 @@ fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
         5.0
     );
 
-    let mut snapshot = room(Vec::new(), vec![claude, codex, pi]);
+    let mut snapshot = room(vec![claude, codex, pi]);
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 2;
     let snapshot =
@@ -58,7 +58,7 @@ fn tabbed_dashboard_shows_every_provider_past_the_cap() {
         agent("pi", "p1", AgentStatus::Idle, 30),
         agent("opencode", "o1", AgentStatus::Idle, 40),
     ];
-    let mut snapshot = room(Vec::new(), agents);
+    let mut snapshot = room(agents);
     // Default `auto` tabs at four providers; a tight cap must not trim them.
     snapshot.theme.display.max_provider_blocks = 2;
     let snapshot =
@@ -84,17 +84,11 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
             .expect("claude panel")
     };
 
-    let panel = panel_for(room(
-        Vec::new(),
-        vec![agent("claude", "c1", AgentStatus::Idle, 10)],
-    ));
+    let panel = panel_for(room(vec![agent("claude", "c1", AgentStatus::Idle, 10)]));
     assert_eq!(panel.color, 173);
     assert_eq!(panel.color_rgb, Some((0xd9, 0x77, 0x57)));
 
-    let mut snapshot = room(
-        Vec::new(),
-        vec![agent("claude", "c1", AgentStatus::Idle, 10)],
-    );
+    let mut snapshot = room(vec![agent("claude", "c1", AgentStatus::Idle, 10)]);
     snapshot.theme.providers.insert(
         "claude".to_owned(),
         crate::config::ThemeProviderStyle {
@@ -109,10 +103,7 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
         "indexed override stays compatible with indexed-only renderers"
     );
 
-    let mut snapshot = room(
-        Vec::new(),
-        vec![agent("claude", "c1", AgentStatus::Idle, 10)],
-    );
+    let mut snapshot = room(vec![agent("claude", "c1", AgentStatus::Idle, 10)]);
     snapshot.theme.providers.insert(
         "claude".to_owned(),
         crate::config::ThemeProviderStyle {
@@ -169,7 +160,7 @@ fn provider_list_filters_and_orders_dashboard_panels() {
                 )
             })
             .collect();
-        let mut snapshot = room(Vec::new(), agents);
+        let mut snapshot = room(agents);
         snapshot.theme.display.max_provider_blocks = 1;
         snapshot.theme.display.provider_list =
             provider_list.into_iter().map(str::to_owned).collect();
@@ -183,7 +174,7 @@ fn provider_list_filters_and_orders_dashboard_panels() {
 
 #[test]
 fn recorded_spend_attaches_only_after_provider_discovery() {
-    let snapshot = room(Vec::new(), Vec::new());
+    let snapshot = room(Vec::new());
     let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
     by_provider.insert(
         "claude".to_owned(),

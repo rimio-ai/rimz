@@ -13,13 +13,10 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
     let mut probed: BTreeMap<String, AgentAccount> = BTreeMap::new();
     probed.insert("pi".to_owned(), account);
 
-    let snapshot = room(
-        Vec::new(),
-        vec![
-            agent("codex", "x1", AgentStatus::Idle, 10).limits(vec![codex_reading]),
-            agent("pi", "p1", AgentStatus::Idle, 20).limits(vec![pi_reading.clone()]),
-        ],
-    )
+    let snapshot = room(vec![
+        agent("codex", "x1", AgentStatus::Idle, 10).limits(vec![codex_reading]),
+        agent("pi", "p1", AgentStatus::Idle, 20).limits(vec![pi_reading.clone()]),
+    ])
     .with_provider_aggregates(&probed, &BTreeMap::new(), &BTreeMap::new());
     let pi_panel = snapshot
         .providers
@@ -30,13 +27,10 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
     assert_eq!(pi_panel.version.as_deref(), Some("0.78.0"));
     assert_eq!(pi_panel.windows, vec![pi_reading]);
 
-    let snapshot = room(
-        Vec::new(),
-        vec![
-            agent("codex", "x1", AgentStatus::Idle, 10).limits(vec![window(40, 3_600)]),
-            agent("pi", "p1", AgentStatus::Idle, 20),
-        ],
-    )
+    let snapshot = room(vec![
+        agent("codex", "x1", AgentStatus::Idle, 10).limits(vec![window(40, 3_600)]),
+        agent("pi", "p1", AgentStatus::Idle, 20),
+    ])
     .with_provider_aggregates(&probed, &BTreeMap::new(), &BTreeMap::new());
     let pi_panel = snapshot
         .providers

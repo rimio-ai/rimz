@@ -13,7 +13,7 @@ pub enum PruneReason {
     /// `workspace.json` records a project root that no longer exists on disk.
     ProjectRootGone,
     /// No usable `workspace.json` and no durable history — an abandoned
-    /// `rimz start` scaffold (empty `feed`/`locks`/`snapshots`).
+    /// `rimz start` scaffold (empty `snapshots`/`runs`/`locks`).
     AbandonedScaffold,
 }
 
@@ -128,7 +128,6 @@ fn workspace_has_history(path: &Path) -> bool {
     path.join("events.log.jsonl").exists()
         || path.join("snapshots").join("latest.json").exists()
         || dir_has_entries(&path.join("events.log.archive"))
-        || dir_has_entries(&path.join("feed"))
 }
 
 fn dir_has_entries(path: &Path) -> bool {
@@ -186,10 +185,10 @@ mod tests {
         write_record(&workspaces.join(gone_id.as_str()), &gone_id, &gone_root);
         fs::create_dir_all(runtime.join(gone_id.as_str())).unwrap();
 
-        // 3. Abandoned scaffold: empty feed/locks/snapshots, no record.
+        // 3. Abandoned scaffold: empty snapshots/runs/locks, no record.
         let scaffold_id = WorkspaceId::from_project_root(Path::new("/scaffold"));
         let scaffold_dir = workspaces.join(scaffold_id.as_str());
-        for sub in ["feed", "locks", "snapshots"] {
+        for sub in ["snapshots", "runs", "locks"] {
             fs::create_dir_all(scaffold_dir.join(sub)).unwrap();
         }
 

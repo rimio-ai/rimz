@@ -11,7 +11,7 @@ fn liveness_drops_dead_runtime_owner_from_rollup() {
         Some("12345".to_owned()),
     ));
 
-    let mut snapshot = room(Vec::new(), vec![codex]);
+    let mut snapshot = room(vec![codex]);
     assert_eq!(snapshot.agents.len(), 1);
     assert!(snapshot.worktree_groups.is_empty());
 
@@ -29,7 +29,7 @@ fn liveness_drops_dead_runtime_owner_from_rollup() {
 /// surviving agent ids. Fixture timestamps are epoch offsets, so the TTL
 /// rules are exercised deterministically.
 fn reap_survivors(agents: Vec<AgentState>) -> Vec<String> {
-    let mut snapshot = room(Vec::new(), agents);
+    let mut snapshot = room(agents);
     snapshot.reap_stale_sessions();
     let mut ids: Vec<String> = snapshot
         .agents

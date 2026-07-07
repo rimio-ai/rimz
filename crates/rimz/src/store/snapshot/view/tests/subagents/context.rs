@@ -12,7 +12,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     typed.task = Some("review".to_owned());
     let started = ago(100);
 
-    let snapshot = room(Vec::new(), vec![parent, child, fork, typed]);
+    let snapshot = room(vec![parent, child, fork, typed]);
     let folded = snapshot.with_subagent_context(vec![
         record(
             "child-1",

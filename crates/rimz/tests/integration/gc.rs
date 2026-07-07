@@ -117,7 +117,7 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
     // An abandoned `rimz start` scaffold: empty subdirs, no workspace.json.
     let scaffold =
         workspaces.join(WorkspaceId::from_project_root(std::path::Path::new("/scaffold")).as_str());
-    for sub in ["feed", "locks", "snapshots"] {
+    for sub in ["snapshots", "runs", "locks"] {
         std::fs::create_dir_all(scaffold.join(sub)).expect("mkdir scaffold sub");
     }
 

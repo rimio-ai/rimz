@@ -132,10 +132,10 @@ fn read_queue_file(path: &Path) -> Result<Vec<MessageRecord>> {
     };
     let tail_terminated = bytes.ends_with(b"\n");
     let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
-    let last_non_empty = lines.iter().rposition(|line| !trim_ascii(line).is_empty());
+    let last_non_empty = lines.iter().rposition(|line| !line.trim_ascii().is_empty());
     let mut messages = Vec::new();
     for (idx, line) in lines.into_iter().enumerate() {
-        let line = trim_ascii(line);
+        let line = line.trim_ascii();
         if line.is_empty() {
             continue;
         }
@@ -204,23 +204,13 @@ fn sort_messages(messages: &mut [MessageRecord]) {
     messages.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
 }
 
-fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
-    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[1..];
-    }
-    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    bytes
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::agents::{AgentState, AgentStatus};
-    use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
+    use crate::agents::AgentState;
+    use crate::ids::WorkspaceId;
     use crate::message::DeliveryGate;
 
     #[test]
@@ -353,51 +343,6 @@ mod tests {
 
     fn agent() -> AgentState {
         let now = jiff::Timestamp::now();
-        AgentState {
-            agent_id: AgentSessionId::from("sess-1"),
-            kind: AgentKind::new_unchecked("claude"),
-            name: None,
-            name_explicit: false,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            status: AgentStatus::Idle,
-            phase: crate::agents::TurnPhase::Idle,
-            pane: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: now,
-            last_activity: now,
-            registered_at: Some(now),
-        }
+        crate::testkit::agent_state("claude", "sess-1", now)
     }
 }

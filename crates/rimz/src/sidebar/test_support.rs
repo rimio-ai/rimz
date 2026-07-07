@@ -3,7 +3,7 @@ use std::path::Path;
 use jiff::Timestamp;
 
 use crate::agents::{AgentState, AgentStatus, RateLimitWindow, TurnPhase};
-use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 
@@ -81,7 +81,7 @@ pub(crate) fn snapshot_with_panels(
     workspace: WorkspaceId,
     panels: Vec<crate::SidebarProviderPanel>,
 ) -> SidebarSnapshot {
-    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     snapshot.providers = panels;
     snapshot
 }
@@ -89,50 +89,11 @@ pub(crate) fn snapshot_with_panels(
 pub(crate) fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
     let now = Timestamp::now();
     AgentState {
-        agent_id: agent_id.into(),
-        kind: AgentKind::new_unchecked(kind),
         name: Some(test_agent_name(agent_id)),
-        name_explicit: false,
         kind_ordinal: Some(test_agent_ordinal(agent_id)),
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
         status: AgentStatus::Running,
-        phase: TurnPhase::Idle,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: None,
-        worktree_branch: None,
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
         model: model.map(ToOwned::to_owned),
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: now,
-        last_activity: now,
-        registered_at: Some(now),
+        ..crate::testkit::agent_state(kind, agent_id, now)
     }
 }
 

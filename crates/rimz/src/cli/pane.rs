@@ -499,7 +499,7 @@ mod tests {
     use super::*;
     use jiff::Timestamp;
     use rimz::agents::AgentStatus;
-    use rimz::ids::{AgentKind, AgentSessionId, MuxName};
+    use rimz::ids::MuxName;
 
     fn pane(raw: &str, view: &str, name: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
         PaneRef {
@@ -516,53 +516,16 @@ mod tests {
     fn agent_on(pane_raw: &str, kind: &str, branch: &str) -> AgentState {
         let now = Timestamp::now();
         AgentState {
-            agent_id: AgentSessionId::from("sess-1"),
-            kind: AgentKind::new_unchecked(kind),
-            name: None,
-            name_explicit: false,
             kind_ordinal: Some(1),
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
             status: AgentStatus::Running,
             phase: rimz::agents::TurnPhase::Reasoning,
             pane: Some(PaneRef::from_id(PaneId::from_parts(
                 MuxName::Zellij,
                 pane_raw,
             ))),
-            runtime_owner: None,
-            parent_agent_id: None,
             worktree_path: Some(format!("/repo/{branch}")),
             worktree_branch: Some(branch.to_owned()),
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: now,
-            last_activity: now,
-            registered_at: Some(now),
+            ..rimz::testkit::agent_state(kind, "sess-1", now)
         }
     }
 
@@ -617,7 +580,6 @@ mod tests {
         agent.last_activity = t1;
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-pane-test")),
-            Vec::new(),
             vec![agent],
             t2,
         );

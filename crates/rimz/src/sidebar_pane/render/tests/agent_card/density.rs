@@ -14,48 +14,45 @@ fn compact_density_trims_resting_cards_by_status() {
     selected.worktree_path = Some("/repo/other".to_owned());
     selected.worktree_branch = Some("other".to_owned());
 
-    let mut snapshot = snapshot_with(
-        Vec::new(),
-        vec![
-            density_agent("idle-1", "idlebot", AgentStatus::Idle, Some("idle task"), 0),
-            density_agent(
-                "run-1",
-                "runner",
-                AgentStatus::Running,
-                Some("running task"),
-                38,
-            ),
-            density_agent(
-                "wait-1",
-                "waiter",
-                AgentStatus::Waiting,
-                Some("waiting task"),
-                42,
-            ),
-            density_agent(
-                "paused-1",
-                "paused",
-                AgentStatus::Paused,
-                Some("paused task"),
-                44,
-            ),
-            density_agent(
-                "done-1",
-                "done",
-                AgentStatus::Success,
-                Some("done task"),
-                46,
-            ),
-            density_agent(
-                "fail-1",
-                "failed",
-                AgentStatus::Failed,
-                Some("failed task"),
-                48,
-            ),
-            selected,
-        ],
-    );
+    let mut snapshot = snapshot_with(vec![
+        density_agent("idle-1", "idlebot", AgentStatus::Idle, Some("idle task"), 0),
+        density_agent(
+            "run-1",
+            "runner",
+            AgentStatus::Running,
+            Some("running task"),
+            38,
+        ),
+        density_agent(
+            "wait-1",
+            "waiter",
+            AgentStatus::Waiting,
+            Some("waiting task"),
+            42,
+        ),
+        density_agent(
+            "paused-1",
+            "paused",
+            AgentStatus::Paused,
+            Some("paused task"),
+            44,
+        ),
+        density_agent(
+            "done-1",
+            "done",
+            AgentStatus::Success,
+            Some("done task"),
+            46,
+        ),
+        density_agent(
+            "fail-1",
+            "failed",
+            AgentStatus::Failed,
+            Some("failed task"),
+            48,
+        ),
+        selected,
+    ]);
     snapshot.theme.display.card_density = CardDensityMode::Compact;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -124,7 +121,7 @@ fn compact_density_running_waiting_without_context_use_baseline_gauge() {
     selected.worktree_path = Some("/repo/other".to_owned());
     selected.worktree_branch = Some("other".to_owned());
 
-    let mut snapshot = snapshot_with(Vec::new(), vec![running, waiting, selected]);
+    let mut snapshot = snapshot_with(vec![running, waiting, selected]);
     snapshot.theme.display.card_density = CardDensityMode::Compact;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -179,7 +176,7 @@ fn compact_density_selected_card_opens_to_full_form() {
     child.subagent_description = Some("trace compaction".to_owned());
     child.subagent_started_at = Some(fixed_now() - Duration::from_secs(120));
 
-    let mut snapshot = snapshot_with(Vec::new(), vec![parent, child]);
+    let mut snapshot = snapshot_with(vec![parent, child]);
     snapshot.theme.display.card_density = CardDensityMode::Compact;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -232,7 +229,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     child.subagent_started_at = Some(fixed_now() - Duration::from_secs(180));
     child.last_activity = fixed_now() - Duration::from_secs(60);
 
-    let mut snapshot = snapshot_with(Vec::new(), vec![parent, selected, child]);
+    let mut snapshot = snapshot_with(vec![parent, selected, child]);
     snapshot.theme.display.card_density = CardDensityMode::Expanded;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(

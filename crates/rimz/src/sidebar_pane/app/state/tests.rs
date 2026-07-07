@@ -170,7 +170,6 @@ fn snapshot_in_group(
     let mut snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(std::path::Path::new("/repo")),
         Vec::new(),
-        Vec::new(),
         jiff::Timestamp::from_second(1_000).unwrap(),
     );
     snapshot.worktree_groups = vec![group];

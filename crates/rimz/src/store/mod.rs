@@ -56,6 +56,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::agents::LaunchParams;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
 use crate::store::event::{AgentLaunchState, EventEnvelope};
 
@@ -155,14 +156,7 @@ pub struct AgentLaunchRequest {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub name: AgentLaunchName,
-    pub profile: Option<String>,
-    pub role: Option<String>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-    pub team: Option<String>,
-    pub launch_group: Option<String>,
-    pub launch_ordinal: Option<u32>,
-    pub channel: Option<String>,
+    pub launch: LaunchParams,
     pub run_id: Option<RunId>,
 }
 
@@ -172,14 +166,7 @@ pub struct AgentLaunchIdentity {
     pub agent_id: AgentSessionId,
     pub name: String,
     pub name_explicit: bool,
-    pub profile: Option<String>,
-    pub role: Option<String>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-    pub team: Option<String>,
-    pub launch_group: Option<String>,
-    pub launch_ordinal: Option<u32>,
-    pub channel: Option<String>,
+    pub launch: LaunchParams,
     pub run_id: Option<RunId>,
 }
 

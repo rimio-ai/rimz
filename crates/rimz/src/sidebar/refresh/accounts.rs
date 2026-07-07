@@ -467,7 +467,6 @@ mod tests {
             let workspace = WorkspaceId::from_project_root(Path::new("/tmp/provider-version"));
             let snapshot = SidebarSnapshot::build_with_agents(
                 workspace.clone(),
-                Vec::new(),
                 vec![root_agent(kind, "active", None)],
                 Timestamp::now(),
             );

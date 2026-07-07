@@ -18,7 +18,7 @@ fn agent_context_line_renders_compaction_markers() {
         );
         claude.context = Some(claude_context(fixed_now()));
         claude.compaction_count = count;
-        let snapshot = snapshot_with(Vec::new(), vec![claude]);
+        let snapshot = snapshot_with(vec![claude]);
         let rendered = snapshot_to_screen(&snapshot, 56, 17);
 
         if let Some(expected) = expected {
@@ -52,7 +52,7 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
     let stamped = pane("%1", "claude", "/repo/main");
     claude.pane = Some(stamped.clone());
     let live = stamped;
-    let snapshot = snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![live], None);
+    let snapshot = snapshot_with(vec![claude]).with_live_panes(vec![live], None);
     let row = &snapshot.worktree_groups[0].rows[0];
     assert!(row.as_process().is_none());
 
@@ -90,7 +90,7 @@ fn codex_line_two_walks_the_descriptor_precedence_ladder() {
         context.session_name = Some(session_name.to_owned());
         context.session_preview = session_preview.map(str::to_owned);
         codex.context = Some(context);
-        let snapshot = snapshot_with(Vec::new(), vec![codex]);
+        let snapshot = snapshot_with(vec![codex]);
         snapshot_to_screen(&snapshot, 44, 15)
     };
 
@@ -122,7 +122,7 @@ fn selected_agent_without_context_keeps_bare_token_total() {
     codex.model = Some("GPT-5.5".to_owned());
     codex.total_tokens = Some(5_000);
     assert!(codex.context.is_none());
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let snapshot = snapshot_with(vec![codex]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -175,7 +175,7 @@ fn codex_card_renders_the_per_call_composition() {
     codex.fresh_input_tokens = Some(9_200);
     codex.output_tokens = Some(800);
     assert!(codex.context.is_none());
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let snapshot = snapshot_with(vec![codex]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -229,7 +229,7 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
         }),
     });
     codex.context = Some(context);
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let snapshot = snapshot_with(vec![codex]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -275,7 +275,7 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
     pi.cache_write_input_tokens = Some(10_000);
     pi.fresh_input_tokens = Some(9_200);
     pi.output_tokens = Some(800);
-    let snapshot = snapshot_with(Vec::new(), vec![pi]);
+    let snapshot = snapshot_with(vec![pi]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -307,7 +307,7 @@ fn pi_card_renders_cache_write_in_the_per_call_composition() {
 fn calm_context_bar_orders_segments_left_to_right() {
     let theme = Theme::fixed(false);
     let bar_styles_for = |agent: crate::agents::AgentState| {
-        let snapshot = snapshot_with(Vec::new(), vec![agent]);
+        let snapshot = snapshot_with(vec![agent]);
         let mut lines = Vec::new();
         let mut map = Vec::new();
         let mut more_hits = Vec::new();
@@ -445,7 +445,7 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         codex.context_pct = Some(21);
         codex.total_tokens = Some(5_000);
         codex.last_activity = fixed_now() - Duration::from_secs(idle_secs);
-        let snapshot = snapshot_with(Vec::new(), vec![codex]);
+        let snapshot = snapshot_with(vec![codex]);
         group_lines(&snapshot, &theme, usize::MAX)
             .iter()
             .flat_map(|line| line.spans.iter())
@@ -500,7 +500,7 @@ fn codex_app_server_context_links_to_rich_card() {
     codex.context_pct = Some(21);
     codex.total_tokens = Some(48_000);
     codex.context = Some(codex_context(fixed_now()));
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let snapshot = snapshot_with(vec![codex]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,

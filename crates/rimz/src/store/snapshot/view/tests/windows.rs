@@ -170,7 +170,7 @@ fn call_split_projects_only_with_known_input_sides() {
     codex.cache_write_input_tokens = Some(10_000);
     codex.fresh_input_tokens = Some(9_200);
     codex.output_tokens = Some(800);
-    let snapshot = room_with_agent_panes(Vec::new(), vec![codex]);
+    let snapshot = room_with_agent_panes(vec![codex]);
 
     let projected = row(&snapshot, "sess-1");
     let split = projected
@@ -188,7 +188,7 @@ fn call_split_projects_only_with_known_input_sides() {
     let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
     codex.total_tokens = Some(5_000);
     codex.cache_read_input_tokens = Some(99);
-    let snapshot = room_with_agent_panes(Vec::new(), vec![codex]);
+    let snapshot = room_with_agent_panes(vec![codex]);
 
     let projected = row(&snapshot, "sess-1");
     assert_eq!(projected.call_split(), None);
@@ -202,7 +202,7 @@ fn call_split_projects_only_with_known_input_sides() {
 /// never an error).
 #[test]
 fn today_spend_live_usd_round_trips_and_defaults_absent() {
-    let mut snapshot = room(Vec::new(), Vec::new());
+    let mut snapshot = room(Vec::new());
     snapshot.today_spend_live_usd = Some(12.34);
     snapshot.today_spend_epoch_secs = Some(123);
     let json = serde_json::to_string(&snapshot).unwrap();

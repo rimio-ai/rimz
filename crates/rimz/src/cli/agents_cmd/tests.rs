@@ -977,12 +977,12 @@ mod identity {
             AgentLaunchName::Explicit("docs".to_owned())
         );
         assert_eq!(requests[0].kind.as_str(), "codex");
-        assert_eq!(requests[0].profile.as_deref(), Some("codex-coder"));
-        assert_eq!(requests[0].role.as_deref(), Some("coder"));
-        assert_eq!(requests[0].model.as_deref(), Some("gpt-5-codex"));
-        assert_eq!(requests[0].effort.as_deref(), Some("high"));
-        assert_eq!(requests[0].team.as_deref(), Some("pcr"));
-        assert_eq!(requests[0].channel.as_deref(), Some("design"));
+        assert_eq!(requests[0].launch.profile.as_deref(), Some("codex-coder"));
+        assert_eq!(requests[0].launch.role.as_deref(), Some("coder"));
+        assert_eq!(requests[0].launch.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(requests[0].launch.effort.as_deref(), Some("high"));
+        assert_eq!(requests[0].launch.team.as_deref(), Some("pcr"));
+        assert_eq!(requests[0].launch.channel.as_deref(), Some("design"));
 
         let requests =
             launch_identity_requests(&layout, None, Some("my_feature"), None, None, None).unwrap();
@@ -1029,16 +1029,16 @@ mod identity {
             None,
         )
         .unwrap();
-        assert_eq!(requests[0].role.as_deref(), Some("coder"));
-        assert_eq!(requests[0].launch_ordinal, Some(1));
-        assert_eq!(requests[1].role.as_deref(), Some("planner"));
-        assert_eq!(requests[1].launch_ordinal, Some(0));
-        assert_eq!(requests[2].role, None);
-        assert_eq!(requests[2].launch_ordinal, None);
+        assert_eq!(requests[0].launch.role.as_deref(), Some("coder"));
+        assert_eq!(requests[0].launch.launch_ordinal, Some(1));
+        assert_eq!(requests[1].launch.role.as_deref(), Some("planner"));
+        assert_eq!(requests[1].launch.launch_ordinal, Some(0));
+        assert_eq!(requests[2].launch.role, None);
+        assert_eq!(requests[2].launch.launch_ordinal, None);
         assert!(
             requests
                 .iter()
-                .all(|request| request.launch_group.is_none())
+                .all(|request| request.launch.launch_group.is_none())
         );
 
         let single_role = LayoutSpec::single(agent_cell_with_role(Some("coder")));
@@ -1051,7 +1051,7 @@ mod identity {
             None,
         )
         .unwrap();
-        assert_eq!(requests[0].launch_ordinal, Some(1));
+        assert_eq!(requests[0].launch.launch_ordinal, Some(1));
 
         let inline = LayoutSpec {
             columns: vec![Column {
@@ -1061,18 +1061,19 @@ mod identity {
         };
         let requests = launch_identity_requests(&inline, None, None, None, None, None).unwrap();
         let group = requests[0]
+            .launch
             .launch_group
             .as_deref()
             .expect("inline launch group");
         assert!(group.starts_with("launch_"));
-        assert_eq!(requests[1].launch_group.as_deref(), Some(group));
-        assert_eq!(requests[0].launch_ordinal, Some(0));
-        assert_eq!(requests[1].launch_ordinal, Some(1));
+        assert_eq!(requests[1].launch.launch_group.as_deref(), Some(group));
+        assert_eq!(requests[0].launch.launch_ordinal, Some(0));
+        assert_eq!(requests[1].launch.launch_ordinal, Some(1));
 
         let single = LayoutSpec::single(agent_cell_with_role(None));
         let requests = launch_identity_requests(&single, None, None, None, None, None).unwrap();
-        assert_eq!(requests[0].launch_group, None);
-        assert_eq!(requests[0].launch_ordinal, None);
+        assert_eq!(requests[0].launch.launch_group, None);
+        assert_eq!(requests[0].launch.launch_ordinal, None);
     }
 }
 
@@ -1097,14 +1098,11 @@ mod pane_exec {
             agent_id: AgentSessionId::from("launch_0123456789abcdef0123456789abcdef"),
             name: "swift-otter".to_owned(),
             name_explicit: false,
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: Some("launch_group_1".to_owned()),
-            launch_ordinal: Some(2),
-            channel: None,
+            launch: rimz::agents::LaunchParams {
+                launch_group: Some("launch_group_1".to_owned()),
+                launch_ordinal: Some(2),
+                ..rimz::agents::LaunchParams::default()
+            },
             run_id: None,
         };
 
@@ -1479,7 +1477,6 @@ mod render {
         host.pane = Some(rimz::pane::PaneRef::from_id(host_pane_id.clone()));
         let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
             workspace_id,
-            Vec::new(),
             vec![old, new, dead_daemon, host],
             jiff::Timestamp::from_second(1_020).unwrap(),
         );
@@ -1586,7 +1583,6 @@ mod render {
         );
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
-            Vec::new(),
             vec![failed, paused, running],
             now,
         );
@@ -1619,7 +1615,6 @@ mod render {
         agent.description = Some("this description is far too long for the terminal".to_owned());
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
-            Vec::new(),
             vec![agent],
             now,
         );
@@ -1650,7 +1645,6 @@ mod render {
         agent.name_explicit = true;
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
-            Vec::new(),
             vec![agent],
             now,
         );
@@ -1690,7 +1684,6 @@ mod render {
         external.worktree_branch = None;
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo/main")),
-            Vec::new(),
             vec![worktree, plain, external],
             now,
         )
@@ -1730,7 +1723,6 @@ mod render {
         coder.team = planner.team.clone();
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo/main")),
-            Vec::new(),
             vec![planner, coder],
             now,
         )
@@ -1754,7 +1746,6 @@ mod render {
         repeated.team = Some("pcr".to_owned());
         let repeated_snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo/main")),
-            Vec::new(),
             vec![repeated],
             now,
         )
@@ -1784,7 +1775,6 @@ mod render {
         coder.team = Some("review".to_owned());
         let mixed_snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo/main")),
-            Vec::new(),
             vec![planner, coder],
             now,
         )
@@ -2014,49 +2004,10 @@ fn agent_with_status(
 ) -> rimz::agents::AgentState {
     let at = jiff::Timestamp::from_second(activity).unwrap();
     rimz::agents::AgentState {
-        agent_id: AgentSessionId::from(id),
-        kind: AgentKind::new_unchecked("claude"),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
         status,
         phase,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
         worktree_path: Some("/tmp/rimz-agents-table".to_owned()),
         worktree_branch: Some("main".to_owned()),
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: at,
-        last_activity: at,
-        registered_at: Some(at),
+        ..rimz::testkit::agent_state("claude", id, at)
     }
 }

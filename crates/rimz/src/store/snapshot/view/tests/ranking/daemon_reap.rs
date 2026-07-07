@@ -97,7 +97,7 @@ fn daemon_session_reap_handles_loaded_set_edges() {
         let loaded = case
             .loaded
             .map(|ids| ids.into_iter().map(str::to_owned).collect::<BTreeSet<_>>());
-        let mut snapshot = room(Vec::new(), case.agents);
+        let mut snapshot = room(case.agents);
         snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
             daemon_pids: &daemon_pids,
             loaded: loaded.as_ref(),
@@ -145,7 +145,7 @@ fn daemon_session_reap_handles_stamped_pane_liveness() {
     ] {
         let daemon_pids = BTreeSet::from([7]);
         let loaded = BTreeSet::new();
-        let mut snapshot = room(Vec::new(), vec![case.agent]);
+        let mut snapshot = room(vec![case.agent]);
         snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
             daemon_pids: &daemon_pids,
             loaded: Some(&loaded),
@@ -171,10 +171,7 @@ fn host_pane_roots_are_dropped_only_when_frame_is_present() {
     let mut host_pane = pane("%host", "claude", "/repo/daemon");
     host_pane.spawn_command = Some("claude remote-control --spawn worktree".to_owned());
     let work_pane = pane("%work", "claude", "/repo/main");
-    let mut snapshot = room(
-        Vec::new(),
-        vec![host_root.clone(), host_child.clone(), normal.clone()],
-    );
+    let mut snapshot = room(vec![host_root.clone(), host_child.clone(), normal.clone()]);
 
     snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
         daemon_pids: &BTreeSet::new(),
@@ -185,7 +182,7 @@ fn host_pane_roots_are_dropped_only_when_frame_is_present() {
 
     assert_eq!(rollup_ids(&snapshot), vec!["normal"]);
 
-    let mut snapshot = room(Vec::new(), vec![host_root, host_child, normal]);
+    let mut snapshot = room(vec![host_root, host_child, normal]);
     snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
         daemon_pids: &BTreeSet::new(),
         loaded: None,

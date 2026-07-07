@@ -8,7 +8,7 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
         ..pane("%1", "x", "/repo/main")
     };
     assert!(
-        rows(&room(Vec::new(), Vec::new()).with_live_panes(vec![anonymous], None)).is_empty(),
+        rows(&room(Vec::new()).with_live_panes(vec![anonymous], None)).is_empty(),
         "presence without command, cwd, spawn, or agent identity folds no row"
     );
 
@@ -18,7 +18,7 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
         cwd: None,
         ..pane("%1", "x", "/repo/main")
     };
-    let snapshot = room(Vec::new(), Vec::new()).with_live_panes(vec![spawn_only], None);
+    let snapshot = room(Vec::new()).with_live_panes(vec![spawn_only], None);
     assert_eq!(rows(&snapshot)[0].name, "codex");
 
     let claude = agent("claude", "sess-a", AgentStatus::Running, 1_000)
@@ -28,8 +28,7 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
         command: None,
         ..pane("%1", "claude", "/repo/main")
     };
-    let snapshot =
-        room(Vec::new(), vec![claude]).with_live_panes(vec![commandless_agent_pane], None);
+    let snapshot = room(vec![claude]).with_live_panes(vec![commandless_agent_pane], None);
     assert!(
         rows(&snapshot)[0].is_agent(),
         "agent stamp binds by pane id"
@@ -39,7 +38,7 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
         command: None,
         ..pane("%2", "x", "/repo/main")
     };
-    let snapshot = room(Vec::new(), Vec::new())
+    let snapshot = room(Vec::new())
         .with_live_panes(vec![pane("%1", "zsh", "/repo/main"), raced_sibling], None);
     assert_eq!(rows(&snapshot)[0].name, "zsh", "guard is per-pane");
 
@@ -49,7 +48,7 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
         cwd: None,
         ..pane("%2", "x", "")
     };
-    let snapshot = room(Vec::new(), Vec::new())
+    let snapshot = room(Vec::new())
         .with_project_root(Some(PathBuf::from(root)))
         .with_live_panes(vec![pane("%1", "zsh", root), external_race], None);
     assert_eq!(snapshot.worktree_groups.len(), 1);
@@ -62,8 +61,7 @@ fn duplicate_pane_or_agent_id_projects_one_row_identity() {
         .worktree("/repo/main")
         .in_pane("%1");
     let duplicate = pane("%1", "claude", "/repo/main");
-    let snapshot =
-        room(Vec::new(), vec![claude]).with_live_panes(vec![duplicate.clone(), duplicate], None);
+    let snapshot = room(vec![claude]).with_live_panes(vec![duplicate.clone(), duplicate], None);
     assert_single_clean_row(&snapshot, "duplicate pane ids fold once");
 
     let first = agent("claude", "sess-a", AgentStatus::Running, 1_000)
@@ -72,7 +70,7 @@ fn duplicate_pane_or_agent_id_projects_one_row_identity() {
     let duplicate = agent("claude", "sess-a", AgentStatus::Running, 999)
         .worktree("/repo/main")
         .in_pane("%2");
-    let snapshot = room(Vec::new(), vec![first, duplicate]).with_live_panes(
+    let snapshot = room(vec![first, duplicate]).with_live_panes(
         vec![
             pane("%1", "claude", "/repo/main"),
             pane("%2", "claude", "/repo/main"),
@@ -135,8 +133,7 @@ fn newborn_unknown_cwd_quarantine_only_applies_to_the_birth_frame() {
             Some(SidebarWorktreeKind::Worktree),
         ),
     ] {
-        let mut snapshot =
-            room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
+        let mut snapshot = room(Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
         snapshot.panes_produced_at_ms = Some(produced_at);
         let snapshot = snapshot.with_live_panes(vec![pane_ref], None);
         assert_eq!(

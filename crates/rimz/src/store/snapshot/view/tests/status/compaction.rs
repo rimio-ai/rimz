@@ -17,7 +17,7 @@ fn compacting_marker_lights_the_head_then_expires() {
         .worktree("/repo/main")
         .compacting_ago(crate::agents::COMPACTING_WINDOW_SECS + 1);
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![fresh, inside, stale]);
+    let snapshot = room_with_agent_panes(vec![fresh, inside, stale]);
     assert!(
         row(&snapshot, "compacting-now").compacting(),
         "a fresh marker pulses"
@@ -141,13 +141,13 @@ fn compaction_end_stays_orthogonal_to_display_status() {
     .worktree("/repo/main")
     .active_ago(default_stall_secs() + 10);
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![auto]);
+    let snapshot = room_with_agent_panes(vec![auto]);
     assert_eq!(
         row(&snapshot, "auto").status(),
         Some(AgentStatus::Running),
         "spent-account projection does not park an auto-resumed row without a pause marker"
     );
-    let snapshot = room_with_agent_panes(Vec::new(), vec![manual]);
+    let snapshot = room_with_agent_panes(vec![manual]);
     assert_eq!(
         row(&snapshot, "manual").status(),
         Some(AgentStatus::Idle),

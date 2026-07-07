@@ -20,7 +20,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
     .map(|(i, status)| agent_in(&format!("sess-{i}"), "/repo/main", status, 1_000 + i as i64))
     .collect::<Vec<_>>();
 
-    let snapshot = room_with_agent_panes(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(agents);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -65,7 +65,7 @@ fn calm_order_uses_pane_ordinal_not_label() {
     older.pane = Some(pane("%0", "codex", "/repo/main"));
     let mut newer = agent("claude", "newer", AgentStatus::Idle, 9_000).worktree("/repo/main");
     newer.pane = Some(pane("%1", "claude", "/repo/main"));
-    let mut snapshot = room_with_agent_panes(Vec::new(), vec![newer, older]);
+    let mut snapshot = room_with_agent_panes(vec![newer, older]);
     let row_order = snapshot.worktree_groups[0]
         .rows
         .iter()
@@ -93,7 +93,7 @@ fn calm_order_uses_pane_ordinal_not_label() {
     let mut newer = agent_in("sess-a", "/repo/a", AgentStatus::Idle, 9_000);
     newer.pane = Some(pane("%1", "node", "/repo/a"));
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![newer, older]);
+    let snapshot = room_with_agent_panes(vec![newer, older]);
 
     let groups = snapshot
         .worktree_groups
@@ -120,7 +120,7 @@ fn attention_bucket_sorts_longest_overdue_first() {
     .map(|(id, status, rank)| agent_in(id, "/repo/main", status, rank))
     .collect::<Vec<_>>();
 
-    let snapshot = room_with_agent_panes(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(agents);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -133,14 +133,11 @@ fn attention_bucket_sorts_longest_overdue_first() {
 
 #[test]
 fn hot_band_score_interleaves_attention_by_overdue_heat() {
-    let snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("fresh-wait", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(120),
-            agent_in("old-fail", "/repo/main", AgentStatus::Failed, 2_000).active_ago(50 * 60),
-            agent_in("calm", "/repo/main", AgentStatus::Success, 3_000).active_ago(60),
-        ],
-    );
+    let snapshot = room_with_agent_panes(vec![
+        agent_in("fresh-wait", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(120),
+        agent_in("old-fail", "/repo/main", AgentStatus::Failed, 2_000).active_ago(50 * 60),
+        agent_in("calm", "/repo/main", AgentStatus::Success, 3_000).active_ago(60),
+    ]);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -156,14 +153,10 @@ fn hot_band_score_interleaves_attention_by_overdue_heat() {
 
 #[test]
 fn warm_band_decay_can_sink_old_attention_below_recent_calm() {
-    let snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("old-ask", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(20 * 60 * 60),
-            agent_in("recent-done", "/repo/main", AgentStatus::Success, 2_000)
-                .active_ago(2 * 60 * 60),
-        ],
-    );
+    let snapshot = room_with_agent_panes(vec![
+        agent_in("old-ask", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(20 * 60 * 60),
+        agent_in("recent-done", "/repo/main", AgentStatus::Success, 2_000).active_ago(2 * 60 * 60),
+    ]);
 
     assert!(row(&snapshot, "old-ask").inactive);
     assert!(row(&snapshot, "recent-done").inactive);
@@ -182,16 +175,12 @@ fn warm_band_decay_can_sink_old_attention_below_recent_calm() {
 
 #[test]
 fn archive_band_parks_rows_below_warm_and_keeps_attention_above_idle() {
-    let snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("warm-idle", "/repo/main", AgentStatus::Idle, 1_000).active_ago(23 * 60 * 60),
-            agent_in("archived-idle", "/repo/main", AgentStatus::Idle, 2_000)
-                .active_ago(25 * 60 * 60),
-            agent_in("archived-ask", "/repo/main", AgentStatus::Waiting, 3_000)
-                .active_ago(25 * 60 * 60),
-        ],
-    );
+    let snapshot = room_with_agent_panes(vec![
+        agent_in("warm-idle", "/repo/main", AgentStatus::Idle, 1_000).active_ago(23 * 60 * 60),
+        agent_in("archived-idle", "/repo/main", AgentStatus::Idle, 2_000).active_ago(25 * 60 * 60),
+        agent_in("archived-ask", "/repo/main", AgentStatus::Waiting, 3_000)
+            .active_ago(25 * 60 * 60),
+    ]);
 
     assert!(!row(&snapshot, "warm-idle").archived);
     assert!(row(&snapshot, "archived-ask").archived);
@@ -209,13 +198,10 @@ fn archive_band_parks_rows_below_warm_and_keeps_attention_above_idle() {
 
 #[test]
 fn read_state_never_changes_the_band() {
-    let mut snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("seen-wait", "/repo/a", AgentStatus::Waiting, 1_000),
-            agent_in("new-done", "/repo/b", AgentStatus::Success, 2_000),
-        ],
-    );
+    let mut snapshot = room_with_agent_panes(vec![
+        agent_in("seen-wait", "/repo/a", AgentStatus::Waiting, 1_000),
+        agent_in("new-done", "/repo/b", AgentStatus::Success, 2_000),
+    ]);
     row_mut(&mut snapshot, "new-done").unread = true;
     snapshot.sort_groups_for_presentation();
     assert_eq!(
@@ -224,13 +210,10 @@ fn read_state_never_changes_the_band() {
         "read ask outranks unread result; read state never changes the band"
     );
 
-    let mut snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("read-old", "/repo/main", AgentStatus::Waiting, 1_000),
-            agent_in("new-wait", "/repo/main", AgentStatus::Waiting, 9_000),
-        ],
-    );
+    let mut snapshot = room_with_agent_panes(vec![
+        agent_in("read-old", "/repo/main", AgentStatus::Waiting, 1_000),
+        agent_in("new-wait", "/repo/main", AgentStatus::Waiting, 9_000),
+    ]);
     row_mut(&mut snapshot, "new-wait").unread = true;
     snapshot.sort_groups_for_presentation();
     let order = snapshot.worktree_groups[0]
@@ -247,18 +230,15 @@ fn read_state_never_changes_the_band() {
 
 #[test]
 fn stale_attention_sinks_below_live_work_then_leads_inactive() {
-    let snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            // Fresh idle work: live, so it outranks any stale card.
-            agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 3_000),
-            // An 8h-stale ask and an 8h-stale result: both cross into inactive.
-            agent_in("old-wait", "/repo/main", AgentStatus::Waiting, 1_000)
-                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-            agent_in("old-done", "/repo/main", AgentStatus::Success, 2_000)
-                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-        ],
-    );
+    let snapshot = room_with_agent_panes(vec![
+        // Fresh idle work: live, so it outranks any stale card.
+        agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 3_000),
+        // An 8h-stale ask and an 8h-stale result: both cross into inactive.
+        agent_in("old-wait", "/repo/main", AgentStatus::Waiting, 1_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        agent_in("old-done", "/repo/main", AgentStatus::Success, 2_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+    ]);
 
     assert!(
         !row(&snapshot, "fresh-idle").inactive,
@@ -283,13 +263,10 @@ fn stale_attention_sinks_below_live_work_then_leads_inactive() {
 
 #[test]
 fn agent_cards_lead_process_rows_even_when_inactive() {
-    let mut snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("old-done", "/repo/main", AgentStatus::Success, 1_000)
-                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-        ],
-    );
+    let mut snapshot = room_with_agent_panes(vec![
+        agent_in("old-done", "/repo/main", AgentStatus::Success, 1_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+    ]);
     snapshot.worktree_groups[0]
         .rows
         .push(process_row("zsh", "/repo/main"));
@@ -309,15 +286,12 @@ fn agent_cards_lead_process_rows_even_when_inactive() {
 
 #[test]
 fn inactive_idle_uses_the_hour_boundary_strictly() {
-    let snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 1_000)
-                .active_ago(ATTENTION_AGE_CEILING_SECS),
-            agent_in("old-idle", "/repo/main", AgentStatus::Idle, 2_000)
-                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-        ],
-    );
+    let snapshot = room_with_agent_panes(vec![
+        agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 1_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS),
+        agent_in("old-idle", "/repo/main", AgentStatus::Idle, 2_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+    ]);
 
     assert!(!row(&snapshot, "fresh-idle").inactive);
     assert!(row(&snapshot, "old-idle").inactive);
@@ -325,14 +299,11 @@ fn inactive_idle_uses_the_hour_boundary_strictly() {
 
 #[test]
 fn inactive_groups_sink_below_process_groups() {
-    let mut snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("old-done", "/repo/a", AgentStatus::Success, 1_000)
-                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-            agent_in("fresh-idle", "/repo/c", AgentStatus::Idle, 2_000),
-        ],
-    );
+    let mut snapshot = room_with_agent_panes(vec![
+        agent_in("old-done", "/repo/a", AgentStatus::Success, 1_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        agent_in("fresh-idle", "/repo/c", AgentStatus::Idle, 2_000),
+    ]);
     snapshot.worktree_groups.push(SidebarWorktreeGroup {
         key: "/repo/b".to_owned(),
         label: "b".to_owned(),
@@ -361,16 +332,13 @@ fn inactive_groups_sink_below_process_groups() {
 
 #[test]
 fn live_process_keeps_mixed_group_above_inactive_groups() {
-    let mut snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("old-a", "/repo/a", AgentStatus::Success, 1_000)
-                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-            agent_in("old-b", "/repo/b", AgentStatus::Success, 2_000)
-                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-            agent_in("fresh-c", "/repo/c", AgentStatus::Idle, 3_000),
-        ],
-    );
+    let mut snapshot = room_with_agent_panes(vec![
+        agent_in("old-a", "/repo/a", AgentStatus::Success, 1_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        agent_in("old-b", "/repo/b", AgentStatus::Success, 2_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        agent_in("fresh-c", "/repo/c", AgentStatus::Idle, 3_000),
+    ]);
     snapshot
         .worktree_groups
         .iter_mut()
@@ -416,7 +384,7 @@ fn cap_keeps_inactive_success_above_hidden_idle_tail() {
         )
         .active_ago(ATTENTION_AGE_CEILING_SECS + 1)
     }));
-    let snapshot = room_with_agent_panes(Vec::new(), agents);
+    let snapshot = room_with_agent_panes(agents);
 
     assert!(
         snapshot.worktree_groups[0]
@@ -430,36 +398,33 @@ fn cap_keeps_inactive_success_above_hidden_idle_tail() {
 
 #[test]
 fn cohort_rows_hold_launch_order_across_status_churn() {
-    let mut snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            cohort_agent(
-                "cohort-second",
-                AgentStatus::Success,
-                1_000,
-                "launch_group_1",
-                Some(1),
-                "%1",
-            ),
-            cohort_agent(
-                "cohort-tail",
-                AgentStatus::Running,
-                2_000,
-                "launch_group_1",
-                None,
-                "%2",
-            ),
-            cohort_agent(
-                "cohort-first",
-                AgentStatus::Waiting,
-                3_000,
-                "launch_group_1",
-                Some(0),
-                "%3",
-            ),
-            agent_in("loose-unread", "/repo/main", AgentStatus::Success, 4_000).in_pane("%0"),
-        ],
-    );
+    let mut snapshot = room_with_agent_panes(vec![
+        cohort_agent(
+            "cohort-second",
+            AgentStatus::Success,
+            1_000,
+            "launch_group_1",
+            Some(1),
+            "%1",
+        ),
+        cohort_agent(
+            "cohort-tail",
+            AgentStatus::Running,
+            2_000,
+            "launch_group_1",
+            None,
+            "%2",
+        ),
+        cohort_agent(
+            "cohort-first",
+            AgentStatus::Waiting,
+            3_000,
+            "launch_group_1",
+            Some(0),
+            "%3",
+        ),
+        agent_in("loose-unread", "/repo/main", AgentStatus::Success, 4_000).in_pane("%0"),
+    ]);
     row_mut(&mut snapshot, "loose-unread").unread = true;
     snapshot.sort_groups_for_presentation();
 
@@ -482,43 +447,40 @@ fn cohort_rows_hold_launch_order_across_status_churn() {
 
 #[test]
 fn inline_cohorts_stay_contiguous_without_interleaving() {
-    let snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            cohort_agent(
-                "g1-a",
-                AgentStatus::Success,
-                1_000,
-                "launch_g1",
-                Some(0),
-                "%1",
-            ),
-            cohort_agent(
-                "g2-a",
-                AgentStatus::Success,
-                2_000,
-                "launch_g2",
-                Some(0),
-                "%2",
-            ),
-            cohort_agent(
-                "g2-b",
-                AgentStatus::Success,
-                3_000,
-                "launch_g2",
-                Some(1),
-                "%3",
-            ),
-            cohort_agent(
-                "g1-b",
-                AgentStatus::Success,
-                4_000,
-                "launch_g1",
-                Some(1),
-                "%4",
-            ),
-        ],
-    );
+    let snapshot = room_with_agent_panes(vec![
+        cohort_agent(
+            "g1-a",
+            AgentStatus::Success,
+            1_000,
+            "launch_g1",
+            Some(0),
+            "%1",
+        ),
+        cohort_agent(
+            "g2-a",
+            AgentStatus::Success,
+            2_000,
+            "launch_g2",
+            Some(0),
+            "%2",
+        ),
+        cohort_agent(
+            "g2-b",
+            AgentStatus::Success,
+            3_000,
+            "launch_g2",
+            Some(1),
+            "%3",
+        ),
+        cohort_agent(
+            "g1-b",
+            AgentStatus::Success,
+            4_000,
+            "launch_g1",
+            Some(1),
+            "%4",
+        ),
+    ]);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -568,10 +530,7 @@ fn team_blocks_rank_by_derived_state_and_stay_contiguous() {
     );
     let idle_a = cohort_agent("idle-a", AgentStatus::Idle, 7_000, "idle", Some(0), "%2");
 
-    let snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![blocked_b, idle_a, working_a, success_a, blocked_a],
-    );
+    let snapshot = room_with_agent_panes(vec![blocked_b, idle_a, working_a, success_a, blocked_a]);
 
     let order = snapshot.worktree_groups[0]
         .rows
@@ -587,30 +546,27 @@ fn team_blocks_rank_by_derived_state_and_stay_contiguous() {
 
 #[test]
 fn inactive_cohort_stays_sunk_when_a_member_is_unread() {
-    let mut snapshot = room_with_agent_panes(
-        Vec::new(),
-        vec![
-            agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 1_000),
-            cohort_agent(
-                "old-a",
-                AgentStatus::Success,
-                2_000,
-                "launch_group_1",
-                Some(0),
-                "%1",
-            )
-            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-            cohort_agent(
-                "old-b",
-                AgentStatus::Idle,
-                3_000,
-                "launch_group_1",
-                Some(1),
-                "%2",
-            )
-            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
-        ],
-    );
+    let mut snapshot = room_with_agent_panes(vec![
+        agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 1_000),
+        cohort_agent(
+            "old-a",
+            AgentStatus::Success,
+            2_000,
+            "launch_group_1",
+            Some(0),
+            "%1",
+        )
+        .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        cohort_agent(
+            "old-b",
+            AgentStatus::Idle,
+            3_000,
+            "launch_group_1",
+            Some(1),
+            "%2",
+        )
+        .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+    ]);
     let order = snapshot.worktree_groups[0]
         .rows
         .iter()
@@ -658,7 +614,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         cohort_first,
     ];
 
-    let mut row_snapshot = room(Vec::new(), Vec::new());
+    let mut row_snapshot = room(Vec::new());
     row_snapshot.worktree_groups = vec![SidebarWorktreeGroup {
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
@@ -690,7 +646,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         .map(|row| row.id.as_str())
         .collect::<Vec<_>>();
 
-    let listing_snapshot = room(Vec::new(), agents);
+    let listing_snapshot = room(agents);
     let refs = listing_snapshot.agents.iter().collect::<Vec<_>>();
     let groups = group_live_agents_by_worktree(&refs, &listing_snapshot);
     let listing_order = groups

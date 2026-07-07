@@ -13,7 +13,7 @@ fn clean_review_completion_settles_running_to_success() {
         .active_ago(60)
         .turn_complete(10);
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-review");
     assert_eq!(
         row.status(),
@@ -40,7 +40,7 @@ fn completion_before_last_activity_leaves_row_running() {
         .active_ago(5)
         .turn_complete(120);
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-review");
     assert_eq!(
         row.status(),
@@ -62,7 +62,7 @@ fn turn_error_outranks_completion_marker() {
         .turn_complete(10)
         .turn_error(10, "API Error: Bad Request");
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-review");
     assert_eq!(
         row.status(),

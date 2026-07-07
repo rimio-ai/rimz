@@ -17,7 +17,7 @@ fn wired_unprompted_codex_panes_render_idle_agent_rows() {
             "o4-mini",
         ),
     ] {
-        let mut snapshot = room(Vec::new(), Vec::new());
+        let mut snapshot = room(Vec::new());
         snapshot.wired_kinds = vec!["codex".to_owned()];
         if let Some(model) = configured_model {
             snapshot
@@ -48,7 +48,7 @@ fn idle_synthesis_gates_leave_unqualified_panes_as_process_rows() {
             vec!["codex".to_owned()],
         ),
     ] {
-        let mut snapshot = room(Vec::new(), Vec::new());
+        let mut snapshot = room(Vec::new());
         snapshot.wired_kinds = wired_kinds;
         let snapshot = snapshot.with_live_panes(vec![pane("term1", command, "/repo/main")], None);
 
@@ -65,10 +65,7 @@ fn two_codex_panes_one_agent_yields_one_real_one_idle() {
     // second still-unprompted `codex` pane in the same worktree. The agent
     // binds the first codex pane by cwd; the second synthesizes an idle row —
     // no codex pane is ever left as a process row.
-    let mut snapshot = room(
-        Vec::new(),
-        vec![paneless_codex("sess-1", "/repo/main", 1_000)],
-    );
+    let mut snapshot = room(vec![paneless_codex("sess-1", "/repo/main", 1_000)]);
     snapshot.wired_kinds = vec!["codex".to_owned()];
     let snapshot = snapshot.with_live_panes(
         vec![

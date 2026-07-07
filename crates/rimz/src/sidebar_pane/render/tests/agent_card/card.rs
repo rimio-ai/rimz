@@ -10,7 +10,7 @@ fn idle_agent_card_lead_uses_soft_gray_when_unselected() {
         Some("main"),
         Some("resting"),
     );
-    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let snapshot = snapshot_with(vec![idle]);
     let theme = Theme::fixed(false);
     let lines = group_lines(&snapshot, &theme, 1);
     let lead = lines
@@ -32,7 +32,7 @@ fn selected_default_idle_agent_card_lead_stays_colorless() {
         Some("main"),
         Some("resting"),
     );
-    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let snapshot = snapshot_with(vec![idle]);
     let theme = Theme::fixed(false);
     let lines = group_lines(&snapshot, &theme, 0);
     let lead = lines
@@ -64,7 +64,7 @@ fn render_agent_capability_and_window() {
     // The hook-derived window renders as the identity line's `1m` token.
     claude.context_window = Some(1_000_000);
     claude.last_activity = fixed_now() - Duration::from_secs(4 * 60);
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
 
     let rendered = snapshot_to_screen(&snapshot, 34, 15);
 
@@ -92,7 +92,7 @@ fn render_agent_capability_uses_descriptor_default_window() {
     codex.effort = Some("xhigh".to_owned());
     assert!(codex.context_window.is_none());
     assert!(codex.context.is_none());
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let snapshot = snapshot_with(vec![codex]);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 15);
 
@@ -112,7 +112,7 @@ fn blank_idle_agent_renders_single_line() {
         Some("main"),
         None,
     );
-    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let snapshot = snapshot_with(vec![idle]);
     let theme = Theme::fixed(true);
     let card_lines = line_texts(&group_lines(&snapshot, &theme, usize::MAX))
         .into_iter()
@@ -147,7 +147,7 @@ fn selected_blank_idle_agent_opens_compose_affordance() {
         Some("main"),
         None,
     );
-    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let snapshot = snapshot_with(vec![idle]);
     let theme = Theme::fixed(true);
 
     let selected = line_texts(&group_lines(&snapshot, &theme, 0));
@@ -176,7 +176,7 @@ fn unselected_blank_idle_agent_stays_single_line() {
         Some("main"),
         None,
     );
-    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let snapshot = snapshot_with(vec![idle]);
     let theme = Theme::fixed(true);
 
     let card_lines = line_texts(&group_lines(&snapshot, &theme, 99))
@@ -204,7 +204,7 @@ fn selected_idle_agent_with_history_keeps_existing_shape() {
     );
     idle.context_pct = Some(0);
     idle.total_tokens = Some(1);
-    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let snapshot = snapshot_with(vec![idle]);
     let theme = Theme::fixed(true);
 
     let selected = line_texts(&group_lines(&snapshot, &theme, 0));
@@ -238,7 +238,7 @@ fn idle_agent_omits_window_token() {
     };
     let theme = Theme::fixed(true);
 
-    let idle = snapshot_with(Vec::new(), vec![mk(AgentStatus::Idle)]);
+    let idle = snapshot_with(vec![mk(AgentStatus::Idle)]);
     let idle_rendered = line_texts(&group_lines(&idle, &theme, usize::MAX)).join("\n");
     assert!(
         idle_rendered.contains("Opus"),
@@ -249,7 +249,7 @@ fn idle_agent_omits_window_token() {
         "idle agent drops the window token:\n{idle_rendered}"
     );
 
-    let running = snapshot_with(Vec::new(), vec![mk(AgentStatus::Running)]);
+    let running = snapshot_with(vec![mk(AgentStatus::Running)]);
     let running_rendered = line_texts(&group_lines(&running, &theme, usize::MAX)).join("\n");
     assert!(
         running_rendered.contains("Opus · 200k"),
@@ -274,7 +274,7 @@ fn capability_cluster_requires_a_resolved_model() {
     assert!(codex.model.is_none());
     codex.effort = Some("xhigh".to_owned());
     codex.context_window = Some(272_000);
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let snapshot = snapshot_with(vec![codex]);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 15);
 
@@ -304,7 +304,7 @@ fn render_agent_handle_as_card_identity() {
     );
     claude.role = Some("planner".to_owned());
     claude.model = Some("Opus".to_owned());
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
 
     let rendered = snapshot_to_screen(&snapshot, 34, 15);
 
@@ -337,7 +337,7 @@ fn render_enriched_selected_agent_card() {
     claude.context_pct = Some(38);
     claude.total_tokens = Some(12_400);
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.worktree_groups[0].diff_added = Some(127);
     snapshot.worktree_groups[0].diff_removed = Some(43);
     snapshot.worktree_groups[0].commits_ahead = Some(3);
@@ -435,7 +435,7 @@ fn render_api_error_dead_turn_card() {
         label: Some("API Error: Bad Request".to_owned()),
     });
     claude.context = Some(context);
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
 
     let rendered = snapshot_to_screen(&snapshot, 54, 17);
 
@@ -456,13 +456,8 @@ fn render_api_error_dead_turn_card() {
 #[test]
 fn render_omits_history_sections() {
     let workspace = fixed_workspace();
-    let mut snapshot = SidebarSnapshot::build_with_carryover(
-        workspace,
-        Vec::<()>::new(),
-        Vec::new(),
-        vec![],
-        fixed_now(),
-    );
+    let mut snapshot =
+        SidebarSnapshot::build_with_carryover(workspace, Vec::new(), vec![], fixed_now());
     snapshot.display_name = "query-engine".to_owned();
     let rendered = snapshot_to_screen(&snapshot, 38, 10);
 
@@ -482,7 +477,7 @@ fn unread_result_card_rests_on_a_uniform_unread_wash() {
         Some("shipped"),
     );
     done.last_activity = fixed_now() - Duration::from_secs(60);
-    let mut snapshot = snapshot_with(Vec::new(), vec![done]);
+    let mut snapshot = snapshot_with(vec![done]);
     snapshot.worktree_groups[0].rows[0].unread = true;
     // Truecolor: the wash is a fine sub-cell tint above the panel.
     let theme = super::super::truecolor_sidebar_theme();

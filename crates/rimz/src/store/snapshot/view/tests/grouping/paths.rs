@@ -80,7 +80,7 @@ fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
             expect_rows: 1,
         },
     ] {
-        let snapshot = room(Vec::new(), Vec::new())
+        let snapshot = room(Vec::new())
             .with_project_root(case.project_root.map(PathBuf::from))
             .with_worktree_roots(case.worktree_roots.into_iter().map(PathBuf::from).collect())
             .with_live_panes(case.panes, None);
@@ -107,7 +107,7 @@ fn unstamped_rimz_worktree_rows_fold_into_channel_pods() {
         .worktree(worktree)
         .in_pane("%2");
 
-    let snapshot = room(Vec::new(), vec![stamped, unstamped])
+    let snapshot = room(vec![stamped, unstamped])
         .with_project_root(Some(project_root))
         .with_worktree_home(Some(worktree_home))
         .with_live_panes(
@@ -134,14 +134,11 @@ fn unstamped_rimz_worktree_rows_fold_into_channel_pods() {
 #[test]
 fn lone_unstamped_rimz_worktree_row_uses_channel_pod() {
     let worktree = "/repo/rimz-worktrees/message-channel";
-    let snapshot = room(
-        Vec::new(),
-        vec![
-            agent("claude", "bare", AgentStatus::Running, 20)
-                .worktree(worktree)
-                .in_pane("%1"),
-        ],
-    )
+    let snapshot = room(vec![
+        agent("claude", "bare", AgentStatus::Running, 20)
+            .worktree(worktree)
+            .in_pane("%1"),
+    ])
     .with_project_root(Some(PathBuf::from("/repo/rimz")))
     .with_worktree_home(Some(PathBuf::from("/repo/rimz-worktrees")))
     .with_live_panes(vec![pane("%1", "claude", worktree)], None);
@@ -202,7 +199,7 @@ fn worktree_home_fallback_stays_scoped_to_rimz_owned_worktrees() {
             "message-channel",
         ),
     ] {
-        let snapshot = room(Vec::new(), Vec::new())
+        let snapshot = room(Vec::new())
             .with_project_root(project_root.map(PathBuf::from))
             .with_worktree_home(worktree_home.map(PathBuf::from))
             .with_live_panes(vec![pane("%1", "zsh", path)], None);

@@ -37,8 +37,8 @@ impl Harness {
 
     /// Library-tier twin of [`crate::common::Env::skip_if_sandboxed`]: ensures
     /// the socket dir exists, then returns `true` (after a `warn!`) when the
-    /// sandbox forbids binding AF_UNIX datagram sockets. Bridge tests call this
-    /// at the top and return early.
+    /// sandbox forbids binding AF_UNIX datagram sockets. Socket-wake tests
+    /// call this at the top and return early.
     pub fn skip_if_sandboxed(&self) -> bool {
         std::fs::create_dir_all(&self.runtime_paths.sock_dir).expect("mkdir sock");
         if super::af_unix_bind_sandboxed(&self.runtime_paths.sock_dir) {

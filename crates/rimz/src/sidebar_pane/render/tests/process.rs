@@ -7,7 +7,7 @@ fn remote_control_host_pane_is_filtered_not_rendered() {
     // agent: the snapshot reducer filters it out, so it never reads as a
     // `claude` row. Remote control surfaces as a `⇅ rc` flag on the provider
     // dashboard (covered by the section tests), never as its own row.
-    let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+    let snapshot = snapshot_with(Vec::new()).with_live_panes(
         vec![
             pane("%1", "zsh", "/repo/main"),
             pane("%2", "claude remote-control --spawn worktree", "/repo/main"),
@@ -41,7 +41,7 @@ fn process_row_resource_stats_follow_busy_state() {
         ("zsh", 1, "○ zsh", "C   1%|M 512M|8M/s", None),
     ] {
         let pane = pane("%1", command, "/repo/main");
-        let mut snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![pane], None);
+        let mut snapshot = snapshot_with(Vec::new()).with_live_panes(vec![pane], None);
         let row = &mut snapshot.worktree_groups[0].rows[0];
         let process = row.as_process_mut().unwrap();
         process.cpu_pct = Some(cpu);
@@ -80,7 +80,7 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     use ratatui::style::Modifier;
 
     let busy = pane("%1", "cargo build --release", "/repo/main");
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
+    let mut snapshot = snapshot_with(Vec::new()).with_live_panes(vec![busy], None);
     let row = &mut snapshot.worktree_groups[0].rows[0];
     let process = row.as_process_mut().unwrap();
     process.cpu_pct = Some(34);
@@ -163,8 +163,7 @@ fn render_process_rows_below_agents_without_a_seam() {
     let stamped = pane("%1", "claude", "/repo/main");
     claude.pane = Some(stamped.clone());
     let shell = pane("%2", "zsh", "/repo/main");
-    let snapshot =
-        snapshot_with(Vec::new(), vec![claude]).with_live_panes(vec![stamped, shell], None);
+    let snapshot = snapshot_with(vec![claude]).with_live_panes(vec![stamped, shell], None);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 18);
 
@@ -199,8 +198,8 @@ fn process_rows_dim_a_step_below_agent_cards() {
         claude.pane = Some(stamped.clone());
         let shell = pane("%2", "zsh", "/repo/main");
         let build = pane("%3", "cargo build --release", "/repo/main");
-        let snapshot = snapshot_with(Vec::new(), vec![claude])
-            .with_live_panes(vec![stamped, shell, build], None);
+        let snapshot =
+            snapshot_with(vec![claude]).with_live_panes(vec![stamped, shell, build], None);
 
         let mut lines = Vec::new();
         let mut map = Vec::new();
@@ -266,7 +265,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
         .expect("working animation spec"),
     );
     let theme = Theme::fixed_for_theme(false, &theme_config);
-    let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+    let snapshot = snapshot_with(Vec::new()).with_live_panes(
         vec![pane("%1", "cargo build --release", "/repo/main")],
         None,
     );
@@ -310,7 +309,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
 
 #[test]
 fn render_agent_process_rows_present() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+    let snapshot = snapshot_with(Vec::new()).with_live_panes(
         vec![
             pane("%1", "claude", "/repo/main"),
             pane("%2", "node", "/repo/main"),
@@ -327,14 +326,14 @@ fn active_process_row_keeps_the_animation_tick_alive() {
     // A pane doing real work spins a braille frame, so the serve loop must hold
     // the fast animation tick for it just as it does for a running agent —
     // otherwise the spin crawls on the slow data tick.
-    let busy = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+    let busy = snapshot_with(Vec::new()).with_live_panes(
         vec![pane("%1", "cargo build --release", "/repo/main")],
         None,
     );
     assert_eq!(animation_cadence_for_test(&busy), AnimationCadence::Fast);
 
     // A bare shell is presence, not motion: it stays on the calm data tick.
-    let idle = snapshot_with(Vec::new(), Vec::new())
-        .with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
+    let idle =
+        snapshot_with(Vec::new()).with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
     assert_eq!(animation_cadence_for_test(&idle), AnimationCadence::None);
 }

@@ -22,7 +22,7 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     (dir, runtime, snapshot)
 }
 
@@ -152,7 +152,6 @@ fn pr_state_projection_uses_the_given_map() {
     let mut snapshot = SidebarSnapshot::build(
         WorkspaceId::from_project_root(dir.path()),
         Vec::new(),
-        Vec::new(),
         Timestamp::now(),
     );
     snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())];
@@ -181,7 +180,6 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
     let mut snapshot = SidebarSnapshot::build(
         WorkspaceId::from_project_root(dir.path()),
         Vec::new(),
-        Vec::new(),
         Timestamp::now(),
     );
     snapshot.worktree_groups = vec![channel_group("feature", &worktree)];
@@ -206,7 +204,6 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
     let mut snapshot = SidebarSnapshot::build(
         WorkspaceId::from_project_root(dir.path()),
         Vec::new(),
-        Vec::new(),
         Timestamp::now(),
     );
     snapshot.worktree_groups = vec![channel_group("feature", &worktree)];
@@ -228,7 +225,6 @@ fn diff_projection_keeps_worktree_channel_label_and_uses_live_branch() {
     write_worktree_marker(&worktree, "codex-resets");
     let mut snapshot = SidebarSnapshot::build(
         WorkspaceId::from_project_root(dir.path()),
-        Vec::new(),
         Vec::new(),
         Timestamp::now(),
     );
@@ -258,7 +254,6 @@ fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
     let mut snapshot = SidebarSnapshot::build(
         WorkspaceId::from_project_root(dir.path()),
         Vec::new(),
-        Vec::new(),
         Timestamp::now(),
     );
     snapshot.worktree_groups = vec![channel_group("codex-resets", &worktree)];
@@ -280,7 +275,6 @@ fn diff_projection_leaves_unmarked_channel_plain() {
     std::fs::create_dir_all(&worktree).unwrap();
     let mut snapshot = SidebarSnapshot::build(
         WorkspaceId::from_project_root(dir.path()),
-        Vec::new(),
         Vec::new(),
         Timestamp::now(),
     );
@@ -429,12 +423,8 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
     let external_kind = wt("external-kind");
     let dead = dir.path().join("dead-dir");
 
-    let mut snapshot = SidebarSnapshot::build(
-        WorkspaceId::from_project_root(dir.path()),
-        Vec::new(),
-        Vec::new(),
-        now,
-    );
+    let mut snapshot =
+        SidebarSnapshot::build(WorkspaceId::from_project_root(dir.path()), Vec::new(), now);
     snapshot.worktree_groups = vec![
         // Running carries hotness on its own — its activity stamp is stale.
         worktree_group(
@@ -522,12 +512,8 @@ fn hot_worktree_paths_keys_on_running_or_recent_agent_rows() {
 fn hot_worktree_paths_treats_future_activity_as_hot() {
     let dir = tempfile::tempdir().unwrap();
     let now = Timestamp::from_second(1_750_000_000).unwrap();
-    let mut snapshot = SidebarSnapshot::build(
-        WorkspaceId::from_project_root(dir.path()),
-        Vec::new(),
-        Vec::new(),
-        now,
-    );
+    let mut snapshot =
+        SidebarSnapshot::build(WorkspaceId::from_project_root(dir.path()), Vec::new(), now);
     snapshot.worktree_groups = vec![worktree_group(
         dir.path(),
         vec![activity_row(
@@ -567,12 +553,8 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
         .pane_id
         .clone();
     let dead_pane = pane("terminal_4", "zsh", &dead.display().to_string()).pane_id;
-    let mut snapshot = SidebarSnapshot::build(
-        WorkspaceId::from_project_root(dir.path()),
-        Vec::new(),
-        Vec::new(),
-        now,
-    );
+    let mut snapshot =
+        SidebarSnapshot::build(WorkspaceId::from_project_root(dir.path()), Vec::new(), now);
     snapshot.viewed_panes = vec![focused_pane, dead_pane];
     snapshot.worktree_groups = vec![
         worktree_group(&focused, vec![row("terminal_1", &focused)]),
@@ -611,7 +593,6 @@ fn cached_enrich_binds_reaped_codex_clear_session() {
     new.origin = Some(SessionOrigin::Fresh);
     let mut snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
-        Vec::new(),
         vec![old, new],
         now,
     );
@@ -656,7 +637,6 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
     open.runtime_owner = Some(RuntimeOwner::new(RuntimeOwnerKind::Agent, "open", 77, None));
     let snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
-        Vec::new(),
         vec![closed, open],
         Timestamp::now(),
     );
@@ -694,7 +674,6 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
     kept.runtime_owner = Some(RuntimeOwner::new(RuntimeOwnerKind::Agent, "kept", 77, None));
     let snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
-        Vec::new(),
         vec![kept],
         Timestamp::now(),
     );
@@ -724,7 +703,6 @@ fn project_lane_enrich_reads_stale_codex_daemon_reap_without_rewriting() {
     .unwrap();
     let snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
-        Vec::new(),
         vec![root_agent("codex", "pane-less", None)],
         Timestamp::now(),
     );
@@ -795,7 +773,6 @@ fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
     agent.worktree_path = Some(worktree.to_owned());
     let snapshot = SidebarSnapshot::build_with_agents(
         snapshot.workspace_id.clone(),
-        Vec::new(),
         vec![agent.clone()],
         Timestamp::now(),
     );
@@ -833,7 +810,6 @@ fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
     active_agent.last_activity += SignedDuration::from_secs(1);
     let active_snapshot = SidebarSnapshot::build_with_agents(
         snapshot.workspace_id.clone(),
-        Vec::new(),
         vec![active_agent],
         Timestamp::now(),
     );
@@ -966,8 +942,7 @@ fn presence_idle_duration_tracks_snapshot_now() {
     let (_dir, runtime, snapshot) = runtime();
     let now = Timestamp::from_second(1_750_000_000).unwrap();
     let now_ms = now.as_millisecond().max(0) as u64;
-    let snapshot =
-        SidebarSnapshot::build(snapshot.workspace_id.clone(), Vec::new(), Vec::new(), now);
+    let snapshot = SidebarSnapshot::build(snapshot.workspace_id.clone(), Vec::new(), now);
     let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 1_000, "rimz-test");
     frame.presence = Some(crate::PresenceSample {
         human_clients: 1,
@@ -1000,11 +975,10 @@ fn root_pod_is_excluded_from_git_reads() {
     agent.worktree_path = Some(child_cwd.clone());
     agent.worktree_branch = Some("main".to_owned());
 
-    let snapshot =
-        SidebarSnapshot::build_with_agents(workspace, Vec::new(), vec![agent], Timestamp::now())
-            .with_root_class(crate::workspace::RootClass::Directory)
-            .with_project_root(Some(dir.path().to_path_buf()))
-            .with_live_panes(vec![pane("terminal_0", "zsh", &root_cwd), child_pane], None);
+    let snapshot = SidebarSnapshot::build_with_agents(workspace, vec![agent], Timestamp::now())
+        .with_root_class(crate::workspace::RootClass::Directory)
+        .with_project_root(Some(dir.path().to_path_buf()))
+        .with_live_panes(vec![pane("terminal_0", "zsh", &root_cwd), child_pane], None);
 
     let kinds: Vec<SidebarWorktreeKind> = snapshot
         .worktree_groups
@@ -1154,7 +1128,7 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
     runtime.ensure_dirs().unwrap();
 
     let project = dir.path().join("repo");
-    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
+    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
         .with_project_root(Some(project.clone()));
 
     let mut global = crate::agents::spending::Spending::default();
@@ -1218,7 +1192,7 @@ fn cached_enrich_ignores_old_provider_spending_version() {
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
 
     let mut global = crate::agents::spending::Spending::default();
     global.total.month.usd = 99.0;
@@ -1313,7 +1287,7 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
         &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
         transcript.clone(),
     )]);
-    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
+    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
         .with_project_root(Some(project));
     let project = snapshot.project_root.clone().unwrap();
     let mut agent = root_agent("claude", "new-session", None);

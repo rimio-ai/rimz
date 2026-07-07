@@ -93,13 +93,8 @@ fn subagent_stop_without_start_keeps_parent_link_and_spares_the_parent() {
         .expect("child row");
     assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
 
-    let mut snapshot = SidebarSnapshot::build_with_carryover(
-        workspace(),
-        Vec::new(),
-        Vec::new(),
-        agents,
-        Timestamp::now(),
-    );
+    let mut snapshot =
+        SidebarSnapshot::build_with_carryover(workspace(), Vec::new(), agents, Timestamp::now());
     snapshot.reap_stale_sessions();
     assert!(
         snapshot.agents.iter().any(|a| a.agent_id == "sess-root"),

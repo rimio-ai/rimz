@@ -56,7 +56,7 @@ fn render_selected_card_collapses_finished_subagent_and_keeps_running_metadata()
     // A sibling on a different model — the per-child label tells them apart.
     fresh.model = Some("claude-haiku-4-5".to_owned());
 
-    let snapshot = snapshot_with(Vec::new(), vec![parent, child, fresh]);
+    let snapshot = snapshot_with(vec![parent, child, fresh]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -164,7 +164,7 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
     quiet.parent_agent_id = Some("claude-1".into());
     quiet.model = Some("claude-haiku-4-5".to_owned());
 
-    let snapshot = snapshot_with(Vec::new(), vec![parent, spender, quiet]);
+    let snapshot = snapshot_with(vec![parent, spender, quiet]);
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,

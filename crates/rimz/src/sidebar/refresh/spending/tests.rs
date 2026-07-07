@@ -1,6 +1,5 @@
 use crate::RuntimePaths;
 use crate::SidebarSnapshot;
-use crate::agents::TurnPhase;
 use crate::agents::spending::{
     CachedEntry, FileCacheEntry, HeadlineSpec, PROVIDER_SPENDING_VERSION, ProviderSpendingCache,
     SpendCursor, SpendScope, SpendWindowMode, Spending, SpendingWalker,
@@ -9,7 +8,6 @@ use crate::agents::spending::{
     write_spending_cache, write_workspace_spending_cache,
 };
 use crate::agents::{AgentState, AgentStatus};
-use crate::ids::AgentKind;
 use crate::ids::WorkspaceId;
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{SPENDING_STALE_GRACE, SPENDING_TTL};
@@ -118,12 +116,8 @@ fn fresh_shared_publish_returns_without_walking() {
         published_at,
         &spending,
     );
-    let snapshot = SidebarSnapshot::build(
-        second.workspace_id.clone(),
-        Vec::new(),
-        Vec::new(),
-        Timestamp::now(),
-    );
+    let snapshot =
+        SidebarSnapshot::build(second.workspace_id.clone(), Vec::new(), Timestamp::now());
 
     let cache = compute_fleet_spending(&second, &snapshot, &HeadlineSpec::default());
 
@@ -203,7 +197,7 @@ fn produce_local_serves_published_within_grace() {
         &spending,
     );
     let _held = hold_shared_spending_lock(&runtime);
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     let mut walker = SpendingWalker::new();
 
     let caches = compute_fleet_spending_with_walker(
@@ -243,7 +237,7 @@ fn produce_local_walk_seeds_from_cursor_cache() {
     let stale_at = unix_now_ms().saturating_sub(SPENDING_STALE_GRACE.as_millis() as u64 + 1_000);
     write_provider_spending_cache(&runtime.shared_provider_spending_path(), stale_at, &stale);
     let _held = hold_shared_spending_lock(&runtime);
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     let mut walker = SpendingWalker::new();
 
     let caches = compute_fleet_spending_with_walker(
@@ -275,7 +269,7 @@ fn walk_local_stays_memory_only_while_publishing_walk_writes_provider_cache() {
         &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
         transcript,
     )]);
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
     let spec = HeadlineSpec::default();
 
     let mut local_walker = SpendingWalker::new();
@@ -327,7 +321,7 @@ fn walk_local_builds_workspace_cache_without_publishing() {
     let workspace_path = runtime.workspace_spending_path(&scope_hash);
     write_workspace_spending_cache(&workspace_path, &previous);
     let before_bytes = std::fs::read(&workspace_path).expect("workspace cache");
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
         .with_project_root(Some(project));
     let spec = HeadlineSpec {
         mode: SpendWindowMode::Today,
@@ -800,7 +794,7 @@ fn producer_publishes_compacted_shared_spending_cache() {
         &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
         transcript,
     )]);
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
 
     let caches = compute_fleet_spending(&runtime, &snapshot, &HeadlineSpec::default());
 
@@ -826,7 +820,7 @@ fn empty_discovery_preserves_prior_nonzero_provider_publish() {
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime paths");
     runtime.ensure_dirs().expect("runtime dirs");
     let project = dir.path().join("repo");
-    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
         .with_project_root(Some(project.clone()));
     let scope = SpendScope::for_workspace(Some(&project), &[], None);
     let scope_hash = scope.hash();
@@ -874,54 +868,13 @@ fn codex_origin_overrides_read_transcript_and_worktree_from_snapshot() {
     let worktree = dir.path().join("repo");
     let now = Timestamp::now();
     let agent = AgentState {
-        agent_id: "codex-1".into(),
-        kind: AgentKind::new_unchecked("codex"),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
         status: AgentStatus::Running,
-        phase: TurnPhase::Idle,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
         worktree_path: Some(worktree.display().to_string()),
-        worktree_branch: None,
-        task: None,
-        prompt: None,
-        description: None,
         transcript_path: Some(transcript.display().to_string()),
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: now,
-        last_activity: now,
-        registered_at: Some(now),
+        ..crate::testkit::agent_state("codex", "codex-1", now)
     };
     let snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(&worktree),
-        Vec::new(),
         vec![agent],
         now,
     );

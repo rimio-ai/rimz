@@ -789,8 +789,7 @@ mod tests {
     }
 
     fn snapshot_with_panes(agents: Vec<AgentState>, panes: Vec<PaneAgent>) -> SidebarSnapshot {
-        let mut snapshot =
-            SidebarSnapshot::build_with_agents(workspace_id(), Vec::new(), agents, now());
+        let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id(), agents, now());
         snapshot.agent_panes = panes;
         snapshot
     }
@@ -799,12 +798,7 @@ mod tests {
         agent.status = AgentStatus::Waiting;
         agent.phase = TurnPhase::Idle;
         agent.waiting_since = Some(agent.last_activity);
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            workspace_id(),
-            Vec::<()>::new(),
-            vec![agent],
-            now(),
-        );
+        let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![agent], now());
         snapshot.agent_panes = vec![pane];
         snapshot
     }

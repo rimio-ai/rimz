@@ -27,7 +27,7 @@ fn recently_finished_child_holds_off_the_stall() {
     // whose child finished four minutes ago is alive, not wedged.
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100).active_ago(660);
     let child = child_state("sess-root", "child-1", AgentStatus::Success, 240);
-    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
+    let snapshot = room_with_agent_panes(vec![parent, child]);
 
     let row = row(&snapshot, "sess-root");
     assert_eq!(row.status(), Some(AgentStatus::Running), "not a stall");
@@ -61,7 +61,7 @@ fn child_activity_does_not_reclock_parent_attention_or_dead_turns() {
         ),
     ] {
         let child = child_state("sess-root", "child-1", child_status, 5);
-        let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
+        let snapshot = room_with_agent_panes(vec![parent, child]);
 
         let row = row(&snapshot, "sess-root");
         assert_eq!(row.status(), Some(expected_status), "{label}");

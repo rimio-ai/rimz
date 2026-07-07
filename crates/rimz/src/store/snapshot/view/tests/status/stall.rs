@@ -18,7 +18,7 @@ fn stalled_running_agent_recovers_when_activity_resumes() {
         agent_id: "live-claude".into(),
         at: epoch(),
     };
-    let snapshot = room(Vec::new(), vec![session])
+    let snapshot = room(vec![session])
         .with_agent_activity(&[touch])
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
 
@@ -37,7 +37,7 @@ fn configured_stall_window_controls_running_attention_escalation() {
             .worktree("/repo/main")
             .in_pane("%1")
             .active_ago(age_secs);
-        let mut snapshot = room(Vec::new(), vec![session]);
+        let mut snapshot = room(vec![session]);
         snapshot.attention.stalled_after_secs =
             std::num::NonZeroU32::new(120).expect("non-zero test window");
         snapshot.with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
@@ -71,7 +71,7 @@ fn displayed_status_precedence_ladder_holds() {
         if rung.with_live_child {
             agents.push(child_state("root", "child-1", AgentStatus::Running, 5));
         }
-        let snapshot = room(Vec::new(), agents).with_live_panes_and_account_budgets(
+        let snapshot = room(agents).with_live_panes_and_account_budgets(
             vec![pane("%1", "node", "/repo/main")],
             None,
             &account_budget("claude", rung.budget_windows),

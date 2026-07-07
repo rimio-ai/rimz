@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn render_active_alert_shows_banner_below_snapshot() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
     let alert = Alert {
         reason: "snapshot failed: store not found".to_owned(),
         since: fixed_now() - Duration::from_secs(8),
@@ -16,7 +16,7 @@ fn render_active_alert_shows_banner_below_snapshot() {
 }
 #[test]
 fn render_recovered_alert_lingers_with_dismiss_hint() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
     let alert = Alert {
         reason: "snapshot failed: store not found".to_owned(),
         since: fixed_now() - Duration::from_secs(20),
@@ -29,7 +29,7 @@ fn render_recovered_alert_lingers_with_dismiss_hint() {
 }
 #[test]
 fn render_no_alert_omits_banner() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
     let rendered = snapshot_to_screen_with_alert(&snapshot, None, 80, 18);
     assert!(
         !rendered.contains("Sidebar degraded"),
@@ -39,7 +39,7 @@ fn render_no_alert_omits_banner() {
 
 #[test]
 fn render_truth_degraded_notice_keeps_room_chrome() {
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    let mut snapshot = snapshot_with(Vec::new());
     snapshot.truth_degraded = Some(crate::TruthNotice {
         carried: 2,
         since_ms: (fixed_now() - Duration::from_secs(8)).as_millisecond() as u64,
@@ -54,7 +54,7 @@ fn render_truth_degraded_notice_keeps_room_chrome() {
 
 #[test]
 fn bottom_chrome_active_alert_suppresses_dashboard_store_and_footer() {
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    let mut snapshot = snapshot_with(Vec::new());
     snapshot.providers = vec![provider_panel(
         "claude",
         "Claude",
@@ -79,7 +79,7 @@ fn bottom_chrome_active_alert_suppresses_dashboard_store_and_footer() {
 
 #[test]
 fn active_alert_suppresses_truth_degraded_notice() {
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    let mut snapshot = snapshot_with(Vec::new());
     snapshot.truth_degraded = Some(crate::TruthNotice {
         carried: 1,
         since_ms: snapshot.now.as_millisecond() as u64,
@@ -96,7 +96,7 @@ fn active_alert_suppresses_truth_degraded_notice() {
 
 #[test]
 fn render_gate_hold_notice_keeps_room_chrome() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
     let ui = UiState {
         gate_notice: Some(GateNotice {
             rule: crate::diag::record::GateRule::EmptyStampedFrame,
@@ -114,7 +114,7 @@ fn render_gate_hold_notice_keeps_room_chrome() {
 
 #[test]
 fn active_alert_suppresses_gate_hold_notice() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
     let ui = UiState {
         gate_notice: Some(GateNotice {
             rule: crate::diag::record::GateRule::AgentDemotedToProcess,

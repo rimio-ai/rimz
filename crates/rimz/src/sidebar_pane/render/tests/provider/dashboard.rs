@@ -20,7 +20,7 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
@@ -75,7 +75,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let ui = UiState {
@@ -106,7 +106,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
         Some("main"),
         Some("add tests"),
     );
-    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let mut snapshot = snapshot_with(vec![codex]);
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
@@ -329,7 +329,7 @@ fn render_provider_dashboard_pixel_pet_buffer_cells_carry_image_id_color() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     snapshot.theme.pets.enabled = true;
@@ -802,7 +802,7 @@ fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = two_provider_panels();
     let rendered = snapshot_to_screen(&snapshot, 54, 40);
 
@@ -848,7 +848,7 @@ fn render_single_provider_dashboard_has_no_tab_rail() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = vec![provider_panel(
         "claude",
         "Claude",
@@ -879,7 +879,7 @@ fn render_provider_dashboard_shows_version_placeholder_when_unknown() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = two_provider_panels();
     snapshot.providers[0].version = None;
     snapshot.providers[0].plan = None;
@@ -895,7 +895,7 @@ fn render_provider_dashboard_shows_version_placeholder_when_unknown() {
         "unknown plan stays absent:\n{rendered}"
     );
 
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    let mut snapshot = snapshot_with(Vec::new());
     snapshot.providers = vec![provider_panel(
         "claude",
         "Claude",

@@ -8,6 +8,7 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
+#[cfg(test)]
 use crate::agents::LaunchParams;
 use crate::pane::RuntimeOwnerKind;
 use crate::store::event::{AgentLaunchPayload, EventEnvelope};
@@ -421,14 +422,7 @@ fn allocate_agent_launch_identities(
             agent_id: request.agent_id.clone(),
             name,
             name_explicit,
-            profile: request.profile.clone(),
-            role: request.role.clone(),
-            model: request.model.clone(),
-            effort: request.effort.clone(),
-            team: request.team.clone(),
-            launch_group: request.launch_group.clone(),
-            launch_ordinal: request.launch_ordinal,
-            channel: request.channel.clone(),
+            launch: request.launch.clone(),
             run_id: request.run_id.clone(),
         });
     }
@@ -470,6 +464,8 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
     let runtime_owner = append.pane_id.as_ref().map(|_| {
         runtime::current_process_owner(RuntimeOwnerKind::Agent, identity.agent_id.as_str())
     });
+    let mut launch = identity.launch.clone();
+    launch.channel = launch.channel.or_else(|| append.channel.clone());
     EventEnvelope::agent_launched(
         append.workspace_id.clone(),
         append.session_name.clone(),
@@ -478,17 +474,7 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
             agent_name_explicit: identity.name_explicit,
-            launch: LaunchParams {
-                profile: identity.profile.clone(),
-                role: identity.role.clone(),
-                model: identity.model.clone(),
-                effort: identity.effort.clone(),
-                team: identity.team.clone(),
-                launch_group: identity.launch_group.clone(),
-                launch_ordinal: identity.launch_ordinal,
-                channel: identity.channel.clone().or_else(|| append.channel.clone()),
-                kind_ordinal: None,
-            },
+            launch,
             state: append.state,
             run_id: identity.run_id.clone(),
             pane_id: append.pane_id.clone(),
@@ -517,8 +503,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::agents::TurnPhase;
-    use crate::agents::{AgentState, AgentStatus};
+    use crate::agents::AgentState;
     use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
     use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
     use crate::store::event::MessageEventMethod;
@@ -740,28 +725,14 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("launch_a"),
             name: AgentLaunchName::Explicit("lucid-atlas".to_owned()),
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
+            launch: LaunchParams::default(),
             run_id: None,
         };
         let prefix = AgentLaunchRequest {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("launch_b"),
             name: AgentLaunchName::Explicit("prefix".to_owned()),
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
+            launch: LaunchParams::default(),
             run_id: None,
         };
 
@@ -780,14 +751,7 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("launch_a"),
             name: AgentLaunchName::Soft("lucid-atlas".to_owned()),
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
+            launch: LaunchParams::default(),
             run_id: None,
         };
 
@@ -825,14 +789,7 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from(id),
             name,
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
+            launch: LaunchParams::default(),
             run_id: None,
         }
     }
@@ -840,50 +797,9 @@ mod tests {
     fn agent_state(kind: &str, id: &str, name: Option<&str>) -> AgentState {
         let now = jiff::Timestamp::now();
         AgentState {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked(kind),
             name: name.map(ToOwned::to_owned),
-            name_explicit: false,
             kind_ordinal: Some(1),
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            status: AgentStatus::Idle,
-            phase: TurnPhase::Idle,
-            pane: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: now,
-            last_activity: now,
-            registered_at: Some(now),
+            ..crate::testkit::agent_state(kind, id, now)
         }
     }
 }

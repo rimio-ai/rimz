@@ -632,12 +632,8 @@ mod tests {
         agent.pane = Some(pane);
         agent.context_pct = Some(42);
         agent.waiting_since = Some(Timestamp::UNIX_EPOCH);
-        let snapshot = SidebarSnapshot::build_with_agents(
-            workspace_id,
-            Vec::<()>::new(),
-            vec![agent],
-            Timestamp::UNIX_EPOCH,
-        );
+        let snapshot =
+            SidebarSnapshot::build_with_agents(workspace_id, vec![agent], Timestamp::UNIX_EPOCH);
 
         let live = live_status(&record, &snapshot).expect("live status");
         assert_eq!(live.agent_status, AgentStatus::Waiting);
@@ -659,7 +655,6 @@ mod tests {
         record.status = RunStatus::Running;
         let snapshot = SidebarSnapshot::build_with_agents(
             workspace_id,
-            vec![],
             vec![agent_state("claude", "sess-1", AgentStatus::Running)],
             Timestamp::UNIX_EPOCH,
         );

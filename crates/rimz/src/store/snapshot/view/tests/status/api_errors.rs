@@ -14,8 +14,8 @@ fn api_error_turn_escalates_running_to_attention() {
         .active_ago(60)
         .turn_error(10, "API Error: Bad Request");
 
-    let snapshot = room(Vec::new(), vec![session])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+    let snapshot =
+        room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
@@ -132,7 +132,6 @@ fn limit_marker_terminal_row_parks_until_budget_resets() {
         };
 
         let snapshot = room_with_agent_panes_and_budgets(
-            Vec::new(),
             vec![session],
             account_budget("codex", budget_windows),
         );
@@ -152,7 +151,6 @@ fn legacy_session_limit_marker_parks_while_budget_is_spent() {
         .turn_error(10, "You've hit your session limit · resets 10:50am (UTC)");
 
     let snapshot = room_with_agent_panes_and_budgets(
-        Vec::new(),
         vec![session],
         account_budget("claude", vec![window(100, 3_600)]),
     );
@@ -178,7 +176,7 @@ fn terminal_turn_error_before_current_turn_does_not_repark_row() {
         .limits(vec![window(100, 3_600)])
         .paused_turn_error(60, "You've hit your usage limit");
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-stale-error");
     assert_eq!(
         row.status(),
@@ -202,8 +200,8 @@ fn api_error_self_clears_when_activity_resumes() {
         .active_ago(30)
         .overloaded_turn_error(120, "API Error: Overloaded");
 
-    let snapshot = room(Vec::new(), vec![session])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+    let snapshot =
+        room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
 
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
@@ -243,8 +241,8 @@ fn paused_class_marker_survives_the_stall_window() {
             .active_ago(default_stall_secs() + 3_600)
             .overloaded_turn_error(10, label);
 
-        let snapshot = room(Vec::new(), vec![session])
-            .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        let snapshot =
+            room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
 
         let row = row(&snapshot, "busy-claude");
         assert_eq!(row.status(), Some(AgentStatus::Paused), "{expected}");
@@ -263,7 +261,7 @@ fn messageless_task_complete_marker_fails_running_codex_row_until_pane_proves_pa
             TurnErrorClass::Unknown,
         );
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-capacity");
     assert_eq!(
         row.status(),

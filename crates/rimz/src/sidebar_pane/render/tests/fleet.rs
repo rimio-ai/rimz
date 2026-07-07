@@ -10,7 +10,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // Borderless layout: row 0 is the name, row 1 a blank line, row 2 the `◎`
     // summary, row 3 the `¤` summary, row 4 the hairline rule. An empty room
     // reads `◎ 0` on row 2 with no make-up beneath, so the body never moves.
-    let empty = snapshot_with(Vec::new(), Vec::new());
+    let empty = snapshot_with(Vec::new());
     let empty_screen = snapshot_to_screen(&empty, 40, 15);
     assert!(
         empty_screen.lines().nth(2).unwrap().contains("◎ 0"),
@@ -40,7 +40,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // The thinking head is a per-row animation, never a cockpit bucket: a
     // pre-edit turn still tallies as working.
     reasoning.phase = crate::agents::TurnPhase::Reasoning;
-    let snapshot = snapshot_with(Vec::new(), vec![working, reasoning]);
+    let snapshot = snapshot_with(vec![working, reasoning]);
     let screen = snapshot_to_screen(&snapshot, 40, 15);
     // Row 2 is the `◎` summary, row 3 the `¤` summary; row 5 is the bucket
     // make-up (row 1 is the blank line, row 4 the hairline rule).
@@ -83,7 +83,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
 
 #[test]
 fn cockpit_reads_workspace_tally_while_store_reads_global_tally() {
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    let mut snapshot = snapshot_with(Vec::new());
     snapshot.value_tally = Some(bottom_tally());
     let headline = crate::SpendWindow {
         usd: 1.23,
@@ -131,7 +131,7 @@ fn attention_bucket_holds_a_fixed_tone() {
             Some("a"),
         );
         waiting.last_activity = fixed_now() - Duration::from_secs(idle_secs);
-        let snapshot = snapshot_with(Vec::new(), vec![waiting]);
+        let snapshot = snapshot_with(vec![waiting]);
         fleet_header_lines(
             &theme,
             &snapshot.worktree_groups,
@@ -171,7 +171,7 @@ fn state_glyphs_keep_their_cockpit_tier() {
         Some("main"),
         Some("a"),
     );
-    let snapshot = snapshot_with(Vec::new(), vec![working]);
+    let snapshot = snapshot_with(vec![working]);
     let lines = fleet_header_lines(
         &theme,
         &snapshot.worktree_groups,
@@ -337,7 +337,7 @@ fn selected_idle_filter_preserves_soft_gray_with_reverse_video() {
         Some("main"),
         Some("resting"),
     );
-    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let snapshot = snapshot_with(vec![idle]);
     let (lines, _) = fleet_header_lines(
         &theme,
         &snapshot.worktree_groups,
@@ -498,7 +498,7 @@ fn make_up_buckets_pulse_only_while_unread() {
         Some("finished"),
     );
     success.last_activity = fixed_now() - Duration::from_secs(5 * 60);
-    let mut success_snapshot = snapshot_with(Vec::new(), vec![success]);
+    let mut success_snapshot = snapshot_with(vec![success]);
     let read_success: Vec<_> = (0..32)
         .map(|phase| bucket_style(&success_snapshot, "✓ 1", phase))
         .collect();
@@ -555,7 +555,7 @@ fn make_up_buckets_pulse_only_while_unread() {
         Some("idle"),
     );
     idle.last_activity = fixed_now() - Duration::from_secs(5 * 60);
-    let mut idle_snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let mut idle_snapshot = snapshot_with(vec![idle]);
     idle_snapshot.worktree_groups[0].rows[0].unread = true;
     let unread_idle: Vec<_> = (0..32)
         .map(|phase| bucket_style(&idle_snapshot, "○ 1", phase))
@@ -713,7 +713,7 @@ fn compacting_agent_counts_as_working() {
     );
     compacting.compacting_since = Some(fixed_now());
     compacting.phase = crate::agents::TurnPhase::Reasoning;
-    let snapshot = snapshot_with(Vec::new(), vec![compacting]);
+    let snapshot = snapshot_with(vec![compacting]);
     let screen = snapshot_to_screen(&snapshot, 40, 12);
     // Row 5 is the make-up: name(0), blank(1), `¤`(2), `◎`(3), hairline(4).
     let buckets = screen.lines().nth(5).unwrap();

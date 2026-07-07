@@ -465,7 +465,6 @@ fn unchanged_consumer_inputs_skip_the_second_fold() {
     let mut rollup = SidebarSnapshot::build(
         fixture.workspace_id.clone(),
         Vec::new(),
-        Vec::new(),
         jiff::Timestamp::now(),
     );
     rollup.reflects_log = Some(crate::store::event_log::LogExtent {
@@ -498,7 +497,6 @@ fn force_fold_bypasses_consumer_unchanged_skip_without_fresh_pane_claim() {
     let mut rollup = SidebarSnapshot::build(
         fixture.workspace_id.clone(),
         Vec::new(),
-        Vec::new(),
         jiff::Timestamp::now(),
     );
     rollup.reflects_log = Some(crate::store::event_log::LogExtent {
@@ -529,7 +527,6 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     let fixture = ConsumerFixture::new();
     let mut rollup = SidebarSnapshot::build(
         fixture.workspace_id.clone(),
-        Vec::new(),
         Vec::new(),
         jiff::Timestamp::now(),
     );

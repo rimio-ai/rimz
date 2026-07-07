@@ -154,7 +154,7 @@ fn assert_snapshot(name: &str, screen: String) {
     });
 }
 
-fn snapshot_with(_items: Vec<()>, mut agents: Vec<AgentState>) -> SidebarSnapshot {
+fn snapshot_with(mut agents: Vec<AgentState>) -> SidebarSnapshot {
     let mut panes = Vec::new();
     for (idx, agent) in agents.iter_mut().enumerate() {
         if agent.parent_agent_id.is_some() {
@@ -171,13 +171,8 @@ fn snapshot_with(_items: Vec<()>, mut agents: Vec<AgentState>) -> SidebarSnapsho
         agent.pane = Some(live.clone());
         panes.push(live);
     }
-    let mut snapshot = SidebarSnapshot::build_with_carryover(
-        fixed_workspace(),
-        Vec::<()>::new(),
-        Vec::new(),
-        agents,
-        fixed_now(),
-    );
+    let mut snapshot =
+        SidebarSnapshot::build_with_carryover(fixed_workspace(), Vec::new(), agents, fixed_now());
     if !panes.is_empty() {
         snapshot = snapshot.with_live_panes(panes, None);
     }
@@ -195,50 +190,11 @@ fn agent(
 ) -> AgentState {
     let now = fixed_now();
     AgentState {
-        agent_id: id.into(),
-        kind: crate::ids::AgentKind::new_unchecked(kind),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
         status,
-        phase: crate::agents::TurnPhase::Idle,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
         worktree_path: worktree_path.map(ToOwned::to_owned),
         worktree_branch: branch.map(ToOwned::to_owned),
         task: task.map(ToOwned::to_owned),
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: now,
-        last_activity: now,
-        registered_at: Some(now),
+        ..crate::testkit::agent_state(kind, id, now)
     }
 }
 
@@ -665,7 +621,7 @@ fn make_up_snapshot() -> SidebarSnapshot {
         Some("add tests"),
     );
     running.last_activity = fixed_now() - Duration::from_secs(8);
-    snapshot_with(Vec::new(), vec![failed, running])
+    snapshot_with(vec![failed, running])
 }
 
 /// The make-up line's text, flattened from its single line's spans.
@@ -720,7 +676,7 @@ fn overflowing_fleet() -> SidebarSnapshot {
         codex.last_activity = now - Duration::from_secs(8);
         agents.push(codex);
     }
-    snapshot_with(Vec::new(), agents)
+    snapshot_with(agents)
 }
 
 /// One lead actionable unread row plus enough calm rows in a single worktree to
@@ -750,7 +706,7 @@ fn overflowing_fleet_with_unread_lead() -> SidebarSnapshot {
         codex.last_activity = now - Duration::from_secs(8);
         agents.push(codex);
     }
-    let mut snapshot = snapshot_with(Vec::new(), agents);
+    let mut snapshot = snapshot_with(agents);
     snapshot.worktree_groups[0].rows[0].unread = true;
     snapshot
 }
@@ -806,7 +762,7 @@ fn lead_unread_picks_the_oldest_actionable_row() {
         Some("c"),
     );
     result.last_activity = now - Duration::from_secs(60 * 60);
-    let mut snapshot = snapshot_with(Vec::new(), vec![newer, older, result]);
+    let mut snapshot = snapshot_with(vec![newer, older, result]);
     for row in snapshot
         .worktree_groups
         .iter_mut()
@@ -831,7 +787,7 @@ fn lead_unread_is_none_without_an_actionable_unread_row() {
         Some("main"),
         Some("c"),
     );
-    let mut snapshot = snapshot_with(Vec::new(), vec![result]);
+    let mut snapshot = snapshot_with(vec![result]);
     snapshot.worktree_groups[0].rows[0].unread = true;
     assert_eq!(
         lead_unread(&snapshot.worktree_groups),

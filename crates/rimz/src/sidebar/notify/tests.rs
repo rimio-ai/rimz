@@ -4,7 +4,6 @@ use jiff::Timestamp;
 
 use super::*;
 use crate::agents::AgentState;
-use crate::agents::lifecycle::TurnPhase;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::sidebar::unread::{OpenedUnread, opened_unread};
@@ -21,15 +20,15 @@ fn prefs() -> NotificationsPrefs {
 }
 
 fn snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
-    snapshot_with_items(Vec::new(), agents)
+    snapshot_with(agents)
 }
 
-fn snapshot_with_items(items: Vec<()>, agents: Vec<AgentState>) -> SidebarSnapshot {
+fn snapshot_with(agents: Vec<AgentState>) -> SidebarSnapshot {
     let panes = agents
         .iter()
         .filter_map(|agent| agent.pane.clone())
         .collect::<Vec<_>>();
-    SidebarSnapshot::build_with_agents(workspace(), items, agents, Timestamp::now())
+    SidebarSnapshot::build_with_agents(workspace(), agents, Timestamp::now())
         .with_live_panes(panes, None)
 }
 
@@ -119,19 +118,7 @@ fn link_snapshot(tier: LinkTier, freshness: SidebarLinkFreshness) -> SidebarSnap
 fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
     let now = Timestamp::now();
     AgentState {
-        agent_id: AgentSessionId::from(id),
-        kind: AgentKind::new_unchecked("claude"),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
         status,
-        phase: TurnPhase::Idle,
         pane: Some(PaneRef {
             pane_id: PaneId::from_parts(MuxName::Tmux, format!("%{id}")),
             session_name: "rimz-test".to_owned(),
@@ -151,36 +138,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
             elevated_agent: None,
             first_seen_at_ms: None,
         }),
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: None,
-        worktree_branch: None,
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: now,
-        last_activity: now,
-        registered_at: Some(now),
+        ..crate::testkit::agent_state("claude", id, now)
     }
 }
 
@@ -243,7 +201,7 @@ fn projected_ask_rows_notify_as_waiting() {
 
     let mut agent = agent("a1", AgentStatus::Waiting, false);
     agent.waiting_since = Some(agent.last_activity);
-    let next = snapshot_with_items(Vec::<()>::new(), vec![agent]);
+    let next = snapshot_with(vec![agent]);
     assert_eq!(
         next.worktree_groups[0].rows[0].status(),
         Some(AgentStatus::Waiting),

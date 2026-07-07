@@ -339,7 +339,6 @@ fn resolve_audit_agent(
     }
     let snapshot = rimz::SidebarSnapshot::build_with_agents(
         workspace.workspace_id.clone(),
-        Vec::<()>::new(),
         audit.agents,
         jiff::Timestamp::now(),
     )
@@ -1657,7 +1656,6 @@ mod tests {
     fn in_room_agent_ids_keeps_only_pane_bound_sessions() {
         let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
             rimz::WorkspaceId::parse("ws_000000000000000000000000").expect("workspace id"),
-            Vec::new(),
             vec![
                 test_agent("sess-one"),
                 test_agent("sess-two"),
@@ -1710,52 +1708,7 @@ mod tests {
     }
 
     fn test_agent(id: &str) -> AgentState {
-        AgentState {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked("codex"),
-            name: None,
-            name_explicit: false,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            status: rimz::agents::AgentStatus::Idle,
-            phase: rimz::agents::TurnPhase::Idle,
-            pane: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: jiff::Timestamp::UNIX_EPOCH,
-            last_activity: jiff::Timestamp::UNIX_EPOCH,
-            registered_at: Some(jiff::Timestamp::UNIX_EPOCH),
-        }
+        rimz::testkit::agent_state("codex", id, jiff::Timestamp::UNIX_EPOCH)
     }
 
     fn test_pane_agent(agent_id: &str, pane: &str) -> rimz::PaneAgent {

@@ -423,14 +423,17 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                 agent_id: AgentSessionId::from(launch_id),
                 name: name.to_owned(),
                 name_explicit: args.agent_name_explicit,
-                profile: args.agent_profile.clone(),
-                role: args.agent_role.clone(),
-                model: args.agent_model.clone(),
-                effort: args.agent_effort.clone(),
-                team: args.agent_team.clone(),
-                launch_group: args.launch_group.clone(),
-                launch_ordinal: args.launch_ordinal,
-                channel: args.agent_channel.clone(),
+                launch: rimz::agents::LaunchParams {
+                    profile: args.agent_profile.clone(),
+                    role: args.agent_role.clone(),
+                    model: args.agent_model.clone(),
+                    effort: args.agent_effort.clone(),
+                    team: args.agent_team.clone(),
+                    launch_group: args.launch_group.clone(),
+                    launch_ordinal: args.launch_ordinal,
+                    channel: args.agent_channel.clone(),
+                    kind_ordinal: None,
+                },
                 run_id: args.run_id.clone(),
             }))
         }
@@ -470,7 +473,7 @@ fn record_own_launch_pane(
             LaunchEventParams {
                 cwd: &cwd,
                 worktree_name: None,
-                channel: identity.channel.as_deref(),
+                channel: identity.launch.channel.as_deref(),
                 prompt,
                 state: rimz::store::event::AgentLaunchState::Bound,
                 pane_id: Some(pane_id.clone()),
@@ -501,7 +504,7 @@ fn record_launch_failed(
             LaunchEventParams {
                 cwd: &cwd,
                 worktree_name: None,
-                channel: identity.channel.as_deref(),
+                channel: identity.launch.channel.as_deref(),
                 prompt,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,

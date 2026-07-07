@@ -2,30 +2,24 @@ use super::*;
 
 #[test]
 fn animation_cadence_separates_fast_work_from_breath_motion() {
-    let running = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Running,
-            Some("/repo/main"),
-            Some("main"),
-            Some("db migrate"),
-        )],
-    );
+    let running = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    )]);
     assert_eq!(animation_cadence_for_test(&running), AnimationCadence::Fast);
 
-    let mut waiting = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Waiting,
-            Some("/repo/main"),
-            Some("main"),
-            Some("allow cargo fmt"),
-        )],
-    );
+    let mut waiting = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("allow cargo fmt"),
+    )]);
     assert_eq!(
         animation_cadence_for_test(&waiting),
         AnimationCadence::None,
@@ -49,33 +43,27 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         AnimationCadence::Breath
     );
 
-    let idle_empty = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "codex-1",
-            "codex",
-            AgentStatus::Idle,
-            Some("/repo/main"),
-            Some("main"),
-            None,
-        )],
-    );
+    let idle_empty = snapshot_with(vec![agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    )]);
     assert_eq!(
         animation_cadence_for_test(&idle_empty),
         AnimationCadence::None
     );
 
-    let mut calm = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Success,
-            Some("/repo/main"),
-            Some("main"),
-            Some("done"),
-        )],
-    );
+    let mut calm = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("done"),
+    )]);
     assert_eq!(animation_cadence_for_test(&calm), AnimationCadence::None);
 
     // An unread `✓` result never leads the attention ladder: it settles to the
@@ -91,17 +79,14 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
 
     // The single lead unread row — the oldest actionable ask — wears the
     // continuous unread effect, so it does keep the breath grid alive.
-    let mut lead = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Waiting,
-            Some("/repo/main"),
-            Some("main"),
-            Some("allow cargo fmt"),
-        )],
-    );
+    let mut lead = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("allow cargo fmt"),
+    )]);
     lead.worktree_groups[0].rows[0].unread = true;
     assert_eq!(
         animation_cadence_for_test(&lead),
@@ -126,17 +111,14 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         "a static-quieted waiting role stills the lead's unread motion"
     );
 
-    let mut idle = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Idle,
-            Some("/repo/main"),
-            Some("main"),
-            None,
-        )],
-    );
+    let mut idle = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    )]);
     assert_eq!(animation_cadence_for_test(&idle), AnimationCadence::None);
     idle.theme.animations.idle =
         Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
@@ -145,17 +127,14 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
 
 #[test]
 fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
-    let bare_idle = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Idle,
-            Some("/repo/main"),
-            Some("main"),
-            None,
-        )],
-    );
+    let bare_idle = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    )]);
 
     assert!(selection_awaiting_first_prompt(
         &bare_idle,
@@ -172,17 +151,14 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         }
     ));
 
-    let described = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Idle,
-            Some("/repo/main"),
-            Some("main"),
-            Some("warm up"),
-        )],
-    );
+    let described = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("warm up"),
+    )]);
     assert!(!selection_awaiting_first_prompt(
         &described,
         &UiState {
@@ -191,17 +167,14 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         }
     ));
 
-    let mut used = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Idle,
-            Some("/repo/main"),
-            Some("main"),
-            None,
-        )],
-    );
+    let mut used = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    )]);
     used.worktree_groups[0].rows[0]
         .as_agent_mut()
         .expect("agent row")
@@ -214,17 +187,14 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
         }
     ));
 
-    let running = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Running,
-            Some("/repo/main"),
-            Some("main"),
-            None,
-        )],
-    );
+    let running = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    )]);
     assert!(!selection_awaiting_first_prompt(
         &running,
         &UiState {
@@ -238,7 +208,6 @@ fn selection_awaiting_first_prompt_tracks_selected_bare_idle_card() {
 fn selected_pet_action_follows_the_focused_card() {
     let statuses = |statuses: &[(AgentStatus, crate::agents::TurnPhase)]| {
         snapshot_with(
-            Vec::new(),
             statuses
                 .iter()
                 .enumerate()
@@ -342,17 +311,14 @@ fn selected_pet_action_follows_the_focused_card() {
 
 #[test]
 fn selected_pet_action_follows_process_cards() {
-    let mut snapshot = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "agent-1",
-            "claude",
-            AgentStatus::Idle,
-            Some("/repo/main"),
-            Some("main"),
-            None,
-        )],
-    );
+    let mut snapshot = snapshot_with(vec![agent(
+        "agent-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    )]);
     snapshot.worktree_groups[0].rows = vec![crate::SidebarRow {
         id: "process-1".to_owned(),
         name: "cargo".to_owned(),
@@ -400,7 +366,7 @@ fn render_stalled_agent_reads_as_static_attention() {
     );
     claude.last_activity =
         fixed_now() - Duration::from_secs(u64::from(crate::agents::DEFAULT_STALL_AFTER_SECS) + 60);
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 16);
     let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 16);
 
@@ -425,7 +391,7 @@ fn render_live_heads_follow_phase_and_turn_phase() {
         Some("reading"),
     );
     claude.phase = crate::agents::TurnPhase::Reasoning;
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 16);
     let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 16);
 
@@ -509,7 +475,7 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
         Some("reading"),
     );
     claude.phase = crate::agents::TurnPhase::Reasoning;
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.theme = theme_config;
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 16);
     assert!(
@@ -537,7 +503,7 @@ fn render_card_cost_ticks_toward_the_target() {
     );
     claude.last_activity = now;
     claude.context = Some(claude_context(now));
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
 
     let mut ui = ui_at_phase(0);
     ui.cost_rolls
@@ -583,7 +549,7 @@ fn paused_agent_reads_as_a_static_pause() {
         }),
         ..claude_context(now)
     });
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 44, 16);
     let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 16);
     assert_eq!(first, second, "a parked agent's head must not animate");
@@ -607,7 +573,7 @@ fn transient_live_heads_replace_the_working_spinner() {
         Some("condensing context"),
     );
     claude.compacting_since = Some(fixed_now());
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 44, 16);
     let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 44, 16);
     assert_ne!(first, second, "the compacting head animates");
@@ -636,7 +602,7 @@ fn transient_live_heads_replace_the_working_spinner() {
         Some("Explore"),
     );
     kid.parent_agent_id = Some("claude-1".into());
-    let snapshot = snapshot_with(Vec::new(), vec![parent, kid]);
+    let snapshot = snapshot_with(vec![parent, kid]);
     // Phase 2 of the wave is a distinctive braille edge, unique to the
     // delegated-wait head (the cockpit's working bucket still shows `⢿`).
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 16);

@@ -30,7 +30,7 @@ fn with_link(
     rtt_ms: Option<u32>,
     miss_pct: u16,
 ) -> SidebarSnapshot {
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    let mut snapshot = snapshot_with(Vec::new());
     snapshot.link = Some(crate::SidebarLinkHealth {
         rtt_ms,
         miss_pct,
@@ -130,17 +130,14 @@ fn fresh_link_badge_uses_full_health_ramp() {
 
 #[test]
 fn footer_pins_help_right_when_attention_needs_it() {
-    let snapshot = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Waiting,
-            Some("/repo/main"),
-            Some("main"),
-            Some("approve deploy"),
-        )],
-    );
+    let snapshot = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("approve deploy"),
+    )]);
 
     let text = footer_text(&snapshot, 40);
 
@@ -150,17 +147,14 @@ fn footer_pins_help_right_when_attention_needs_it() {
 
 #[test]
 fn footer_keeps_help_right_without_attention_hint() {
-    let snapshot = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Waiting,
-            Some("/repo/main"),
-            Some("main"),
-            Some("approve deploy"),
-        )],
-    );
+    let snapshot = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("approve deploy"),
+    )]);
 
     let text = footer_text(&snapshot, 24);
 
@@ -176,17 +170,14 @@ fn remote_footer_keeps_left_badge_and_right_help_when_they_fit() {
         Some(210),
         0,
     );
-    snapshot.worktree_groups = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Waiting,
-            Some("/repo/main"),
-            Some("main"),
-            Some("approve deploy"),
-        )],
-    )
+    snapshot.worktree_groups = snapshot_with(vec![agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("approve deploy"),
+    )])
     .worktree_groups;
 
     let text = footer_text(&snapshot, 44);
@@ -198,7 +189,7 @@ fn remote_footer_keeps_left_badge_and_right_help_when_they_fit() {
 
 #[test]
 fn footer_trims_help_to_narrow_width() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
 
     assert_eq!(footer_text(&snapshot, 4), "? fo");
 }

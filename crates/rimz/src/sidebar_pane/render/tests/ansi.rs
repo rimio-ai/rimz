@@ -38,7 +38,7 @@ fn line_ansi_serializer_maps_color_and_row_reset_contract() {
 }
 #[test]
 fn fixed_line_ansi_renderer_emits_one_reset_terminated_line_per_frame_row() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
 
     let mut ansi = Vec::new();
     render_fixed_line_ansi(&mut ansi, &snapshot, None, 16, 5).unwrap();

@@ -13,7 +13,7 @@ fn interrupted_turn_settles_running_to_idle_before_stall() {
         .active_ago(default_stall_secs() + 60)
         .turn_interrupted(10);
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-clear");
     assert_eq!(
         row.status(),
@@ -39,7 +39,7 @@ fn interruption_before_last_activity_leaves_row_running() {
         .active_ago(5)
         .turn_interrupted(120);
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-clear");
     assert_eq!(
         row.status(),
@@ -58,7 +58,7 @@ fn turn_error_outranks_interruption_marker() {
         .turn_interrupted(10)
         .turn_error(10, "API Error: Bad Request");
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let snapshot = room_with_agent_panes(vec![session]);
     let row = row(&snapshot, "codex-clear");
     assert_eq!(
         row.status(),

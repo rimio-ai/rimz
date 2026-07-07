@@ -12,7 +12,7 @@ fn line_one_prefers_session_name_over_task() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
     let rendered = snapshot_to_screen(&snapshot, 44, 15);
 
     assert!(rendered.contains("store refactor"));
@@ -32,7 +32,7 @@ fn line_two_falls_back_to_the_latest_prompt_when_unnamed() {
         None, // idle cleared the task; no session name (no context)
     );
     claude.prompt = Some("wire the relay".to_owned());
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
     let rendered = snapshot_to_screen(&snapshot, 44, 15);
 
     assert!(rendered.contains("wire the relay"));
@@ -54,7 +54,7 @@ fn line_two_uses_launch_description_before_task_and_prompt() {
     );
     claude.description = Some("port auth".to_owned());
     claude.prompt = Some("wire the relay".to_owned());
-    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![claude]), 44, 15);
+    let rendered = snapshot_to_screen(&snapshot_with(vec![claude]), 44, 15);
 
     assert!(rendered.contains("port auth"));
     assert!(!rendered.contains("db migrate"));
@@ -76,7 +76,7 @@ fn line_two_rich_context_replaces_launch_description() {
     preview_context.session_preview = Some("thread preview".to_owned());
     preview_context.session_name = Some("thread name".to_owned());
     preview.context = Some(preview_context);
-    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![preview]), 44, 15);
+    let rendered = snapshot_to_screen(&snapshot_with(vec![preview]), 44, 15);
 
     assert!(rendered.contains("thread preview"));
     assert!(!rendered.contains("port auth"));
@@ -94,7 +94,7 @@ fn line_two_rich_context_replaces_launch_description() {
     named_context.session_preview = None;
     named_context.session_name = Some("thread name".to_owned());
     named.context = Some(named_context);
-    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![named]), 44, 15);
+    let rendered = snapshot_to_screen(&snapshot_with(vec![named]), 44, 15);
 
     assert!(rendered.contains("thread name"));
     assert!(!rendered.contains("port auth"));
@@ -112,7 +112,7 @@ fn line_two_rejects_skill_blocks_at_renderer_backstop() {
             "<skill name=\"merge\" Location=\"/home/u/.agents/skills/merge/SKILL.md\">body</skill>",
         ),
     );
-    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![codex]), 44, 15);
+    let rendered = snapshot_to_screen(&snapshot_with(vec![codex]), 44, 15);
 
     assert!(!rendered.contains("<skill"));
     assert!(
@@ -134,7 +134,7 @@ fn line_two_control_characters_collapse_before_framing() {
     let mut context = codex_context(fixed_now());
     context.session_preview = Some("ship\nwide\tlabel\rnow\u{0007}".to_owned());
     codex.context = Some(context);
-    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![codex]), 44, 15);
+    let rendered = snapshot_to_screen(&snapshot_with(vec![codex]), 44, 15);
     let line = rendered
         .lines()
         .find(|line| line.contains("ship wide label now"))
@@ -224,7 +224,7 @@ fn parked_background_marker_falls_back_to_unicode() {
         Some("done"),
     );
     claude.phase = crate::agents::TurnPhase::Parked;
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let snapshot = snapshot_with(vec![claude]);
     let theme = Theme::fixed_for_theme(
         true,
         &crate::config::ThemeConfig {
@@ -265,7 +265,7 @@ fn unread_descriptor_grows_bold_without_dimming() {
         Some("main"),
         Some("done"),
     );
-    let mut unread = snapshot_with(Vec::new(), vec![agent.clone()]);
+    let mut unread = snapshot_with(vec![agent.clone()]);
     unread.worktree_groups[0].rows[0].unread = true;
     // Under NO_COLOR the blink unread descriptor shares the lead glyph/name
     // 2-pole toggle through a grow-only weight: plain on the off-pole, bold on
@@ -282,7 +282,7 @@ fn unread_descriptor_grows_bold_without_dimming() {
     assert!(unread_mods.iter().all(|m| !m.contains(Modifier::DIM)));
 
     // A read descriptor never blinks — its weight is the same at every phase.
-    let read = snapshot_with(Vec::new(), vec![agent]);
+    let read = snapshot_with(vec![agent]);
     for phase in 0..32 {
         let modifier = span_for(&rendered_group_lines_blink_no_color(&read, phase), "done")
             .style
@@ -306,7 +306,7 @@ fn unread_descriptor_holds_bold_while_colored_pulse_brightens() {
         Some("main"),
         Some("done"),
     );
-    let mut snapshot = snapshot_with(Vec::new(), vec![agent]);
+    let mut snapshot = snapshot_with(vec![agent]);
     snapshot.worktree_groups[0].rows[0].unread = true;
 
     let styles: Vec<_> = (0..32)
@@ -340,7 +340,7 @@ fn unread_turn_error_label_pulses_and_stays_italic() {
         Some("main"),
         Some("done"),
     );
-    let mut snapshot = snapshot_with(Vec::new(), vec![agent]);
+    let mut snapshot = snapshot_with(vec![agent]);
     let row = &mut snapshot.worktree_groups[0].rows[0];
     row.unread = true;
     row.as_agent_mut().unwrap().turn_error_label = Some("api error".to_owned());

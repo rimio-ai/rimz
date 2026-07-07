@@ -16,7 +16,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = vec![provider_panel(
         "claude",
         "Claude",
@@ -191,7 +191,7 @@ fn pets_provider_dashboard_owns_total_rows() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     snapshot.theme.pets.enabled = true;
@@ -301,7 +301,7 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let mut snapshot = snapshot_with(vec![claude]);
     snapshot.providers = two_provider_panels();
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     snapshot.theme.pets.enabled = true;

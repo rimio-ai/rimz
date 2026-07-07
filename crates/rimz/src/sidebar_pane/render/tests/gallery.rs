@@ -41,17 +41,14 @@ fn render_gallery_draws_delimiters_between_columns() {
 }
 
 fn gallery_snapshot(display_name: &str, id: &str, kind: &str) -> SidebarSnapshot {
-    let mut snapshot = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            id,
-            kind,
-            AgentStatus::Running,
-            Some("/repo/main"),
-            Some("main"),
-            Some("render gallery"),
-        )],
-    );
+    let mut snapshot = snapshot_with(vec![agent(
+        id,
+        kind,
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("render gallery"),
+    )]);
     snapshot.display_name = display_name.to_owned();
     snapshot
 }

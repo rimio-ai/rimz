@@ -25,7 +25,7 @@ fn footer_spans(snapshot: &SidebarSnapshot, width: usize) -> Vec<ratatui::text::
 }
 
 fn with_presence(presence: Option<crate::SidebarPresence>) -> SidebarSnapshot {
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    let mut snapshot = snapshot_with(Vec::new());
     snapshot.presence = presence;
     snapshot
 }

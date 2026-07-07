@@ -22,8 +22,8 @@ fn live_panes_overlay_only_matching_agent_rows() {
         if let Some(raw_pane) = stamped_pane {
             codex = codex.branch("main").in_pane(raw_pane);
         }
-        let snapshot = room(Vec::new(), vec![codex])
-            .with_live_panes(vec![pane("%1", pane_command, "/repo/main")], None);
+        let snapshot =
+            room(vec![codex]).with_live_panes(vec![pane("%1", pane_command, "/repo/main")], None);
 
         assert_eq!(snapshot.worktree_groups.len(), 1, "{label}");
         assert_eq!(snapshot.worktree_groups[0].rows.len(), 1, "{label}");
@@ -48,8 +48,7 @@ fn stamped_codex_returned_to_shell_without_hosted_process_renders_process_row() 
     let codex = agent("codex", "sess-1", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1");
-    let snapshot =
-        room(Vec::new(), vec![codex]).with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
+    let snapshot = room(vec![codex]).with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
 
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1);
@@ -77,8 +76,8 @@ fn forked_side_session_does_not_repaint_primary_card() {
         .active_ago(5);
     fork.registered_at = Some(ago(60));
 
-    let snapshot = room(Vec::new(), vec![main, fork])
-        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+    let snapshot =
+        room(vec![main, fork]).with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1, "one top-level row on the shared pane");
@@ -108,7 +107,7 @@ fn shared_pane_primary_is_stable_when_registration_ties() {
             .active_ago(b_active_ago);
         agent_b.registered_at = None;
 
-        let snapshot = room(Vec::new(), vec![agent_a, agent_b])
+        let snapshot = room(vec![agent_a, agent_b])
             .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
         let rows = rows(&snapshot);
@@ -157,7 +156,7 @@ fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
         None,
     )); // same daemon pid — a fork, not a relaunch
 
-    let mut snapshot = room(Vec::new(), vec![main, fork]);
+    let mut snapshot = room(vec![main, fork]);
     snapshot.reap_stale_sessions();
     let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
@@ -212,7 +211,7 @@ fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
         ));
         replacement.origin = replacement_origin;
 
-        let mut snapshot = room(Vec::new(), vec![main, replacement]);
+        let mut snapshot = room(vec![main, replacement]);
         snapshot.reap_stale_sessions();
         let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
@@ -247,7 +246,7 @@ fn relaunch_in_reused_cwd_still_takes_over_the_card() {
         .active_ago(5); // postdates the new process start
     fresh.registered_at = Some(ago(20));
 
-    let snapshot = room(Vec::new(), vec![dead, fresh]).with_live_panes(vec![live], None);
+    let snapshot = room(vec![dead, fresh]).with_live_panes(vec![live], None);
 
     let rows = rows(&snapshot);
     assert_eq!(rows.len(), 1);
@@ -268,8 +267,8 @@ fn agent_binds_only_by_stamped_pane_id() {
         .worktree("/repo/main")
         .in_pane("%2");
 
-    let snapshot = room(Vec::new(), vec![claude])
-        .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+    let snapshot =
+        room(vec![claude]).with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
@@ -290,7 +289,7 @@ fn live_agent_and_process_rows_are_pane_backed() {
         .worktree("/repo/main")
         .in_pane("%1");
 
-    let snapshot = room(Vec::new(), vec![parent, child]).with_live_panes(
+    let snapshot = room(vec![parent, child]).with_live_panes(
         vec![
             pane("%1", "claude", "/repo/main"),
             pane("%2", "zsh", "/repo/main"),

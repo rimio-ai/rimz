@@ -976,7 +976,6 @@ fn empty_snapshot() -> SidebarSnapshot {
     SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
         Vec::new(),
-        Vec::new(),
         Timestamp::now(),
     )
 }

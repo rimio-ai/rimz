@@ -148,12 +148,8 @@ mod tests {
             77,
             None,
         ));
-        let pre_reap = SidebarSnapshot::build_with_agents(
-            workspace.clone(),
-            Vec::new(),
-            vec![agent],
-            Timestamp::now(),
-        );
+        let pre_reap =
+            SidebarSnapshot::build_with_agents(workspace.clone(), vec![agent], Timestamp::now());
         write_codex_daemon_reap(
             &runtime,
             &CodexDaemonReap {

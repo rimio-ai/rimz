@@ -168,55 +168,13 @@ fn linux_process_state_from_stat(stat: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
-    use crate::agents::TurnPhase;
     use jiff::Timestamp;
 
     fn agent(owner: Option<RuntimeOwner>) -> AgentState {
         AgentState {
-            agent_id: "sess-1".into(),
-            kind: crate::ids::AgentKind::new_unchecked("claude"),
-            name: None,
-            name_explicit: false,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
             status: AgentStatus::Idle,
-            phase: TurnPhase::Idle,
-            pane: None,
             runtime_owner: owner,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: Timestamp::UNIX_EPOCH,
-            last_activity: Timestamp::UNIX_EPOCH,
-            registered_at: Some(Timestamp::UNIX_EPOCH),
+            ..crate::testkit::agent_state("claude", "sess-1", Timestamp::UNIX_EPOCH)
         }
     }
 

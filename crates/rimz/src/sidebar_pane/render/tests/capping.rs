@@ -87,7 +87,7 @@ fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
     let mut map = Vec::new();
     let mut more_hits = Vec::new();
     let mut row_index = 0;
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
     worktree_group_lines(
         &Theme::fixed(true),
         &group,
@@ -136,7 +136,7 @@ fn expanded_group_keeps_less_control_when_hold_makes_all_rows_visible() {
     let mut map = Vec::new();
     let mut more_hits = Vec::new();
     let mut row_index = 0;
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    let snapshot = snapshot_with(Vec::new());
     worktree_group_lines(
         &Theme::fixed(true),
         &group,

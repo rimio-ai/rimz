@@ -12,7 +12,7 @@ use jiff::Timestamp;
 
 use super::row::SidebarRow;
 use super::view::SidebarSnapshot;
-use crate::agents::lifecycle::{self, TurnPhase};
+use crate::agents::lifecycle;
 use crate::agents::{AccountBudget, AgentState, AgentStatus};
 use crate::agents::{
     AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentTurnError, RateLimitWindow,
@@ -43,19 +43,18 @@ pub(super) fn workspace() -> WorkspaceId {
 /// Build a snapshot at the [`epoch`] — the one construction path the
 /// scenarios share. Enrichment chains (`with_live_panes`, `with_agent_context`,
 /// …) hang off the returned snapshot as in production.
-pub(super) fn room(items: Vec<()>, agents: Vec<AgentState>) -> SidebarSnapshot {
-    SidebarSnapshot::build_with_agents(workspace(), items, agents, epoch())
+pub(super) fn room(agents: Vec<AgentState>) -> SidebarSnapshot {
+    SidebarSnapshot::build_with_agents(workspace(), agents, epoch())
 }
 
 /// Build a snapshot at the [`epoch`] and admit each root agent through a
 /// synthetic live pane. Tests that assert row projection, ranking, caps, or
 /// display status use this instead of the frameless [`room`] constructor.
-pub(super) fn room_with_agent_panes(items: Vec<()>, agents: Vec<AgentState>) -> SidebarSnapshot {
-    room_with_agent_panes_and_budgets(items, agents, std::collections::BTreeMap::new())
+pub(super) fn room_with_agent_panes(agents: Vec<AgentState>) -> SidebarSnapshot {
+    room_with_agent_panes_and_budgets(agents, std::collections::BTreeMap::new())
 }
 
 pub(super) fn room_with_agent_panes_and_budgets(
-    items: Vec<()>,
     mut agents: Vec<AgentState>,
     account_budgets: std::collections::BTreeMap<AgentKind, AccountBudget>,
 ) -> SidebarSnapshot {
@@ -87,7 +86,7 @@ pub(super) fn room_with_agent_panes_and_budgets(
         agent.pane = Some(pane.clone());
         panes.push(pane);
     }
-    SidebarSnapshot::build_with_agents(workspace(), items, agents, epoch())
+    SidebarSnapshot::build_with_agents(workspace(), agents, epoch())
         .with_live_panes_and_account_budgets(panes, None, &account_budgets)
 }
 
@@ -137,50 +136,9 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
     let offset_ms = (100_000 - last_seen).max(0) as u64;
     let timestamp = epoch() - std::time::Duration::from_millis(offset_ms);
     AgentState {
-        agent_id: id.into(),
-        kind: AgentKind::new_unchecked(kind),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
         status,
-        phase: TurnPhase::Idle,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: None,
-        worktree_branch: None,
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
         waiting_since: (status == AgentStatus::Waiting).then_some(timestamp),
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: timestamp,
-        last_activity: timestamp,
-        registered_at: Some(timestamp),
+        ..crate::testkit::agent_state(kind, id, timestamp)
     }
 }
 

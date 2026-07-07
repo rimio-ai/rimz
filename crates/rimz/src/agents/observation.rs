@@ -27,7 +27,7 @@ pub enum SessionOrigin {
 }
 
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
     /// The `[agents.profiles]` profile the launcher selected, passed through
     /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.

@@ -75,12 +75,8 @@ fn assemble_snapshot(
         agents,
         RuntimeScope::Runtime,
     );
-    let mut snapshot = SidebarSnapshot::build_with_agents(
-        paths.workspace_id.clone(),
-        Vec::<()>::new(),
-        projection.agents,
-        now,
-    );
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), projection.agents, now);
     snapshot.reap_stale_sessions();
     snapshot.display_name = display_name_for(paths);
     let mut snapshot = snapshot

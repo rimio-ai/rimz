@@ -454,12 +454,8 @@ mod tests {
             .map(|status| SidebarStatusCount { status, count: 1 })
             .collect();
         let workspace = crate::ids::WorkspaceId::from_project_root(Path::new("/repo/main"));
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            workspace,
-            Vec::new(),
-            Vec::new(),
-            jiff::Timestamp::now(),
-        );
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(workspace, Vec::new(), jiff::Timestamp::now());
         snapshot.panes_produced_at_ms = Some(1);
         snapshot.worktree_groups = vec![SidebarWorktreeGroup {
             key: "/repo/main".to_owned(),

@@ -12,7 +12,7 @@ fn agents_on_different_branches_in_one_path_form_two_groups() {
         .worktree("/repo/shared")
         .branch("main");
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![feature, main]);
+    let snapshot = room_with_agent_panes(vec![feature, main]);
 
     assert_eq!(
         snapshot.worktree_groups.len(),
@@ -38,7 +38,7 @@ fn one_branch_path_keeps_agent_and_shell_in_one_group() {
         .branch("main")
         .in_pane("%1");
 
-    let snapshot = room(Vec::new(), vec![claude]).with_live_panes(
+    let snapshot = room(vec![claude]).with_live_panes(
         vec![
             pane("%1", "claude", "/repo/main"),
             pane("%2", "zsh", "/repo/main"),

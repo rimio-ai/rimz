@@ -22,9 +22,8 @@ fn first_mut(
 
 fn live_row_ids(frame: &crate::sidebar::frame::PaneFrame) -> Vec<String> {
     let workspace = crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/repo"));
-    let snapshot =
-        crate::SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), jiff::Timestamp::now())
-            .with_live_panes(frame.to_pane_refs(), None);
+    let snapshot = crate::SidebarSnapshot::build(workspace, Vec::new(), jiff::Timestamp::now())
+        .with_live_panes(frame.to_pane_refs(), None);
     let mut ids = snapshot
         .worktree_groups
         .iter()

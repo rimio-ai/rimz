@@ -17,7 +17,7 @@ fn ranked_snapshot(mut agents: Vec<AgentState>) -> SidebarSnapshot {
         panes.push(live);
     }
 
-    room(Vec::new(), agents).with_live_panes(panes, None)
+    room(agents).with_live_panes(panes, None)
 }
 
 fn labels(snapshot: &SidebarSnapshot) -> Vec<String> {

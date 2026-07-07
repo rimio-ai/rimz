@@ -5,13 +5,10 @@ fn two_paneless_codex_in_one_worktree_bind_most_recent() {
     // When two pane-less Codex sessions claim one worktree — a lingering
     // closed session and a live one — the most-recently-active binds the
     // single live pane; the stale session does not render.
-    let snapshot = room(
-        Vec::new(),
-        vec![
-            paneless_codex("sess-old", "/repo/main", 1_000),
-            paneless_codex("sess-new", "/repo/main", 2_000),
-        ],
-    )
+    let snapshot = room(vec![
+        paneless_codex("sess-old", "/repo/main", 1_000),
+        paneless_codex("sess-new", "/repo/main", 2_000),
+    ])
     .with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
@@ -26,17 +23,14 @@ fn paneless_codex_and_new_stamped_codex_share_one_worktree_without_idle_row() {
     // newer session's focused pane at hook ingestion. The older paneless
     // session must survive long enough to bind the other same-cwd pane.
     let newer = paneless_codex("sess-new", "/repo/main", 2_000).in_pane("%2");
-    let snapshot = room(
-        Vec::new(),
-        vec![paneless_codex("sess-old", "/repo/main", 1_000), newer],
-    )
-    .with_live_panes(
-        vec![
-            pane("%1", "codex", "/repo/main"),
-            pane("%2", "codex", "/repo/main"),
-        ],
-        None,
-    );
+    let snapshot = room(vec![paneless_codex("sess-old", "/repo/main", 1_000), newer])
+        .with_live_panes(
+            vec![
+                pane("%1", "codex", "/repo/main"),
+                pane("%2", "codex", "/repo/main"),
+            ],
+            None,
+        );
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 2);
@@ -68,7 +62,7 @@ fn resumed_codex_pane_binds_the_matching_session_and_heals_stale_stamp() {
         ..pane("term1", "codex", "/repo/main")
     };
 
-    let snapshot = room(Vec::new(), vec![newer, old]).with_live_panes(vec![resumed_pane], None);
+    let snapshot = room(vec![newer, old]).with_live_panes(vec![resumed_pane], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
@@ -89,7 +83,7 @@ fn resumed_codex_pane_binds_the_matching_session_and_heals_stale_stamp() {
         ..pane("term1", "codex", "/repo/main")
     };
 
-    let snapshot = room(Vec::new(), vec![old]).with_live_panes(vec![resumed_pane], None);
+    let snapshot = room(vec![old]).with_live_panes(vec![resumed_pane], None);
 
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
@@ -124,7 +118,7 @@ fn paneless_codex_sessions_pair_by_latest_process_start_before_first_event() {
         ),
         (vec![newer, older], vec![new_pane, old_pane]),
     ] {
-        let snapshot = room(Vec::new(), agents).with_live_panes(panes, None);
+        let snapshot = room(agents).with_live_panes(panes, None);
         assert_eq!(
             row(&snapshot, "sess-old")
                 .pane

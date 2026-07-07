@@ -112,8 +112,8 @@ mod tests {
 
     use super::*;
     use crate::RuntimePaths;
-    use crate::agents::{AgentState, AgentStatus, TurnPhase};
-    use crate::ids::{AgentKind, WorkspaceId};
+    use crate::agents::{AgentState, AgentStatus};
+    use crate::ids::WorkspaceId;
     use crate::sidebar::enrich::{FoldOpts, enrich};
     use crate::sidebar::refresh::AccountsCache;
     use crate::sidebar::test_support::{activity_row, worktree_group};
@@ -185,50 +185,10 @@ mod tests {
         now: Timestamp,
     ) -> AgentState {
         AgentState {
-            agent_id: id.into(),
-            kind: AgentKind::new_unchecked("claude"),
-            name: None,
-            name_explicit: false,
-            kind_ordinal: None,
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
             status: AgentStatus::Running,
-            phase: TurnPhase::Idle,
-            pane: None,
-            runtime_owner: None,
-            parent_agent_id: None,
             worktree_path: Some(worktree_path.display().to_string()),
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
             transcript_path: Some(transcript_path.display().to_string()),
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: now,
-            last_activity: now,
-            registered_at: Some(now),
+            ..crate::testkit::agent_state("claude", id, now)
         }
     }
 
@@ -259,9 +219,8 @@ mod tests {
         let wt = dir.path().join("wt");
         let external = Path::new("/tmp/rimz-other-project");
         let build_snapshot = || -> SidebarSnapshot {
-            let mut snapshot =
-                SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new(), published)
-                    .with_project_root(Some(dir.path().to_path_buf()));
+            let mut snapshot = SidebarSnapshot::build(workspace.clone(), Vec::new(), published)
+                .with_project_root(Some(dir.path().to_path_buf()));
             snapshot.agents = vec![
                 agent_state("baselined", &wt, &transcript("baselined"), published),
                 agent_state("external", external, &transcript("external"), published),
@@ -322,14 +281,10 @@ mod tests {
         let wt = Path::new("/repo/wt");
         let linked = Path::new("/linked/wt");
 
-        let mut snapshot = SidebarSnapshot::build(
-            WorkspaceId::from_project_root(wt),
-            Vec::new(),
-            Vec::new(),
-            published,
-        )
-        .with_project_root(Some(Path::new("/repo").to_path_buf()))
-        .with_worktree_roots(vec![linked.to_path_buf()]);
+        let mut snapshot =
+            SidebarSnapshot::build(WorkspaceId::from_project_root(wt), Vec::new(), published)
+                .with_project_root(Some(Path::new("/repo").to_path_buf()))
+                .with_worktree_roots(vec![linked.to_path_buf()]);
         snapshot.agents = [
             "baselined",
             "newborn",
@@ -382,13 +337,9 @@ mod tests {
         assert!((live - 16.00).abs() < 1e-9);
         assert_eq!(snapshot.today_spend_epoch_secs, Some(123));
 
-        let mut empty = SidebarSnapshot::build(
-            WorkspaceId::from_project_root(wt),
-            Vec::new(),
-            Vec::new(),
-            published,
-        )
-        .with_project_root(Some(Path::new("/repo").to_path_buf()));
+        let mut empty =
+            SidebarSnapshot::build(WorkspaceId::from_project_root(wt), Vec::new(), published)
+                .with_project_root(Some(Path::new("/repo").to_path_buf()));
         apply_live_today_spend(&mut empty, &WorkspaceSpendingCache::default());
         assert_eq!(empty.today_spend_live_usd, Some(0.0));
     }
@@ -404,7 +355,6 @@ mod tests {
 
         let mut snapshot = SidebarSnapshot::build(
             WorkspaceId::from_project_root(project),
-            Vec::new(),
             Vec::new(),
             published,
         )

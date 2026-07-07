@@ -147,7 +147,6 @@ fn snapshot_with_spend(year_usd: Option<f64>) -> crate::SidebarSnapshot {
     let mut snapshot = crate::SidebarSnapshot::build(
         WorkspaceId::from_project_root(std::path::Path::new("/repo")),
         Vec::new(),
-        Vec::new(),
         jiff::Timestamp::now(),
     );
     snapshot.value_tally = year_usd.map(spend_tally);

@@ -272,13 +272,8 @@ pub struct SidebarSnapshot {
 
 impl SidebarSnapshot {
     #[cfg(test)]
-    pub fn build(
-        workspace_id: WorkspaceId,
-        _items: Vec<()>,
-        events: Vec<EventEnvelope>,
-        now: Timestamp,
-    ) -> Self {
-        Self::build_with_carryover(workspace_id, Vec::<()>::new(), events, Vec::new(), now)
+    pub fn build(workspace_id: WorkspaceId, events: Vec<EventEnvelope>, now: Timestamp) -> Self {
+        Self::build_with_carryover(workspace_id, events, Vec::new(), now)
     }
 
     /// Build a snapshot, folding `carryover_agents` into the agent rollup so
@@ -287,18 +282,16 @@ impl SidebarSnapshot {
     #[cfg(test)]
     pub fn build_with_carryover(
         workspace_id: WorkspaceId,
-        _items: Vec<()>,
         events: Vec<EventEnvelope>,
         carryover_agents: Vec<AgentState>,
         now: Timestamp,
     ) -> Self {
         let agents = agent_rollup_with_carryover(&events, carryover_agents);
-        Self::build_with_agents(workspace_id, Vec::<()>::new(), agents, now)
+        Self::build_with_agents(workspace_id, agents, now)
     }
 
     pub fn build_with_agents(
         workspace_id: WorkspaceId,
-        _items: Vec<()>,
         agents: Vec<AgentState>,
         now: Timestamp,
     ) -> Self {

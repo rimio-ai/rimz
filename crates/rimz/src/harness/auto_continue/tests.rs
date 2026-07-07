@@ -244,7 +244,6 @@ fn fire_if_due_keeps_records_when_activity_regresses() {
     write_park(&path, &record);
     let snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
-        Vec::new(),
         vec![agent(900)],
         ts(4_000),
     );
@@ -433,7 +432,6 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
     let snapshot_at = |now| {
         let mut snapshot = SidebarSnapshot::build_with_agents(
             runtime.workspace_id.clone(),
-            Vec::new(),
             vec![parked_agent(
                 100,
                 1_000,
@@ -468,7 +466,6 @@ fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
     write_recovered_window(&runtime);
     let mut snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
-        Vec::new(),
         vec![parked_agent(
             1_000,
             5_990,
@@ -502,7 +499,6 @@ fn recovered_budget_rearms_a_lost_limit_park() {
     write_recovered_window(&runtime);
     let mut snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
-        Vec::new(),
         vec![parked_agent(
             1_000,
             5_990,
@@ -537,7 +533,6 @@ fn recovered_budget_clears_a_stale_rate_limit_record() {
     write_recovered_window(&runtime);
     let mut snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
-        Vec::new(),
         vec![agent(1_000)],
         ts(6_000),
     );
@@ -567,7 +562,6 @@ fn fire_with_resume_message(status: MessageStatus) -> Option<ParkRecord> {
     write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 1));
     let mut snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
-        Vec::new(),
         vec![parked_agent(
             1_000,
             5_990,
@@ -649,7 +643,6 @@ fn phantom_spawns_never_exhaust_a_park() {
     write_park(&path, &record);
     let snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
-        Vec::new(),
         vec![parked_agent(
             1_000,
             5_990,
@@ -675,7 +668,6 @@ fn exhausted_resume_attempts_report_actionable_key() {
     write_park(&path, &rate_record(5_000, 1_000, Some(5_000), 0));
     let snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
-        Vec::new(),
         vec![parked_agent(
             1_000,
             5_990,

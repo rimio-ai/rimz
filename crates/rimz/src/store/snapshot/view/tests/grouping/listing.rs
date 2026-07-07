@@ -26,7 +26,7 @@ fn groups_by_worktree_attention_first_external_last_uncapped() {
             .worktree("/repo/main"),
         );
     }
-    let snapshot = room(Vec::new(), agents);
+    let snapshot = room(agents);
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);
@@ -63,7 +63,7 @@ fn one_path_two_branches_splits_into_two_listing_pods() {
     let main = agent("claude", "sess-b", AgentStatus::Idle, 1_100)
         .worktree("/repo/shared")
         .branch("main");
-    let snapshot = room(Vec::new(), vec![feature, main]);
+    let snapshot = room(vec![feature, main]);
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);
@@ -91,8 +91,8 @@ fn out_of_project_agent_tails_into_external_when_root_is_known() {
     // would outrank project work on its `failed` attention status.
     let inside = agent("claude", "in", AgentStatus::Running, 10).worktree("/repo/main");
     let outside = agent("claude", "out", AgentStatus::Failed, 20).worktree("/tmp/scratch");
-    let snapshot = room(Vec::new(), vec![inside, outside])
-        .with_project_root(Some(std::path::PathBuf::from("/repo/main")));
+    let snapshot =
+        room(vec![inside, outside]).with_project_root(Some(std::path::PathBuf::from("/repo/main")));
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);
@@ -120,7 +120,7 @@ fn git_backed_out_of_project_agent_gets_own_worktree_pod() {
     let project_root = Some(std::path::PathBuf::from("/repo/main"));
 
     let grouped = |agent: AgentState| {
-        let snapshot = room(Vec::new(), vec![agent]).with_project_root(project_root.clone());
+        let snapshot = room(vec![agent]).with_project_root(project_root.clone());
         let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
         let groups = group_live_agents_by_worktree(&refs, &snapshot);
         let group = groups.first().expect("a group");
@@ -140,7 +140,7 @@ fn git_backed_out_of_project_agent_gets_own_worktree_pod() {
 fn sidebar_external_group_label_is_stable_for_non_git_cwd() {
     let outside =
         agent("claude", "out", AgentStatus::Failed, 20).worktree("/home/user/.agents/teams");
-    let snapshot = room(Vec::new(), vec![outside])
+    let snapshot = room(vec![outside])
         .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
         .with_live_panes(vec![pane("%1", "claude", "/home/user/.agents/teams")], None);
 
@@ -155,7 +155,7 @@ fn branch_named_unmatched_path_keeps_pre_enumeration_worktree_group() {
     let feature = agent("claude", "feat", AgentStatus::Running, 20)
         .worktree("/work/query-engine-feature-x/src")
         .branch("feature-x");
-    let snapshot = room(Vec::new(), vec![feature])
+    let snapshot = room(vec![feature])
         .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
         .with_live_panes(
             vec![pane("%1", "claude", "/work/query-engine-feature-x/src")],
@@ -174,7 +174,7 @@ fn named_channel_groups_a_live_agent_ahead_of_worktree_identity() {
         .worktree("/repo/main")
         .branch("main");
     design.channel = Some("design".to_owned());
-    let snapshot = room(Vec::new(), vec![design]);
+    let snapshot = room(vec![design]);
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);
@@ -190,7 +190,7 @@ fn listing_roster_folds_unstamped_rimz_worktree_agents_into_channel_pod() {
     let mut stamped = agent("claude", "stamped", AgentStatus::Running, 20).worktree(worktree);
     stamped.channel = Some("message-channel".to_owned());
     let unstamped = agent("codex", "bare", AgentStatus::Idle, 10).worktree(worktree);
-    let snapshot = room(Vec::new(), vec![stamped, unstamped])
+    let snapshot = room(vec![stamped, unstamped])
         .with_project_root(Some(std::path::PathBuf::from("/repo/rimz")))
         .with_worktree_home(Some(std::path::PathBuf::from("/repo/rimz-worktrees")));
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
@@ -218,7 +218,7 @@ fn listing_roster_mirrors_cohort_block_order_and_group_attention_rank() {
     second.launch_ordinal = Some(1);
     second.pane = Some(pane("%1", "claude", "/repo/a"));
     let other = agent("claude", "other-running", AgentStatus::Running, 40).worktree("/repo/b");
-    let snapshot = room(Vec::new(), vec![second, other, first]);
+    let snapshot = room(vec![second, other, first]);
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     let groups = group_live_agents_by_worktree(&refs, &snapshot);

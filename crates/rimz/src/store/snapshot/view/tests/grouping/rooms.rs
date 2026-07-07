@@ -14,7 +14,7 @@ fn directory_room_groups_git_backed_rows_by_resolved_worktree() {
         .worktree("/srv/agents/billing")
         .branch("billing")
         .in_pane("%3");
-    let snapshot = room(Vec::new(), vec![query, billing])
+    let snapshot = room(vec![query, billing])
         .with_root_class(RootClass::Directory)
         .with_project_root(Some(PathBuf::from("/srv/agents")))
         .with_live_panes(
@@ -99,7 +99,7 @@ fn non_repo_room_variants_share_the_root_pod_rule() {
             1,
         ),
     ] {
-        let snapshot = room(Vec::new(), Vec::new())
+        let snapshot = room(Vec::new())
             .with_root_class(root_class)
             .with_project_root(Some(PathBuf::from(root)))
             .with_worktree_roots(worktree_roots.into_iter().map(PathBuf::from).collect())
@@ -121,7 +121,7 @@ fn deeply_nested_git_backed_row_gets_own_worktree_pod() {
         .branch("feature/nested")
         .in_pane("%1");
 
-    let snapshot = room(Vec::new(), vec![agent])
+    let snapshot = room(vec![agent])
         .with_root_class(RootClass::Directory)
         .with_project_root(Some(PathBuf::from("/srv/agents")))
         .with_live_panes(

@@ -538,7 +538,7 @@ mod tests {
     fn explain_reports_fifo_blocker() {
         let now = Timestamp::now();
         let agent = agent("sess-fifo", AgentStatus::Idle);
-        let snapshot = snapshot(agent.clone(), true, Vec::new(), now);
+        let snapshot = snapshot(agent.clone(), true, now);
         let older = message(&agent, 1, "first");
         let newer = message(&agent, 2, "second");
 
@@ -554,7 +554,7 @@ mod tests {
     fn explain_reports_gate_closed() {
         let now = Timestamp::now();
         let agent = agent("sess-gate", AgentStatus::Running);
-        let snapshot = snapshot(agent.clone(), true, Vec::new(), now);
+        let snapshot = snapshot(agent.clone(), true, now);
         let message = message(&agent, 1, "wait");
 
         let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
@@ -569,7 +569,7 @@ mod tests {
         let now = Timestamp::now();
         let mut agent = agent("sess-interrupted", AgentStatus::Running);
         agent.context = Some(settle_context(None, Some(agent.last_activity)));
-        let snapshot = snapshot(agent.clone(), true, Vec::new(), now);
+        let snapshot = snapshot(agent.clone(), true, now);
         let message = message(&agent, 1, "wait");
 
         let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
@@ -584,7 +584,7 @@ mod tests {
         let now = Timestamp::now();
         let mut agent = agent("sess-ask", AgentStatus::Waiting);
         agent.waiting_since = Some(agent.last_activity);
-        let snapshot = snapshot(agent.clone(), true, Vec::new(), now);
+        let snapshot = snapshot(agent.clone(), true, now);
         let message = message(&agent, 1, "blocked");
 
         let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
@@ -597,7 +597,7 @@ mod tests {
     fn explain_reports_no_live_pane() {
         let now = Timestamp::now();
         let agent = agent("sess-pane", AgentStatus::Idle);
-        let snapshot = snapshot(agent.clone(), false, Vec::new(), now);
+        let snapshot = snapshot(agent.clone(), false, now);
         let message = message(&agent, 1, "blocked");
 
         let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
@@ -611,7 +611,7 @@ mod tests {
     fn explain_reports_scheduled_floor() {
         let now = Timestamp::now();
         let agent = agent("sess-scheduled", AgentStatus::Idle);
-        let snapshot = snapshot(agent.clone(), true, Vec::new(), now);
+        let snapshot = snapshot(agent.clone(), true, now);
         let mut message = message(&agent, 1, "later");
         let not_before = now + jiff::SignedDuration::from_secs(60);
         message.not_before = Some(not_before);
@@ -623,14 +623,8 @@ mod tests {
         assert!(check.fifo.head, "schedule is the first blocker");
     }
 
-    fn snapshot(
-        agent: AgentState,
-        with_pane: bool,
-        items: Vec<()>,
-        now: Timestamp,
-    ) -> SidebarSnapshot {
-        let mut snapshot =
-            SidebarSnapshot::build_with_agents(workspace_id(), items, vec![agent], now);
+    fn snapshot(agent: AgentState, with_pane: bool, now: Timestamp) -> SidebarSnapshot {
+        let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![agent], now);
         if with_pane {
             let agent = &snapshot.agents[0];
             snapshot.agent_panes = vec![PaneAgent {
