@@ -17,14 +17,14 @@ use crate::cli::render;
 use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
-use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
-use rimz::store::{EditOutcome, MessageEdit};
 use rimz::message::dispatch::{DispatchContext, DispatchOutcome, SendMode};
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
     parse_schedule_at,
 };
 use rimz::message::{deliver, dispatch};
+use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
+use rimz::store::{EditOutcome, MessageEdit};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 #[derive(Debug, Args)]
@@ -964,8 +964,8 @@ fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Res
                 let mut snapshot = super::resolution_snapshot(&workspace, &store, globals)?;
                 if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone())
                 {
-                    snapshot = snapshot
-                        .with_agent_context(rimz::store::agent_context::read_all(&runtime));
+                    snapshot =
+                        snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
                 }
                 let check = deliver::explain(record, &live_messages, &snapshot, now);
                 let agents: Vec<&AgentState> = snapshot.root_agents().collect();
@@ -1580,14 +1580,8 @@ fn report_dispatch(
             if compactable {
                 print_compacted_if_needed(label, compacted);
             }
-            if !wait_and_print_message(
-                store,
-                session_name,
-                label,
-                message_id,
-                wait_base,
-                deadline,
-            )? {
+            if !wait_and_print_message(store, session_name, label, message_id, wait_base, deadline)?
+            {
                 failed = true;
             }
         }

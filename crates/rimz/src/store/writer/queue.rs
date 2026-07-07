@@ -3,13 +3,13 @@ use std::time::Duration;
 use jiff::Timestamp;
 
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
-use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::message::{
     AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
     claim_expired, queue_head_for_message,
 };
+use crate::store::event::{EventEnvelope, MessageEventMethod};
 
-use super::super::{Store, Result, UnresolvedMessage, message_store};
+use super::super::{Result, Store, UnresolvedMessage, message_store};
 use super::{PublishPolicy, Txn};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

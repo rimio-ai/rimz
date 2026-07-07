@@ -14,10 +14,10 @@ use crate::agents::spending::{
     read_provider_spending_cache, read_spending_cache, unix_secs_now,
 };
 use crate::harness::schedule::run_log;
-use crate::store::parse_cache::FileStamp;
 use crate::sidebar::refresh::live_spend::{live_card_sessions, live_excluded_sessions};
 use crate::sidebar::timing::SPENDING_STALE_GRACE;
 use crate::sidebar::timing::unix_now_ms;
+use crate::store::parse_cache::FileStamp;
 use crate::{RuntimePaths, SidebarSnapshot};
 
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);

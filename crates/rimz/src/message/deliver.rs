@@ -16,7 +16,7 @@ use crate::message::{
     queue_head_for_message,
 };
 use crate::workspace::ResolvedWorkspace;
-use crate::{Store, PaneAgent, RuntimePaths, SidebarSnapshot};
+use crate::{PaneAgent, RuntimePaths, SidebarSnapshot, Store};
 
 use super::{dispatch, send};
 

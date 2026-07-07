@@ -5,8 +5,8 @@ use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::store::event_log;
 use crate::message::{AutoCompact, DeliveryGate, MessageSender};
+use crate::store::event_log;
 use crate::{RuntimePaths, StatePaths};
 
 #[test]
@@ -39,9 +39,7 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     let until = Timestamp::now() + Duration::from_secs(30);
     store.queue_message(&queued, "session").unwrap();
 
-    store
-        .defer_message_wake(&queued.message_id, until)
-        .unwrap();
+    store.defer_message_wake(&queued.message_id, until).unwrap();
 
     let pending = store.list_pending_messages().unwrap();
     assert_eq!(pending[0].retry_after, Some(until));
