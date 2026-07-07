@@ -42,8 +42,6 @@ pub struct LinkStats {
     pub rtt_ms: Option<u32>,
     pub miss_pct: u16,
     pub window: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bandwidth_bps: Option<u64>,
 }
 
 /// One local-to-remote probe line. `stats` is the best view before this line's
@@ -392,7 +390,6 @@ impl ProbeWindow {
             rtt_ms: self.reported_ms,
             miss_pct,
             window: settled,
-            bandwidth_bps: None,
         }
     }
 
@@ -652,7 +649,6 @@ mod tests {
                 rtt_ms: None,
                 miss_pct: 0,
                 window: 1,
-                bandwidth_bps: None,
             }
         );
 
@@ -750,7 +746,6 @@ mod tests {
                 rtt_ms: Some(42),
                 miss_pct: 3,
                 window: 12,
-                bandwidth_bps: None,
             },
         );
         let text = serde_json::to_string(&probe).unwrap();

@@ -63,6 +63,17 @@ impl CommandSpec {
         self
     }
 
+    /// Render program and args joined with spaces for human status lines.
+    /// `remote::display_ssh_command` remains the shell-safe, pasteable SSH
+    /// variant because remote snippets need quoting.
+    pub fn display_line(&self) -> String {
+        if self.args.is_empty() {
+            self.program.clone()
+        } else {
+            format!("{} {}", self.program, self.args.join(" "))
+        }
+    }
+
     pub fn to_command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);

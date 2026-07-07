@@ -350,7 +350,6 @@ fn stats(rtt_ms: Option<u32>, miss_pct: u16) -> LinkStats {
         rtt_ms,
         miss_pct,
         window: 30,
-        bandwidth_bps: None,
     }
 }
 

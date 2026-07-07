@@ -83,7 +83,7 @@ pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
 
     let mut command = spec.to_command();
     let err = command.exec();
-    Err::<(), _>(err).with_context(|| format!("execing `{}`", command_display(spec)))
+    Err::<(), _>(err).with_context(|| format!("execing `{}`", spec.display_line()))
 }
 
 #[cfg(not(unix))]
@@ -91,11 +91,11 @@ pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
     let status = spec
         .to_command()
         .status()
-        .with_context(|| format!("running `{}`", command_display(spec)))?;
+        .with_context(|| format!("running `{}`", spec.display_line()))?;
     if !status.success() {
         anyhow::bail!(
             "attach command `{}` exited with {status}",
-            command_display(spec)
+            spec.display_line()
         );
     }
     Ok(())
@@ -104,15 +104,7 @@ pub(crate) fn exec_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
 fn print_attach_command(spec: &rimz::mux::CommandSpec) {
     #[expect(clippy::print_stdout, reason = "user-facing command suggestion")]
     {
-        println!("{}", command_display(spec));
-    }
-}
-
-fn command_display(spec: &rimz::mux::CommandSpec) -> String {
-    if spec.args.is_empty() {
-        spec.program.clone()
-    } else {
-        format!("{} {}", spec.program, spec.args.join(" "))
+        println!("{}", spec.display_line());
     }
 }
 

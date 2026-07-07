@@ -17,11 +17,11 @@ use rimz::mux::CommandSpec;
 use rimz::sidebar_pane::render::scheme;
 use rimz::web::{
     ParsedWebStatus, WebClientColors, WebOpenPayload, WebServerStatus, WebStartOptions,
-    WebStatusPayload, WebTokenCommand, ZellijWebEndpoint, active_zellij_config_path,
-    cache_login_token, clear_cached_login_token, effective_base_url, endpoint_from_status_base,
-    join_session_url, merge_web_client_config, parse_created_login_token, parse_status,
-    parse_token_count, read_cached_login_token, web_help_spec, web_start_spec, web_status_spec,
-    web_stop_spec, web_token_spec,
+    WebStatusPayload, WebTokenCommand, active_zellij_config_path, cache_login_token,
+    clear_cached_login_token, effective_base_url, endpoint_from_status_base, join_session_url,
+    merge_web_client_config, parse_created_login_token, parse_status, parse_token_count,
+    read_cached_login_token, web_help_spec, web_start_spec, web_status_spec, web_stop_spec,
+    web_token_spec,
 };
 
 #[derive(Debug, Args)]
@@ -340,26 +340,13 @@ fn warn_if_web_sharing_unconfirmed(session: &str) {
 }
 
 fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
-    let session = if let Some(session) = args.session {
-        require_workspace_record_for_session(&session)?;
-        session
+    let web_room = if let Some(session) = args.session {
+        room::web_room_for_session(&session)?
     } else {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
-        let workspace = rimz::WorkspaceResolver::resolve(&path, globals.root.clone())
-            .with_context(|| format!("resolving workspace at {}", path.display()))?;
-        let record = room::workspace_record_for_session(&workspace.session_name)
-            .context("checking Rimz workspace record")?;
-        let Some(record) = record else {
-            bail!(
-                "workspace session `{}` has not been born by Rimz; run `rimz web open {}` or `rimz start {}` first",
-                workspace.session_name,
-                path.display(),
-                path.display(),
-            );
-        };
-        room::ensure_single_backend_room(MuxName::Zellij, &record.session_name)?;
-        record.session_name
+        room::existing_web_room_for_path(&path, globals)?
     };
+    let session = web_room.session_name;
     let config = machine_config();
     let payload = web_payload(
         &session,
@@ -514,18 +501,6 @@ fn read_token_count() -> Result<usize> {
     Ok(parse_token_count(&output.stdout))
 }
 
-fn require_workspace_record_for_session(session: &str) -> Result<rimz::WorkspaceRecord> {
-    let record =
-        room::workspace_record_for_session(session).context("checking Rimz workspace record")?;
-    let Some(record) = record else {
-        bail!(
-            "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
-        );
-    };
-    room::ensure_single_backend_room(MuxName::Zellij, session)?;
-    Ok(record)
-}
-
 fn ensure_zellij_selected(globals: &GlobalFlags) -> Result<()> {
     if globals.mux == Some(MuxName::Tmux) {
         bail!("`rimz web` supports Zellij only; drop `--mux tmux` (web always uses Zellij).");
@@ -550,9 +525,9 @@ fn run_inherited(spec: CommandSpec) -> Result<()> {
     let status = spec
         .to_command()
         .status()
-        .with_context(|| format!("running `{}`", command_display(&spec)))?;
+        .with_context(|| format!("running `{}`", spec.display_line()))?;
     if !status.success() {
-        bail!("command `{}` exited with {status}", command_display(&spec));
+        bail!("command `{}` exited with {status}", spec.display_line());
     }
     Ok(())
 }
@@ -560,11 +535,11 @@ fn run_inherited(spec: CommandSpec) -> Result<()> {
 fn run_captured_debug_on_success(spec: CommandSpec) -> Result<()> {
     let output = spec
         .output_raw()
-        .with_context(|| format!("running `{}`", command_display(&spec)))?;
+        .with_context(|| format!("running `{}`", spec.display_line()))?;
     if output.status.success() {
         if !output.stdout.is_empty() || !output.stderr.is_empty() {
             tracing::debug!(
-                command = %command_display(&spec),
+                command = %spec.display_line(),
                 stdout = %String::from_utf8_lossy(&output.stdout).trim(),
                 stderr = %String::from_utf8_lossy(&output.stderr).trim(),
                 "command output",
@@ -574,7 +549,7 @@ fn run_captured_debug_on_success(spec: CommandSpec) -> Result<()> {
     }
     bail!(
         "command `{}` exited with {}: {}",
-        command_display(&spec),
+        spec.display_line(),
         output.status,
         command_output_streams(&output)
     )
@@ -583,7 +558,7 @@ fn run_captured_debug_on_success(spec: CommandSpec) -> Result<()> {
 fn command_error(spec: &CommandSpec, stderr: &[u8]) -> anyhow::Error {
     anyhow::anyhow!(
         "command `{}` failed: {}",
-        command_display(spec),
+        spec.display_line(),
         String::from_utf8_lossy(stderr).trim()
     )
 }
@@ -609,14 +584,6 @@ fn command_output_streams(output: &std::process::Output) -> String {
         output.status.to_string()
     } else {
         detail
-    }
-}
-
-fn command_display(spec: &CommandSpec) -> String {
-    if spec.args.is_empty() {
-        spec.program.clone()
-    } else {
-        format!("{} {}", spec.program, spec.args.join(" "))
     }
 }
 
@@ -650,17 +617,7 @@ pub(crate) fn open_browser_best_effort(url: &str) {
         .spawn();
 }
 
-pub(crate) fn local_tunnel_payload(
-    remote: &WebOpenPayload,
-    local_port: u16,
-) -> (String, ZellijWebEndpoint) {
+pub(crate) fn local_tunnel_url(remote: &WebOpenPayload, local_port: u16) -> String {
     let base_url = format!("http://127.0.0.1:{local_port}");
-    let url = join_session_url(&base_url, &remote.session);
-    (
-        url,
-        ZellijWebEndpoint {
-            ip: "127.0.0.1".to_owned(),
-            port: local_port,
-        },
-    )
+    join_session_url(&base_url, &remote.session)
 }

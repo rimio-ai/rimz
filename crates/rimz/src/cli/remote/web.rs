@@ -1,6 +1,6 @@
 use std::io::{IsTerminal, Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::process::{Child, Output, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -77,7 +77,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
         ),
         "preparing remote Zellij web",
     )?;
-    let payload = rimz::web::parse_web_open_payload(&prep.stdout)
+    let payload = rimz::web::parse_web_open_payload(&prep)
         .with_context(|| remote_output_context("parsing remote `rimz web open --json`", &prep))?;
     if !payload.version_ok() {
         bail!(
@@ -103,7 +103,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
             bail!("web tunnel exited before local port accepted connections");
         }
     }
-    let (url, _) = super::super::web::local_tunnel_payload(&payload, local_port);
+    let url = super::super::web::local_tunnel_url(&payload, local_port);
     super::super::web::print_url(&url)?;
     super::super::web::open_browser_best_effort(&url);
     report_web_tunnel_up(remote.target.host_display(), remote.reconnect);
@@ -115,44 +115,38 @@ fn relay_web_token(remote: &RemoteConnect) {
     let output = match spec.to_command().output() {
         Ok(output) => output,
         Err(err) => {
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "rimz: could not mint a Zellij web login token on {} ({err}); create one with `rimz web token create` on the remote host.",
-                remote.target.host_display(),
-            );
+            write_web_token_error(remote.target.host_display(), &err.to_string());
             return;
         }
     };
-    let mut stderr = std::io::stderr().lock();
     if !output.status.success() {
         let mut detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         if detail.is_empty() {
             detail = output.status.to_string();
         }
-        let _ = writeln!(
-            stderr,
-            "rimz: could not mint a Zellij web login token on {} ({detail}); create one with `rimz web token create` on the remote host.",
-            remote.target.host_display(),
-        );
+        write_web_token_error(remote.target.host_display(), &detail);
         return;
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if token.is_empty() {
-        let _ = writeln!(
-            stderr,
-            "rimz: could not mint a Zellij web login token on {} (empty token); create one with `rimz web token create` on the remote host.",
-            remote.target.host_display(),
-        );
+        write_web_token_error(remote.target.host_display(), "empty token");
         return;
     }
     let _ = writeln!(
-        stderr,
+        std::io::stderr().lock(),
         "rimz: login token for {}: {token}",
         remote.target.host_display(),
     );
 }
 
-fn run_web_prep(spec: &rimz::mux::CommandSpec, label: &str) -> Result<Output> {
+fn write_web_token_error(host: &str, detail: &str) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "rimz: could not mint a Zellij web login token on {host} ({detail}); create one with `rimz web token create` on the remote host.",
+    );
+}
+
+fn run_web_prep(spec: &rimz::mux::CommandSpec, label: &str) -> Result<Vec<u8>> {
     let mut child = spec
         .to_command()
         .stdout(Stdio::piped())
@@ -171,27 +165,16 @@ fn run_web_prep(spec: &rimz::mux::CommandSpec, label: &str) -> Result<Output> {
     let status = child
         .wait()
         .with_context(|| format!("{label}: waiting for remote prep"))?;
-    let output = Output {
-        status,
-        stdout,
-        stderr: Vec::new(),
-    };
-    if output.status.success() {
-        return Ok(output);
+    if status.success() {
+        return Ok(stdout);
     }
-    bail!("{label} failed with {}", output.status);
+    bail!("{label} failed with {status}");
 }
 
-fn remote_output_context(label: &str, output: &Output) -> String {
+fn remote_output_context(label: &str, bytes: &[u8]) -> String {
     let mut stdout = String::new();
-    let _ = (&output.stdout[..]).take(300).read_to_string(&mut stdout);
-    let mut stderr = String::new();
-    let _ = (&output.stderr[..]).take(300).read_to_string(&mut stderr);
-    format!(
-        "{label}; stdout={:?}, stderr={:?}",
-        stdout.trim(),
-        stderr.trim()
-    )
+    let _ = bytes.take(300).read_to_string(&mut stdout);
+    format!("{label}; stdout={:?}", stdout.trim())
 }
 
 fn spawn_tunnel_supervisor(
@@ -248,11 +231,10 @@ fn supervise_tunnel(
     stop: Arc<AtomicBool>,
     child_slot: Arc<Mutex<Option<Child>>>,
 ) -> TunnelExit {
-    use rimz::remote::{ReconnectPolicy, verdict};
+    use rimz::remote::{ReconnectPolicy, ReconnectState};
 
     let policy = ReconnectPolicy::from_env();
-    let mut established = false;
-    let mut consecutive_failures = 0;
+    let mut reconnect_state = ReconnectState::new(policy);
     while !stop.load(Ordering::SeqCst) {
         let started = Instant::now();
         let child = match spec
@@ -273,24 +255,20 @@ fn supervise_tunnel(
             return TunnelExit::Clean;
         }
         let ran_past_gatetime = started.elapsed() >= policy.gatetime;
-        if ran_past_gatetime {
-            established = true;
-            consecutive_failures = 0;
-        }
         match tunnel_step(
-            verdict(exit_code, established, consecutive_failures, &policy),
+            reconnect_state.settle(exit_code, ran_past_gatetime),
             reconnect,
         ) {
             TunnelStep::Clean => return TunnelExit::Clean,
             TunnelStep::Fatal(code) => return TunnelExit::Fatal(code),
             TunnelStep::Retry(delay) => {
-                consecutive_failures = consecutive_failures.saturating_add(1);
+                let consecutive_failures = reconnect_state.consecutive_failures();
                 let _ = writeln!(
                     std::io::stderr().lock(),
                     "rimz: web tunnel to {host} lost — reconnecting in {}s (attempt {consecutive_failures})",
                     delay.as_secs(),
                 );
-                sleep_interruptible(delay, &stop);
+                super::sleep_interruptibly(delay, &stop);
             }
         }
     }
@@ -322,13 +300,6 @@ fn wait_tunnel_child(stop: &AtomicBool, child_slot: &Mutex<Option<Child>>) -> Op
                 }
             }
         }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn sleep_interruptible(duration: Duration, stop: &AtomicBool) {
-    let deadline = Instant::now() + duration;
-    while Instant::now() < deadline && !stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(100));
     }
 }

@@ -187,19 +187,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
     report_start_notices(&workspace)?;
-    let config_was_missing = !rimz::config::MachineConfig::config_path().exists();
-    let initialized_config = setup::ensure_default_config()?;
-    let first_run = config_was_missing && rimz::config::MachineConfig::config_path().exists();
-    if initialized_config && !(first_run && std::io::stdin().is_terminal()) {
-        let config_path = rimz::config::MachineConfig::config_path();
-        let config_dir = config_path.parent().unwrap_or(config_path.as_path());
-        let mut err = std::io::stderr().lock();
-        writeln!(
-            err,
-            "rimz: initialized config under {} — customize files there (`rimz config path`).",
-            render::home_relative(&config_dir.display().to_string())
-        )?;
-    }
+    let first_run = ensure_default_config_for_start()?;
     enter_room(
         RoomEntry::Start {
             workspace,
@@ -242,13 +230,7 @@ pub(crate) fn ensure_session_room_for_web(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<WebRoom> {
-    let record = workspace_record_for_session(session).context("checking Rimz workspace record")?;
-    let Some(record) = record else {
-        bail!(
-            "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
-        );
-    };
-    ensure_single_backend_room(MuxName::Zellij, session)?;
+    let record = workspace_record_for_web_session(session)?;
     prepare_room(
         RoomEntry::WebSession {
             record: &record,
@@ -261,6 +243,67 @@ pub(crate) fn ensure_session_room_for_web(
         session_name: record.session_name,
         workspace_id: record.workspace_id,
     })
+}
+
+pub(crate) fn web_room_for_session(session: &str) -> Result<WebRoom> {
+    let record = workspace_record_for_web_session(session)?;
+    Ok(WebRoom {
+        session_name: record.session_name,
+        workspace_id: record.workspace_id,
+    })
+}
+
+pub(crate) fn existing_web_room_for_path(path: &Path, globals: &GlobalFlags) -> Result<WebRoom> {
+    let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
+        .with_context(|| format!("resolving workspace at {}", path.display()))?;
+    let record = workspace_record_for_session(&workspace.session_name)
+        .context("checking Rimz workspace record")?;
+    let Some(record) = record else {
+        bail!(
+            "workspace session `{}` has not been born by Rimz; run `rimz web open {}` or `rimz start {}` first",
+            workspace.session_name,
+            path.display(),
+            path.display(),
+        );
+    };
+    ensure_single_backend_room(MuxName::Zellij, &record.session_name)?;
+    Ok(WebRoom {
+        session_name: record.session_name,
+        workspace_id: record.workspace_id,
+    })
+}
+
+fn workspace_record_for_web_session(session: &str) -> Result<WorkspaceRecord> {
+    let record = workspace_record_for_session(session).context("checking Rimz workspace record")?;
+    let Some(record) = record else {
+        bail!(
+            "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
+        );
+    };
+    ensure_single_backend_room(MuxName::Zellij, session)?;
+    Ok(record)
+}
+
+fn ensure_default_config_for_start() -> Result<bool> {
+    let config_was_missing = !rimz::config::MachineConfig::config_path().exists();
+    let initialized_config = setup::ensure_default_config()?;
+    let first_run = config_was_missing && rimz::config::MachineConfig::config_path().exists();
+    if initialized_config && !(first_run && std::io::stdin().is_terminal()) {
+        report_initialized_config()?;
+    }
+    Ok(first_run)
+}
+
+fn report_initialized_config() -> Result<()> {
+    let config_path = rimz::config::MachineConfig::config_path();
+    let config_dir = config_path.parent().unwrap_or(config_path.as_path());
+    let mut err = std::io::stderr().lock();
+    writeln!(
+        err,
+        "rimz: initialized config under {} — customize files there (`rimz config path`).",
+        render::home_relative(&config_dir.display().to_string())
+    )?;
+    Ok(())
 }
 
 pub(crate) struct WebRoom {

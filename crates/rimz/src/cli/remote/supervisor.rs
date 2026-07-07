@@ -26,12 +26,11 @@ pub(super) fn supervise_remote(
     target: &RemoteTarget,
     control_path: &Path,
 ) -> Result<()> {
-    use rimz::remote::{ReconnectPolicy, Verdict};
+    use rimz::remote::{ReconnectPolicy, ReconnectState, Verdict};
 
     let policy = ReconnectPolicy::from_env();
+    let mut reconnect = ReconnectState::new(policy);
     let host = target.host_display();
-    let mut established = false;
-    let mut consecutive_failures: u32 = 0;
     let mut outage_active = false;
     report_remote_connect(host, true);
     loop {
@@ -71,23 +70,14 @@ pub(super) fn supervise_remote(
         if control_ready {
             remove_control_path(control_path);
         }
-        if outcome.established {
-            established = true;
-            consecutive_failures = 0;
-        }
-        match rimz::remote::verdict(
-            outcome.status.code(),
-            established,
-            consecutive_failures,
-            &policy,
-        ) {
+        match reconnect.settle(outcome.status.code(), outcome.established) {
             Verdict::CleanExit => return Ok(()),
             Verdict::Fatal { code } => bail!(
                 "ssh to {host} exited with status {code}; not reconnecting \
                  (only a dropped link on an established session is retried)"
             ),
             Verdict::Retry { delay } => {
-                consecutive_failures = consecutive_failures.saturating_add(1);
+                let consecutive_failures = reconnect.consecutive_failures();
                 let mut stderr = std::io::stderr().lock();
                 let _ = writeln!(
                     stderr,
@@ -365,7 +355,7 @@ fn wait_for_control_master(target: &RemoteTarget, control_path: &Path, stop: &At
         {
             return true;
         }
-        sleep_interruptibly(CONTROL_MASTER_CHECK_INTERVAL, stop);
+        super::sleep_interruptibly(CONTROL_MASTER_CHECK_INTERVAL, stop);
     }
     false
 }
@@ -411,7 +401,7 @@ fn probe_loop(
                 {
                     let _ = events.send(event);
                 }
-                sleep_interruptibly(respawn_delay, &stop);
+                super::sleep_interruptibly(respawn_delay, &stop);
             }
         }
     }
@@ -583,22 +573,7 @@ fn write_link_probe(stdin: &mut impl Write, probe: &LinkProbe) -> std::io::Resul
 fn sleep_until_next_tick(next_tick: Instant, stop: &AtomicBool) {
     let now = Instant::now();
     let until_tick = next_tick.saturating_duration_since(now);
-    sleep_interruptibly(until_tick.min(Duration::from_millis(50)), stop);
-}
-
-fn sleep_interruptibly(duration: Duration, stop: &AtomicBool) {
-    if duration.is_zero() {
-        return;
-    }
-    let step = Duration::from_millis(50);
-    let deadline = Instant::now() + duration;
-    while !stop.load(Ordering::Relaxed) {
-        let now = Instant::now();
-        if now >= deadline {
-            return;
-        }
-        std::thread::sleep((deadline - now).min(step));
-    }
+    super::sleep_interruptibly(until_tick.min(Duration::from_millis(50)), stop);
 }
 
 /// One stderr line before the terminal belongs to ssh, so the user knows the

@@ -36,7 +36,6 @@ fn remote_link_badge_renders_with_reconstructed_agents() {
             rtt_ms: Some(210),
             miss_pct: 0,
             window: 12,
-            bandwidth_bps: None,
         },
     ));
 

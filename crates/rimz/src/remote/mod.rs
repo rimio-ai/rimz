@@ -10,6 +10,7 @@
 //! reconnects; the cli owns process I/O.
 
 pub mod aliases;
+pub mod bandwidth;
 pub mod link;
 pub mod web;
 
@@ -306,22 +307,28 @@ fn guarded_snippet(
     if let Some(mux) = mux {
         rimz.push_str(&format!(" --mux {mux}"));
     }
+    let mut env_setup = String::new();
+    if truecolor {
+        env_setup.push_str("export COLORTERM=truecolor; ");
+    }
+    env_setup.push_str(&term.remote_setup());
+    remote_exec_snippet(&target.host, &env_setup, &format!("{rimz} -- {arg}"))
+}
+
+pub(crate) fn remote_exec_snippet(
+    host_display: &str,
+    env_setup: &str,
+    rimz_command: &str,
+) -> String {
     let not_found = sh_quote(&format!(
-        "rimz not found on {} — install: cargo install --locked rimz",
-        target.host,
+        "rimz not found on {host_display} — install: cargo install --locked rimz",
     ));
     format!(
         "{}; \
          command -v rimz >/dev/null 2>&1 || {{ echo {not_found} >&2; exit {code}; }}; \
-         {truecolor_setup}{term_setup}exec {rimz} -- {arg}",
+         {env_setup}exec {rimz_command}",
         remote_path_prefix(),
         code = REMOTE_RIMZ_MISSING_EXIT,
-        truecolor_setup = if truecolor {
-            "export COLORTERM=truecolor; "
-        } else {
-            ""
-        },
-        term_setup = term.remote_setup(),
     )
 }
 
@@ -370,8 +377,8 @@ pub(crate) fn quote_remote_path(path: &str) -> String {
 }
 
 /// Render a spec as one pasteable shell line, quoting any argv element a
-/// shell would split or expand. (`cli`'s `command_display` joins with bare
-/// spaces, which is fine for mux specs but garbles the snippet argument.)
+/// shell would split or expand. [`CommandSpec::display_line`] joins with bare
+/// spaces, which is fine for mux specs but garbles the snippet argument.
 pub fn display_ssh_command(spec: &CommandSpec) -> String {
     let mut out = display_word(&spec.program);
     for arg in &spec.args {
@@ -483,6 +490,46 @@ pub fn verdict(
         Some(code) => Verdict::Fatal { code },
         // Signal-death: something killed ssh deliberately; don't fight it.
         None => Verdict::Fatal { code: 1 },
+    }
+}
+
+pub struct ReconnectState {
+    policy: ReconnectPolicy,
+    established: bool,
+    consecutive_failures: u32,
+}
+
+impl ReconnectState {
+    pub fn new(policy: ReconnectPolicy) -> Self {
+        Self {
+            policy,
+            established: false,
+            consecutive_failures: 0,
+        }
+    }
+
+    /// Settle one finished ssh session: a session that lived past the gatetime
+    /// marks the link established and resets the failure count; a Retry verdict
+    /// counts one more consecutive failure.
+    pub fn settle(&mut self, exit_code: Option<i32>, lived_past_gatetime: bool) -> Verdict {
+        if lived_past_gatetime {
+            self.established = true;
+            self.consecutive_failures = 0;
+        }
+        let verdict = verdict(
+            exit_code,
+            self.established,
+            self.consecutive_failures,
+            &self.policy,
+        );
+        if matches!(verdict, Verdict::Retry { .. }) {
+            self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        }
+        verdict
+    }
+
+    pub fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
     }
 }
 
@@ -949,5 +996,43 @@ mod tests {
             }
         );
         assert_eq!(verdict(None, true, 0, &policy), Verdict::Fatal { code: 1 });
+    }
+
+    #[test]
+    fn reconnect_state_settles_established_sessions_and_failures() {
+        let policy = ReconnectPolicy::default();
+        let mut state = ReconnectState::new(policy);
+
+        assert_eq!(
+            state.settle(Some(SSH_TRANSPORT_EXIT), false),
+            Verdict::Fatal {
+                code: SSH_TRANSPORT_EXIT
+            }
+        );
+        assert_eq!(state.consecutive_failures(), 0);
+
+        assert_eq!(
+            state.settle(Some(SSH_TRANSPORT_EXIT), true),
+            Verdict::Retry {
+                delay: Duration::from_secs(1)
+            }
+        );
+        assert_eq!(state.consecutive_failures(), 1);
+
+        assert_eq!(
+            state.settle(Some(SSH_TRANSPORT_EXIT), false),
+            Verdict::Retry {
+                delay: Duration::from_secs(2)
+            }
+        );
+        assert_eq!(state.consecutive_failures(), 2);
+
+        assert_eq!(
+            state.settle(Some(REMOTE_RIMZ_MISSING_EXIT), true),
+            Verdict::Fatal {
+                code: REMOTE_RIMZ_MISSING_EXIT
+            }
+        );
+        assert_eq!(state.consecutive_failures(), 0);
     }
 }

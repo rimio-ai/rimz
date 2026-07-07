@@ -6,8 +6,7 @@
 use crate::mux::CommandSpec;
 
 use super::{
-    REMOTE_RIMZ_MISSING_EXIT, RemoteSpec, RemoteTarget, quote_remote_path, remote_path_prefix,
-    sh_quote, ssh_program,
+    RemoteSpec, RemoteTarget, quote_remote_path, remote_exec_snippet, sh_quote, ssh_program,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,16 +64,10 @@ fn one_shot_spec(target: &RemoteTarget, rimz: &str) -> CommandSpec {
 }
 
 fn web_snippet(target: &RemoteTarget, rimz: &str) -> String {
-    let not_found = sh_quote(&format!(
-        "rimz not found on {} — install: cargo install --locked rimz",
+    remote_exec_snippet(
         target.host_display(),
-    ));
-    format!(
-        "{}; \
-         command -v rimz >/dev/null 2>&1 || {{ echo {not_found} >&2; exit {code}; }}; \
-         export TERM=xterm-256color; export COLORTERM=truecolor; exec {rimz}",
-        remote_path_prefix(),
-        code = REMOTE_RIMZ_MISSING_EXIT,
+        "export TERM=xterm-256color; export COLORTERM=truecolor; ",
+        rimz,
     )
 }
 

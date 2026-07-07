@@ -1,6 +1,8 @@
 //! `rimz remote` — named SSH room aliases and remote attach.
 
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -377,6 +379,21 @@ fn run_infocmp(term: &str) -> Option<String> {
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+pub(super) fn sleep_interruptibly(duration: Duration, stop: &AtomicBool) {
+    if duration.is_zero() {
+        return;
+    }
+    let step = Duration::from_millis(50);
+    let deadline = Instant::now() + duration;
+    while !stop.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        if now >= deadline {
+            return;
+        }
+        std::thread::sleep((deadline - now).min(step));
+    }
 }
 
 #[cfg(test)]
