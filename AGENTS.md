@@ -96,7 +96,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 **Root** — [README.md](./README.md) (product entry), [docs/README.md](./docs/README.md) (user documentation index, the README's Docs link), [DESIGN.md](./DESIGN.md) (the attention problem, design pillars, invariants, non-goals), [ARCHITECTURE.md](./ARCHITECTURE.md) (runtime shape, on-disk state, code-map rationale).
 
 **Guide** — `docs/guide/`
-- [installation.md](./docs/guide/installation.md) — source-install prerequisites and Rust toolchain for Linux and macOS.
+- [installation.md](./docs/guide/installation.md) — prerequisites and every install path: Homebrew, prebuilt binaries, Cargo, source.
 - [setup.md](./docs/guide/setup.md) — first-pass machine setup: config init, hooks, true color, pets, loop knobs, Zellij/tmux baselines.
 - [product.md](./docs/guide/product.md) — the working tour: the room, the loop, and the scenarios from local fleet to scripted pipeline.
 - [experience.md](./docs/guide/experience.md) — the first session walked step by step: install, consent gate, first agent, first fleet.

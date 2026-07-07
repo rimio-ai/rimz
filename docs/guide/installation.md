@@ -1,52 +1,26 @@
 # Installation
 
-Rimz builds from source into one binary that runs inside the Zellij or tmux you already use. The build needs Git, a C linker, a terminal multiplexer, and the Rust toolchain — the steps below install each on Linux and macOS, then verify and tune the result.
-
-The source install also builds a small Zellij plugin that ships embedded in the binary. The plugin compiles to WebAssembly, so the build needs Rust's `wasm32-wasip1` target — and the repo installs it for you: [rust-toolchain.toml](../../rust-toolchain.toml) pins the stable channel, the components, and that target, and `rustup` applies the file the first time you build in the repo. There is no manual target setup.
-
-`cargo install --locked rimz` installs the binary-only crate from crates.io with the presence plugin embedded from a vendored WebAssembly artifact. Zellij pane discovery uses that plugin's topology channel, so Zellij rooms require Zellij 0.44 or newer and a loadable presence plugin; `cargo xtask install` from a source checkout builds and embeds a fresh plugin artifact.
+Rimz is a single binary for macOS and Linux. Pick one install path: [Homebrew](#install-with-homebrew-macos) on macOS, a [prebuilt binary](#install-a-prebuilt-binary) from the releases page, or [Cargo](#install-with-cargo). [Building from source](#build-from-source) is for working on Rimz itself or for platforms the prebuilt paths miss.
 
 ## Prerequisites
 
-Rimz needs four things on your machine.
+Rimz runs inside a terminal multiplexer and drives the agent CLIs you already use. It needs:
 
-- **A terminal multiplexer** — Zellij or tmux. Both are first-class; install one, or both and choose per project. Rimz refuses to start against a build too old to carry the room options it sets, so mind the floors: **tmux 3.5 or newer** and **Zellij 0.44 or newer** (tmux 3.5 adds CSI-u soft-newline keys with a multiline-paste caveat; tmux 3.6 preserves paste too; Zellij 0.44 carries the sidebar's single-click jumps and the presence-plugin topology channel). `rimz doctor` reports the installed version and whether it clears the floor.
-- **A C linker** — `cc` and `ld` link the final binary. The build pulls in no C libraries of its own; the linker is all the system toolchain provides.
-- **Git** — to clone the source.
-- **Rust, through `rustup`** — the compiler and Cargo. `rustup` reads the repo's pinned toolchain and installs the matching channel, components, and WebAssembly target on first build.
+- **macOS or Linux.**
+- **Zellij 0.44 or newer, or tmux 3.5 or newer.** Both are first-class; one is enough. On tmux, 3.6 or newer gives the best experience: it keeps multiline paste clean alongside the extended keys Rimz enables. Rimz refuses to start against a build below the floor, and `rimz doctor` reports the installed version and whether it clears it.
+- **The agent CLIs you plan to run** — Claude Code, Codex, Pi, or OpenCode, installed per their own docs. Rimz drives the stock CLIs and bundles none of them.
+- **Git** — agent worktrees and the sidebar's git status use it.
 
-One thing to know before you reach for a package manager: a distribution's packaged tmux is often older than 3.5 (Debian 12 ships 3.3a), and most distributions do not package Zellij at all. The per-OS steps give a current build of each.
+Mind the versions when you reach for a package manager: a distribution's packaged tmux is usually behind (Debian 12 ships 3.3a, Debian 13 ships 3.5a), and most distributions do not package Zellij at all.
 
-## Linux
-
-Install the build tools and Git.
+On macOS, Homebrew's builds of both are current:
 
 ```sh
-# Debian or Ubuntu
-sudo apt update
-sudo apt install -y build-essential pkg-config git
-
-# Fedora
-sudo dnf install -y gcc gcc-c++ make pkgconf-pkg-config git
-
-# Arch
-sudo pacman -S --needed base-devel pkgconf git
+brew install zellij
+brew install tmux         # one is enough; keep both to choose per project
 ```
 
-Install at least one multiplexer. tmux ships in every distribution; confirm it clears the floor with `tmux -V`, and upgrade from backports, Homebrew on Linux, or source if it predates 3.5.
-
-```sh
-# Debian or Ubuntu
-sudo apt install -y tmux
-
-# Fedora
-sudo dnf install -y tmux
-
-# Arch
-sudo pacman -S --needed tmux
-```
-
-Zellij is rarely packaged, so install its release binary into your `PATH` (swap `x86_64` for `aarch64` on ARM). Once Rust is installed below, `cargo install zellij` is an alternative that builds it from source.
+On Linux, Zellij ships a prebuilt binary on its releases page; drop it into your `PATH` (swap `x86_64` for `aarch64` on ARM):
 
 ```sh
 curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
@@ -54,130 +28,112 @@ curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86
 zellij --version
 ```
 
-Install Rust through `rustup`. The installer sets a default stable toolchain and adds `~/.cargo/bin` to your `PATH`.
+For tmux, the distribution package works when `tmux -V` clears the version you want:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-. "$HOME/.cargo/env"
+sudo apt install tmux     # Debian/Ubuntu; dnf and pacman ship it too
 ```
 
-Clone and install Rimz. `cargo xtask install` builds the presence plugin and the `rimz` binary, copies `rimz` into `~/.cargo/bin`, and prints the installed version and path.
+tmux publishes no prebuilt binaries, so when the packaged one is too old, install a current one through Homebrew on Linux or build the release tarball (the first line installs the build deps):
 
 ```sh
-git clone https://github.com/rimio/rimz.git
-cd rimz
-cargo xtask install
+sudo apt install -y build-essential pkg-config libevent-dev libncurses-dev bison
+curl -fsSLO https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz
+tar -xzf tmux-3.7.tar.gz && cd tmux-3.7
+./configure && make -j"$(nproc)" && sudo make install
 ```
 
-## macOS
+The multiplexer needs no configuration for Rimz: every room sets its own options on session start and reattach, and your existing Zellij or tmux config keeps owning your theme, shell, and keybinds. Tuning the room and building a multiplexer baseline are covered in [set up your machine](./setup.md#configure-your-multiplexer).
 
-Install Apple's command-line tools and a multiplexer. Homebrew's tmux clears the 3.5 floor.
+## Install with Homebrew (macOS)
 
 ```sh
-xcode-select --install
-brew install git tmux
-brew install zellij        # optional second backend
+brew tap rimio/homebrew-rimz
+brew install rimz
 ```
 
-Install `rustup` through Homebrew, which keeps rustup itself current while rustup owns the Rust toolchains.
+`brew upgrade rimz` picks up new releases.
+
+## Install a prebuilt binary
+
+Every [release](https://github.com/rimio/rimz/releases) ships one archive per platform plus a `SHA256SUMS` file:
+
+| Archive | Platform |
+| --- | --- |
+| `rimz-x86_64-unknown-linux-gnu.tar.gz` | Linux, x86_64 |
+| `rimz-aarch64-apple-darwin.tar.gz` | macOS, Apple silicon |
+| `rimz-x86_64-apple-darwin.tar.gz` | macOS, Intel |
+
+Download, verify, and install (shown for Linux; swap the archive name on macOS and verify with `shasum -a 256 -c --ignore-missing`):
 
 ```sh
-brew install rustup
+curl -fsSLO https://github.com/rimio/rimz/releases/latest/download/rimz-x86_64-unknown-linux-gnu.tar.gz
+curl -fsSLO https://github.com/rimio/rimz/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xzf rimz-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 rimz-x86_64-unknown-linux-gnu/rimz /usr/local/bin/rimz
 ```
 
-Put Homebrew rustup's proxy directory ahead of Homebrew's general bin directory, then install a default toolchain.
+Three notes on the archives:
+
+- The Linux binary targets x86_64 and links against a current glibc. On an ARM Linux machine, or if the binary reports a `GLIBC` version error, use the [Cargo install](#install-with-cargo) instead.
+- The macOS binaries carry an ad-hoc signature and install cleanly over `curl`. A browser download gets quarantined by Gatekeeper; `xattr -d com.apple.quarantine rimz` clears it.
+- The `latest-main` prerelease carries a rolling build of the default branch, for when you want a fix that has not been tagged yet.
+
+## Install with Cargo
 
 ```sh
-RUSTUP_BIN="$(brew --prefix rustup)/bin"
-grep -qxF "export PATH=\"$RUSTUP_BIN:\$PATH\"" ~/.zshrc || \
-  echo "export PATH=\"$RUSTUP_BIN:\$PATH\"" >> ~/.zshrc
-exec zsh -l
-rustup default stable
+cargo install --locked rimz
 ```
 
-`rustup default stable` installs the toolchain; the repo's pinned components and `wasm32-wasip1` target install themselves the first time you build, so there is nothing else to add by hand.
+This builds Rimz from crates.io and works on any supported platform, including ARM Linux. It needs the Rust toolchain (install through [rustup](https://rustup.rs)) and a C linker (`build-essential` on Debian/Ubuntu, `xcode-select --install` on macOS). The crate ships Rimz's Zellij plugin as a prebuilt WebAssembly artifact, so no extra Rust targets are involved.
 
-Homebrew's `rust` formula ships its own `cargo` and `rustc`. Keep them off the path for Rimz builds — `rustup` provisions rustup toolchains, not Homebrew's compiler.
-
-```sh
-brew unlink rust || true
-hash -r 2>/dev/null || rehash 2>/dev/null || true
-```
-
-Confirm Cargo and rustc resolve through rustup, then clone and install.
-
-```sh
-command -v cargo
-command -v rustc
-rustup show active-toolchain
-
-git clone https://github.com/rimio/rimz.git
-cd rimz
-cargo xtask install
-```
-
-The command paths sit under `$(brew --prefix rustup)/bin` or `$HOME/.cargo/bin`. A `cargo` or `rustc` under `/opt/homebrew/bin` means Homebrew Rust still shadows rustup — see [`can't find crate for core`](#cant-find-crate-for-core).
-
-## Verify your install
-
-With `rimz` on your `PATH`, two commands confirm the build and the runtime.
+## Verify the install
 
 ```sh
 rimz --version
 rimz doctor
 ```
 
-`rimz doctor` reports the multiplexer it selected, its version and whether it clears the floor, the presence-plugin status, sidebar liveness, and runtime socket headroom — the fastest read on whether a fresh machine is ready. From here, [set up your machine](./setup.md) is the next step: config init, agent hooks, and the settings that make the room comfortable.
+`rimz doctor` reports the multiplexer it selected, its version and whether it clears the floor, hook status, and room health — the fastest read on whether a fresh machine is ready. From here, walk [your first session](./experience.md), then make the machine comfortable with [set up your machine](./setup.md).
 
-## Configure your multiplexer
+## Build from source
 
-Rimz configures each room for you. On every session birth and reattach it sets the options agents need, so a freshly installed Zellij or tmux works without editing `~/.config/zellij/config.kdl` or `~/.tmux.conf`. A Zellij room opens in locked mode so your typing reaches the agent pane, with single-click sidebar jumps, 100k-line scrollback, the system clipboard, and resurrection off; a tmux room runs with the mouse on, focus events, OSC passthrough for desktop notifications, 100k-line history, and CSI-u extended keys, so Shift+Enter and Alt+Enter reach agents as soft newlines. On tmux 3.5.x, that trades clean multiline clipboard paste until tmux 3.6. Rimz reasserts these on every attach.
+The source build is for contributing to Rimz or installing on a platform the prebuilt paths miss. Beyond the [prerequisites](#prerequisites) above it needs a C toolchain, Git, and Rust through `rustup`:
 
-Your own Zellij and tmux config still owns everything Rimz leaves alone — the theme, true-color output, your default shell, copy-mode keybindings, and status-bar styling — and a baseline keeps the multiplexer pleasant in your sessions outside Rimz too. Tuning the room from Rimz's config (`[zellij]` and `[tmux]` overrides) and building that baseline are both covered in [set up your machine](./setup.md#configure-your-multiplexer).
+```sh
+# Linux — build tools (Debian/Ubuntu shown; use dnf or pacman equivalents)
+sudo apt install -y build-essential pkg-config git
+
+# macOS — Apple's command-line tools
+xcode-select --install
+
+# Both — Rust through rustup
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+. "$HOME/.cargo/env"
+```
+
+Then clone and install:
+
+```sh
+git clone https://github.com/rimio/rimz.git
+cd rimz
+cargo xtask install
+```
+
+`cargo xtask install` builds the Zellij presence plugin (a WebAssembly artifact embedded into the binary), builds `rimz`, copies it into `~/.cargo/bin`, and prints the installed version and path. The repo's [rust-toolchain.toml](../../rust-toolchain.toml) pins the toolchain channel, components, and the `wasm32-wasip1` target, and `rustup` applies it on the first build — there is no manual target setup.
+
+To work on Rimz itself (debug builds, tests, the gate stack), continue with [the Rust conventions](../contributing/rust-conventions.md).
 
 ## Uninstall
 
-Run `rimz uninstall --all` from outside a Rimz room to remove installed hooks, live rooms, runtime/cache/data roots, durable state, per-machine config, and the installed binary. Project-local `.rimz/` dirs and Rimz-owned worktrees stay in place for manual review.
+Run `rimz uninstall --all` from outside a Rimz room. It removes installed hooks, live rooms, runtime state, durable stores, per-machine config, and the installed binary; project-local `.rimz/` dirs and Rimz-owned worktrees stay in place for manual review. If you installed through Homebrew, also run `brew uninstall rimz`. Flags for partial removal are in the [maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall).
 
 ## Troubleshooting
 
-### `can't find crate for core`
-
-This error during `cargo xtask install` means the compiler Cargo used could not find the Rust standard library for `wasm32-wasip1`.
-
-```text
-error[E0463]: can't find crate for `core`
-  = note: the `wasm32-wasip1` target may not be installed
-```
-
-Check the compiler and the target library that compiler sees.
-
-```sh
-command -v cargo
-command -v rustc
-rustup target list --installed | grep wasm32 || true
-rustc --print target-libdir --target wasm32-wasip1
-ls "$(rustc --print target-libdir --target wasm32-wasip1 2>/dev/null)" 2>/dev/null | grep libcore || true
-```
-
-A healthy setup prints a `libcore-*.rlib` file from that last command, and `cargo` and `rustc` resolve under `$HOME/.cargo/bin` or `$(brew --prefix rustup)/bin`.
-
-On macOS, a common broken shape is `rustup target list --installed` showing `wasm32-wasip1` while `command -v rustc` points at `/opt/homebrew/bin/rustc`. That pairs rustup's target registry with Homebrew's compiler. Repair the shell so rustup's `cargo` and `rustc` come first, then rerun `cargo xtask install`.
-
-```sh
-RUSTUP_BIN="$(brew --prefix rustup)/bin"
-export PATH="$RUSTUP_BIN:$PATH"
-brew unlink rust || true
-hash -r 2>/dev/null || rehash 2>/dev/null || true
-
-command -v cargo
-command -v rustc
-ls "$(rustc --print target-libdir --target wasm32-wasip1)" | grep libcore
-```
-
 ### `rimz doctor` flags the multiplexer as unsupported
 
-Rimz refuses to start against a multiplexer too old to carry the room options it sets — tmux below 3.5, or Zellij below 0.44. Check the installed version, then install a current build from the per-OS steps above.
+Rimz refuses to start against a multiplexer too old to carry the room options it sets: tmux below 3.5, or Zellij below 0.44. Check the installed version, then install a current build from the [prerequisites](#prerequisites).
 
 ```sh
 tmux -V
@@ -185,24 +141,32 @@ zellij --version
 rimz doctor
 ```
 
-On tmux, `extended-keys-format` (tmux 3.5) is the option an older server rejects; Rimz enables `extended-keys` and `*:extkeys` across supported tmux versions so Shift+Enter and Alt+Enter reach agents as soft newlines. tmux 3.5.x corrupts pasted newlines while extended keys are active; tmux 3.6 preserves paste too. On Zellij, 0.44 is the floor for single-click sidebar jumps and the presence-plugin topology channel.
+One tmux nuance: on tmux 3.5.x the extended keys Rimz enables (so Shift+Enter and Alt+Enter reach agents as soft newlines) corrupt pasted multiline text; tmux 3.6 fixes the paste too.
 
-### `rustup` is missing
+### `GLIBC_x.xx not found` running the prebuilt Linux binary
 
-Install `rustup` before running Rimz's source build.
+The release binary links against a current glibc, and an older distribution cannot load it. Install through [Cargo](#install-with-cargo) instead, which builds against your system's glibc.
 
-```sh
-# Linux
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-. "$HOME/.cargo/env"
+### `can't find crate for core` during a source build
 
-# macOS with Homebrew
-brew install rustup
+This error during `cargo xtask install` means the compiler Cargo used cannot see the Rust standard library for `wasm32-wasip1`:
+
+```text
+error[E0463]: can't find crate for `core`
+  = note: the `wasm32-wasip1` target may not be installed
 ```
 
-Then run:
+The usual cause is a non-rustup Rust shadowing rustup's on your `PATH` — on macOS, Homebrew's `rust` formula is the common culprit. Check where the tools resolve:
 
 ```sh
-cd /path/to/rimz
-cargo xtask install
+command -v cargo
+command -v rustc
+rustup show active-toolchain
+```
+
+A healthy setup resolves both under `$HOME/.cargo/bin` (or rustup's own bin directory). If they point elsewhere, put rustup first and remove the shadowing toolchain, then rerun `cargo xtask install`:
+
+```sh
+brew unlink rust        # macOS, if Homebrew's rust formula is installed
+hash -r
 ```

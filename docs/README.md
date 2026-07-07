@@ -8,7 +8,7 @@ New to Rimz? Read in order: [installation](./guide/installation.md), [your first
 
 | Page | What it covers |
 | --- | --- |
-| [Installation](./guide/installation.md) | Prerequisites, installing from crates.io, Homebrew, or source, verifying with `rimz doctor`, uninstalling. |
+| [Installation](./guide/installation.md) | Prerequisites, installing from Homebrew, prebuilt binaries, Cargo, or source, verifying with `rimz doctor`, uninstalling. |
 | [Your first session](./guide/experience.md) | Install to a working fleet: the consent gate, the first agent card, the first question routed to your keyboard. |
 | [Set up your machine](./guide/setup.md) | The one-time pass that makes Rimz a daily driver: config init, agent hooks, true color, pets, the hands-off loop settings, and a Zellij/tmux baseline. |
 
