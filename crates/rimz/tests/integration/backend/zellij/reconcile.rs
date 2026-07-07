@@ -256,10 +256,17 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
     assert_sidebar_is_left_docked(&xdg, &name);
-    let focused = wait_for_focused_non_sidebar_title_in_tab(&xdg, &name, tab_id);
-    assert!(
-        focused.is_some(),
-        "in-place nested repair restores focus to the work area, got: {focused:?}",
+    assert_sidebar_identity(
+        &xdg,
+        &name,
+        sidebar_id,
+        "the renderer pane survives the nested-row repair",
+    );
+    let focused = wait_for_focused_non_sidebar_title_in_tab(&xdg, &name, tab_id)
+        .unwrap_or_else(|| panic!("tab {tab_id} has no focused terminal pane"));
+    assert_ne!(
+        focused, "rimz-sidebar",
+        "in-place nested repair focuses the sidebar; focus must land on the work area",
     );
 }
 /// A nested sidebar beside a user-made multi-column work layout is detected but
