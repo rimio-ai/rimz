@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use serde::Serialize;
 
-use super::render::{self, Table, cell, fmt_bytes, paint, palette};
+use super::render::{self, fmt_bytes, paint, palette};
 use super::spinner::Spinner;
 use super::{GlobalFlags, open_store};
 use rimz::store::event_log::RepairOutcome;
@@ -36,8 +36,8 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     spinner.set("sweeping runtime hints…");
     let report =
         gc::collect_runtime(args.older_than, args.dry_run).context("collecting runtime garbage")?;
-    let (messages_archived, messages_reconciled, repaired, carryover_pruned) = if args.dry_run {
-        (0, 0, None, 0)
+    let store_maintenance = if args.dry_run {
+        StoreMaintenance::SkippedDryRun
     } else {
         spinner.set("repairing store…");
         match WorkspaceResolver::resolve(".", globals.root.clone()) {
@@ -66,22 +66,22 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                     let carryover_pruned = store
                         .prune_carryover(rimz::store::event_log::DEFAULT_RETENTION)
                         .context("pruning carryover agents")?;
-                    (
-                        messages_archived,
-                        reconcile.requeued + reconcile.timed_out,
-                        Some(repaired),
+                    StoreMaintenance::Done {
+                        archived: messages_archived,
+                        reconciled: reconcile.requeued + reconcile.timed_out,
+                        repaired,
                         carryover_pruned,
-                    )
+                    }
                 }
                 Err(err) => {
                     tracing::debug!(
                         error = %err,
                         "workspace store unavailable; runtime gc continues"
                     );
-                    (0, 0, None, 0)
+                    StoreMaintenance::SkippedNoStore
                 }
             },
-            Err(_) => (0, 0, None, 0),
+            Err(_) => StoreMaintenance::SkippedNoStore,
         }
     };
     spinner.set("reaping dead schedules…");
@@ -100,10 +100,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         older_than: args.older_than,
         runtime: report,
         temps,
-        repaired,
-        queue_archived: messages_archived,
-        queue_reconciled: messages_reconciled,
-        carryover_pruned,
+        store_maintenance,
         schedules_reaped,
         prune,
         worktrees,
@@ -124,13 +121,10 @@ struct GcOutcome {
     older_than: Duration,
     runtime: gc::GcReport,
     temps: gc::TempSweepReport,
-    repaired: Option<RepairOutcome>,
-    queue_archived: usize,
-    queue_reconciled: usize,
-    carryover_pruned: usize,
+    store_maintenance: StoreMaintenance,
     schedules_reaped: usize,
     prune: gc::WorkspacePruneReport,
-    worktrees: WorktreeSweep,
+    worktrees: WorktreeSweepStatus,
 }
 
 impl GcOutcome {
@@ -143,10 +137,101 @@ impl GcOutcome {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StoreMaintenance {
+    Done {
+        archived: usize,
+        reconciled: usize,
+        repaired: RepairOutcome,
+        carryover_pruned: usize,
+    },
+    SkippedDryRun,
+    SkippedNoStore,
+}
+
+impl Default for StoreMaintenance {
+    fn default() -> Self {
+        Self::Done {
+            archived: 0,
+            reconciled: 0,
+            repaired: RepairOutcome::default(),
+            carryover_pruned: 0,
+        }
+    }
+}
+
+impl StoreMaintenance {
+    fn status_json(&self) -> &'static str {
+        match self {
+            Self::Done { .. } => "done",
+            Self::SkippedDryRun => "skipped_dry_run",
+            Self::SkippedNoStore => "skipped_no_store",
+        }
+    }
+
+    fn skip_text(&self) -> Option<&'static str> {
+        match self {
+            Self::Done { .. } => None,
+            Self::SkippedDryRun => Some("skipped (dry run)"),
+            Self::SkippedNoStore => Some("skipped — no rimz store here"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WorktreeSweepStatus {
+    Swept(WorktreeSweep),
+    Skipped(WorktreeSkip),
+}
+
+impl Default for WorktreeSweepStatus {
+    fn default() -> Self {
+        Self::Swept(WorktreeSweep::default())
+    }
+}
+
+impl WorktreeSweepStatus {
+    fn bytes(&self) -> u64 {
+        match self {
+            Self::Swept(sweep) => sweep.bytes(),
+            Self::Skipped(_) => 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorktreeSkip {
+    NotARepo,
+    NoStore,
+    RosterUnavailable,
+    ListFailed,
+}
+
+impl WorktreeSkip {
+    fn text(self) -> &'static str {
+        match self {
+            Self::NotARepo => "not inside a git repo",
+            Self::NoStore => "no rimz store here",
+            Self::RosterUnavailable => "agent roster unavailable",
+            Self::ListFailed => "worktree listing failed",
+        }
+    }
+
+    fn json(self) -> &'static str {
+        match self {
+            Self::NotARepo => "not_a_repo",
+            Self::NoStore => "no_store",
+            Self::RosterUnavailable => "roster_unavailable",
+            Self::ListFailed => "list_failed",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct WorktreeSweep {
     removed: Vec<SweptWorktree>,
     failed: Vec<FailedWorktree>,
+    kept: Vec<KeptWorktree>,
 }
 
 impl WorktreeSweep {
@@ -177,25 +262,49 @@ struct FailedWorktree {
     error: String,
 }
 
-fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> WorktreeSweep {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeptWorktree {
+    name: String,
+    path: PathBuf,
+    reason: KeptReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeptReason {
+    InUse,
+    Dirty,
+    NotMerged,
+}
+
+impl KeptReason {
+    fn json(self) -> &'static str {
+        match self {
+            Self::InUse => "in_use",
+            Self::Dirty => "uncommitted_changes",
+            Self::NotMerged => "not_merged",
+        }
+    }
+}
+
+fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> WorktreeSweepStatus {
     let Ok(workspace) = WorkspaceResolver::resolve(".", globals.root.clone()) else {
-        return WorktreeSweep::default();
+        return WorktreeSweepStatus::Skipped(WorktreeSkip::NotARepo);
     };
     if workspace.root_class != rimz::workspace::RootClass::Repo {
-        return WorktreeSweep::default();
+        return WorktreeSweepStatus::Skipped(WorktreeSkip::NotARepo);
     }
     let store = match open_store_for_worktree_gc(&workspace, dry_run) {
         Ok(Some(store)) => store,
         Ok(None) => {
             tracing::debug!("workspace store absent; worktree gc skipped");
-            return WorktreeSweep::default();
+            return WorktreeSweepStatus::Skipped(WorktreeSkip::NoStore);
         }
         Err(err) => {
             tracing::debug!(
                 error = %err,
                 "workspace store unavailable; worktree gc skipped"
             );
-            return WorktreeSweep::default();
+            return WorktreeSweepStatus::Skipped(WorktreeSkip::NoStore);
         }
     };
     let snapshot =
@@ -206,7 +315,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
                     error = %err,
                     "agent roster unavailable; worktree gc skipped"
                 );
-                return WorktreeSweep::default();
+                return WorktreeSweepStatus::Skipped(WorktreeSkip::RosterUnavailable);
             }
         };
     let mut protected_paths = match rimz::mux::auto_detect_backend(globals.mux) {
@@ -226,22 +335,15 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
         Ok(entries) => entries,
         Err(err) => {
             tracing::debug!(error = %err, "worktree gc skipped");
-            return WorktreeSweep::default();
+            return WorktreeSweepStatus::Skipped(WorktreeSkip::ListFailed);
         }
     };
-    let candidates: Vec<_> = entries
-        .into_iter()
-        .filter(|entry| {
-            let path = rimz::worktree::normalize_path_lexical(&entry.path);
-            !protected_paths
-                .iter()
-                .any(|cwd| rimz::worktree::path_inside(cwd, &path))
-                && !entry.dirty
-                && entry.landed == Some(true)
-        })
-        .collect();
+    let (candidates, kept) = partition_candidates(entries, &protected_paths);
     let total = candidates.len();
-    let mut sweep = WorktreeSweep::default();
+    let mut sweep = WorktreeSweep {
+        kept,
+        ..WorktreeSweep::default()
+    };
     for (i, entry) in candidates.into_iter().enumerate() {
         let action = if dry_run { "checking" } else { "removing" };
         spinner.set(format!(
@@ -305,7 +407,40 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
     if sweep.swept() > 0 && !dry_run {
         let _ = rimz::worktree::prune(&workspace.project_root);
     }
-    sweep
+    WorktreeSweepStatus::Swept(sweep)
+}
+
+fn partition_candidates(
+    entries: Vec<rimz::worktree::WorktreeListEntry>,
+    protected_paths: &[PathBuf],
+) -> (Vec<rimz::worktree::WorktreeListEntry>, Vec<KeptWorktree>) {
+    let mut candidates = Vec::new();
+    let mut kept = Vec::new();
+    for entry in entries {
+        let path = rimz::worktree::normalize_path_lexical(&entry.path);
+        let reason = if protected_paths
+            .iter()
+            .any(|cwd| rimz::worktree::path_inside(cwd, &path))
+        {
+            Some(KeptReason::InUse)
+        } else if entry.dirty {
+            Some(KeptReason::Dirty)
+        } else if entry.landed != Some(true) {
+            Some(KeptReason::NotMerged)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            kept.push(KeptWorktree {
+                name: entry.name,
+                path: entry.path,
+                reason,
+            });
+        } else {
+            candidates.push(entry);
+        }
+    }
+    (candidates, kept)
 }
 
 fn open_store_for_worktree_gc(
@@ -332,191 +467,495 @@ fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::pane::PaneRef>) 
 
 fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     let reclaimed = out.reclaimed_bytes();
-    let active = reclaimed > 0
-        || runtime_items(&out.runtime) > 0
-        || out.temps.files_removed > 0
-        || out.queue_archived > 0
-        || out.queue_reconciled > 0
-        || out.carryover_pruned > 0
-        || out.schedules_reaped > 0
-        || out.repaired.as_ref().is_some_and(RepairOutcome::truncated)
-        || !out.prune.removed.is_empty()
-        || !out.prune.retained_unreadable.is_empty()
-        || out.worktrees.swept() > 0
-        || !out.worktrees.failed.is_empty();
-
-    if active {
-        let header = if out.dry_run {
-            format!("gc would reclaim {} (dry run)", fmt_bytes(reclaimed))
+    let problems = problem_count(out);
+    let header = if out.dry_run {
+        if reclaimed > 0 {
+            format!("gc — would reclaim {} (dry run)", fmt_bytes(reclaimed))
         } else {
-            format!("gc reclaimed {}", fmt_bytes(reclaimed))
-        };
-        writeln!(w, "{}", paint(palette::ACCENT.bold(), &header))?;
+            "gc — nothing to reclaim (dry run)".to_owned()
+        }
+    } else if reclaimed > 0 {
+        format!("gc — reclaimed {}", fmt_bytes(reclaimed))
+    } else if problems > 0 {
+        "gc — no bytes reclaimed".to_owned()
     } else {
-        let header = if out.dry_run {
-            "gc — nothing to reclaim (dry run)"
-        } else {
-            "gc — nothing to reclaim"
-        };
-        writeln!(w, "{}", paint(palette::ACCENT.bold(), header))?;
+        "gc — all clean, nothing to reclaim".to_owned()
+    };
+    write!(w, "{}", paint(palette::ACCENT.bold(), &header))?;
+    if problems > 0 {
+        write!(
+            w,
+            "{}",
+            paint(
+                palette::WARN,
+                &format!(" · {}", plural(problems, "problem", "problems"))
+            )
+        )?;
     }
-    writeln!(
-        w,
-        "  {}",
-        paint(
-            palette::MUTED,
-            &format!("older than {}s", out.older_than.as_secs())
+    writeln!(w)?;
+
+    let skipped = skipped_area_count(out);
+    let checked = GC_AREAS - skipped;
+    let checked_text = if skipped > 0 {
+        format!(
+            "checked {checked} of {GC_AREAS} areas · cutoff {}",
+            fmt_duration_compact(out.older_than)
         )
-    )?;
-
-    let mut table = Table::new(["CLASS", "COUNT", "BYTES", "DETAIL"]).right(&[2]);
-    if out.worktrees.swept() > 0 {
-        table.row([
-            cell("worktrees"),
-            cell(plural(out.worktrees.swept(), "swept", "swept")),
-            cell(fmt_bytes(out.worktrees.bytes())),
-            cell("landed checkouts"),
-        ]);
-    }
-    if !out.prune.removed.is_empty() {
-        table.row([
-            cell("workspaces"),
-            cell(plural(out.prune.removed.len(), "pruned", "pruned")),
-            cell(fmt_bytes(out.prune.bytes_removed())),
-            cell("dead stores"),
-        ]);
-    }
-    if out.temps.files_removed > 0 {
-        table.row([
-            cell("temp"),
-            cell(plural(out.temps.files_removed, "orphan", "orphans")),
-            cell(fmt_bytes(out.temps.bytes_removed)),
-            cell("interrupted writes"),
-        ]);
-    }
-    let runtime_items = runtime_items(&out.runtime);
-    if runtime_items > 0 {
-        table.row([
-            cell("runtime"),
-            cell(plural(runtime_items, "item", "items")),
-            cell(fmt_bytes(out.runtime.bytes_removed)),
-            cell(runtime_breakdown(&out.runtime)),
-        ]);
-    }
-    if out.worktrees.swept() > 0
-        || !out.prune.removed.is_empty()
-        || out.temps.files_removed > 0
-        || runtime_items > 0
-    {
-        writeln!(w)?;
-        table.render(w)?;
-    }
-
-    if out.queue_archived > 0 {
-        report_note(w, &format!("messages archived: {}", out.queue_archived))?;
-    }
-    if out.queue_reconciled > 0 {
-        report_note(w, &format!("messages reconciled: {}", out.queue_reconciled))?;
-    }
-    if out.carryover_pruned > 0 {
-        report_note(
-            w,
-            &format!("carryover agents pruned: {}", out.carryover_pruned),
-        )?;
-    }
-    if out.schedules_reaped > 0 {
-        report_note(w, &format!("schedules reaped: {}", out.schedules_reaped))?;
-    }
-    if let Some(repair) = out.repaired.filter(RepairOutcome::truncated) {
-        report_note(
-            w,
-            &format!(
-                "log repaired: {} cut ({} frames kept)",
-                fmt_bytes(repair.bytes_truncated),
-                repair.frames_kept
-            ),
-        )?;
-    }
-    if out.dry_run {
-        report_note(w, "store maintenance skipped (dry run)")?;
-    }
-    let worktree_verb = if out.dry_run {
-        "would sweep worktree"
     } else {
-        "worktree swept"
+        format!(
+            "checked {GC_AREAS} areas · cutoff {}",
+            fmt_duration_compact(out.older_than)
+        )
     };
-    for removed in &out.worktrees.removed {
-        let mut note = format!(
-            "{worktree_verb}: {} {} ({})",
-            removed.name,
-            removed.path.display(),
-            fmt_bytes(removed.bytes)
-        );
-        if !out.dry_run {
-            if removed.branch_deletion == Some(rimz::worktree::BranchDeletion::KeptUnmerged) {
-                note.push_str(" — branch kept: not proven merged");
-            }
-            if let Some(err) = &removed.archive_error {
-                note.push_str(&format!(" — message archive failed: {err}"));
-            }
+    writeln!(w, "  {}", paint(palette::MUTED, &checked_text))?;
+    writeln!(w)?;
+
+    render_worktrees(out, w)?;
+    render_workspaces(out, w)?;
+    render_runtime(out, w)?;
+    render_temps(out, w)?;
+    render_messages(out, w)?;
+    render_event_log(out, w)?;
+    render_agent_cache(out, w)?;
+    render_loop_schedules(out, w)?;
+    Ok(())
+}
+
+const GC_AREAS: usize = 8;
+const GC_AREA_LABEL_WIDTH: usize = 14;
+
+#[derive(Clone, Copy)]
+enum RowVerdict {
+    Healthy,
+    Acted,
+    Warn,
+    Alarm,
+    Skipped,
+}
+
+impl RowVerdict {
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::Healthy => "✓",
+            Self::Acted => "✦",
+            Self::Warn => "⚠",
+            Self::Alarm => "✗",
+            Self::Skipped => "–",
         }
-        report_note(w, &note)?;
     }
-    for failed in &out.worktrees.failed {
-        report_note(
+
+    fn style(self) -> anstyle::Style {
+        match self {
+            Self::Healthy => palette::GOOD,
+            Self::Acted => palette::ACCENT,
+            Self::Warn => palette::WARN,
+            Self::Alarm => palette::ALARM,
+            Self::Skipped => palette::FAINT,
+        }
+    }
+}
+
+fn render_row(
+    w: &mut impl Write,
+    verdict: RowVerdict,
+    area: &str,
+    outcome: &str,
+) -> io::Result<()> {
+    let glyph = verdict.glyph();
+    let style = verdict.style();
+    let padded_area = format!("{area:<width$}", width = GC_AREA_LABEL_WIDTH);
+    let line = format!("  {glyph} {padded_area}  {outcome}");
+    match verdict {
+        RowVerdict::Warn | RowVerdict::Alarm => writeln!(w, "{}", paint(style, &line)),
+        RowVerdict::Healthy | RowVerdict::Acted | RowVerdict::Skipped => {
+            writeln!(w, "  {} {padded_area}  {outcome}", paint(style, glyph),)
+        }
+    }
+}
+
+fn render_subline(w: &mut impl Write, style: anstyle::Style, text: &str) -> io::Result<()> {
+    writeln!(w, "      {}", paint(style, text))
+}
+
+fn render_worktrees(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    match &out.worktrees {
+        WorktreeSweepStatus::Skipped(skip) => render_row(
             w,
-            &format!(
-                "worktree failed: {} — {}",
-                failed.path.display(),
-                failed.error
-            ),
-        )?;
+            RowVerdict::Skipped,
+            "worktrees",
+            &format!("skipped — {}", skip.text()),
+        ),
+        WorktreeSweepStatus::Swept(sweep) => {
+            let removed = sweep.removed.len();
+            let kept = sweep.kept.len();
+            let outcome = if removed > 0 {
+                let action = if out.dry_run {
+                    "would remove"
+                } else {
+                    "removed"
+                };
+                let mut outcome = format!(
+                    "{} · {}",
+                    plural(removed, action, action),
+                    fmt_bytes(sweep.bytes())
+                );
+                if kept > 0 {
+                    outcome.push_str(&format!(" · {kept} kept"));
+                }
+                outcome
+            } else if kept > 0 {
+                format!("{kept} kept — {}", kept_summary(&sweep.kept))
+            } else {
+                "none managed here".to_owned()
+            };
+            let verdict = if removed > 0 {
+                RowVerdict::Acted
+            } else if !sweep.failed.is_empty() {
+                RowVerdict::Alarm
+            } else {
+                RowVerdict::Healthy
+            };
+            render_row(w, verdict, "worktrees", &outcome)?;
+            if removed > 0 && kept > 0 {
+                render_subline(
+                    w,
+                    palette::MUTED,
+                    &format!("kept: {}", kept_summary(&sweep.kept)),
+                )?;
+            }
+            let action = if out.dry_run {
+                "would remove"
+            } else {
+                "removed"
+            };
+            for removed in &sweep.removed {
+                let mut line = format!(
+                    "{action}: {}  {}  {}",
+                    removed.name,
+                    fmt_bytes(removed.bytes),
+                    worktree_removal_detail(removed)
+                );
+                let style = if let Some(err) = &removed.archive_error {
+                    line.push_str(&format!(" — message archive failed: {err}"));
+                    palette::WARN
+                } else {
+                    palette::MUTED
+                };
+                render_subline(w, style, &line)?;
+            }
+            for failed in &sweep.failed {
+                render_subline(
+                    w,
+                    palette::ALARM,
+                    &format!("✗ failed: {} — {}", failed.path.display(), failed.error),
+                )?;
+            }
+            Ok(())
+        }
     }
-    let workspace_verb = if out.dry_run {
-        "would prune workspace"
+}
+
+fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    let removed = out.prune.removed.len();
+    let unreadable = out.prune.retained_unreadable.len();
+    let outcome = if removed > 0 {
+        let action = if out.dry_run { "would prune" } else { "pruned" };
+        format!(
+            "{} · {}",
+            plural(removed, action, action),
+            fmt_bytes(out.prune.bytes_removed())
+        )
+    } else if unreadable > 0 {
+        format!(
+            "{} kept with unreadable record — history preserved",
+            unreadable
+        )
+    } else if out.prune.kept > 0 {
+        plural(out.prune.kept, "healthy", "healthy")
     } else {
-        "workspace pruned"
+        "none found".to_owned()
     };
+    let verdict = if removed > 0 {
+        RowVerdict::Acted
+    } else if unreadable > 0 {
+        RowVerdict::Warn
+    } else {
+        RowVerdict::Healthy
+    };
+    render_row(w, verdict, "workspaces", &outcome)?;
+    let action = if out.dry_run { "would prune" } else { "pruned" };
     for removed in &out.prune.removed {
-        match &removed.project_root {
-            Some(root) => report_note(
-                w,
-                &format!(
-                    "{workspace_verb}: {} {} ({})",
-                    removed.workspace_id,
-                    root.display(),
-                    fmt_bytes(removed.bytes)
-                ),
-            )?,
-            None => report_note(
-                w,
-                &format!(
-                    "{workspace_verb}: {} (abandoned scaffold, {})",
-                    removed.workspace_id,
-                    fmt_bytes(removed.bytes)
-                ),
-            )?,
-        }
-    }
-    if !out.prune.retained_unreadable.is_empty() {
-        report_note(
+        render_subline(
             w,
-            &format!(
-                "retained: {} (unreadable record + history)",
-                out.prune.retained_unreadable.len()
-            ),
+            palette::MUTED,
+            &format!("{action}: {}", removed_workspace_detail(removed)),
         )?;
     }
-    if out.runtime.runtime_roots_scanned > 0 {
-        report_note(
+    if removed > 0 && unreadable > 0 {
+        render_subline(
             w,
-            &format!(
-                "scanned {} runtime roots",
-                out.runtime.runtime_roots_scanned
-            ),
+            palette::WARN,
+            &format!("{unreadable} kept with unreadable record — history preserved"),
         )?;
     }
     Ok(())
+}
+
+fn render_runtime(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    let items = runtime_items(&out.runtime);
+    if items > 0 {
+        render_row(
+            w,
+            RowVerdict::Acted,
+            "runtime",
+            &format!(
+                "{} · {} — {}",
+                plural(items, "stale file", "stale files"),
+                fmt_bytes(out.runtime.bytes_removed),
+                plural(
+                    out.runtime.runtime_roots_scanned,
+                    "root scanned",
+                    "roots scanned"
+                )
+            ),
+        )?;
+        let action = if out.dry_run {
+            "would remove"
+        } else {
+            "removed"
+        };
+        render_subline(
+            w,
+            palette::MUTED,
+            &format!("{action}: {}", runtime_breakdown(&out.runtime)),
+        )
+    } else {
+        render_row(
+            w,
+            RowVerdict::Healthy,
+            "runtime",
+            &format!(
+                "{}, all fresh",
+                plural(
+                    out.runtime.runtime_roots_scanned,
+                    "root scanned",
+                    "roots scanned"
+                )
+            ),
+        )
+    }
+}
+
+fn render_temps(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    if out.temps.files_removed > 0 {
+        render_row(
+            w,
+            RowVerdict::Acted,
+            "temp files",
+            &format!(
+                "{} · {}",
+                plural(out.temps.files_removed, "orphaned", "orphaned"),
+                fmt_bytes(out.temps.bytes_removed)
+            ),
+        )
+    } else {
+        render_row(w, RowVerdict::Healthy, "temp files", "none orphaned")
+    }
+}
+
+fn render_messages(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    match &out.store_maintenance {
+        StoreMaintenance::Done {
+            archived,
+            reconciled,
+            ..
+        } => {
+            let mut clauses = Vec::new();
+            if *archived > 0 {
+                clauses.push(plural(*archived, "orphaned archived", "orphaned archived"));
+            }
+            if *reconciled > 0 {
+                clauses.push(plural(*reconciled, "stuck reset", "stuck reset"));
+            }
+            if clauses.is_empty() {
+                render_row(w, RowVerdict::Healthy, "messages", "queue clean")
+            } else {
+                render_row(w, RowVerdict::Acted, "messages", &clauses.join(" · "))
+            }
+        }
+        skipped => render_row(
+            w,
+            RowVerdict::Skipped,
+            "messages",
+            skipped.skip_text().unwrap_or("skipped"),
+        ),
+    }
+}
+
+fn render_event_log(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    match &out.store_maintenance {
+        StoreMaintenance::Done { repaired, .. } if repaired.truncated() => render_row(
+            w,
+            RowVerdict::Warn,
+            "event log",
+            &format!(
+                "corruption repaired — {} cut, {} frames kept",
+                fmt_bytes(repaired.bytes_truncated),
+                repaired.frames_kept
+            ),
+        ),
+        StoreMaintenance::Done { .. } => render_row(w, RowVerdict::Healthy, "event log", "intact"),
+        skipped => render_row(
+            w,
+            RowVerdict::Skipped,
+            "event log",
+            skipped.skip_text().unwrap_or("skipped"),
+        ),
+    }
+}
+
+fn render_agent_cache(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    match &out.store_maintenance {
+        StoreMaintenance::Done {
+            carryover_pruned, ..
+        } if *carryover_pruned > 0 => render_row(
+            w,
+            RowVerdict::Acted,
+            "agent cache",
+            &plural(
+                *carryover_pruned,
+                "expired entry pruned",
+                "expired entries pruned",
+            ),
+        ),
+        StoreMaintenance::Done { .. } => render_row(w, RowVerdict::Healthy, "agent cache", "clean"),
+        skipped => render_row(
+            w,
+            RowVerdict::Skipped,
+            "agent cache",
+            skipped.skip_text().unwrap_or("skipped"),
+        ),
+    }
+}
+
+fn render_loop_schedules(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    if out.dry_run {
+        render_row(
+            w,
+            RowVerdict::Skipped,
+            "loop schedules",
+            "skipped (dry run)",
+        )
+    } else if out.schedules_reaped > 0 {
+        render_row(
+            w,
+            RowVerdict::Acted,
+            "loop schedules",
+            &plural(out.schedules_reaped, "dead reaped", "dead reaped"),
+        )
+    } else {
+        render_row(w, RowVerdict::Healthy, "loop schedules", "none dead")
+    }
+}
+
+fn problem_count(out: &GcOutcome) -> usize {
+    let worktree_problems = match &out.worktrees {
+        WorktreeSweepStatus::Swept(sweep) => {
+            sweep.failed.len()
+                + sweep
+                    .removed
+                    .iter()
+                    .filter(|removed| removed.archive_error.is_some())
+                    .count()
+        }
+        WorktreeSweepStatus::Skipped(_) => 0,
+    };
+    let event_log_problems = match &out.store_maintenance {
+        StoreMaintenance::Done { repaired, .. } if repaired.truncated() => 1,
+        _ => 0,
+    };
+    worktree_problems + out.prune.retained_unreadable.len() + event_log_problems
+}
+
+fn skipped_area_count(out: &GcOutcome) -> usize {
+    let worktree = usize::from(matches!(&out.worktrees, WorktreeSweepStatus::Skipped(_)));
+    let store = match &out.store_maintenance {
+        StoreMaintenance::Done { .. } => 0,
+        StoreMaintenance::SkippedDryRun | StoreMaintenance::SkippedNoStore => 3,
+    };
+    let schedules = usize::from(out.dry_run);
+    worktree + store + schedules
+}
+
+fn kept_summary(kept: &[KeptWorktree]) -> String {
+    let mut parts = Vec::new();
+    let in_use = kept
+        .iter()
+        .filter(|worktree| worktree.reason == KeptReason::InUse)
+        .count();
+    if in_use > 0 {
+        parts.push(plural(in_use, "in use", "in use"));
+    }
+    let dirty = kept
+        .iter()
+        .filter(|worktree| worktree.reason == KeptReason::Dirty)
+        .count();
+    if dirty > 0 {
+        parts.push(plural(
+            dirty,
+            "with uncommitted changes",
+            "with uncommitted changes",
+        ));
+    }
+    let not_merged = kept
+        .iter()
+        .filter(|worktree| worktree.reason == KeptReason::NotMerged)
+        .count();
+    if not_merged > 0 {
+        parts.push(plural(not_merged, "not merged yet", "not merged yet"));
+    }
+    parts.join(", ")
+}
+
+fn worktree_removal_detail(removed: &SweptWorktree) -> &'static str {
+    match removed.branch_deletion {
+        Some(rimz::worktree::BranchDeletion::Deleted) => "merged, branch deleted",
+        Some(rimz::worktree::BranchDeletion::KeptUnmerged) => {
+            "merged, branch kept (not proven merged)"
+        }
+        None => "merged",
+    }
+}
+
+fn removed_workspace_detail(removed: &gc::RemovedWorkspace) -> String {
+    match removed.reason {
+        gc::PruneReason::ProjectRootGone => format!(
+            "{} — project folder gone: {} ({})",
+            removed.workspace_id,
+            removed
+                .project_root
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unknown".to_owned()),
+            fmt_bytes(removed.bytes)
+        ),
+        gc::PruneReason::AbandonedScaffold => format!(
+            "{} — abandoned setup, never used ({})",
+            removed.workspace_id,
+            fmt_bytes(removed.bytes)
+        ),
+    }
+}
+
+fn fmt_duration_compact(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs >= 3_600 && secs.is_multiple_of(3_600) {
+        format!("{}h", secs / 3_600)
+    } else if secs >= 60 && secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
 }
 
 fn print_json_report(outcome: &GcOutcome) -> Result<()> {
@@ -541,7 +980,7 @@ struct JsonReport {
     carryover_pruned: usize,
     schedules_reaped: usize,
     repair: Option<JsonRepair>,
-    store_maintenance_skipped: bool,
+    store_maintenance: &'static str,
 }
 
 impl From<&GcOutcome> for JsonReport {
@@ -555,13 +994,13 @@ impl From<&GcOutcome> for JsonReport {
             temps: JsonTemps::from(&out.temps),
             runtime: JsonRuntime::from(&out.runtime),
             messages: JsonMessages {
-                archived: out.queue_archived,
-                reconciled: out.queue_reconciled,
+                archived: messages_archived(&out.store_maintenance),
+                reconciled: messages_reconciled(&out.store_maintenance),
             },
-            carryover_pruned: out.carryover_pruned,
+            carryover_pruned: carryover_pruned(&out.store_maintenance),
             schedules_reaped: out.schedules_reaped,
-            repair: out.repaired.map(JsonRepair::from),
-            store_maintenance_skipped: out.dry_run,
+            repair: repair_outcome(&out.store_maintenance).map(JsonRepair::from),
+            store_maintenance: out.store_maintenance.status_json(),
         }
     }
 }
@@ -570,13 +1009,25 @@ impl From<&GcOutcome> for JsonReport {
 struct JsonWorktrees {
     removed: Vec<JsonSweptWorktree>,
     failed: Vec<JsonFailedWorktree>,
+    kept: Vec<JsonKeptWorktree>,
+    skipped: Option<&'static str>,
 }
 
-impl From<&WorktreeSweep> for JsonWorktrees {
-    fn from(sweep: &WorktreeSweep) -> Self {
-        Self {
-            removed: sweep.removed.iter().map(JsonSweptWorktree::from).collect(),
-            failed: sweep.failed.iter().map(JsonFailedWorktree::from).collect(),
+impl From<&WorktreeSweepStatus> for JsonWorktrees {
+    fn from(status: &WorktreeSweepStatus) -> Self {
+        match status {
+            WorktreeSweepStatus::Swept(sweep) => Self {
+                removed: sweep.removed.iter().map(JsonSweptWorktree::from).collect(),
+                failed: sweep.failed.iter().map(JsonFailedWorktree::from).collect(),
+                kept: sweep.kept.iter().map(JsonKeptWorktree::from).collect(),
+                skipped: None,
+            },
+            WorktreeSweepStatus::Skipped(skip) => Self {
+                removed: Vec::new(),
+                failed: Vec::new(),
+                kept: Vec::new(),
+                skipped: Some(skip.json()),
+            },
         }
     }
 }
@@ -617,6 +1068,23 @@ impl From<&FailedWorktree> for JsonFailedWorktree {
         Self {
             path: path_string(&failed.path),
             error: failed.error.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonKeptWorktree {
+    name: String,
+    path: String,
+    reason: &'static str,
+}
+
+impl From<&KeptWorktree> for JsonKeptWorktree {
+    fn from(worktree: &KeptWorktree) -> Self {
+        Self {
+            name: worktree.name.clone(),
+            path: path_string(&worktree.path),
+            reason: worktree.reason.json(),
         }
     }
 }
@@ -741,6 +1209,36 @@ impl From<RepairOutcome> for JsonRepair {
     }
 }
 
+fn messages_archived(maintenance: &StoreMaintenance) -> usize {
+    match maintenance {
+        StoreMaintenance::Done { archived, .. } => *archived,
+        StoreMaintenance::SkippedDryRun | StoreMaintenance::SkippedNoStore => 0,
+    }
+}
+
+fn messages_reconciled(maintenance: &StoreMaintenance) -> usize {
+    match maintenance {
+        StoreMaintenance::Done { reconciled, .. } => *reconciled,
+        StoreMaintenance::SkippedDryRun | StoreMaintenance::SkippedNoStore => 0,
+    }
+}
+
+fn carryover_pruned(maintenance: &StoreMaintenance) -> usize {
+    match maintenance {
+        StoreMaintenance::Done {
+            carryover_pruned, ..
+        } => *carryover_pruned,
+        StoreMaintenance::SkippedDryRun | StoreMaintenance::SkippedNoStore => 0,
+    }
+}
+
+fn repair_outcome(maintenance: &StoreMaintenance) -> Option<RepairOutcome> {
+    match maintenance {
+        StoreMaintenance::Done { repaired, .. } => Some(*repaired),
+        StoreMaintenance::SkippedDryRun | StoreMaintenance::SkippedNoStore => None,
+    }
+}
+
 fn path_string(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -750,10 +1248,6 @@ fn prune_reason_json(reason: gc::PruneReason) -> &'static str {
         gc::PruneReason::ProjectRootGone => "project_root_gone",
         gc::PruneReason::AbandonedScaffold => "abandoned_scaffold",
     }
-}
-
-fn report_note(w: &mut impl Write, text: &str) -> io::Result<()> {
-    writeln!(w, "  {}", paint(palette::MUTED, text))
 }
 
 fn runtime_items(report: &gc::GcReport) -> usize {
@@ -826,43 +1320,124 @@ mod tests {
     }
 
     #[test]
-    fn render_report_groups_reclaimed_bytes_by_class() {
-        let out = strip_report(&full_outcome(false));
-        assert!(out.contains("gc reclaimed"));
-        assert!(out.contains("worktrees"));
-        assert!(out.contains("workspaces"));
-        assert!(out.contains("runtime"));
-        assert!(out.contains("temp"));
-        assert!(out.contains("carryover agents pruned"));
-        assert!(out.contains("orphans"));
-        assert!(out.contains("heartbeat"));
-        assert!(out.contains("sidecars"));
-        assert!(out.contains("probe"));
-        assert!(out.contains("1.4 GB"));
+    fn partition_candidates_keeps_protected_dirty_and_unmerged_entries() {
+        let entries = vec![
+            worktree_entry("protected", "/repo-worktrees/protected", true, Some(false)),
+            worktree_entry("dirty", "/repo-worktrees/dirty", true, Some(true)),
+            worktree_entry("unknown", "/repo-worktrees/unknown", false, None),
+            worktree_entry("pending", "/repo-worktrees/pending", false, Some(false)),
+            worktree_entry("clean", "/repo-worktrees/clean", false, Some(true)),
+        ];
+        let protected = vec![PathBuf::from("/repo-worktrees/protected/src")];
+
+        let (candidates, kept) = partition_candidates(entries, &protected);
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["clean"]
+        );
+        assert_eq!(
+            kept.iter()
+                .map(|worktree| (worktree.name.as_str(), worktree.reason))
+                .collect::<Vec<_>>(),
+            [
+                ("protected", KeptReason::InUse),
+                ("dirty", KeptReason::Dirty),
+                ("unknown", KeptReason::NotMerged),
+                ("pending", KeptReason::NotMerged),
+            ]
+        );
     }
 
     #[test]
-    fn render_report_lists_worktree_outcomes() {
+    fn render_report_names_all_clean_checks() {
+        let out = strip_report(&clean_outcome());
+
+        assert!(out.contains("gc — all clean, nothing to reclaim"));
+        assert!(out.contains("checked 8 areas · cutoff 1h"));
+        assert!(out.contains("✓ worktrees"));
+        assert!(out.contains("3 kept — 2 in use, 1 not merged yet"));
+        assert!(out.contains("✓ workspaces"));
+        assert!(out.contains("4 healthy"));
+        assert!(out.contains("✓ runtime"));
+        assert!(out.contains("6 roots scanned, all fresh"));
+        assert!(out.contains("✓ temp files"));
+        assert!(out.contains("✓ messages"));
+        assert!(out.contains("✓ event log"));
+        assert!(out.contains("✓ agent cache"));
+        assert!(out.contains("✓ loop schedules"));
+    }
+
+    #[test]
+    fn render_report_lists_active_checklist_details() {
         let out = strip_report(&full_outcome(false));
 
-        assert!(out.contains("worktree swept: demo /repo-worktrees/demo"));
-        assert!(out.contains(
-            "worktree swept: gc-info /repo-worktrees/gc-info (12 B) — branch kept: not proven merged"
-        ));
+        assert!(out.contains("gc — reclaimed"));
+        assert!(out.contains("· 3 problems"));
+        assert!(out.contains("✦ worktrees"));
+        assert!(out.contains("2 removed · 1.4 GB · 3 kept"));
+        assert!(out.contains("kept: 2 in use, 1 not merged yet"));
+        assert!(out.contains("removed: demo"));
+        assert!(out.contains("merged, branch deleted"));
+        assert!(out.contains("removed: gc-info"));
+        assert!(out.contains("merged, branch kept (not proven merged)"));
         assert!(out.contains("message archive failed: archive boom"));
-        assert!(out.contains("worktree failed: /repo-worktrees/wip — remove boom"));
+        assert!(out.contains("✗ failed: /repo-worktrees/wip — remove boom"));
+        assert!(
+            out.contains("pruned: ws_0123456789abcdef01234567 — project folder gone: /gone (2 KB)")
+        );
+        assert!(out.contains("⚠ event log"));
+        assert!(out.contains("corruption repaired — 9 B cut, 3 frames kept"));
     }
 
     #[test]
     fn render_report_uses_dry_run_framing() {
         let out = strip_report(&full_outcome(true));
 
-        assert!(out.contains("gc would reclaim"));
-        assert!(out.contains("store maintenance skipped (dry run)"));
-        assert!(out.contains("would sweep worktree: demo /repo-worktrees/demo"));
-        assert!(out.contains("would prune workspace: ws_0123456789abcdef01234567 /gone"));
-        assert!(!out.contains("branch kept"));
+        assert!(out.contains("gc — would reclaim"));
+        assert!(out.contains("(dry run)"));
+        assert!(out.contains("checked 4 of 8 areas · cutoff 1h"));
+        assert!(out.contains("would remove: demo"));
+        assert!(out.contains("would prune: ws_0123456789abcdef01234567"));
+        assert!(out.contains("– messages        skipped (dry run)"));
+        assert!(out.contains("– event log       skipped (dry run)"));
+        assert!(out.contains("– agent cache     skipped (dry run)"));
+        assert!(out.contains("– loop schedules  skipped (dry run)"));
+        assert!(!out.contains("branch kept (not proven merged)"));
         assert!(!out.contains("message archive failed"));
+    }
+
+    #[test]
+    fn render_report_names_skipped_worktree_area() {
+        let out = strip_report(&GcOutcome {
+            older_than: Duration::from_secs(3600),
+            worktrees: WorktreeSweepStatus::Skipped(WorktreeSkip::NotARepo),
+            ..GcOutcome::default()
+        });
+
+        assert!(out.contains("checked 7 of 8 areas · cutoff 1h"));
+        assert!(out.contains("– worktrees       skipped — not inside a git repo"));
+    }
+
+    #[test]
+    fn render_report_counts_failures_as_problems() {
+        let out = strip_report(&GcOutcome {
+            older_than: Duration::from_secs(3600),
+            worktrees: WorktreeSweepStatus::Swept(WorktreeSweep {
+                failed: vec![FailedWorktree {
+                    path: PathBuf::from("/bad"),
+                    error: "boom".to_owned(),
+                }],
+                ..WorktreeSweep::default()
+            }),
+            ..GcOutcome::default()
+        });
+
+        assert!(out.contains("· 1 problem"));
+        assert!(out.contains("✗ failed: /bad — boom"));
     }
 
     #[test]
@@ -879,27 +1454,51 @@ mod tests {
             "archive boom"
         );
         assert_eq!(value["worktrees"]["failed"][0]["error"], "remove boom");
+        assert_eq!(value["worktrees"]["kept"][0]["reason"], "in_use");
+        assert_eq!(value["worktrees"]["kept"][2]["reason"], "not_merged");
+        assert!(value["worktrees"]["skipped"].is_null());
         assert_eq!(
             value["workspaces"]["removed"][0]["reason"],
             "project_root_gone"
         );
         assert_eq!(value["runtime"]["roots_scanned"], 2);
         assert_eq!(value["messages"]["archived"], 1);
+        assert_eq!(value["messages"]["reconciled"], 1);
         assert_eq!(value["repair"]["bytes_truncated"], 9);
+        assert_eq!(value["store_maintenance"], "done");
 
         let dry_run = serde_json::to_value(JsonReport::from(&full_outcome(true))).unwrap();
         assert!(dry_run["repair"].is_null());
         assert!(dry_run["worktrees"]["removed"][0]["branch_deleted"].is_null());
-        assert_eq!(dry_run["store_maintenance_skipped"], true);
+        assert_eq!(dry_run["store_maintenance"], "skipped_dry_run");
+
+        let no_store = serde_json::to_value(JsonReport::from(&GcOutcome {
+            store_maintenance: StoreMaintenance::SkippedNoStore,
+            worktrees: WorktreeSweepStatus::Skipped(WorktreeSkip::NoStore),
+            ..GcOutcome::default()
+        }))
+        .unwrap();
+        assert_eq!(no_store["store_maintenance"], "skipped_no_store");
+        assert_eq!(no_store["worktrees"]["skipped"], "no_store");
     }
 
-    #[test]
-    fn render_report_names_empty_runs() {
-        let out = strip_report(&GcOutcome {
+    fn clean_outcome() -> GcOutcome {
+        GcOutcome {
             older_than: Duration::from_secs(3600),
+            runtime: gc::GcReport {
+                runtime_roots_scanned: 6,
+                ..gc::GcReport::default()
+            },
+            prune: gc::WorkspacePruneReport {
+                kept: 4,
+                ..gc::WorkspacePruneReport::default()
+            },
+            worktrees: WorktreeSweepStatus::Swept(WorktreeSweep {
+                kept: kept_worktrees(),
+                ..WorktreeSweep::default()
+            }),
             ..GcOutcome::default()
-        });
-        assert!(out.contains("nothing to reclaim"));
+        }
     }
 
     fn full_outcome(dry_run: bool) -> GcOutcome {
@@ -919,14 +1518,20 @@ mod tests {
                 files_removed: 2,
                 bytes_removed: 68,
             },
-            repaired: (!dry_run).then_some(RepairOutcome {
-                bytes_truncated: 9,
-                frames_kept: 3,
-            }),
-            queue_archived: usize::from(!dry_run),
-            queue_reconciled: 0,
-            carryover_pruned: usize::from(!dry_run),
-            schedules_reaped: 0,
+            store_maintenance: if dry_run {
+                StoreMaintenance::SkippedDryRun
+            } else {
+                StoreMaintenance::Done {
+                    archived: 1,
+                    reconciled: 1,
+                    repaired: RepairOutcome {
+                        bytes_truncated: 9,
+                        frames_kept: 3,
+                    },
+                    carryover_pruned: 1,
+                }
+            },
+            schedules_reaped: usize::from(!dry_run),
             prune: gc::WorkspacePruneReport {
                 removed: vec![gc::RemovedWorkspace {
                     workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
@@ -937,7 +1542,7 @@ mod tests {
                 kept: 0,
                 retained_unreadable: Vec::new(),
             },
-            worktrees: WorktreeSweep {
+            worktrees: WorktreeSweepStatus::Swept(WorktreeSweep {
                 removed: vec![
                     SweptWorktree {
                         name: "demo".to_owned(),
@@ -958,6 +1563,7 @@ mod tests {
                         archive_error: (!dry_run).then_some("archive boom".to_owned()),
                     },
                 ],
+                kept: kept_worktrees(),
                 failed: if dry_run {
                     Vec::new()
                 } else {
@@ -966,7 +1572,43 @@ mod tests {
                         error: "remove boom".to_owned(),
                     }]
                 },
+            }),
+        }
+    }
+
+    fn kept_worktrees() -> Vec<KeptWorktree> {
+        vec![
+            KeptWorktree {
+                name: "active".to_owned(),
+                path: PathBuf::from("/repo-worktrees/active"),
+                reason: KeptReason::InUse,
             },
+            KeptWorktree {
+                name: "shell".to_owned(),
+                path: PathBuf::from("/repo-worktrees/shell"),
+                reason: KeptReason::InUse,
+            },
+            KeptWorktree {
+                name: "pending".to_owned(),
+                path: PathBuf::from("/repo-worktrees/pending"),
+                reason: KeptReason::NotMerged,
+            },
+        ]
+    }
+
+    fn worktree_entry(
+        name: &str,
+        path: &str,
+        dirty: bool,
+        landed: Option<bool>,
+    ) -> rimz::worktree::WorktreeListEntry {
+        rimz::worktree::WorktreeListEntry {
+            name: name.to_owned(),
+            path: PathBuf::from(path),
+            branch: Some(name.to_owned()),
+            base_ref: "main".to_owned(),
+            dirty,
+            landed,
         }
     }
 

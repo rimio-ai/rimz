@@ -521,7 +521,8 @@ fn agents_exec_clean_exit_leaves_clean_worktree_until_gc() {
         .assert()
         .success()
         .stdout(contains("worktrees"))
-        .stdout(contains("1 swept"));
+        .stdout(contains("1 removed"))
+        .stdout(contains("removed: demo"));
 
     wait_for_path_absent(&path, "clean worktree removed by gc");
     assert!(
@@ -827,7 +828,8 @@ fn gc_sweeps_merged_worktree() {
         .assert()
         .success()
         .stdout(contains("worktrees"))
-        .stdout(contains("1 swept"));
+        .stdout(contains("1 removed"))
+        .stdout(contains("removed: demo"));
 
     assert!(!path.exists(), "gc swept merged worktree");
     assert!(
@@ -882,7 +884,8 @@ fn gc_sweeps_merge_landed_worktree() {
         .assert()
         .success()
         .stdout(contains("worktrees"))
-        .stdout(contains("1 swept"));
+        .stdout(contains("1 removed"))
+        .stdout(contains("removed: demo"));
 
     assert!(!path.exists(), "gc swept merge-landed worktree");
     assert!(
@@ -946,7 +949,8 @@ fn gc_sweeps_worktree_whose_base_branch_landed_on_trunk() {
         .assert()
         .success()
         .stdout(contains("worktrees"))
-        .stdout(contains("1 swept"));
+        .stdout(contains("1 removed"))
+        .stdout(contains("removed: demo"));
 
     assert!(!path.exists(), "gc swept stale-base worktree");
     assert!(
@@ -1009,7 +1013,8 @@ fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
         .assert()
         .success()
         .stdout(contains("worktrees"))
-        .stdout(contains("1 swept"));
+        .stdout(contains("1 removed"))
+        .stdout(contains("removed: demo"));
 
     wait_for_path_absent(&path, "explicit-base worktree removed by gc");
     assert!(

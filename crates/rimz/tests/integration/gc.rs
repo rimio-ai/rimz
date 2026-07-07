@@ -133,8 +133,8 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
         .assert()
         .success()
         .stdout(contains("reclaimed"))
-        .stdout(contains("abandoned scaffold"))
-        .stdout(contains("retained"));
+        .stdout(contains("abandoned setup, never used"))
+        .stdout(contains("kept with unreadable record"));
 
     assert!(!scaffold.exists(), "abandoned scaffold should be reaped");
     assert!(
@@ -166,7 +166,8 @@ fn gc_reaps_dead_loop_delivery_schedule() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("schedules reaped: 1"));
+        .stdout(contains("loop schedules"))
+        .stdout(contains("1 dead reaped"));
 
     let config = std::fs::read_to_string(config_path).expect("read agents config");
     assert!(
@@ -349,8 +350,12 @@ fn gc_keeps_worktree_with_live_agent() {
 
     assert!(worktree.exists(), "live agent should keep the worktree");
     assert!(
-        !stdout.contains("worktrees"),
-        "gc should not report a worktree sweep: {stdout}"
+        stdout.contains("1 kept — 1 in use"),
+        "gc should report why the worktree was kept: {stdout}"
+    );
+    assert!(
+        !stdout.contains("removed: demo"),
+        "gc should not remove a live worktree: {stdout}"
     );
 }
 
@@ -380,7 +385,7 @@ fn gc_dry_run_previews_worktree_after_agent_dies() {
         .args(["gc", "--older-than", "1h", "--dry-run"])
         .assert()
         .success()
-        .stdout(contains("would sweep worktree: demo"))
+        .stdout(contains("would remove: demo"))
         .stdout(contains("dry run"));
 
     assert!(worktree.exists(), "dry-run should keep the worktree");
@@ -389,7 +394,7 @@ fn gc_dry_run_previews_worktree_after_agent_dies() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("worktree swept: demo"));
+        .stdout(contains("removed: demo"));
 
     assert!(!worktree.exists(), "real gc should sweep the worktree");
 }
@@ -421,7 +426,8 @@ fn gc_sweeps_worktree_after_agent_dies() {
         .assert()
         .success()
         .stdout(contains("worktrees"))
-        .stdout(contains("swept"));
+        .stdout(contains("1 removed"))
+        .stdout(contains("removed: demo"));
 
     assert!(!worktree.exists(), "dead agent should release the worktree");
 }
