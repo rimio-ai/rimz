@@ -1,6 +1,6 @@
 use super::*;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 
 use tempfile::TempDir;
@@ -73,7 +73,13 @@ fn compute_spending_with_origins_and_scope(
         },
     );
     let counted = dedup_cached_entries(files, cache, &HashSet::new()).into_counted();
-    let aggregate = aggregate_counted_rollups(files, cache, &counted, scope, now_secs, spec, false);
+    let live_excluded = BTreeSet::new();
+    let workspace = scope.map(|scope| WorkspaceRollupScope {
+        scope,
+        live_excluded: &live_excluded,
+    });
+    let aggregate =
+        aggregate_counted_rollups(files, cache, &counted, workspace, now_secs, spec, false);
     (aggregate.spending, aggregate.workspace_tally)
 }
 
@@ -129,7 +135,16 @@ fn compute_scoped_tally(
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> SpendTally {
-    compute_scoped_spending(files, cache, &HashSet::new(), scope, now_secs, spec).tally
+    compute_scoped_spending(
+        files,
+        cache,
+        &HashSet::new(),
+        scope,
+        &BTreeSet::new(),
+        now_secs,
+        spec,
+    )
+    .tally
 }
 
 macro_rules! walk_spending {
@@ -137,6 +152,7 @@ macro_rules! walk_spending {
         let prices = $prices;
         let origin_overrides = HashMap::new();
         let automation_files = HashSet::new();
+        let live_excluded = BTreeSet::new();
         let spec = HeadlineSpec::default();
         let req = WalkRequest {
             files: $files,
@@ -146,6 +162,7 @@ macro_rules! walk_spending {
             automation_files: &automation_files,
             automation_signature: 0,
             scope: None,
+            live_excluded: &live_excluded,
             spec: &spec,
         };
         $walker.walk($cache_path, &req, $observer)
@@ -322,67 +339,7 @@ fn sample_spending() -> Spending {
     spending
 }
 
-fn tally_with_headline_usd(usd: f64) -> SpendTally {
-    let mut tally = SpendTally::default();
-    tally.headline.usd = usd;
-    tally
-}
-
-fn workspace_cache_for_carry(
-    scope_hash: &str,
-    walked: f64,
-    cutoff: u64,
-    carry: f64,
-    refreshed_at_ms: u64,
-    live_baselines: BTreeMap<String, f64>,
-) -> WorkspaceSpendingCache {
-    WorkspaceSpendingCache {
-        version: WORKSPACE_SPENDING_VERSION,
-        refreshed_at_ms,
-        scope_hash: scope_hash.to_owned(),
-        tally: tally_with_headline_usd(walked),
-        headline_cutoff_secs: cutoff,
-        carry_usd: carry,
-        live_baselines,
-    }
-}
-
-fn displayed_workspace_usd(
-    cache: &WorkspaceSpendingCache,
-    live_costs: &[(String, f64, Option<u64>)],
-) -> f64 {
-    today_spend_live_usd(
-        cache.tally.headline.usd + cache.carry_usd,
-        live_costs
-            .iter()
-            .map(|(id, usd, registered_at)| (id.as_str(), *usd, *registered_at)),
-        &cache.live_baselines,
-        cache.refreshed_at_ms,
-    )
-}
-
-fn publish_workspace_for_carry(
-    prev: &WorkspaceSpendingCache,
-    scope_hash: &str,
-    walked: f64,
-    cutoff: u64,
-    refreshed_at_ms: u64,
-    live_costs: &[(String, f64, Option<u64>)],
-) -> WorkspaceSpendingCache {
-    let (carry_usd, live_baselines) =
-        reconcile_workspace_carry(prev, scope_hash, walked, cutoff, live_costs);
-    workspace_cache_for_carry(
-        scope_hash,
-        walked,
-        cutoff,
-        carry_usd,
-        refreshed_at_ms,
-        live_baselines,
-    )
-}
-
 mod aggregation;
 mod compaction;
-mod live_overlay;
 mod published_cache;
 mod walk_cache;

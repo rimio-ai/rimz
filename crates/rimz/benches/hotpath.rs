@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
 
@@ -227,6 +227,7 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
     if warm {
         let origin_overrides = HashMap::new();
         let automation_files = HashSet::new();
+        let live_excluded = BTreeSet::new();
         let spec = rimz::agents::spending::HeadlineSpec::default();
         let req = rimz::agents::spending::WalkRequest {
             files: &files,
@@ -236,6 +237,7 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
             automation_files: &automation_files,
             automation_signature: 0,
             scope: None,
+            live_excluded: &live_excluded,
             spec: &spec,
         };
         let _ = walker.walk(&cache_path, &req, &mut rimz::agents::spending::SilentWalk);
@@ -278,6 +280,7 @@ fn spending_walk_cold(bencher: Bencher) {
         .bench_local_values(|mut fixture| {
             let origin_overrides = HashMap::new();
             let automation_files = HashSet::new();
+            let live_excluded = BTreeSet::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
                 files: &fixture.files,
@@ -287,6 +290,7 @@ fn spending_walk_cold(bencher: Bencher) {
                 automation_files: &automation_files,
                 automation_signature: 0,
                 scope: None,
+                live_excluded: &live_excluded,
                 spec: &spec,
             };
             divan::black_box(fixture.walker.walk(
@@ -304,6 +308,7 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
         .bench_local_values(|mut fixture| {
             let origin_overrides = HashMap::new();
             let automation_files = HashSet::new();
+            let live_excluded = BTreeSet::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
                 files: &fixture.files,
@@ -313,6 +318,7 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
                 automation_files: &automation_files,
                 automation_signature: 0,
                 scope: None,
+                live_excluded: &live_excluded,
                 spec: &spec,
             };
             divan::black_box(fixture.walker.walk(

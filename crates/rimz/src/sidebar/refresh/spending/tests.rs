@@ -16,7 +16,7 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{SPENDING_STALE_GRACE, SPENDING_TTL};
 
 use jiff::Timestamp;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -301,7 +301,7 @@ fn walk_local_stays_memory_only_while_publishing_walk_writes_provider_cache() {
 }
 
 #[test]
-fn walk_local_reconciles_workspace_carry_without_publishing() {
+fn walk_local_builds_workspace_cache_without_publishing() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime paths");
@@ -320,14 +320,10 @@ fn walk_local_reconciles_workspace_carry_without_publishing() {
     )]);
     let scope = SpendScope::for_workspace(Some(&project), &[], None);
     let scope_hash = scope.hash();
-    let mut previous_tally = crate::agents::spending::SpendTally::default();
-    previous_tally.headline.usd = 2.0;
     let previous = crate::agents::spending::WorkspaceSpendingCache {
         refreshed_at_ms: 10_000,
         scope_hash: scope_hash.clone(),
-        tally: previous_tally,
-        headline_cutoff_secs: now_secs / 86_400 * 86_400,
-        carry_usd: 1.0,
+        live_excluded: BTreeSet::from(["claude:old".to_owned()]),
         ..Default::default()
     };
     let workspace_path = runtime.workspace_spending_path(&scope_hash);
@@ -344,16 +340,16 @@ fn walk_local_reconciles_workspace_carry_without_publishing() {
     let local = super::walk_fleet_spending(&mut walker, &runtime, &snapshot, &spec, false);
 
     assert!((local.workspace.tally.headline.usd - 2.5).abs() < 1e-9);
-    assert!((local.workspace.carry_usd - 0.5).abs() < 1e-9);
+    assert!(local.workspace.live_excluded.is_empty());
     assert_eq!(
         std::fs::read(&workspace_path).expect("workspace cache"),
         before_bytes,
-        "local fallback computes carry for its own frame without publishing"
+        "local fallback computes workspace cache for its own frame without publishing"
     );
 }
 
 #[test]
-fn publishing_walk_observer_checkpoints_workspace_carry_and_baselines() {
+fn publishing_walk_observer_checkpoints_workspace_live_exclusions() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("repo");
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
@@ -391,20 +387,6 @@ fn publishing_walk_observer_checkpoints_workspace_carry_and_baselines() {
         );
         cache
     };
-    let mut previous_tally = crate::agents::spending::SpendTally::default();
-    previous_tally.headline.usd = 1.0;
-    write_workspace_spending_cache(
-        &runtime.workspace_spending_path(&scope_hash),
-        &crate::agents::spending::WorkspaceSpendingCache {
-            refreshed_at_ms: 10_000,
-            scope_hash: scope_hash.clone(),
-            tally: previous_tally,
-            headline_cutoff_secs: now_secs / 86_400 * 86_400,
-            carry_usd: 0.5,
-            live_baselines: BTreeMap::from([("agent".to_owned(), 5.0)]),
-            ..Default::default()
-        },
-    );
     let files = vec![(
         &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
         transcript,
@@ -413,7 +395,7 @@ fn publishing_walk_observer_checkpoints_workspace_carry_and_baselines() {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
     };
-    let live_costs = vec![("agent".to_owned(), 7.0, Some(1_000))];
+    let live_excluded = BTreeSet::from(["claude:agent".to_owned()]);
     let provider_path = runtime.shared_provider_spending_path();
     let automation_files = HashSet::new();
     let mut observer = super::PublishingWalkObserver {
@@ -425,18 +407,14 @@ fn publishing_walk_observer_checkpoints_workspace_carry_and_baselines() {
         scope: Some(&scope),
         scope_hash: Some(scope_hash.clone()),
         spec: &spec,
-        live_costs: &live_costs,
+        live_excluded: &live_excluded,
     };
 
     crate::agents::spending::WalkObserver::on_interval(&mut observer, &raw);
 
     let workspace = read_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash));
     assert!((workspace.tally.headline.usd - 1.25).abs() < 1e-9);
-    assert!((workspace.carry_usd - 2.25).abs() < 1e-9);
-    assert_eq!(
-        workspace.live_baselines,
-        BTreeMap::from([("agent".to_owned(), 7.0)])
-    );
+    assert_eq!(workspace.live_excluded, live_excluded);
 }
 
 #[test]
@@ -515,7 +493,7 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
         Some(&scope_hash),
         &files,
         &HeadlineSpec::default(),
-        &[],
+        &BTreeSet::new(),
     )
     .expect("workspace cache derives from the shared cursor cache");
 
@@ -531,7 +509,7 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
 }
 
 #[test]
-fn workspace_cache_from_shared_entries_reconciles_carry_and_baselines() {
+fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("repo");
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
@@ -580,22 +558,9 @@ fn workspace_cache_from_shared_entries_reconciles_carry_and_baselines() {
         &raw,
         &Default::default(),
         &scope,
+        &BTreeSet::from(["claude:agent".to_owned()]),
         now_secs,
         &spec,
-    );
-    let mut previous_tally = crate::agents::spending::SpendTally::default();
-    previous_tally.headline.usd = 1.0;
-    write_workspace_spending_cache(
-        &runtime.workspace_spending_path(&scope_hash),
-        &crate::agents::spending::WorkspaceSpendingCache {
-            refreshed_at_ms: 10_000,
-            scope_hash: scope_hash.clone(),
-            tally: previous_tally,
-            headline_cutoff_secs: scoped.headline_cutoff_secs,
-            carry_usd: 0.5,
-            live_baselines: BTreeMap::from([("agent".to_owned(), 5.0)]),
-            ..Default::default()
-        },
     );
     let mut spending = Spending::default();
     spending.total.headline.usd = 1.25;
@@ -606,7 +571,7 @@ fn workspace_cache_from_shared_entries_reconciles_carry_and_baselines() {
         spending,
         ..ProviderSpendingCache::default()
     };
-    let live_costs = vec![("agent".to_owned(), 7.0, Some(1_000))];
+    let live_excluded = BTreeSet::from(["claude:agent".to_owned()]);
 
     let workspace = workspace_cache_from_shared_entries(
         &runtime,
@@ -615,20 +580,171 @@ fn workspace_cache_from_shared_entries_reconciles_carry_and_baselines() {
         Some(&scope_hash),
         &files,
         &spec,
-        &live_costs,
+        &live_excluded,
     )
     .expect("workspace cache derives from the shared cursor cache");
 
     assert!((workspace.tally.headline.usd - 1.25).abs() < 1e-9);
     assert_eq!(workspace.headline_cutoff_secs, scoped.headline_cutoff_secs);
-    assert!((workspace.carry_usd - 2.25).abs() < 1e-9);
-    assert_eq!(
-        workspace.live_baselines,
-        BTreeMap::from([("agent".to_owned(), 7.0)])
-    );
+    assert_eq!(workspace.live_excluded, live_excluded);
     let fresh = super::fresh_workspace_cache(&runtime, Some(&scope_hash), unix_now_ms())
         .expect("fresh workspace cache");
     assert_eq!(fresh, workspace);
+}
+
+#[test]
+fn derive_workspace_spending_memo_keys_live_exclusions() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("repo");
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
+        .expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let scope_hash = scope.hash();
+    let transcript = dir.path().join("claude.jsonl");
+    let now_secs = unix_secs_now();
+    let mut raw = read_spending_cache(&runtime.shared_spending_cursor_path());
+    raw.files.insert(
+        transcript.to_string_lossy().into_owned(),
+        FileCacheEntry {
+            mtime_secs: 1,
+            len: 1,
+            cursor: SpendCursor::default(),
+            origin_path: Some(project),
+            entries: vec![CachedEntry {
+                ts_secs: now_secs,
+                cost_usd: 1.25,
+                input: 10,
+                output: 5,
+                cache_write: 0,
+                cache_read: 0,
+                message_id: Some("msg-1".to_owned()),
+                request_id: Some("req-1".to_owned()),
+                thread_id: None,
+                is_sidechain: false,
+                model: None,
+                rolled: false,
+            }],
+            unknown_models: BTreeMap::new(),
+        },
+    );
+    write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
+    let files = vec![(
+        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        transcript.clone(),
+    )];
+    let spec = HeadlineSpec::default();
+
+    let included = super::derive_workspace_spending(
+        &runtime,
+        &scope,
+        scope_hash.clone(),
+        1_000,
+        &files,
+        &BTreeSet::new(),
+        &spec,
+    );
+    let live_excluded = crate::agents::spending::live_session_keys(
+        &crate::agents::ClaudeAdapter,
+        "session",
+        &transcript,
+    )
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let excluded = super::derive_workspace_spending(
+        &runtime,
+        &scope,
+        scope_hash,
+        1_000,
+        &files,
+        &live_excluded,
+        &spec,
+    );
+
+    assert!((included.tally.headline.usd - 1.25).abs() < 1e-9);
+    assert_eq!(excluded.tally.headline.usd, 0.0);
+}
+
+#[test]
+fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("repo");
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
+        .expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let scope_hash = scope.hash();
+    let transcript = dir.path().join("claude.jsonl");
+    std::fs::write(&transcript, b"").expect("transcript");
+    let mut raw = read_spending_cache(&runtime.shared_spending_cursor_path());
+    raw.files.insert(
+        transcript.to_string_lossy().into_owned(),
+        FileCacheEntry {
+            mtime_secs: 1,
+            len: 0,
+            cursor: SpendCursor::default(),
+            origin_path: Some(project),
+            entries: Vec::new(),
+            unknown_models: BTreeMap::new(),
+        },
+    );
+    write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
+    let files = vec![(
+        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        transcript,
+    )];
+    let mut spending = Spending::default();
+    spending.total.year.usd = 10.0;
+    let provider = ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
+        refreshed_at_ms: unix_now_ms(),
+        spending,
+        ..ProviderSpendingCache::default()
+    };
+    let mut prev_tally = crate::agents::spending::SpendTally::default();
+    prev_tally.headline.usd = 5.0;
+    let prev = crate::agents::spending::WorkspaceSpendingCache {
+        refreshed_at_ms: unix_now_ms(),
+        scope_hash: scope_hash.clone(),
+        tally: prev_tally.clone(),
+        live_excluded: BTreeSet::from(["claude:old".to_owned()]),
+        ..Default::default()
+    };
+    write_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash), &prev);
+
+    let served = workspace_cache_from_shared_entries(
+        &runtime,
+        &provider,
+        &scope,
+        Some(&scope_hash),
+        &files,
+        &HeadlineSpec::default(),
+        &BTreeSet::new(),
+    )
+    .expect("workspace cache derives from shared entries");
+
+    assert_eq!(served.tally, prev_tally);
+    assert_eq!(served.live_excluded, prev.live_excluded);
+
+    let old = crate::agents::spending::WorkspaceSpendingCache {
+        refreshed_at_ms: unix_now_ms()
+            .saturating_sub(crate::agents::spending::SESSION_GAP_SECS * 1_000 + 1),
+        ..prev
+    };
+    write_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash), &old);
+    let reset = workspace_cache_from_shared_entries(
+        &runtime,
+        &provider,
+        &scope,
+        Some(&scope_hash),
+        &files,
+        &HeadlineSpec::default(),
+        &BTreeSet::new(),
+    )
+    .expect("workspace cache derives from shared entries");
+
+    assert_eq!(reset.tally.headline.usd, 0.0);
+    assert!(reset.live_excluded.is_empty());
 }
 
 #[test]

@@ -19,9 +19,8 @@ use super::{metric_spans, pin_right, spans_width};
 /// window, the glyph in the teal it shares with the W/M ledger rows — on the
 /// left, with the headline token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the
 /// live coarse form) pinned to the right edge. The breakdown reads the
-/// workspace-scoped JSONL tally's headline window and drops when it recorded no
-/// tokens, leaving `◎ {sessions}` alone. The live-agent count and the spend ride
-/// the second line
+/// workspace-scoped JSONL tally's headline window and paints zeroes before any
+/// spend arrives. The live-agent count and the spend ride the second line
 /// ([`cockpit_spend_line`]).
 pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
     theme: &Theme,
@@ -35,19 +34,16 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
         theme.component(Component::Sessions),
         &sessions.to_string(),
     );
-    let right = headline
-        .filter(|w| w.tokens > 0 || w.cache_read > 0)
-        .map(|window| {
-            token_breakdown_spans(
-                theme,
-                window.tokens,
-                window.input,
-                window.output,
-                window.cache_read,
-                tokens_int,
-            )
-        })
-        .unwrap_or_default();
+    let zero = SpendWindow::default();
+    let window = headline.unwrap_or(&zero);
+    let right = token_breakdown_spans(
+        theme,
+        window.tokens,
+        window.input,
+        window.output,
+        window.cache_read,
+        tokens_int,
+    );
     pin_right(left, right, width)
 }
 
@@ -57,8 +53,8 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 /// figure ticks toward the workspace tally's headline total via the shared
 /// [`TallyAnim`] roll — big decaying steps, then penny by penny onto the exact
 /// figure — and brightens for a beat the instant it settles (the W/M ledger
-/// rows below stay static). Always present — an empty room reads `¤ 0`; the
-/// bold dollar-green `$` joins the right edge once the headline records spend.
+/// rows below stay static). Always present — an empty room reads `¤ 0` with
+/// `$0.00` on the right edge.
 /// The steady unread count is a click-to-filter target and paints as a picked
 /// chip while the unread lens is active.
 pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
@@ -70,17 +66,13 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     phase: u64,
     width: usize,
 ) -> (Line<'static>, Option<(u16, u16)>) {
-    let right = if today_usd > 0.0 {
-        let usd = anim.today_usd.display(today_usd, phase);
-        let style = if anim.today_usd.flashing(phase) {
-            theme.value_flash()
-        } else {
-            theme.money_style(Modifier::BOLD)
-        };
-        vec![Span::styled(dollars2(usd), style)]
+    let usd = anim.today_usd.display(today_usd, phase);
+    let style = if anim.today_usd.flashing(phase) {
+        theme.value_flash()
     } else {
-        Vec::new()
+        theme.money_style(Modifier::BOLD)
     };
+    let right = vec![Span::styled(dollars2(usd), style)];
     let right_width = spans_width(&right);
     let mut left = metric_spans(
         theme,
@@ -108,11 +100,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         let start = spans_width(&left);
         left.push(Span::styled(format!("({unread_agents})"), style));
         let end = spans_width(&left);
-        let left_budget = if right.is_empty() {
-            width
-        } else {
-            width.saturating_sub(right_width + 1)
-        };
+        let left_budget = width.saturating_sub(right_width + 1);
         unread_range = (end <= left_budget).then_some((start as u16, end as u16));
     }
     (pin_right(left, right, width), unread_range)

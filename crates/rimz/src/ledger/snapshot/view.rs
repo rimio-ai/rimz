@@ -236,18 +236,21 @@ pub struct SidebarSnapshot {
     /// dashboard and fleet ledger stay account-global.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_value_tally: Option<SpendTally>,
-    /// The cockpit's live headline spend: the walked
-    /// `workspace_value_tally.headline` figure plus each live session's overshoot
-    /// over the baseline captured at the workspace cache publish
-    /// ([`crate::agents::spending::today_spend_live_usd`]), so the headline
-    /// climbs the instant a session's statusline cost moves while the global
-    /// tally stays the exact walked record the W/M ledger rows read.
+    /// The cockpit's live headline spend: walked workspace headline USD with
+    /// active live-card sessions excluded, plus those cards' current costs.
+    /// This keeps the headline aligned with visible cards while the W/M ledger
+    /// rows keep reading the exact walked record.
     /// Stamped where the spending cache folds onto the snapshot — the
     /// producing CLI and the consumer fold alike; `None` on the pure-reducer
     /// path and any pre-overlay snapshot, where the cockpit falls back to the
     /// tally.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub today_spend_live_usd: Option<f64>,
+    /// Headline-window epoch for [`Self::today_spend_live_usd`]. The renderer's
+    /// within-session ratchet resets when this cutoff changes. `None` on older
+    /// producer frames leaves the ratchet inert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today_spend_epoch_secs: Option<u64>,
     /// Remote SSH link health published by `rimz remote connect` through the
     /// remote-side `link-stats.json` sidecar. Local rooms and old remotes carry
     /// `None`, keeping the footer byte-identical to the pre-link-health render.
@@ -330,6 +333,7 @@ impl SidebarSnapshot {
             value_tally: None,
             workspace_value_tally: None,
             today_spend_live_usd: None,
+            today_spend_epoch_secs: None,
             link: None,
             reflects_log: None,
             resume_outcomes: Some(Vec::new()),

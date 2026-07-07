@@ -1191,7 +1191,10 @@ impl LoopState {
             .as_ref()
             .map(|tally| tally.headline.usd));
         if let Some(usd) = today_usd {
-            ui.tally.observe(usd, ui.animation_phase);
+            let shown = ui
+                .spend_ratchet
+                .observe(current.today_spend_epoch_secs, usd);
+            ui.tally.observe(shown, ui.animation_phase);
         }
         // The per-card cost rolls fold beside it: observe each agent row's session
         // cost under its durable row id (pruning rows the snapshot no longer

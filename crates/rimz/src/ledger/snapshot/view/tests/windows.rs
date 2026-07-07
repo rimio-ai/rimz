@@ -204,15 +204,20 @@ fn call_split_projects_only_with_known_input_sides() {
 fn today_spend_live_usd_round_trips_and_defaults_absent() {
     let mut snapshot = room(Vec::new(), Vec::new());
     snapshot.today_spend_live_usd = Some(12.34);
+    snapshot.today_spend_epoch_secs = Some(123);
     let json = serde_json::to_string(&snapshot).unwrap();
     let parsed: SidebarSnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.today_spend_live_usd, Some(12.34));
+    assert_eq!(parsed.today_spend_epoch_secs, Some(123));
 
     // An old producer's frame carries no field at all (`skip_serializing_if`
     // keeps `None` off the wire symmetrically).
     snapshot.today_spend_live_usd = None;
+    snapshot.today_spend_epoch_secs = None;
     let bare = serde_json::to_string(&snapshot).unwrap();
     assert!(!bare.contains("today_spend_live_usd"));
+    assert!(!bare.contains("today_spend_epoch_secs"));
     let parsed: SidebarSnapshot = serde_json::from_str(&bare).unwrap();
     assert_eq!(parsed.today_spend_live_usd, None);
+    assert_eq!(parsed.today_spend_epoch_secs, None);
 }

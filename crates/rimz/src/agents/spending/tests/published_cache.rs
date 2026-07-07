@@ -94,8 +94,7 @@ fn workspace_spending_cache_is_scope_keyed_and_ttl_gated() {
         scope_hash: "scope-a".to_owned(),
         tally: tally.clone(),
         headline_cutoff_secs: 123,
-        carry_usd: 0.45,
-        live_baselines: BTreeMap::from([("claude-1".to_owned(), 1.05)]),
+        live_excluded: BTreeSet::from(["claude:session-1".to_owned()]),
         ..Default::default()
     };
     write_workspace_spending_cache(&path, &written);
@@ -106,10 +105,9 @@ fn workspace_spending_cache_is_scope_keyed_and_ttl_gated() {
     assert_eq!(cache.scope_hash, "scope-a");
     assert_eq!(cache.tally, tally);
     assert_eq!(cache.headline_cutoff_secs, 123);
-    assert_eq!(cache.carry_usd, 0.45);
     assert_eq!(
-        cache.live_baselines,
-        BTreeMap::from([("claude-1".to_owned(), 1.05)])
+        cache.live_excluded,
+        BTreeSet::from(["claude:session-1".to_owned()])
     );
     assert!(cache.is_fresh(10_000, "scope-a"));
     assert!(!cache.is_fresh(10_000, "scope-b"));

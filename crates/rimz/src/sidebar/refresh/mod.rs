@@ -31,7 +31,7 @@ pub use credits::{
     CreditsCache, ProviderCreditsEntry, merge_provider_credits, merge_provider_credits_entry_if_due,
 };
 pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
-pub use live_spend::{apply_live_today_spend, live_row_costs};
+pub use live_spend::apply_live_today_spend;
 pub use pr::PrStateCache;
 pub use rate_limits::{drop_kind_rate_limits, merge_account_rate_limits};
 pub use sessions::refresh_session_transcript_context;

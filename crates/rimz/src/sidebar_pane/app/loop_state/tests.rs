@@ -134,6 +134,37 @@ fn frame_active(state: &LoopState) -> bool {
         .0
 }
 
+#[test]
+fn spend_ratchet_holds_within_epoch_and_resets_across_epochs() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
+    let (mut fetch, _rx) = fetch_dispatcher();
+
+    let mut high = agent_snapshot(&ws);
+    high.today_spend_live_usd = Some(5.0);
+    high.today_spend_epoch_secs = Some(10);
+    fold_snapshot(&mut state, &config, &mut fetch, high, true);
+    assert_eq!(state.ui.spend_ratchet.display(Some(10), 5.0), 5.0);
+
+    let mut lower = agent_snapshot(&ws);
+    lower.today_spend_live_usd = Some(3.0);
+    lower.today_spend_epoch_secs = Some(10);
+    fold_snapshot(&mut state, &config, &mut fetch, lower, true);
+    assert_eq!(state.ui.spend_ratchet.display(Some(10), 3.0), 5.0);
+
+    let mut older = agent_snapshot(&ws);
+    older.today_spend_live_usd = Some(1.0);
+    fold_snapshot(&mut state, &config, &mut fetch, older, true);
+    assert_eq!(state.ui.spend_ratchet.display(None, 1.0), 1.0);
+
+    let mut next = agent_snapshot(&ws);
+    next.today_spend_live_usd = Some(2.0);
+    next.today_spend_epoch_secs = Some(11);
+    fold_snapshot(&mut state, &config, &mut fetch, next, true);
+    assert_eq!(state.ui.spend_ratchet.display(Some(11), 2.0), 2.0);
+}
+
 fn fixed_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
     let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24));
     Terminal::with_options(

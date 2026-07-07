@@ -108,7 +108,10 @@ fn render_selected_card_collapses_finished_subagent_and_keeps_running_metadata()
         .lines()
         .filter(|line| {
             let trimmed = line.trim_start();
-            line.contains("◇") && !trimmed.starts_with("W:") && !trimmed.starts_with("M:")
+            line.contains("◇")
+                && line.contains("▌")
+                && !trimmed.starts_with("W:")
+                && !trimmed.starts_with("M:")
         })
         .count();
     assert_eq!(

@@ -624,17 +624,20 @@ pub(super) fn top_lines(
         .map(|tally| &tally.headline);
     let sessions = headline.map(|window| window.sessions).unwrap_or(0);
     header.push(cockpit_summary_line(theme, sessions, headline, inner));
-    // Line 2 is always present — an empty room reads `¤ 0` — with the spend
-    // joining the right edge and counting up as a turn lands. The roll targets
-    // the live overlay when the snapshot carries one — the walked figure plus
-    // each session's post-publish overshoot, so the headline moves with every
-    // statusline push — and falls back to the tally on a pre-overlay snapshot.
+    // Line 2 is always present — an empty room reads `¤ 0` — with spend on the
+    // right edge and counting up as a turn lands. The roll targets the live
+    // overlay when the snapshot carries one — walked headline USD with live
+    // card sessions excluded plus their current costs — and falls back to the
+    // tally on a pre-overlay snapshot.
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
     let unread_agents = unread_total(&snapshot.worktree_groups);
     let today_usd = snapshot
         .today_spend_live_usd
         .or(headline.map(|window| window.usd))
         .unwrap_or(0.0);
+    let today_usd = ui
+        .spend_ratchet
+        .display(snapshot.today_spend_epoch_secs, today_usd);
     let spend_line = header.len();
     let unread_picked = ui.make_up_filter == Some(BodyFilter::Unread);
     let (spend, unread_range) = cockpit_spend_line(

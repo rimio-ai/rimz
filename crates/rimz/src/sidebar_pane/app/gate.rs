@@ -234,6 +234,9 @@ fn repair_collapsed_spend(
     incoming
         .today_spend_live_usd
         .clone_from(&prev_good.today_spend_live_usd);
+    incoming
+        .today_spend_epoch_secs
+        .clone_from(&prev_good.today_spend_epoch_secs);
     let prior_spending = prev_good
         .providers
         .iter()

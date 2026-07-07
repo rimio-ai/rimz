@@ -1203,7 +1203,7 @@ fn cost_row_at(
     let mut row = activity_row(
         true,
         Some(AgentStatus::Running),
-        Timestamp::from_second(1_750_000_000).unwrap(),
+        Timestamp::now(),
         worktree_path,
     );
     row.id = id.to_owned();
@@ -1401,11 +1401,15 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
 
     let _discovered = crate::agents::spending::override_discovered_spending_files_for_test(vec![(
         &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
-        transcript,
+        transcript.clone(),
     )]);
     let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
         .with_project_root(Some(project));
     let project = snapshot.project_root.clone().unwrap();
+    let mut agent = root_agent("claude", "new-session", None);
+    agent.worktree_path = Some(project.display().to_string());
+    agent.transcript_path = Some(transcript.display().to_string());
+    snapshot.agents = vec![agent];
     snapshot.worktree_groups = vec![worktree_group(
         &project,
         vec![cost_row_at(
@@ -1431,13 +1435,13 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
             tally.headline.sessions,
             tally.headline.tokens
         )),
-        Some((3.75, 1, 27)),
+        Some((0.0, 1, 27)),
         "consumer folds derive the cockpit tally from the shared cursor cache"
     );
     assert_eq!(
         snapshot.today_spend_live_usd,
-        Some(4.0),
-        "the derived cache keeps the producer publish stamp for live-spend overlay"
+        Some(0.25),
+        "the derived cache excludes live-card headline USD and adds the card cost"
     );
     assert!(
         !runtime.workspace_spending_path(&hash).exists(),

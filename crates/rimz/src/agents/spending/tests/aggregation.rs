@@ -186,6 +186,104 @@ fn headline_cutoffs_are_global_scoped_and_provider_local() {
 }
 
 #[test]
+fn live_exclusion_suppresses_workspace_headline_usd_only() {
+    let project = PathBuf::from("/repo/project");
+    let file = PathBuf::from("/tmp/rimz/live.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file_with_origin(
+            &file,
+            &project,
+            vec![cached_entry(NOW_SECS, 1.25, "live")],
+        )]),
+        ..Default::default()
+    };
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let live_excluded = BTreeSet::from(["claude:live".to_owned()]);
+    let scoped = compute_scoped_spending(
+        &files,
+        &cache,
+        &HashSet::new(),
+        &scope,
+        &live_excluded,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    )
+    .tally;
+    assert_eq!(scoped.headline.usd, 0.0);
+    assert_eq!(scoped.headline.tokens, 15);
+    assert_eq!(scoped.headline.sessions, 1);
+    assert!((scoped.week.usd - 1.25).abs() < 1e-9);
+
+    let session = PathBuf::from("/tmp/claude/sess-1");
+    let main = session.join("chat.jsonl");
+    let sub = session.join("subagents/worker.jsonl");
+    let mut main_entry = cached_entry(NOW_SECS, 0.50, "");
+    main_entry.thread_id = None;
+    let mut sub_entry = cached_entry(NOW_SECS, 0.10, "");
+    sub_entry.thread_id = None;
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+        (claude_adapter(), main.clone()),
+        (claude_adapter(), sub.clone()),
+    ];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file_with_origin(&main, &project, vec![main_entry]),
+            cached_file_with_origin(&sub, &project, vec![sub_entry]),
+        ]),
+        ..Default::default()
+    };
+    let live_excluded = live_session_keys(claude_adapter(), "sess-1", &main)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let scoped = compute_scoped_spending(
+        &files,
+        &cache,
+        &HashSet::new(),
+        &scope,
+        &live_excluded,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    )
+    .tally;
+    assert_eq!(scoped.headline.usd, 0.0);
+    assert_eq!(scoped.headline.tokens, 30);
+    assert_eq!(scoped.headline.sessions, 1);
+    assert!((scoped.week.usd - 0.60).abs() < 1e-9);
+
+    let codex_file = PathBuf::from("/tmp/codex/rollout.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> =
+        vec![(codex_adapter(), codex_file.clone())];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file_with_origin(
+            &codex_file,
+            &project,
+            vec![
+                cached_entry(NOW_SECS, 2.00, "live"),
+                cached_entry(NOW_SECS, 3.00, "sibling"),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let live_excluded = live_session_keys(codex_adapter(), "live", &codex_file)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let scoped = compute_scoped_spending(
+        &files,
+        &cache,
+        &HashSet::new(),
+        &scope,
+        &live_excluded,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    )
+    .tally;
+    assert!((scoped.headline.usd - 3.00).abs() < 1e-9);
+    assert_eq!(scoped.headline.tokens, 30);
+    assert!((scoped.week.usd - 5.00).abs() < 1e-9);
+}
+
+#[test]
 fn automation_entries_do_not_bridge_session_idle_gaps() {
     const HOUR: u64 = 3_600;
     let first_file = PathBuf::from("/tmp/rimz/first.jsonl");

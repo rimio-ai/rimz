@@ -31,8 +31,9 @@ use super::{AgentAdapter, AgentCost};
 pub use crate::sidebar::timing::SPENDING_TTL;
 
 pub(crate) use aggregate::{
-    CountedPayload, OwnedCounted, aggregate_counted_rollups, dedup_cached_entries,
-    dedup_cached_entries_owned, origin_path, spending_files_signature,
+    CountedPayload, OwnedCounted, SESSION_GAP_SECS, WorkspaceRollupScope,
+    aggregate_counted_rollups, dedup_cached_entries, dedup_cached_entries_owned, live_session_keys,
+    origin_path, spending_files_signature,
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
@@ -51,9 +52,8 @@ pub(crate) use cache::{compact_spending_cache, file_stat, peek_cache_version};
 pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
-    read_workspace_spending_cache, reconcile_workspace_carry, today_spend_live_usd,
-    write_provider_spending_cache, write_provider_spending_cache_with_rollups,
-    write_workspace_spending_cache,
+    read_workspace_spending_cache, write_provider_spending_cache,
+    write_provider_spending_cache_with_rollups, write_workspace_spending_cache,
 };
 pub(crate) use refresh::{
     RefreshCallbacks, is_priceable_model_name, record_unknown_model, recorded_unknown_models,
@@ -189,6 +189,7 @@ pub struct WalkRequest<'a> {
     pub automation_files: &'a HashSet<PathBuf>,
     pub automation_signature: u64,
     pub scope: Option<&'a SpendScope>,
+    pub live_excluded: &'a BTreeSet<String>,
     pub spec: &'a HeadlineSpec,
 }
 
@@ -333,7 +334,10 @@ impl SpendingWalker {
             &self.cache,
             counted,
             req.now_secs,
-            req.scope,
+            req.scope.map(|scope| WorkspaceRollupScope {
+                scope,
+                live_excluded: req.live_excluded,
+            }),
             req.spec,
             stats,
         )
@@ -425,6 +429,7 @@ pub(crate) fn aggregate_walk_publish(
     automation_files: &HashSet<PathBuf>,
     now_secs: u64,
     scope: Option<&SpendScope>,
+    live_excluded: &BTreeSet<String>,
     spec: &HeadlineSpec,
 ) -> SpendingWalkResult {
     let counted = dedup_cached_entries(files, cache, automation_files).into_counted();
@@ -433,7 +438,10 @@ pub(crate) fn aggregate_walk_publish(
         cache,
         &counted,
         now_secs,
-        scope,
+        scope.map(|scope| WorkspaceRollupScope {
+            scope,
+            live_excluded,
+        }),
         spec,
         WalkStats::default(),
     )
@@ -444,11 +452,12 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
     cache: &SpendingDiskCache,
     counted: &[C],
     now_secs: u64,
-    scope: Option<&SpendScope>,
+    workspace: Option<WorkspaceRollupScope<'_>>,
     spec: &HeadlineSpec,
     stats: WalkStats,
 ) -> SpendingWalkResult {
-    let aggregate = aggregate_counted_rollups(files, cache, counted, scope, now_secs, spec, true);
+    let aggregate =
+        aggregate_counted_rollups(files, cache, counted, workspace, now_secs, spec, true);
 
     SpendingWalkResult {
         spending: aggregate.spending,
@@ -467,12 +476,13 @@ pub struct ScopedSpending {
 }
 
 /// Compute the cockpit's workspace-scoped tally plus the headline epoch cutoff
-/// that makes live carry reset at window boundaries.
+/// that resets presentation ratchets at window boundaries.
 pub fn compute_scoped_spending(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
     automation_files: &HashSet<PathBuf>,
     scope: &SpendScope,
+    live_excluded: &BTreeSet<String>,
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> ScopedSpending {
@@ -481,8 +491,12 @@ pub fn compute_scoped_spending(
     }
     let deduped = dedup_cached_entries(files, cache, automation_files);
     let counted = deduped.into_counted();
+    let workspace = Some(WorkspaceRollupScope {
+        scope,
+        live_excluded,
+    });
     let aggregate =
-        aggregate_counted_rollups(files, cache, &counted, Some(scope), now_secs, spec, false);
+        aggregate_counted_rollups(files, cache, &counted, workspace, now_secs, spec, false);
     ScopedSpending {
         tally: aggregate.workspace_tally,
         headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,

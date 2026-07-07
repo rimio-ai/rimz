@@ -308,6 +308,7 @@ fn compute_stats_from_files(
     };
     let origin_overrides = HashMap::new();
     let automation_files = rimz::harness::schedule::run_log::automation_transcripts();
+    let live_excluded = BTreeSet::new();
     let spec = HeadlineSpec::default();
     let req = WalkRequest {
         files: &files,
@@ -317,6 +318,7 @@ fn compute_stats_from_files(
         automation_files: &automation_files,
         automation_signature: rimz::harness::schedule::run_log::automation_signature(),
         scope: None,
+        live_excluded: &live_excluded,
         spec: &spec,
     };
     let result = match (publish, progress) {

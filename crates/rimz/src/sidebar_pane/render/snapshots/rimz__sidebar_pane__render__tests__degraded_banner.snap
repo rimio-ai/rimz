@@ -1,12 +1,11 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
-assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
 
- ◎ 0
- ¤ 0
+ ◎ 0                                                            ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                                                      $0.00
  ──────────────────────────────────────────────────────────────────────────────
 
 

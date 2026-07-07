@@ -1,6 +1,6 @@
 //! Window aggregation, scoped tallies, and cross-file deduplication for spending walks.
 
-use std::collections::{BTreeMap, HashMap, HashSet, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -86,7 +86,7 @@ pub struct HeadlineSpec {
     pub timezone: Option<String>,
 }
 
-const SESSION_GAP_SECS: u64 = 5 * 3_600;
+pub(crate) const SESSION_GAP_SECS: u64 = 5 * 3_600;
 
 /// Rolling spend and token tally over the configured headline window plus three
 /// trailing ledger windows: 7 days, 30 days, and 365 days. The ledger windows
@@ -145,17 +145,28 @@ pub(crate) struct CountedRollups {
     pub(crate) models: BTreeMap<String, SpendTally>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct WorkspaceRollupScope<'a> {
+    pub(crate) scope: &'a SpendScope,
+    pub(crate) live_excluded: &'a BTreeSet<String>,
+}
+
 pub(crate) fn aggregate_counted_rollups(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
     counted: &[impl CountedPayload],
-    scope: Option<&SpendScope>,
+    workspace: Option<WorkspaceRollupScope<'_>>,
     now_secs: u64,
     spec: &HeadlineSpec,
     include_history_rollups: bool,
 ) -> CountedRollups {
-    let scope = scope.filter(|scope| !scope.is_empty());
-    let cutoffs = CountedCutoffs::from_counted(counted, scope, now_secs, spec);
+    let workspace = workspace.filter(|workspace| !workspace.scope.is_empty());
+    let cutoffs = CountedCutoffs::from_counted(
+        counted,
+        workspace.map(|workspace| workspace.scope),
+        now_secs,
+        spec,
+    );
     let mut spending = Spending::default();
     let mut workspace_tally = SpendTally::default();
     let mut days = BTreeMap::<i64, DaySpend>::new();
@@ -171,12 +182,18 @@ pub(crate) fn aggregate_counted_rollups(
             now_secs,
             cutoffs.provider(provider),
         );
-        if let Some(scope) = scope
+        if let Some(workspace) = workspace
             && counted
                 .origin()
-                .is_some_and(|origin| scope.contains(origin))
+                .is_some_and(|origin| workspace.scope.contains(origin))
         {
-            accum(&mut workspace_tally, entry, now_secs, cutoffs.scoped());
+            accum_scoped(
+                &mut workspace_tally,
+                entry,
+                now_secs,
+                cutoffs.scoped(),
+                workspace.live_excluded.contains(counted.session_key()),
+            );
         }
 
         if include_history_rollups {
@@ -197,12 +214,12 @@ pub(crate) fn aggregate_counted_rollups(
     }
 
     add_spending_sessions(&mut spending, files, cache, now_secs, &cutoffs);
-    if let Some(scope) = scope {
+    if let Some(workspace) = workspace {
         add_scoped_sessions(
             &mut workspace_tally,
             files,
             cache,
-            scope,
+            workspace.scope,
             now_secs,
             cutoffs.scoped(),
         );
@@ -211,7 +228,7 @@ pub(crate) fn aggregate_counted_rollups(
     CountedRollups {
         spending,
         workspace_tally,
-        workspace_headline_cutoff_secs: scope.map(|_| cutoffs.scoped()).unwrap_or_default(),
+        workspace_headline_cutoff_secs: workspace.map(|_| cutoffs.scoped()).unwrap_or_default(),
         days,
         models: if include_history_rollups {
             models
@@ -462,6 +479,7 @@ pub(crate) trait CountedPayload: DedupPayload {
     fn kind(&self) -> &'static str;
     fn origin(&self) -> Option<&Path>;
     fn is_automation(&self) -> bool;
+    fn session_key(&self) -> &str;
 }
 
 pub(crate) struct SidechainDedup<P> {
@@ -531,6 +549,7 @@ impl<P: DedupPayload> SidechainDedup<P> {
 pub(crate) struct Counted<'a> {
     kind: &'static str,
     origin: Option<&'a Path>,
+    session_key: String,
     entry: &'a CachedEntry,
     is_automation: bool,
 }
@@ -553,12 +572,17 @@ impl CountedPayload for Counted<'_> {
     fn is_automation(&self) -> bool {
         self.is_automation
     }
+
+    fn session_key(&self) -> &str {
+        &self.session_key
+    }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct OwnedCounted {
     kind: &'static str,
     origin: Option<PathBuf>,
+    session_key: String,
     entry: CachedEntry,
     is_automation: bool,
 }
@@ -581,6 +605,10 @@ impl CountedPayload for OwnedCounted {
     fn is_automation(&self) -> bool {
         self.is_automation
     }
+
+    fn session_key(&self) -> &str {
+        &self.session_key
+    }
 }
 
 pub(crate) fn dedup_cached_entries<'a>(
@@ -592,9 +620,10 @@ pub(crate) fn dedup_cached_entries<'a>(
         files,
         cache,
         automation_files,
-        |kind, cached_file, entry, is_automation| Counted {
+        |adapter, file, kind, cached_file, entry, is_automation| Counted {
             kind,
             origin: cached_file.origin_path.as_deref(),
+            session_key: session_key(adapter, file, entry),
             entry,
             is_automation,
         },
@@ -610,9 +639,10 @@ pub(crate) fn dedup_cached_entries_owned(
         files,
         cache,
         automation_files,
-        |kind, cached_file, entry, is_automation| OwnedCounted {
+        |adapter, file, kind, cached_file, entry, is_automation| OwnedCounted {
             kind,
             origin: cached_file.origin_path.clone(),
+            session_key: session_key(adapter, file, entry),
             entry: entry.clone(),
             is_automation,
         },
@@ -623,7 +653,14 @@ fn dedup_cached_entries_with<'a, P: DedupPayload>(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &'a SpendingDiskCache,
     automation_files: &HashSet<PathBuf>,
-    make: impl Fn(&'static str, &'a FileCacheEntry, &'a CachedEntry, bool) -> P,
+    make: impl Fn(
+        &'static dyn AgentAdapter,
+        &Path,
+        &'static str,
+        &'a FileCacheEntry,
+        &'a CachedEntry,
+        bool,
+    ) -> P,
 ) -> SidechainDedup<P> {
     let mut deduped = SidechainDedup::default();
     for (adapter, file) in files {
@@ -635,7 +672,14 @@ fn dedup_cached_entries_with<'a, P: DedupPayload>(
         let is_automation = !automation_files.is_empty()
             && automation_files.contains(&crate::worktree::normalize_path_lexical(file));
         for entry in &cached_file.entries {
-            deduped.insert(make(kind, cached_file, entry, is_automation));
+            deduped.insert(make(
+                *adapter,
+                file,
+                kind,
+                cached_file,
+                entry,
+                is_automation,
+            ));
         }
     }
     deduped
@@ -688,6 +732,16 @@ fn session_cutoff_secs(timestamps: &[u64], now_secs: u64) -> u64 {
 }
 
 fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64, headline_cutoff: u64) {
+    accum_scoped(tally, entry, now_secs, headline_cutoff, false);
+}
+
+fn accum_scoped(
+    tally: &mut SpendTally,
+    entry: &CachedEntry,
+    now_secs: u64,
+    headline_cutoff: u64,
+    suppress_headline_usd: bool,
+) {
     let usd = entry.cost_usd;
     // Ledger-window bucketing: an entry counts toward each trailing window whose
     // span it still falls within. The configured headline window is independent
@@ -704,7 +758,9 @@ fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64, headline_cu
         tally.week.add(usd, entry);
     }
     if entry.ts_secs >= headline_cutoff {
-        tally.headline.add(usd, entry);
+        tally
+            .headline
+            .add(if suppress_headline_usd { 0.0 } else { usd }, entry);
     }
 }
 
@@ -756,6 +812,26 @@ fn session_key(adapter: &dyn AgentAdapter, path: &Path, entry: &CachedEntry) -> 
         return format!("{}:{thread_id}", adapter.descriptor().kind);
     }
 
+    file_grouping_session_key(adapter, path)
+}
+
+pub(crate) fn live_session_keys(
+    adapter: &dyn AgentAdapter,
+    session_id: &str,
+    transcript_path: &Path,
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    let session_id = session_id.trim();
+    if !session_id.is_empty() {
+        keys.push(format!("{}:{session_id}", adapter.descriptor().kind));
+    }
+    keys.push(file_grouping_session_key(adapter, transcript_path));
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn file_grouping_session_key(adapter: &dyn AgentAdapter, path: &Path) -> String {
     let dir = match adapter.descriptor().thread_key {
         ThreadKey::SessionDir => {
             let parent = path.parent();

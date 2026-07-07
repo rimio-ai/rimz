@@ -1,6 +1,6 @@
-//! Published provider and workspace spending cache shapes and live-headline carry math.
+//! Published provider and workspace spending cache shapes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -34,8 +34,9 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 9;
 /// v2: the default headline window changed from trailing 24 hours to session.
 /// v3: scoped tallies read per-file origin instead of per-entry origin.
 /// v4: live headline carry and baselines publish atomically with the scoped
-/// walk.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 4;
+/// walk. v5: live card sessions are excluded from walked headline USD and
+/// added back from live cards.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 5;
 
 /// The published provider-spending cache: the aggregated [`Spending`] plus the
 /// stamp the producer's [`SPENDING_TTL`] gate reads. A wrapper rather than a
@@ -168,9 +169,7 @@ pub struct WorkspaceSpendingCache {
     #[serde(default)]
     pub headline_cutoff_secs: u64,
     #[serde(default)]
-    pub carry_usd: f64,
-    #[serde(default)]
-    pub live_baselines: BTreeMap<String, f64>,
+    pub live_excluded: BTreeSet<String>,
 }
 
 impl WorkspaceSpendingCache {
@@ -205,61 +204,4 @@ pub fn read_workspace_spending_cache(path: &Path) -> WorkspaceSpendingCache {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<WorkspaceSpendingCache>(&bytes).ok())
         .unwrap_or_default()
-}
-
-/// Headline spend as the cockpit paints it: the walked tally's exact figure plus
-/// monotone carry plus each live session's overshoot over the baseline captured
-/// when the walk published — so the headline climbs the instant a session's
-/// statusline cost moves, while each publish reconciles upward within the same
-/// window epoch.
-/// Pure presentation over `(session id, cost now, registered-at ms)` triples: a
-/// baselined session adds `max(0, cost_now − baseline)` (a resumed or reset
-/// session clamps to zero rather than rolling the headline backwards); a session
-/// absent from the baselines adds its whole cost when it registered after the
-/// publish stamp — the walk never saw it — and nothing otherwise, the fail-safe
-/// undercount that heals on the next walk.
-pub fn today_spend_live_usd<'a>(
-    walked_headline_usd: f64,
-    live_costs: impl Iterator<Item = (&'a str, f64, Option<u64>)>,
-    baselines: &BTreeMap<String, f64>,
-    published_at_ms: u64,
-) -> f64 {
-    let overshoot: f64 = live_costs
-        .map(|(id, cost_now, registered_at_ms)| match baselines.get(id) {
-            Some(baseline) => (cost_now - baseline).max(0.0),
-            None if registered_at_ms.is_some_and(|at| at > published_at_ms) => cost_now.max(0.0),
-            None => 0.0,
-        })
-        .sum();
-    walked_headline_usd + overshoot
-}
-
-pub fn reconcile_workspace_carry(
-    prev: &WorkspaceSpendingCache,
-    scope_hash: &str,
-    new_headline_usd: f64,
-    new_cutoff_secs: u64,
-    live_costs: &[(String, f64, Option<u64>)],
-) -> (f64, BTreeMap<String, f64>) {
-    let baselines = live_costs
-        .iter()
-        .map(|(id, usd, _)| (id.clone(), *usd))
-        .collect();
-    let carry = if prev.version == WORKSPACE_SPENDING_VERSION
-        && prev.scope_hash == scope_hash
-        && prev.headline_cutoff_secs == new_cutoff_secs
-    {
-        let display_before = today_spend_live_usd(
-            prev.tally.headline.usd + prev.carry_usd,
-            live_costs
-                .iter()
-                .map(|(id, usd, registered_at)| (id.as_str(), *usd, *registered_at)),
-            &prev.live_baselines,
-            prev.refreshed_at_ms,
-        );
-        (display_before - new_headline_usd).max(0.0)
-    } else {
-        0.0
-    };
-    (carry, baselines)
 }

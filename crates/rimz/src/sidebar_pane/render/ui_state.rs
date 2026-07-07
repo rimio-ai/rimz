@@ -26,6 +26,9 @@ pub struct UiState {
     /// while a roll is in flight. Crate-internal: an implementation detail of the
     /// renderer, not part of the public `UiState` surface.
     pub(crate) tally: TallyAnim,
+    /// The highest cockpit spend displayed within the current headline-window
+    /// epoch. Producer frames before the epoch field leave this inert.
+    pub(crate) spend_ratchet: SpendRatchet,
     /// The agent cards' `$cost` count-up state — one stepped roll per row,
     /// keyed by the row's durable id so a reorder or refresh re-anchors a
     /// climb to its agent. Folded next to `tally` on each data refresh
@@ -176,6 +179,35 @@ impl UiState {
     pub(crate) fn cached_theme(&self, config: &ThemeConfig) -> Option<Rc<Theme>> {
         let (cached_config, theme) = self.theme_cache.as_ref()?;
         (cached_config == config).then(|| Rc::clone(theme))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SpendRatchet {
+    epoch: Option<u64>,
+    max_usd: f64,
+}
+
+impl SpendRatchet {
+    pub(crate) fn observe(&mut self, epoch: Option<u64>, usd: f64) -> f64 {
+        let Some(epoch) = epoch else {
+            return usd;
+        };
+        if self.epoch == Some(epoch) {
+            self.max_usd = self.max_usd.max(usd);
+        } else {
+            self.epoch = Some(epoch);
+            self.max_usd = usd;
+        }
+        self.max_usd
+    }
+
+    pub(crate) fn display(&self, epoch: Option<u64>, usd: f64) -> f64 {
+        if epoch.is_some() && epoch == self.epoch {
+            self.max_usd.max(usd)
+        } else {
+            usd
+        }
     }
 }
 
