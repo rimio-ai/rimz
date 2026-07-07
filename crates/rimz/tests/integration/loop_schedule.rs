@@ -79,9 +79,18 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
         stdout.lines().any(|line| {
             line.trim_start().starts_with("wake")
                 && line.contains("@claude")
+                && line.contains("machine")
                 && line.contains("✓ delivered")
         }),
         "loop list should fold run history for wake: {stdout}"
+    );
+
+    let stdout = loop_ok(&env, &["loop", "show", "wake"]);
+    assert!(
+        stdout.lines().any(|line| {
+            line.contains("source:") && line.contains("machine") && line.contains("loop.toml")
+        }),
+        "loop show should name the machine task source file: {stdout}"
     );
 }
 
@@ -97,6 +106,15 @@ fn loop_project_tasks_list_and_refuse_until_trusted() {
     assert!(
         stdout.contains("repo-check") && stdout.contains("project · untrusted"),
         "project task should stay visible with trust state: {stdout}"
+    );
+    let stdout = loop_ok(&env, &["loop", "show", "repo-check"]);
+    assert!(
+        stdout.lines().any(|line| {
+            line.contains("source:")
+                && line.contains("project · untrusted")
+                && line.contains(".rimz/config.toml")
+        }),
+        "project task show should name the defining file: {stdout}"
     );
 
     let (_stdout, stderr) = loop_fail(&env, &["loop", "run", "repo-check"]);
@@ -262,7 +280,11 @@ fn loop_fire_keeps_ephemeral_task() {
     );
 
     for _ in 0..2 {
-        loop_ok(&env, &["loop", "fire", "probe"]);
+        let stdout = loop_ok(&env, &["loop", "fire", "probe"]);
+        assert!(
+            stdout.contains("loop `probe`: completed (exit 0)"),
+            "check-only manual fire should keep the check exit label: {stdout}"
+        );
         assert!(
             read_loop_instances(&env).0.contains_key("probe"),
             "manual fire should keep the one-shot instance"

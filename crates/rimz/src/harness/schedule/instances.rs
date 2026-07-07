@@ -92,7 +92,7 @@ pub enum TaskSource {
 impl TaskSource {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Config => "config",
+            Self::Config => "machine",
             Self::Instance => "state",
             Self::Project { .. } => "project",
         }

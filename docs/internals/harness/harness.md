@@ -150,7 +150,7 @@ The elder spawns `rimz loop run <name>` with fresh null stdio. That hidden runne
 
 The lock file is `loop-run-<name>.lock` next to `loop-fire.json`, and the kernel releases it when the runner exits or crashes. A due fire or manual `loop fire` that meets a still-running task records `overlapped`, prints a skip message in foreground mode, and leaves task state untouched.
 
-`rimz loop fire <name>` drives the same runner path in the foreground for testing, streams check output live, prints the outcome and failure evidence, and leaves one-shot entries and bind schedules in place. `--keep` leaves the transient supervised pane open for inspection; scheduled `loop run` captures check output for run forensics and always lets the run cleanup reclaim panes.
+`rimz loop fire <name>` drives the same runner path in the foreground for testing, streams check output live, prints the outcome, the agent's final message, and failure evidence, and leaves one-shot entries and bind schedules in place. `--keep` leaves the transient supervised pane open for inspection; scheduled `loop run` captures check output for run forensics and always lets the run cleanup reclaim panes.
 
 Self-paced loops are ordinary one-shots. An agent schedules its next wake with `--in <delay>` at the end of the current wake; the instance row is removed before delivery, so the agent creates the next one only while it still has work. The pending wake stays visible in `rimz loop list` without editing `loop.toml`.
 

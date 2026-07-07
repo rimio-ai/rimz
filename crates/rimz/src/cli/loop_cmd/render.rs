@@ -148,6 +148,26 @@ fn source_label(source: TaskSource) -> String {
     }
 }
 
+fn source_detail(source: TaskSource, entry: &TaskEntry) -> String {
+    format!(
+        "{} — {}",
+        source_label(source),
+        display_path(&source_path(source, entry))
+    )
+}
+
+fn source_path(source: TaskSource, entry: &TaskEntry) -> PathBuf {
+    match source {
+        TaskSource::Config => MachineConfig::loop_path(),
+        TaskSource::Project { .. } => project_config_path(&entry.root),
+        TaskSource::Instance => instances::path(&state_home()),
+    }
+}
+
+fn display_path(path: &Path) -> String {
+    ui::home_relative(path.to_string_lossy().as_ref())
+}
+
 fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
     RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
 }
@@ -223,7 +243,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         kv.push("check", ui::cell(check));
     }
     kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
-    kv.push("source", ui::cell(source_label(source)));
+    kv.push("source", ui::cell(source_detail(source, &entry)));
     kv.render(&mut out)?;
 
     if records.is_empty() {
@@ -754,6 +774,38 @@ mod tests {
             output: "not yet".to_owned(),
         });
         assert_eq!(run_status(&skipped).label, "check failed");
+    }
+
+    #[test]
+    fn source_detail_names_definition_path() {
+        let entry = TaskEntry {
+            root: PathBuf::from("/repo"),
+            ..TaskEntry::default()
+        };
+
+        assert_eq!(
+            source_detail(TaskSource::Config, &entry),
+            format!(
+                "machine — {}",
+                ui::home_relative(MachineConfig::loop_path().to_string_lossy().as_ref())
+            )
+        );
+        assert_eq!(
+            source_detail(
+                TaskSource::Project {
+                    state: TrustState::Untrusted
+                },
+                &entry,
+            ),
+            "project · untrusted — /repo/.rimz/config.toml"
+        );
+        assert_eq!(
+            source_detail(TaskSource::Instance, &entry),
+            format!(
+                "state — {}",
+                ui::home_relative(instances::path(&state_home()).to_string_lossy().as_ref())
+            )
+        );
     }
 
     #[test]

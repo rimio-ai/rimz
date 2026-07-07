@@ -85,7 +85,7 @@ pub(super) fn run_one(
             let duration_ms = elapsed_ms(started);
             let record = loop_record(name, mode, duration_ms, &outcome);
             run_log::append(&record);
-            print_run_summary(name, duration_ms, &outcome)?;
+            print_run_summary(name, duration_ms, mode, keep, &outcome)?;
             if let Some(code) = outcome.exit_code {
                 std::process::exit(code);
             }
@@ -394,9 +394,15 @@ fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-fn print_run_summary(name: &str, duration_ms: u64, outcome: &RunOutcome) -> Result<()> {
+fn print_run_summary(
+    name: &str,
+    duration_ms: u64,
+    mode: LoopRunMode,
+    keep: bool,
+    outcome: &RunOutcome,
+) -> Result<()> {
     let mut out = ui::out();
-    write_run_summary(&mut out, name, duration_ms, outcome)?;
+    write_run_summary(&mut out, name, duration_ms, mode, keep, outcome)?;
     Ok(())
 }
 
@@ -404,6 +410,8 @@ fn write_run_summary(
     out: &mut impl Write,
     name: &str,
     duration_ms: u64,
+    mode: LoopRunMode,
+    keep: bool,
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
     if outcome.result == LoopRunResult::CheckSkipped {
@@ -449,17 +457,53 @@ fn write_run_summary(
             ui::paint(ui::palette::MUTED, &format!("  see: rimz loop show {name}"))
         )?;
     } else {
+        let result_label = success_result_label(outcome);
         write!(
             out,
             "loop `{name}`: {}",
-            ui::paint(result_style, outcome.result.label())
+            ui::paint(result_style, &result_label)
         )?;
         if let Some(exit_label) = exit_label.as_deref() {
             write!(out, " {exit_label}")?;
         }
         writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        if outcome.result == LoopRunResult::Completed && outcome.run_id.is_some() {
+            if let Some(message) = outcome
+                .last_message
+                .as_deref()
+                .filter(|msg| !msg.trim().is_empty())
+            {
+                render::write_gutter_block(out, None, message)?;
+            } else {
+                writeln!(
+                    out,
+                    "{}",
+                    ui::paint(
+                        ui::palette::MUTED,
+                        &format!("  no final message; see: rimz loop show {name}")
+                    )
+                )?;
+            }
+        }
+        if mode == LoopRunMode::Manual && !keep && outcome.run_id.is_some() {
+            writeln!(
+                out,
+                "{}",
+                ui::paint(
+                    ui::palette::MUTED,
+                    "  pane closed; rerun with --keep to watch"
+                )
+            )?;
+        }
     }
     Ok(())
+}
+
+fn success_result_label(outcome: &RunOutcome) -> String {
+    match (outcome.result, outcome.target.as_deref()) {
+        (LoopRunResult::Delivered, Some(target)) => format!("delivered to {target}"),
+        _ => outcome.result.label().to_owned(),
+    }
 }
 
 fn write_check_skipped_summary(
@@ -507,10 +551,12 @@ fn check_on_label(on: CheckOn) -> &'static str {
 }
 
 fn outcome_exit_label(outcome: &RunOutcome) -> Option<String> {
-    if let Some(exit) = outcome
-        .exit_code
-        .or_else(|| outcome.check.as_ref().and_then(|check| check.code))
-    {
+    if let Some(exit) = outcome.exit_code {
+        if exit == 0 {
+            return None;
+        }
+        Some(format!("(exit {exit})"))
+    } else if let Some(exit) = outcome.check.as_ref().and_then(|check| check.code) {
         Some(format!("(exit {exit})"))
     } else if outcome.check.as_ref().is_some_and(|check| check.timed_out) {
         Some("(timeout)".to_owned())
@@ -598,7 +644,15 @@ mod tests {
         outcome.failure_tail = Some("error: boom\nUsage: codex [OPTIONS] [PROMPT]".to_owned());
         let mut out = Vec::new();
 
-        write_run_summary(&mut out, "wake", 1_900, &outcome).unwrap();
+        write_run_summary(
+            &mut out,
+            "wake",
+            1_900,
+            LoopRunMode::Manual,
+            false,
+            &outcome,
+        )
+        .unwrap();
 
         let raw = String::from_utf8(out).unwrap();
         assert!(raw.contains(&ui::paint(ui::palette::ALARM.bold(), "failed (exit 1)")));
@@ -622,7 +676,15 @@ mod tests {
         outcome.wake_subject = Some("codex".to_owned());
         let mut out = Vec::new();
 
-        write_run_summary(&mut out, "wake", 7_300, &outcome).unwrap();
+        write_run_summary(
+            &mut out,
+            "wake",
+            7_300,
+            LoopRunMode::Manual,
+            false,
+            &outcome,
+        )
+        .unwrap();
 
         let raw = String::from_utf8(out).unwrap();
         assert!(raw.contains(&ui::paint(ui::palette::MUTED, "check passed (exit 0)")));
@@ -645,7 +707,15 @@ mod tests {
         outcome.wake_subject = Some("codex".to_owned());
         let mut out = Vec::new();
 
-        write_run_summary(&mut out, "wake", 2_000, &outcome).unwrap();
+        write_run_summary(
+            &mut out,
+            "wake",
+            2_000,
+            LoopRunMode::Manual,
+            false,
+            &outcome,
+        )
+        .unwrap();
 
         let out = String::from_utf8(out).unwrap();
         let out = anstream::adapter::strip_str(&out).to_string();
@@ -667,7 +737,15 @@ mod tests {
         outcome.wake_subject = Some("codex".to_owned());
         let mut out = Vec::new();
 
-        write_run_summary(&mut out, "wake", 300_000, &outcome).unwrap();
+        write_run_summary(
+            &mut out,
+            "wake",
+            300_000,
+            LoopRunMode::Manual,
+            false,
+            &outcome,
+        )
+        .unwrap();
 
         let out = String::from_utf8(out).unwrap();
         let out = anstream::adapter::strip_str(&out).to_string();
@@ -675,6 +753,121 @@ mod tests {
             out,
             "loop `wake`: check timed out in 5m — codex not woken\n"
         );
+    }
+
+    #[test]
+    fn completed_spawn_summary_prints_last_message_and_keep_hint() {
+        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
+        outcome.exit_code = Some(0);
+        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
+        outcome.last_message = Some("pong\n".to_owned());
+        let mut out = Vec::new();
+
+        write_run_summary(
+            &mut out,
+            "wake",
+            3_700,
+            LoopRunMode::Manual,
+            false,
+            &outcome,
+        )
+        .unwrap();
+
+        let out = String::from_utf8(out).unwrap();
+        let out = anstream::adapter::strip_str(&out).to_string();
+        assert_eq!(
+            out,
+            "loop `wake`: completed in 3.7s\n  │ pong\n  pane closed; rerun with --keep to watch\n"
+        );
+    }
+
+    #[test]
+    fn completed_spawn_summary_falls_back_when_last_message_is_blank() {
+        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
+        outcome.exit_code = Some(0);
+        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
+        outcome.last_message = Some(" \n".to_owned());
+        let mut out = Vec::new();
+
+        write_run_summary(
+            &mut out,
+            "wake",
+            1_000,
+            LoopRunMode::Manual,
+            false,
+            &outcome,
+        )
+        .unwrap();
+
+        let out = String::from_utf8(out).unwrap();
+        let out = anstream::adapter::strip_str(&out).to_string();
+        assert_eq!(
+            out,
+            "loop `wake`: completed in 1.0s\n  no final message; see: rimz loop show wake\n  pane closed; rerun with --keep to watch\n"
+        );
+    }
+
+    #[test]
+    fn delivered_summary_names_target_handle() {
+        let mut outcome = RunOutcome::new(LoopRunResult::Delivered);
+        outcome.target = Some("@claude".to_owned());
+        let mut out = Vec::new();
+
+        write_run_summary(&mut out, "nudge", 90, LoopRunMode::Manual, false, &outcome).unwrap();
+
+        let out = String::from_utf8(out).unwrap();
+        let out = anstream::adapter::strip_str(&out).to_string();
+        assert_eq!(out, "loop `nudge`: delivered to @claude in 90ms\n");
+    }
+
+    #[test]
+    fn spawn_success_suppresses_exit_zero_but_check_only_keeps_it() {
+        let mut spawn = RunOutcome::new(LoopRunResult::Completed);
+        spawn.exit_code = Some(0);
+        let mut out = Vec::new();
+
+        write_run_summary(&mut out, "spawn", 1_000, LoopRunMode::Manual, false, &spawn).unwrap();
+
+        let stripped = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert_eq!(stripped, "loop `spawn`: completed in 1.0s\n");
+
+        let mut check = RunOutcome::new(LoopRunResult::Completed);
+        check.check = Some(CheckRecord {
+            code: Some(0),
+            timed_out: false,
+            output: "ok".to_owned(),
+        });
+        let mut out = Vec::new();
+
+        write_run_summary(&mut out, "check", 1_000, LoopRunMode::Manual, false, &check).unwrap();
+
+        let stripped = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert_eq!(stripped, "loop `check`: completed (exit 0) in 1.0s\n");
+    }
+
+    #[test]
+    fn keep_hint_only_prints_for_manual_spawn_without_keep() {
+        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
+        outcome.exit_code = Some(0);
+        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
+        outcome.last_message = Some("done".to_owned());
+
+        for (mode, keep, should_hint) in [
+            (LoopRunMode::Manual, false, true),
+            (LoopRunMode::Manual, true, false),
+            (LoopRunMode::Scheduled, false, false),
+        ] {
+            let mut out = Vec::new();
+            write_run_summary(&mut out, "wake", 100, mode, keep, &outcome).unwrap();
+
+            let stripped =
+                anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+            assert_eq!(
+                stripped.contains("pane closed; rerun with --keep to watch"),
+                should_hint,
+                "{mode:?} keep={keep}: {stripped}"
+            );
+        }
     }
 
     #[test]
