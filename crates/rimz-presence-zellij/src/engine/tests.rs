@@ -128,7 +128,7 @@ fn seed_manifest(
     host: &FakeHost,
 ) {
     let hash = raw_hash(&manifest);
-    let _ = engine.on_pane_manifest(manifest, hash, now, host);
+    let _ = engine.on_pane_manifest(hash, |_| manifest, now, host);
 }
 
 fn run_commands(effects: &[Effect]) -> Vec<&Vec<String>> {
@@ -199,7 +199,7 @@ fn cached_grant_on_first_manifest_hides_and_first_manifest_is_baseline() {
     let mut engine = Engine::new(0, config());
     let manifest = tabs(vec![pane(1), pane(2)]);
 
-    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 10, &host);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 10, &host);
 
     assert!(effects.contains(&Effect::HideSelf));
     assert_eq!(reasons(&effects), vec!["alive"]);
@@ -216,7 +216,28 @@ fn first_manifest_after_explicit_grant_is_baseline() {
     grant(&mut engine, 10, &host);
     let manifest = tabs(vec![pane(1), pane(2)]);
 
-    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 20, &host);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 20, &host);
+
+    assert!(run_commands(&effects).is_empty());
+}
+
+#[test]
+fn stable_manifest_skips_lazy_projection() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 20, &host);
+    let renamed = tabs(vec![PaneFields {
+        title: "title-only churn".to_owned(),
+        ..pane(1)
+    }]);
+
+    let effects = engine.on_pane_manifest(
+        raw_hash(&renamed),
+        |_| panic!("stable manifest must not project"),
+        30,
+        &host,
+    );
 
     assert!(run_commands(&effects).is_empty());
 }
@@ -229,7 +250,7 @@ fn manifest_adding_two_card_panes_emits_two_opens_without_changed() {
     seed_manifest(&mut engine, tabs(vec![pane(1)]), 20, &host);
     let manifest = tabs(vec![pane(1), pane(2), pane(3)]);
 
-    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 30, &host);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 30, &host);
 
     assert_eq!(reasons(&effects), vec!["pane-opened", "pane-opened"]);
 }
@@ -247,7 +268,7 @@ fn focus_only_manifest_emits_patch_and_settle_changed() {
     );
     let manifest = tabs(vec![pane(1), focused(pane(2))]);
 
-    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 30, &host);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 30, &host);
 
     assert_eq!(reasons(&effects), vec!["focus-changed"]);
     assert!(has_timeout(&effects, SETTLE_POKE_MS));
@@ -357,7 +378,7 @@ fn tab_switch_focus_correction_reports_stranded_sidebar_and_work_focus() {
         (0, vec![pane_in_tab(1, 0)]),
         (1, vec![sidebar_pane(10), focused(pane_in_tab(11, 1))]),
     ]);
-    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 120, &host);
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 120, &host);
     assert!(run_commands(&effects).iter().any(|argv| {
         arg_after(argv, "--reason") == Some("focus-changed")
             && argv

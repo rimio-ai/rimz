@@ -130,8 +130,8 @@ impl Engine {
 
     pub fn on_pane_manifest(
         &mut self,
-        projected: BTreeMap<usize, Vec<PaneFields>>,
         raw_hash: u64,
+        project: impl FnOnce(&BTreeMap<usize, String>) -> BTreeMap<usize, Vec<PaneFields>>,
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
@@ -143,6 +143,7 @@ impl Engine {
         let stable_unchanged = self.last_raw_stable_hash == Some(raw_hash) && !self.tabs.is_empty();
         self.last_raw_stable_hash = Some(raw_hash);
         if !stable_unchanged {
+            let projected = project(&self.tab_names);
             // Zellij can deliver partial pane manifests; omitted tabs retain
             // their previous state instead of collapsing the room.
             let mut next_tabs = policy::merged_room(&self.tabs, &projected);

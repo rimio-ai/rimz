@@ -114,8 +114,12 @@ mod shell {
                 }
                 Event::PaneUpdate(manifest) => {
                     let raw_hash = raw_manifest_stable_hash(&manifest, engine.tab_names());
-                    let projected = project(&manifest, engine.tab_names());
-                    engine.on_pane_manifest(projected, raw_hash, now, &host)
+                    engine.on_pane_manifest(
+                        raw_hash,
+                        |tab_names| project(&manifest, tab_names),
+                        now,
+                        &host,
+                    )
                 }
                 Event::TabUpdate(tabs) => {
                     let active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
