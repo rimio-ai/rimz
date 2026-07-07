@@ -223,10 +223,12 @@ fn confirm_codex_turn_death(
     if !codex::turn_death_needs_pane_confirmation(error) {
         return;
     }
-    let Some(pane) = codex_session_pane(runtime, workspace_id, session_id) else {
-        return;
-    };
-    rimz::sidebar::refresh::sessions::confirm_codex_turn_death_from_pane(&pane, refresh);
+    let pane = codex_session_pane(runtime, workspace_id, session_id);
+    rimz::sidebar::refresh::sessions::confirm_codex_turn_death_from_pane(
+        runtime,
+        pane.as_ref(),
+        refresh,
+    );
 }
 
 fn codex_session_pane(

@@ -59,6 +59,7 @@ pub use self::process::{
     codex_daemon_pids, codex_resumed_session_id_for_root, codex_resumed_session_id_from_cmdline,
     pid_is_codex_daemon,
 };
+pub(crate) use self::transcript::infer_turn_death_from_spent_window;
 use self::transcript::{
     TranscriptUsage, configured_model, configured_reasoning_effort, detect_turn_error,
     find_session_transcript, payload_reasoning_effort, usage_from_transcript_tail,

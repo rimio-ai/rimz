@@ -19,6 +19,7 @@ use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass,
 };
 use crate::agents::pricing::PriceBook;
+use crate::agents::state::AccountBudget;
 use crate::agents::{
     LocalContextRefresh, SessionOrigin, TranscriptStat, optional_payload_string,
     read_transcript_tail,
@@ -529,37 +530,74 @@ pub fn refine_turn_death_from_frame(error: &mut AgentTurnError, frame: &str) {
     if !turn_death_needs_pane_confirmation(error) {
         return;
     }
-    let Some(label) = death_warning_from_frame(frame) else {
+    let Some(warning) = death_warning_from_frame_scan(frame) else {
         return;
     };
-    error.label = Some(label);
-    let class = TurnErrorClass::classify_label(error.label.as_deref());
-    if class != TurnErrorClass::Failed {
-        error.class = class;
+    error.label = Some(warning.label);
+    error.class = warning.class;
+}
+
+/// Infer a generic messageless Codex turn death from the fused account budget
+/// when pane text cannot prove it. [`AccountBudget::latest_spent_window_reset`]
+/// is the same clock `resume_park` arms against, so the inferred pause class and
+/// auto-resume deadline cannot disagree.
+pub(crate) fn infer_turn_death_from_spent_window(
+    error: &mut AgentTurnError,
+    budget: Option<&AccountBudget>,
+    now: Timestamp,
+) {
+    if !turn_death_needs_pane_confirmation(error) {
+        return;
+    }
+    if budget
+        .and_then(|budget| budget.latest_spent_window_reset(now))
+        .is_some()
+    {
+        error.class = TurnErrorClass::PausedRateLimit;
+        error.label = Some("usage limit inferred (rate-limit window spent)".to_owned());
     }
 }
 
-pub fn death_warning_from_frame(frame: &str) -> Option<String> {
+#[cfg(test)]
+pub(super) fn death_warning_from_frame(frame: &str) -> Option<String> {
+    death_warning_from_frame_scan(frame).map(|warning| warning.label)
+}
+
+struct DeathWarning {
+    label: String,
+    class: TurnErrorClass,
+}
+
+fn death_warning_from_frame_scan(frame: &str) -> Option<DeathWarning> {
     let lines: Vec<&str> = frame.lines().collect();
     let prompt_idx = lines.iter().rposition(|line| is_codex_input_prompt(line));
     let search_len = prompt_idx.unwrap_or(lines.len());
     for idx in (0..search_len).rev() {
         let line = trim_frame_line(lines[idx]);
-        let Some(first) = line.strip_prefix('⚠') else {
+        if line.is_empty() || is_codex_input_prompt_text(line) {
             continue;
-        };
-        let mut block = vec![first.trim()];
+        }
+        let class = TurnErrorClass::classify_label(Some(line));
+        if class == TurnErrorClass::Failed {
+            continue;
+        }
+        let anchor = trim_banner_ornaments(line);
+        let mut block = vec![anchor];
         for continuation in &lines[idx + 1..search_len] {
             let continuation = trim_frame_line(continuation);
             if continuation.is_empty()
-                || continuation.starts_with('⚠')
                 || is_codex_input_prompt_text(continuation)
+                || continuation
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| !ch.is_alphanumeric())
             {
                 break;
             }
             block.push(continuation);
         }
-        return cap_turn_error_label(&block.join(" "));
+        let label = cap_turn_error_label(&block.join(" "))?;
+        return Some(DeathWarning { label, class });
     }
     None
 }
@@ -596,6 +634,11 @@ fn trim_frame_line(line: &str) -> &str {
         text = stripped.trim_end();
     }
     text
+}
+
+fn trim_banner_ornaments(line: &str) -> &str {
+    line.trim_start_matches(|ch: char| !ch.is_alphanumeric())
+        .trim_start()
 }
 
 fn is_codex_input_prompt(line: &str) -> bool {

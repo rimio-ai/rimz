@@ -572,7 +572,7 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
 }
 
 #[test]
-fn death_warning_from_frame_extracts_last_warning_above_prompt() {
+fn death_warning_from_frame_extracts_keyword_proven_banner_above_prompt() {
     let frame = "\
 intro
 ⚠ Earlier warning
@@ -596,7 +596,34 @@ intro
         Some("Selected model is at capacity. Please try a different model.")
     );
 
+    let usage_limit = "\
+› $rebase main and push
+
+■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try
+again at 6:35 AM.
+
+› Implement {feature}
+";
+    let expected_usage_limit = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 6:35 AM."
+        .chars()
+        .take(80)
+        .collect::<String>();
+    assert_eq!(
+        death_warning_from_frame(usage_limit),
+        Some(expected_usage_limit)
+    );
+
+    assert_eq!(
+        death_warning_from_frame("You've hit your usage limit. Try again later.\n› \n").as_deref(),
+        Some("You've hit your usage limit. Try again later.")
+    );
+
     assert_eq!(death_warning_from_frame("no warning\n› \n"), None);
+    assert_eq!(
+        death_warning_from_frame("› You've hit your usage limit\n› \n"),
+        None,
+        "prompt echoes are not provider warnings"
+    );
 }
 
 #[test]
@@ -619,6 +646,35 @@ fn refine_turn_death_from_frame_only_parks_keyword_proven_warning() {
         Some("Selected model is at capacity. Please try a different model.")
     );
 
+    let mut usage_limit = crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::Unknown,
+        at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
+        label: Some("turn ended with no final message".to_owned()),
+    };
+    refine_turn_death_from_frame(
+        &mut usage_limit,
+        "\
+› $rebase main and push
+
+■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try
+again at 6:35 AM.
+
+› Implement {feature}
+",
+    );
+    assert_eq!(
+        usage_limit.class,
+        crate::agents::TurnErrorClass::PausedRateLimit
+    );
+    let expected_usage_limit = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 6:35 AM."
+        .chars()
+        .take(80)
+        .collect::<String>();
+    assert_eq!(
+        usage_limit.label.as_deref(),
+        Some(expected_usage_limit.as_str())
+    );
+
     let mut unknown = crate::agents::AgentTurnError {
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
@@ -626,7 +682,70 @@ fn refine_turn_death_from_frame_only_parks_keyword_proven_warning() {
     };
     refine_turn_death_from_frame(&mut unknown, "⚠ Provider ended turn early\n› \n");
     assert_eq!(unknown.class, crate::agents::TurnErrorClass::Unknown);
-    assert_eq!(unknown.label.as_deref(), Some("Provider ended turn early"));
+    assert_eq!(
+        unknown.label.as_deref(),
+        Some("turn ended with no final message")
+    );
+}
+
+#[test]
+fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
+    let now = "2026-07-07T10:17:26.638Z"
+        .parse::<jiff::Timestamp>()
+        .unwrap();
+    let future_reset = now
+        .checked_add(jiff::SignedDuration::from_secs(60 * 60))
+        .unwrap();
+    let past_reset = now
+        .checked_sub(jiff::SignedDuration::from_secs(60))
+        .unwrap();
+    let budget = |used_percentage, resets_at| crate::agents::AccountBudget {
+        windows: vec![crate::agents::RateLimitWindow {
+            used_percentage,
+            resets_at,
+            duration_mins: Some(300),
+            ..Default::default()
+        }],
+    };
+    let generic = || crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::Unknown,
+        at: now,
+        label: Some("turn ended with no final message".to_owned()),
+    };
+
+    let spent = budget(Some(100), Some(future_reset));
+    let mut error = generic();
+    infer_turn_death_from_spent_window(&mut error, Some(&spent), now);
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
+    assert_eq!(
+        error.label.as_deref(),
+        Some("usage limit inferred (rate-limit window spent)")
+    );
+
+    for budget in [
+        budget(Some(99), Some(future_reset)),
+        budget(Some(100), Some(past_reset)),
+        budget(None, Some(future_reset)),
+    ] {
+        let mut error = generic();
+        infer_turn_death_from_spent_window(&mut error, Some(&budget), now);
+        assert_eq!(error, generic());
+    }
+
+    let mut proven = crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::PausedOverloaded,
+        at: now,
+        label: Some("Selected model is at capacity.".to_owned()),
+    };
+    infer_turn_death_from_spent_window(&mut proven, Some(&spent), now);
+    assert_eq!(
+        proven,
+        crate::agents::AgentTurnError {
+            class: crate::agents::TurnErrorClass::PausedOverloaded,
+            at: now,
+            label: Some("Selected model is at capacity.".to_owned()),
+        }
+    );
 }
 
 #[test]

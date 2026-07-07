@@ -14,7 +14,7 @@ use crate::RuntimePaths;
 use crate::agents::{
     LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger,
 };
-use crate::ids::PaneId;
+use crate::ids::{AgentKind, PaneId};
 use crate::sidebar::timing::{
     SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL, SESSION_REFRESH_INTERVAL,
 };
@@ -90,7 +90,7 @@ fn refresh_session_transcript_context_with_snapshot(
     };
     let mut refresh = refresh;
     if let Some(snapshot) = snapshot {
-        confirm_codex_turn_death_from_snapshot(snapshot, kind, session_id, &mut refresh);
+        confirm_codex_turn_death_from_snapshot(snapshot, runtime, kind, session_id, &mut refresh);
     }
     if let Err(err) = crate::store::agent_context::merge_local_context(
         runtime,
@@ -114,17 +114,20 @@ fn refresh_session_transcript_context_with_snapshot(
 
 fn confirm_codex_turn_death_from_snapshot(
     snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
     kind: &str,
     session_id: &str,
     refresh: &mut LocalContextRefresh,
 ) {
-    let Some(error) = refresh.turn_error.as_mut() else {
-        return;
-    };
-    if kind != "codex" || !crate::agents::codex::turn_death_needs_pane_confirmation(error) {
+    if kind != "codex"
+        || refresh
+            .turn_error
+            .as_ref()
+            .is_none_or(|error| !crate::agents::codex::turn_death_needs_pane_confirmation(error))
+    {
         return;
     }
-    let Some(pane) = snapshot
+    let pane = snapshot
         .agent_panes
         .iter()
         .find(|pane| {
@@ -134,27 +137,35 @@ fn confirm_codex_turn_death_from_snapshot(
                     .as_ref()
                     .is_some_and(|agent_id| agent_id.as_str() == session_id)
         })
-        .map(|pane| pane.pane_id.clone())
-    else {
-        return;
-    };
-    confirm_codex_turn_death_from_pane(&pane, refresh);
+        .map(|pane| &pane.pane_id);
+    confirm_codex_turn_death_from_pane(runtime, pane, refresh);
 }
 
-pub fn confirm_codex_turn_death_from_pane(pane: &PaneId, refresh: &mut LocalContextRefresh) {
+pub fn confirm_codex_turn_death_from_pane(
+    runtime: &RuntimePaths,
+    pane: Option<&PaneId>,
+    refresh: &mut LocalContextRefresh,
+) {
     let Some(error) = refresh.turn_error.as_mut() else {
         return;
     };
     if !crate::agents::codex::turn_death_needs_pane_confirmation(error) {
         return;
     }
-    let backend = crate::mux::backend_for(pane.mux());
-    // rimz-invariant: codex-turn-death-confirmation
-    let Ok(capture) = backend.capture_pane(pane, Some(CODEX_TURN_DEATH_CAPTURE_LINES), false)
-    else {
-        return;
-    };
-    crate::agents::codex::refine_turn_death_from_frame(error, &capture.raw_text);
+    if let Some(pane) = pane {
+        let backend = crate::mux::backend_for(pane.mux());
+        // rimz-invariant: codex-turn-death-confirmation
+        if let Ok(capture) = backend.capture_pane(pane, Some(CODEX_TURN_DEATH_CAPTURE_LINES), false)
+        {
+            crate::agents::codex::refine_turn_death_from_frame(error, &capture.raw_text);
+        }
+    }
+    if crate::agents::codex::turn_death_needs_pane_confirmation(error) {
+        let now = Timestamp::now();
+        let budgets = crate::agents::account_budgets_from_caches(runtime, now);
+        let kind = AgentKind::new_unchecked("codex");
+        crate::agents::codex::infer_turn_death_from_spent_window(error, budgets.get(&kind), now);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,6 +303,7 @@ fn spawn_session_context_refresh(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::io::Write;
     use std::time::{Duration, SystemTime};
 
@@ -425,6 +437,61 @@ mod tests {
         assert!(!stale_session.exists());
         assert!(fresh_session.exists());
         assert!(accounts.exists());
+    }
+
+    #[test]
+    fn codex_turn_death_without_pane_infers_spent_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let now = Timestamp::now();
+        let reset = now
+            .checked_add(jiff::SignedDuration::from_secs(60 * 60))
+            .unwrap();
+        let cache = crate::agents::RateLimitsCache {
+            windows: BTreeMap::from([(
+                "codex".to_owned(),
+                crate::agents::AgentRateLimits {
+                    windows: vec![crate::agents::RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some(reset),
+                        duration_mins: Some(300),
+                        ..Default::default()
+                    }],
+                },
+            )]),
+            ..Default::default()
+        };
+        std::fs::write(
+            runtime.shared_rate_limits_path(),
+            serde_json::to_vec(&cache).unwrap(),
+        )
+        .unwrap();
+        let mut refresh = LocalContextRefresh {
+            model_id: None,
+            effort: None,
+            tokens: None,
+            cost: None,
+            turn_error: Some(crate::agents::AgentTurnError {
+                class: crate::agents::TurnErrorClass::Unknown,
+                at: now,
+                label: Some("turn ended with no final message".to_owned()),
+            }),
+            turn_complete: None,
+            turn_interrupted: None,
+            transcript_path: None,
+            transcript_stat: None,
+        };
+
+        confirm_codex_turn_death_from_pane(&runtime, None, &mut refresh);
+
+        let error = refresh.turn_error.expect("turn death remains stamped");
+        assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
+        assert_eq!(
+            error.label.as_deref(),
+            Some("usage limit inferred (rate-limit window spent)")
+        );
     }
 
     #[test]
