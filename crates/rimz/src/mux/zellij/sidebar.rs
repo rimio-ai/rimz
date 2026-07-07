@@ -259,17 +259,18 @@ impl ZellijBackend {
             if let Some(previous) = fallback_misdocked.take() {
                 self.cleanup_failed_add(opts, previous);
             }
-            self.converge_sidebar_geometry(opts, tab_position, raw_id);
+            let floor = self.converge_sidebar_geometry(opts, tab_position, raw_id);
             match self.sidebar_dock_outcome(
                 &opts.session_name,
                 &opts.workspace_id,
                 tab_position,
                 raw_id,
+                floor,
             ) {
                 DockOutcome::Docked => return Ok(DockOutcome::Docked),
                 DockOutcome::Misdocked
                     if attempt + 1 < ADD_DOCK_ATTEMPTS
-                        && self.misdocked_add_should_retry(opts, tab_position, raw_id) =>
+                        && self.misdocked_add_should_retry(opts, tab_position, raw_id, floor) =>
                 {
                     fallback_misdocked = Some(raw_id);
                 }
@@ -407,25 +408,24 @@ impl ZellijBackend {
     /// pane reaches the left column or stops progressing, a narrow nested-row
     /// repair that stacks work panes into the right column when the surrounding
     /// layout is safe to rewrite, then a resize back toward the session's fixed
-    /// birth width when it is still too wide. Returns whether any repair was issued.
-    /// Best-effort:
-    /// geometry is cosmetic, so any failure just leaves the pane where it is for
-    /// the next pass.
+    /// birth width when it is still too wide. Returns the last successful repair
+    /// action timestamp. Best-effort: geometry is cosmetic, so any failure just
+    /// leaves the pane where it is for the next pass.
     pub(super) fn converge_sidebar_geometry(
         &self,
         opts: &SidebarPaneOptions,
         tab_position: u64,
         raw_id: u64,
-    ) -> bool {
+    ) -> Option<u64> {
         const REDOCK_MAX_STEPS: u32 = 4;
         let pane_raw = format!("terminal_{raw_id}");
-        let mut repaired = false;
+        let mut floor = None;
         let mut last_x = u64::MAX;
         for _ in 0..REDOCK_MAX_STEPS {
             let Ok(panes) = self.topology_panes_for_workspace(
                 &opts.session_name,
                 &opts.workspace_id,
-                None,
+                floor,
                 RECONCILE_LIST_TIMEOUT,
             ) else {
                 break;
@@ -445,26 +445,30 @@ impl ZellijBackend {
             if self.dock_left(&opts.session_name, &pane_raw).is_err() {
                 break;
             }
-            repaired = true;
+            floor = Some(unix_now_ms());
         }
-        if self.stack_nested_work_panes(opts, tab_position, raw_id) {
-            repaired = true;
+        if let Some(action_ms) = self.stack_nested_work_panes(opts, tab_position, raw_id, floor) {
+            floor = Some(action_ms);
         }
         let target_cols = u64::from(opts.birth_size.cols.get());
-        if let Some(cols) =
-            self.sidebar_cols(&opts.session_name, &opts.workspace_id, tab_position, raw_id)
-            && sidebar_width_off_spec(cols, target_cols)
+        if let Some(cols) = self.sidebar_cols(
+            &opts.session_name,
+            &opts.workspace_id,
+            tab_position,
+            raw_id,
+            floor,
+        ) && sidebar_width_off_spec(cols, target_cols)
         {
-            self.resize_sidebar_toward(
+            floor = self.resize_sidebar_toward(
                 &opts.session_name,
                 &opts.workspace_id,
                 tab_position,
                 &pane_raw,
                 target_cols,
+                floor,
             );
-            repaired = true;
         }
-        repaired
+        floor
     }
 
     pub(super) fn sidebar_dock_outcome(
@@ -473,11 +477,15 @@ impl ZellijBackend {
         workspace_id: &WorkspaceId,
         tab_position: u64,
         raw_id: u64,
+        min_topology_produced_at_ms: Option<u64>,
     ) -> DockOutcome {
         std::thread::sleep(DOCK_VERIFY_SETTLE);
-        let Ok(panes) =
-            self.topology_panes_for_workspace(session, workspace_id, None, RECONCILE_LIST_TIMEOUT)
-        else {
+        let Ok(panes) = self.topology_panes_for_workspace(
+            session,
+            workspace_id,
+            min_topology_produced_at_ms,
+            RECONCILE_LIST_TIMEOUT,
+        ) else {
             return DockOutcome::Docked;
         };
         let Some(pane) = panes.iter().find(|pane| {
@@ -497,11 +505,12 @@ impl ZellijBackend {
         opts: &SidebarPaneOptions,
         tab_position: u64,
         raw_id: u64,
+        min_topology_produced_at_ms: Option<u64>,
     ) -> bool {
         let Ok(panes) = self.topology_panes_for_workspace(
             &opts.session_name,
             &opts.workspace_id,
-            None,
+            min_topology_produced_at_ms,
             RECONCILE_LIST_TIMEOUT,
         ) else {
             return false;
@@ -530,22 +539,21 @@ impl ZellijBackend {
         opts: &SidebarPaneOptions,
         tab_position: u64,
         raw_id: u64,
-    ) -> bool {
+        min_topology_produced_at_ms: Option<u64>,
+    ) -> Option<u64> {
         let deadline = Instant::now() + STACK_REPAIR_SETTLE;
         let work = loop {
             let Ok(panes) = self.topology_panes_for_workspace(
                 &opts.session_name,
                 &opts.workspace_id,
-                None,
+                min_topology_produced_at_ms,
                 RECONCILE_LIST_TIMEOUT,
             ) else {
-                return false;
+                return None;
             };
-            let Some(sidebar) = panes.iter().find(|pane| {
+            let sidebar = panes.iter().find(|pane| {
                 pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id
-            }) else {
-                return false;
-            };
+            })?;
             let excluded = HashSet::new();
             if let Some(work) = repairable_nested_work_pane_ids(sidebar, &panes, &excluded) {
                 break work;
@@ -553,14 +561,14 @@ impl ZellijBackend {
             if sidebar_dock_verdict(sidebar, &panes, &excluded) == Some(SidebarDock::Docked)
                 || Instant::now() >= deadline
             {
-                return false;
+                return None;
             }
             std::thread::sleep(MOUNT_POLL_STEP);
         };
         let mut args = vec!["stack-panes".to_owned(), "--".to_owned()];
         args.extend(work.iter().map(|id| format!("terminal_{id}")));
         match self.zellij_action(&opts.session_name).args(args).run() {
-            Ok(_) => true,
+            Ok(_) => Some(unix_now_ms()),
             Err(err) => {
                 tracing::warn!(
                     session = %opts.session_name,
@@ -569,7 +577,7 @@ impl ZellijBackend {
                     error = %err,
                     "sidebar geometry repair could not stack work panes into the right column",
                 );
-                false
+                None
             }
         }
     }
@@ -662,9 +670,10 @@ impl ZellijBackend {
     /// width. The resize step is coarse, so the target can fall between two
     /// reachable widths; stop at the first width at or below it so the pane
     /// never finishes above the canonical target. Bounded and best-effort: it
-    /// stops at the target, when a step makes no progress (hit a minimum), or
-    /// after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is cosmetic, so
-    /// any failure just leaves the wider pane.
+    /// stops at the target, when post-step topology proves a step made no
+    /// progress (hit a real Zellij minimum), or after [`RESIZE_MAX_STEPS`] —
+    /// never a dead loop. Width is cosmetic, so any failure just leaves the
+    /// wider pane.
     pub(super) fn resize_sidebar_toward(
         &self,
         session: &str,
@@ -672,31 +681,36 @@ impl ZellijBackend {
         tab_position: u64,
         pane_id: &str,
         target_cols: u64,
-    ) {
+        min_topology_produced_at_ms: Option<u64>,
+    ) -> Option<u64> {
         const RESIZE_MAX_STEPS: u32 = 16;
         let Some(target_raw) = parse_terminal_id(pane_id) else {
-            return;
+            return min_topology_produced_at_ms;
         };
+        let mut floor = min_topology_produced_at_ms;
         let mut last_cols = u64::MAX;
         for _ in 0..RESIZE_MAX_STEPS {
-            let Some(cols) = self.sidebar_cols(session, workspace_id, tab_position, target_raw)
+            let Some(cols) =
+                self.sidebar_cols(session, workspace_id, tab_position, target_raw, floor)
             else {
-                return;
+                return floor;
             };
             if cols <= target_cols {
-                return;
+                return floor;
             }
             if cols >= last_cols {
-                return; // no progress (hit a minimum) — stop rather than spin.
+                return floor; // no progress (hit a minimum) — stop rather than spin.
             }
             last_cols = cols;
             if self
                 .resize_sidebar_step(session, pane_id, "decrease")
                 .is_err()
             {
-                return;
+                return floor;
             }
+            floor = Some(unix_now_ms());
         }
+        floor
     }
 
     pub(super) fn resize_sidebar_step(
@@ -725,9 +739,15 @@ impl ZellijBackend {
         workspace_id: &WorkspaceId,
         tab_position: u64,
         target_raw: u64,
+        min_topology_produced_at_ms: Option<u64>,
     ) -> Option<u64> {
         let panes = self
-            .topology_panes_for_workspace(session, workspace_id, None, RECONCILE_LIST_TIMEOUT)
+            .topology_panes_for_workspace(
+                session,
+                workspace_id,
+                min_topology_produced_at_ms,
+                RECONCILE_LIST_TIMEOUT,
+            )
             .ok()?;
         panes
             .iter()

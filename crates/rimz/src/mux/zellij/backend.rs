@@ -862,11 +862,16 @@ fn repair_sidebar_geometry(
     focused_in_tab: &HashMap<u64, u64>,
     report: &mut SidebarRecovery,
 ) {
-    let repaired = backend.converge_sidebar_geometry(opts, tab_position, raw_id);
-    match backend.sidebar_dock_outcome(&opts.session_name, &opts.workspace_id, tab_position, raw_id)
-    {
+    let floor = backend.converge_sidebar_geometry(opts, tab_position, raw_id);
+    match backend.sidebar_dock_outcome(
+        &opts.session_name,
+        &opts.workspace_id,
+        tab_position,
+        raw_id,
+        floor,
+    ) {
         DockOutcome::Docked => {
-            if repaired {
+            if floor.is_some() {
                 report.redocked += 1;
                 restore_tab_focus(
                     backend,
@@ -884,6 +889,7 @@ fn repair_sidebar_geometry(
                 &opts.workspace_id,
                 tab_position,
                 raw_id,
+                floor,
             ) {
                 rebuild_misdocked_sidebar(
                     backend,
@@ -906,11 +912,12 @@ fn repairable_nested_sidebar_remains(
     workspace_id: &WorkspaceId,
     tab_position: u64,
     raw_id: u64,
+    min_topology_produced_at_ms: Option<u64>,
 ) -> bool {
     let Ok(panes) = backend.topology_panes_for_workspace(
         session_name,
         workspace_id,
-        None,
+        min_topology_produced_at_ms,
         crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
     ) else {
         return false;

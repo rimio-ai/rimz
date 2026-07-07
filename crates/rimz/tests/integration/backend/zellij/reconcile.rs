@@ -140,6 +140,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     assert_eq!(report.recovered, 0, "nothing needed adding");
     assert_eq!(report.failed, 0);
     assert_sidebar_is_left_docked(&xdg, &name);
+    wait_for_sidebar_width_at_most(&xdg, &name, u64::from(opts.birth_size.cols.get()));
     assert_sidebar_identity(
         &xdg,
         &name,
@@ -360,6 +361,7 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
     );
     let liveness = claimed_liveness(sidebar_id);
     write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
+    let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &liveness);
 
     assert_eq!(
@@ -521,5 +523,26 @@ fn assert_sidebar_identity(xdg: &Path, name: &str, sidebar_id: u64, message: &st
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_sidebar_width_at_most(xdg: &Path, name: &str, max_cols: u64) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let sidebar = raw_sidebar_pane(xdg, name);
+        let cols = sidebar
+            .get("pane_columns")
+            .and_then(|value| value.as_u64())
+            .expect("sidebar columns after redock");
+        if cols <= max_cols {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "redock should shrink the sidebar to the canonical width: \
+                 got {cols}, want <= {max_cols}",
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
