@@ -10,12 +10,7 @@ pub(crate) fn print_run_output(
     out: &mut impl Write,
     err: &mut impl Write,
 ) -> Result<()> {
-    if let Some(message) = record
-        .last_message
-        .as_deref()
-        .map(str::trim)
-        .filter(|message| !message.is_empty())
-    {
+    if let Some(message) = trimmed_message(record.last_message.as_deref()) {
         writeln!(out, "{message}")?;
     } else if record.status == RunStatus::Completed {
         writeln!(
@@ -23,6 +18,13 @@ pub(crate) fn print_run_output(
             "rimz: run completed but no final assistant message was extracted"
         )?;
     }
+    print_run_forensics(record, err)
+}
+
+pub(super) fn print_run_forensics<W: Write + ?Sized>(
+    record: &RunRecord,
+    err: &mut W,
+) -> Result<()> {
     if record.status != RunStatus::Completed {
         writeln!(
             err,
@@ -67,6 +69,131 @@ pub(crate) fn status_label(status: RunStatus) -> &'static str {
         RunStatus::TimedOut => "timed_out",
         RunStatus::Canceled => "canceled",
     }
+}
+
+pub(crate) enum StreamSink<'a> {
+    Text {
+        out: &'a mut dyn Write,
+        err: &'a mut dyn Write,
+        last_emitted: Option<String>,
+    },
+    Ndjson {
+        out: &'a mut dyn Write,
+        last_live: Option<RunLiveStatus>,
+    },
+}
+
+impl<'a> StreamSink<'a> {
+    pub(crate) fn text(out: &'a mut dyn Write, err: &'a mut dyn Write) -> Self {
+        Self::Text {
+            out,
+            err,
+            last_emitted: None,
+        }
+    }
+
+    pub(crate) fn ndjson(out: &'a mut dyn Write) -> Self {
+        Self::Ndjson {
+            out,
+            last_live: None,
+        }
+    }
+
+    pub(crate) fn is_text(&self) -> bool {
+        matches!(self, Self::Text { .. })
+    }
+
+    pub(crate) fn message(&mut self, text: String) -> Result<()> {
+        match self {
+            Self::Text {
+                out, last_emitted, ..
+            } => emit_text_message(&mut **out, last_emitted, &text),
+            Self::Ndjson { out, .. } => emit_ndjson(&mut **out, &RunStreamEvent::Message { text }),
+        }
+    }
+
+    pub(crate) fn status(&mut self, live: RunLiveStatus) -> Result<()> {
+        match self {
+            Self::Text { .. } => Ok(()),
+            Self::Ndjson { out, last_live } => {
+                if last_live.as_ref() == Some(&live) {
+                    return Ok(());
+                }
+                emit_ndjson(&mut **out, &RunStreamEvent::Status { live: live.clone() })?;
+                *last_live = Some(live);
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn end_record(&mut self, record: &RunRecord) -> Result<()> {
+        self.end_status(record.status, record.last_message.as_deref())?;
+        if let Self::Text { err, .. } = self {
+            print_run_forensics(record, &mut **err)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn end_status(
+        &mut self,
+        status: RunStatus,
+        last_message: Option<&str>,
+    ) -> Result<()> {
+        match self {
+            Self::Text {
+                out, last_emitted, ..
+            } => {
+                if let Some(message) = trimmed_message(last_message)
+                    && last_emitted.as_deref() != Some(message)
+                {
+                    emit_text_message(&mut **out, last_emitted, message)?;
+                }
+                Ok(())
+            }
+            Self::Ndjson { out, .. } => emit_ndjson(
+                &mut **out,
+                &RunStreamEvent::End {
+                    status,
+                    last_message: last_message.map(str::to_owned),
+                },
+            ),
+        }
+    }
+
+    pub(crate) fn timeout(&mut self) -> Result<()> {
+        if let Self::Text { err, .. } = self {
+            writeln!(&mut **err, "rimz: wait timed out")?;
+        }
+        Ok(())
+    }
+}
+
+fn emit_text_message(
+    out: &mut dyn Write,
+    last_emitted: &mut Option<String>,
+    text: &str,
+) -> Result<()> {
+    let Some(message) = trimmed_message(Some(text)) else {
+        return Ok(());
+    };
+    if last_emitted.is_some() {
+        writeln!(out)?;
+    }
+    writeln!(out, "{message}")?;
+    out.flush()?;
+    *last_emitted = Some(message.to_owned());
+    Ok(())
+}
+
+fn emit_ndjson(out: &mut dyn Write, value: &impl serde::Serialize) -> Result<()> {
+    serde_json::to_writer(&mut *out, value)?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
+}
+
+fn trimmed_message(message: Option<&str>) -> Option<&str> {
+    message.map(str::trim).filter(|message| !message.is_empty())
 }
 
 #[derive(Debug, PartialEq, serde::Serialize)]
@@ -139,5 +266,34 @@ mod tests {
         assert!(err.contains("rimz: run failed (exit 1)"));
         assert!(err.contains("agent died\nfatal error"));
         assert!(err.contains("transcript: /tmp/transcript.jsonl"));
+    }
+
+    #[test]
+    fn text_stream_dedupes_already_streamed_final_message() {
+        let mut record = record(RunStatus::Completed);
+        record.last_message = Some("done".to_owned());
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut sink = StreamSink::text(&mut out, &mut err);
+
+        sink.message("done".to_owned()).unwrap();
+        sink.end_record(&record).unwrap();
+
+        assert_eq!(String::from_utf8(out).unwrap(), "done\n");
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn text_stream_prints_unstreamed_final_message() {
+        let mut record = record(RunStatus::Completed);
+        record.last_message = Some("done".to_owned());
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut sink = StreamSink::text(&mut out, &mut err);
+
+        sink.end_record(&record).unwrap();
+
+        assert_eq!(String::from_utf8(out).unwrap(), "done\n");
+        assert!(err.is_empty());
     }
 }

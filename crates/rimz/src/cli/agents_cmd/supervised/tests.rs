@@ -6,6 +6,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
 use rimz::store::{RuntimePaths, StatePaths};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use tokio::net::UnixDatagram;
 
 #[test]
@@ -219,6 +220,7 @@ fn blocking_stream_wakeup_reloads_terminal_record() {
         &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::from_secs(1)),
+        &AtomicBool::new(false),
     )
     .unwrap();
 
@@ -239,6 +241,7 @@ fn blocking_stream_timeout_marks_run_timed_out() {
         &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::ZERO),
+        &AtomicBool::new(false),
     )
     .unwrap();
 
@@ -255,6 +258,9 @@ fn blocking_stream_timeout_marks_run_timed_out() {
 fn attached_stream_timeout_does_not_mark_run_timed_out() {
     let fixture = RunFixture::new(RunStatus::Running);
     let run_id = fixture.run_id();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut sink = output::StreamSink::text(&mut out, &mut err);
 
     let outcome = stream_attached_run(
         &fixture.store,
@@ -262,6 +268,7 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
         &rimz::agents::CodexAdapter,
         false,
         Some(Duration::ZERO),
+        &mut sink,
     )
     .unwrap();
 
@@ -272,6 +279,7 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
             .status,
         RunStatus::Running
     );
+    assert!(String::from_utf8(err).unwrap().contains("wait timed out"));
 }
 
 #[test]
@@ -291,7 +299,10 @@ fn transcript_cursor_skips_existing_attach_bytes_and_resets_on_path_change() {
 
     assert!(
         cursor
-            .messages(&record, &rimz::agents::CodexAdapter)
+            .messages(
+                record.transcript_path.as_deref(),
+                &rimz::agents::CodexAdapter
+            )
             .is_empty(),
         "default attach starts at the current end"
     );
@@ -305,7 +316,10 @@ fn transcript_cursor_skips_existing_attach_bytes_and_resets_on_path_change() {
             )
             .unwrap();
     assert_eq!(
-        cursor.messages(&record, &rimz::agents::CodexAdapter),
+        cursor.messages(
+            record.transcript_path.as_deref(),
+            &rimz::agents::CodexAdapter
+        ),
         vec!["new"]
     );
 
@@ -317,7 +331,10 @@ fn transcript_cursor_skips_existing_attach_bytes_and_resets_on_path_change() {
     .unwrap();
     record.transcript_path = Some(second.to_string_lossy().into_owned());
     assert_eq!(
-        cursor.messages(&record, &rimz::agents::CodexAdapter),
+        cursor.messages(
+            record.transcript_path.as_deref(),
+            &rimz::agents::CodexAdapter
+        ),
         vec!["fresh"],
         "a new transcript path starts at byte zero"
     );
@@ -337,7 +354,13 @@ fn completed_run_wakeup_reloads_terminal_record() {
     };
     send_run_frame(&sock_path, &frame);
 
-    let outcome = wait_for_run(sock, fixture.expected(), Some(Duration::from_secs(1))).unwrap();
+    let outcome = wait_for_run(
+        sock,
+        fixture.expected(),
+        Some(Duration::from_secs(1)),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     let loaded = terminal_record_after_wait(&fixture.paths, &run_id, outcome).unwrap();
 
     assert_eq!(loaded.status, RunStatus::Completed);
@@ -351,11 +374,78 @@ fn neutral_run_wait_marks_timeout() {
     let run_id = fixture.run_id();
     let (sock, _sock_path) = fixture.bind();
 
-    let outcome = wait_for_run(sock, fixture.expected(), Some(Duration::from_millis(10))).unwrap();
+    let outcome = wait_for_run(
+        sock,
+        fixture.expected(),
+        Some(Duration::from_millis(10)),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     let timed_out = terminal_record_after_wait(&fixture.paths, &run_id, outcome).unwrap();
 
     assert_eq!(timed_out.status, RunStatus::TimedOut);
     assert_eq!(timed_out.status.exit_code(), 124);
+}
+
+#[test]
+fn wait_for_run_returns_interrupted_when_flag_is_set() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let (sock, _sock_path) = fixture.bind();
+    let interrupt = AtomicBool::new(true);
+
+    let outcome = wait_for_run(
+        sock,
+        fixture.expected(),
+        Some(Duration::from_secs(1)),
+        &interrupt,
+    )
+    .unwrap();
+
+    assert_eq!(outcome, RunWaitOutcome::Interrupted);
+}
+
+#[test]
+fn interrupted_wait_marks_run_canceled() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let run_id = fixture.run_id();
+
+    let canceled =
+        terminal_record_after_wait(&fixture.paths, &run_id, RunWaitOutcome::Interrupted).unwrap();
+
+    assert_eq!(canceled.status, RunStatus::Canceled);
+    assert_eq!(
+        rimz::harness::run::load(&fixture.paths, &run_id)
+            .unwrap()
+            .status,
+        RunStatus::Canceled
+    );
+}
+
+#[test]
+fn blocking_stream_interrupt_marks_run_canceled() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let run_id = fixture.run_id();
+    let (sock, _sock_path) = fixture.bind();
+    let interrupt = AtomicBool::new(true);
+
+    let canceled = stream_blocking_run(
+        sock,
+        fixture.expected(),
+        &fixture.store,
+        &run_id,
+        &rimz::agents::CodexAdapter,
+        Some(Duration::from_secs(1)),
+        &interrupt,
+    )
+    .unwrap();
+
+    assert_eq!(canceled.status, RunStatus::Canceled);
+    assert_eq!(
+        rimz::harness::run::load(&fixture.paths, &run_id)
+            .unwrap()
+            .status,
+        RunStatus::Canceled
+    );
 }
 
 fn run_record(kind: &str) -> RunRecord {

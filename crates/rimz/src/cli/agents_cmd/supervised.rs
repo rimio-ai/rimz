@@ -1,7 +1,10 @@
 //! Supervised one-shot run support used by `rimz agents -p` and wait/stop.
 
 use std::path::Path;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -15,6 +18,10 @@ use rimz::workspace::WorkspaceResolver;
 pub(super) mod output;
 pub(super) mod pane;
 pub(super) mod stream;
+
+const RUN_WAIT_INTERRUPT_POLL: Duration = Duration::from_millis(250);
+static RUN_INTERRUPT_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+static RUN_INTERRUPT_HANDLERS_INSTALLED: OnceLock<()> = OnceLock::new();
 
 #[cfg(test)]
 use output::RunStreamEvent;
@@ -122,37 +129,107 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     Ok(PaneCmd { argv })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RunWaitOutcome {
+    Completed,
+    TimedOut,
+    Interrupted,
+}
+
+pub(super) fn install_run_interrupt_flag() -> Result<Arc<AtomicBool>> {
+    let flag = RUN_INTERRUPT_SIGNAL_RECEIVED
+        .get_or_init(|| Arc::new(AtomicBool::new(false)))
+        .clone();
+    flag.store(false, Ordering::SeqCst);
+    install_run_interrupt_handlers(flag.clone())?;
+    Ok(flag)
+}
+
+#[cfg(unix)]
+fn install_run_interrupt_handlers(flag: Arc<AtomicBool>) -> Result<()> {
+    use signal_hook::consts::signal::SIGINT;
+
+    if RUN_INTERRUPT_HANDLERS_INSTALLED.get().is_some() {
+        return Ok(());
+    }
+    signal_hook::flag::register_conditional_shutdown(SIGINT, 130, flag.clone())?;
+    signal_hook::flag::register(SIGINT, flag)?;
+    let _ = RUN_INTERRUPT_HANDLERS_INSTALLED.set(());
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_run_interrupt_handlers(_flag: Arc<AtomicBool>) -> Result<()> {
+    Ok(())
+}
+
 pub(super) fn wait_for_run(
     sock: std::os::unix::net::UnixDatagram,
     expected: ExpectedRunFrame,
     timeout: Option<Duration>,
-) -> Result<RunWakeOutcome> {
+    interrupt: &AtomicBool,
+) -> Result<RunWaitOutcome> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()
         .context("creating run wait runtime")?;
-    runtime
-        .block_on(run_wake::wait_for_run_completion_owning(
-            sock, expected, timeout,
-        ))
-        .context("waiting for run completion")
+    let outcome: Result<RunWaitOutcome> = runtime.block_on(async {
+        let sock = run_wake::adopt(sock).context("adopting run socket")?;
+        let deadline = timeout.map(|duration| Instant::now() + duration);
+        loop {
+            if interrupt.load(Ordering::SeqCst) {
+                return Ok(RunWaitOutcome::Interrupted);
+            }
+            let Some(wait) = next_run_wait(deadline) else {
+                return Ok(RunWaitOutcome::TimedOut);
+            };
+            match run_wake::wait_for_run_completion(&sock, &expected, Some(wait)).await? {
+                RunWakeOutcome::Completed(_status) => return Ok(RunWaitOutcome::Completed),
+                RunWakeOutcome::Neutral => {
+                    if interrupt.load(Ordering::SeqCst) {
+                        return Ok(RunWaitOutcome::Interrupted);
+                    }
+                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                        return Ok(RunWaitOutcome::TimedOut);
+                    }
+                }
+            }
+        }
+    });
+    outcome.context("waiting for run completion")
+}
+
+fn next_run_wait(deadline: Option<Instant>) -> Option<Duration> {
+    let Some(deadline) = deadline else {
+        return Some(RUN_WAIT_INTERRUPT_POLL);
+    };
+    let now = Instant::now();
+    if now >= deadline {
+        None
+    } else {
+        Some((deadline - now).min(RUN_WAIT_INTERRUPT_POLL))
+    }
 }
 
 pub(super) fn terminal_record_after_wait(
     paths: &rimz::StatePaths,
     run_id: &rimz::RunId,
-    outcome: RunWakeOutcome,
+    outcome: RunWaitOutcome,
 ) -> Result<RunRecord> {
     match outcome {
-        RunWakeOutcome::Completed(_status) => Ok(rimz::harness::run::load(paths, run_id)?),
-        RunWakeOutcome::Neutral => {
+        RunWaitOutcome::Completed => Ok(rimz::harness::run::load(paths, run_id)?),
+        RunWaitOutcome::TimedOut => {
             let current = rimz::harness::run::load(paths, run_id)?;
             if current.status.is_terminal() {
                 Ok(current)
             } else {
                 Ok(rimz::harness::run::timeout(paths, run_id)?)
             }
+        }
+        RunWaitOutcome::Interrupted => {
+            let (record, _wrote) = rimz::harness::run::cancel(paths, run_id)?;
+            Ok(record)
         }
     }
 }

@@ -632,7 +632,7 @@ fn zellij_trace_shim() -> std::path::PathBuf {
 }
 
 #[test]
-fn run_stream_polls_transcript_until_terminal_record() {
+fn run_stream_prints_text_until_terminal_record() {
     let env = Env::new();
     let store = env.store();
     let transcript = env.runtime_root.join("run-stream.jsonl");
@@ -682,6 +682,64 @@ fn run_stream_polls_transcript_until_terminal_record() {
     assert!(
         out.status.success(),
         "agents wait --stream failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hello\n");
+}
+
+#[test]
+fn run_stream_json_polls_transcript_until_terminal_record() {
+    let env = Env::new();
+    let store = env.store();
+    let transcript = env.runtime_root.join("run-stream-json.jsonl");
+    std::fs::write(&transcript, "").expect("seed transcript");
+    let mut record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "summarize".to_owned(),
+        env.project_root.clone(),
+    );
+    record.status = RunStatus::Running;
+    record.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    let run_id = record.run_id.clone();
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
+
+    let child = env
+        .rimz()
+        .args([
+            "agents",
+            "wait",
+            run_id.as_str(),
+            "--stream",
+            "--json",
+            "--from-start",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agents wait stream");
+    std::thread::sleep(Duration::from_millis(100));
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .expect("open transcript")
+        .write_all(
+            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hello\"}}\n",
+        )
+        .expect("append transcript");
+    let mut terminal = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
+    terminal.status = RunStatus::Completed;
+    terminal.last_message = Some("hello".to_owned());
+    terminal.updated_at = Timestamp::now();
+    terminal.completed_at = Some(terminal.updated_at);
+    rimz::store::run_store::write(&store.paths().runs_dir, &terminal).expect("write terminal");
+
+    let out = child.wait_with_output().expect("wait agents stream");
+    assert!(
+        out.status.success(),
+        "agents wait --stream --json failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );

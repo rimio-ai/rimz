@@ -117,7 +117,7 @@ Because the agent runs in a real pane, a run that stops to ask survives the stop
 
 For orchestration:
 
-- `--detach` prints the agent's pet name and returns; `rimz agents wait <ref> --stream` blocks on it later, streaming the turn as it happens.
+- `--bg` prints the agent's pet name and returns; `rimz agents wait <ref> --stream` blocks on it later, streaming the turn as it happens.
 - `rimz agents show <ref>` reports activity, context, placement, the attached run, the message queue, and recent transcript.
 - `rimz message --steer @<agent> "continue"` is the first-class nudge for wrapper scripts; `rimz pane send` and `rimz pane capture` remain the universal fallback.
 

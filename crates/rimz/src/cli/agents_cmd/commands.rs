@@ -721,35 +721,33 @@ pub(super) fn wait_agent(
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let store = crate::cli::open_store(&workspace)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let live_agent = crate::cli::resolve_agent_one(
-        &snapshot,
-        &reference,
-        None,
-        crate::cli::current_channel(&workspace).as_deref(),
-    )
-    .ok();
+    let current_channel = crate::cli::current_channel(&workspace);
+    let live_agent_result =
+        crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel.as_deref());
+    let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(run) = newest_run_by_ref(&store, &reference, live_agent)?
         && (!run.status.is_terminal() || live_agent.is_none() || run.run_id.as_str() == reference)
     {
         return wait_run_record(&store, &run, timeout, stream_output, from_start, json);
     }
     if live_agent.is_none() {
-        crate::cli::resolve_agent_one(
-            &snapshot,
+        live_agent_result?;
+    }
+    if stream_output {
+        return wait_interactive_agent_stream(
+            &store,
             &reference,
-            None,
-            crate::cli::current_channel(&workspace).as_deref(),
-        )?;
+            current_channel.as_deref(),
+            timeout,
+            from_start,
+            json,
+        );
     }
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
         let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-        let agent = crate::cli::resolve_agent_one(
-            &snapshot,
-            &reference,
-            None,
-            crate::cli::current_channel(&workspace).as_deref(),
-        )?;
+        let agent =
+            crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel.as_deref())?;
         if gate_open(DeliveryGate::Done, agent.status) {
             if json {
                 supervised::output::print_json(agent)?;
@@ -766,6 +764,64 @@ pub(super) fn wait_agent(
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
         std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn wait_interactive_agent_stream(
+    store: &rimz::Store,
+    reference: &str,
+    current_channel: Option<&str>,
+    timeout: Option<Duration>,
+    from_start: bool,
+    json: bool,
+) -> Result<()> {
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let agent = crate::cli::resolve_agent_one(&snapshot, reference, None, current_channel)?;
+    let adapter = rimz::agents::find_adapter(agent.kind.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
+    let mut cursor = supervised::stream::TranscriptCursor::new(from_start);
+    let mut stdout = render::out();
+    let mut stderr = render::err();
+    let mut json_stdout = std::io::stdout().lock();
+    let mut sink = if json {
+        supervised::output::StreamSink::ndjson(&mut json_stdout)
+    } else {
+        supervised::output::StreamSink::text(&mut stdout, &mut stderr)
+    };
+    let deadline = timeout.map(|duration| Instant::now() + duration);
+    loop {
+        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+        let agent = crate::cli::resolve_agent_one(&snapshot, reference, None, current_channel)?;
+        for text in cursor.messages(agent.transcript_path.as_deref(), adapter) {
+            sink.message(text)?;
+        }
+        sink.status(interactive_live_status(agent))?;
+        if gate_open(DeliveryGate::Done, agent.status) {
+            sink.end_status(RunStatus::Completed, None)?;
+            std::process::exit(0);
+        }
+        if agent.status == rimz::agents::AgentStatus::Failed {
+            sink.end_status(RunStatus::Failed, None)?;
+            std::process::exit(RunStatus::Failed.exit_code());
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            if sink.is_text() {
+                sink.timeout()?;
+            }
+            std::process::exit(RunStatus::TimedOut.exit_code());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn interactive_live_status(agent: &AgentState) -> rimz::harness::run::RunLiveStatus {
+    rimz::harness::run::RunLiveStatus {
+        agent_status: agent.status,
+        phase: agent.phase,
+        pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
+        context_pct: agent
+            .context_fill_pct()
+            .map(|pct| pct.round().clamp(0.0, 100.0) as u8),
     }
 }
 
@@ -1052,8 +1108,8 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
     }
     let output_format = args.output_format.unwrap_or_default();
     let input_format = args.input_format.unwrap_or_default();
-    if args.detach && output_format == OutputFormat::StreamJson {
-        bail!("--output-format stream-json cannot be combined with --detach");
+    if args.bg && output_format == OutputFormat::StreamJson {
+        bail!("--output-format stream-json cannot be combined with --bg");
     }
     let prompt = resolve_print_prompt(&args, input_format)?;
     let workspace = supervised::resolve_run_workspace(globals)?;
@@ -1221,12 +1277,17 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         prompt: &prompt,
         cleanup_worktree: args.worktree.is_some() || args.from_pr.is_some(),
         permission_args: agent_cell.args,
-        self_cleanup_on_completion: args.detach && !args.keep,
+        self_cleanup_on_completion: args.bg && !args.keep,
     })?;
-    let bound = if args.detach {
+    let bound = if args.bg {
         None
     } else {
         Some(run_wake::bind_run(store.runtime_paths(), &run_id).context("binding run socket")?)
+    };
+    let interrupt = if args.bg {
+        None
+    } else {
+        Some(supervised::install_run_interrupt_flag()?)
     };
     let socket_guard = bound
         .as_ref()
@@ -1281,7 +1342,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         );
         return Err(err).context("opening run pane");
     }
-    if args.detach {
+    if args.bg {
         #[expect(clippy::print_stdout, reason = "command result is the agent name")]
         {
             println!("{}", launch_identity.name);
@@ -1303,9 +1364,19 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             &run_id,
             adapter,
             args.timeout,
+            interrupt
+                .as_deref()
+                .expect("blocking run has interrupt flag"),
         )?
     } else {
-        let outcome = supervised::wait_for_run(sock, expected, args.timeout)?;
+        let outcome = supervised::wait_for_run(
+            sock,
+            expected,
+            args.timeout,
+            interrupt
+                .as_deref()
+                .expect("blocking run has interrupt flag"),
+        )?;
         supervised::terminal_record_after_wait(store.paths(), &run_id, outcome)?
     };
     record = record_failure_tail_before_cleanup(
@@ -1315,12 +1386,22 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         record,
     );
     if !args.keep {
-        supervised::pane::close_run_pane(
-            backend.as_ref(),
-            &store,
-            &workspace.session_name,
-            &record,
-        );
+        if record.status == RunStatus::Canceled {
+            supervised::pane::close_stopped_run_pane_after_grace(
+                backend.as_ref(),
+                &store,
+                &workspace.session_name,
+                &record,
+                supervised::pane::STOP_BACKSTOP_GRACE,
+            );
+        } else {
+            supervised::pane::close_run_pane(
+                backend.as_ref(),
+                &store,
+                &workspace.session_name,
+                &record,
+            );
+        }
     }
     drop(socket_guard);
     Ok(Some(record))
@@ -1390,12 +1471,21 @@ fn wait_run_record(
     let adapter = rimz::agents::find_adapter(run.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", run.kind))?;
     if stream_output {
+        let mut stdout = render::out();
+        let mut stderr = render::err();
+        let mut json_stdout = std::io::stdout().lock();
+        let mut sink = if json {
+            supervised::output::StreamSink::ndjson(&mut json_stdout)
+        } else {
+            supervised::output::StreamSink::text(&mut stdout, &mut stderr)
+        };
         match supervised::stream::stream_attached_run(
             store,
             &run.run_id,
             adapter,
             from_start,
             timeout,
+            &mut sink,
         )? {
             Some(record) => std::process::exit(record.status.exit_code()),
             None => std::process::exit(RunStatus::TimedOut.exit_code()),
@@ -1407,6 +1497,10 @@ fn wait_run_record(
         if current.status.is_terminal() {
             if json {
                 supervised::output::print_json(&current)?;
+            } else {
+                let mut stdout = render::out();
+                let mut stderr = render::err();
+                supervised::output::print_run_output(&current, &mut stdout, &mut stderr)?;
             }
             std::process::exit(current.status.exit_code());
         }

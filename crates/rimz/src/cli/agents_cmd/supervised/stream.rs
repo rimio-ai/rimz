@@ -1,12 +1,12 @@
-use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use super::output;
+use super::output::StreamSink;
 use rimz::agents::AgentAdapter;
-use rimz::harness::run::{RunLiveStatus, RunRecord};
+use rimz::harness::run::RunRecord;
 use rimz::harness::run_wake::{self, ExpectedRunFrame, RunWakeOutcome};
 
 pub(crate) fn stream_blocking_run(
@@ -16,28 +16,35 @@ pub(crate) fn stream_blocking_run(
     run_id: &rimz::RunId,
     adapter: &dyn AgentAdapter,
     timeout: Option<Duration>,
+    interrupt: &AtomicBool,
 ) -> Result<RunRecord> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()
         .context("creating run stream runtime")?;
+    let mut stdout = std::io::stdout().lock();
+    let mut sink = StreamSink::ndjson(&mut stdout);
     runtime.block_on(async {
         let sock = run_wake::adopt(sock).context("adopting run socket")?;
         let deadline = timeout.map(|duration| Instant::now() + duration);
         let mut cursor = TranscriptCursor::new(true);
-        let mut last_live = None;
         loop {
             let record = rimz::harness::run::load(store.paths(), run_id)?;
-            emit_stream_updates(store, adapter, &mut cursor, &mut last_live, &record)?;
+            emit_stream_updates(store, adapter, &mut cursor, &mut sink, &record)?;
             if record.status.is_terminal() {
-                emit_stream_end(&record)?;
+                sink.end_record(&record)?;
                 return Ok(record);
+            }
+            if interrupt.load(Ordering::SeqCst) {
+                let (canceled, _wrote) = rimz::harness::run::cancel(store.paths(), run_id)?;
+                sink.end_record(&canceled)?;
+                return Ok(canceled);
             }
             let Some(wait) = next_stream_wait(deadline) else {
                 let timed_out = rimz::harness::run::timeout(store.paths(), run_id)?;
-                emit_stream_updates(store, adapter, &mut cursor, &mut last_live, &timed_out)?;
-                emit_stream_end(&timed_out)?;
+                emit_stream_updates(store, adapter, &mut cursor, &mut sink, &timed_out)?;
+                sink.end_record(&timed_out)?;
                 return Ok(timed_out);
             };
             match run_wake::wait_for_run_completion(&sock, &expected, Some(wait))
@@ -46,11 +53,17 @@ pub(crate) fn stream_blocking_run(
             {
                 RunWakeOutcome::Completed(_status) => {
                     let record = rimz::harness::run::load(store.paths(), run_id)?;
-                    emit_stream_updates(store, adapter, &mut cursor, &mut last_live, &record)?;
-                    emit_stream_end(&record)?;
+                    emit_stream_updates(store, adapter, &mut cursor, &mut sink, &record)?;
+                    sink.end_record(&record)?;
                     return Ok(record);
                 }
-                RunWakeOutcome::Neutral => {}
+                RunWakeOutcome::Neutral => {
+                    if interrupt.load(Ordering::SeqCst) {
+                        let (canceled, _wrote) = rimz::harness::run::cancel(store.paths(), run_id)?;
+                        sink.end_record(&canceled)?;
+                        return Ok(canceled);
+                    }
+                }
             }
         }
     })
@@ -62,18 +75,21 @@ pub(crate) fn stream_attached_run(
     adapter: &dyn AgentAdapter,
     from_start: bool,
     timeout: Option<Duration>,
+    sink: &mut StreamSink<'_>,
 ) -> Result<Option<RunRecord>> {
     let mut cursor = TranscriptCursor::new(from_start);
-    let mut last_live = None;
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
         let record = rimz::harness::run::load(store.paths(), run_id)?;
-        emit_stream_updates(store, adapter, &mut cursor, &mut last_live, &record)?;
+        emit_stream_updates(store, adapter, &mut cursor, sink, &record)?;
         if record.status.is_terminal() {
-            emit_stream_end(&record)?;
+            sink.end_record(&record)?;
             return Ok(Some(record));
         }
         if reached_deadline(deadline) {
+            if sink.is_text() {
+                sink.timeout()?;
+            }
             return Ok(None);
         }
         std::thread::sleep(next_attached_stream_sleep(deadline));
@@ -98,7 +114,7 @@ fn next_attached_stream_sleep(deadline: Option<Instant>) -> Duration {
 }
 
 fn next_stream_wait(deadline: Option<Instant>) -> Option<Duration> {
-    const STREAM_TICK: Duration = Duration::from_secs(1);
+    const STREAM_TICK: Duration = Duration::from_millis(250);
     let deadline = match deadline {
         Some(deadline) => deadline,
         None => return Some(STREAM_TICK),
@@ -111,14 +127,14 @@ fn next_stream_wait(deadline: Option<Instant>) -> Option<Duration> {
 }
 
 #[derive(Debug)]
-pub(super) struct TranscriptCursor {
+pub(crate) struct TranscriptCursor {
     path: Option<String>,
     offset: u64,
     skip_existing_on_first_path: bool,
 }
 
 impl TranscriptCursor {
-    pub(super) fn new(from_start: bool) -> Self {
+    pub(crate) fn new(from_start: bool) -> Self {
         Self {
             path: None,
             offset: 0,
@@ -126,12 +142,12 @@ impl TranscriptCursor {
         }
     }
 
-    pub(super) fn messages(
+    pub(crate) fn messages(
         &mut self,
-        record: &RunRecord,
+        transcript_path: Option<&str>,
         adapter: &dyn AgentAdapter,
     ) -> Vec<String> {
-        let Some(path) = record.transcript_path.as_deref() else {
+        let Some(path) = transcript_path else {
             return Vec::new();
         };
         if self.path.as_deref() != Some(path) {
@@ -163,35 +179,18 @@ fn emit_stream_updates(
     store: &rimz::Store,
     adapter: &dyn AgentAdapter,
     cursor: &mut TranscriptCursor,
-    last_live: &mut Option<RunLiveStatus>,
+    sink: &mut StreamSink<'_>,
     record: &RunRecord,
 ) -> Result<()> {
-    for text in cursor.messages(record, adapter) {
-        emit_ndjson(&output::RunStreamEvent::Message { text })?;
+    for text in cursor.messages(record.transcript_path.as_deref(), adapter) {
+        sink.message(text)?;
     }
     if let Some(live) = store
         .snapshot_cached()
         .ok()
         .and_then(|snapshot| rimz::harness::run::live_status(record, &snapshot))
-        && last_live.as_ref() != Some(&live)
     {
-        emit_ndjson(&output::RunStreamEvent::Status { live: live.clone() })?;
-        *last_live = Some(live);
+        sink.status(live)?;
     }
-    Ok(())
-}
-
-fn emit_stream_end(record: &RunRecord) -> Result<()> {
-    emit_ndjson(&output::RunStreamEvent::End {
-        status: record.status,
-        last_message: record.last_message.clone(),
-    })
-}
-
-fn emit_ndjson(value: &impl serde::Serialize) -> Result<()> {
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, value)?;
-    writeln!(stdout)?;
-    stdout.flush()?;
     Ok(())
 }

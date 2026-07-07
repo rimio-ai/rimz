@@ -298,6 +298,11 @@ mod parse {
         .expect("parse output-format");
         assert_eq!(parsed.args.output_format, Some(OutputFormat::StreamJson));
 
+        let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--bg"])
+            .expect("parse background print run");
+        assert!(parsed.args.print);
+        assert!(parsed.args.bg);
+
         let parsed = AgentsHarness::try_parse_from([
             "rimz",
             "claude",
@@ -308,12 +313,22 @@ mod parse {
         .expect("parse input-format");
         assert_eq!(parsed.args.input_format, Some(InputFormat::StreamJson));
 
+        let parsed = AgentsHarness::try_parse_from(["rimz", "wait", "codex", "--stream", "--json"])
+            .expect("parse streamed JSON wait");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Wait {
+                stream: true,
+                json: true,
+                ..
+            })
+        ));
+
         for argv in [
             &["rimz", "claude", "hi", "-p", "--stream"][..],
             &["rimz", "claude", "hi", "--output-format", "json"],
             &["rimz", "claude", "hi", "--max-turns", "3"],
             &["rimz", "wait", "codex", "--from-start"],
-            &["rimz", "wait", "codex", "--stream", "--json"],
             &["rimz", "claude", "--new-pane", "--new-tab"],
             &["rimz", "claude", "hi", "--resume"],
             &["rimz", "claude", "hi", "--continue"],

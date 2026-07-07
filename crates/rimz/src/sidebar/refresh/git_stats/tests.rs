@@ -231,7 +231,7 @@ fn head_facts_reads_live_branch_and_detached_head() {
         Some("feature-migration"),
         "the live branch is read from the worktree, overriding any pinned label"
     );
-    let _ = repo.git(&["checkout", "-q", "--detach"]);
+    let _ = repo.git(&["checkout", "-q", "HEAD^0"]);
     assert_eq!(
         head_facts(repo.path()).branch,
         None,

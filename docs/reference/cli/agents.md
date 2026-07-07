@@ -100,15 +100,16 @@ Placement follows intent under the default `auto` policy: a named-channel launch
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
-rimz agents claude "Run the long migration audit." -p --detach   # prints a pet name, returns now
+rimz agents claude "Run the long migration audit." -p --bg       # prints a pet name, returns now
 rimz agents claude "Review the diff." -p --effort high --system-prompt-file ./review-prompt.md
 cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
 ```
 
-- `--detach` prints the pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`.
-- `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--detach`). The JSON `run_id` opens the Rimz transcript log with `rimz transcript <run_id>`; the JSON `transcript_path` is the provider-native session file used for streaming, context, and spend enrichment.
+- `--bg` prints the pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`.
+- `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--bg`). The JSON `run_id` opens the Rimz transcript log with `rimz transcript <run_id>`; the JSON `transcript_path` is the provider-native session file used for streaming, context, and spend enrichment.
 - `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it, wrapped in `<stdin>…</stdin>` tags when both are present; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt.
 - `--max-turns <N>` caps the agentic turn count where the adapter exposes a native limit (Claude today); an agent without one refuses the run.
+- Ctrl+C on a blocking `-p` cancels the run, exits `130`, and lets the wrapper stop the agent before the pane is reclaimed.
 
 Supervised runs need installed and trusted hooks, because hooks are the completion signal. The run records, wakeup socket, streaming, and pane cleanup are in [harness.md → Supervised runs](../../internals/harness/harness.md#supervised-runs).
 
@@ -142,7 +143,7 @@ Bare `rimz agents` lists the live room's pane-backed root-agent cards in attenti
 
 `top` ranks live root agents by pane process-tree resources: CPU, memory, I/O per second, process count, context fill, tokens, and age. It streams by default; `--once` takes two samples 500 ms apart and exits for scripts. Resource columns read `-` on platforms or panes where process metrics are unavailable, while context and token columns still render.
 
-`focus` jumps to an agent's pane. `wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate; `--stream` tails the transcript and `--from-start` replays from the top. `refresh` forces the transcript tail re-read past the stat gate, re-runs Codex turn-death confirmation against the live pane when one is bound, spawns the kind's detached rich-context helper when one exists, and wakes sidebars after an inline merge. With a reference, `refresh` resolves exactly one agent in scope; without a reference, it refreshes every live root agent in the current channel; with `--all`, it takes no reference and covers every live root agent in the workspace. `stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
+`focus` jumps to an agent's pane. `wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate; a plain run wait prints the final assistant message at completion, `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing. `refresh` forces the transcript tail re-read past the stat gate, re-runs Codex turn-death confirmation against the live pane when one is bound, spawns the kind's detached rich-context helper when one exists, and wakes sidebars after an inline merge. With a reference, `refresh` resolves exactly one agent in scope; without a reference, it refreshes every live root agent in the current channel; with `--all`, it takes no reference and covers every live root agent in the workspace. `stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
 
 ## Message an agent
 

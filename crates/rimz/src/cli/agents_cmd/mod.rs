@@ -123,7 +123,7 @@ pub struct AgentsArgs {
     /// Durable name for a single launched agent.
     #[arg(long, short = 'n')]
     name: Option<String>,
-    /// Launch in the background, leaving focus on the launching pane.
+    /// Launch in the background, leaving focus on the launching pane; with `-p`, print the run's agent name and return immediately.
     #[arg(long)]
     bg: bool,
     /// Split the agent into a new pane in the current tab instead of taking
@@ -160,9 +160,6 @@ pub struct AgentsArgs {
     /// Leave the supervised agent pane open after completion.
     #[arg(long, requires = "print")]
     keep: bool,
-    /// Launch the supervised run and print its agent name.
-    #[arg(long, requires = "print")]
-    detach: bool,
     /// Print JSON for `list` and bare `agents` card output.
     #[arg(long)]
     json: bool,
@@ -269,8 +266,8 @@ enum AgentsSubcmd {
         /// Replay the transcript from the top before tailing.
         #[arg(long, requires = "stream")]
         from_start: bool,
-        /// Emit JSON.
-        #[arg(long, conflicts_with = "stream")]
+        /// Emit JSON; with `--stream`, emit NDJSON run events.
+        #[arg(long)]
         json: bool,
     },
     /// Stop a supervised run or close an agent pane.
@@ -481,7 +478,6 @@ impl AgentsArgs {
             print: false,
             timeout: None,
             keep: false,
-            detach: false,
             json: false,
             output_format: None,
             input_format: None,
@@ -517,7 +513,6 @@ impl AgentsArgs {
             print: true,
             timeout: task.timeout,
             keep: task.keep,
-            detach: false,
             json: false,
             output_format: None,
             input_format: None,
