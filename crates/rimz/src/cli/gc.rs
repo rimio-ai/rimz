@@ -589,20 +589,21 @@ fn render_worktrees(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             let removed = sweep.removed.len();
             let kept = sweep.kept.len();
             let outcome = if removed > 0 {
-                let action = if out.dry_run {
-                    "would remove"
+                let mut outcome = if out.dry_run {
+                    format!("would remove {removed} · {}", fmt_bytes(sweep.bytes()))
                 } else {
-                    "removed"
+                    format!(
+                        "{} · {}",
+                        plural(removed, "removed", "removed"),
+                        fmt_bytes(sweep.bytes())
+                    )
                 };
-                let mut outcome = format!(
-                    "{} · {}",
-                    plural(removed, action, action),
-                    fmt_bytes(sweep.bytes())
-                );
                 if kept > 0 {
                     outcome.push_str(&format!(" · {kept} kept"));
                 }
                 outcome
+            } else if !sweep.failed.is_empty() {
+                plural(sweep.failed.len(), "removal failed", "removals failed")
             } else if kept > 0 {
                 format!("{kept} kept — {}", kept_summary(&sweep.kept))
             } else {
@@ -659,12 +660,18 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     let removed = out.prune.removed.len();
     let unreadable = out.prune.retained_unreadable.len();
     let outcome = if removed > 0 {
-        let action = if out.dry_run { "would prune" } else { "pruned" };
-        format!(
-            "{} · {}",
-            plural(removed, action, action),
-            fmt_bytes(out.prune.bytes_removed())
-        )
+        if out.dry_run {
+            format!(
+                "would prune {removed} · {}",
+                fmt_bytes(out.prune.bytes_removed())
+            )
+        } else {
+            format!(
+                "{} · {}",
+                plural(removed, "pruned", "pruned"),
+                fmt_bytes(out.prune.bytes_removed())
+            )
+        }
     } else if unreadable > 0 {
         format!(
             "{} kept with unreadable record — history preserved",
@@ -704,21 +711,29 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
 fn render_runtime(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     let items = runtime_items(&out.runtime);
     if items > 0 {
-        render_row(
-            w,
-            RowVerdict::Acted,
-            "runtime",
-            &format!(
-                "{} · {} — {}",
-                plural(items, "stale file", "stale files"),
+        let item_count = plural(items, "stale file", "stale files");
+        let outcome = if out.dry_run {
+            format!(
+                "would remove {item_count} · {} — {}",
                 fmt_bytes(out.runtime.bytes_removed),
                 plural(
                     out.runtime.runtime_roots_scanned,
                     "root scanned",
                     "roots scanned"
                 )
-            ),
-        )?;
+            )
+        } else {
+            format!(
+                "{item_count} · {} — {}",
+                fmt_bytes(out.runtime.bytes_removed),
+                plural(
+                    out.runtime.runtime_roots_scanned,
+                    "root scanned",
+                    "roots scanned"
+                )
+            )
+        };
+        render_row(w, RowVerdict::Acted, "runtime", &outcome)?;
         let action = if out.dry_run {
             "would remove"
         } else {
@@ -748,16 +763,16 @@ fn render_runtime(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
 
 fn render_temps(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     if out.temps.files_removed > 0 {
-        render_row(
-            w,
-            RowVerdict::Acted,
-            "temp files",
-            &format!(
-                "{} · {}",
-                plural(out.temps.files_removed, "orphaned", "orphaned"),
+        let orphaned = plural(out.temps.files_removed, "orphaned", "orphaned");
+        let outcome = if out.dry_run {
+            format!(
+                "would remove {orphaned} · {}",
                 fmt_bytes(out.temps.bytes_removed)
-            ),
-        )
+            )
+        } else {
+            format!("{orphaned} · {}", fmt_bytes(out.temps.bytes_removed))
+        };
+        render_row(w, RowVerdict::Acted, "temp files", &outcome)
     } else {
         render_row(w, RowVerdict::Healthy, "temp files", "none orphaned")
     }
@@ -1400,6 +1415,10 @@ mod tests {
         assert!(out.contains("gc — would reclaim"));
         assert!(out.contains("(dry run)"));
         assert!(out.contains("checked 4 of 8 areas · cutoff 1h"));
+        assert!(out.contains("would remove 2 · 1.4 GB · 3 kept"));
+        assert!(out.contains("would prune 1 · 2 KB"));
+        assert!(out.contains("would remove 5 stale files"));
+        assert!(out.contains("would remove 2 orphaned"));
         assert!(out.contains("would remove: demo"));
         assert!(out.contains("would prune: ws_0123456789abcdef01234567"));
         assert!(out.contains("– messages        skipped (dry run)"));
@@ -1437,6 +1456,7 @@ mod tests {
         });
 
         assert!(out.contains("· 1 problem"));
+        assert!(out.contains("✗ worktrees       1 removal failed"));
         assert!(out.contains("✗ failed: /bad — boom"));
     }
 
