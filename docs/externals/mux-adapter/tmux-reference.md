@@ -1,6 +1,6 @@
 # tmux upstream reference
 
-> The Rimz-side contracts live in [multiplexers.md](../../internals/sidebar/multiplexers.md) — the `MuxBackend` seam, the managed sidebar pane, the control-mode presence watch, and the room options. This doc mirrors the upstream surface itself.
+> The Rimz-side contracts live in [multiplexers.md](../../internals/mux/multiplexers.md) — the `MuxBackend` seam, the managed sidebar pane, the control-mode presence watch, and the room options. This doc mirrors the upstream surface itself.
 
 This is the single home for the **tmux upstream surface** Rimz binds to — the client/server and socket model, the command verbs the backend adapter drives, the format language, hooks, options, the session environment, and the control-mode protocol. It is a hand-maintained mirror of the tmux(1) man page cross-checked against the installed binary and live probes on a scratch `-S` server, captured at **tmux 3.5a** (2026-06; upstream latest is **3.6b**, 2026-05-20). Where the man page and the wire disagree, the wire wins and the disagreement is flagged.
 
@@ -180,7 +180,7 @@ The format language is tmux's read surface: every `-F` flag, filter, hook comman
 | `client_tty` / `client_session` / `client_name` / `client_control_mode` / `client_flags` | per-client facts | the `list-clients` row context |
 | `socket_path` / `pid` / `start_time` / `version` | server facts | `start_time` is the **server's** start, not a pane's |
 
-**There is no `pane_start_time`.** No release from 3.2 through 3.6b defines a per-pane process start-time variable — `display-message -v` reports `format 'pane_start_time' not found` and the column expands empty (probed 3.5a; absent from master `format.c`). The nearest live facts are `pane_pid` (first process) and the monotonic never-reused `%id` itself, which already rules out stale-id collisions within one server's lifetime; Rimz derives `pane_process_start` from `pane_pid` via `/proc` ([multiplexers.md → pane metadata](../../internals/sidebar/multiplexers.md#pane-metadata)).
+**There is no `pane_start_time`.** No release from 3.2 through 3.6b defines a per-pane process start-time variable — `display-message -v` reports `format 'pane_start_time' not found` and the column expands empty (probed 3.5a; absent from master `format.c`). The nearest live facts are `pane_pid` (first process) and the monotonic never-reused `%id` itself, which already rules out stale-id collisions within one server's lifetime; Rimz derives `pane_process_start` from `pane_pid` via `/proc` ([multiplexers.md → pane metadata](../../internals/mux/multiplexers.md#pane-metadata)).
 
 Catalog breadth (~230 variables): `buffer_*`, `client_*` (geometry, flags, tty, uid), `command_*`, copy-mode state (`copy_cursor_*`, `selection_*`, `search_*`, `scroll_position`), `cursor_*`, `history_*` (`history_size`, `history_limit`, `history_bytes`), `hook_*` (firing context), `mouse_*`, `pane_*` (geometry, edges, flags, modes), `session_*` (counts, times, groups, `session_attached`), `window_*` (geometry, flags, counts, `window_zoomed_flag`, `window_layout`), and the server singletons. Full table: man FORMATS.
 
@@ -196,7 +196,7 @@ Commands run on triggers, stored as **array options** — they scope and stack e
 
 ## Options
 
-Four scope tables — server, session, window, pane — each in a global and a local flavour; local shadows global. The room options Rimz applies at `ensure_session`, batched into one client call ([multiplexers.md → tmux backend](../../internals/sidebar/multiplexers.md#tmux-backend)); Rimz's value in bold:
+Four scope tables — server, session, window, pane — each in a global and a local flavour; local shadows global. The room options Rimz applies at `ensure_session`, batched into one client call ([multiplexers.md → tmux backend](../../internals/mux/multiplexers.md#tmux-backend)); Rimz's value in bold:
 
 | Option | Scope | Values | Why it matters |
 | --- | --- | --- | --- |

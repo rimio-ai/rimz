@@ -27,7 +27,7 @@ A new worktree starts ready to run. Two optional, committed project files descri
 
 Both files skip blank lines and `#` comments, and both confine every source to the project root: absolute patterns and patterns reaching out with `..` are skipped, and each resolved path is checked against its canonical form, so a symlink a glob descends into cannot pull host files into the agent-readable tree. Linking additionally requires a real directory and never clobbers an existing destination, writing an absolute symlink. Each linked directory is registered in the worktree's effective `git info/exclude` as an anchored `/<path>` pattern (temp-file-plus-rename, deduped across creates); because that exclude is commonly the repo's shared one, the same build directory is also excluded in the main checkout and sibling worktrees — the intended outcome for build and dependency directories.
 
-Seeding is best-effort enrichment layered over creation: a missing file is a silent no-op, and a pattern that matches nothing or a copy that fails warns on the launch path and is skipped — the worktree and its agent still launch. A reused worktree is never re-seeded. Neither file runs a command, so both stay outside the trust hash ([trust.md](../sidebar/trust.md)). `rimz worktree new` reports the counts it seeded and linked.
+Seeding is best-effort enrichment layered over creation: a missing file is a silent no-op, and a pattern that matches nothing or a copy that fails warns on the launch path and is skipped — the worktree and its agent still launch. A reused worktree is never re-seeded. Neither file runs a command, so both stay outside the trust hash ([trust.md](../harness/trust.md)). `rimz worktree new` reports the counts it seeded and linked.
 
 ## Cleanup
 

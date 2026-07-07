@@ -19,7 +19,7 @@ Four nouns carry the model:
 - An **agent kind** is a wired integration (`claude`, `codex`, `pi`, `opencode`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
 - An **agent instance** is presence: a live local pane running a known agent right now, read from the multiplexer every tick.
 - A **session** is identity: the id the agent's own hooks report, keyed `(kind, agent_id)`, where every durable fact attaches.
-- The **rollup entry** is the one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session that ledger replay derives: the durable record the sidebar enriches and renders.
+- The **rollup entry** is the one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session that store replay derives: the durable record the sidebar enriches and renders.
 
 Joining instances to sessions is [the instance lifecycle](#the-instance-lifecycle); the data flow between them is:
 
@@ -27,7 +27,7 @@ Joining instances to sessions is [the instance lifecycle](#the-instance-lifecycl
 native agent event
   │  the adapter normalizes it             (the adapter boundary)
   ▼
-AgentLifecycleObservation ──► one agent.lifecycle event in the ledger
+AgentLifecycleObservation ──► one agent.lifecycle event in the store
   │  replay: reduce_agent_states folds each signal through step()
   ▼
 AgentState ──► one rollup entry per (kind, agent_id)
@@ -52,14 +52,14 @@ The glyph, animation, and color for each are the canonical table in [the interfa
 
 ## The rollup
 
-[`reduce_agent_states`](../../../crates/rimz/src/ledger/snapshot/project.rs) folds the `agent.lifecycle` events into one `AgentState` keyed by `(kind, agent_id)`, where `agent_id` is the session id, so two concurrent agents of the same kind never share a row. Each event is a *partial* update, and how the reducer treats a field the event omits is the field's **lifetime**:
+[`reduce_agent_states`](../../../crates/rimz/src/store/snapshot/project.rs) folds the `agent.lifecycle` events into one `AgentState` keyed by `(kind, agent_id)`, where `agent_id` is the session id, so two concurrent agents of the same kind never share a row. Each event is a *partial* update, and how the reducer treats a field the event omits is the field's **lifetime**:
 
 | Lifetime | Rule | Fields |
 | --- | --- | --- |
 | **identity** | set once when the session registers, stable thereafter | `agent_id`, `kind`, `parent_agent_id`, `agent_pid` |
 | **activity** | replaced by the latest event, and *clearing* it is meaningful: an idle agent has no `task` | `status`, `task`, `last_activity` |
 | **carry-forward** | persists until a newer value arrives; a missing value never resets it | `model`, `effort`, `context_pct`, `context_window`, `prompt`, `transcript_path`, `recent_prompts` |
-| **live-derived** | never stored in the ledger; computed at snapshot time from the live pane or git | `pane`, `worktree_path`, `worktree_branch` |
+| **live-derived** | never stored in the store; computed at snapshot time from the live pane or git | `pane`, `worktree_path`, `worktree_branch` |
 | **transient heads** | opened and closed by signals, painted over the base status | the turn [phase](#turn-phase), the [compaction bracket](#the-compaction-bracket) (`compacting_since`; each close increments the durable `compaction_count`) |
 
 [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) and [`AgentState`](../../../crates/rimz/src/agents/state.rs) are the field catalog; the lifetimes above are the rule those types do not state. Three rules earn a note:
@@ -167,7 +167,7 @@ A compaction signal for a session the rollup has never seen folds to nothing. Co
 6. **Turn interruption**: a `running` row whose latest turn was aborted without a `Stop` hook settles to `idle`. Codex writes rollout `turn_aborted` for Esc and `/clear` mid-turn, so the interruption marker postdates `last_activity` and settles the row as at rest with no result instead of letting the stall window misread it as failed ([adapter/codex.md → Turn-interruption marker](./adapter/codex.md#turn-interruption-marker)). A turn-death marker outranks it; a newer prompt self-clears it.
 7. **Stall**: a `running` agent silent past the configurable stall window projects to `paused` only when its kind has a spent, unreset window; otherwise it escalates to the attention `!` (see [Liveness and presence](#liveness-and-presence)).
 
-Each rung reads enrichment plus liveness, and each leaves `snapshot.agents` holding the true lifecycle status: Claude transcript-death can leave the rollup `running` while Codex Stop-over-rollout-error records the rollup `failed`, and projection refines either display to `paused`. The order is a pinned contract. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/ledger/snapshot/view/tests/status/stall.rs) test stacks the error/stall causes, and the `turn_complete`/`turn_interrupted` status tests pin the settle rungs, so a reordering fails the suite even when every single-cause test still passes. The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking head, and an open compaction bracket pulses over any base status.
+Each rung reads enrichment plus liveness, and each leaves `snapshot.agents` holding the true lifecycle status: Claude transcript-death can leave the rollup `running` while Codex Stop-over-rollout-error records the rollup `failed`, and projection refines either display to `paused`. The order is a pinned contract. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the error/stall causes, and the `turn_complete`/`turn_interrupted` status tests pin the settle rungs, so a reordering fails the suite even when every single-cause test still passes. The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking head, and an open compaction bracket pulses over any base status.
 
 ## The instance lifecycle
 
@@ -182,17 +182,17 @@ An agent reaches the sidebar as an **agent instance**: a live local pane running
 
 So the binding test is one question: does a live local pane bind the session? A stamped session binds by id; an unstamped session binds through the recovery ladder; a session no pane binds is a remote agent.
 
-**Phase 1: pre-session presence.** A wired instance with no bound session yet renders as an idle agent row, so a just-launched agent reads as itself rather than a bare process. Claude reaches this at the login screen and in the short span before `SessionStart` stamps the pane; Codex and OpenCode reach it before their first real session exists. Rimz synthesizes an idle `○ <kind>` row until a lifecycle hook binds the real session ([`idle_agent_row`](../../../crates/rimz/src/ledger/snapshot/panes/lazy.rs)). The gate is wired hooks: an installed integration can later report status, and an unwired instance stays a [process row](../sidebar/sidebar.md#process-rows). The descriptor's `registers_lazily` flag is for cwd session binding, not idle synthesis.
+**Phase 1: pre-session presence.** A wired instance with no bound session yet renders as an idle agent row, so a just-launched agent reads as itself rather than a bare process. Claude reaches this at the login screen and in the short span before `SessionStart` stamps the pane; Codex and OpenCode reach it before their first real session exists. Rimz synthesizes an idle `○ <kind>` row until a lifecycle hook binds the real session ([`idle_agent_row`](../../../crates/rimz/src/store/snapshot/panes/lazy.rs)). The gate is wired hooks: an installed integration can later report status, and an unwired instance stays a [process row](../sidebar/sidebar.md#process-rows). The descriptor's `registers_lazily` flag is for cwd session binding, not idle synthesis.
 
 **Phase 2: session binding.** A lifecycle hook arrives carrying a session id, and Rimz joins it to the right instance. A standalone hook stamped the pane id, so the join is exact and free. An unstamped session walks a deterministic recovery ladder: hook ingestion writes a recovered same-cwd pane stamp from the repaired live frame; a `codex resume <session-id>` pane binds exactly; then same-cwd sessions pair newest-first to the latest viable pane process-start before the session's first event. Residual ambiguity binds deterministically and appends a `binding.log.jsonl` breadcrumb. The ladder's guards and limits are [sidebar.md → Presence model](../sidebar/sidebar.md#presence-model).
 
 **Phase 3: instance exit.** The in-pane agent process is the liveness truth, surfaced through the pane: the CLI client is the pane's foreground process or the single hosted descendant under the pane root, so when it exits the pane reverts to a shell and stops reading as an agent. The instance leaves with no exit hook, in both launch modes. A `SessionEnd` hook (Claude) tombstones the session eagerly on top of this, clearing its row and context sidecar at once; Codex has no `SessionEnd`, so a Codex session leaves by pane liveness and the [rollup reaper](#liveness-and-presence) alone.
 
-Daemon-routed Codex hooks first name the shared app-server daemon, then the recovery ladder re-owns any local session to its in-pane process and stores the full pane stamp (`pane_id`, tab id, cwd, pane pid, and process start). An unbound daemon-owned session abstains from pid liveness and ages through the ghost TTL like a pidless row; the app-server loaded-thread reaper remains a faster secondary signal, dropping a daemon-mode session absent from `thread/loaded/list` before the pane fold ([`reap_runtime`](../../../crates/rimz/src/ledger/snapshot/view/reap.rs)) while an unreachable daemon or untrusted list keeps every session.
+Daemon-routed Codex hooks first name the shared app-server daemon, then the recovery ladder re-owns any local session to its in-pane process and stores the full pane stamp (`pane_id`, tab id, cwd, pane pid, and process start). An unbound daemon-owned session abstains from pid liveness and ages through the ghost TTL like a pidless row; the app-server loaded-thread reaper remains a faster secondary signal, dropping a daemon-mode session absent from `thread/loaded/list` before the pane fold ([`reap_runtime`](../../../crates/rimz/src/store/snapshot/view/reap.rs)) while an unreachable daemon or untrusted list keeps every session.
 
 ## Liveness and presence
 
-Presence comes from the live pane, with no exit event required: an agent renders only on the pane it stamped, and one whose pane reverts to a shell or closes is gone on the next snapshot. **The binding mechanics (stamped pane id, the Codex daemon exception, jump reconciliation) live in [sidebar.md → Presence model](../sidebar/sidebar.md#presence-model); this section owns only what the rollup contributes.** There is no `offline` status: a dead agent is a reverted shell row or no row, never a retracted ledger fact.
+Presence comes from the live pane, with no exit event required: an agent renders only on the pane it stamped, and one whose pane reverts to a shell or closes is gone on the next snapshot. **The binding mechanics (stamped pane id, the Codex daemon exception, jump reconciliation) live in [sidebar.md → Presence model](../sidebar/sidebar.md#presence-model); this section owns only what the rollup contributes.** There is no `offline` status: a dead agent is a reverted shell row or no row, never a retracted store fact.
 
 **Stamped-pane binding decides what renders; the captured pid feeds the reaper.** Rimz records the pid best-effort on each lifecycle event (`RIMZ_AGENT_PID=$PPID`, falling back to a `/proc` ancestor walk, plus the Linux process-start token to defeat pid reuse), and the reaper reads *pidless* as one ghost signal. Stamped-pane binding already keeps a stale agent off a stranger's pane, so the pid never gates rendering.
 
@@ -210,7 +210,7 @@ Like every heartbeat it is latency, not truth: a missing file just leaves `last_
 
 A coding agent reports to Rimz through hooks, and every agent speaks through one trait, [`AgentAdapter`](../../../crates/rimz/src/agents/mod.rs), registered in [`registry::ADAPTERS`](../../../crates/rimz/src/agents/registry.rs). The trait is the single place a native protocol diverges and the single place it is normalized; nothing downstream of it is agent-specific. The per-provider mappings it produces are the adapter docs; the raw upstream protocols they read are the [external references](../../externals/agent-adapter/claude-reference.md).
 
-An agent reports through the same public shape everything else uses: a hook is an adapter that translates a native protocol onto one Rimz CLI entrypoint, and the observations it records land in the same ledger every read surface projects.
+An agent reports through the same public shape everything else uses: a hook is an adapter that translates a native protocol onto one Rimz CLI entrypoint, and the observations it records land in the same store every read surface projects.
 
 ### The seam: `AgentAdapter`
 
@@ -224,7 +224,7 @@ Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../.
 
 Two invariants hold the seam shut:
 
-- **Adapters never touch the ledger.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every ledger write; it calls the adapter for classification and neutral output only.
+- **Adapters never touch the store.** The adapter is a pure mapper. [`rimz hooks feed`](../../../crates/rimz/src/cli/hooks.rs) owns every store write; it calls the adapter for classification and neutral output only.
 - **Nothing downstream reads a native payload.** The adapter emits exactly two things the rest of Rimz consumes: an `AgentLifecycleObservation` and a blocking-ask classification. A native field reached for outside an adapter is a mapping that belongs *in* the adapter.
 
 ### Two hook channels
@@ -268,11 +268,11 @@ Installing hooks edits the agent's own config, so it is a security surface, neve
 - **One command for every event**: `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`, with no `--event`. The helper reads the event from the payload's `hook_event_name`.
 - **Idempotent, self-healing reclaim.** Install reclaims every rimz-owned entry by the stable command substring `rimz hooks feed --source <agent>`, then rewrites the canonical set, so duplicate or stale blocks never accumulate. User-authored hooks are untouched.
 
-**Trust.** Every hook command enters the executable-surface hash, so a tampered hook config demotes project trust to stale (see [trust.md](../sidebar/trust.md)).
+**Trust.** Every hook command enters the executable-surface hash, so a tampered hook config demotes project trust to stale (see [trust.md](../harness/trust.md)).
 
 ## Enrichment
 
-The ledger and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `context_pct`, `context_window`, and `total_tokens` are **enrichment**: display-only and redactable. A missing value means "the agent didn't report it," never zero. The sidebar still paints a context bar for every observed agent, drawing an unreported gauge at a visible 0% baseline.
+The store and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `context_pct`, `context_window`, and `total_tokens` are **enrichment**: display-only and redactable. A missing value means "the agent didn't report it," never zero. The sidebar still paints a context bar for every observed agent, drawing an unreported gauge at a visible 0% baseline.
 
 `context_window` is the model's window in tokens, and uniformly across agents it is the model's max **input** tokens: the gauge numerator counts input-side occupancy only (`input + cache`, never output; see [`context_used_tokens`](../../../crates/rimz/src/agents/state.rs)), so a model that splits its window into separate input and output caps scales against the input cap. Each adapter resolves the window its own way (Claude from the payload model id, where `[1m]` widens it; Codex from the rollout's `model_context_window`; OpenCode from its model catalog), and the card's identity line renders it (`258k`, `1M`), preferring the fresher out-of-band reading from [`AgentContext`](#rich-context-agentcontext) when one exists.
 
@@ -304,7 +304,7 @@ Some agents publish far richer per-session data out of band than their hooks car
 
 This is high-frequency, display-only enrichment, so it does **not** ride the event log. Rimz writes a **latest-wins per-session sidecar**, one atomic file per `(kind, agent_id)` under the runtime `agent_context/` dir, from CLI producer paths (statusline feed, hook ingestion, detached refresh helpers, the Codex stat-gated backstop). `rimz sidebar snapshot` folds each record onto its `AgentState`.
 
-The sidecar lives wholly off the durable path (ledger first; sidebar wakeups are latency, not truth) and dies with the session: a session-end event tombstones it, a missed tombstone becomes invisible when the rollup row is reaped and the snapshot join has no surviving row to enrich, and `rimz gc` sweeps old files. The file sits under the per-uid runtime root (mode `0700`), no broader exposure than the heartbeat or diff-stats caches.
+The sidecar lives wholly off the durable path (store first; sidebar wakeups are latency, not truth) and dies with the session: a session-end event tombstones it, a missed tombstone becomes invisible when the rollup row is reaped and the snapshot join has no surviving row to enrich, and `rimz gc` sweeps old files. The file sits under the per-uid runtime root (mode `0700`), no broader exposure than the heartbeat or diff-stats caches.
 
 ## Adding an agent
 

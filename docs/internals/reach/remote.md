@@ -1,6 +1,6 @@
 # Remote Attach And Link Health
 
-`rimz remote connect` is a local SSH launcher and link supervisor. The remote host's own `rimz` owns workspace resolution, session birth, the sidebar, and the ledger; the local process owns the SSH child, reconnect policy, and terminal-local link alerts.
+`rimz remote connect` is a local SSH launcher and link supervisor. The remote host's own `rimz` owns workspace resolution, session birth, the sidebar, and the store; the local process owns the SSH child, reconnect policy, and terminal-local link alerts.
 
 ## Attach Path
 

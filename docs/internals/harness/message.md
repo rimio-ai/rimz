@@ -1,6 +1,6 @@
 # The message system
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [agent.md](./agent.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md) and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [agent.md](../agents/agent.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md) and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
 
 `rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and Rimz types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command uses.
 
@@ -20,11 +20,11 @@ Three modes place a send on the timing axis. All three resolve the target throug
 
 ## Addressing and targets
 
-The address grammar (handle classes, channel resolution, arity, fan-out, `--create`) is [harness.md § The address](./harness.md#the-address). This section covers what a target resolves to for delivery: a live pane, or the durable **card** a parked message keys on — the logical agent identity the rollup tracks, a kind plus a session id or launch placeholder ([agent.md § The rollup](./agent.md#the-rollup)).
+The address grammar (handle classes, channel resolution, arity, fan-out, `--create`) is [harness.md § The address](./harness.md#the-address). This section covers what a target resolves to for delivery: a live pane, or the durable **card** a parked message keys on — the logical agent identity the rollup tracks, a kind plus a session id or launch placeholder ([agent.md § The rollup](../agents/agent.md#the-rollup)).
 
 Resolution climbs from the live command snapshot to the durable audit rollup. The live snapshot supplies bound panes and lazy sessionless panes. If that view misses, Rimz resolves the same address against audit-scope registered sessions and launch placeholders, bypassing runtime liveness expel and pane-frame failures. A match there creates a pane-less queued record; the next sweep or turn-boundary delivery re-resolves a live pane.
 
-`message --steer` reaches live panes. A bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet, a lazy-registering agent (Codex) before its first turn ([agent.md § The instance lifecycle](./agent.md#the-instance-lifecycle)), because the thing a paste needs is the pane, which the producer already detects. When the durable audit rollup resolves the target but no live pane is available, `--steer` parks the message instead of dropping it.
+`message --steer` reaches live panes. A bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet, a lazy-registering agent (Codex) before its first turn ([agent.md § The instance lifecycle](../agents/agent.md#the-instance-lifecycle)), because the thing a paste needs is the pane, which the producer already detects. When the durable audit rollup resolves the target but no live pane is available, `--steer` parks the message instead of dropping it.
 
 The default message path uses that live pane when the target can receive now, including lazy panes with no session yet. When it must park work, it keys the durable record on the bound session or launch placeholder card so FIFO survives registration. A message queued against a provisional `launch_*` card keeps the launch id in the record; when the card registers, name-based matching ([`same_card`](../../../crates/rimz/src/message.rs)) folds it into the session's single FIFO queue: one card, one queue.
 
@@ -242,7 +242,7 @@ Worktree identity follows the agent's own resolved checkout, not the room tree: 
 
 ### The named-channel registry
 
-Named channels live in `channels.json` beside `workspace.json` in the workspace ledger. The record stores the bare name and creation time; writes hold the workspace lock and use temp-file-plus-rename.
+Named channels live in `channels.json` beside `workspace.json` in the workspace store. The record stores the bare name and creation time; writes hold the workspace lock and use temp-file-plus-rename.
 
 The registry stores only named channels. Worktree channels use their `rimz-worktree.json` marker as durable truth, while in-place team and directory lanes derive from the stamped live launch identity. `rimz channel list` unions the registry, Rimz-owned worktrees, and live channels from the snapshot.
 
@@ -260,7 +260,7 @@ Commands run inside a named-channel, worktree, or in-place team pane inherit `RI
 
 ## The message store
 
-The ledger persists live message state in one JSONL file under the workspace state root, terminal message content in a sibling history file, and terminal audit in the shared event log:
+The store persists live message state in one JSONL file under the workspace state root, terminal message content in a sibling history file, and terminal audit in the shared event log:
 
 ```text
 messages/messages.jsonl   live queued, claimed, and sent records
@@ -268,9 +268,9 @@ messages/history.jsonl    terminal records with text, size-guarded to newest 500
 events.log.jsonl          terminal message.* audit events
 ```
 
-`messages/messages.jsonl` holds only live records. A terminal transition appends the final record to `messages/history.jsonl`, removes it from the queue file, then appends the terminal `message.*` event. The history append uses the same JSONL tolerance as the live queue and is pruned after append when the file passes 512 KiB by rewriting the newest 500 `msg_`-ordered records. The event log still carries no message content. All writes hold the workspace lock; queue rewrites use temp-file-plus-rename through the ledger atomic helpers, and history appends use the ledger append helper.
+`messages/messages.jsonl` holds only live records. A terminal transition appends the final record to `messages/history.jsonl`, removes it from the queue file, then appends the terminal `message.*` event. The history append uses the same JSONL tolerance as the live queue and is pruned after append when the file passes 512 KiB by rewriting the newest 500 `msg_`-ordered records. The event log still carries no message content. All writes hold the workspace lock; queue rewrites use temp-file-plus-rename through the store atomic helpers, and history appends use the store append helper.
 
-The store exposes `list()` (live records), `list_history()` (terminal records with text), and `list_pending()` (`Queued` records only). A missing `messages/messages.jsonl` means the workspace has no live queue records; pre-JSONL message files stay unread and the event log remains the source for terminal history. Store implementation: [`ledger/message_store.rs`](../../../crates/rimz/src/ledger/message_store.rs); ledger mutations: [`ledger/writer/queue.rs`](../../../crates/rimz/src/ledger/writer/queue.rs).
+The store exposes `list()` (live records), `list_history()` (terminal records with text), and `list_pending()` (`Queued` records only). A missing `messages/messages.jsonl` means the workspace has no live queue records; pre-JSONL message files stay unread and the event log remains the source for terminal history. Store implementation: [`store/message_store.rs`](../../../crates/rimz/src/store/message_store.rs); store mutations: [`store/writer/queue.rs`](../../../crates/rimz/src/store/writer/queue.rs).
 
 ## Transcript
 
@@ -293,7 +293,7 @@ A delivery becomes a `Message` entry when the receiver's turn-start hook parses 
 
 The transcript reader computes the current-life boundary at read time from the live cohort in scope: the earliest `registered_at` among the matching root agents. Entries before that timestamp are prior-session archive; the default view hides them when a live cohort exists, `--all` renders them under a dated archive marker, and a scope with no live cohort renders the whole log as archive. The JSONL buckets stay append-only and unmutated.
 
-Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](./agent.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
+Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](../agents/agent.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
 
 Domain types: [`chat.rs`](../../../crates/rimz/src/chat.rs) for the durable log, [`cli/transcript/`](../../../crates/rimz/src/cli/transcript/) for the chat projection.
 
@@ -322,6 +322,6 @@ Two hidden helpers are the pipeline's execution arms, spawned detached with null
 
 ## Hazards
 
-- Queued text can land while a human has half-typed a draft in the agent pane. Rimz gates on ledger state, not focused-pane state or captured composer contents.
+- Queued text can land while a human has half-typed a draft in the agent pane. Rimz gates on store state, not focused-pane state or captured composer contents.
 - Agent UIs can present dialogs no hook reports. Core keeps pane capture out of delivery; a script that needs to inspect UI text owns capture-before-send through the public `pane capture` primitive.
 - Multiplexer sends are best-effort: a pane can disappear or reject input after the claim, which the message record records and retries until the attempt cap.

@@ -1,7 +1,7 @@
 //! Durable named-channel registry.
 //!
 //! Worktree, team, and directory channels are derived from their backing state.
-//! This file stores only bare named lanes so an empty cooperation tab survives
+//! This file stores only bare named channels so an empty cooperation tab survives
 //! room rebirth.
 
 use std::collections::{BTreeMap, btree_map::Entry};

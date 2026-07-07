@@ -1,7 +1,6 @@
 # Product
 
-> The design these flows rest on (attention routing, ledger-owned durability, one CLI shared by agents and scripts) is [DESIGN.md](../../DESIGN.md).
-
+> The design these flows rest on — attention routing, store-owned durability, one CLI shared by agents and scripts — is [DESIGN.md](../../DESIGN.md).
 Rimz runs tens or hundreds of Claude Code, Codex, and Pi sessions in parallel, on a laptop or on a server you reach over SSH, inside the Zellij or tmux you already run, with your keybinds and the official apps untouched. This page is the working tour, ordered the way people scale, each step moving your leverage further from the keyboard: triage a fleet in one room, put a team on a feature, move it to a server, engineer the loop past your attention span, and script agents like any other CLI. The first session, install to a working fleet, is walked step by step in [experience.md](./experience.md).
 
 ## The room and the sidebar
@@ -64,14 +63,13 @@ The room treats a team as one line of work. The sidebar keeps its members as one
 
 The sidebar groups panes by worktree, so main plus two feature trees render as three groups in one room. Agents in one worktree share files and siblings keep their own: write-capable agents in sibling worktrees is the recommended pattern, and two in the same tree trigger a one-time advisory. Two `rimz agents claude "…" --worktree` launches race parallel attempts, each in its own fresh tree.
 
-Cleanup is supervised. When a worktree agent is reclaimed, work proven landed on the base branch is swept away with its branch; anything dirty, pending, or unknown is kept, behind a keep/remove/shell prompt when you're watching, and `rimz gc` sweeps leftovers later under the same proof ([worktree.md](../internals/agents/worktree.md#cleanup)).
+Cleanup is supervised. When a worktree agent is reclaimed, work proven landed on the base branch is swept away with its branch; anything dirty, pending, or unknown is kept, behind a keep/remove/shell prompt when you're watching, and `rimz gc` sweeps leftovers later under the same proof ([worktree.md](../internals/harness/worktree.md#cleanup)).
 
 ## Run it on a server
 
-Your dev box lives on a server: start agents, close the laptop, reopen from a tablet on the train. `rimz remote connect dev-box:query-engine` reconstructs the sidebar from the ledger: every agent where you left it, every pending question still waiting. Saved aliases carry the target and reconnect defaults (`rimz remote add dev dev-box:~/code/query-engine`, then `rimz remote connect dev`), the link supervises itself with automatic reconnects, and a `⇄ remote 210ms` badge in the sidebar footer reads link health at a glance ([remote internals](../internals/reach/remote.md)).
+Your dev box lives on a server: start agents, close the laptop, reopen from a tablet on the train. `rimz remote connect dev-box:query-engine` reconstructs the sidebar from the store — every agent where you left it, every pending question still waiting. Saved aliases carry the target and reconnect defaults (`rimz remote add dev dev-box:~/code/query-engine`, then `rimz remote connect dev`), the link supervises itself with automatic reconnects, and a `⇄ remote 210ms` badge in the sidebar footer reads link health at a glance ([remote internals](../internals/reach/remote.md)).
 
-The room outlives the host. The ledger is a directory of flat files under `~/.local/state/rimz/`, and after a reboot or mux crash Rimz offers the fleet back: prior agents idle in their `#channel` tabs (`claude --resume`, `codex resume`, `pi --session`), one prompt from where they stopped. The offer defaults yes, non-interactive starts recover, `rimz reset` or `--no-resume` starts clean, and a room you closed deliberately stays closed.
-
+The room outlives the host. The store is a directory of flat files under `~/.local/state/rimz/`, and after a reboot or mux crash Rimz offers the fleet back — prior agents idle in their `#channel` tabs (`claude --resume`, `codex resume`, `pi --session`), one prompt from where they stopped. The offer defaults yes, non-interactive starts recover, `rimz reset` or `--no-resume` starts clean, and a room you closed deliberately stays closed.
 Long runs meet provider limits, and the room keeps them legible: an agent on the 5-hour wall parks as `⏸` while the provider dashboard counts down the reset (`↻ 1h47m`), in the same place the week's spend reads. That pause is the first thing loop engineering automates, next.
 
 ## Engineer the loop
@@ -102,7 +100,7 @@ What the handler runs is up to you, and the primitives that drive the room are p
 
 How an unattended run answers permissions is a posture you choose, and two patterns compose. The posture is the guardrail layer of the harness you are building: a constraint the room and the agent's own prompts enforce, rather than a rule the model is asked to follow.
 
-The agent's own bypass flag runs straight through: `claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`, or `rimz agents <kind> "<prompt>" -p --yolo` to pass the adapter's flag for you (`--ask` keeps the provider's prompts in place). Rimz still observes sessions, completions, and failures through lifecycle hooks; the tradeoff is that the agent skips permission events at the source, so the ledger holds what other hooks report rather than a per-decision audit trail.
+The agent's own bypass flag runs straight through: `claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`, or `rimz agents <kind> "<prompt>" -p --yolo` to pass the adapter's flag for you (`--ask` keeps the provider's prompts in place). Rimz still observes sessions, completions, and failures through lifecycle hooks; the tradeoff is that the agent skips permission events at the source, so the store holds what other hooks report rather than a per-decision audit trail.
 
 Answering in the agent's own UI keeps the per-decision record: the prompt, the answer, and the tool run all land in the agent's transcript, whether you typed the answer or a handler you wired sent it with `rimz pane send`. Prefer that path when handled prompts belong on the record, and reserve the bypass flag for runs where you accept the tradeoff.
 
@@ -123,6 +121,6 @@ For orchestration:
 - `rimz agents show <ref>` reports activity, context, placement, the attached run, the message queue, and recent transcript.
 - `rimz message --steer @<agent> "continue"` is the first-class nudge for wrapper scripts; `rimz pane send` and `rimz pane capture` remain the universal fallback.
 
-Flags and selection rules: [the agent-control reference](../reference/cli/agents.md#agents). Run records and completion mechanics: [harness.md](../internals/agents/harness.md#supervised-runs).
+Flags and selection rules: [the agent-control reference](../reference/cli/agents.md#agents). Run records and completion mechanics: [harness.md](../internals/harness/harness.md#supervised-runs).
 
 Scripts drive the room with the same commands you type. A pipeline that needs a judgment call runs one supervised turn and reads the exit code (`rimz agents claude -p "review the canary metrics and reply SHIP or HOLD"`); a wrapper hands follow-up work to a running agent with `rimz message --on done`; `rimz pane capture` and `rimz transcript` read back what happened. These are the primitives the interactive room runs on, so anything you do at the keyboard, a script can do on a schedule.

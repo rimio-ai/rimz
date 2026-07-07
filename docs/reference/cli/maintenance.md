@@ -1,6 +1,6 @@
 # Maintenance CLI
 
-These commands configure the machine, keep a room's identity and ledger healthy, recover a wedged room, sweep runtime state, and answer liveness probes. Every command here also accepts the global `--mux` and `--root` overrides.
+These commands configure the machine, keep a room's identity and store healthy, recover a wedged room, sweep runtime state, and answer liveness probes. Every command here also accepts the global `--mux` and `--root` overrides.
 
 ## Configure the machine
 
@@ -39,7 +39,7 @@ rimz list-pets [--json]
 
 `list-pets` previews each bundled provider-dashboard pet and each pet installed under `~/.codex/pets/` as a medium cell-art sprite in a width-fitted grid on a terminal, streaming rows as sprites load, fetching and caching the built-in sheets, and honoring `RIMZ_PETS_OFFLINE`. Installed pets are labeled by selectable slug. Off a terminal it prints pet ids one per line, and `--json` emits the id array with installed slugs after the built-ins.
 
-## Workspace ledger tools
+## Workspace store tools
 
 ```sh
 rimz workspace resolve [PATH]
@@ -47,7 +47,7 @@ rimz workspace migrate <OLD_ROOT> <NEW_ROOT>
 rimz workspace rotate-events [--max-bytes <SIZE>] [--archive-older-than <DURATION>]
 ```
 
-`resolve` prints the resolved workspace as JSON — scripts use it to capture stable fields (`workspace_id`, `project_root`, `root_class`, `worktree_root`, `worktree_branch`, `session_name`, `mux_hint`) before invoking other tools. `migrate` moves a workspace ledger after its project root moves on disk, rewriting queued messages, events, and metadata to the new identity. `rotate-events` archives the active event log when it reaches `--max-bytes` (default `64MiB`) and starts a fresh log while preserving the agent carryover the sidebar and rebirth flow need; `--archive-older-than` prunes older archives and defaults to `14d`. The durability and rotation contract is in [ledger.md](../../internals/sidebar/ledger.md).
+`resolve` prints the resolved workspace as JSON — scripts use it to capture stable fields (`workspace_id`, `project_root`, `root_class`, `worktree_root`, `worktree_branch`, `session_name`, `mux_hint`) before invoking other tools. `migrate` moves a workspace store after its project root moves on disk, rewriting queued messages, events, and metadata to the new identity. `rotate-events` archives the active event log when it reaches `--max-bytes` (default `64MiB`) and starts a fresh log while preserving the agent carryover the sidebar and rebirth flow need; `--archive-older-than` prunes older archives and defaults to `14d`. The durability and rotation contract is in [store.md](../../internals/store/store.md).
 
 ## Reload, reset, GC, and uninstall
 
@@ -62,10 +62,10 @@ These repair or clean an installation without changing configuration.
 
 - **`reload`** runs from anywhere and reconciles running sidebars onto the current Rimz build: it re-execs sidebars where possible, restarts those that cannot reload in place, closes duplicates and unresponsive ones, repairs geometry, restarts `rimz stats --refresh` dashboards, and leaves stopped sessions stopped.
 - **`reset`** is the escape hatch for a wedged room. It resolves `PATH` as the cwd, tears down the session, purges the resurrection cache, archives records, clears coordination state, sweeps orphaned processes, then rebuilds and reattaches by default. `--yes` skips the prompt (required off a TTY), `--no-start` stops after teardown and prints the rerun hint, and `--hard` also removes the agent carryover (a plain reset keeps it for history but still starts empty).
-- **`gc`** removes stale runtime state older than `--older-than` (default `24h`), sweeps orphaned atomic-write temp files (`*.tmp.<pid>.<nonce>`) across the state and runtime trees, removes stale provider probe-throttle markers (`*-probe.*`) from the runtime shared dir, applies the shorter Codex TTL to per-session app-server throttle stamps, abandons queued messages for missing sessions, repairs a corrupt event-log tail, prunes provably dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed with no live pane inside. It prints live progress, reports reclaimed disk grouped by category, and names each swept worktree and pruned workspace. `--dry-run` previews the same report without removing anything and skips ledger maintenance; `--json` emits the report as JSON on stdout.
-- **`uninstall`** removes Rimz from the machine: installed agent hooks, running rooms, runtime state, cache, data artifacts, and the `rimz` binaries it finds at the current executable, Cargo's bin dir, and `/usr/local/bin` (override the system bin probe with `RIMZ_SYSTEM_BIN_DIR`). Durable ledgers and spend history stay unless `--state` is passed; per-machine config, themes, trust grants, notification handlers, and remote aliases stay unless `--config` is passed; `--all` passes both. `--keep-binary` leaves binaries in place. `--yes` skips the prompt and is required off a TTY. Project-local `.rimz/` dirs and Rimz-owned worktrees stay in place because they can hold project config and unlanded work.
+- **`gc`** removes stale runtime state older than `--older-than` (default `24h`), sweeps orphaned atomic-write temp files (`*.tmp.<pid>.<nonce>`) across the state and runtime trees, removes stale provider probe-throttle markers (`*-probe.*`) from the runtime shared dir, applies the shorter Codex TTL to per-session app-server throttle stamps, abandons queued messages for missing sessions, repairs a corrupt event-log tail, prunes provably dead workspace stores, and sweeps clean Rimz-marked worktrees whose work has landed with no live pane inside. It prints live progress, reports reclaimed disk grouped by category, and names each swept worktree and pruned workspace. `--dry-run` previews the same report without removing anything and skips store maintenance; `--json` emits the report as JSON on stdout.
+- **`uninstall`** removes Rimz from the machine: installed agent hooks, running rooms, runtime state, cache, data artifacts, and the `rimz` binaries it finds at the current executable, Cargo's bin dir, and `/usr/local/bin` (override the system bin probe with `RIMZ_SYSTEM_BIN_DIR`). Durable stores and spend history stay unless `--state` is passed; per-machine config, themes, trust grants, notification handlers, and remote aliases stay unless `--config` is passed; `--all` passes both. `--keep-binary` leaves binaries in place. `--yes` skips the prompt and is required off a TTY. Project-local `.rimz/` dirs and Rimz-owned worktrees stay in place because they can hold project config and unlanded work.
 
-Sidebar reload behavior is in [sidebar.md](../../internals/sidebar/sidebar.md); reset and GC ledger effects are in [ledger.md](../../internals/sidebar/ledger.md).
+Sidebar reload behavior is in [sidebar.md](../../internals/sidebar/sidebar.md); reset and GC store effects are in [store.md](../../internals/store/store.md).
 
 ## Ping
 

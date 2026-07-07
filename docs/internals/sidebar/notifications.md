@@ -1,6 +1,6 @@
 # Notifications
 
-Rimz sends best-effort attention alerts from the same state that drives the sidebar. The ledger remains truth; notifications are latency and reachability.
+Rimz sends best-effort attention alerts from the same state that drives the sidebar. The store remains truth; notifications are latency and reachability.
 
 ## Channels
 
@@ -20,7 +20,7 @@ Unread is the inbox bit. A row opens an unread episode in `unread.json` when its
 
 The first reconciliation when `unread.json` is absent opens current attention rows silently: they render unread on attach, but they do not replay a desktop/banner storm. After the file exists, only new episode opens are eligible for a push. The same durable set dedupes producer handoff and renderer restart because an already-open episode is already recorded.
 
-The producer applies trigger filtering, per-agent debounce, burst coalescing, and focus suppression to pushes only. The built-in trigger set is `waiting` and `failed`; `paused` and `success` open unread and stay quiet unless configured. A trigger filter can suppress a handler/banner while the row still becomes unread. Focus suppression reads the same live pane focus bit the sidebar already folds into snapshots; it is a conservative visibility hint, not ledger truth.
+The producer applies trigger filtering, per-agent debounce, burst coalescing, and focus suppression to pushes only. The built-in trigger set is `waiting` and `failed`; `paused` and `success` open unread and stay quiet unless configured. A trigger filter can suppress a handler/banner while the row still becomes unread. Focus suppression reads the same live pane focus bit the sidebar already folds into snapshots; it is a conservative visibility hint, not store truth.
 
 For each notification, the producer first renders the event into its banner text, applying `[notifications].title` and `[notifications].body` only for agent-status and coalesced notifications. It then spawns each matching `[[notifications.handler]]` and broadcasts `SidebarEvent::Notify` to the sidebar socket with the triggering agent pane ids. The legacy `[notifications].command` key desugars to one unconditional handler. Every handler command receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, `RIMZ_NOTIFY_KIND`, `RIMZ_NOTIFY_PANE`, and `RIMZ_NOTIFY_ROOT`; reminders also receive `RIMZ_NOTIFY_UNREAD` with the unread actionable count. Pane and root are filled for a single-agent notification and empty for coalesced or sparse notifications. The child inherits no hook stdout and is handed to the global child reaper.
 
@@ -95,3 +95,5 @@ command = "python3 ~/bin/waiting_hook.py {{pane}} {{root}}"
 ```
 
 A script that reads pane text handles untrusted data: an agent's output can contain anything, so match it against patterns the script owns and do nothing on unknown shapes. Keep handler credentials in per-machine config; the operator-facing threat model is [security](../../guide/security.md).
+
+Handlers are also where off-box attention routing would grow from: a future bridge subsystem — first-class outbound channels (push services, chat, mail) with delivery guarantees — would be handlers grown up, not a parallel mechanism.

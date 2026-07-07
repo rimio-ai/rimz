@@ -1,6 +1,6 @@
 # Diagnostics
 
-Rimz records what goes wrong as typed evidence, so a transient fault leaves something to debug after it heals. A roster that empties and refills over two seconds, a spend figure that blinks to zero, a card that outlives its pane: each is invisible an hour later. Rimz captures the evidence at the moment it happens and keeps it where the investigation will look. Correctness reads the ledger, CAS rules, and caches; diagnostics are evidence for a human, and no correctness path reads them back.
+Rimz records what goes wrong as typed evidence, so a transient fault leaves something to debug after it heals. A roster that empties and refills over two seconds, a spend figure that blinks to zero, a card that outlives its pane: each is invisible an hour later. Rimz captures the evidence at the moment it happens and keeps it where the investigation will look. Correctness reads the store, CAS rules, and caches; diagnostics are evidence for a human, and no correctness path reads them back.
 
 Evidence has two destinations. The default is a durable per-workspace log on the box, always on. The second is off-box error reporting to a Sentry project, compiled only into dev builds and dormant until a contributor opts in. Both are best-effort enrichment layered beside the running system: neither ever holds a correctness path, and the sidebar keeps unstructured tracing off by default.
 
@@ -8,7 +8,7 @@ Most of this doc is the local log and the [frame-stream observer](#the-frame-str
 
 ## Where diagnostics land
 
-Each workspace writes its diagnostic logs under its state directory, `~/.local/state/rimz/workspaces/<workspace-id>/`. The state directory is the right home because the job is investigation after the pane, mux session, or machine has gone away: runtime caches under `$XDG_RUNTIME_DIR` die with the session, while these records survive reboot like ledger records.
+Each workspace writes its diagnostic logs under its state directory, `~/.local/state/rimz/workspaces/<workspace-id>/`. The state directory is the right home because the job is investigation after the pane, mux session, or machine has gone away: runtime caches under `$XDG_RUNTIME_DIR` die with the session, while these records survive reboot like store records.
 
 The `diag/` module owns a family of append-only JSONL surfaces that share one rotating helper, [`JsonlLog`](../../../crates/rimz/src/diag/rotating.rs): every file rotates at 1 MiB to one kept generation (`<name>.1.jsonl`) and appends best-effort, so a failed write logs at debug rather than surfacing on a Rimz path. Three of these surfaces carry the workspace identity through one [`DiagSink`](../../../crates/rimz/src/diag.rs); a disabled sink is a no-op with the same methods, so the emitting callsites need no `#[cfg]` or branch.
 
@@ -32,7 +32,7 @@ Every line in `diag.log.jsonl` is a `rimz.diag.v1` JSON object from [`diag/recor
 
 The `build` id, also stamped on every published pane frame, is a digest of the writing executable read from its linker-provided build-id note ([`build_id.rs`](../../../crates/rimz/src/build_id.rs)), so records and frames written by overlapping old and new builds during an upgrade stay distinguishable in place. A producer that reads a prior frame stamped by a different build additionally records a `mixed_build_writers` event, marking the upgrade-overlap window where a stale writer can regress fresh state.
 
-Records are anomaly-only. Routine fetch ticks, successful paints, and stable cache hits write nothing. Pure projection layers return diagnostics as data; impure callers append them through the `DiagSink`, so ledger reducers and the renderer gate carry no disk-write API. The observer's writer thread emits through the same sink, so every anomaly source shares one envelope, one file, and one rate limiter.
+Records are anomaly-only. Routine fetch ticks, successful paints, and stable cache hits write nothing. Pure projection layers return diagnostics as data; impure callers append them through the `DiagSink`, so store reducers and the renderer gate carry no disk-write API. The observer's writer thread emits through the same sink, so every anomaly source shares one envelope, one file, and one rate limiter.
 
 ## Event taxonomy
 
@@ -44,7 +44,7 @@ The emitter is the triage pointer: producer kinds describe pane-source truth, re
 | `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `link_alert`, `producer_elected`, `producer_demoted`, `renderer_panic`, `renderer_exit` | `sidebar_pane::app` | Renderer-side holds, degraded refresh episodes, remote-link degraded/recovered episodes, producer handoff, panics that would otherwise disappear with the pane, clean self-close and give-up exits with cause |
 | `tick_budget_breach` | `sidebar::meter` via the fetch worker and cache refresher | sustained over-budget producer ticks: worst in-process wall time, mux wait, fold bytes, spawns, declared budgets, streak length, episode `since_ms`, and recovery |
 | `renderer_signal_death` | `sidebar_pane::supervise` | Abnormal signal or non-panic exit from the render worker, with the captured stderr tail |
-| `row_conflict`, `newborn_quarantined`, `group_migration` | `ledger::snapshot::view` via `sidebar::enrich` and renderer state diffing | duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, cwd-driven pane moves across group boundaries |
+| `row_conflict`, `newborn_quarantined`, `group_migration` | `store::snapshot::view` via `sidebar::enrich` and renderer state diffing | duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, cwd-driven pane moves across group boundaries |
 | `frame_anomaly` | `sidebar::observe` writer thread | rendered-stream detector verdicts — flaps, oscillations, resets, per-frame consistency violations, elder cross-checks — each carrying its detector key, evidence, frame stamp, and the writer's elder/consumer role |
 | `mixed_build_writers` | `sidebar::produce::panes` | a prior published frame stamped by a different build than the producing process — the upgrade-overlap window where stale writers regress fresh state |
 
@@ -163,7 +163,7 @@ The carry-forward guard answers this shape before publication, so the same fault
 
 Card-content questions (a wrong gauge, a missing cost, a card resting in the wrong shape) are answered from the same read path the renderer runs, before any raw file is opened. Rendered-frame anomalies (flicker, duplicate rows, missing tabs) take the [episode workflow](#investigating-an-episode) instead.
 
-`rimz workspace resolve <path>` names the workspace for any project path and prints its `workspace_id`. Every worktree of a repository resolves to the repository's own workspace, so a `rimz-worktrees/<branch>` checkout maps to the main repository's state and runtime directories. State lives under `$XDG_STATE_HOME/rimz/workspaces/<id>/` and runtime files under `$XDG_RUNTIME_DIR/rimz/<id>/`; the layout is owned by [`ledger/paths.rs`](../../../crates/rimz/src/ledger/paths.rs).
+`rimz workspace resolve <path>` names the workspace for any project path and prints its `workspace_id`. Every worktree of a repository resolves to the repository's own workspace, so a `rimz-worktrees/<branch>` checkout maps to the main repository's state and runtime directories. State lives under `$XDG_STATE_HOME/rimz/workspaces/<id>/` and runtime files under `$XDG_RUNTIME_DIR/rimz/<id>/`; the layout is owned by [`store/paths.rs`](../../../crates/rimz/src/store/paths.rs).
 
 `rimz sidebar snapshot --json --no-produce`, run from anywhere inside the workspace (or with `--workspace-id` from outside it), prints the fused `SidebarSnapshot` a node renders: the event-fresh rollup folded over the published pane frame plus the per-session sidecars ([state.md](../sidebar/state.md)). `--no-produce` keeps the read passive (no mux or git forks), so inspection never perturbs the room; omit it to pay one producing refresh when no fresh producer cache exists.
 
@@ -185,7 +185,7 @@ jq -r '[.kind, .agent_id, .context.session_name] | @tsv' agent_context/ctx.*.jso
 jq . agent_context/ctx.<digest>.json                                                # the full record
 ```
 
-The ledger's own view without the sidecar fold is the published checkpoint plus log tail ([ledger.md](../sidebar/ledger.md#runtime-projection)); comparing it against the snapshot attributes a wrong figure to the rollup, the sidecar, or the fold. The renderer-side derivations a card dispute usually hinges on live on the view model: the gauge-source preference is [`AgentCard::context_gauge_percent`](../../../crates/rimz/src/ledger/snapshot/row.rs) and the card-shape predicates sit in the agent-card section ([`agent_card/mod.rs`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/mod.rs)).
+The store's own view without the sidecar fold is the published checkpoint plus log tail ([store.md](../store/store.md#runtime-projection)); comparing it against the snapshot attributes a wrong figure to the rollup, the sidecar, or the fold. The renderer-side derivations a card dispute usually hinges on live on the view model: the gauge-source preference is [`AgentCard::context_gauge_percent`](../../../crates/rimz/src/store/snapshot/row.rs) and the card-shape predicates sit in the agent-card section ([`agent_card/mod.rs`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/mod.rs)).
 
 ## Off-box error reporting
 
@@ -195,7 +195,7 @@ Without the feature, [`observability`](../../../crates/rimz/src/observability.rs
 
 ### Opting in
 
-Reporting exists in builds compiled with `--features sentry`. `cargo xtask install-dev` is the contributor shortcut: it installs the optimized `profiling` host profile with the feature on and, when `sentry-cli` is installed and authenticated, best-effort uploads that binary's debug files. Reporting turns on when a DSN resolves from `RIMZ_SENTRY_DSN` or the per-machine `[sentry]` config; the env value wins, and an empty value counts as unset. The DSN lives per-machine, never in the committed `.rimz/config.toml`, so a clone or pull cannot redirect a contributor's telemetry, and the DSN stays off the [project trust surface](../sidebar/trust.md). `RIMZ_SENTRY_ENVIRONMENT` (or `[sentry] environment`) tags the deployment; unset, it defaults by build profile, so an installed release reports as `production` while dev, profiling, and CI builds report as `development`, keeping contributor noise off the production dashboard. The config shape lives in [configuration.md → Off-box error reporting](../../reference/configuration.md#off-box-error-reporting); the data boundary lives in [security.md → Off-box error reporting](../../guide/security.md#off-box-error-reporting).
+Reporting exists in builds compiled with `--features sentry`. `cargo xtask install-dev` is the contributor shortcut: it installs the optimized `profiling` host profile with the feature on and, when `sentry-cli` is installed and authenticated, best-effort uploads that binary's debug files. Reporting turns on when a DSN resolves from `RIMZ_SENTRY_DSN` or the per-machine `[sentry]` config; the env value wins, and an empty value counts as unset. The DSN lives per-machine, never in the committed `.rimz/config.toml`, so a clone or pull cannot redirect a contributor's telemetry, and the DSN stays off the [project trust surface](../harness/trust.md). `RIMZ_SENTRY_ENVIRONMENT` (or `[sentry] environment`) tags the deployment; unset, it defaults by build profile, so an installed release reports as `production` while dev, profiling, and CI builds report as `development`, keeping contributor noise off the production dashboard. The config shape lives in [configuration.md → Off-box error reporting](../../reference/configuration.md#off-box-error-reporting); the data boundary lives in [security.md → Off-box error reporting](../../guide/security.md#off-box-error-reporting).
 
 With no DSN, no client is created and Rimz makes no network calls. A malformed DSN yields `Reporting::InvalidDsn`, logged with the fix once the subscriber is live and otherwise inert, so a telemetry typo never degrades or blocks a command.
 

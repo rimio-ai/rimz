@@ -1,6 +1,6 @@
 # Zellij upstream reference
 
-> The Rimz-side contracts live in [multiplexers.md](../../internals/sidebar/multiplexers.md) — the `MuxBackend` seam, the presence channel, the birth layout, the health gates — and [web.md](../../internals/reach/web.md) for browser access. This doc mirrors the upstream surface itself.
+> The Rimz-side contracts live in [multiplexers.md](../../internals/mux/multiplexers.md) — the `MuxBackend` seam, the presence channel, the birth layout, the health gates — and [web.md](../../internals/reach/web.md) for browser access. This doc mirrors the upstream surface itself.
 
 This is the single home for the **Zellij upstream surface** Rimz binds to — the wasm plugin API (lifecycle, events, commands, types, permissions, workers, pipes), the CLI control surface, the configuration options, the layout KDL, and session serialization. It is a hand-maintained mirror of zellij.dev's docs cross-checked against the installed binary's `--help` and the `zellij-utils`/`zellij-tile` 0.44.3 source, captured at **Zellij 0.44.3** (2026-06). Where the website and the source disagree, the source wins.
 
@@ -28,7 +28,7 @@ Re-fetch these to refresh this mirror. The canonical type definitions live in th
 
 ## Plugin API
 
-Plugins are wasm32-wasip1 binaries loaded into Zellij's plugin host. Rimz ships one: [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/) ([multiplexers.md → presence channel](../../internals/sidebar/multiplexers.md#zellij-presence-channel)).
+Plugins are wasm32-wasip1 binaries loaded into Zellij's plugin host. Rimz ships one: [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/) ([multiplexers.md → presence channel](../../internals/mux/multiplexers.md#zellij-presence-channel)).
 
 ### Lifecycle
 
@@ -94,7 +94,7 @@ Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variant
 
 Verified Rimz caveat: the `SessionUpdate` pane manifest for the current session can arrive transiently partial on Zellij's roughly 60s serialization cadence while `PaneUpdate`, `list-panes -j -a`, and the serialized session metadata still reflect the full live room. Rimz treats `PaneUpdate` as the authoritative pane roster and uses `SessionUpdate` only as an upstream session-info event reference.
 
-**`CommandChanged` is the load-bearing event for Rimz**: it pushes the foreground-command handoff with the full argv, the foreground bit, and the focused clients — exactly the live process state `list-panes -j` does not report ([caveats](../../internals/sidebar/multiplexers.md#zellij-backend-caveats)). A cached permission grant produces **no** `PermissionRequestResult`; application state flowing is the proof of grant (verified live, 0.44.3).
+**`CommandChanged` is the load-bearing event for Rimz**: it pushes the foreground-command handoff with the full argv, the foreground bit, and the focused clients — exactly the live process state `list-panes -j` does not report ([caveats](../../internals/mux/multiplexers.md#zellij-backend-caveats)). A cached permission grant produces **no** `PermissionRequestResult`; application state flowing is the proof of grant (verified live, 0.44.3).
 
 ### Commands (host functions)
 
@@ -115,7 +115,7 @@ The `get_pane_pid` / `get_pane_running_command` / `get_pane_cwd` request/respons
 - *Sessions:* `switch_session(Option<&str>)` / `…_with_layout` / `…_with_cwd` / `…_with_focus(name, tab, (pane_id, is_plugin))` · `rename_session(&str)` · `kill_sessions(&[names])` · `delete_dead_session(name)` / `delete_all_dead_sessions()` · `detach()` · `disconnect_other_clients()` · `quit_zellij()` · `change_host_folder(PathBuf)`.
 - *Signals & layouts:* `send_sigint_to_pane_id(PaneId)` / `send_sigkill_to_pane_id(PaneId)` · `rerun_command_pane(terminal_id)` · `save_layout(name, kdl, overwrite)` / `delete_layout(name)` / `rename_layout(old, new)` / `edit_layout(name, ctx)` · `override_layout(LayoutInfo, retain_terminals, retain_plugins, active_tab_only, ctx)` · `previous_swap_layout()` / `next_swap_layout()`.
 
-**RunCommands** — `run_command(&[&str], Context)` ✓ → `RunCommandResult` · `run_command_with_env_variables_and_cwd(cmd, env, cwd, ctx)` · the `open_command_pane*` family (tiled / `_floating` / `_in_place` / `_near_plugin` / `_floating_near_plugin` / `_in_place_of_plugin(close_after)` / `_in_place_of_pane_id` / `_background`) each `(CommandToRun, [coords,] Context) -> Option<PaneId>`. `run_command` spawns with the **server's** env and the launching CLI's cwd — pass absolute argv. Both `run_command` and timers keep working with **zero clients attached** (verified live, 0.44.3), though a detached or starved server can still drop *pane-lifecycle* processing until the next attach ([caveats](../../internals/sidebar/multiplexers.md#zellij-backend-caveats)).
+**RunCommands** — `run_command(&[&str], Context)` ✓ → `RunCommandResult` · `run_command_with_env_variables_and_cwd(cmd, env, cwd, ctx)` · the `open_command_pane*` family (tiled / `_floating` / `_in_place` / `_near_plugin` / `_floating_near_plugin` / `_in_place_of_plugin(close_after)` / `_in_place_of_pane_id` / `_background`) each `(CommandToRun, [coords,] Context) -> Option<PaneId>`. `run_command` spawns with the **server's** env and the launching CLI's cwd — pass absolute argv. Both `run_command` and timers keep working with **zero clients attached** (verified live, 0.44.3), though a detached or starved server can still drop *pane-lifecycle* processing until the next attach ([caveats](../../internals/mux/multiplexers.md#zellij-backend-caveats)).
 
 **OpenFiles** — `open_file*` family mirroring the command-pane variants, each `(FileToOpen, [coords,] Context) -> Option<PaneId>`, plus `open_edit_pane_in_place_of_pane_id`.
 
@@ -186,7 +186,7 @@ Integer-width inconsistency to keep straight: `TabInfo.tab_id` is `usize`, `clos
 | `WriteToClipboard` | Write to the clipboard |
 | `ReadSessionEnvironmentVariables` | Read env vars present at session creation |
 
-`request_permission(&[…])` raises one floating prompt for the whole batch; the answer arrives as `PermissionRequestResult`. Zellij persists grants in `<cache-dir>/zellij/permissions.kdl`, keyed on the exact plugin path string — canonicalize before loading or the grant misses ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-presence-channel)). The KDL shape is a plugin-path node with one child node per permission:
+`request_permission(&[…])` raises one floating prompt for the whole batch; the answer arrives as `PermissionRequestResult`. Zellij persists grants in `<cache-dir>/zellij/permissions.kdl`, keyed on the exact plugin path string — canonicalize before loading or the grant misses ([multiplexers.md](../../internals/mux/multiplexers.md#zellij-presence-channel)). The KDL shape is a plugin-path node with one child node per permission:
 
 ```kdl
 "/home/user/.local/share/rimz/plugins/rimz-presence-zellij.wasm" {
@@ -228,7 +228,7 @@ PipeMessage {
 - A pipe with no explicit destination **broadcasts to all running plugins**; `--plugin <url>` targets (and launch-or-messages) one. Same URL + different `--plugin-configuration` = a **different plugin identity** for destination matching.
 - **CLI backpressure:** the piping process's STDIN buffer is released only after the plugin renders (or declines to render). `block_cli_pipe_input(id)` holds the pipeline; `unblock_cli_pipe_input(id)` resumes it; `cli_pipe_output(id, data)` writes to the CLI pipe's STDOUT independently. Several plugins can hold/feed the same pipe if they share its id.
 - Plugin → plugin: `pipe_message_to_plugin(MessageToPlugin)`; destination `zellij:OWN_URL` expands to the caller's own URL (self-replication — guard against config-keyed message loops).
-- The CLI side (`zellij pipe`) blocks while a launched plugin's permission prompt is pending — bound the call and reap only the CLI client ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-presence-channel)).
+- The CLI side (`zellij pipe`) blocks while a launched plugin's permission prompt is pending — bound the call and reap only the CLI client ([multiplexers.md](../../internals/mux/multiplexers.md#zellij-presence-channel)).
 
 ### Keybind actions
 
@@ -252,7 +252,7 @@ zellij [OPTIONS] [SUBCOMMAND]
       --data-dir <dir>      plugin lookup    --max-panes <n>    -d, --debug
 ```
 
-Subcommands (aliases): `action`/`ac` · `attach`/`a` · `run`/`r` · `edit`/`e` · `plugin`/`p` · `pipe` · `subscribe` · `watch`/`w` · `web` · `options` · `setup` · `list-sessions`/`ls` · `list-aliases`/`la` · `kill-session`/`k` · `kill-all-sessions`/`ka` · `delete-session`/`d` · `delete-all-sessions`/`da` · `convert-config` / `convert-layout` / `convert-theme` (YAML→KDL migration). `run`, `edit`, and `plugin` print the created pane id (`terminal_<id>` / `plugin_<id>`) — treat it as a hint, not an authority ([caveats](../../internals/sidebar/multiplexers.md#zellij-backend-caveats)).
+Subcommands (aliases): `action`/`ac` · `attach`/`a` · `run`/`r` · `edit`/`e` · `plugin`/`p` · `pipe` · `subscribe` · `watch`/`w` · `web` · `options` · `setup` · `list-sessions`/`ls` · `list-aliases`/`la` · `kill-session`/`k` · `kill-all-sessions`/`ka` · `delete-session`/`d` · `delete-all-sessions`/`da` · `convert-config` / `convert-layout` / `convert-theme` (YAML→KDL migration). `run`, `edit`, and `plugin` print the created pane id (`terminal_<id>` / `plugin_<id>`) — treat it as a hint, not an authority ([caveats](../../internals/mux/multiplexers.md#zellij-backend-caveats)).
 
 ### `attach`
 
@@ -324,7 +324,7 @@ Blank payload reads STDIN line-buffered with plugin backpressure; plugin `cli_pi
 
 ## Configuration
 
-KDL, one file. Lookup order: `--config-dir` flag → `$ZELLIJ_CONFIG_DIR` → `$HOME/.config/zellij` → platform default (Linux XDG; macOS `~/Library/Application Support/org.Zellij-Contributors.Zellij`) → `/etc/zellij`. `zellij setup --dump-config` prints the default. Zellij **watches the active config file and live-applies most changes**. A missing config births the first-run setup wizard, which silently drops `action new-pane` mounts while showing ([caveats](../../internals/sidebar/multiplexers.md#zellij-backend-caveats)); note Zellij prefers and creates `$HOME/.config/zellij` over `$XDG_CONFIG_HOME/zellij`.
+KDL, one file. Lookup order: `--config-dir` flag → `$ZELLIJ_CONFIG_DIR` → `$HOME/.config/zellij` → platform default (Linux XDG; macOS `~/Library/Application Support/org.Zellij-Contributors.Zellij`) → `/etc/zellij`. `zellij setup --dump-config` prints the default. Zellij **watches the active config file and live-applies most changes**. A missing config births the first-run setup wizard, which silently drops `action new-pane` mounts while showing ([caveats](../../internals/mux/multiplexers.md#zellij-backend-caveats)); note Zellij prefers and creates `$HOME/.config/zellij` over `$XDG_CONFIG_HOME/zellij`.
 
 ### Options catalog
 
@@ -401,13 +401,13 @@ Bare alias names resolve in layouts, the CLI, keybinds, and pipes. Defaults ship
 
 ## Layout KDL
 
-The surface Rimz's birth templates use ([multiplexers.md → Zellij backend](../../internals/sidebar/multiplexers.md#zellij-backend)). Root node `layout`; children: `pane`, `tab`, `pane_template`, `tab_template`, `default_tab_template`, `new_tab_template`, `floating_panes`, and a global `cwd`. Layouts apply **only at session birth** (or via `new-tab --layout` / `override-layout`). `zellij setup --dump-layout default` prints the built-in.
+The surface Rimz's birth templates use ([multiplexers.md → Zellij backend](../../internals/mux/multiplexers.md#zellij-backend)). Root node `layout`; children: `pane`, `tab`, `pane_template`, `tab_template`, `default_tab_template`, `new_tab_template`, `floating_panes`, and a global `cwd`. Layouts apply **only at session birth** (or via `new-tab --layout` / `override-layout`). `zellij setup --dump-layout default` prints the built-in.
 
 **`pane`** — leaf or container. Attributes: `split_direction "vertical"|"horizontal"` (container; default horizontal), `size "30%"|<fixed>` (upstream calls fixed sizes unstable — and a fixed size wider than a detached session's default 80×24 geometry kills the birth, hence Rimz's percentage-at-birth rule), `borderless`, `focus`, `name`, `cwd`, `command` + `args "a" "b"` (args only in child braces), `close_on_exit`, `start_suspended`, `edit "file"`, `plugin { location "zellij:…" }` (location only in child braces), `stacked` / `expanded`, `default_fg` / `default_bg`.
 
 **`tab`** — `name`, `focus` (one tab), `split_direction`, `cwd`, `hide_floating_panes`, children panes.
 
-**Templates** — `pane_template name="…"` / `tab_template name="…"` carry a `children` node marking the insertion point; consumers invoke them by name as nodes. A template with `command` accepts `args`/`cwd` from the consumer. **`default_tab_template`** shapes the initial tabs *and* every later tab — and **replaces Zellij's built-in template, dropping the tab/status bar unless re-added explicitly**. **`new_tab_template`** shapes only user-opened tabs and does not apply to the birth tabs. Two sharp edges Rimz hit: a `children` node nested inside a split is never auto-filled with a default terminal (spell the terminal pane explicitly), and on 0.44.3 a layout carrying a `new_tab_template` but **no `tab` node** kills a `--create-background` birth ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-backend)).
+**Templates** — `pane_template name="…"` / `tab_template name="…"` carry a `children` node marking the insertion point; consumers invoke them by name as nodes. A template with `command` accepts `args`/`cwd` from the consumer. **`default_tab_template`** shapes the initial tabs *and* every later tab — and **replaces Zellij's built-in template, dropping the tab/status bar unless re-added explicitly**. **`new_tab_template`** shapes only user-opened tabs and does not apply to the birth tabs. Two sharp edges Rimz hit: a `children` node nested inside a split is never auto-filled with a default terminal (spell the terminal pane explicitly), and on 0.44.3 a layout carrying a `new_tab_template` but **no `tab` node** kills a `--create-background` birth ([multiplexers.md](../../internals/mux/multiplexers.md#zellij-backend)).
 
 **`floating_panes`** — child panes with `x`/`y`/`width`/`height` as fixed or `"%"` values.
 
@@ -419,6 +419,6 @@ Swap layouts (`*.swap.kdl`, `swap_tiled_layout` / `swap_floating_layout`) drive 
 
 By default every session serializes to the user **cache folder** (`~/.cache/zellij/<contract_version>/session_info/<session>/`) on `serialization_interval` (~1s) as human-readable KDL layouts — the same dialect as `--layout`, shareable across machines. Serialized: the layout plus each pane's *discovered* command (`$RESURRECT_COMMAND`, rewritable via `post_command_discovery_hook`, whose STDOUT replaces the discovered command); optionally the viewport (`serialize_pane_viewport`) and scrollback (`scrollback_lines_to_serialize`).
 
-A dead serialized session lists as `EXITED - attach to resurrect`; attach recreates the layout with every command pane **held at a `Press ENTER to run…` banner** (`PaneInfo.is_held`) — `attach -f/--force-run-commands` runs them immediately instead. `kill-session` keeps the serialized state; `delete-session` / `delete-all-sessions` removes it; `attach --forget` deletes before connecting. `session_serialization false` switches the resurrection machinery off — Rimz's choice, and why: agents cannot restore their running state, so a resurrected room is a wall of held panes ([multiplexers.md](../../internals/sidebar/multiplexers.md#zellij-backend)).
+A dead serialized session lists as `EXITED - attach to resurrect`; attach recreates the layout with every command pane **held at a `Press ENTER to run…` banner** (`PaneInfo.is_held`) — `attach -f/--force-run-commands` runs them immediately instead. `kill-session` keeps the serialized state; `delete-session` / `delete-all-sessions` removes it; `attach --forget` deletes before connecting. `session_serialization false` switches the resurrection machinery off — Rimz's choice, and why: agents cannot restore their running state, so a resurrected room is a wall of held panes ([multiplexers.md](../../internals/mux/multiplexers.md#zellij-backend)).
 
 `disable_session_metadata true` separately stops the live session metadata loop: the periodic `session-metadata.kdl` rewrite and command-discovery `ps` probes that still run when serialization itself is disabled. Rimz passes it for every room birth and attach.

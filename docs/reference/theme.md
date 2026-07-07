@@ -2,7 +2,7 @@
 
 > [interface/sidebar.md](../interface/sidebar.md) says what every tone and glyph *means on screen*; this page is the knobs that restyle them, and `rimz config init --print` is the full annotated key list.
 
-Theming restyles the sidebar — the color scheme, color depth, glyph vocabulary, status-head animations, and provider branding — from one per-machine file, `~/.config/rimz/theme.toml`. Every element carries its state by *shape* first ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so color reinforces meaning rather than carrying it, and any palette — including no color at all — stays readable. Theme settings are personal display preferences: they tune what the renderer paints, never ledger correctness, and stay outside the project trust hash.
+Theming restyles the sidebar — the color scheme, color depth, glyph vocabulary, status-head animations, and provider branding — from one per-machine file, `~/.config/rimz/theme.toml`. Every element carries its state by *shape* first ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so color reinforces meaning rather than carrying it, and any palette — including no color at all — stays readable. Theme settings are personal display preferences: they tune what the renderer paints, never store correctness, and stay outside the project trust hash.
 
 ```sh
 rimz config set theme "Catppuccin Mocha"     # pick a scheme

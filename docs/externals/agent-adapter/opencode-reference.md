@@ -40,7 +40,7 @@ Discovery:
 | `opencode.json` — `plugin: ["npm:pkg", "file:./path.ts", ["spec", {options}]]` | configured; npm specifiers auto-install via Bun into `~/.cache/opencode/node_modules` |
 | `opencode plugin <module>` | CLI install — writes the specifier into config |
 
-Install for Rimz means **one Rimz-owned file** written to `~/.config/opencode/plugin/` — auto-discovered at the next launch, idempotent by path, removed by deleting the file. The file executes arbitrary code with the user's permissions inside every OpenCode server, so it belongs in the executable-surface trust hash like every hook config ([trust.md](../../internals/sidebar/trust.md)). `--pure` runs without external plugins — the integration-blind mode, same posture as an agent run before `rimz hooks install`.
+Install for Rimz means **one Rimz-owned file** written to `~/.config/opencode/plugin/` — auto-discovered at the next launch, idempotent by path, removed by deleting the file. The file executes arbitrary code with the user's permissions inside every OpenCode server, so it belongs in the executable-surface trust hash like every hook config ([trust.md](../../internals/harness/trust.md)). `--pure` runs without external plugins — the integration-blind mode, same posture as an agent run before `rimz hooks install`.
 
 A plugin module exports an async factory receiving `PluginInput` and returning its `Hooks`; `node:` built-ins and npm dependencies are importable.
 

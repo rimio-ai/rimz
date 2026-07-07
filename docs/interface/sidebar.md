@@ -1,6 +1,6 @@
 # The sidebar, on screen
 
-The sidebar is one narrow column that answers a single question: **which pane needs you, right now.** Every pane in the room is a row; agents are enriched from the ledger; everything groups by the worktree it lives in. The sidebar routes you to the pane — you read and answer in the agent's own UI.
+The sidebar is one narrow column that answers a single question: **which pane needs you, right now.** Every pane in the room is a row; agents are enriched from the store; everything groups by the worktree it lives in. The sidebar routes you to the pane — you read and answer in the agent's own UI.
 
 It stacks three reading zones, top to bottom — the **cockpit** (who is here, what it costs, what needs you), the **agent cards** (one card per pane, grouped by worktree), and the **provider dashboard** (your accounts, their budgets, and the optional pet) — with bottom chrome (a footer and a health line) pinned under all three.
 
@@ -10,7 +10,7 @@ Every frame below is what the renderer actually paints — structure, glyphs, co
 
 ## The whole frame at a glance
 
-A complete frame: a selected agent in a worktree, with the per-provider dashboard pinned at the bottom. The cockpit figures use the current Rimz room's project root and grouped worktrees; the provider dashboard and ledger figures use account-global transcript totals.
+A complete frame: a selected agent in a worktree, with the per-provider dashboard pinned at the bottom. The cockpit figures use the current Rimz room's project root and grouped worktrees; the provider dashboard and store figures use account-global transcript totals.
 
 ```
  ⌘ query-engine                    ~/code/query-engine    ← workspace identity
@@ -23,7 +23,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 
 ▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⊙ main    ← selected worktree · commits/diff · PR marker
 ▌⣾ claude · Opus 4.8 · xhigh · 1m                $1.27    ← line 1: identity · model · effort · context window · usd value
-▌  ledger refactor                                        ← line 2: session description
+▌  store refactor                                        ← line 2: session description
 ▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context window progress: how full the context window is
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m    ← token stats: filled toks in context window
 ▌  ⧉ subagents (2)                                        ← subagents spawned this turn
@@ -111,7 +111,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 |------|---------|
 | `⌘ name`        | the workspace, with the name in the green `good` tone |
 | `¤ N`           | the live agents in the room right now — the glyph in the agents' working clay |
-| `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the ledger window — teal in both |
+| `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the store window — teal in both |
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label soft |
 | `⋯ bg`          | an agent parked on background work — a faint secondary marker after the description, so the live status above stays honest |
 | `⑂ name` / `⮌ name` | a group header with a git story — branch for pristine/diverged worktrees, merge for landed removable worktrees |
@@ -188,7 +188,7 @@ complete:
 
 ```
 ✓ claude · Opus 4.8 · xhigh · 1m                $2.14
-  ledger refactor
+  store refactor
   ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━───────────── 78.4%
   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m
 ```
@@ -206,7 +206,7 @@ resting:
 
 ```
  ⣾ claude · Opus · 1m                           $1.27
-   ledger refactor
+   store refactor
    ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────── 78.4%
    ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                  ◔ 8m
 ```
@@ -214,7 +214,7 @@ resting:
 selected — only appends, never reshapes
 ```
 ▌⣾ claude · Opus · 1m                           $1.27
-▌  ledger refactor
+▌  store refactor
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────── 78.4%
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                  ◔ 8m
 ▌  ⧉ subagents (1)                                       ← appended
@@ -351,7 +351,7 @@ With `[theme.pets] enabled = true`, the active provider block narrows and one pa
  ⇄ remote 210ms              ? for help
 ```
 
-Each block's stats speaks the fleet ledger's vocabulary, scoped to the provider: the configured headline `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right. The stats row stays one row in every provider layout; normal and narrow hide the input/output split only when the width needs it. The `Total:` delimiter switches from provider-headline facts to account-global fleet totals. Wide paints `W:` and `M:` as two full rows with USD pinned right; normal and narrow split each token row into a left `W:`/`M:` session cluster and right-aligned token stats, then put `W: $...` on the left and `M: $...` on the right of the third total row. A cold or empty cache keeps the rows and reads `$0.00`.
+Each block's stats speaks the fleet store's vocabulary, scoped to the provider: the configured headline `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right. The stats row stays one row in every provider layout; normal and narrow hide the input/output split only when the width needs it. The `Total:` delimiter switches from provider-headline facts to account-global fleet totals. Wide paints `W:` and `M:` as two full rows with USD pinned right; normal and narrow split each token row into a left `W:`/`M:` session cluster and right-aligned token stats, then put `W: $...` on the left and `M: $...` on the right of the third total row. A cold or empty cache keeps the rows and reads `$0.00`.
 
 A **metered account** drains one "mana" bar per included budget window toward its reset. The bar fills with what's *left*, sliding continuously green → gold → amber → red as it empties over a dim empty track — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's tone, while the `↻` reset countdown beside it wears the spend pace: soft when the current burn rate sustains to reset, then sliding gold → amber → red as it outruns the window, falling back to the quiet soft tier when pace is unknowable. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets. When paid extra usage is available or unknown, the second row becomes `ex`; known usage reads `$used/$limit`, a known remaining balance reads dollars, and an unknown or uncapped value reads `∞` over a dim empty track.
 
@@ -384,19 +384,19 @@ A **Pi block** names its version and the backing account it runs on — `Pi v0.7
 
 Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — host infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[theme.providers.<kind>]`, see [theme.md](../reference/theme.md#provider-styling)).
 
-### The fleet ledger
+### The fleet store
 
-The account-global running totals seal the bottom of the dashboard, above the footer — a quiet two-row ledger you learn to glance at, never a cue that competes with the rows. The trailing-week (`W:`) and trailing-month (`M:`) rows span every provider.
+The account-global running totals seal the bottom of the dashboard, above the footer — a quiet two-row store you learn to glance at, never a cue that competes with the rows. The trailing-week (`W:`) and trailing-month (`M:`) rows span every provider.
 
 ```
  W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88
  M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66
 ```
 
-- **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend` — the precise one-decimal record beside the cockpit's coarse live read, every field right-aligned into one shared grid so the `W:`/`M:` labels stack and the columns line up. Cache creation folds into the `↘` input figure, keeping the ledger to the headline numbers.
-- **No animation.** The ledger figures are static — the count-ups live above, the configured headline in the cockpit and each card's `$cost`. The windows escalate `headline → week → month`.
+- **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend` — the precise one-decimal record beside the cockpit's coarse live read, every field right-aligned into one shared grid so the `W:`/`M:` labels stack and the columns line up. Cache creation folds into the `↘` input figure, keeping the store to the headline numbers.
+- **No animation.** The store figures are static — the count-ups live above, the configured headline in the cockpit and each card's `$cost`. The windows escalate `headline → week → month`.
 
-Every figure is computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them account-global. The ledger reads the last persistent account-global totals when they exist, and `$0.00` until something has been recorded.
+Every figure is computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them account-global. The store reads the last persistent account-global totals when they exist, and `$0.00` until something has been recorded.
 
 ## Bottom chrome
 
@@ -454,13 +454,13 @@ These notices clear when the next accepted pane frame lands. A health alert take
 **Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:
 
 ```
- ⚠ Sidebar degraded for 8s: snapshot failed: ledger not found
+ ⚠ Sidebar degraded for 8s: snapshot failed: store not found
 ```
 
 On recovery it doesn't vanish; it lingers as a dim, dismissable notice so a failure that flickered past is still visible after the fact:
 
 ```
- ⚠ last alert 8s ago: snapshot failed: ledger not found  ·  x dismiss
+ ⚠ last alert 8s ago: snapshot failed: store not found  ·  x dismiss
 ```
 
 Press `x` to dismiss it; a fresh failure re-arms it. `r` reloads the tab.
@@ -499,7 +499,7 @@ The renderer's golden tests in [`crates/rimz/src/sidebar_pane/render/`](../../cr
 | provider dashboard, tabbed (derived tab) | `provider_dashboard` |
 | provider dashboard, manual tab pick | `provider_dashboard_codex_tab` |
 | provider dashboard, stacked auto layout | `provider_dashboard_stacked` |
-| fleet ledger (week/month) | `fleet_ledger` |
+| fleet store (week/month) | `fleet_store` |
 | health alert | `degraded_banner` |
 | pane-source notice | `render_truth_degraded_notice_keeps_room_chrome` |
 

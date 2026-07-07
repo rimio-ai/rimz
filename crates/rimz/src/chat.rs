@@ -2,7 +2,7 @@
 //!
 //! The log is append-only JSONL under `transcript/<bucket-start>.jsonl` in the
 //! workspace state root. The directory name stays for compatibility; this chat
-//! log is distinct from provider-native transcript files.
+//! log is distinct from provider-native transcript files and the message queue.
 
 use std::fs;
 use std::io;

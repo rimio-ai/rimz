@@ -16,7 +16,7 @@ Names are bare ASCII letters, numbers, `_`, or `-`. They render and address as `
 
 ## Commands
 
-`new <NAME>` validates and records the channel in the current room ledger, then best-effort opens a `#NAME` tab with `RIMZ_CHANNEL` stamped into the shell. The command works in repo, marker, and directory rooms.
+`new <NAME>` validates and records the channel in the current room store, then best-effort opens a `#NAME` tab with `RIMZ_CHANNEL` stamped into the shell. The command works in repo, marker, and directory rooms.
 
 `list` prints named channels, Rimz-owned worktree channels, and live derived channels in one table. The `BACKING` column is `named`, `worktree`, or `directory`; explicitly stamped named lanes stay `named`, and in-place team lanes appear as live directory lanes such as `#project/pcr`. The `AGENTS` column lists live handles. `--json` emits the same entries as objects with `channel`, `backing`, and `agents`.
 

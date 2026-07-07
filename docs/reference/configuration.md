@@ -154,7 +154,7 @@ dir = "../{repo}-worktrees"
 base = "fresh"
 ```
 
-`rimz worktree` and `rimz agents --worktree` create Rimz-owned Git worktrees here. A relative `dir` resolves from the repository root and `{repo}` expands to the root basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. A committed `<root>/.worktreeinclude` lists globs for untracked files to copy into each new worktree, and `<root>/.worktreelink` lists directories to symlink-share. The seeding, symlink, and cleanup mechanics are in [worktree.md](../internals/agents/worktree.md).
+`rimz worktree` and `rimz agents --worktree` create Rimz-owned Git worktrees here. A relative `dir` resolves from the repository root and `{repo}` expands to the root basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. A committed `<root>/.worktreeinclude` lists globs for untracked files to copy into each new worktree, and `<root>/.worktreelink` lists directories to symlink-share. The seeding, symlink, and cleanup mechanics are in [worktree.md](../internals/harness/worktree.md).
 
 ## Loop tasks
 
@@ -200,7 +200,7 @@ handle = "@planner"
 
 Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`. Each task chooses `spec`, `bind`, `check`, or `check` plus one agent action. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. Bind-mode pins delivery to one live agent session and sends the prompt through the message path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, and `on = "success"` wakes on zero exit. Check output is appended to the agent prompt when the guard fires. `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
 
-Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Each task carries a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file. The full model is in [harness.md → Scheduled turns](../internals/agents/harness.md#scheduled-turns-loop), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
+Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Each task carries a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file. The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
 
 ## Behavior settings
 
@@ -300,7 +300,7 @@ Resume covers two tenses. On a **rebirth after reboot or mux crash** (the machin
 smart_compact = "70%"
 ```
 
-`smart_compact` sets the default threshold for compact-first `message` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [message.md](../internals/agents/message.md#smart-compaction).
+`smart_compact` sets the default threshold for compact-first `message` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [message.md](../internals/harness/message.md#smart-compaction).
 
 ### rtk output compression
 
@@ -323,7 +323,7 @@ This section applies only to Rimz builds compiled with the non-default `sentry` 
 
 ## Multiplexer room options
 
-Rimz applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without editing your global Zellij or tmux config. The `[zellij]` and `[tmux]` tables tune those settings; `rimz config init --print` lists every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/sidebar/multiplexers.md).
+Rimz applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without editing your global Zellij or tmux config. The `[zellij]` and `[tmux]` tables tune those settings; `rimz config init --print` lists every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/mux/multiplexers.md).
 
 The `[mux]` table selects the default backend after the `--mux <name>` selection, its `--zellij`/`--tmux` shorthands, and active Zellij/tmux environment checks. Leave `default` unset to choose tmux when both backends are installed, or set it to `"zellij"` or `"tmux"` to require that backend. A configured backend that is not installed makes `rimz start` refuse with a fix message.
 
@@ -406,7 +406,7 @@ Which providers appear, their order, and their brand styling are theme and disco
 
 ## Project config
 
-The committed `<root>/.rimz/config.toml` declares the workspace shape a team shares. Rimz computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch and applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches. Use one `agents` shape per project config — `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared layout, hooks, and agent launch command is planned project-config behaviour.
+The committed `<root>/.rimz/config.toml` declares the workspace shape a team shares. Rimz computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch and applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches. Use one `agents` shape per project config — `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behaviour. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`.
 
 ```toml
 [[agents]]
@@ -419,10 +419,10 @@ event = "PreToolUse"
 command = "notify-send rimz"
 ```
 
-Command-running fields enter the trust hash, so a clone with project config reads `untrusted` until `rimz trust grant` pins the current surface on this machine. A trusted repo profile or team overlays machine config and wins on a name collision; a repo profile may inherit only another repo profile or a built-in kind, and a repo team role may bind only a repo profile, keeping the hashed surface closed and machine-independent. An `untrusted` or `stale` workspace refuses a launch that would consume a repo profile, team, or `[[agents]]` env, with the `rimz trust grant` fix. The hash contract and launch-time enforcement are in [trust.md](../internals/sidebar/trust.md); the threat model is in [security.md](../guide/security.md).
+Command-running fields enter the trust hash, so a clone with project config reads `untrusted` until `rimz trust grant` pins the current surface on this machine. A trusted repo profile or team overlays machine config and wins on a name collision; a repo profile may inherit only another repo profile or a built-in kind, and a repo team role may bind only a repo profile, keeping the hashed surface closed and machine-independent. An `untrusted` or `stale` workspace refuses a launch that would consume a repo profile, team, or `[[agents]]` env, with the `rimz trust grant` fix; a `stale` report shows a field-level diff of what changed since the grant, so the re-grant is informed. The hash contract, stored surface, and launch-time enforcement are in [trust.md](../internals/harness/trust.md); the threat model is in [security.md](../guide/security.md).
 
 ## Sidecars and privacy
 
-Notification handlers, remote aliases, and trust records each have their own reference: [notifications.md](../internals/sidebar/notifications.md), `rimz remote` ([getting started](./cli/getting-started.md#remote-rooms)), and `rimz trust` ([trust.md](../internals/sidebar/trust.md)).
+Notification handlers, remote aliases, and trust records each have their own reference: [notifications.md](../internals/sidebar/notifications.md), `rimz remote` ([getting started](./cli/getting-started.md#remote-rooms)), and `rimz trust` ([trust.md](../internals/harness/trust.md)).
 
 Payload-fidelity and retention controls (`[privacy] payload_mode`) are a planned project surface. The design and intended keys are in [security.md](../guide/security.md), and the hook boundary they will govern is in [agent.md → The adapter boundary](../internals/agents/agent.md#the-adapter-boundary).

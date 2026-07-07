@@ -85,7 +85,7 @@ The `Result<T>` alias lives next to the enum it shadows. Predicates like `is_rec
 
 ## Identifier newtypes
 
-Every identifier that travels through the schema, the ledger, or the wakeup socket is a newtype. No bare `String` or `Uuid` flowing through public APIs.
+Every identifier that travels through the schema, the store, or the wakeup socket is a newtype. No bare `String` or `Uuid` flowing through public APIs.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -105,7 +105,7 @@ Conventions:
 
 - Inner value is **never** `pub`. Use `pub(crate)` only if the same crate needs the unwrapped form for an FFI seam.
 - Identifiers minted by Rimz (`RunId`, `EventId`, `SidebarInstanceId`, and other internal correlation IDs) use **UUIDv7** for monotonic ordering — filenames named after the ID sort chronologically without an external index.
-- Identifiers derived from external truth use their natural shape: `WorkspaceId` is the SHA-256 of `project_root`; `PaneId` is `"<mux>:<raw_pane_id>"` per [multiplexers.md](../internals/sidebar/multiplexers.md). These types still go through a newtype and a parser — never assembled inline.
+- Identifiers derived from external truth use their natural shape: `WorkspaceId` is the SHA-256 of `project_root`; `PaneId` is `"<mux>:<raw_pane_id>"` per [multiplexers.md](../internals/mux/multiplexers.md). These types still go through a newtype and a parser — never assembled inline.
 
 ## State machines as types
 
@@ -126,7 +126,7 @@ impl MessageStatus {
 }
 ```
 
-The lifecycle rules from [message.md](../internals/agents/message.md) — record first, claim before send, terminal is final — live at the store boundary (`ledger/message_store.rs`, `ledger/writer/queue.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
+The lifecycle rules from [message.md](../internals/harness/message.md) — record first, claim before send, terminal is final — live at the store boundary (`store/message_store.rs`, `store/writer/queue.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
 
 `AgentStatus`, `PermissionPosture`, gates, delivery outcomes — same shape.
 
@@ -136,11 +136,11 @@ Actors are for genuinely long-lived processes with concurrent in-process writers
 
 ```rust
 #[derive(Clone, Debug)]
-pub struct Ledger {
-    inner: Arc<LedgerInner>,
+pub struct Store {
+    inner: Arc<StoreInner>,
 }
 
-impl Ledger {
+impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn queue_message(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
         {
@@ -158,7 +158,7 @@ impl Ledger {
 Rules:
 
 - Public methods return `Result<...>` and acquire the workspace lock for their critical section.
-- Best-effort wakeups (sidebar fanout, the run-socket datagram) fire after the lock drops — the ledger commit always observes before notification.
+- Best-effort wakeups (sidebar fanout, the run-socket datagram) fire after the lock drops — the store commit always observes before notification.
 - The handle is `Clone` via `Arc<Inner>`; cheap to pass into spawned tasks.
 - Durability barriers carry `#[must_use = "durability barrier; check the result"]` so dropping `Err(Fsync(...))` is a compile-time warning, not a silent data loss.
 
@@ -166,12 +166,12 @@ When a long-lived process *does* arrive (watcher daemon, scheduler host), it get
 
 ## Atomic writes
 
-Two write shapes in `ledger/atomic.rs` cover every disk write in the project:
+Two write shapes in `store/atomic.rs` cover every disk write in the project:
 
 - `write_temp_then_rename(path, value)` for cold-path durable state (trust grants, workspace records, hook installs, the rotation carryover); `write_temp_then_rename_cache` — rename-atomic, no fsync — for liveness files and rebuilt-on-next-read caches.
-- `append_record_bytes(path, line) -> Result<()>` — the event-log append discipline (one `write()` per record, no fsync — appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync); the frame encoding itself lives beside its decoder in `ledger/event_log.rs`.
+- `append_record_bytes(path, line) -> Result<()>` — the event-log append discipline (one `write()` per record, no fsync — appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync); the frame encoding itself lives beside its decoder in `store/event_log.rs`.
 
-Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `ledger/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [ledger.md](../internals/sidebar/ledger.md) for the frame format, torn-record recovery, and rotation rules.
+Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `store/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [store.md](../internals/store/store.md) for the frame format, torn-record recovery, and rotation rules.
 
 ## Tests
 
@@ -180,9 +180,9 @@ Both helpers live next to the durability contract they enforce. No module hand-r
 Core test shapes keep their own discipline:
 
 - **Unit tests** — `#[cfg(test)] mod tests` in the module under test: inline by default; past 500 lines the body moves to a sibling file (`#[cfg(test)] mod tests;` + `view/tests.rs`) — same module path, same private access, enforced by `cargo xtask invariants`. The move is whole-module: a module's unit tests live in one place, inline or sibling, so "where are the tests" has one answer and the size gate stays meaningful. When a sibling `tests.rs` itself grows, organize with nested modules inside it grouped by concern (a `tests/` directory module past that) — growth extends the test tree, it does not return tests to the source file. An outgrown unit-test module is also a prompt: check whether the weight belongs in a domain module or the integration tier before extracting. Pure logic only: state-machine transitions, parser shapes, schema round-trips. No filesystem, no network, no subprocess.
-- **Integration tests** — one binary per crate at `crates/rimz/tests/integration/main.rs`, where each suite is a module (`mod hooks;`) and related suites group under a subdirectory module (`mod backend;` over `backend/{tmux,zellij}.rs`). Real subprocesses, real temp directories under `tempfile::TempDir`, real ledger files. Spawn `rimz` through the `Env` harness in `crates/rimz/tests/integration/common/` (an `assert_cmd` `cargo-bin` builder); suite layout and local rules live in the [suite contract](../../crates/rimz/tests/integration/AGENTS.md).
-- **Performance gates** — integration tests under `crates/rimz/tests/integration/performance/` assert deterministic work bounds, not timing. Counters live at the funnel they measure: fsyncs in `ledger::atomic::testkit`, event-log bytes in `ledger::event_log::testkit`, and hot-path subprocess attempts in `proc::testkit`. The crate-level `testkit` feature exposes only synthetic fleet builders and counter readers for tests and benches; shipped artifacts do not enable it.
-- **Performance benches** — `crates/rimz/benches/` holds non-gating divan benchmarks. They measure wall-clock and allocation figures over synthetic ledgers, pane frames, and sidecars, never real agents. Run them with `cargo xtask perf`; do not put timing assertions in CI.
+- **Integration tests** — one binary per crate at `crates/rimz/tests/integration/main.rs`, where each suite is a module (`mod hooks;`) and related suites group under a subdirectory module (`mod backend;` over `backend/{tmux,zellij}.rs`). Real subprocesses, real temp directories under `tempfile::TempDir`, real store files. Spawn `rimz` through the `Env` harness in `crates/rimz/tests/integration/common/` (an `assert_cmd` `cargo-bin` builder); suite layout and local rules live in the [suite contract](../../crates/rimz/tests/integration/AGENTS.md).
+- **Performance gates** — integration tests under `crates/rimz/tests/integration/performance/` assert deterministic work bounds, not timing. Counters live at the funnel they measure: fsyncs in `store::atomic::testkit`, event-log bytes in `store::event_log::testkit`, and hot-path subprocess attempts in `proc::testkit`. The crate-level `testkit` feature exposes only synthetic fleet builders and counter readers for tests and benches; shipped artifacts do not enable it.
+- **Performance benches** — `crates/rimz/benches/` holds non-gating divan benchmarks. They measure wall-clock and allocation figures over synthetic stores, pane frames, and sidecars, never real agents. Run them with `cargo xtask perf`; do not put timing assertions in CI.
 - **Snapshot tests** — `insta::assert_snapshot!` for every protocol stdout (CLI, hook, `--json` events) **including failure shapes**. Normalize UUIDs, timestamps, absolute paths, and other transient identifiers at the assertion boundary before snapshotting; introduce a shared helper only when multiple suites need the same normalization. Sidebar render tests draw through a `vt100::Parser`-backed ratatui backend and snapshot the resulting screen contents — never widget internals.
 - **Property tests** — `proptest` for parsers (TOML override values, agent payloads, framing), serializers (round-trip schema types), and state-machine transitions (no path leaves a final state).
 
@@ -258,7 +258,7 @@ The individual gates:
 
 ### Architectural invariants
 
-`cargo xtask invariants` is a grep-and-shape gate over the tracked tree — shallow string matches, so treat it as a low-cost trip-wire paired with the type system and review, not a substitute for either. It guards boundaries the compiler can't see: hook-stdout decision-channel integrity, sidebar/ledger import separation, spend-parser and diagnostic-write confinement, fsync calls staying in `ledger/atomic.rs`, pane-primitive use, the render snapshot clock, [UI-color provenance](../reference/theme.md#how-a-tone-resolves) and glyph provenance, vendored presence-plugin freshness, and the inline-test size gate. The authoritative set is the `ensure_*` list in [xtask/src/invariants.rs](../../xtask/src/invariants.rs); a new boundary lands there as an `ensure_*` check with a self-test.
+`cargo xtask invariants` is a grep-and-shape gate over the tracked tree — shallow string matches, so treat it as a low-cost trip-wire paired with the type system and review, not a substitute for either. It guards boundaries the compiler can't see: hook-stdout decision-channel integrity, sidebar/store import separation, spend-parser and diagnostic-write confinement, fsync calls staying in `store/atomic.rs`, pane-primitive use, the render snapshot clock, [UI-color provenance](../reference/theme.md#how-a-tone-resolves) and glyph provenance, vendored presence-plugin freshness, and the inline-test size gate. The authoritative set is the `ensure_*` list in [xtask/src/invariants.rs](../../xtask/src/invariants.rs); a new boundary lands there as an `ensure_*` check with a self-test.
 
 ## Continuous integration
 
@@ -300,4 +300,4 @@ rcodesign --version
 1. [AGENTS.md](../../AGENTS.md) — engineering principles and implementation rules.
 2. This file — module shape and idioms.
 3. [ARCHITECTURE.md](../../ARCHITECTURE.md) — where the modules live.
-4. [ledger.md](../internals/sidebar/ledger.md) and the [quality gates](#quality-gates) — the contracts that touch every module.
+4. [store.md](../internals/store/store.md) and the [quality gates](#quality-gates) — the contracts that touch every module.

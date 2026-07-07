@@ -19,16 +19,16 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Explicit Rust.** Typed IDs, state machines, structured parsers, explicit errors. Domain errors return `Result`; `unwrap`/`expect`/panic belong in tests, build scripts, and provably-impossible states (with a comment).
 - **Strong types** for workspace, request, pane, agent-kind, and agent-session IDs, and for surfaces, statuses, and protocol versions.
 - **Structured parsers** for TOML, JSON, KDL, and agent payloads.
-- **Ledger durability.** File-state writes use temp-file plus rename; event-log writes follow the [ledger durability contract](./docs/internals/sidebar/ledger.md).
+- **Store durability.** File-state writes use temp-file plus rename; event-log writes follow the [store durability contract](./docs/internals/store/store.md).
 - **Fail-fast on preconditions.** A configured capability that cannot work fails at the entry point with the fix — `rimz start` refuses rather than launching a degraded surface. Best-effort is for latency and enrichment (sidebar wakeups, app-server context), never for a precondition the user switched on.
 
 ## Product invariants
 
-- **Ledger first.** Correctness lives in the ledger, CAS rules, nonces, and per-request sockets. Sidebar wakeups are latency, not truth.
+- **Durability first.** Correctness lives in durable records, CAS rules, nonces, and per-request sockets. Wakeups and pane reads are latency, never truth.
 - **Hook stdout is the decision channel.** Logs go to stderr or Rimz state logs; hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class; core behaviour never depends on a backend-only feature.
 - **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives, and `message` routes human text through the same send path; pane reads stay in rendering, explicit `pane capture` calls, and Codex turn-death confirmation.
-- **Sidebar is read-only on the ledger.** Sidebar code reads via `rimz sidebar snapshot`; ledger-write modules stay out of the sidebar's import graph.
+- **Sidebar is read-only on the store.** Sidebar code reads via `rimz sidebar snapshot`; store-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
 - **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, and privacy settings are product behaviour.
 
@@ -50,7 +50,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - Keep test tiers separate: unit tests stay in-module and pure, integration tests own subprocess/filesystem behaviour, journey tests own rendered user flows, live-backend tests own real tmux/Zellij, and performance tests assert bounded resource use.
 - A module's unit tests have one home: inline `#[cfg(test)] mod tests`, or a sibling `tests.rs` past the size gate (enforced by `cargo xtask invariants`). Minimal usage examples live as unit tests. Shape and threshold in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Do not land ignored tests for future product targets. Capture planned behaviour in the owning doc, then add the executable test when the implementation can make it pass under nextest.
-- Grep-style invariants (`cargo xtask invariants`) guard the architectural boundaries — decision-channel integrity, sidebar/ledger separation, the trust hash, pane-primitive use, and more.
+- Grep-style invariants (`cargo xtask invariants`) guard the architectural boundaries — decision-channel integrity, sidebar/store separation, the trust hash, pane-primitive use, and more.
 
 ## Code map
 
@@ -61,16 +61,16 @@ Rimz ships as one Rust binary: the `rimz` crate is CLI, domain library, and nati
 **Subsystems — `crates/rimz/src/`**, each carrying its own `AGENTS.md` contract:
 - `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output.
 - `agents/` — the `AgentAdapter` trait, `state.rs` rollup, per-kind adapters (Claude, Codex, Pi, OpenCode), spend/pricing/account.
-- `harness/` — layout IR, teams, address grammar, launch argv, supervised runs, loop scheduling, resume.
+- `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, loop scheduling, resume.
 - `message/` — durable per-agent message queue: park-vs-live dispatch, live-pane send, scheduled wakeups.
-- `ledger/` — durable state: framed event log, message/run stores, snapshot rebuild, wakeups, GC.
+- `store/` — durable state engine: framed event log, message/run stores, snapshot rebuild, wakeups, GC.
 - `mux/` — Zellij/tmux seam: `MuxBackend`, subprocess engine, reconcile planner, recovery.
 - `sidebar/` — data plane: producer election, pulled-truth/event fusion, projection fold, heavy-lane refresh.
 - `sidebar_pane/` — native renderer process: serve loop, pets, the `render/theme/` color pipeline.
 - `remote/` — SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/` — diagnostic-only JSONL append surfaces.
 
-**Top-level modules** — identity and reach (`workspace`, `web`, `channel`, `worktree`, `storage`, `forge`); chat/panes/seams (`chat`, `pane`, `bridge`, `sock`, `ids`, `trust`); daemon view (`remote_control`, `daemon_content`); process and config (`config`, `observability`, `agent_activity`, `lane`, `proc`, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`).
+**Top-level modules** — identity and reach (`workspace`, `web`, `channel`, `worktree`, `disk_usage`, `forge`); chat/panes/seams (`chat`, `pane`, `sock`, `ids`, `trust`); daemon view (`remote_control`, `daemon_content`); process and config (`config`, `observability`, `agent_activity`, `lane`, `proc`, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`).
 
 ## Documentation map
 
@@ -94,9 +94,12 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [configuration.md](./docs/reference/configuration.md) — config tiers, per-machine template, project trust shape, privacy.
 - [theme.md](./docs/reference/theme.md) — sidebar theming: palettes, color depth and slot overrides, custom themes, animations, provider branding, pets.
 
-**Internals** — `docs/internals/`, four subsystem leaves.
-- **`agents/`** — [agent.md](./docs/internals/agents/agent.md) (agent model: rollup, state machine, adapter boundary, live context), adapters [claude.md](./docs/internals/agents/adapter/claude.md)/[codex.md](./docs/internals/agents/adapter/codex.md)/[pi.md](./docs/internals/agents/adapter/pi.md)/[opencode.md](./docs/internals/agents/adapter/opencode.md), [provider.md](./docs/internals/agents/provider.md) (accounts, balances, spend, pricing), [harness.md](./docs/internals/agents/harness.md) (layout IR, address grammar, `-p` runs, loop tasks), [message.md](./docs/internals/agents/message.md) (routing, records, delivery, channels, transcript), [worktree.md](./docs/internals/agents/worktree.md) (Rimz-owned Git worktrees).
-- **`sidebar/`** — [sidebar.md](./docs/internals/sidebar/sidebar.md) (mechanics: presence, ranking, reload), [state.md](./docs/internals/sidebar/state.md) (pulled truth, events, fusion, cadences), [notifications.md](./docs/internals/sidebar/notifications.md), [ledger.md](./docs/internals/sidebar/ledger.md) (durable state, durability contract), [multiplexers.md](./docs/internals/sidebar/multiplexers.md) (Zellij/tmux contracts), [trust.md](./docs/internals/sidebar/trust.md), [pets.md](./docs/internals/sidebar/pets.md).
+**Internals** — `docs/internals/`, one group per subsystem.
+- **`harness/`** — [harness.md](./docs/internals/harness/harness.md) (layout IR, address grammar, `-p` runs and the run wake, loop tasks), [message.md](./docs/internals/harness/message.md) (routing, records, delivery, channels, transcript), [worktree.md](./docs/internals/harness/worktree.md) (Rimz-owned Git worktrees), [trust.md](./docs/internals/harness/trust.md) (the harness permission model: executable surface, grants, the stale diff).
+- **`agents/`** — [agent.md](./docs/internals/agents/agent.md) (agent model: rollup, state machine, adapter boundary, live context), adapters [claude.md](./docs/internals/agents/adapter/claude.md)/[codex.md](./docs/internals/agents/adapter/codex.md)/[pi.md](./docs/internals/agents/adapter/pi.md)/[opencode.md](./docs/internals/agents/adapter/opencode.md), [provider.md](./docs/internals/agents/provider.md) (accounts, balances, spend, pricing).
+- **`store/`** — [store.md](./docs/internals/store/store.md) (the durable state engine: on-disk shape, write classes, wakeups).
+- **`mux/`** — [multiplexers.md](./docs/internals/mux/multiplexers.md) (Zellij/tmux contracts).
+- **`sidebar/`** — [sidebar.md](./docs/internals/sidebar/sidebar.md) (mechanics: presence, ranking, reload), [state.md](./docs/internals/sidebar/state.md) (pulled truth, events, fusion, cadences), [notifications.md](./docs/internals/sidebar/notifications.md), [pets.md](./docs/internals/sidebar/pets.md).
 - **`health/`** — [diagnostics.md](./docs/internals/health/diagnostics.md) (diagnostics log, frame observer, off-box Sentry), [performance.md](./docs/internals/health/performance.md) (render budget, cost map, fleet overhead), [profiling.md](./docs/internals/health/profiling.md) (live-fleet field guide).
 - **`reach/`** — [welcome.md](./docs/internals/reach/welcome.md) (lobby and `rimz stats`), [remote.md](./docs/internals/reach/remote.md) (SSH attach, reconnect, link health), [web.md](./docs/internals/reach/web.md) (Zellij browser access).
 

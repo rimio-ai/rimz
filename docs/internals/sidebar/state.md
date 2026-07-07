@@ -7,7 +7,7 @@ This doc owns the sidebar **data plane**: the node model every renderer runs, th
 Every sidebar renderer is a **node**. A node paints from two in-memory stores — *pulled truth* and a *typed event store* — fused on every frame by a pure function. One node per workspace is elected **producer** and does all the expensive external work once; every other node consumes what it publishes.
 
 ```text
-  ledger rollup (durable truth)          elected producer ── pulls ──▶ per-lane caches
+  store rollup (durable truth)          elected producer ── pulls ──▶ per-lane caches
   read event-fresh in every node          (panes + roots on fetch · git/spend/accounts on refresher)
             │                                                    │
             └────────────────────┬───────────────────────────────┘
@@ -19,15 +19,15 @@ Every sidebar renderer is a **node**. A node paints from two in-memory stores �
                     (pure: no IO, no subprocess, no clock read past `now`)
 ```
 
-Durable truth is the ledger; everything the producer publishes is a cache that a pull rebuilds. Wakeup events are latency hints — a dropped datagram costs staleness bounded by the next pull, never correctness.
+Durable truth is the store; everything the producer publishes is a cache that a pull rebuilds. Wakeup events are latency hints — a dropped datagram costs staleness bounded by the next pull, never correctness.
 
 ## The node model
 
-A node holds two-part runtime state. **Pulled truth** is the event-fresh ledger rollup folded over the producer's published pane frame and enrichment caches. The **event store** is a small set of typed realtime events received since the last fold. Every paint computes `fuse(pulled, events, now)` and renders the resulting `SidebarSnapshot`, so a node's frame is a function of its two stores and one clock value.
+A node holds two-part runtime state. **Pulled truth** is the event-fresh store rollup folded over the producer's published pane frame and enrichment caches. The **event store** is a small set of typed realtime events received since the last fold. Every paint computes `fuse(pulled, events, now)` and renders the resulting `SidebarSnapshot`, so a node's frame is a function of its two stores and one clock value.
 
-The pane frame admits the cards; the ledger, sidecars, and events only enrich admitted cards. A frameless fold (CLI consumers that want rollup metadata, not a roster) sets `SidebarSnapshot::panes_produced_at_ms` to null and leaves `worktree_groups` empty.
+The pane frame admits the cards; the store, sidecars, and events only enrich admitted cards. A frameless fold (CLI consumers that want rollup metadata, not a roster) sets `SidebarSnapshot::panes_produced_at_ms` to null and leaves `worktree_groups` empty.
 
-Durable truth feeds every node identically and bypasses the producer: each node reads the rollup in process (`latest.json` plus the unfolded log tail — [ledger.md](./ledger.md#runtime-projection)) and reads the per-session sidecars fresh from disk behind stat-gated parse caches.
+Durable truth feeds every node identically and bypasses the producer: each node reads the rollup in process (`latest.json` plus the unfolded log tail — [store.md](../store/store.md#runtime-projection)) and reads the per-session sidecars fresh from disk behind stat-gated parse caches.
 
 One **producer** — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull and publishes each lane as its own single-writer cache. Two producer threads split that work. The fetch worker publishes pane truth and group roots each data tick, then projects the heavy caches' last published values into its snapshot. The elder-gated cache refresher owns the TTL-gated refreshes behind those caches — git diff-stats, PR state, spending, accounts, usage, credits, and auto-continue side effects — on the same data cadence, so a status flip never waits behind a `git` fork or a provider probe. Every other node consumes the published caches in process and never pulls for freshness on its own; the producer itself consumes its own published fast lane before paying for a refresh. Realtime events never patch a published cache — pulled truth on disk is written only by producer pulls. A dead producer is a degradation like any other, handled by the heartbeat election ([Failure modes](#failure-modes)).
 
@@ -61,11 +61,11 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 
 Per-session **sidecars** (`agent_context/`, `subagent_context/`, `agent-activity/`) are the exception to producer ownership: CLI hook and statusline runs write them latest-wins, and the elder's transcript watcher refreshes Codex context between hooks ([Push channels](#push-channels)). Every node reads them fresh behind stat-gated parse caches.
 
-The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (a TTL-gated jump viewport hint that every renderer reads on focus adoption), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../health/diagnostics.md)). The ledger's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the ledger write tail — [ledger.md](./ledger.md) owns them.
+The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (a TTL-gated jump viewport hint that every renderer reads on focus adoption), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../health/diagnostics.md)). The store's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the store write tail — [store.md](../store/store.md) owns them.
 
 ## Realtime events
 
-Wakeup datagrams carry `SidebarEventEnvelope` ([`sidebar/events.rs`](../../../crates/rimz/src/sidebar/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event. `session_name` is the scope — `Some` targets the one mux session whose pane ids the event names, `None` is workspace-wide (ledger deltas, reloads, and pane-frame publications reach every renderer of the workspace).
+Wakeup datagrams carry `SidebarEventEnvelope` ([`sidebar/events.rs`](../../../crates/rimz/src/sidebar/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event. `session_name` is the scope — `Some` targets the one mux session whose pane ids the event names, `None` is workspace-wide (store deltas, reloads, and pane-frame publications reach every renderer of the workspace).
 
 The receive path drops an event for another workspace or session before it reaches the store. Only **overlay** events live in the store — `PaneClosed`, `CommandChanged`, `FocusChanged`, and a `PaneOpened` that carries a command; the rest are consumed as renderer actions or producer-verification nudges. The store keeps one slot per key (per pane per event kind, plus a single focus slot), latest stamp wins, capped at `MAX_EVENTS`. Each entry expires under a receiver-clock TTL and records both `sent_at_ms` (for supersession) and the receive time (for expiry), so a skewed sender clock can mis-order an overlay briefly but never pin it.
 
@@ -79,7 +79,7 @@ The receive path drops an event for another workspace or session before it reach
 | `FocusStranded` | sidebar `pane_id` | Renderer action only, dropped past the short `FOCUS_STRANDED_EVENT_TTL` so late delivery cannot yank focus: the matching sidebar pane refocuses its held or own-view working sibling; when attached clients are viewing distinct panes, the renderer leaves focus alone because `focus-pane-id` is session-global | Zellij plugin |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; never admits a card on its own | Zellij plugin, tmux watch |
 | `PanesChanged` | none | Nudge a producer pull — topology moved, identity unknown | tmux watch fallback, the Zellij manifest fold |
-| `LedgerDelta` | optional event method and lifecycle signal | Refetch the rollup; a session start/end also requests fresh panes | ledger and context-sidecar writers |
+| `StoreDelta` | optional event method and lifecycle signal | Refetch the rollup; a session start/end also requests fresh panes | store and context-sidecar writers |
 | `PaneFramePublished` | none | Fold the just-published producer pane frame from cache | producer |
 | `Notify` | `title`, `body`, target panes, `recheck_unread`, kind | Renderer action only: raise the configured desktop/bell/command notification, gated on row-unread when `recheck_unread`; never fused into rows ([notifications.md](./notifications.md)) | the notification path |
 | `Reload` | none | Re-exec or hard-refresh the renderer | `rimz reload` |
@@ -88,8 +88,8 @@ The receive path drops an event for another workspace or session before it reach
 
 Each push channel exists so a change a writer already knows about reaches every node within one wakeup instead of a poll window; the producer's pull stays the structural backstop behind all of them.
 
-- **Ledger and sidecar writers** post a `LedgerDelta` after every durable write or context-sidecar merge, so status, tokens, and cost repaint within one wakeup.
-- **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; it skips title-only manifest churn before projection, floors repeated same-pane command shortcuts to one immediate patch plus the settled producer pull, and emits `FocusChanged` when a tab switch lands on a working pane. **The tmux control-mode watcher** pushes typed pane overlays from its `refresh-client -B` subscription, emits `FocusChanged` on window switches, stamps `presence.stamp`, and falls back to `PanesChanged` for identity-free topology notices ([multiplexers.md](./multiplexers.md)).
+- **Store and sidecar writers** post a `StoreDelta` after every durable write or context-sidecar merge, so status, tokens, and cost repaint within one wakeup.
+- **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; it skips title-only manifest churn before projection, floors repeated same-pane command shortcuts to one immediate patch plus the settled producer pull, and emits `FocusChanged` when a tab switch lands on a working pane. **The tmux control-mode watcher** pushes typed pane overlays from its `refresh-client -B` subscription, emits `FocusChanged` on window switches, stamps `presence.stamp`, and falls back to `PanesChanged` for identity-free topology notices ([multiplexers.md](../mux/multiplexers.md)).
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live Codex session's rollout JSONL and runs the stat-gated context refresh on write, covering the mid-turn gap where Codex hooks fire only at progress events. Only the elder watches; demotion drops the watch, and a watcher that never starts costs nothing because the producer-tick refresh stays unconditional.
 - **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, refreshes heavy caches from the last published pane frame, fires due loop tasks for this room, and wakes due scheduled messages. Demotion turns it into a sleeper; a panic resets its rollup cursor and spending walker, and the next tick retries from cache truth.
 
@@ -116,7 +116,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | Lane | Cadence | Where felt |
 | --- | --- | --- |
 | Pane frame | `SNAPSHOT_CACHE_TTL` by default; `EVENT_PANE_TTL` while the presence stamp is fresh | Pane open/close and cwd/command regrouping with no exact event |
-| Unwatched consumer fold | ≤ `UNWATCHED_FOLD_CLAMP` for identity-free nudges; watched renderers and the producer are immediate | Off-screen `LedgerDelta` and topology nudges in active rooms |
+| Unwatched consumer fold | ≤ `UNWATCHED_FOLD_CLAMP` for identity-free nudges; watched renderers and the producer are immediate | Off-screen `StoreDelta` and topology nudges in active rooms |
 | Zellij topology cache | `PRESENCE_STAMP_FRESH` | Zellij pre-producer pane listing |
 | Presence stamp | `PRESENCE_STAMP_FRESH` | Switches the producer between default and event-mode pane TTLs |
 | Presence sample | `PRESENCE_SAMPLE_TTL` while tmux reports attached clients and input-idle timestamps | AFK badge clear after fresh input |
@@ -124,7 +124,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | PR state | `PR_STATE_HOT_TTL` for hot/focused repos, `PR_STATE_TTL` for idle repos; escalating failure backoff starts at `PR_STATE_RETRY_TTL` and caps at the repo tier; HEAD changes bypass the TTL | Worktree header PR glyphs after diverged stats; each due repo enumerates open PRs once, and failed repos keep last-known-good state |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
 | `/proc` metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
-| Spending walk | `SPENDING_TTL` | Provider dashboard, fleet ledger, and the floor under the live cockpit spend |
+| Spending walk | `SPENDING_TTL` | Provider dashboard, fleet store, and the floor under the live cockpit spend |
 | Accounts | `ACCOUNTS_TTL` success; `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
 | Live-session context | `SESSION_REFRESH_INTERVAL` | Provider dashboard budget windows and session sidecars |
 | Account credits | `OAUTH_USAGE_TTL` for provider reads; `CREDITS_DISPLAY_MAX_AGE` for display | Provider dashboard paid/extra usage row and Codex reset marker |

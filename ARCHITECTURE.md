@@ -18,49 +18,49 @@ Detail lives in four places, narrowing as you go:
 
 - **[AGENTS.md § Code map](./AGENTS.md#code-map)** indexes *what lives where* — repository layout and per-module ownership.
 - **This file** explains *how it runs* — runtime shape, on-disk state, and the structural rationale behind that code map.
-- **The layered `AGENTS.md` contracts** state the *rules* for a subtree, loaded automatically when you work there: the root contract, [`crates/rimz/`](./crates/rimz/AGENTS.md), and a contract per major subtree ([`agents/`](./crates/rimz/src/agents/AGENTS.md), [`harness/`](./crates/rimz/src/harness/AGENTS.md), [`ledger/`](./crates/rimz/src/ledger/AGENTS.md), [`mux/`](./crates/rimz/src/mux/AGENTS.md), [`tests/integration/`](./crates/rimz/tests/integration/AGENTS.md)).
+- **The layered `AGENTS.md` contracts** state the *rules* for a subtree, loaded automatically when you work there: the root contract, [`crates/rimz/`](./crates/rimz/AGENTS.md), and a contract per major subtree ([`agents/`](./crates/rimz/src/agents/AGENTS.md), [`harness/`](./crates/rimz/src/harness/AGENTS.md), [`store/`](./crates/rimz/src/store/AGENTS.md), [`mux/`](./crates/rimz/src/mux/AGENTS.md), [`tests/integration/`](./crates/rimz/tests/integration/AGENTS.md)).
 - **Each module's `//!` header** is the per-file authority. This map never restates it; the topic docs under `docs/` (mapped in [AGENTS.md](./AGENTS.md#documentation-map)) explain behavior.
 
 ## Runtime shape
 
-There is no Rimz daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads ledger state in process.
+There is no Rimz daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process.
 
 ```text
 terminal emulator
   mux session (Zellij or tmux)
-    sidebar renderer (native pane, read-only on the ledger)
+    sidebar renderer (native pane, read-only on the store)
     shells, scripts, agents, CI helpers
                 │
                 │  per-instance sidebar socket   (typed wakeup events of record)
                 │  hook stdin/stdout             (the decision channel)
                 ▼
 rimz CLI and hook subprocesses
-  workspace identity · ledger writes · supervised-run waits
+  workspace identity · store writes · supervised-run waits
   mux commands through MuxBackend · hook installers
                 │
                 ▼
-workspace ledger (a directory of flat files)
+workspace store (a directory of flat files)
 ```
 
-The CLI and hook subprocesses are the only writers of product truth. The sidebar reads the ledger read-only and writes its own runtime caches and read receipts; `rimz sidebar snapshot` is the one-shot inspection surface over the same pipeline. The per-instance sidebar socket is the wakeup channel of record — backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/sidebar/multiplexers.md)). The producer/consumer split, push channels, and timing cadences are in [state.md](./docs/internals/sidebar/state.md).
+The CLI and hook subprocesses are the only writers of product truth. The sidebar reads the store read-only and writes its own runtime caches and read receipts; `rimz sidebar snapshot` is the one-shot inspection surface over the same pipeline. The per-instance sidebar socket is the wakeup channel of record — backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/mux/multiplexers.md)). The producer/consumer split, push channels, and timing cadences are in [state.md](./docs/internals/sidebar/state.md).
 
 ### State ownership
 
 | Owner | Owns | Does not own |
 | --- | --- | --- |
-| Multiplexer | panes, views, sessions, attach/detach, layout, scrollback | ledger state, agent status, handler trust |
-| Rimz ledger | events, agent state, messages, runs, snapshots | terminal rendering, pane mechanics |
+| Multiplexer | panes, views, sessions, attach/detach, layout, scrollback | store state, agent status, handler trust |
+| Rimz store | events, agent state, messages, runs, snapshots | terminal rendering, pane mechanics |
 | CLI / hook subprocesses | durable writes, supervised-run waiters, mux command calls | UI presentation |
 | Sidebar | rendering, focus affordances, human actions through the CLI | durable state files |
-| Agents | native UI, prompts, sandboxing, bypass behaviour | Rimz ledger state |
+| Agents | native UI, prompts, sandboxing, bypass behaviour | Rimz store state |
 | Host | process resurrection, OS sandboxing | workspace state |
 
 ### Durable state on disk
 
-State is three tiers of plain files. The path constants and their exact filenames are owned by [`ledger/paths.rs`](./crates/rimz/src/ledger/paths.rs) (`StatePaths`, `RuntimePaths`); this is the shape, not the catalog.
+State is three tiers of plain files. The path constants and their exact filenames are owned by [`store/paths.rs`](./crates/rimz/src/store/paths.rs) (`StatePaths`, `RuntimePaths`); this is the shape, not the catalog.
 
 ```text
-workspace ledger   ~/.local/state/rimz/workspaces/<id>/
+workspace store   ~/.local/state/rimz/workspaces/<id>/
   events.log.jsonl · snapshots/latest.json
   runs/<run_id>.json · messages/messages.jsonl · transcript/<date>.jsonl · locks/workspace.lock
   workspace.json · channels.json
@@ -82,16 +82,16 @@ shared runtime      $XDG_RUNTIME_DIR/rimz/shared/
   accounts.lock · rate_limits.lock · credits.lock · spending.lock
 ```
 
-The ledger tier is durable truth, written with temp-file-plus-rename and a framed event log (the durability contract is [ledger.md](./docs/internals/sidebar/ledger.md)). Shared persistent caches survive reboot so the dashboard and pace views open warm, while runtime tiers are disposable: locks, sockets, sidecars, and per-room best-effort caches that speed the next read and die with the session.
+The store tier is durable truth, written with temp-file-plus-rename and a framed event log (the durability contract is [store.md](./docs/internals/store/store.md)). Shared persistent caches survive reboot so the dashboard and pace views open warm, while runtime tiers are disposable: locks, sockets, sidecars, and per-room best-effort caches that speed the next read and die with the session.
 
 ## Code and crate structure
 
 The path index — repository layout and per-module ownership — is [AGENTS.md § Code map](./AGENTS.md#code-map). This section holds the structural rationale behind it.
 
-Add a crate only when ownership, target type, or dependency profile demands it. `rimz` is the one host runtime artifact — CLI, domain library, and native sidebar renderer ship in the same executable, every renderer projecting the same `rimz sidebar snapshot` view-model. `rimz-presence-zellij` clears the bar because it is a wasm32-wasip1 plugin binary owned by the Zellij plugin-host boundary, depending on no rimz crate; every `rimz` build embeds the vendored wasm checked in under `crates/rimz/presence/` and materializes it under the user's data directory before loading it. Its decision logic is a `zellij-tile`-free pure `policy.rs`, and its host-boundary argv/KDL rendering is pure `wire.rs`; both host-test in the ordinary workspace run. The plugin talks to rimz exclusively through the wake/focus argv: it pokes `rimz sidebar wake` on pane-topology and focus changes so the producer can stretch its pane poll, publishes `pane-topology.json` as a Zellij-only cache, and flags tab switches that restore focus to the sidebar ([multiplexers.md → Zellij presence channel](./docs/internals/sidebar/multiplexers.md#zellij-presence-channel)).
+Add a crate only when ownership, target type, or dependency profile demands it. `rimz` is the one host runtime artifact — CLI, domain library, and native sidebar renderer ship in the same executable, every renderer projecting the same `rimz sidebar snapshot` view-model. `rimz-presence-zellij` clears the bar because it is a wasm32-wasip1 plugin binary owned by the Zellij plugin-host boundary, depending on no rimz crate; every `rimz` build embeds the vendored wasm checked in under `crates/rimz/presence/` and materializes it under the user's data directory before loading it. Its decision logic is a `zellij-tile`-free pure `policy.rs`, and its host-boundary argv/KDL rendering is pure `wire.rs`; both host-test in the ordinary workspace run. The plugin talks to rimz exclusively through the wake/focus argv: it pokes `rimz sidebar wake` on pane-topology and focus changes so the producer can stretch its pane poll, publishes `pane-topology.json` as a Zellij-only cache, and flags tab switches that restore focus to the sidebar ([multiplexers.md → Zellij presence channel](./docs/internals/mux/multiplexers.md#zellij-presence-channel)).
 
 `build.rs` embeds the checked-in data artifacts at compile time, network-free: the generated token-pricing snapshot (`cargo xtask pricing-refresh` regenerates it; [provider.md → Token pricing](./docs/internals/agents/provider.md#token-pricing)), the Alacritty theme catalog (`cargo xtask theme-refresh`), and the presence-plugin wasm. Hidden helper subcommands are machinery, not humans; the catalog lives in [cli.md → Commands Rimz calls for you](./docs/reference/cli.md#commands-rimz-calls-for-you).
 
 ## Tests
 
-Integration tests live under each crate's `tests/`; `crates/rimz` collects its suites into a single `tests/integration/` binary with a shared `common/` harness — layout and conventions in the [suite contract](./crates/rimz/tests/integration/AGENTS.md). The test tiers are defined in [rust-conventions.md → Tests](./docs/contributing/rust-conventions.md#tests), and grep-style architectural invariants (decision-channel integrity, sidebar/ledger separation, the trust hash, pane-primitive use, and more) run through `cargo xtask invariants`.
+Integration tests live under each crate's `tests/`; `crates/rimz` collects its suites into a single `tests/integration/` binary with a shared `common/` harness — layout and conventions in the [suite contract](./crates/rimz/tests/integration/AGENTS.md). The test tiers are defined in [rust-conventions.md → Tests](./docs/contributing/rust-conventions.md#tests), and grep-style architectural invariants (decision-channel integrity, sidebar/store separation, the trust hash, pane-primitive use, and more) run through `cargo xtask invariants`.
