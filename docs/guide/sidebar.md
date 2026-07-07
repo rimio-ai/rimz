@@ -2,7 +2,7 @@
 
 One person, a fleet of agents, and only so much attention to spend. The sidebar spends it for you: one narrow column beside the agents' panes that answers a single question, **which pane needs you, right now**. Everything on it serves that question or the two behind it: what is the fleet doing, and what is it costing. You never work *in* the sidebar; when it surfaces an agent, one keypress drops you into that agent's pane and you answer in the agent's own UI.
 
-This page is how to read it: the zones and what each shows, the cards and the states behind them, and the ranking that decides what sits on top. Three companions go deeper: the [interface reference](../interface/sidebar.md) draws every glyph, meter, and frame exactly; [theme.md](../reference/theme.md) restyles all of it; [configuration.md](../reference/configuration.md#sidebar-rendering) holds the knobs.
+This page is how to read it: the zones and what each shows, the cards and the states behind them, and the ranking that decides what sits on top. Three companions go deeper: the [interface reference](../interface/sidebar.md) draws every glyph, meter, and frame exactly; [theme.md](./theme.md) restyles all of it; [configuration.md](../reference/configuration.md#sidebar-rendering) holds the knobs.
 
 <p align="center">
   <img src="../rimz-sidebar.png" alt="The sidebar: cockpit on top, triaged agent cards by worktree, provider dashboard at the bottom" width="420">
@@ -49,7 +49,7 @@ Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) de
 
 Budgets are account-scoped, one account shared by every session of a provider, so they live in a pinned panel at the bottom rather than on the cards. Each provider block shows the account and plan (`Claude Max`, `ChatGPT Pro`), the CLI version, that provider's session count, token breakdown, and dollar spend, and one draining "mana" bar per budget window (5-hour, 7-day) with a countdown to its reset. API-key accounts show trailing-month spend instead of a window. Below the blocks, two totals rows sum the whole fleet across providers for the trailing week and month, so one look tells you where the week is going.
 
-With several providers the panel tabs, following whichever agent you have selected; `←`/`→` or a click picks one by hand. With [pets enabled](../reference/theme.md#pets), the companion rides the panel's right edge.
+With several providers the panel tabs, following whichever agent you have selected; `←`/`→` or a click picks one by hand. With [pets enabled](./theme.md#pets), the companion rides the panel's right edge.
 
 ### Bottom chrome
 
@@ -73,7 +73,7 @@ Each agent is a small stacked card, four lines at rest:
 
 Selecting a card appends anything deeper without reshaping what is on screen: the **subagents** the agent spawned this turn appear underneath, each with its own live state, what the parent asked it to do, and, while it runs, its token spend, model, and elapsed time. A finished subagent keeps its `✓` or `!` verdict on the list until the parent's next turn. Subagents have no pane of their own, so they appear only here, nested under their parent.
 
-How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](../reference/theme.md#display)): `compact` trims resting cards, `expanded` shows subagents everywhere.
+How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, `expanded` shows subagents everywhere.
 
 ## The agent lifecycle
 

@@ -14,7 +14,7 @@ rimz config set theme.pets.enabled true    # any dotted key works, however deep
 rimz config init --print                   # every key, its default, and accepted values
 ```
 
-`rimz config set` validates before it writes, so a bad value never reaches the file: an unknown scheme is rejected with the catalog count and the custom-file hint, and a malformed color, palette, glyph, or frame is rejected with the reason. Loading stays lenient, so a stale value from an older version falls back to its default at render time rather than taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).
+`rimz config set` validates before it writes, so a bad value never reaches the file: an unknown scheme is rejected with the catalog count and the custom-file hint, and a malformed color, palette, glyph, or frame is rejected with the reason. Loading stays lenient, so a stale value from an older version falls back to its default at render time rather than taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](../reference/cli/maintenance.md).
 
 Edits to `theme.toml` apply on the next refresh. The one exception is a custom scheme *file* edited in place: its palette is cached while the config that points at it is unchanged, so re-pick the scheme or restart the sidebar to see the edit.
 
@@ -39,7 +39,7 @@ scheme = "Catppuccin Mocha"
 
 The bundled catalog is the Alacritty export of [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes), so a scheme name resolves to the same palette in every terminal and mux.
 
-Zellij web rooms use the active scheme for the browser terminal when `[web.zellij] style_client` is true; see [Web CLI](./cli/web.md).
+Zellij web rooms use the active scheme for the browser terminal when `[web.zellij] style_client` is true; see [Web CLI](../reference/cli/web.md).
 
 To paste a palette inline instead, drop an Alacritty `[colors.*]` block at the root of `theme.toml`; an inline palette wins over `scheme`. The required keys are `colors.primary.background` / `foreground` and the six `colors.normal` hues; `colors.bright.blue` (the selection accent, falling back to `normal.blue`) and `colors.selection.background` (the selected-card band) are optional. A missing or malformed entry is named at load.
 
@@ -225,7 +225,7 @@ ascii_art = """
 """
 ```
 
-`color` accepts a palette role, `#rrggbb`, or a raw index. Which blocks appear and in what order is a [Display](#display) and discovery setting (see [configuration.md → Provider dashboard](./configuration.md#provider-dashboard)).
+`color` accepts a palette role, `#rrggbb`, or a raw index. Which blocks appear and in what order is a [Display](#display) and discovery setting (see [configuration.md → Provider dashboard](../reference/configuration.md#provider-dashboard)).
 
 ## Pets
 

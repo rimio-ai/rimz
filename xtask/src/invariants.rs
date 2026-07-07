@@ -367,7 +367,7 @@ fn path_has_tests_component(path: &Path) -> bool {
 /// module (which owns the Raw→Semantic→Component→emit pipeline and the depth
 /// quantizer), the Alacritty parser, and the OKLab math are exempt, as are test
 /// modules — tests legitimately assert carrier→slot mappings. See
-/// docs/reference/theme.md and docs/contributing/rust-conventions.md.
+/// docs/guide/theme.md and docs/contributing/rust-conventions.md.
 fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
     let render_root = root.join("crates/rimz/src/sidebar_pane/render");
     let mut violations = Vec::new();
@@ -396,7 +396,7 @@ fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
         "sidebar render must name color through a component token (theme.component(Component::…)) \
          or a semantic accessor (theme.good/warn/caution/alarm, body/muted/faint/rule), never a \
          Color variant; only Color::Reset may be named — Color::Indexed/Rgb are minted by the \
-         theme pipeline, not hand-picked in render — see docs/reference/theme.md\n{}",
+         theme pipeline, not hand-picked in render — see docs/guide/theme.md\n{}",
         violations.join("\n")
     );
 }

@@ -11,7 +11,7 @@ Configuration comes in two tiers. **Per-machine** config under `~/.config/rimz/`
 | File | Tier | What it holds |
 | --- | --- | --- |
 | `~/.config/rimz/config.toml` | per-machine | room behavior: accounts, notifications, remote-control launch, multiplexer defaults, resume, smart-compact, optional Sentry |
-| `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
+| `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](../guide/theme.md)) |
 | `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, attention timing |
 | `~/.config/rimz/loop.toml` | per-machine | durable recurring loop task definitions and scheduled command checks |
 | `~/.agents/agents/<name>/agent.toml`, `~/.agents/teams/<name>/team.toml` | per-machine | drop-in profile and team fragments merged under `agents.toml` |
@@ -348,7 +348,7 @@ To configure your *own* Zellij or tmux — the theme, true color, copy-mode, and
 
 ## Appearance and the sidebar
 
-The sidebar's palette, glyphs, animations, color depth, color stops, and pets are theme settings in `theme.toml`, documented in full in [theme.md](./theme.md). The settings below cover sidebar behavior plus the pet display selector.
+The sidebar's palette, glyphs, animations, color depth, color stops, and pets are theme settings in `theme.toml`, documented in full in [theme.md](../guide/theme.md). The settings below cover sidebar behavior plus the pet display selector.
 
 ### Sidebar Rendering
 
@@ -379,7 +379,7 @@ inactive_after_secs = 3600
 archive_after_secs = 86400
 ```
 
-`timezone` is an optional IANA zone for displayed transcript times, wall-clock scheduling, and the `"today"` spend cutoff; unset or unknown uses the system local zone. `focus_key` is the global multiplexer chord that focuses the sidebar from any pane and toggles back to your last working pane; both backends bind it at session birth, the default is `Alt+p`, and `""` or `off` registers nothing. `afk_after_secs` sets the input-idle window before the footer shows `zᶻ idle` on tmux, adding `· Nm` after the first minute; Zellij reports attach state only, so it shows `zᶻ away` on full detach regardless of this value. The default is 900 seconds (15 minutes). `trunk` is a preferred comparison branch for the worktree header's git stats, falling back to `main` → `master` → the remote default when it does not resolve. `[agents.attention]` tunes attention timing: `stalled_after_secs` is when a silent running agent escalates to the actionable `!` bucket (30 minutes by default), `inactive_after_secs` is when a card leaves hot work (one hour — the prompt-cache boundary, so a cold card reads as cold), and `archive_after_secs` is when a card parks below hot and warm work (24 hours by default). Set `archive_after_secs` greater than `inactive_after_secs`; lower values are lifted to the first second after the inactive window. The `[theme.display]` knobs that share this area — render cadence, sizing, `scrollbar`, and `card_density` — are theme settings; see [theme.md → Display](./theme.md#display).
+`timezone` is an optional IANA zone for displayed transcript times, wall-clock scheduling, and the `"today"` spend cutoff; unset or unknown uses the system local zone. `focus_key` is the global multiplexer chord that focuses the sidebar from any pane and toggles back to your last working pane; both backends bind it at session birth, the default is `Alt+p`, and `""` or `off` registers nothing. `afk_after_secs` sets the input-idle window before the footer shows `zᶻ idle` on tmux, adding `· Nm` after the first minute; Zellij reports attach state only, so it shows `zᶻ away` on full detach regardless of this value. The default is 900 seconds (15 minutes). `trunk` is a preferred comparison branch for the worktree header's git stats, falling back to `main` → `master` → the remote default when it does not resolve. `[agents.attention]` tunes attention timing: `stalled_after_secs` is when a silent running agent escalates to the actionable `!` bucket (30 minutes by default), `inactive_after_secs` is when a card leaves hot work (one hour — the prompt-cache boundary, so a cold card reads as cold), and `archive_after_secs` is when a card parks below hot and warm work (24 hours by default). Set `archive_after_secs` greater than `inactive_after_secs`; lower values are lifted to the first second after the inactive window. The `[theme.display]` knobs that share this area — render cadence, sizing, `scrollbar`, and `card_density` — are theme settings; see [theme.md → Display](../guide/theme.md#display).
 
 `spend_window` sets the cockpit and provider headline row: `"session"` starts at the latest human activity burst after a five-hour idle gap and is the default, loop-fired turns still count inside the resulting window but do not start or bridge it, `"24h"` keeps a trailing-24-hour window, and `"today"` starts at calendar midnight in `timezone`.
 
@@ -395,15 +395,15 @@ glyphs = "auto"
 voice = true
 ```
 
-An opt-in animated companion in the provider dashboard. The first-run and setup pet question writes `enabled = true` for the default `rocky` pet. Full setup is in [theme.md → Pets](./theme.md#pets); render mechanics, cache layout, and sheet geometry are in [pets.md](../internals/sidebar/pets.md).
+An opt-in animated companion in the provider dashboard. The first-run and setup pet question writes `enabled = true` for the default `rocky` pet. Full setup is in [theme.md → Pets](../guide/theme.md#pets); render mechanics, cache layout, and sheet geometry are in [pets.md](../internals/sidebar/pets.md).
 
 ### Sidebar Bands
 
-The agent-card context meter and the provider budget bar interpolate across color stops you can tune. Both are theme settings (`[theme.display.context_meter]`, `[theme.display.budget_bar]`); the model and the shipped numbers are in [theme.md → Display](./theme.md#display).
+The agent-card context meter and the provider budget bar interpolate across color stops you can tune. Both are theme settings (`[theme.display.context_meter]`, `[theme.display.budget_bar]`); the model and the shipped numbers are in [theme.md → Display](../guide/theme.md#display).
 
 ### Provider Dashboard
 
-Which providers appear, their order, and their brand styling are theme and discovery settings (`[theme.display] provider_tabs` / `provider_list` / `max_provider_blocks`, and `[theme.providers.<kind>]`). The layout model is in [theme.md → Display](./theme.md#display) and the styling fields in [theme.md → Provider styling](./theme.md#provider-styling); account and budget sourcing is in [provider.md](../internals/agents/provider.md).
+Which providers appear, their order, and their brand styling are theme and discovery settings (`[theme.display] provider_tabs` / `provider_list` / `max_provider_blocks`, and `[theme.providers.<kind>]`). The layout model is in [theme.md → Display](../guide/theme.md#display) and the styling fields in [theme.md → Provider styling](../guide/theme.md#provider-styling); account and budget sourcing is in [provider.md](../internals/agents/provider.md).
 
 ## Project config
 

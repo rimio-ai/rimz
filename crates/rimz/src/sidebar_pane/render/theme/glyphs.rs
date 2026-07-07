@@ -176,7 +176,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
 
 /// The Nerd Font glyph for a role, or `None` when the preset keeps the role's
 /// Unicode default. The Nerd Font set is the Unicode base with this curated icon
-/// selection layered over it (see `docs/reference/theme.md#glyphs`): the drawn
+/// selection layered over it (see `docs/guide/theme.md#glyphs`): the drawn
 /// gauges, spines, caps, hairline, the dotted seal, the compacting wave, and the
 /// status spinner/clock heads (which animate through frame sequences in
 /// `animation.rs`) all return `None` and keep their box-drawing or Unicode shape,
@@ -198,7 +198,7 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         | GlyphRole::StatusCompacting => return None,
         // cockpit identity row. Every icon ships single-cell to match the "Mono"
         // Nerd Font builds; a face that draws them double-width pads per-glyph with a
-        // trailing space (see docs/reference/theme.md#glyphs).
+        // trailing space (see docs/guide/theme.md#glyphs).
         GlyphRole::CockpitWorkspace => "\u{eda7}", // nf-fa-seedling
         GlyphRole::CockpitSessions => "\u{ee83}",  // nf-fa-splotch
         GlyphRole::CockpitAgents => "\u{ee9c}",    // nf-fa-brain

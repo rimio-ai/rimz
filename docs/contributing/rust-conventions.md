@@ -258,7 +258,7 @@ The individual gates:
 
 ### Architectural invariants
 
-`cargo xtask invariants` is a grep-and-shape gate over the tracked tree — shallow string matches, so treat it as a low-cost trip-wire paired with the type system and review, not a substitute for either. It guards boundaries the compiler can't see: hook-stdout decision-channel integrity, sidebar/store import separation, spend-parser and diagnostic-write confinement, fsync calls staying in `store/atomic.rs`, pane-primitive use, the render snapshot clock, [UI-color provenance](../reference/theme.md#color-slots) and glyph provenance, vendored presence-plugin freshness, and the inline-test size gate. The authoritative set is the `ensure_*` list in [xtask/src/invariants.rs](../../xtask/src/invariants.rs); a new boundary lands there as an `ensure_*` check with a self-test.
+`cargo xtask invariants` is a grep-and-shape gate over the tracked tree — shallow string matches, so treat it as a low-cost trip-wire paired with the type system and review, not a substitute for either. It guards boundaries the compiler can't see: hook-stdout decision-channel integrity, sidebar/store import separation, spend-parser and diagnostic-write confinement, fsync calls staying in `store/atomic.rs`, pane-primitive use, the render snapshot clock, [UI-color provenance](../guide/theme.md#color-slots) and glyph provenance, vendored presence-plugin freshness, and the inline-test size gate. The authoritative set is the `ensure_*` list in [xtask/src/invariants.rs](../../xtask/src/invariants.rs); a new boundary lands there as an `ensure_*` check with a self-test.
 
 ## Continuous integration
 

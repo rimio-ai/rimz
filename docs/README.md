@@ -25,7 +25,7 @@ New to Rimz? Read in order: [installation](./guide/installation.md), [your first
 | Page | What it covers |
 | --- | --- |
 | [Configuration](./reference/configuration.md) | Every setting: the four config files, agent profiles and teams, loop tasks, behavior toggles, and project config. |
-| [Theming and pets](./reference/theme.md) | Schemes, palettes, color depth, glyphs, animations, provider styling, and the sidebar pets. |
+| [Theming and pets](./guide/theme.md) | Schemes, palettes, color depth, glyphs, animations, provider styling, and the sidebar pets. |
 | [Zellij and tmux baselines](./guide/setup.md#configure-your-multiplexer) | Recommended multiplexer settings, shipped ready to adopt under [examples/](../examples/README.md). |
 
 ## Reference

@@ -29,7 +29,7 @@ rimz coverage [--json]
 rimz list-themes [--json]
 ```
 
-`list-themes` prints the bundled Alacritty theme names, one per line, each usable verbatim as `rimz config set theme.scheme <name>`; on a terminal it renders an aligned table: each theme's name, then grouped palette chips (background/foreground, then the six ANSI hues) under a legend header. `--json` emits the list as an array. The palette model and custom theme files are in [theme.md](../theme.md).
+`list-themes` prints the bundled Alacritty theme names, one per line, each usable verbatim as `rimz config set theme.scheme <name>`; on a terminal it renders an aligned table: each theme's name, then grouped palette chips (background/foreground, then the six ANSI hues) under a legend header. `--json` emits the list as an array. The palette model and custom theme files are in [theme.md](../../guide/theme.md).
 
 ## List pets
 

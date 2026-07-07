@@ -222,7 +222,7 @@ The [documentation index](./docs/README.md) maps the whole set. Highlights:
 - [Your first session](./docs/guide/experience.md) — install to a working fleet, step by step
 - [Set up your machine](./docs/guide/setup.md) — config, hooks, true color, pets, and the Zellij/tmux baselines
 - [Product tour](./docs/guide/product.md) — the room, the loop, and the scenarios people run, local fleet to scripted pipeline
-- [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/reference/configuration.md) · [Theming](./docs/reference/theme.md)
+- [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/reference/configuration.md) · [Theming](./docs/guide/theme.md)
 - [DESIGN.md](./DESIGN.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [internals](./docs/internals/) — how it works, in depth
 
 ## Install

@@ -62,7 +62,7 @@ style = "modern"       # truecolor + Nerd Font icons; "default" = auto color + U
 # mode = "truecolor"   # force RGB when auto-detection is defeated
 ```
 
-Schemes, palette slots, and the full display model are in [theming](../reference/theme.md).
+Schemes, palette slots, and the full display model are in [theming](./theme.md).
 
 The first-run glyph probe writes `style = "modern"` for you when the gradient is smooth and the sampled sidebar icons render cleanly.
 
@@ -80,7 +80,7 @@ voice = true       # canned captions on fleet-status changes
 
 `rimz list-pets` previews every built-in as cell art; the shipped ids are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`.
 
-`glyphs = "auto"` renders crisp pixels when the terminal is Ghostty or kitty — inside tmux that also needs tmux 3.6 or newer with `allow-passthrough on` — and falls back to sextant cell art everywhere else, including all Zellij rooms. `glyphs = "sextant"` pins the portable cell art. Bring-your-own sheets, the offline switch, and the privacy boundary are in [theming → Pets](../reference/theme.md#pets).
+`glyphs = "auto"` renders crisp pixels when the terminal is Ghostty or kitty — inside tmux that also needs tmux 3.6 or newer with `allow-passthrough on` — and falls back to sextant cell art everywhere else, including all Zellij rooms. `glyphs = "sextant"` pins the portable cell art. Bring-your-own sheets, the offline switch, and the privacy boundary are in [theming → Pets](./theme.md#pets).
 
 ## Keep the fleet moving
 
