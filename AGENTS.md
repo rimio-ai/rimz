@@ -76,7 +76,7 @@ Rimz ships as one Rust binary: the `rimz` crate is CLI, domain library, and nati
 
 Every other document is a leaf from here, grouped by purpose: **guide** (use it), **interface** (see it), **reference** (look it up), **internals** (how it works), **externals** (upstream surfaces), **contributing** (work on it).
 
-**Root** — [README.md](./README.md) (product entry), [DESIGN.md](./DESIGN.md) (the attention problem, design pillars, invariants, non-goals), [ARCHITECTURE.md](./ARCHITECTURE.md) (runtime shape, on-disk state, code-map rationale).
+**Root** — [README.md](./README.md) (product entry), [docs/README.md](./docs/README.md) (user documentation index, the README's Docs link), [DESIGN.md](./DESIGN.md) (the attention problem, design pillars, invariants, non-goals), [ARCHITECTURE.md](./ARCHITECTURE.md) (runtime shape, on-disk state, code-map rationale).
 
 **Guide** — `docs/guide/`
 - [installation.md](./docs/guide/installation.md) — source-install prerequisites and Rust toolchain for Linux and macOS.
