@@ -823,15 +823,21 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         return format!("@{name}");
     }
     // A unique profile is next. A shared profile (two `planner`s in one channel)
-    // is not unique, and a profile named like a built-in kind resolves through
-    // the Kind selector, so both fall through to the kind/ordinal ladder.
+    // is not unique, a profile named like a built-in kind resolves through the
+    // Kind selector, and a profile whose text a live explicit name claims would
+    // resolve to that named agent instead — all fall through to the
+    // kind/ordinal ladder so the rendered handle still round-trips.
     if let Some(profile) = agent.profile.as_deref() {
         let profile_rivals = peers
             .iter()
             .filter(|peer| peer.profile.as_deref() == Some(profile))
             .filter(|peer| !scoped || agent_channel(peer) == channel)
             .count();
-        if profile_rivals <= 1 && !is_known_kind(profile) {
+        let shadowed_by_name = peers
+            .iter()
+            .filter(|peer| !scoped || agent_channel(peer) == channel)
+            .any(|peer| peer.name_explicit && peer.name.as_deref() == Some(profile));
+        if profile_rivals <= 1 && !is_known_kind(profile) && !shadowed_by_name {
             return format!("@{profile}");
         }
     }

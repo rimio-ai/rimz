@@ -628,6 +628,19 @@ fn explicit_name_renders_and_round_trips_before_profile() {
             .as_str(),
         "session-writer"
     );
+
+    // The agent whose profile text `writer` is now claimed by the explicit name
+    // falls through to its kind, so its rendered handle still round-trips to
+    // itself instead of colliding with `@writer`.
+    let profiled_handle = agent_handle(peers[1], &peers, true);
+    assert_eq!(profiled_handle, "@codex#auth");
+    assert_eq!(
+        resolve_one(&snapshot, &profiled_handle, None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-profile"
+    );
 }
 
 #[test]
