@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -176,6 +176,7 @@ pub(crate) fn chat_view(
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
     let current = current_channel(workspace);
+    let target = resolve_run_target(&paths, target)?;
     let entries = dedup_asks(rimz::transcript::read_all(&paths)?);
     if entries.is_empty() {
         return Ok(RenderedChat {
@@ -192,7 +193,7 @@ pub(crate) fn chat_view(
     let live_agents = live_root_agents(workspace);
     let live_root_keys = live_agents.iter().map(|agent| agent.key.clone()).collect();
     let scope = resolve_scope(
-        target,
+        target.as_deref(),
         worktree,
         current.as_deref(),
         &identities,
@@ -203,7 +204,7 @@ pub(crate) fn chat_view(
         .filter(|entry| entry_in_scope(entry, &scope))
         .collect();
     if filtered.is_empty() {
-        let empty_message = empty_scope_message(&scope, target);
+        let empty_message = empty_scope_message(&scope, target.as_deref());
         return Ok(RenderedChat {
             channel: scope.channel,
             focus: scope.focus,
@@ -225,7 +226,7 @@ pub(crate) fn chat_view(
     entries.sort_by(|left, right| compare_optional_timestamps(left.chat.at, right.chat.at));
 
     if entries.is_empty() {
-        let empty_message = empty_scope_message(&scope, target);
+        let empty_message = empty_scope_message(&scope, target.as_deref());
         return Ok(RenderedChat {
             channel: scope.channel,
             focus: scope.focus,
@@ -315,6 +316,24 @@ fn empty_scope_message(scope: &Scope, target: Option<&str>) -> String {
         .or_else(|| target.map(ToOwned::to_owned))
         .unwrap_or_else(|| "this room".to_owned());
     format!("No conversation for {label} yet.")
+}
+
+fn resolve_run_target(paths: &rimz::StatePaths, target: Option<&str>) -> Result<Option<String>> {
+    let Some(raw) = target else {
+        return Ok(None);
+    };
+    let selector = raw.strip_prefix('@').unwrap_or(raw);
+    if selector.contains('#') {
+        return Ok(Some(raw.to_owned()));
+    }
+    let Ok(run_id) = rimz::RunId::parse(selector) else {
+        return Ok(Some(raw.to_owned()));
+    };
+    let record = rimz::harness::run::load(paths, &run_id)?;
+    let Some(agent_id) = record.agent_id else {
+        bail!("run {run_id} has not bound an agent session yet");
+    };
+    Ok(Some(agent_id.to_string()))
 }
 
 fn write_archive_hint(

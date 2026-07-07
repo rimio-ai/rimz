@@ -108,6 +108,52 @@ fn transcript_paths() -> (tempfile::TempDir, rimz::StatePaths) {
     (dir, paths)
 }
 
+fn run_record(paths: &rimz::StatePaths, agent_id: Option<&str>) -> rimz::RunId {
+    let mut record = rimz::harness::run::RunRecord::new(
+        paths.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        rimz::harness::run::PermissionMode::Auto,
+        "prompt".to_owned(),
+        std::path::Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    record.agent_id = agent_id.map(AgentSessionId::from);
+    rimz::harness::run::create(paths, &record).expect("create run");
+    record.run_id
+}
+
+#[test]
+fn run_target_resolves_to_bound_agent_session() {
+    let (_dir, paths) = transcript_paths();
+    let run_id = run_record(&paths, Some("sess-1"));
+
+    let target = resolve_run_target(&paths, Some(run_id.as_str())).expect("resolve run target");
+
+    assert_eq!(target.as_deref(), Some("sess-1"));
+}
+
+#[test]
+fn run_target_rejects_unbound_run() {
+    let (_dir, paths) = transcript_paths();
+    let run_id = run_record(&paths, None);
+
+    let err = resolve_run_target(&paths, Some(run_id.as_str())).expect_err("unbound run errors");
+
+    assert!(
+        err.to_string()
+            .contains("has not bound an agent session yet"),
+        "{err}"
+    );
+}
+
+#[test]
+fn run_target_leaves_non_run_target_unchanged() {
+    let (_dir, paths) = transcript_paths();
+
+    let target = resolve_run_target(&paths, Some("@codex#chat")).expect("resolve target");
+
+    assert_eq!(target.as_deref(), Some("@codex#chat"));
+}
+
 fn transcript_entry(
     entry: TranscriptKind,
     text: &str,

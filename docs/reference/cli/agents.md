@@ -44,7 +44,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 - The management verbs (`show`, `logs`, `focus`, `wait`, and `stop`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `stop --all` fans out every match for the reference, while `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
 - `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`; a fan-out delivers to every match with no confirmation and prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
-The `@` sigil is required for `message` (it also keeps a target from being read as a launch spec); `show`, `logs`, `wait`, `stop`, and `refresh` also accept a bare selector (`swift-otter`), while `wait` and `stop` also accept a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
+The `@` sigil is required for `message` (it also keeps a target from being read as a launch spec); `show`, `logs`, `wait`, `stop`, and `refresh` also accept a bare selector (`swift-otter`), while `transcript`, `wait`, and `stop` also accept a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
 
 ## Agents
 
@@ -106,7 +106,7 @@ cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
 ```
 
 - `--detach` prints the pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`.
-- `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--detach`).
+- `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--detach`). The JSON `run_id` opens the Rimz transcript log with `rimz transcript <run_id>`; the JSON `transcript_path` is the provider-native session file used for streaming, context, and spend enrichment.
 - `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt.
 - `--max-turns <N>` caps the agentic turn count where the adapter exposes a native limit (Claude today); an agent without one refuses the run.
 
@@ -201,13 +201,14 @@ Parked delivery needs installed and trusted hooks, because turn-end hooks trigge
 ```sh
 rimz transcript @swift-otter            # one agent's channel messages
 rimz transcript @codex#cli-docs --last 4
+rimz transcript run_0123456789abcdef0123456789abcdef
 rimz transcript #cli-docs               # the channel chat log
 rimz transcript @all#cli-docs --last 12
 rimz transcript --all                   # include the dated history archive
 rimz transcript --json
 ```
 
-A channel target (`#worktree`, `@all`, or no target for the current channel) projects every root agent's transcript-log entry in that exact lane into one timestamp-ordered chat log. The default view starts at the current live cohort for that scope, so a same-name team or worktree relaunch opens on its living conversation instead of replaying the prior one; older lines remain in the append-only log, `--all` shows them under a dated history archive, and an empty scope exits successfully with a short note. A single-agent transcript target is deliberately non-ambiguous: an exact session id wins across channels, otherwise a handle picks a live session in the current room when one exists, then the latest transcript activity. Headers put the sender first, add the receiver with `→` when one exists, and show `HH:MM`; consecutive messages from the same sender-to-receiver pair group under one header. Message bodies highlight `@agent` and `#channel` mentions, and provider API error entries render as error-styled agent lines. Blocking asks render as cards with a left spine, option lists, each option's description under its label, folded answers, and `◌ unanswered` when no answer exists in the log. Peer-opened turns include the receiver's assistant reply, and `--last <N>` keeps the last N chat lines.
+A channel target (`#worktree`, `@all`, or no target for the current channel) projects every root agent's transcript-log entry in that exact lane into one timestamp-ordered chat log. The default view starts at the current live cohort for that scope, so a same-name team or worktree relaunch opens on its living conversation instead of replaying the prior one; older lines remain in the append-only log, `--all` shows them under a dated history archive, and an empty scope exits successfully with a short note. A single-agent transcript target is deliberately non-ambiguous: a supervised-run id resolves to that run's bound root agent session, an exact session id wins across channels, otherwise a handle picks a live session in the current room when one exists, then the latest transcript activity. Headers put the sender first, add the receiver with `→` when one exists, and show `HH:MM`; consecutive messages from the same sender-to-receiver pair group under one header. Message bodies highlight `@agent` and `#channel` mentions, and provider API error entries render as error-styled agent lines. Blocking asks render as cards with a left spine, option lists, each option's description under its label, folded answers, and `◌ unanswered` when no answer exists in the log. Peer-opened turns include the receiver's assistant reply, and `--last <N>` keeps the last N chat lines.
 
 A single-agent target builds that same channel log and filters it to messages the focal agent sent or received, so sent messages appear from peers' logs as well as received messages from the focal log. Sends made with `--no-from` look like human prompts, and cross-channel sends involving agents outside the focal channel are outside this view. `--json` emits `{channel, focus, entries}` for both channel and agent targets, with `archived_count` when prior-session lines are hidden.
 
