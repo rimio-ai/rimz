@@ -243,11 +243,11 @@ fn stop_failure_records_turn_error_transcript_entry() {
     )
     .unwrap();
 
-    let entries = rimz::chat::read_all(store.paths()).unwrap();
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
     let [entry] = entries.as_slice() else {
         panic!("expected one transcript entry, got {entries:?}");
     };
-    assert_eq!(entry.entry, rimz::chat::ChatKind::Error);
+    assert_eq!(entry.entry, rimz::transcript::TranscriptKind::Error);
     assert_eq!(entry.kind.as_str(), "claude");
     assert_eq!(entry.agent_id.as_str(), "sess-1");
     assert_eq!(entry.channel.as_deref(), Some("hooks-test"));

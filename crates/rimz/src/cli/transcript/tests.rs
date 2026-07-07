@@ -15,7 +15,13 @@ fn agent_key_for(kind: &str, session_id: &str) -> AgentKey {
     )
 }
 
-fn render_entry(kind: ChatKind, from: &str, to: Option<&str>, at: &str, text: &str) -> RenderEntry {
+fn render_entry(
+    kind: TranscriptKind,
+    from: &str,
+    to: Option<&str>,
+    at: &str,
+    text: &str,
+) -> RenderEntry {
     RenderEntry {
         kind,
         agent: agent_key(),
@@ -24,7 +30,7 @@ fn render_entry(kind: ChatKind, from: &str, to: Option<&str>, at: &str, text: &s
             to: to.map(ToOwned::to_owned),
             at: Some(ts(at)),
             text: text.to_owned(),
-            error: kind == ChatKind::Error,
+            error: kind == TranscriptKind::Error,
             questions: Vec::new(),
             answers: Vec::new(),
         },
@@ -32,19 +38,19 @@ fn render_entry(kind: ChatKind, from: &str, to: Option<&str>, at: &str, text: &s
 }
 
 fn entry(at: &str, text: &str) -> RenderEntry {
-    render_entry(ChatKind::Prompt, "user", Some("@claude"), at, text)
+    render_entry(TranscriptKind::Prompt, "user", Some("@claude"), at, text)
 }
 
 fn assistant_entry(at: &str, text: &str) -> RenderEntry {
-    render_entry(ChatKind::Assistant, "@claude", None, at, text)
+    render_entry(TranscriptKind::Assistant, "@claude", None, at, text)
 }
 
 fn ask_entry(at: &str, text: &str) -> RenderEntry {
-    render_entry(ChatKind::Ask, "@claude", None, at, text)
+    render_entry(TranscriptKind::Ask, "@claude", None, at, text)
 }
 
 fn answer_entry(at: &str, text: &str) -> RenderEntry {
-    render_entry(ChatKind::Answer, "you", Some("@claude"), at, text)
+    render_entry(TranscriptKind::Answer, "you", Some("@claude"), at, text)
 }
 
 fn ask_option(label: &str) -> AskOption {
@@ -79,11 +85,11 @@ fn render_raw(entries: &[RenderEntry], today: Date) -> String {
 fn log_entry(
     kind: &str,
     session_id: &str,
-    entry: ChatKind,
+    entry: TranscriptKind,
     from: Option<&str>,
     text: &str,
-) -> ChatEntry {
-    let mut entry = ChatEntry::new(
+) -> TranscriptEntry {
+    let mut entry = TranscriptEntry::new(
         ts("2026-06-01T00:00:00Z"),
         AgentKind::new_unchecked(kind),
         AgentSessionId::from(session_id),
@@ -95,12 +101,102 @@ fn log_entry(
     entry
 }
 
+fn transcript_paths() -> (tempfile::TempDir, rimz::StatePaths) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let workspace_id = rimz::ids::WorkspaceId::from_project_root(dir.path());
+    let paths = rimz::StatePaths::under(workspace_id, dir.path()).expect("state paths");
+    (dir, paths)
+}
+
+fn transcript_entry(
+    entry: TranscriptKind,
+    text: &str,
+    at: &str,
+) -> rimz::transcript::TranscriptEntry {
+    let mut entry = rimz::transcript::TranscriptEntry::new(
+        ts(at),
+        AgentKind::new_unchecked("claude"),
+        AgentSessionId::from("sess-1"),
+        entry,
+        text.to_owned(),
+    );
+    entry.questions = vec![rimz::transcript::AskQuestion {
+        question: "Choose path?".to_owned(),
+        options: vec![ask_option("safe"), ask_option("fast")],
+    }];
+    entry
+}
+
+fn waiting_agent() -> rimz::agents::AgentState {
+    let waiting_since = ts("2026-06-01T00:00:00Z");
+    let mut agent =
+        rimz::agents::AgentState::stub("claude", "sess-1", rimz::agents::AgentStatus::Waiting);
+    agent.waiting_since = Some(waiting_since);
+    agent.last_activity = waiting_since;
+    agent
+}
+
+#[test]
+fn latest_ask_view_returns_open_ask() {
+    let (_dir, paths) = transcript_paths();
+    let ask = transcript_entry(TranscriptKind::Ask, "details", "2026-06-01T00:00:00Z");
+    rimz::transcript::append(&paths, &ask).expect("append ask");
+
+    let view = latest_ask_view_from_paths(&paths, &waiting_agent())
+        .expect("latest ask")
+        .expect("open ask");
+
+    assert_eq!(view.title, "Choose path?");
+    assert_eq!(view.body.as_deref(), Some("details"));
+    assert_eq!(view.options, vec!["safe".to_owned(), "fast".to_owned()]);
+}
+
+#[test]
+fn latest_ask_view_returns_none_after_later_answer() {
+    let (_dir, paths) = transcript_paths();
+    let ask = transcript_entry(TranscriptKind::Ask, "details", "2026-06-01T00:00:00Z");
+    let answer = transcript_entry(TranscriptKind::Answer, "safe", "2026-06-01T00:00:01Z");
+    rimz::transcript::append(&paths, &ask).expect("append ask");
+    rimz::transcript::append(&paths, &answer).expect("append answer");
+
+    let view = latest_ask_view_from_paths(&paths, &waiting_agent()).expect("latest ask");
+
+    assert!(view.is_none());
+}
+
+#[test]
+fn latest_ask_view_ignores_older_answer() {
+    let (_dir, paths) = transcript_paths();
+    let answer = transcript_entry(TranscriptKind::Answer, "safe", "2026-06-01T00:00:00Z");
+    let ask = transcript_entry(TranscriptKind::Ask, "details", "2026-06-01T00:00:01Z");
+    rimz::transcript::append(&paths, &answer).expect("append answer");
+    rimz::transcript::append(&paths, &ask).expect("append ask");
+
+    let view = latest_ask_view_from_paths(&paths, &waiting_agent())
+        .expect("latest ask")
+        .expect("open ask");
+
+    assert_eq!(view.title, "Choose path?");
+}
+
+#[test]
+fn latest_ask_view_skips_log_when_agent_not_waiting() {
+    let (_dir, paths) = transcript_paths();
+    let mut agent = waiting_agent();
+    agent.status = rimz::agents::AgentStatus::Idle;
+
+    let view = latest_ask_view_from_paths(&paths, &agent).expect("latest ask");
+
+    assert!(view.is_none());
+    assert!(!paths.transcript_dir.exists());
+}
+
 #[test]
 fn message_entry_projects_structured_sender_and_receiver() {
     let entry = log_entry(
         "claude",
         "receiver",
-        ChatKind::Message,
+        TranscriptKind::Message,
         Some("@planner"),
         "ship it",
     );
@@ -115,15 +211,15 @@ fn message_entry_projects_structured_sender_and_receiver() {
 
 #[test]
 fn focus_keeps_messages_sent_by_the_focal_agent() {
-    let focal = log_entry("claude", "sender", ChatKind::Prompt, None, "start");
+    let focal = log_entry("claude", "sender", TranscriptKind::Prompt, None, "start");
     let sent = log_entry(
         "codex",
         "receiver",
-        ChatKind::Message,
+        TranscriptKind::Message,
         Some("@claude"),
         "ack",
     );
-    let local = log_entry("codex", "receiver", ChatKind::Prompt, None, "local");
+    let local = log_entry("codex", "receiver", TranscriptKind::Prompt, None, "local");
     let identities = build_identities(&[focal.clone(), sent.clone()]);
     let scope = Scope {
         channel: Some("chat".to_owned()),
@@ -243,7 +339,7 @@ fn mention_painting_highlights_agents_and_channels() {
 #[test]
 fn structured_ask_card_folds_selected_answer_with_note() {
     let mut ask = ask_entry("2026-06-28T18:00:00Z", "I checked both paths.");
-    ask.chat.questions = vec![rimz::chat::AskQuestion {
+    ask.chat.questions = vec![rimz::transcript::AskQuestion {
         question: "Choose deployment path?".to_owned(),
         options: vec![
             described_ask_option("safe", "Use staged rollout with rollback ready."),
@@ -251,7 +347,7 @@ fn structured_ask_card_folds_selected_answer_with_note() {
         ],
     }];
     let mut answer = answer_entry("2026-06-28T18:01:00Z", "safe");
-    answer.chat.answers = vec![rimz::chat::AskAnswer {
+    answer.chat.answers = vec![rimz::transcript::AskAnswer {
         question: Some("Choose deployment path?".to_owned()),
         chosen: vec!["safe".to_owned()],
         note: Some("use prod window".to_owned()),
@@ -280,7 +376,7 @@ fn structured_ask_card_folds_selected_answer_with_note() {
     assert!(!out.contains("you → @claude"), "{out}");
 
     let mut raw_ask = ask_entry("2026-06-28T18:00:00Z", "");
-    raw_ask.chat.questions = vec![rimz::chat::AskQuestion {
+    raw_ask.chat.questions = vec![rimz::transcript::AskQuestion {
         question: "Choose deployment path?".to_owned(),
         options: vec![
             described_ask_option("safe", "Tell @ops before rollout."),
@@ -288,7 +384,7 @@ fn structured_ask_card_folds_selected_answer_with_note() {
         ],
     }];
     let mut raw_answer = answer_entry("2026-06-28T18:01:00Z", "safe");
-    raw_answer.chat.answers = vec![rimz::chat::AskAnswer {
+    raw_answer.chat.answers = vec![rimz::transcript::AskAnswer {
         question: Some("Choose deployment path?".to_owned()),
         chosen: vec!["safe".to_owned()],
         note: None,
@@ -303,23 +399,23 @@ fn structured_ask_card_folds_selected_answer_with_note() {
 fn structured_ask_card_renders_other_and_multi_question_answers() {
     let mut ask = ask_entry("2026-06-28T18:00:00Z", "");
     ask.chat.questions = vec![
-        rimz::chat::AskQuestion {
+        rimz::transcript::AskQuestion {
             question: "Merge strategy?".to_owned(),
             options: vec![ask_option("squash"), ask_option("rebase")],
         },
-        rimz::chat::AskQuestion {
+        rimz::transcript::AskQuestion {
             question: "Notify team?".to_owned(),
             options: vec![ask_option("yes"), ask_option("no")],
         },
     ];
     let mut answer = answer_entry("2026-06-28T18:01:00Z", "live repro first\nyes");
     answer.chat.answers = vec![
-        rimz::chat::AskAnswer {
+        rimz::transcript::AskAnswer {
             question: Some("Notify team?".to_owned()),
             chosen: vec!["yes".to_owned()],
             note: None,
         },
-        rimz::chat::AskAnswer {
+        rimz::transcript::AskAnswer {
             question: Some("Merge strategy?".to_owned()),
             chosen: vec!["live repro first".to_owned()],
             note: None,
@@ -369,7 +465,7 @@ fn exit_plan_text_falls_back_to_text_card() {
 #[test]
 fn question_lines_paint_mentions() {
     let mut ask = ask_entry("2026-06-28T18:00:00Z", "");
-    ask.chat.questions = vec![rimz::chat::AskQuestion {
+    ask.chat.questions = vec![rimz::transcript::AskQuestion {
         question: "Ask @codex about #cli-docs?".to_owned(),
         options: vec![ask_option("yes"), ask_option("no")],
     }];
@@ -383,7 +479,7 @@ fn question_lines_paint_mentions() {
 #[test]
 fn card_lines_wrap_with_spine_and_option_hanging_indent() {
     let mut ask = ask_entry("2026-06-28T18:00:00Z", "");
-    ask.chat.questions = vec![rimz::chat::AskQuestion {
+    ask.chat.questions = vec![rimz::transcript::AskQuestion {
             question: "Which deployment plan should the release captain choose when the fallback window is narrow and every reviewer needs one clear sentence of context?".to_owned(),
             options: vec![
                 described_ask_option(

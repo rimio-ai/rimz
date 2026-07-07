@@ -375,6 +375,26 @@ impl MessageRecord {
         }
     }
 
+    /// Fresh `Queued` copy of a terminal record for `message requeue`.
+    pub fn requeue_from(record: &MessageRecord) -> MessageRecord {
+        Self::new_for_card(
+            record.workspace_id.clone(),
+            record.kind.clone(),
+            record.agent_id.clone(),
+            record.agent_name.clone(),
+            record.text.clone(),
+            record.enter,
+            record.gate,
+        )
+        .with_address(record.address.clone())
+        .with_channel(record.channel.clone())
+        .with_sender(record.sender.clone())
+        .with_force(record.force)
+        .with_auto_compact(record.auto_compact)
+        .with_body(record.body)
+        .with_not_before(record.not_before)
+    }
+
     #[must_use]
     pub fn with_address(mut self, address: Option<String>) -> Self {
         self.address = address;

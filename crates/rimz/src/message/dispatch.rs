@@ -641,7 +641,7 @@ mod tests {
     use super::*;
 
     use crate::agents::{AgentStatus, TurnPhase};
-    use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+    use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
     use crate::pane::PaneRef;
 
     #[test]
@@ -810,60 +810,14 @@ mod tests {
     }
 
     fn agent(id: &str, status: AgentStatus) -> AgentState {
-        let timestamp = now();
-        let phase = match status {
-            AgentStatus::Running => TurnPhase::Reasoning,
-            _ => TurnPhase::Idle,
-        };
-        AgentState {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked("claude"),
-            name: Some(format!("{id}-name")),
-            name_explicit: false,
-            kind_ordinal: Some(1),
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            status,
-            phase,
-            pane: Some(PaneRef::from_id(PaneId::from_parts(
-                MuxName::Zellij,
-                "terminal_3",
-            ))),
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: Some("/repo/project".to_owned()),
-            worktree_branch: Some("project".to_owned()),
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: timestamp,
-            last_activity: timestamp,
-            registered_at: Some(timestamp),
-        }
+        let mut agent = AgentState::stub("claude", id, status);
+        agent.pane = Some(PaneRef::from_id(PaneId::from_parts(
+            MuxName::Zellij,
+            "terminal_3",
+        )));
+        agent.worktree_path = Some("/repo/project".to_owned());
+        agent.worktree_branch = Some("project".to_owned());
+        agent
     }
 
     fn bound_pane(agent: &AgentState, raw: &str) -> PaneAgent {

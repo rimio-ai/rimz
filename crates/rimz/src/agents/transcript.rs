@@ -1,7 +1,7 @@
 //! Adapter-normalized provider-native transcript message types.
 //!
 //! Adapters normalize their native transcript files into [`TranscriptMessage`].
-//! The durable Rimz-owned cross-provider chat log lives in [`crate::chat`].
+//! The durable Rimz-owned cross-provider transcript log lives in [`crate::transcript`].
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};

@@ -92,8 +92,8 @@ use super::{
     classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
     resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
-use crate::chat::AskQuestion;
 use crate::harness::run::PermissionMode;
+use crate::transcript::AskQuestion;
 
 /// Per-hook timeout written into the Codex config (seconds). Hooks write a
 /// Waiting state and return neutral immediately, so the value is a short guard

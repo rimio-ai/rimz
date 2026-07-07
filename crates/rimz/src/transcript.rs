@@ -1,8 +1,8 @@
-//! Durable Rimz-owned cross-provider chat log.
+//! Durable Rimz-owned cross-provider conversation log.
 //!
 //! The log is append-only JSONL under `transcript/<bucket-start>.jsonl` in the
-//! workspace state root. The directory name stays for compatibility; this chat
-//! log is distinct from provider-native transcript files and the message queue.
+//! workspace state root. This transcript is distinct from provider-native
+//! transcript and session files.
 
 use std::fs;
 use std::io;
@@ -19,7 +19,7 @@ const FILE_DAYS: u32 = 7;
 const SECONDS_PER_DAY: i64 = 86_400;
 
 #[derive(Debug, thiserror::Error)]
-pub enum ChatLogErr {
+pub enum TranscriptLogErr {
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
@@ -34,11 +34,11 @@ pub enum ChatLogErr {
     Json(#[from] serde_json::Error),
 }
 
-pub type Result<T> = std::result::Result<T, ChatLogErr>;
+pub type Result<T> = std::result::Result<T, TranscriptLogErr>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ChatKind {
+pub enum TranscriptKind {
     Prompt,
     Message,
     Assistant,
@@ -48,7 +48,7 @@ pub enum ChatKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatEntry {
+pub struct TranscriptEntry {
     pub at: Timestamp,
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
@@ -60,7 +60,7 @@ pub struct ChatEntry {
     pub profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
-    pub entry: ChatKind,
+    pub entry: TranscriptKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
     pub text: String,
@@ -70,12 +70,12 @@ pub struct ChatEntry {
     pub answers: Vec<AskAnswer>,
 }
 
-impl ChatEntry {
+impl TranscriptEntry {
     pub fn new(
         at: Timestamp,
         kind: AgentKind,
         agent_id: AgentSessionId,
-        entry: ChatKind,
+        entry: TranscriptKind,
         text: String,
     ) -> Self {
         Self {
@@ -201,12 +201,12 @@ fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
-/// Append one chat entry. Callers must not already hold the workspace
+/// Append one transcript entry. Callers must not already hold the workspace
 /// lock; append takes it to serialize hook children writing long JSONL lines.
 #[must_use = "durability barrier; check the result"]
-pub fn append(paths: &StatePaths, entry: &ChatEntry) -> Result<()> {
+pub fn append(paths: &StatePaths, entry: &TranscriptEntry) -> Result<()> {
     let _guard = lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
-    fs::create_dir_all(&paths.transcript_dir).map_err(|source| ChatLogErr::Io {
+    fs::create_dir_all(&paths.transcript_dir).map_err(|source| TranscriptLogErr::Io {
         path: paths.transcript_dir.clone(),
         source,
     })?;
@@ -216,24 +216,61 @@ pub fn append(paths: &StatePaths, entry: &ChatEntry) -> Result<()> {
     Ok(())
 }
 
-pub fn read_all(paths: &StatePaths) -> Result<Vec<ChatEntry>> {
-    let mut files = chat_files(&paths.transcript_dir)?;
+pub fn read_all(paths: &StatePaths) -> Result<Vec<TranscriptEntry>> {
+    let mut files = transcript_files(&paths.transcript_dir)?;
     files.sort();
 
     let mut entries = Vec::new();
     for path in files {
-        let text = fs::read_to_string(&path).map_err(|source| ChatLogErr::Io {
+        let text = fs::read_to_string(&path).map_err(|source| TranscriptLogErr::Io {
             path: path.clone(),
             source,
         })?;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            if let Ok(entry) = serde_json::from_str::<ChatEntry>(line) {
+            if let Ok(entry) = serde_json::from_str::<TranscriptEntry>(line) {
                 entries.push(entry);
             }
         }
     }
     entries.sort_by_key(|entry| entry.at);
     Ok(entries)
+}
+
+/// The agent's latest open native ask: the newest `Ask` entry for
+/// `(kind, agent_id)` with no later `Answer` entry.
+///
+/// Bucket files are walked newest-first and each bucket's entries newest-first,
+/// so the scan stops at the newest bucket that mentions the agent.
+pub fn latest_open_ask(
+    paths: &StatePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+) -> Result<Option<TranscriptEntry>> {
+    let mut files = transcript_files(&paths.transcript_dir)?;
+    files.sort_by(|left, right| right.cmp(left));
+
+    for path in files {
+        let text = fs::read_to_string(&path).map_err(|source| TranscriptLogErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let entries = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str::<TranscriptEntry>(line).ok())
+            .collect::<Vec<_>>();
+        for entry in entries.into_iter().rev() {
+            if &entry.kind != kind || &entry.agent_id != agent_id {
+                continue;
+            }
+            match entry.entry {
+                TranscriptKind::Ask => return Ok(Some(entry)),
+                TranscriptKind::Answer => return Ok(None),
+                _ => {}
+            }
+        }
+    }
+    Ok(None)
 }
 
 pub fn answer_text(decision: &Value) -> String {
@@ -266,12 +303,12 @@ fn text_value(value: &Value) -> Option<String> {
         .flatten()
 }
 
-fn chat_files(dir: &Path) -> Result<Vec<PathBuf>> {
+fn transcript_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => {
-            return Err(ChatLogErr::Io {
+            return Err(TranscriptLogErr::Io {
                 path: dir.to_path_buf(),
                 source,
             });
@@ -279,7 +316,7 @@ fn chat_files(dir: &Path) -> Result<Vec<PathBuf>> {
     };
     let mut files = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|source| ChatLogErr::Io {
+        let entry = entry.map_err(|source| TranscriptLogErr::Io {
             path: dir.to_path_buf(),
             source,
         })?;
@@ -322,8 +359,8 @@ mod tests {
         (dir, paths)
     }
 
-    fn entry(entry: ChatKind, text: &str, at: &str) -> ChatEntry {
-        ChatEntry::new(
+    fn entry(entry: TranscriptKind, text: &str, at: &str) -> TranscriptEntry {
+        TranscriptEntry::new(
             ts(at),
             AgentKind::new_unchecked("claude"),
             AgentSessionId::from("sess-1"),
@@ -359,12 +396,12 @@ mod tests {
     #[test]
     fn chat_entry_round_trips_and_skips_empty_optionals() {
         for kind in [
-            ChatKind::Prompt,
-            ChatKind::Message,
-            ChatKind::Assistant,
-            ChatKind::Ask,
-            ChatKind::Answer,
-            ChatKind::Error,
+            TranscriptKind::Prompt,
+            TranscriptKind::Message,
+            TranscriptKind::Assistant,
+            TranscriptKind::Ask,
+            TranscriptKind::Answer,
+            TranscriptKind::Error,
         ] {
             let entry = entry(kind, "hello", "2026-06-01T00:00:00Z");
             let json = serde_json::to_string(&entry).expect("serialize");
@@ -372,14 +409,14 @@ mod tests {
             assert!(!json.contains("channel"));
             assert!(!json.contains("questions"));
             assert!(!json.contains("answers"));
-            let decoded: ChatEntry = serde_json::from_str(&json).expect("decode");
+            let decoded: TranscriptEntry = serde_json::from_str(&json).expect("decode");
             assert_eq!(decoded, entry);
         }
     }
 
     #[test]
     fn chat_entry_round_trips_structured_asks_and_answers() {
-        let mut entry = entry(ChatKind::Ask, "lead-in", "2026-06-01T00:00:00Z");
+        let mut entry = entry(TranscriptKind::Ask, "lead-in", "2026-06-01T00:00:00Z");
         entry.questions = vec![AskQuestion {
             question: "Choose deployment path?".to_owned(),
             options: vec![
@@ -396,7 +433,7 @@ mod tests {
         let json = serde_json::to_string(&entry).expect("serialize");
         assert!(json.contains("questions"));
         assert!(json.contains("answers"));
-        let decoded: ChatEntry = serde_json::from_str(&json).expect("decode");
+        let decoded: TranscriptEntry = serde_json::from_str(&json).expect("decode");
 
         assert_eq!(decoded, entry);
     }
@@ -447,8 +484,8 @@ mod tests {
     fn read_all_sorts_by_timestamp_and_skips_malformed_lines() {
         let (_dir, paths) = paths();
         fs::create_dir_all(&paths.transcript_dir).expect("mkdir transcript");
-        let first = entry(ChatKind::Prompt, "first", "2026-06-01T00:00:02Z");
-        let second = entry(ChatKind::Assistant, "second", "2026-06-01T00:00:01Z");
+        let first = entry(TranscriptKind::Prompt, "first", "2026-06-01T00:00:02Z");
+        let second = entry(TranscriptKind::Assistant, "second", "2026-06-01T00:00:01Z");
         fs::write(
             paths.transcript_dir.join("2026-06-01.jsonl"),
             format!("{}\nnot json\n", serde_json::to_string(&first).unwrap()),
@@ -472,9 +509,66 @@ mod tests {
     }
 
     #[test]
+    fn latest_open_ask_finds_unanswered_ask() {
+        let (_dir, paths) = paths();
+        let ask = entry(TranscriptKind::Ask, "approve?", "2026-06-01T00:00:00Z");
+        append(&paths, &ask).expect("append ask");
+
+        let open = latest_open_ask(&paths, &ask.kind, &ask.agent_id).expect("read ask");
+
+        assert_eq!(
+            open.as_ref().map(|entry| entry.text.as_str()),
+            Some("approve?")
+        );
+    }
+
+    #[test]
+    fn latest_open_ask_treats_later_answer_as_closed() {
+        let (_dir, paths) = paths();
+        let ask = entry(TranscriptKind::Ask, "approve?", "2026-06-01T00:00:00Z");
+        let answer = entry(TranscriptKind::Answer, "yes", "2026-06-01T00:00:01Z");
+        append(&paths, &ask).expect("append ask");
+        append(&paths, &answer).expect("append answer");
+
+        let open = latest_open_ask(&paths, &ask.kind, &ask.agent_id).expect("read ask");
+
+        assert_eq!(open, None);
+    }
+
+    #[test]
+    fn latest_open_ask_newest_bucket_decides() {
+        let (_dir, paths) = paths();
+        let older_answer = entry(TranscriptKind::Answer, "yes", "2026-06-01T00:00:00Z");
+        let newer_ask = entry(TranscriptKind::Ask, "approve?", "2026-06-08T00:00:00Z");
+        append(&paths, &older_answer).expect("append answer");
+        append(&paths, &newer_ask).expect("append ask");
+
+        let open = latest_open_ask(&paths, &newer_ask.kind, &newer_ask.agent_id).expect("read ask");
+
+        assert_eq!(
+            open.as_ref().map(|entry| entry.text.as_str()),
+            Some("approve?")
+        );
+    }
+
+    #[test]
+    fn latest_open_ask_missing_dir_is_empty() {
+        let (_dir, paths) = paths();
+
+        let open = latest_open_ask(
+            &paths,
+            &AgentKind::new_unchecked("claude"),
+            &AgentSessionId::from("sess-1"),
+        )
+        .expect("read missing dir");
+
+        assert_eq!(open, None);
+    }
+
+    #[test]
     fn append_creates_transcript_dir_lazily() {
         let (_dir, paths) = paths();
-        let entry = entry(ChatKind::Prompt, "hello", "2026-06-01T00:00:00Z");
+        let entry = entry(TranscriptKind::Prompt, "hello", "2026-06-01T00:00:00Z");
 
         append(&paths, &entry).expect("append");
 

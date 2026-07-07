@@ -295,7 +295,7 @@ The transcript reader computes the current-life boundary at read time from the l
 
 Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](../agents/agent.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
 
-Domain types: [`chat.rs`](../../../crates/rimz/src/chat.rs) for the durable log, [`cli/transcript/`](../../../crates/rimz/src/cli/transcript/) for the chat projection.
+Domain types: [`transcript.rs`](../../../crates/rimz/src/transcript.rs) for the durable log, [`cli/transcript/`](../../../crates/rimz/src/cli/transcript/) for the chat projection.
 
 ## Audit trail
 

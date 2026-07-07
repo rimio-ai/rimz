@@ -3,7 +3,7 @@ use super::scope::entry_key;
 use super::*;
 
 pub(super) fn render_entry_for_log_entry(
-    entry: &ChatEntry,
+    entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
 ) -> RenderEntry {
@@ -15,13 +15,13 @@ pub(super) fn render_entry_for_log_entry(
 }
 
 pub(super) fn chat_entry_for_log_entry(
-    entry: &ChatEntry,
+    entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
 ) -> ChatLine {
     let receiver = handle_for(entry, identities, include_channel);
     match entry.entry {
-        ChatKind::Prompt => ChatLine {
+        TranscriptKind::Prompt => ChatLine {
             from: "user".to_owned(),
             to: Some(receiver),
             at: Some(entry.at),
@@ -30,7 +30,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
-        ChatKind::Message => ChatLine {
+        TranscriptKind::Message => ChatLine {
             from: entry.from.clone().unwrap_or_else(|| "user".to_owned()),
             to: Some(receiver),
             at: Some(entry.at),
@@ -39,7 +39,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
-        ChatKind::Assistant | ChatKind::Ask => ChatLine {
+        TranscriptKind::Assistant | TranscriptKind::Ask => ChatLine {
             from: receiver,
             to: None,
             at: Some(entry.at),
@@ -48,7 +48,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
-        ChatKind::Error => ChatLine {
+        TranscriptKind::Error => ChatLine {
             from: receiver,
             to: None,
             at: Some(entry.at),
@@ -57,7 +57,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: Vec::new(),
             answers: Vec::new(),
         },
-        ChatKind::Answer => ChatLine {
+        TranscriptKind::Answer => ChatLine {
             from: entry.from.clone().unwrap_or_else(|| "answered".to_owned()),
             to: Some(receiver),
             at: Some(entry.at),
@@ -70,7 +70,7 @@ pub(super) fn chat_entry_for_log_entry(
 }
 
 pub(super) fn handle_for(
-    entry: &ChatEntry,
+    entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
     include_channel: bool,
 ) -> String {
@@ -186,7 +186,7 @@ pub(super) fn render_chat_to(
             follows_day_delimiter = true;
             last_group = None;
         }
-        let is_ask = entry.kind == ChatKind::Ask;
+        let is_ask = entry.kind == TranscriptKind::Ask;
         let continuation = !is_ask
             && last_group
                 .as_ref()
@@ -229,13 +229,13 @@ pub(super) fn pair_answers(entries: &[RenderEntry]) -> AnswerPairs {
     let mut open_by_agent: HashMap<AgentKey, Vec<usize>> = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
         match entry.kind {
-            ChatKind::Ask => {
+            TranscriptKind::Ask => {
                 open_by_agent
                     .entry(entry.agent.clone())
                     .or_default()
                     .push(index);
             }
-            ChatKind::Answer => {
+            TranscriptKind::Answer => {
                 let mut by_agent = || {
                     let stack = open_by_agent.get_mut(&entry.agent)?;
                     while let Some(ask) = stack.pop() {

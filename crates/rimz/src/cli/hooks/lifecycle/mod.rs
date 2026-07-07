@@ -2,14 +2,13 @@ use super::*;
 
 use std::borrow::Cow;
 
-mod chat;
 mod context;
 mod delivery;
 mod identity;
 mod observe;
 mod rotate;
+mod transcript;
 
-use chat::*;
 use context::*;
 use delivery::*;
 use identity::{
@@ -17,6 +16,7 @@ use identity::{
 };
 use observe::record_lifecycle_observation;
 use rotate::*;
+use transcript::*;
 
 pub(super) use identity::fill_root_launch_identity;
 #[cfg(test)]
@@ -73,13 +73,13 @@ pub(super) fn handle_lifecycle_hook(
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(store, agent, event_name, payload, recorded);
         if let Err(err) =
-            record_chat_conversation(workspace, store, agent, event_name, payload, recorded)
+            record_conversation(workspace, store, agent, event_name, payload, recorded)
         {
             warn!(
                 agent = agent.descriptor().kind,
                 event = %event_name,
                 error = %err,
-                "lifecycle: failed to record chat entry",
+                "lifecycle: failed to record transcript entry",
             );
         }
         confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
@@ -203,6 +203,59 @@ mod tests {
         let runtime = rimz::store::RuntimePaths::under(workspace_id, dir.path()).unwrap();
         let store = Store::open(paths, runtime).unwrap();
         (dir, store)
+    }
+
+    fn transcript_entry(
+        entry: rimz::transcript::TranscriptKind,
+        text: &str,
+        at: &str,
+    ) -> rimz::transcript::TranscriptEntry {
+        rimz::transcript::TranscriptEntry::new(
+            at.parse().expect("timestamp"),
+            rimz::ids::AgentKind::new_unchecked("claude"),
+            rimz::ids::AgentSessionId::from("sess-1"),
+            entry,
+            text.to_owned(),
+        )
+    }
+
+    #[test]
+    fn native_ask_log_detects_open_ask() {
+        let (_dir, store) = test_store();
+        let ask = transcript_entry(
+            rimz::transcript::TranscriptKind::Ask,
+            "approve?",
+            "2026-06-01T00:00:00Z",
+        );
+        rimz::transcript::append(store.paths(), &ask).expect("append ask");
+
+        assert!(has_open_native_ask(&store, "claude", "sess-1"));
+    }
+
+    #[test]
+    fn native_ask_log_detects_answered_ask() {
+        let (_dir, store) = test_store();
+        let ask = transcript_entry(
+            rimz::transcript::TranscriptKind::Ask,
+            "approve?",
+            "2026-06-01T00:00:00Z",
+        );
+        let answer = transcript_entry(
+            rimz::transcript::TranscriptKind::Answer,
+            "yes",
+            "2026-06-01T00:00:01Z",
+        );
+        rimz::transcript::append(store.paths(), &ask).expect("append ask");
+        rimz::transcript::append(store.paths(), &answer).expect("append answer");
+
+        assert!(!has_open_native_ask(&store, "claude", "sess-1"));
+    }
+
+    #[test]
+    fn native_ask_log_treats_empty_log_as_closed() {
+        let (_dir, store) = test_store();
+
+        assert!(!has_open_native_ask(&store, "claude", "sess-1"));
     }
 
     fn workspace_id() -> rimz::ids::WorkspaceId {

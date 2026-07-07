@@ -1,7 +1,7 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
-use crate::chat::{AskAnswer, AskOption, AskQuestion};
+use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -374,7 +374,7 @@ mod tests {
         );
 
         assert_eq!(
-            crate::chat::answers_text(&answer.expect("answer")),
+            crate::transcript::answers_text(&answer.expect("answer")),
             "safe\nyes"
         );
     }

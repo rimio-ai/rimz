@@ -12,8 +12,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
-use rimz::chat::{AskOption, ChatEntry, ChatKind};
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::transcript::{AskOption, TranscriptEntry, TranscriptKind};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -64,9 +64,9 @@ pub(crate) struct ChatLine {
     #[serde(default, skip_serializing_if = "is_false")]
     pub error: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub questions: Vec<rimz::chat::AskQuestion>,
+    pub questions: Vec<rimz::transcript::AskQuestion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub answers: Vec<rimz::chat::AskAnswer>,
+    pub answers: Vec<rimz::transcript::AskAnswer>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -77,7 +77,7 @@ type AgentKey = (AgentKind, AgentSessionId);
 
 #[derive(Clone, Debug)]
 pub(crate) struct RenderEntry {
-    kind: ChatKind,
+    kind: TranscriptKind,
     agent: AgentKey,
     pub(crate) chat: ChatLine,
 }
@@ -111,8 +111,8 @@ mod scope;
 
 use chat::{format_marker_when, render_chat_to, render_entry_for_log_entry};
 use scope::{
-    build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_key,
-    entry_matches_focus, keep_last, live_boundary, live_root_agents, resolve_scope,
+    build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_matches_focus,
+    keep_last, live_boundary, live_root_agents, resolve_scope,
 };
 #[cfg(test)]
 use {chat::*, scope::*};
@@ -176,7 +176,7 @@ pub(crate) fn chat_view(
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
     let current = current_channel(workspace);
-    let entries = dedup_asks(rimz::chat::read_all(&paths)?);
+    let entries = dedup_asks(rimz::transcript::read_all(&paths)?);
     if entries.is_empty() {
         return Ok(RenderedChat {
             channel: None,
@@ -198,7 +198,7 @@ pub(crate) fn chat_view(
         &identities,
         &live_root_keys,
     )?;
-    let filtered: Vec<&ChatEntry> = entries
+    let filtered: Vec<&TranscriptEntry> = entries
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope))
         .collect();
@@ -352,23 +352,22 @@ pub(crate) fn latest_ask_view(
     }
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
-    let key = (agent.kind.clone(), agent.agent_id.clone());
-    let mut answered_after = false;
-    for entry in dedup_asks(rimz::chat::read_all(&paths)?).into_iter().rev() {
-        if entry_key(&entry) != key {
-            continue;
-        }
-        match entry.entry {
-            ChatKind::Answer => answered_after = true,
-            ChatKind::Ask if !answered_after => return Ok(Some(ask_view_from_entry(&entry))),
-            ChatKind::Ask => return Ok(None),
-            _ => {}
-        }
-    }
-    Ok(None)
+    latest_ask_view_from_paths(&paths, agent)
 }
 
-fn ask_view_from_entry(entry: &ChatEntry) -> AskView {
+fn latest_ask_view_from_paths(
+    paths: &rimz::StatePaths,
+    agent: &rimz::agents::AgentState,
+) -> Result<Option<AskView>> {
+    if !agent.is_awaiting_input() {
+        return Ok(None);
+    }
+    rimz::transcript::latest_open_ask(paths, &agent.kind, &agent.agent_id)
+        .map(|entry| entry.as_ref().map(ask_view_from_entry))
+        .map_err(Into::into)
+}
+
+fn ask_view_from_entry(entry: &TranscriptEntry) -> AskView {
     let first_question = entry.questions.first();
     AskView {
         title: first_question

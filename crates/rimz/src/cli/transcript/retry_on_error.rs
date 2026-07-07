@@ -1,8 +1,9 @@
+use super::scope::entry_key;
 use super::*;
 use std::collections::{BTreeSet, HashMap};
 
-use rimz::chat::{ChatEntry, ChatKind};
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::transcript::{TranscriptEntry, TranscriptKind};
 
 fn ts(raw: &str) -> jiff::Timestamp {
     raw.parse().expect("timestamp")
@@ -11,12 +12,12 @@ fn ts(raw: &str) -> jiff::Timestamp {
 fn log_entry(
     kind: &str,
     session_id: &str,
-    entry: ChatKind,
+    entry: TranscriptKind,
     text: &str,
     at: &str,
     channel: Option<&str>,
-) -> ChatEntry {
-    let mut entry = ChatEntry::new(
+) -> TranscriptEntry {
+    let mut entry = TranscriptEntry::new(
         ts(at),
         AgentKind::new_unchecked(kind),
         AgentSessionId::from(session_id),
@@ -40,7 +41,7 @@ fn error_entry_projects_as_agent_error_line() {
     let entry = log_entry(
         "claude",
         "receiver",
-        ChatKind::Error,
+        TranscriptKind::Error,
         "API Error: Bad Request",
         "2026-06-01T00:00:00Z",
         Some("chat"),
@@ -59,7 +60,7 @@ fn agent_target_prefers_live_session_over_stale_same_handle() {
     let stale = log_entry(
         "claude",
         "old-sess",
-        ChatKind::Prompt,
+        TranscriptKind::Prompt,
         "old",
         "2026-06-01T00:00:00Z",
         Some("chat"),
@@ -67,7 +68,7 @@ fn agent_target_prefers_live_session_over_stale_same_handle() {
     let live = log_entry(
         "claude",
         "live-sess",
-        ChatKind::Prompt,
+        TranscriptKind::Prompt,
         "live",
         "2026-06-01T00:01:00Z",
         Some("chat"),
@@ -86,7 +87,7 @@ fn agent_target_uses_latest_when_no_match_is_live() {
     let old = log_entry(
         "claude",
         "old-sess",
-        ChatKind::Prompt,
+        TranscriptKind::Prompt,
         "old",
         "2026-06-01T00:00:00Z",
         Some("chat"),
@@ -94,7 +95,7 @@ fn agent_target_uses_latest_when_no_match_is_live() {
     let latest = log_entry(
         "claude",
         "latest-sess",
-        ChatKind::Prompt,
+        TranscriptKind::Prompt,
         "latest",
         "2026-06-01T00:02:00Z",
         Some("chat"),
@@ -118,7 +119,7 @@ fn exact_session_id_resolves_outside_the_current_channel() {
     let exact = log_entry(
         "claude",
         "sess-exact",
-        ChatKind::Prompt,
+        TranscriptKind::Prompt,
         "hello",
         "2026-06-01T00:00:00Z",
         Some("other"),

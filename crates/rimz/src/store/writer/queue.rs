@@ -29,6 +29,30 @@ pub struct MessageEdit {
 }
 
 impl MessageEdit {
+    /// Apply requested deltas to a record. Setting `auto_compact` resets the
+    /// compaction baseline so the new threshold is re-evaluated at delivery.
+    pub fn apply(self, record: &mut MessageRecord) {
+        if let Some(text) = self.text {
+            record.text = text;
+        }
+        if let Some(gate) = self.gate {
+            record.gate = gate;
+        }
+        if let Some(not_before) = self.not_before {
+            record.not_before = not_before;
+        }
+        if let Some(force) = self.force {
+            record.force = force;
+        }
+        if let Some(enter) = self.enter {
+            record.enter = enter;
+        }
+        if let Some(auto_compact) = self.auto_compact {
+            record.auto_compact = auto_compact;
+            record.compacted_context_tokens = None;
+        }
+    }
+
     pub fn changed_fields(&self) -> Vec<&'static str> {
         let mut fields = Vec::new();
         if self.text.is_some() {
@@ -245,25 +269,7 @@ impl Store {
                 return Ok(EditOutcome::NotOpen(message.status));
             }
             let fields = edit.changed_fields();
-            if let Some(text) = edit.text {
-                message.text = text;
-            }
-            if let Some(gate) = edit.gate {
-                message.gate = gate;
-            }
-            if let Some(not_before) = edit.not_before {
-                message.not_before = not_before;
-            }
-            if let Some(force) = edit.force {
-                message.force = force;
-            }
-            if let Some(enter) = edit.enter {
-                message.enter = enter;
-            }
-            if let Some(auto_compact) = edit.auto_compact {
-                message.auto_compact = auto_compact;
-                message.compacted_context_tokens = None;
-            }
+            edit.apply(&mut message);
             message.retry_after = None;
             message.updated_at = Timestamp::now();
             message_store::write(&txn.paths.messages_dir, &message)?;

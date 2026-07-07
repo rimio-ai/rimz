@@ -46,8 +46,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::chat::{AskAnswer, AskQuestion};
 use crate::harness::run::PermissionMode;
+use crate::transcript::{AskAnswer, AskQuestion};
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,

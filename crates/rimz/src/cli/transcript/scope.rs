@@ -45,7 +45,7 @@ fn live_agent_in_scope(agent: &LiveRootAgent, scope: &Scope) -> bool {
     }
 }
 
-pub(super) fn entry_in_scope(entry: &ChatEntry, scope: &Scope) -> bool {
+pub(super) fn entry_in_scope(entry: &TranscriptEntry, scope: &Scope) -> bool {
     scope
         .focus_keys
         .as_ref()
@@ -66,7 +66,7 @@ pub(super) fn compare_optional_timestamps(
 }
 
 pub(super) fn entry_matches_focus(
-    entry: &ChatEntry,
+    entry: &TranscriptEntry,
     chat: &ChatLine,
     scope: &Scope,
     identities: &HashMap<AgentKey, Identity>,
@@ -116,10 +116,10 @@ pub(super) fn split_rendered_handle(handle: &str) -> (&str, Option<&str>) {
         .map_or((handle, None), |(base, channel)| (base, Some(channel)))
 }
 
-pub(super) fn dedup_asks(entries: Vec<ChatEntry>) -> Vec<ChatEntry> {
+pub(super) fn dedup_asks(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> {
     let mut latest_asks: HashMap<AgentKey, (usize, jiff::Timestamp)> = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
-        if entry.entry == ChatKind::Ask {
+        if entry.entry == TranscriptKind::Ask {
             let key = entry_key(entry);
             latest_asks
                 .entry(key)
@@ -135,7 +135,7 @@ pub(super) fn dedup_asks(entries: Vec<ChatEntry>) -> Vec<ChatEntry> {
         .into_iter()
         .enumerate()
         .filter_map(|(index, entry)| {
-            if entry.entry == ChatKind::Ask {
+            if entry.entry == TranscriptKind::Ask {
                 let key = entry_key(&entry);
                 return (latest_asks.get(&key).map(|(latest, _)| *latest) == Some(index))
                     .then_some(entry);
@@ -145,7 +145,7 @@ pub(super) fn dedup_asks(entries: Vec<ChatEntry>) -> Vec<ChatEntry> {
         .collect()
 }
 
-pub(super) fn build_identities(entries: &[ChatEntry]) -> HashMap<AgentKey, Identity> {
+pub(super) fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey, Identity> {
     let mut identities = HashMap::new();
     for entry in entries {
         let candidate = Identity {
@@ -375,7 +375,7 @@ pub(super) fn channel_matches(entry_channel: Option<&str>, filter: Option<&str>)
     filter.is_none_or(|filter| entry_channel == Some(filter))
 }
 
-pub(super) fn entry_key(entry: &ChatEntry) -> AgentKey {
+pub(super) fn entry_key(entry: &TranscriptEntry) -> AgentKey {
     (entry.kind.clone(), entry.agent_id.clone())
 }
 

@@ -11,7 +11,6 @@ pub mod agent_activity;
 pub mod agents;
 pub mod build_id;
 pub mod channel;
-pub mod chat;
 pub mod child_process;
 pub mod config;
 pub mod daemon_content;
@@ -37,6 +36,7 @@ pub mod store;
 #[cfg(feature = "testkit")]
 #[doc(hidden)]
 pub mod testkit;
+pub mod transcript;
 pub mod trust;
 pub mod tui;
 pub mod uninstall;

@@ -144,11 +144,11 @@ fn codex_question_summary_reads_request_user_input_questions() {
     assert_eq!(
         questions,
         Some(vec![
-            crate::chat::AskQuestion {
+            crate::transcript::AskQuestion {
                 question: "Pick a migration path?".to_owned(),
                 options: Vec::new(),
             },
-            crate::chat::AskQuestion {
+            crate::transcript::AskQuestion {
                 question: "Notify users?".to_owned(),
                 options: Vec::new(),
             },

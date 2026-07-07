@@ -66,8 +66,8 @@ use super::{
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
-use crate::chat::{AskAnswer, AskQuestion};
 use crate::harness::run::PermissionMode;
+use crate::transcript::{AskAnswer, AskQuestion};
 
 /// Everything `const` about Claude Code, in one place. See
 /// [`AgentDescriptor`] for the descriptor-vs-trait split.

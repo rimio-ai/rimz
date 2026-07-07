@@ -1,4 +1,4 @@
-//! Chat recording for lifecycle hooks.
+//! Transcript recording for lifecycle hooks.
 
 use super::*;
 
@@ -13,7 +13,7 @@ pub(super) fn record_native_answer(
     let Some(answers) = agent.native_ask_answer(event_name, payload) else {
         return;
     };
-    let answer = rimz::chat::answers_text(&answers);
+    let answer = rimz::transcript::answers_text(&answers);
     if answers.is_empty() || answer.is_empty() {
         return;
     }
@@ -43,21 +43,21 @@ pub(super) fn record_native_answer(
         .filter(|path| !path.is_empty())
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned(workspace.worktree_root.display().to_string()));
-    let channel = rimz::chat::entry_channel(
+    let channel = rimz::transcript::entry_channel(
         recorded.and_then(|recorded| recorded.observation.launch.channel.as_deref()),
         Some(worktree_path.as_ref()),
     );
-    let mut entry = rimz::chat::ChatEntry::new(
+    let mut entry = rimz::transcript::TranscriptEntry::new(
         jiff::Timestamp::now(),
         rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
         rimz::ids::AgentSessionId::from(agent_id),
-        rimz::chat::ChatKind::Answer,
+        rimz::transcript::TranscriptKind::Answer,
         answer,
     );
     entry.channel = channel;
     entry.from = Some("you".to_owned());
     entry.answers = answers;
-    if let Err(err) = rimz::chat::append(store.paths(), &entry) {
+    if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
             event = %event_name,
@@ -68,34 +68,22 @@ pub(super) fn record_native_answer(
     }
 }
 
-fn has_open_native_ask(store: &Store, kind: &str, agent_id: &str) -> bool {
+pub(super) fn has_open_native_ask(store: &Store, kind: &str, agent_id: &str) -> bool {
     let kind = rimz::ids::AgentKind::new_unchecked(kind);
     let agent_id = rimz::ids::AgentSessionId::from(agent_id);
-    let Ok(entries) = rimz::chat::read_all(store.paths()) else {
-        return false;
-    };
-    let mut open = 0usize;
-    for entry in entries
-        .into_iter()
-        .filter(|entry| entry.kind == kind && entry.agent_id == agent_id)
-    {
-        match entry.entry {
-            rimz::chat::ChatKind::Ask => open += 1,
-            rimz::chat::ChatKind::Answer if open > 0 => open -= 1,
-            _ => {}
-        }
-    }
-    open > 0
+    rimz::transcript::latest_open_ask(store.paths(), &kind, &agent_id)
+        .map(|ask| ask.is_some())
+        .unwrap_or(false)
 }
 
-pub(super) fn record_chat_conversation(
+pub(super) fn record_conversation(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
     recorded: &RecordedLifecycle,
-) -> rimz::chat::Result<()> {
+) -> rimz::transcript::Result<()> {
     let observation = &recorded.observation;
     if observation.parent_agent_id.is_some() {
         return Ok(());
@@ -104,7 +92,7 @@ pub(super) fn record_chat_conversation(
         return Ok(());
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
-    let channel = rimz::chat::entry_channel(
+    let channel = rimz::transcript::entry_channel(
         observation.launch.channel.as_deref(),
         observation.worktree_path.as_deref(),
     )
@@ -115,7 +103,7 @@ pub(super) fn record_chat_conversation(
             .map(|name| name.to_string_lossy().into_owned())
     });
     let entry_base = |entry, text: String| {
-        let mut entry = rimz::chat::ChatEntry::new(
+        let mut entry = rimz::transcript::TranscriptEntry::new(
             jiff::Timestamp::now(),
             kind.clone(),
             agent_id.clone(),
@@ -145,13 +133,13 @@ pub(super) fn record_chat_conversation(
                     let entry = if let Some((sender, body)) =
                         rimz::harness::target::parse_sender_prefix(segment)
                     {
-                        let mut entry = entry_base(rimz::chat::ChatKind::Message, body);
+                        let mut entry = entry_base(rimz::transcript::TranscriptKind::Message, body);
                         entry.from = Some(sender);
                         entry
                     } else {
-                        entry_base(rimz::chat::ChatKind::Prompt, segment.to_owned())
+                        entry_base(rimz::transcript::TranscriptKind::Prompt, segment.to_owned())
                     };
-                    rimz::chat::append(store.paths(), &entry)?;
+                    rimz::transcript::append(store.paths(), &entry)?;
                 }
             }
         }
@@ -161,9 +149,9 @@ pub(super) fn record_chat_conversation(
                 .map(|message| message.trim().to_owned())
                 .filter(|message| !message.is_empty())
             {
-                rimz::chat::append(
+                rimz::transcript::append(
                     store.paths(),
-                    &entry_base(rimz::chat::ChatKind::Assistant, message),
+                    &entry_base(rimz::transcript::TranscriptKind::Assistant, message),
                 )?;
             }
         }
@@ -179,9 +167,9 @@ pub(super) fn record_chat_conversation(
                 .map(|message| message.trim().to_owned())
                 .filter(|message| !message.is_empty())
                 .unwrap_or_default();
-            let mut entry = entry_base(rimz::chat::ChatKind::Ask, last);
+            let mut entry = entry_base(rimz::transcript::TranscriptKind::Ask, last);
             entry.questions = questions;
-            rimz::chat::append(store.paths(), &entry)?;
+            rimz::transcript::append(store.paths(), &entry)?;
         }
         _ => {}
     }
@@ -203,7 +191,7 @@ pub(super) fn merge_turn_error_marker_and_chat(
     let updated =
         merge_turn_error_marker(store, agent, event_name, context_agent_id, marker.clone());
     if updated {
-        record_turn_error_chat_entry(
+        record_turn_error_entry(
             workspace,
             store,
             agent,
@@ -215,7 +203,7 @@ pub(super) fn merge_turn_error_marker_and_chat(
     updated
 }
 
-pub(super) fn record_turn_error_chat_entry(
+pub(super) fn record_turn_error_entry(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,
@@ -223,11 +211,11 @@ pub(super) fn record_turn_error_chat_entry(
     context_agent_id: &str,
     marker: &rimz::agents::AgentTurnError,
 ) {
-    let mut entry = rimz::chat::ChatEntry::new(
+    let mut entry = rimz::transcript::TranscriptEntry::new(
         marker.at,
         rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
         rimz::ids::AgentSessionId::from(context_agent_id),
-        rimz::chat::ChatKind::Error,
+        rimz::transcript::TranscriptKind::Error,
         marker
             .label
             .clone()
@@ -237,7 +225,7 @@ pub(super) fn record_turn_error_chat_entry(
         .worktree_root
         .file_name()
         .map(|name| name.to_string_lossy().into_owned());
-    if let Err(err) = rimz::chat::append(store.paths(), &entry) {
+    if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
             event = %event_name,

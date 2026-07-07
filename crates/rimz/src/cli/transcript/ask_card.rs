@@ -18,7 +18,7 @@ pub(super) fn write_ask_card(
 
 pub(super) fn write_structured_ask_card(
     out: &mut impl Write,
-    questions: &[rimz::chat::AskQuestion],
+    questions: &[rimz::transcript::AskQuestion],
     answer: Option<&RenderEntry>,
 ) -> Result<()> {
     let (answers, source) = folded_answers(answer);
@@ -27,8 +27,8 @@ pub(super) fn write_structured_ask_card(
 
 pub(super) fn write_structured_ask_card_with_answers(
     out: &mut impl Write,
-    questions: &[rimz::chat::AskQuestion],
-    answers: &[rimz::chat::AskAnswer],
+    questions: &[rimz::transcript::AskQuestion],
+    answers: &[rimz::transcript::AskAnswer],
     source: Option<&str>,
 ) -> Result<()> {
     let matched = match_question_answers(questions, answers);
@@ -43,7 +43,7 @@ pub(super) fn write_structured_ask_card_with_answers(
 
 pub(super) fn folded_answers(
     answer: Option<&RenderEntry>,
-) -> (Vec<rimz::chat::AskAnswer>, Option<&str>) {
+) -> (Vec<rimz::transcript::AskAnswer>, Option<&str>) {
     let Some(answer) = answer else {
         return (Vec::new(), None);
     };
@@ -51,9 +51,9 @@ pub(super) fn folded_answers(
 }
 
 pub(super) fn match_question_answers(
-    questions: &[rimz::chat::AskQuestion],
-    answers: &[rimz::chat::AskAnswer],
-) -> Vec<Option<rimz::chat::AskAnswer>> {
+    questions: &[rimz::transcript::AskQuestion],
+    answers: &[rimz::transcript::AskAnswer],
+) -> Vec<Option<rimz::transcript::AskAnswer>> {
     let mut matched = vec![None; questions.len()];
     let mut used = vec![false; answers.len()];
     for (answer_index, answer) in answers.iter().enumerate() {
@@ -80,8 +80,8 @@ pub(super) fn match_question_answers(
 
 pub(super) fn write_question_block(
     out: &mut impl Write,
-    question: &rimz::chat::AskQuestion,
-    answer: Option<&rimz::chat::AskAnswer>,
+    question: &rimz::transcript::AskQuestion,
+    answer: Option<&rimz::transcript::AskAnswer>,
     source: Option<&str>,
 ) -> Result<()> {
     let answered = answer.is_some();
@@ -122,7 +122,7 @@ pub(super) fn write_question_text(
 
 pub(super) fn write_free_answer(
     out: &mut impl Write,
-    answer: &rimz::chat::AskAnswer,
+    answer: &rimz::transcript::AskAnswer,
     source: Option<&str>,
 ) -> Result<()> {
     let mut suffix_written = false;
@@ -144,7 +144,7 @@ pub(super) fn write_free_answer(
 pub(super) fn write_option_answers(
     out: &mut impl Write,
     options: &[AskOption],
-    answer: &rimz::chat::AskAnswer,
+    answer: &rimz::transcript::AskAnswer,
     source: Option<&str>,
 ) -> Result<()> {
     let chosen = answer
@@ -238,7 +238,7 @@ pub(super) fn write_text_card(
     let text = if answer.chat.answers.is_empty() {
         answer.chat.text.trim().to_owned()
     } else {
-        rimz::chat::answers_text(&answer.chat.answers)
+        rimz::transcript::answers_text(&answer.chat.answers)
     };
     if text.is_empty() {
         return Ok(());

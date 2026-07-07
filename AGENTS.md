@@ -70,7 +70,7 @@ Rimz ships as one Rust binary: the `rimz` crate is CLI, domain library, and nati
 - `remote/` — SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/` — diagnostic-only JSONL append surfaces.
 
-**Top-level modules** — identity and reach (`workspace`, `web`, `channel`, `worktree`, `disk_usage`, `forge`); chat/panes/seams (`chat`, `pane`, `sock`, `ids`, `trust`); daemon view (`remote_control`, `daemon_content`); process and config (`config`, `observability`, `agent_activity`, `lane`, `proc`, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`).
+**Top-level modules** — identity and reach (`workspace`, `web`, `channel`, `worktree`, `disk_usage`, `forge`); transcript/panes/seams (`transcript`, `pane`, `sock`, `ids`, `trust`); daemon view (`remote_control`, `daemon_content`); process and config (`config`, `observability`, `agent_activity`, `lane`, `proc`, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`).
 
 ## Documentation map
 

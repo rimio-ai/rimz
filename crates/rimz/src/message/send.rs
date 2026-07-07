@@ -427,60 +427,14 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
-    use crate::agents::{AgentStatus, TurnPhase};
-    use crate::ids::{AgentKind, WorkspaceId};
+    use crate::agents::AgentStatus;
+    use crate::ids::WorkspaceId;
     use crate::store::event::{EventEnvelope, MessageEventMethod};
     use crate::store::{RuntimePaths, StatePaths};
-    use jiff::Timestamp;
-
     fn agent() -> AgentState {
-        let now = Timestamp::now();
-        AgentState {
-            agent_id: AgentSessionId::from("sess-a"),
-            kind: AgentKind::new_unchecked("claude"),
-            name: Some("lucid-atlas".to_owned()),
-            name_explicit: false,
-            kind_ordinal: Some(1),
-            profile: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            status: AgentStatus::Idle,
-            phase: TurnPhase::Idle,
-            pane: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            description: None,
-            transcript_path: None,
-            origin: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            cache_write_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            waiting_since: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_compact_command_tokens: None,
-            last_seen: now,
-            last_activity: now,
-            registered_at: Some(now),
-        }
+        let mut agent = AgentState::stub("claude", "sess-a", AgentStatus::Idle);
+        agent.name = Some("lucid-atlas".to_owned());
+        agent
     }
 
     fn delivered_message_event(message: &mut MessageRecord) -> EventEnvelope {
