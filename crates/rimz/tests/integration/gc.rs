@@ -267,6 +267,21 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
 }
 
 #[test]
+fn gc_json_emits_report() {
+    let env = Env::new();
+
+    let assert = env.rimz().args(["gc", "--json"]).assert().success();
+    let value: serde_json::Value =
+        serde_json::from_slice(&assert.get_output().stdout).expect("gc json");
+
+    assert_eq!(value["dry_run"], false);
+    assert!(
+        value.get("reclaimed_bytes").is_some(),
+        "json includes reclaimed_bytes: {value}"
+    );
+}
+
+#[test]
 fn gc_keeps_spawn_and_live_loop_schedules() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -337,6 +352,46 @@ fn gc_keeps_worktree_with_live_agent() {
         !stdout.contains("worktrees"),
         "gc should not report a worktree sweep: {stdout}"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn gc_dry_run_previews_worktree_after_agent_dies() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees").join("demo");
+    register_running_agent_at(
+        &env,
+        "sess-worktree-dead",
+        "demo",
+        &worktree,
+        &[("RIMZ_AGENT_PID", &u32::MAX.to_string())],
+    );
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains("would sweep worktree: demo"))
+        .stdout(contains("dry run"));
+
+    assert!(worktree.exists(), "dry-run should keep the worktree");
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktree swept: demo"));
+
+    assert!(!worktree.exists(), "real gc should sweep the worktree");
 }
 
 #[cfg(target_os = "linux")]

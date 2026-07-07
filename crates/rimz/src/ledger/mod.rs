@@ -213,6 +213,17 @@ impl Ledger {
         })
     }
 
+    /// Open an existing ledger for read paths without creating directories.
+    #[must_use]
+    pub fn open_existing(paths: StatePaths, runtime: RuntimePaths) -> Option<Self> {
+        if !paths.root.is_dir() {
+            return None;
+        }
+        Some(Self {
+            inner: Arc::new(LedgerInner { paths, runtime }),
+        })
+    }
+
     pub fn paths(&self) -> &StatePaths {
         &self.inner.paths
     }

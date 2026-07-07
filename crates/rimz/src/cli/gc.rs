@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use serde::Serialize;
 
 use super::render::{self, Table, cell, fmt_bytes, paint, palette};
 use super::spinner::Spinner;
@@ -19,6 +20,12 @@ pub struct GcArgs {
     /// Remove runtime artifacts older than this duration (`30s`, `5m`, `1h`).
     #[arg(long, default_value = "24h", value_parser = parse_duration)]
     older_than: Duration,
+    /// Report what gc would remove without removing anything.
+    #[arg(long)]
+    dry_run: bool,
+    /// Emit the garbage collection report as JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
@@ -27,9 +34,12 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let spinner = Spinner::new("starting gc…");
     spinner.set("sweeping runtime hints…");
-    let report = gc::collect_runtime(args.older_than).context("collecting runtime garbage")?;
-    spinner.set("repairing ledger…");
-    let (messages_archived, messages_reconciled, repaired, carryover_pruned) =
+    let report =
+        gc::collect_runtime(args.older_than, args.dry_run).context("collecting runtime garbage")?;
+    let (messages_archived, messages_reconciled, repaired, carryover_pruned) = if args.dry_run {
+        (0, 0, None, 0)
+    } else {
+        spinner.set("repairing ledger…");
         match WorkspaceResolver::resolve(".", globals.root.clone()) {
             Ok(workspace) => match open_ledger(&workspace) {
                 Ok(ledger) => {
@@ -72,16 +82,21 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                 }
             },
             Err(_) => (0, 0, None, 0),
-        };
+        }
+    };
     spinner.set("reaping dead schedules…");
-    let schedules_reaped =
-        super::loop_cmd::reap_dead_delivery_schedules().context("reaping dead loop schedules")?;
+    let schedules_reaped = if args.dry_run {
+        0
+    } else {
+        super::loop_cmd::reap_dead_delivery_schedules().context("reaping dead loop schedules")?
+    };
     spinner.set("pruning dead workspaces…");
-    let prune = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
+    let prune = gc::prune_dead_workspaces(args.dry_run).context("pruning dead workspaces")?;
     spinner.set("sweeping orphan temps…");
-    let temps = gc::collect_orphan_temps(args.older_than);
-    let worktrees = sweep_worktrees(globals, &spinner);
+    let temps = gc::collect_orphan_temps(args.older_than, args.dry_run);
+    let worktrees = sweep_worktrees(globals, &spinner, args.dry_run);
     let outcome = GcOutcome {
+        dry_run: args.dry_run,
         older_than: args.older_than,
         runtime: report,
         temps,
@@ -94,13 +109,18 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         worktrees,
     };
     drop(spinner);
-    let mut out = render::out();
-    render_report(&outcome, &mut out)?;
+    if args.json {
+        print_json_report(&outcome)?;
+    } else {
+        let mut out = render::out();
+        render_report(&outcome, &mut out)?;
+    }
     Ok(())
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct GcOutcome {
+    dry_run: bool,
     older_than: Duration,
     runtime: gc::GcReport,
     temps: gc::TempSweepReport,
@@ -113,21 +133,63 @@ struct GcOutcome {
     worktrees: WorktreeSweep,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct WorktreeSweep {
-    swept: usize,
-    bytes: u64,
+impl GcOutcome {
+    fn reclaimed_bytes(&self) -> u64 {
+        self.runtime
+            .bytes_removed
+            .saturating_add(self.temps.bytes_removed)
+            .saturating_add(self.prune.bytes_removed())
+            .saturating_add(self.worktrees.bytes())
+    }
 }
 
-fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct WorktreeSweep {
+    removed: Vec<SweptWorktree>,
+    failed: Vec<FailedWorktree>,
+}
+
+impl WorktreeSweep {
+    fn swept(&self) -> usize {
+        self.removed.len()
+    }
+
+    fn bytes(&self) -> u64 {
+        self.removed
+            .iter()
+            .fold(0_u64, |total, removed| total.saturating_add(removed.bytes))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SweptWorktree {
+    name: String,
+    branch: String,
+    path: PathBuf,
+    bytes: u64,
+    branch_deletion: Option<rimz::worktree::BranchDeletion>,
+    archive_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FailedWorktree {
+    path: PathBuf,
+    error: String,
+}
+
+fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> WorktreeSweep {
     let Ok(workspace) = WorkspaceResolver::resolve(".", globals.root.clone()) else {
         return WorktreeSweep::default();
     };
     if workspace.root_class != rimz::workspace::RootClass::Repo {
         return WorktreeSweep::default();
     }
-    let ledger = match open_ledger(&workspace) {
-        Ok(ledger) => ledger,
+    let ledger = match open_ledger_for_worktree_gc(&workspace, dry_run) {
+        Ok(Some(ledger)) => ledger,
+        Ok(None) => {
+            tracing::debug!("workspace ledger absent; worktree gc skipped");
+            return WorktreeSweep::default();
+        }
         Err(err) => {
             tracing::debug!(
                 error = %err,
@@ -181,8 +243,9 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
     let total = candidates.len();
     let mut sweep = WorktreeSweep::default();
     for (i, entry) in candidates.into_iter().enumerate() {
+        let action = if dry_run { "checking" } else { "removing" };
         spinner.set(format!(
-            "removing worktree [{}/{}] {}",
+            "{action} worktree [{}/{}] {}",
             i + 1,
             total,
             entry.name
@@ -194,6 +257,17 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
             continue;
         };
         let bytes = rimz::storage::dir_size(&entry.path);
+        if dry_run {
+            sweep.removed.push(SweptWorktree {
+                name: marker.name,
+                branch: marker.branch,
+                path: entry.path,
+                bytes,
+                branch_deletion: None,
+                archive_error: None,
+            });
+            continue;
+        }
         match super::worktree::remove_and_archive(
             &marker,
             || {
@@ -213,34 +287,39 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
             },
         ) {
             Ok(removed) => {
-                sweep.swept += 1;
-                sweep.bytes = sweep.bytes.saturating_add(bytes);
-                if let Err(err) = removed.archive {
-                    tracing::debug!(
-                        branch = %marker.branch,
-                        error = %err,
-                        "worktree gc could not archive messages for removed worktree",
-                    );
-                }
-                if removed.branch_deletion == rimz::worktree::BranchDeletion::KeptUnmerged {
-                    tracing::debug!(
-                        path = %entry.path.display(),
-                        branch = %marker.branch,
-                        "worktree gc removed checkout but kept branch not proven landed",
-                    );
-                }
+                sweep.removed.push(SweptWorktree {
+                    name: marker.name,
+                    branch: marker.branch,
+                    path: entry.path,
+                    bytes,
+                    branch_deletion: Some(removed.branch_deletion),
+                    archive_error: removed.archive.err().map(|err| err.to_string()),
+                });
             }
-            Err(err) => tracing::debug!(
-                path = %entry.path.display(),
-                error = %err,
-                "worktree gc removal skipped",
-            ),
+            Err(err) => sweep.failed.push(FailedWorktree {
+                path: entry.path,
+                error: err.to_string(),
+            }),
         }
     }
-    if sweep.swept > 0 {
+    if sweep.swept() > 0 && !dry_run {
         let _ = rimz::worktree::prune(&workspace.project_root);
     }
     sweep
+}
+
+fn open_ledger_for_worktree_gc(
+    workspace: &rimz::ResolvedWorkspace,
+    dry_run: bool,
+) -> Result<Option<rimz::Ledger>> {
+    if !dry_run {
+        return open_ledger(workspace).map(Some);
+    }
+    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing ledger paths")?;
+    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    Ok(rimz::Ledger::open_existing(paths, runtime))
 }
 
 fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::pane::PaneRef>) -> Vec<PathBuf> {
@@ -252,12 +331,7 @@ fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::pane::PaneRef>) 
 }
 
 fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
-    let reclaimed = out
-        .runtime
-        .bytes_removed
-        .saturating_add(out.temps.bytes_removed)
-        .saturating_add(out.prune.bytes_removed())
-        .saturating_add(out.worktrees.bytes);
+    let reclaimed = out.reclaimed_bytes();
     let active = reclaimed > 0
         || runtime_items(&out.runtime) > 0
         || out.temps.files_removed > 0
@@ -268,23 +342,23 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         || out.repaired.as_ref().is_some_and(RepairOutcome::truncated)
         || !out.prune.removed.is_empty()
         || !out.prune.retained_unreadable.is_empty()
-        || out.worktrees.swept > 0;
+        || out.worktrees.swept() > 0
+        || !out.worktrees.failed.is_empty();
 
     if active {
-        writeln!(
-            w,
-            "{}",
-            paint(
-                palette::ACCENT.bold(),
-                &format!("gc reclaimed {}", fmt_bytes(reclaimed))
-            )
-        )?;
+        let header = if out.dry_run {
+            format!("gc would reclaim {} (dry run)", fmt_bytes(reclaimed))
+        } else {
+            format!("gc reclaimed {}", fmt_bytes(reclaimed))
+        };
+        writeln!(w, "{}", paint(palette::ACCENT.bold(), &header))?;
     } else {
-        writeln!(
-            w,
-            "{}",
-            paint(palette::ACCENT.bold(), "gc — nothing to reclaim")
-        )?;
+        let header = if out.dry_run {
+            "gc — nothing to reclaim (dry run)"
+        } else {
+            "gc — nothing to reclaim"
+        };
+        writeln!(w, "{}", paint(palette::ACCENT.bold(), header))?;
     }
     writeln!(
         w,
@@ -296,11 +370,11 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     )?;
 
     let mut table = Table::new(["CLASS", "COUNT", "BYTES", "DETAIL"]).right(&[2]);
-    if out.worktrees.swept > 0 {
+    if out.worktrees.swept() > 0 {
         table.row([
             cell("worktrees"),
-            cell(plural(out.worktrees.swept, "swept", "swept")),
-            cell(fmt_bytes(out.worktrees.bytes)),
+            cell(plural(out.worktrees.swept(), "swept", "swept")),
+            cell(fmt_bytes(out.worktrees.bytes())),
             cell("landed checkouts"),
         ]);
     }
@@ -329,7 +403,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             cell(runtime_breakdown(&out.runtime)),
         ]);
     }
-    if out.worktrees.swept > 0
+    if out.worktrees.swept() > 0
         || !out.prune.removed.is_empty()
         || out.temps.files_removed > 0
         || runtime_items > 0
@@ -363,12 +437,52 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             ),
         )?;
     }
+    if out.dry_run {
+        report_note(w, "ledger maintenance skipped (dry run)")?;
+    }
+    let worktree_verb = if out.dry_run {
+        "would sweep worktree"
+    } else {
+        "worktree swept"
+    };
+    for removed in &out.worktrees.removed {
+        let mut note = format!(
+            "{worktree_verb}: {} {} ({})",
+            removed.name,
+            removed.path.display(),
+            fmt_bytes(removed.bytes)
+        );
+        if !out.dry_run {
+            if removed.branch_deletion == Some(rimz::worktree::BranchDeletion::KeptUnmerged) {
+                note.push_str(" — branch kept: not proven merged");
+            }
+            if let Some(err) = &removed.archive_error {
+                note.push_str(&format!(" — message archive failed: {err}"));
+            }
+        }
+        report_note(w, &note)?;
+    }
+    for failed in &out.worktrees.failed {
+        report_note(
+            w,
+            &format!(
+                "worktree failed: {} — {}",
+                failed.path.display(),
+                failed.error
+            ),
+        )?;
+    }
+    let workspace_verb = if out.dry_run {
+        "would prune workspace"
+    } else {
+        "workspace pruned"
+    };
     for removed in &out.prune.removed {
         match &removed.project_root {
             Some(root) => report_note(
                 w,
                 &format!(
-                    "workspace pruned: {} {} ({})",
+                    "{workspace_verb}: {} {} ({})",
                     removed.workspace_id,
                     root.display(),
                     fmt_bytes(removed.bytes)
@@ -377,7 +491,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             None => report_note(
                 w,
                 &format!(
-                    "workspace pruned: {} (abandoned scaffold, {})",
+                    "{workspace_verb}: {} (abandoned scaffold, {})",
                     removed.workspace_id,
                     fmt_bytes(removed.bytes)
                 ),
@@ -403,6 +517,239 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn print_json_report(outcome: &GcOutcome) -> Result<()> {
+    let rendered = serde_json::to_string_pretty(&JsonReport::from(outcome))?;
+    #[expect(clippy::print_stdout, reason = "json emitter")]
+    {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct JsonReport {
+    dry_run: bool,
+    older_than_secs: u64,
+    reclaimed_bytes: u64,
+    worktrees: JsonWorktrees,
+    workspaces: JsonWorkspaces,
+    temps: JsonTemps,
+    runtime: JsonRuntime,
+    messages: JsonMessages,
+    carryover_pruned: usize,
+    schedules_reaped: usize,
+    repair: Option<JsonRepair>,
+    ledger_maintenance_skipped: bool,
+}
+
+impl From<&GcOutcome> for JsonReport {
+    fn from(out: &GcOutcome) -> Self {
+        Self {
+            dry_run: out.dry_run,
+            older_than_secs: out.older_than.as_secs(),
+            reclaimed_bytes: out.reclaimed_bytes(),
+            worktrees: JsonWorktrees::from(&out.worktrees),
+            workspaces: JsonWorkspaces::from(&out.prune),
+            temps: JsonTemps::from(&out.temps),
+            runtime: JsonRuntime::from(&out.runtime),
+            messages: JsonMessages {
+                archived: out.queue_archived,
+                reconciled: out.queue_reconciled,
+            },
+            carryover_pruned: out.carryover_pruned,
+            schedules_reaped: out.schedules_reaped,
+            repair: out.repaired.map(JsonRepair::from),
+            ledger_maintenance_skipped: out.dry_run,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonWorktrees {
+    removed: Vec<JsonSweptWorktree>,
+    failed: Vec<JsonFailedWorktree>,
+}
+
+impl From<&WorktreeSweep> for JsonWorktrees {
+    fn from(sweep: &WorktreeSweep) -> Self {
+        Self {
+            removed: sweep.removed.iter().map(JsonSweptWorktree::from).collect(),
+            failed: sweep.failed.iter().map(JsonFailedWorktree::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonSweptWorktree {
+    name: String,
+    branch: String,
+    path: String,
+    bytes: u64,
+    branch_deleted: Option<bool>,
+    archive_error: Option<String>,
+}
+
+impl From<&SweptWorktree> for JsonSweptWorktree {
+    fn from(worktree: &SweptWorktree) -> Self {
+        Self {
+            name: worktree.name.clone(),
+            branch: worktree.branch.clone(),
+            path: path_string(&worktree.path),
+            bytes: worktree.bytes,
+            branch_deleted: worktree
+                .branch_deletion
+                .map(|deletion| deletion == rimz::worktree::BranchDeletion::Deleted),
+            archive_error: worktree.archive_error.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonFailedWorktree {
+    path: String,
+    error: String,
+}
+
+impl From<&FailedWorktree> for JsonFailedWorktree {
+    fn from(failed: &FailedWorktree) -> Self {
+        Self {
+            path: path_string(&failed.path),
+            error: failed.error.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonWorkspaces {
+    removed: Vec<JsonRemovedWorkspace>,
+    retained_unreadable: Vec<JsonRetainedWorkspace>,
+    kept: usize,
+}
+
+impl From<&gc::WorkspacePruneReport> for JsonWorkspaces {
+    fn from(report: &gc::WorkspacePruneReport) -> Self {
+        Self {
+            removed: report
+                .removed
+                .iter()
+                .map(JsonRemovedWorkspace::from)
+                .collect(),
+            retained_unreadable: report
+                .retained_unreadable
+                .iter()
+                .map(JsonRetainedWorkspace::from)
+                .collect(),
+            kept: report.kept,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonRemovedWorkspace {
+    workspace_id: String,
+    reason: &'static str,
+    project_root: Option<String>,
+    bytes: u64,
+}
+
+impl From<&gc::RemovedWorkspace> for JsonRemovedWorkspace {
+    fn from(workspace: &gc::RemovedWorkspace) -> Self {
+        Self {
+            workspace_id: workspace.workspace_id.to_string(),
+            reason: prune_reason_json(workspace.reason),
+            project_root: workspace.project_root.as_deref().map(path_string),
+            bytes: workspace.bytes,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonRetainedWorkspace {
+    workspace_id: String,
+    error: String,
+}
+
+impl From<&(rimz::WorkspaceId, String)> for JsonRetainedWorkspace {
+    fn from((workspace_id, error): &(rimz::WorkspaceId, String)) -> Self {
+        Self {
+            workspace_id: workspace_id.to_string(),
+            error: error.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonTemps {
+    files_removed: usize,
+    bytes_removed: u64,
+}
+
+impl From<&gc::TempSweepReport> for JsonTemps {
+    fn from(report: &gc::TempSweepReport) -> Self {
+        Self {
+            files_removed: report.files_removed,
+            bytes_removed: report.bytes_removed,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonRuntime {
+    roots_scanned: usize,
+    heartbeats_removed: usize,
+    sidecars_removed: usize,
+    sockets_removed: usize,
+    probe_markers_removed: usize,
+    dirs_removed: usize,
+    bytes_removed: u64,
+}
+
+impl From<&gc::GcReport> for JsonRuntime {
+    fn from(report: &gc::GcReport) -> Self {
+        Self {
+            roots_scanned: report.runtime_roots_scanned,
+            heartbeats_removed: report.heartbeat_files_removed,
+            sidecars_removed: report.sidecar_files_removed,
+            sockets_removed: report.sidebar_sockets_removed,
+            probe_markers_removed: report.probe_markers_removed,
+            dirs_removed: report.dirs_removed,
+            bytes_removed: report.bytes_removed,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonMessages {
+    archived: usize,
+    reconciled: usize,
+}
+
+#[derive(Serialize)]
+struct JsonRepair {
+    bytes_truncated: u64,
+    frames_kept: usize,
+}
+
+impl From<RepairOutcome> for JsonRepair {
+    fn from(repair: RepairOutcome) -> Self {
+        Self {
+            bytes_truncated: repair.bytes_truncated,
+            frames_kept: repair.frames_kept,
+        }
+    }
+}
+
+fn path_string(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn prune_reason_json(reason: gc::PruneReason) -> &'static str {
+    match reason {
+        gc::PruneReason::ProjectRootGone => "project_root_gone",
+        gc::PruneReason::AbandonedScaffold => "abandoned_scaffold",
+    }
 }
 
 fn report_note(w: &mut impl Write, text: &str) -> io::Result<()> {
@@ -480,43 +827,7 @@ mod tests {
 
     #[test]
     fn render_report_groups_reclaimed_bytes_by_class() {
-        let outcome = GcOutcome {
-            older_than: Duration::from_secs(3600),
-            runtime: gc::GcReport {
-                runtime_roots_scanned: 2,
-                heartbeat_files_removed: 1,
-                sidecar_files_removed: 2,
-                sidebar_sockets_removed: 0,
-                probe_markers_removed: 1,
-                dirs_removed: 1,
-                bytes_removed: 13_018,
-            },
-            temps: gc::TempSweepReport {
-                files_removed: 2,
-                bytes_removed: 68,
-            },
-            repaired: None,
-            queue_archived: 0,
-            queue_reconciled: 0,
-            carryover_pruned: 1,
-            schedules_reaped: 0,
-            prune: gc::WorkspacePruneReport {
-                removed: vec![gc::RemovedWorkspace {
-                    workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
-                    reason: gc::PruneReason::ProjectRootGone,
-                    bytes: 2048,
-                    project_root: Some(PathBuf::from("/gone")),
-                }],
-                kept: 0,
-                retained_unreadable: Vec::new(),
-            },
-            worktrees: WorktreeSweep {
-                swept: 2,
-                bytes: 1_503_238_553,
-            },
-        };
-
-        let out = strip_report(&outcome);
+        let out = strip_report(&full_outcome(false));
         assert!(out.contains("gc reclaimed"));
         assert!(out.contains("worktrees"));
         assert!(out.contains("workspaces"));
@@ -531,12 +842,132 @@ mod tests {
     }
 
     #[test]
+    fn render_report_lists_worktree_outcomes() {
+        let out = strip_report(&full_outcome(false));
+
+        assert!(out.contains("worktree swept: demo /repo-worktrees/demo"));
+        assert!(out.contains(
+            "worktree swept: gc-info /repo-worktrees/gc-info (12 B) — branch kept: not proven merged"
+        ));
+        assert!(out.contains("message archive failed: archive boom"));
+        assert!(out.contains("worktree failed: /repo-worktrees/wip — remove boom"));
+    }
+
+    #[test]
+    fn render_report_uses_dry_run_framing() {
+        let out = strip_report(&full_outcome(true));
+
+        assert!(out.contains("gc would reclaim"));
+        assert!(out.contains("ledger maintenance skipped (dry run)"));
+        assert!(out.contains("would sweep worktree: demo /repo-worktrees/demo"));
+        assert!(out.contains("would prune workspace: ws_0123456789abcdef01234567 /gone"));
+        assert!(!out.contains("branch kept"));
+        assert!(!out.contains("message archive failed"));
+    }
+
+    #[test]
+    fn json_report_serializes_gc_schema() {
+        let value = serde_json::to_value(JsonReport::from(&full_outcome(false))).unwrap();
+
+        assert_eq!(value["dry_run"], false);
+        assert_eq!(value["older_than_secs"], 3600);
+        assert_eq!(value["worktrees"]["removed"][0]["name"], "demo");
+        assert_eq!(value["worktrees"]["removed"][0]["branch_deleted"], true);
+        assert_eq!(value["worktrees"]["removed"][1]["branch_deleted"], false);
+        assert_eq!(
+            value["worktrees"]["removed"][1]["archive_error"],
+            "archive boom"
+        );
+        assert_eq!(value["worktrees"]["failed"][0]["error"], "remove boom");
+        assert_eq!(
+            value["workspaces"]["removed"][0]["reason"],
+            "project_root_gone"
+        );
+        assert_eq!(value["runtime"]["roots_scanned"], 2);
+        assert_eq!(value["messages"]["archived"], 1);
+        assert_eq!(value["repair"]["bytes_truncated"], 9);
+
+        let dry_run = serde_json::to_value(JsonReport::from(&full_outcome(true))).unwrap();
+        assert!(dry_run["repair"].is_null());
+        assert!(dry_run["worktrees"]["removed"][0]["branch_deleted"].is_null());
+        assert_eq!(dry_run["ledger_maintenance_skipped"], true);
+    }
+
+    #[test]
     fn render_report_names_empty_runs() {
         let out = strip_report(&GcOutcome {
             older_than: Duration::from_secs(3600),
             ..GcOutcome::default()
         });
         assert!(out.contains("nothing to reclaim"));
+    }
+
+    fn full_outcome(dry_run: bool) -> GcOutcome {
+        GcOutcome {
+            dry_run,
+            older_than: Duration::from_secs(3600),
+            runtime: gc::GcReport {
+                runtime_roots_scanned: 2,
+                heartbeat_files_removed: 1,
+                sidecar_files_removed: 2,
+                sidebar_sockets_removed: 0,
+                probe_markers_removed: 1,
+                dirs_removed: 1,
+                bytes_removed: 13_018,
+            },
+            temps: gc::TempSweepReport {
+                files_removed: 2,
+                bytes_removed: 68,
+            },
+            repaired: (!dry_run).then_some(RepairOutcome {
+                bytes_truncated: 9,
+                frames_kept: 3,
+            }),
+            queue_archived: usize::from(!dry_run),
+            queue_reconciled: 0,
+            carryover_pruned: usize::from(!dry_run),
+            schedules_reaped: 0,
+            prune: gc::WorkspacePruneReport {
+                removed: vec![gc::RemovedWorkspace {
+                    workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                    reason: gc::PruneReason::ProjectRootGone,
+                    bytes: 2048,
+                    project_root: Some(PathBuf::from("/gone")),
+                }],
+                kept: 0,
+                retained_unreadable: Vec::new(),
+            },
+            worktrees: WorktreeSweep {
+                removed: vec![
+                    SweptWorktree {
+                        name: "demo".to_owned(),
+                        branch: "demo".to_owned(),
+                        path: PathBuf::from("/repo-worktrees/demo"),
+                        bytes: 1_503_238_553,
+                        branch_deletion: (!dry_run)
+                            .then_some(rimz::worktree::BranchDeletion::Deleted),
+                        archive_error: None,
+                    },
+                    SweptWorktree {
+                        name: "gc-info".to_owned(),
+                        branch: "gc-info".to_owned(),
+                        path: PathBuf::from("/repo-worktrees/gc-info"),
+                        bytes: 12,
+                        branch_deletion: (!dry_run)
+                            .then_some(rimz::worktree::BranchDeletion::KeptUnmerged),
+                        archive_error: (!dry_run).then_some("archive boom".to_owned()),
+                    },
+                ],
+                failed: if dry_run {
+                    Vec::new()
+                } else {
+                    vec![FailedWorktree {
+                        path: PathBuf::from("/repo-worktrees/wip"),
+                        error: "remove boom".to_owned(),
+                    }]
+                },
+            },
+        }
     }
 
     fn strip_report(outcome: &GcOutcome) -> String {

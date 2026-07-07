@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,11 @@ use crate::sidebar::timing::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_T
 use super::{GcErr, GcReport, Result};
 
 #[must_use = "maintenance report; surface it to the caller"]
-pub(crate) fn collect_runtime_under(runtime_root: &Path, older_than: Duration) -> Result<GcReport> {
+pub(crate) fn collect_runtime_under(
+    runtime_root: &Path,
+    older_than: Duration,
+    dry_run: bool,
+) -> Result<GcReport> {
     let entries = match fs::read_dir(runtime_root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(GcReport::default()),
@@ -24,6 +28,7 @@ pub(crate) fn collect_runtime_under(runtime_root: &Path, older_than: Duration) -
     };
 
     let mut report = GcReport::default();
+    let mut sweep = Sweep::new(dry_run);
     for entry in entries {
         let entry = entry.map_err(|source| GcErr::ReadDir {
             path: runtime_root.to_path_buf(),
@@ -43,9 +48,14 @@ pub(crate) fn collect_runtime_under(runtime_root: &Path, older_than: Duration) -
             continue;
         }
         report.runtime_roots_scanned += 1;
-        collect_workspace_runtime(&root, older_than, &mut report)?;
+        collect_workspace_runtime(&root, older_than, &mut sweep, &mut report)?;
     }
-    collect_stale_probe_markers(&runtime_root.join("shared"), older_than, &mut report)?;
+    collect_stale_probe_markers(
+        &runtime_root.join("shared"),
+        older_than,
+        &mut sweep,
+        &mut report,
+    )?;
 
     Ok(report)
 }
@@ -53,6 +63,7 @@ pub(crate) fn collect_runtime_under(runtime_root: &Path, older_than: Duration) -
 fn collect_workspace_runtime(
     workspace_root: &Path,
     older_than: Duration,
+    sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
     let heartbeat_dir = workspace_root.join("heartbeat");
@@ -61,24 +72,40 @@ fn collect_workspace_runtime(
     let activity_dir = workspace_root.join("agent-activity");
     let context_dir = workspace_root.join("agent_context");
     let subagent_context_dir = workspace_root.join("subagent_context");
-    collect_heartbeats(&heartbeat_dir, &sock_dir, older_than, report)?;
-    collect_stale_read_marks(&read_marks_dir, &heartbeat_dir, older_than, report)?;
-    collect_stale_sidecars(&activity_dir, older_than, report)?;
-    collect_stale_sidecars(&context_dir, older_than, report)?;
-    collect_stale_sidecars(&subagent_context_dir, older_than, report)?;
-    remove_dir_if_empty(&heartbeat_dir, report)?;
-    remove_dir_if_empty(&sock_dir, report)?;
-    remove_dir_if_empty(&read_marks_dir, report)?;
-    remove_dir_if_empty(&activity_dir, report)?;
-    remove_dir_if_empty(&context_dir, report)?;
-    remove_dir_if_empty(&subagent_context_dir, report)?;
-    remove_dir_if_empty(workspace_root, report)?;
+    for dir in [
+        &heartbeat_dir,
+        &sock_dir,
+        &read_marks_dir,
+        &activity_dir,
+        &context_dir,
+        &subagent_context_dir,
+        workspace_root,
+    ] {
+        sweep.remember_dir_size(dir);
+    }
+    collect_heartbeats(&heartbeat_dir, &sock_dir, older_than, sweep, report)?;
+    collect_stale_read_marks(&read_marks_dir, &heartbeat_dir, older_than, sweep, report)?;
+    collect_stale_sidecars(&activity_dir, older_than, sweep, report)?;
+    collect_stale_sidecars(&context_dir, older_than, sweep, report)?;
+    collect_stale_sidecars(&subagent_context_dir, older_than, sweep, report)?;
+    sweep.remove_dir_if_empty(&heartbeat_dir, report)?;
+    sweep.remove_dir_if_empty(&sock_dir, report)?;
+    sweep.remove_dir_if_empty(&read_marks_dir, report)?;
+    sweep.remove_dir_if_empty(&activity_dir, report)?;
+    sweep.remove_dir_if_empty(&context_dir, report)?;
+    sweep.remove_dir_if_empty(&subagent_context_dir, report)?;
+    sweep.remove_dir_if_empty(workspace_root, report)?;
     Ok(())
 }
 
 /// Reap stale per-session sidecar files — activity heartbeats, statusline
 /// context sidecars, and per-subagent context sidecars.
-fn collect_stale_sidecars(dir: &Path, older_than: Duration, report: &mut GcReport) -> Result<()> {
+fn collect_stale_sidecars(
+    dir: &Path,
+    older_than: Duration,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<()> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -99,7 +126,7 @@ fn collect_stale_sidecars(dir: &Path, older_than: Duration, report: &mut GcRepor
         if !is_older_than(&path, older_than)? {
             continue;
         }
-        remove_file_if_exists(
+        sweep.remove_file_if_exists(
             &path,
             |report| {
                 report.sidecar_files_removed += 1;
@@ -118,6 +145,7 @@ fn collect_stale_sidecars(dir: &Path, older_than: Duration, report: &mut GcRepor
 fn collect_stale_probe_markers(
     shared_dir: &Path,
     older_than: Duration,
+    sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
     let entries = match fs::read_dir(shared_dir) {
@@ -155,7 +183,7 @@ fn collect_stale_probe_markers(
         if !is_probe_marker(name) || !is_older_than(&path, threshold)? {
             continue;
         }
-        remove_file_if_exists(
+        sweep.remove_file_if_exists(
             &path,
             |report| {
                 report.probe_markers_removed += 1;
@@ -177,6 +205,7 @@ fn collect_stale_read_marks(
     read_marks_dir: &Path,
     heartbeat_dir: &Path,
     older_than: Duration,
+    sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
     let live_instances = fresh_sidebar_instance_ids(heartbeat_dir, older_than)?;
@@ -203,7 +232,7 @@ fn collect_stale_read_marks(
         if live_instances.contains(instance_id.as_str()) || !is_older_than(&path, older_than)? {
             continue;
         }
-        remove_file_if_exists(
+        sweep.remove_file_if_exists(
             &path,
             |report| {
                 report.sidecar_files_removed += 1;
@@ -250,6 +279,7 @@ fn collect_heartbeats(
     heartbeat_dir: &Path,
     sock_dir: &Path,
     older_than: Duration,
+    sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
     let entries = match fs::read_dir(heartbeat_dir) {
@@ -280,7 +310,7 @@ fn collect_heartbeats(
         if heartbeat_kind == Some(HeartbeatKind::Sidebar)
             && let Some(socket) = stale_sidebar_socket(&path, sock_dir)
         {
-            remove_file_if_exists(
+            sweep.remove_file_if_exists(
                 &socket,
                 |report| {
                     report.sidebar_sockets_removed += 1;
@@ -288,7 +318,7 @@ fn collect_heartbeats(
                 report,
             )?;
         }
-        remove_file_if_exists(
+        sweep.remove_file_if_exists(
             &path,
             |report| {
                 report.heartbeat_files_removed += 1;
@@ -338,70 +368,124 @@ fn sidebar_instance_id_from_json_name(path: &Path) -> Option<SidebarInstanceId> 
     SidebarInstanceId::parse(id).ok()
 }
 
-fn remove_file_if_exists(
-    path: &Path,
-    increment: impl FnOnce(&mut GcReport),
-    report: &mut GcReport,
-) -> Result<()> {
-    let bytes = match fs::symlink_metadata(path) {
-        Ok(meta) => meta.len(),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(GcErr::Io {
-                path: path.to_path_buf(),
-                source,
-            });
-        }
-    };
-    match fs::remove_file(path) {
-        Ok(()) => {
-            report.bytes_removed = report.bytes_removed.saturating_add(bytes);
-            increment(report);
-            Ok(())
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(GcErr::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
+struct Sweep {
+    dry_run: bool,
+    planned: HashSet<PathBuf>,
+    dir_bytes: HashMap<PathBuf, u64>,
 }
 
-fn remove_dir_if_empty(path: &Path, report: &mut GcReport) -> Result<()> {
-    let mut entries = match fs::read_dir(path) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(GcErr::ReadDir {
-                path: path.to_path_buf(),
-                source,
-            });
+impl Sweep {
+    fn new(dry_run: bool) -> Self {
+        Self {
+            dry_run,
+            planned: HashSet::new(),
+            dir_bytes: HashMap::new(),
         }
-    };
-    if entries.next().is_some() {
-        return Ok(());
     }
-    let bytes = match fs::symlink_metadata(path) {
-        Ok(meta) => meta.len(),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => 0,
-        Err(source) => {
-            return Err(GcErr::Io {
+
+    fn remember_dir_size(&mut self, path: &Path) {
+        if let Ok(meta) = fs::symlink_metadata(path) {
+            self.dir_bytes.insert(path.to_path_buf(), meta.len());
+        }
+    }
+
+    fn remove_file_if_exists(
+        &mut self,
+        path: &Path,
+        increment: impl FnOnce(&mut GcReport),
+        report: &mut GcReport,
+    ) -> Result<()> {
+        let bytes = match fs::symlink_metadata(path) {
+            Ok(meta) => meta.len(),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(GcErr::Io {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        if self.dry_run {
+            self.record_removed(path, bytes, report, increment);
+            return Ok(());
+        }
+        match fs::remove_file(path) {
+            Ok(()) => {
+                self.record_removed(path, bytes, report, increment);
+                Ok(())
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(GcErr::Io {
                 path: path.to_path_buf(),
                 source,
+            }),
+        }
+    }
+
+    fn remove_dir_if_empty(&mut self, path: &Path, report: &mut GcReport) -> Result<()> {
+        let entries = match fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(GcErr::ReadDir {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(|source| GcErr::ReadDir {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            if !self.planned.contains(&entry.path()) {
+                return Ok(());
+            }
+        }
+        let bytes = match self.dir_bytes.get(path).copied() {
+            Some(bytes) => bytes,
+            None => match fs::symlink_metadata(path) {
+                Ok(meta) => meta.len(),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => 0,
+                Err(source) => {
+                    return Err(GcErr::Io {
+                        path: path.to_path_buf(),
+                        source,
+                    });
+                }
+            },
+        };
+        if self.dry_run {
+            self.record_removed(path, bytes, report, |report| {
+                report.dirs_removed += 1;
             });
+            return Ok(());
         }
-    };
-    match fs::remove_dir(path) {
-        Ok(()) => {
-            report.dirs_removed += 1;
-            report.bytes_removed = report.bytes_removed.saturating_add(bytes);
-            Ok(())
+        match fs::remove_dir(path) {
+            Ok(()) => {
+                self.record_removed(path, bytes, report, |report| {
+                    report.dirs_removed += 1;
+                });
+                Ok(())
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(GcErr::Io {
+                path: path.to_path_buf(),
+                source,
+            }),
         }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(GcErr::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
+    }
+
+    fn record_removed(
+        &mut self,
+        path: &Path,
+        bytes: u64,
+        report: &mut GcReport,
+        increment: impl FnOnce(&mut GcReport),
+    ) {
+        self.planned.insert(path.to_path_buf());
+        report.bytes_removed = report.bytes_removed.saturating_add(bytes);
+        increment(report);
     }
 }
 
@@ -461,7 +545,8 @@ mod tests {
         }
 
         let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
+                .unwrap();
 
         assert_eq!(report.sidecar_files_removed, 4);
         assert!(
@@ -483,6 +568,39 @@ mod tests {
         assert!(
             !rt.agent_activity_dir.parent().unwrap().exists(),
             "with no runtime files left, the workspace root is reaped too"
+        );
+    }
+
+    #[test]
+    fn runtime_gc_dry_run_reports_apply_without_removing() {
+        let temp = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(temp.path());
+        let rt = RuntimePaths::under(workspace_id, temp.path()).unwrap();
+        rt.ensure_dirs().unwrap();
+
+        let stale_activity = rt.agent_activity_dir.join("deadbeefdeadbeef.json");
+        fs::write(&stale_activity, b"{}").unwrap();
+        fs::File::open(&stale_activity)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+
+        let preview =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), true)
+                .unwrap();
+
+        assert!(stale_activity.exists(), "dry-run keeps stale sidecar");
+        assert!(rt.agent_activity_dir.exists(), "dry-run keeps emptied dirs");
+
+        let applied =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
+                .unwrap();
+
+        assert_eq!(preview, applied);
+        assert!(!stale_activity.exists(), "apply removes stale sidecar");
+        assert!(
+            !rt.agent_activity_dir.parent().unwrap().exists(),
+            "apply removes the now-empty workspace root"
         );
     }
 
@@ -518,7 +636,8 @@ mod tests {
         }
 
         let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
+                .unwrap();
 
         assert_eq!(report.runtime_roots_scanned, 1);
         assert_eq!(report.heartbeat_files_removed, 1);
@@ -558,7 +677,8 @@ mod tests {
         write_json(&rt.sidebar_heartbeat_path(&instance_id), &heartbeat);
 
         let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
+                .unwrap();
 
         assert_eq!(report.sidecar_files_removed, 0);
         assert!(read_marks.exists(), "live owner's read marks are kept");
@@ -605,7 +725,8 @@ mod tests {
         }
 
         let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
+                .unwrap();
 
         assert_eq!(report.probe_markers_removed, 3);
         assert!(!stale_session.exists());

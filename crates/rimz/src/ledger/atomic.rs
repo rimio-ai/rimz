@@ -374,7 +374,7 @@ fn is_orphan_temp_name(name: &str) -> bool {
 /// These are same-directory siblings created by [`temp_sibling`] before a
 /// rename. A hard kill can leave them behind. Only files older than `min_age`
 /// are removed, so an in-flight write stays intact.
-pub fn sweep_orphan_temps_under(root: &Path, min_age: Duration) -> (usize, u64) {
+pub fn sweep_orphan_temps_under(root: &Path, min_age: Duration, dry_run: bool) -> (usize, u64) {
     let mut stack = vec![root.to_path_buf()];
     let now = SystemTime::now();
     let mut files_removed = 0usize;
@@ -411,7 +411,7 @@ pub fn sweep_orphan_temps_under(root: &Path, min_age: Duration) -> (usize, u64) 
                 .ok()
                 .and_then(|modified| now.duration_since(modified).ok())
                 .is_some_and(|age| age >= min_age);
-            if old_enough && std::fs::remove_file(&path).is_ok() {
+            if old_enough && (dry_run || std::fs::remove_file(&path).is_ok()) {
                 files_removed += 1;
                 bytes_removed = bytes_removed.saturating_add(metadata.len());
             }
@@ -628,7 +628,7 @@ mod tests {
                 .unwrap();
         }
 
-        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600));
+        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
 
         assert_eq!(files, 2);
         assert_eq!(bytes, 8);
@@ -636,6 +636,23 @@ mod tests {
         assert!(!stale_nested.exists());
         assert!(fresh.exists());
         assert!(keep.exists());
+    }
+
+    #[test]
+    fn sweep_orphan_temps_dry_run_counts_without_removing() {
+        let dir = tempdir().unwrap();
+        let nonce = "00000000000000000000000000000000";
+        let stale = dir.path().join(format!("spending.json.tmp.1.{nonce}"));
+        std::fs::write(&stale, b"temp").unwrap();
+        std::fs::File::open(&stale)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+
+        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
+
+        assert_eq!((files, bytes), (1, 4));
+        assert!(stale.exists(), "dry-run leaves temp file in place");
     }
 
     #[test]
@@ -650,7 +667,7 @@ mod tests {
             std::fs::write(path, b"keep").unwrap();
         }
 
-        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::ZERO);
+        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::ZERO, false);
 
         assert_eq!((files, bytes), (0, 0));
         assert!(no_nonce.exists());

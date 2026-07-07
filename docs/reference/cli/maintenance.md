@@ -54,7 +54,7 @@ rimz workspace rotate-events [--max-bytes <SIZE>] [--archive-older-than <DURATIO
 ```sh
 rimz reload
 rimz reset [--yes] [--no-start] [--hard] [PATH]
-rimz gc [--older-than <DURATION>]
+rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 ```
 
@@ -62,7 +62,7 @@ These repair or clean an installation without changing configuration.
 
 - **`reload`** runs from anywhere and reconciles running sidebars onto the current Rimz build: it re-execs sidebars where possible, restarts those that cannot reload in place, closes duplicates and unresponsive ones, repairs geometry, restarts `rimz stats --refresh` dashboards, and leaves stopped sessions stopped.
 - **`reset`** is the escape hatch for a wedged room. It resolves `PATH` as the cwd, tears down the session, purges the resurrection cache, archives records, clears coordination state, sweeps orphaned processes, then rebuilds and reattaches by default. `--yes` skips the prompt (required off a TTY), `--no-start` stops after teardown and prints the rerun hint, and `--hard` also removes the agent carryover (a plain reset keeps it for history but still starts empty).
-- **`gc`** removes stale runtime state older than `--older-than` (default `24h`), sweeps orphaned atomic-write temp files (`*.tmp.<pid>.<nonce>`) across the state and runtime trees, removes stale provider probe-throttle markers (`*-probe.*`) from the runtime shared dir, applies the shorter Codex TTL to per-session app-server throttle stamps, abandons queued messages for missing sessions, repairs a corrupt event-log tail, prunes provably dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed with no live pane inside. It prints live progress and reports reclaimed disk grouped by category.
+- **`gc`** removes stale runtime state older than `--older-than` (default `24h`), sweeps orphaned atomic-write temp files (`*.tmp.<pid>.<nonce>`) across the state and runtime trees, removes stale provider probe-throttle markers (`*-probe.*`) from the runtime shared dir, applies the shorter Codex TTL to per-session app-server throttle stamps, abandons queued messages for missing sessions, repairs a corrupt event-log tail, prunes provably dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed with no live pane inside. It prints live progress, reports reclaimed disk grouped by category, and names each swept worktree and pruned workspace. `--dry-run` previews the same report without removing anything and skips ledger maintenance; `--json` emits the report as JSON on stdout.
 - **`uninstall`** removes Rimz from the machine: installed agent hooks, running rooms, runtime state, cache, data artifacts, and the `rimz` binaries it finds at the current executable, Cargo's bin dir, and `/usr/local/bin` (override the system bin probe with `RIMZ_SYSTEM_BIN_DIR`). Durable ledgers and spend history stay unless `--state` is passed; per-machine config, themes, trust grants, notification handlers, and remote aliases stay unless `--config` is passed; `--all` passes both. `--keep-binary` leaves binaries in place. `--yes` skips the prompt and is required off a TTY. Project-local `.rimz/` dirs and Rimz-owned worktrees stay in place because they can hold project config and unlanded work.
 
 Sidebar reload behavior is in [sidebar.md](../../internals/sidebar/sidebar.md); reset and GC ledger effects are in [ledger.md](../../internals/sidebar/ledger.md).
