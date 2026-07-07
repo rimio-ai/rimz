@@ -78,8 +78,10 @@ pub(super) fn launch_layout(
             .worktree
             .as_deref()
             .map(str::trim)
-            .filter(|name| !name.is_empty());
-        if let Some(name) = explicit_worktree_name
+            .filter(|name| !name.is_empty())
+            .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
+            .transpose()?;
+        if let Some(name) = explicit_worktree_name.as_deref()
             && args.from_pr.is_none()
         {
             match reconcile::reconcile_named_team_launch(

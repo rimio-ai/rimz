@@ -317,6 +317,15 @@ fn agent_channel_and_in_worktree_use_directory_not_branch() {
 }
 
 #[test]
+fn branch_style_worktree_filter_matches_dashed_channel() {
+    let mut agent = agent("claude", "session-feat", Some("feat-great"), "terminal_1");
+    agent.worktree_branch = Some("feat/great".to_owned());
+
+    assert_eq!(agent_channel(&agent).as_deref(), Some("feat-great"));
+    assert!((&agent).in_worktree("feat/great"));
+}
+
+#[test]
 fn explicit_named_channel_wins_over_worktree_and_team() {
     let mut agent = agent("claude", "session-design", Some("feat/auth"), "terminal_1");
     agent.worktree_path = Some("/code/repo".to_owned());

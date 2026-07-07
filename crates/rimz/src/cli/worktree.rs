@@ -108,7 +108,13 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             branch,
         } => {
             let ledger = open_ledger(&workspace)?;
-            if let Some(name) = name.as_deref()
+            let requested_name = name
+                .as_deref()
+                .map(rimz::worktree::parse_requested_name)
+                .transpose()?;
+            if let Some(name) = requested_name
+                .as_ref()
+                .map(|requested| requested.name.as_str())
                 && super::channel::named_channel_registered(&ledger, name)
             {
                 bail!(

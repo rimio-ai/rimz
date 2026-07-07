@@ -79,6 +79,73 @@ fn worktree_new_list_and_remove_round_trip() {
 }
 
 #[test]
+fn worktree_new_accepts_branch_style_name_and_removes_by_raw_spelling() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "new", "feat/great"])
+        .assert()
+        .success()
+        .stdout(contains("created feat-great"))
+        .stdout(contains("branch : feat/great"));
+
+    let path = env.home_root.join("project-worktrees").join("feat-great");
+    assert!(path.is_dir(), "dashed worktree path exists");
+    assert_eq!(
+        git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "feat/great"
+    );
+
+    env.rimz()
+        .args(["worktree", "new", "feat-great"])
+        .assert()
+        .failure()
+        .stderr(contains("worktree `feat-great` already exists"));
+
+    env.rimz()
+        .args(["worktree", "remove", "feat/great"])
+        .assert()
+        .success()
+        .stdout(contains("removed feat/great"));
+    assert!(!path.exists(), "slash spelling removes dashed worktree");
+    assert!(
+        !branch_exists(&env.project_root, "feat/great"),
+        "slash branch deleted"
+    );
+}
+
+#[test]
+fn worktree_new_explicit_branch_overrides_branch_style_name() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "new", "feat/great", "--branch", "other"])
+        .assert()
+        .success()
+        .stdout(contains("created feat-great"))
+        .stdout(contains("branch : other"));
+
+    let path = env.home_root.join("project-worktrees").join("feat-great");
+    assert_eq!(
+        git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "other"
+    );
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(marker.name, "feat-great");
+    assert_eq!(marker.branch, "other");
+}
+
+#[test]
 fn worktree_new_refuses_named_channel_conflict() {
     if git_missing() {
         return;
@@ -96,6 +163,26 @@ fn worktree_new_refuses_named_channel_conflict() {
         .assert()
         .failure()
         .stderr(contains("channel `demo` is a named channel"));
+}
+
+#[test]
+fn worktree_new_checks_dashed_channel_for_branch_style_name() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["channel", "new", "feat-great"])
+        .assert()
+        .success();
+
+    env.rimz()
+        .args(["worktree", "new", "feat/great"])
+        .assert()
+        .failure()
+        .stderr(contains("channel `feat-great` is a named channel"));
 }
 
 #[test]

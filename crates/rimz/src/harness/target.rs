@@ -114,8 +114,9 @@ trait Candidate<'a>: Copy {
     }
 
     fn in_worktree(self, filter: &str) -> bool {
+        let branch_style_filter = filter.contains('/').then(|| filter.replace('/', "-"));
         if let Some(channel) = self.channel().filter(|channel| !channel.is_empty()) {
-            return channel == filter;
+            return channel == filter || branch_style_filter.as_deref() == Some(channel);
         }
         let channel = compose_channel(
             self.channel(),
@@ -126,6 +127,13 @@ trait Candidate<'a>: Copy {
             || self
                 .worktree_path()
                 .is_some_and(|path| path == filter || path.rsplit('/').next() == Some(filter))
+            || branch_style_filter.as_deref().is_some_and(|filter| {
+                channel.as_deref() == Some(filter)
+                    || self
+                        .worktree_path()
+                        .and_then(|path| path.rsplit('/').next())
+                        == Some(filter)
+            })
     }
 }
 

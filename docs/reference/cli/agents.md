@@ -83,7 +83,7 @@ These broadcast to every agent cell, and each adapter renders them into its own 
 
 ### Channel, worktree, and placement
 
-`-w`/`--worktree` reuses or creates a named worktree (`--worktree=docs` or `--worktree docs`); bare `--worktree` creates a fresh generated one. `--from-pr <number|url>` creates the worktree from a pull request head and implies a worktree launch — pair it with `--worktree <NAME>` to name the local worktree, or accept `pr-<N>`. A worktree launch names its backend tab `#<NAME>`, matching the channel in agent addresses.
+`-w`/`--worktree` reuses or creates a named worktree (`--worktree=docs` or `--worktree docs`); bare `--worktree` creates a fresh generated one. Branch-style spelling is accepted: `--worktree=feat/great` creates branch `feat/great` and worktree/channel/tab `feat-great`. `--from-pr <number|url>` creates the worktree from a pull request head and implies a worktree launch — pair it with `--worktree <NAME>` to name the local worktree, or accept `pr-<N>`. A worktree launch names its backend tab `#<NAME>`, matching the channel in agent addresses.
 
 Relaunching a named team into the same named worktree reconciles with existing state before it creates anything: a live team focuses its current tab, a closed tab with work in progress offers to resume that team in the worktree, and a closed clean merged worktree offers to remove it and launch fresh. Add `--resume` or `--continue` to force a resume of the named worktree's prior cohort even when the worktree is clean or merged.
 

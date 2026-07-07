@@ -33,7 +33,9 @@ const AUTO_NOUNS: &[&str] = &[
 pub enum WorktreeErr {
     #[error("rimz worktrees require a git repository; run from a repo checkout")]
     NotRepo,
-    #[error("invalid worktree name `{0}`; use letters, numbers, `_`, or `-`")]
+    #[error(
+        "invalid worktree name `{0}`; use letters, numbers, `_`, `-`, with `/` separating branch-style segments"
+    )]
     InvalidName(String),
     #[error("worktree `{name}` already exists at {path}")]
     Exists { name: String, path: PathBuf },
@@ -94,6 +96,12 @@ pub struct CreatedWorktree {
     /// Directories symlinked into the worktree from the project's `.worktreelink`.
     /// Zero for a reused worktree, which is never re-seeded.
     pub linked: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestedName {
+    pub name: String,
+    pub branch: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -175,11 +183,15 @@ pub fn create(
     reuse_existing: bool,
 ) -> Result<CreatedWorktree> {
     ensure_repo(repo_root)?;
-    let FreshWorktree { name, path } =
-        match resolve_fresh_worktree(repo_root, config, name, None, reuse_existing)? {
-            WorktreeCreateTarget::Fresh(fresh) => fresh,
-            WorktreeCreateTarget::Reuse(reused) => return Ok(reused),
-        };
+    let FreshWorktree {
+        name,
+        path,
+        branch: derived_branch,
+    } = match resolve_fresh_worktree(repo_root, config, name, None, reuse_existing)? {
+        WorktreeCreateTarget::Fresh(fresh) => fresh,
+        WorktreeCreateTarget::Reuse(reused) => return Ok(reused),
+    };
+    let branch = resolve_branch(branch, derived_branch.as_deref(), &name)?;
 
     let base = base.unwrap_or_else(|| config.base.clone());
     let checkout_base_ref = base.as_refspec().to_owned();
@@ -206,7 +218,11 @@ pub fn create_from_pr(
 ) -> Result<CreatedWorktree> {
     ensure_repo(repo_root)?;
     let default_name = format!("pr-{}", pr.number);
-    let FreshWorktree { name, path } = match resolve_fresh_worktree(
+    let FreshWorktree {
+        name,
+        path,
+        branch: derived_branch,
+    } = match resolve_fresh_worktree(
         repo_root,
         config,
         name,
@@ -216,6 +232,7 @@ pub fn create_from_pr(
         WorktreeCreateTarget::Fresh(fresh) => fresh,
         WorktreeCreateTarget::Reuse(reused) => return Ok(reused),
     };
+    let branch = resolve_branch(branch, derived_branch.as_deref(), &name)?;
 
     let remote =
         git_stdout(repo_root, ["remote", "get-url", "origin"]).map_err(|err| match err {
@@ -258,7 +275,6 @@ pub fn remove(
     force: bool,
 ) -> Result<BranchDeletion> {
     ensure_repo(repo_root)?;
-    validate_name(name)?;
     let path = worktree_path(repo_root, config, name)?;
     let marker = read_marker_for_worktree(&path)?.ok_or_else(|| WorktreeErr::Unmarked {
         name: name.to_owned(),
@@ -382,8 +398,23 @@ pub fn worktree_parent(repo_root: &Path, config: &WorktreeConfig) -> Result<Path
 }
 
 pub fn worktree_path(repo_root: &Path, config: &WorktreeConfig, name: &str) -> Result<PathBuf> {
-    validate_name(name)?;
-    Ok(worktree_parent(repo_root, config)?.join(name))
+    let requested = parse_requested_name(name)?;
+    Ok(worktree_parent(repo_root, config)?.join(requested.name))
+}
+
+pub fn parse_requested_name(raw: &str) -> Result<RequestedName> {
+    let mut name = String::with_capacity(raw.len());
+    for (index, segment) in raw.split('/').enumerate() {
+        validate_requested_segment(raw, segment)?;
+        if index > 0 {
+            name.push('-');
+        }
+        name.push_str(segment);
+    }
+    Ok(RequestedName {
+        name,
+        branch: raw.contains('/').then(|| raw.to_owned()),
+    })
 }
 
 pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {
@@ -470,6 +501,7 @@ pub fn normalize_path_lexical(path: &Path) -> PathBuf {
 struct FreshWorktree {
     name: String,
     path: PathBuf,
+    branch: Option<String>,
 }
 
 enum WorktreeCreateTarget {
@@ -484,13 +516,14 @@ fn resolve_fresh_worktree(
     default_name: Option<&str>,
     reuse_existing: bool,
 ) -> Result<WorktreeCreateTarget> {
-    let name = match (name, default_name) {
-        (Some(raw), _) | (None, Some(raw)) => {
-            validate_name(raw)?;
-            raw.to_owned()
-        }
-        (None, None) => available_auto_name(repo_root, config)?,
+    let requested = match (name, default_name) {
+        (Some(raw), _) | (None, Some(raw)) => parse_requested_name(raw)?,
+        (None, None) => RequestedName {
+            name: available_auto_name(repo_root, config)?,
+            branch: None,
+        },
     };
+    let RequestedName { name, branch } = requested;
     let path = worktree_path(repo_root, config, &name)?;
     if path.exists() {
         if reuse_existing {
@@ -511,26 +544,22 @@ fn resolve_fresh_worktree(
         }
         return Err(WorktreeErr::Exists { name, path });
     }
-    Ok(WorktreeCreateTarget::Fresh(FreshWorktree { name, path }))
+    Ok(WorktreeCreateTarget::Fresh(FreshWorktree {
+        name,
+        path,
+        branch,
+    }))
 }
 
 fn add_and_seed(
     repo_root: &Path,
     name: String,
     path: PathBuf,
-    branch: Option<&str>,
+    branch: String,
     base_branch: Option<String>,
     base_ref: String,
     checkout_ref: &str,
 ) -> Result<CreatedWorktree> {
-    let branch = branch
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| name.clone());
-    if branch.trim().is_empty() {
-        return Err(WorktreeErr::Parse(
-            "worktree branch cannot be empty".to_owned(),
-        ));
-    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -831,15 +860,29 @@ fn auto_name_from_uuid(seed: Uuid, attempt: u8) -> String {
     }
 }
 
-fn validate_name(name: &str) -> Result<()> {
-    let valid = !name.is_empty()
-        && name
+fn resolve_branch(
+    explicit: Option<&str>,
+    derived: Option<&str>,
+    default_name: &str,
+) -> Result<String> {
+    let branch = explicit.or(derived).unwrap_or(default_name).to_owned();
+    if branch.trim().is_empty() {
+        return Err(WorktreeErr::Parse(
+            "worktree branch cannot be empty".to_owned(),
+        ));
+    }
+    Ok(branch)
+}
+
+fn validate_requested_segment(raw: &str, segment: &str) -> Result<()> {
+    let valid = !segment.is_empty()
+        && segment
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
     if valid {
         Ok(())
     } else {
-        Err(WorktreeErr::InvalidName(name.to_owned()))
+        Err(WorktreeErr::InvalidName(raw.to_owned()))
     }
 }
 
@@ -949,6 +992,53 @@ mod tests {
         let seed = Uuid::parse_str("01890f3c-0000-7000-8000-000000000001").expect("uuid");
         assert_eq!(auto_name_from_uuid(seed, 0), auto_name_from_uuid(seed, 0));
         assert!(auto_name_from_uuid(seed, 1).ends_with("-1"));
+    }
+
+    #[test]
+    fn requested_name_maps_branch_style_spelling_to_dashed_worktree_name() {
+        assert_eq!(
+            parse_requested_name("feat/great").unwrap(),
+            RequestedName {
+                name: "feat-great".to_owned(),
+                branch: Some("feat/great".to_owned()),
+            }
+        );
+        assert_eq!(
+            parse_requested_name("feat-great").unwrap(),
+            RequestedName {
+                name: "feat-great".to_owned(),
+                branch: None,
+            }
+        );
+    }
+
+    #[test]
+    fn requested_name_rejects_empty_segments_and_bad_chars() {
+        for raw in ["", "feat/", "/feat", "feat//great", "feat/great.work"] {
+            assert!(
+                matches!(
+                    parse_requested_name(raw),
+                    Err(WorktreeErr::InvalidName(name)) if name == raw
+                ),
+                "{raw} should be invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_branch_wins_over_branch_style_spelling() {
+        assert_eq!(
+            resolve_branch(Some("other"), Some("feat/great"), "feat-great").unwrap(),
+            "other"
+        );
+        assert_eq!(
+            resolve_branch(None, Some("feat/great"), "feat-great").unwrap(),
+            "feat/great"
+        );
+        assert_eq!(
+            resolve_branch(None, None, "feat-great").unwrap(),
+            "feat-great"
+        );
     }
 
     #[test]
