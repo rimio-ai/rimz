@@ -64,7 +64,7 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
     assert!(channel.contains("  second answer"), "{channel}");
     assert!(!channel.contains("other prompt"), "{channel}");
 
-    let all = run_ok(env.rimz().args(["transcript", "@all"]));
+    let all = run_ok(env.rimz().args(["transcript", "@all", "--all"]));
     assert!(all.contains("@claude#feature-transcript"), "{all}");
     assert!(all.contains("@codex#feature-transcript"), "{all}");
     assert!(all.contains("@codex#other-transcript"), "{all}");
