@@ -2,7 +2,7 @@ use super::*;
 
 #[cfg(unix)]
 pub(super) fn walk_to_agent_ancestor(source: &str) -> Option<u32> {
-    // Cap the walk so a pathologically deep tree (or a /proc parse glitch)
+    // Cap the walk so a pathologically deep tree (or a process-table glitch)
     // cannot loop the hook helper. 32 levels is far beyond any real agent
     // launch chain.
     let mut pid = std::os::unix::process::parent_id();

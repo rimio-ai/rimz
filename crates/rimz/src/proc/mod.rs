@@ -408,10 +408,9 @@ pub fn exe_path(pid: u32) -> Option<(std::path::PathBuf, bool)> {
     ))
 }
 
-/// The real uid this process runs as, read from its own `/proc` status. The
-/// sidebar's pane-pid backfill matches a session's Zellij server by uid so a
-/// same-named session of another user is never walked. `None` on a non-Linux
-/// target, so callers skip rather than guess.
+/// The real uid this process runs as. The sidebar's pane-pid backfill matches a
+/// session's Zellij server by uid so a same-named session of another user is
+/// never walked. `None` on hosts without a unix uid.
 #[cfg(unix)]
 pub fn own_uid() -> Option<u32> {
     Some(nix::unistd::getuid().as_raw())
