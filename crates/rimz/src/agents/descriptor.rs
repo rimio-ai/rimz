@@ -162,8 +162,8 @@ pub enum PlanLabel {
 #[derive(Debug)]
 pub struct ToolClassification {
     /// Tools that mutate the workspace — write files or run commands. A
-    /// mutating tool is proof of real work, so its `PostToolUse` is the only
-    /// tool event recorded on the lifecycle channel.
+    /// mutating tool is proof of real work, so its completed tool signal is
+    /// durable even when it does not change state.
     pub mutating: &'static [&'static str],
     /// The file-editing subset of `mutating` — the turn's first edit moves it
     /// from reasoning to acting. A shell tool mutates but does not edit, so a

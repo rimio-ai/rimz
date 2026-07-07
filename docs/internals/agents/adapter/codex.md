@@ -17,13 +17,13 @@ Native event or derived surface → internal mapping; the upstream events, paylo
 | `Stop`                               | lifecycle     | `TurnEnded { errored, parked_on_background: false }`; `errored` reads the native payload or a rollout turn-error marker | clear task; refresh context/tokens; merge rollout turn-error marker |
 | `PermissionRequest`                  | awaiting-user | `AwaitingInput { Permission }` → `waiting` | —                                          |
 | `PreToolUse: request_user_input`     | awaiting-user | `AwaitingInput { Question }` → `waiting`   | user question                              |
-| `PostToolUse` (mutating)             | lifecycle     | `ToolUsed { mutates: true, edits }` | `edits` for `apply_patch`; read-only tools stay silent |
-| `PreToolUse` (other tools)           | lifecycle     | `ToolUsed { mutates: false, edits: false }` as proof-of-work only | persisted when it reconciles a resting row or closes a compaction bracket |
+| `PostToolUse`                        | lifecycle     | `ToolUsed { mutates, edits }` for every tool | `edits` for `apply_patch`; non-mutating completions use proof-of-work persistence, including answered asks |
+| `PreToolUse` (other tools)           | lifecycle     | `ToolUsed { mutates: false, edits: false }` as proof-of-work only | persisted when it reconciles a resting row, clears waiting, or closes a compaction bracket |
 | `PreCompact`                         | lifecycle     | `Compacting`                        | stamps the head                                  |
 | `PostCompact`                        | lifecycle     | `CompactionEnded` with known trigger | safely redundant as a close; carries the auto/manual trigger bit |
 | pane liveness + rollup reaper        | derived       | session removal for the hooks matrix `ended` row | gap: no `SessionEnd` hook; cleared on a snapshot tick, not at session exit |
 
-`request_user_input` self-classifies from `tool_name` on the broad `PreToolUse` hook. Codex has no plan-approval gate: `update_plan` is a non-blocking todo tracker, and every non-question `PreToolUse` remains lifecycle proof-of-work only.
+`request_user_input` self-classifies from `tool_name` on the broad `PreToolUse` hook. Its own non-mutating `PostToolUse` clears waiting when the answer lands. Codex has no plan-approval gate: `update_plan` is a non-blocking todo tracker, and every non-question `PreToolUse` remains lifecycle proof-of-work only.
 
 Codex provider-error evidence comes from the rollout tail. Rimz checks explicit error records on `Stop`; the stat-gated local refresh also checks the resting tail, so a provider-killed turn that writes no `Stop` still publishes `AgentContext.turn_error`. Timestamped rollout error records and the resting message-less `task_complete` shape write the marker, while newer live rollout records clear it. Explicit error evidence marks the `TurnEnded` lifecycle signal errored so a provider-killed `Stop` never reduces as success. The row then pauses or fails through the shared display projection ([Turn-death marker](#turn-death-marker)). Token and cost enrichment still refreshes on `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` through the stat-gated local context path.
 

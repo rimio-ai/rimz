@@ -3,8 +3,7 @@ use crate::agents::SessionOrigin;
 
 #[test]
 fn observe_lifecycle_maps_each_event_to_its_signal() {
-    // Each root event payload maps to its lifecycle signal; a payload that is
-    // observed-but-silent (a non-mutating tool) yields no observation at all.
+    // Each root event payload maps to its lifecycle signal.
     // Identity and subagent boundaries are covered separately below.
     use LifecycleSignal::*;
     let cases: &[(&str, serde_json::Value, Option<LifecycleSignal>)] = &[
@@ -77,7 +76,18 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
         (
             "PostToolUse",
             json!({"session_id":"s","tool_name":"read"}),
-            None,
+            Some(ToolUsed {
+                mutates: false,
+                edits: false,
+            }),
+        ),
+        (
+            "PostToolUse",
+            json!({"session_id":"s","tool_name":"request_user_input"}),
+            Some(ToolUsed {
+                mutates: false,
+                edits: false,
+            }),
         ),
         (
             "Stop",

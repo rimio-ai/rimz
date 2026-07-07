@@ -69,13 +69,13 @@ pub(super) fn record_lifecycle_observation(
                 "closed compaction bracket on a non-compaction signal",
             );
         }
-        // `ToolUsed { false, false }` is reserved for non-blocking PreToolUse
-        // proof-of-work. PostToolUse observations are emitted only from the
-        // `tool_mutates` arm, so they always carry `mutates: true`; this gate
-        // keeps PreToolUse out of the durable log unless a fresh snapshot shows
-        // it reconciling a resting row or closing a compaction bracket. If the
-        // transition read fails, the proof-of-work signal drops and the bracket
-        // closes on the next durable lifecycle signal.
+        // `ToolUsed { false, false }` is proof-of-work from non-blocking
+        // PreToolUse and non-mutating PostToolUse, including an answered
+        // blocking ask. This gate keeps it out of the durable log unless a
+        // fresh snapshot shows it clearing waiting, reconciling a resting row,
+        // or closing a compaction bracket. If transition read fails, the signal
+        // drops and the state change replays on the next durable lifecycle
+        // signal.
         let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
         let append_lifecycle = append_lifecycle_event(&observation.signal, transition);
         let appended_lifecycle = if append_lifecycle {
@@ -223,7 +223,7 @@ pub(super) fn log_lifecycle_transition(
     Some(transition)
 }
 
-pub(super) fn proof_of_work_pre_tool(signal: &LifecycleSignal) -> bool {
+pub(super) fn proof_of_work_tool(signal: &LifecycleSignal) -> bool {
     matches!(
         signal,
         LifecycleSignal::ToolUsed {
@@ -237,7 +237,7 @@ pub(in crate::cli::hooks) fn append_lifecycle_event(
     signal: &LifecycleSignal,
     transition: Option<agent_lifecycle::Transition>,
 ) -> bool {
-    !proof_of_work_pre_tool(signal)
+    !proof_of_work_tool(signal)
         || transition.is_some_and(|transition| {
             transition.compaction_closed
                 || transition.waiting_cleared

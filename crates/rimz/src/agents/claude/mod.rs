@@ -954,8 +954,8 @@ fn map_claude_lifecycle_signal(
         "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,
         }),
-        "PostToolUse" if descriptor.tool_mutates(payload) => Some(LifecycleSignal::ToolUsed {
-            mutates: true,
+        "PostToolUse" => Some(LifecycleSignal::ToolUsed {
+            mutates: descriptor.tool_mutates(payload),
             edits: descriptor.tool_edits_files(payload),
         }),
         "PreToolUse" => {

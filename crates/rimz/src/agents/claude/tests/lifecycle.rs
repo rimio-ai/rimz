@@ -190,7 +190,20 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
                 edits: false,
             }),
         ),
-        ("Read", None),
+        (
+            "Read",
+            Some(LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+            }),
+        ),
+        (
+            "AskUserQuestion",
+            Some(LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+            }),
+        ),
     ] {
         let observed = ClaudeAdapter.observe_lifecycle(
             "PostToolUse",

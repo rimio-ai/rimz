@@ -174,9 +174,29 @@ fn core_turn_and_subagent_edges_follow_the_contract() {
             },
             true,
         ),
+        (
+            "non-mutating tool clears waiting",
+            Some(state(AgentStatus::Waiting, TurnPhase::Idle, false)),
+            LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+            },
+            state(AgentStatus::Running, TurnPhase::Acting, false),
+            TransitionKind::Normal,
+            true,
+        ),
     ] {
         assert_step(name, prev, signal, next, kind, false, opened_turn);
     }
+
+    let waiting_resume = step(
+        Some(&state(AgentStatus::Waiting, TurnPhase::Idle, false)),
+        &LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+        },
+    );
+    assert!(waiting_resume.waiting_cleared);
 
     let ended = step(Some(&reasoning), &LifecycleSignal::Ended);
     assert_eq!(ended.next, reasoning);

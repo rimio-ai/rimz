@@ -192,14 +192,14 @@ fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
     );
     assert!(
         !append_lifecycle_event(&proof_of_work, None),
-        "pre-tool proof-of-work drops when the prior rollup cannot be inspected"
+        "tool proof-of-work drops when the prior rollup cannot be inspected"
     );
     assert!(
         !append_lifecycle_event(
             &proof_of_work,
             Some(transition(TransitionKind::Normal, false))
         ),
-        "pre-tool proof-of-work does not fill the durable log during normal running turns"
+        "tool proof-of-work does not fill the durable log during normal running turns"
     );
     assert!(
         append_lifecycle_event(
@@ -212,14 +212,20 @@ fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
                 false,
             )),
         ),
-        "pre-tool proof-of-work is durable when it reconciles a stale resting row"
+        "tool proof-of-work is durable when it reconciles a stale resting row"
     );
     assert!(
         append_lifecycle_event(
             &proof_of_work,
             Some(transition(TransitionKind::Normal, true))
         ),
-        "pre-tool proof-of-work is durable when it closes an open compaction bracket"
+        "tool proof-of-work is durable when it closes an open compaction bracket"
+    );
+    let mut clears_waiting = transition(TransitionKind::Normal, false);
+    clears_waiting.waiting_cleared = true;
+    assert!(
+        append_lifecycle_event(&proof_of_work, Some(clears_waiting)),
+        "tool proof-of-work is durable when it clears waiting"
     );
 }
 

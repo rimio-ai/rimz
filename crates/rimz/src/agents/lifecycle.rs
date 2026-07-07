@@ -105,13 +105,13 @@ pub enum LifecycleSignal {
         #[serde(default)]
         errored: bool,
     },
-    /// A tool completed (`PostToolUse`). Adapters emit this only for a
-    /// *mutating* tool, so it doubles as proof the agent is doing real work —
-    /// which is why it can reconcile a rollup that wrongly thinks the agent is
-    /// resting. `edits` marks the file-editing subset (Claude `Edit`/`Write`/…,
-    /// Codex `apply_patch`): the first edit of a turn moves it from reasoning
-    /// to acting. Defaulted so a `tool_used` event written before the bit
-    /// existed still replays.
+    /// A tool completed (`PostToolUse`) or non-blocking tool started
+    /// (`PreToolUse`). Adapters emit this for every completed tool; `mutates`,
+    /// not emission, marks proof of real work durable enough to record without
+    /// a state change. `edits` marks the file-editing subset (Claude
+    /// `Edit`/`Write`/…, Codex `apply_patch`): the first edit of a turn moves
+    /// it from reasoning to acting. Defaulted so a `tool_used` event written
+    /// before the bit existed still replays.
     ToolUsed {
         mutates: bool,
         #[serde(default)]
@@ -255,8 +255,9 @@ pub struct Transition {
     /// bracket; an unbracketed close signal closes nothing.
     pub compaction_closed: bool,
     /// A waiting state was durably cleared without otherwise changing status.
-    /// Blocking permission prompts can resume through a non-mutating PreToolUse
-    /// edge; recording that no-op is what clears `waiting_since` on replay.
+    /// Blocking prompts normally resume through their own non-mutating
+    /// PostToolUse answer edge, with the next PreToolUse as a backstop;
+    /// recording that no-op is what clears `waiting_since` on replay.
     pub waiting_cleared: bool,
     /// A turn boundary opened or re-opened. Explicit starts stamp a fresh
     /// prompt boundary except when a prompt wakes a parked running row and
