@@ -20,7 +20,7 @@ cd ~/code/query-engine   # a real, small project they already have
 rimz
 ```
 
-The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux) and the agents (Claude, Codex), writes the per-machine config templates under `~/.config/rimz/`, and asks the few choices it cannot detect — no hand-created config file or account between the reader and the first frame.
+The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux) and the agents (Claude, Codex), writes the per-machine config templates under `~/.config/rimz/`, and asks the few choices it cannot detect; no hand-created config file or account stands between the reader and the first frame.
 
 The first run on a machine writes `config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, and `remote.toml` when they are missing, then opens with one consent gate before the room: showing what an agent is doing means adding reporting hooks to the agent's config. The same first-run transcript shows the live glyph probe and pet opt-in, so the summary, choices, and results read top-to-bottom.
 
@@ -214,11 +214,11 @@ The power move is going straight to the blocked pane. A single session-scoped Sp
 
 The grouping matches the reader's mental model. Groups are keyed on worktree isolation, since only same-worktree agents share files: a header marks each one, and the worktree the reader has selected reads as one bracketed lane, a thin spine down its full height with a faint dotted seal capping its header and the selected card inside it bolder.
 
-The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and always sorts last, below every project group. The room scales past one repo too: `rimz start` in `~/code` lets each git-backed agent group by its own checkout, with the same cockpit, ranking, and jump triage ([the fleet room](./product.md#many-repos-one-room)).
+The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and always sorts last, below every project group. The room scales past one repo too: `rimz start` in `~/code` lets each git-backed agent group by its own checkout, with the same cockpit, ranking, and jump triage ([directory workspaces](../reference/cli.md#start-and-attach-a-workspace)).
 
 The footer advertises `?`, and pressing it replaces the card body with the keys-and-filter overlay, so navigation, actions, status filters, and the sidebar-focus chord are learnable in place without leaving the room; [the sidebar interface reference](../interface/sidebar.md#bottom-chrome) shows the exact frame.
 
-Glyph shape carries the meaning and color is a redundant second channel, so every status reads under `NO_COLOR` and to color-blind eyes — twelve agents on one line is the [triage-at-a-glance design](../../DESIGN.md#triage-at-a-glance) carrying a real fleet.
+Glyph shape carries the meaning and color is a redundant second channel, so every status reads under `NO_COLOR` and to color-blind eyes; twelve agents on one line is the [triage-at-a-glance design](../../DESIGN.md#triage-at-a-glance) carrying a real fleet.
 
 ## Detach and reattach from anywhere
 
@@ -235,7 +235,7 @@ The same reattach has a first-class form: `rimz remote connect dev-box:query-eng
 
 The sidebar comes back exactly as the reader left it: every agent where it was, every question still waiting, ranked identically, plus whatever finished while they were gone, already triaged by the same ranking. The first usable frame paints from the ledger immediately, since a resize or attach is itself a wakeup, so reattach reconstructs from durable state with no loading screen.
 
-This is what changes how the reader works: start a run on the dev box, close everything, and pick it up on a phone at the airport. Continuity is ledger-owned ([DESIGN.md → Invariants](../../DESIGN.md#invariants)); the running processes are the host's job — systemd, tmux-resurrect, Zellij resurrect ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
+This is what changes how the reader works: start a run on the dev box, close everything, and pick it up on a phone at the airport. Continuity is ledger-owned ([DESIGN.md → Invariants](../../DESIGN.md#invariants)); the running processes are the host's job: systemd, tmux-resurrect, Zellij resurrect ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
 
 ## When something is wrong
 
@@ -267,13 +267,13 @@ The same honesty extends to trust and protocol. An untrusted `.rimz/config.toml`
 
 ## Growing into it: building on the room
 
-By now the reader is hooked on the observe-and-route loop, and the product grows with them along paths they discover when they need them.
+By now the reader is hooked on the loop of glance, jump, answer. What grows from here is harness and loop engineering: automation composed from the same public commands the reader has been typing, along paths they discover when they need them ([product.md → Engineer the loop](./product.md#engineer-the-loop)).
 
-Automation over the waiting state is the morning-after upgrade: tired of approving `cargo check` for the eighth time, the reader wires a notification handler that wakes on waiting rows and answers the routine ones in the agent's own pane — a bounded-pattern script over `rimz pane capture` and `rimz pane send`, or a supervised agent delegate launched with `rimz agents <kind> -p`. Anything outside policy stays waiting and routes to the reader as before, which is what lets the fleet keep working while they sleep. Handler wiring is in [notifications.md](../internals/sidebar/notifications.md); the safety posture is in [security.md](./security.md).
+Automation over the waiting state is the morning-after upgrade. Tired of approving `cargo check` for the eighth time, the reader wires a notification handler that wakes on waiting rows and answers the routine ones in the agent's own pane: a bounded-pattern script over `rimz pane capture` and `rimz pane send`, or a supervised agent delegate launched with `rimz agents <kind> -p`. Anything outside policy stays waiting and routes to the reader as before, which is what lets the fleet keep working while they sleep. Handler wiring is in [notifications.md](../internals/sidebar/notifications.md); the safety posture is in [security.md](./security.md).
 
-Unattended runs are the same idea without waiting on a person, and `rimz agents <kind> "<prompt>" -p` makes the whole shape scriptable; the detail lives in [product.md → Put your pipeline in the room](./product.md#put-your-pipeline-in-the-room).
+Unattended runs are the same idea without a person at the keyboard: `rimz agents <kind> "<prompt>" -p` runs one supervised turn a script can branch on, and `rimz loop` drives those turns on a clock or on a failing check; the detail lives in [product.md → Put your pipeline in the room](./product.md#put-your-pipeline-in-the-room).
 
-And because agents and scripts share one CLI, a deploy or migration script can steer the same fleet — hand work to a running agent with `rimz message`, run a judgment call as a supervised turn, read back transcripts — straight from the pipeline ([the pipeline scenario](./product.md#put-your-pipeline-in-the-room)).
+And because agents and scripts share one CLI, a deploy or migration script can steer the same fleet (hand work to a running agent with `rimz message`, run a judgment call as a supervised turn, read back transcripts) straight from the pipeline ([the pipeline scenario](./product.md#put-your-pipeline-in-the-room)).
 
 ## The experience in one screen
 

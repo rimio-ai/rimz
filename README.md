@@ -8,7 +8,7 @@
   The control room for your coding agents
 </pre></div>
 
-<p align="center"><strong>agents fleet · harness dashboard · programmable · local & remote · tmux & zellij · token insight</strong></p>
+<p align="center"><strong>agent fleet · harness dashboard · loops · local & remote · tmux & zellij · token insight</strong></p>
 
 <p align="center">
   <a href="https://github.com/rimio/rimz/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/rimio/rimz/actions/workflows/ci.yml/badge.svg"></a>
@@ -30,7 +30,7 @@
 
 ---
 
-Rimz is a realtime dashboard for harnessing agentic coding: one human and tens of agents working together in one zellij or tmux room, where everything about every agent reads at a glance. Every agent gets a live card (state, task, context health, live cost), and the sidebar routes your attention to whichever one needs you.
+Rimz is a realtime dashboard for harnessing agentic coding: one human and tens of agents working together in one Zellij or tmux room, where everything about every agent reads at a glance. Every agent gets a live card (state, task, context health, live cost), and the sidebar routes your attention to whichever one needs you.
 
 <p align="center">
   <img src="docs/rimz-full.png" alt="A Rimz room: the sidebar triaging a fleet of coding agents beside their panes" width="100%">
@@ -38,7 +38,7 @@ Rimz is a realtime dashboard for harnessing agentic coding: one human and tens o
 </p>
 
 
-Rimz is also the substrate for harness and loop engineering: one uniform interface across Claude Code, Codex, Pi, and OpenCode, a durable message system for steering and queuing agents, supervised runs with exit codes for scripts and CI, and scheduled loops that keep the fleet working on a clock. All of it is a single lightweight binary inside the tmux or zellij you already run.
+Rimz stays out of your way: a single lightweight binary inside the Zellij or tmux you already run, with your keybinds intact, the agent CLIs stock, and the official web, desktop, and mobile apps untouched. The same footprint carries the primitives that **harness engineering** and **loop engineering** build on: the sidebar is the observability layer, one uniform interface reaches Claude Code, Codex, Pi, and OpenCode, a durable message system steers and queues agents, supervised runs carry exit codes into scripts and CI, and scheduled wakeups keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on those primitives.
 
 
 ## What it does
@@ -51,11 +51,12 @@ Rimz is also the substrate for harness and loop engineering: one uniform interfa
 - **Realtime Harness Dashboard:** working state and task, model and effort, context health and compactions, token mix down to cache reads, live dollar cost, and the subagent tree
 - **Attention, Routed:** one glance at the cockpit line (`? 2  ! 1 …`) reads the whole fleet, the column below arrives already triaged, and one keypress drops you into the pane that is waiting
 - **Know Your Pace:** $ and token insight for today, week, and month, with every provider's plan and 5h/7d budget bars draining in real time; one look tells you where the week is going
-- **Extremely Lightweight:** a single binary that wraps the harnesses you already run (Claude Code, Codex, Pi, OpenCode) inside your familiar zellij or tmux: same keybinds, same terminal, zero learning curve, and the official web, desktop, and mobile apps all keep working
+- **Extremely Lightweight:** a single binary that wraps the agents you already run (Claude Code, Codex, Pi, OpenCode) inside your familiar Zellij or tmux: same keybinds, same terminal, zero learning curve, and the official web, desktop, and mobile apps all keep working
 - **Local or Remote, Continuously:** start the room on your macbook or a server, close the laptop, and reattach from anywhere; the link heals itself, and even a reboot brings the room back with layout and agents resumed
 - **Worktrees, for every Agent:** open agents together, side by side in an isolated worktree with dynamic layout: `claude,codex` starts Claude planning beside Codex reviewing, `vim,codex+term` puts your editor, an agent, and a shell in one tab
 - **Messages, agents chat as in Slack:** agents message each other and you by handle (`@codex#feat-a`), with steer/queue delivery that respects agent state and the context window; `rimz message` is the same surface for you and for scripts
 - **Scriptable, End to End:** `rimz agents -p` is `claude -p` for every agent, with exit codes, JSON output, streaming, and full observability, so agents drop into scripts, CI, and workflows
+- **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result), and notification handlers run your own command the moment a row needs eyes; the intelligence in the loop stays yours
 - **Auto Continue, while you're Away:** agents keep working after you step away: a rate-limit pause resumes the moment the budget window resets, transient API errors retry on a backoff ramp, and a full context window compacts before the next prompt lands
 - **Pets, your beloved Companion:** an opt-in animated sprite on the provider dashboard that follows the fleet's state, rendered as pixels where the terminal supports them and cell art everywhere else
 
@@ -167,7 +168,7 @@ rimz loop add watchdog --check "cargo test" --on fail \
     --spec codex --prompt "fix the failing test" --every 15m
 ```
 
-**Work from anywhere.** A room is plain zellij or tmux under SSH: save an alias, connect with self-healing reconnect, or open the room in a browser.
+**Work from anywhere.** A room is plain Zellij or tmux under SSH: save an alias, connect with self-healing reconnect, or open the room in a browser.
 
 ```sh
 rimz remote add dev dev-box:~/code/query-engine
@@ -185,7 +186,7 @@ rimz setup                                  # detect the machine, write default 
 rimz config set theme "Catppuccin Mocha"    # edit one key; Rimz routes it to the owning file
 ```
 
-The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, true color, pets, the hands-off loop behaviors, and a modern zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration reference](./docs/reference/configuration.md).
+The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, true color, pets, the hands-off loop behaviors, and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration reference](./docs/reference/configuration.md).
 
 ## Agent compatibility matrix
 
@@ -201,7 +202,7 @@ Adapters are thin layers over the same hook and transcript primitives ([agents i
 ## Documentation
 
 - [Product tour](./docs/guide/product.md) — the room, the loop, and the scenarios people run, local fleet to scripted pipeline
-- [Set up your machine](./docs/guide/setup.md) — config, hooks, true color, pets, and the zellij/tmux baselines
+- [Set up your machine](./docs/guide/setup.md) — config, hooks, true color, pets, and the Zellij/tmux baselines
 - [Attention](./docs/guide/attention.md) — how the sidebar decides what needs you
 - [Security](./docs/guide/security.md) — threat model and guardrails
 - [The sidebar on screen](./docs/interface/sidebar.md) — rendered frames and the glyph legend
@@ -218,7 +219,7 @@ brew tap rimio/homebrew-rimz
 brew install rimz
 ```
 
-zellij (0.44+) or tmux (3.5+) runs the room; `rimz doctor` confirms your build clears the floor. Building from source is `git clone … && cargo xtask install`; prerequisites and the pinned toolchain live in [the installation guide](./docs/guide/installation.md).
+Zellij (0.44+) or tmux (3.5+) runs the room; `rimz doctor` confirms your build clears the floor. Building from source is `git clone … && cargo xtask install`; prerequisites and the pinned toolchain live in [the installation guide](./docs/guide/installation.md).
 
 Hooks are how agents report to the room. The first `rimz` run offers to install them with a diff preview, and `rimz hooks install` does the same on demand:
 
