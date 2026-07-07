@@ -302,6 +302,13 @@ fn reject_project_task_state_fields(
                 });
             }
         }
+        if table.get("once").and_then(toml::Value::as_bool) == Some(true) {
+            return Err(ProjectTasksErr::UnsupportedField {
+                task: task.clone(),
+                field: "once",
+                fix: "one-shot cleanup would edit committed project config; use a machine task",
+            });
+        }
     }
     Ok(())
 }

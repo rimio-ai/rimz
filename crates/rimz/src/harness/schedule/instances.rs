@@ -38,7 +38,7 @@ pub fn load_all_with_project(
     load_all_from_layers(
         load(),
         MachineConfig::load_lenient().r#loop.tasks.clone(),
-        project,
+        trusted_project(project),
     )
 }
 
@@ -47,6 +47,23 @@ pub fn load_entry_with_project(
     project: Option<(Tasks, TrustState)>,
 ) -> Option<(TaskEntry, TaskSource)> {
     load_all_with_project(project).remove(name)
+}
+
+pub fn load_all_visible_with_project(
+    project: Option<(Tasks, TrustState)>,
+) -> BTreeMap<String, (TaskEntry, TaskSource)> {
+    load_all_from_layers(
+        load(),
+        MachineConfig::load_lenient().r#loop.tasks.clone(),
+        project,
+    )
+}
+
+pub fn load_entry_visible_with_project(
+    name: &str,
+    project: Option<(Tasks, TrustState)>,
+) -> Option<(TaskEntry, TaskSource)> {
+    load_all_visible_with_project(project).remove(name)
 }
 
 pub fn is_ephemeral(entry: &TaskEntry) -> bool {
@@ -119,6 +136,11 @@ fn load_all_from_layers(
         );
     }
     tasks
+}
+
+fn trusted_project(project: Option<(Tasks, TrustState)>) -> Option<(Tasks, TrustState)> {
+    let (tasks, state) = project?;
+    (state == TrustState::Trusted).then_some((tasks, state))
 }
 
 fn insert_into(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
@@ -241,6 +263,53 @@ mod tests {
             source,
             &TaskSource::Project {
                 state: TrustState::Trusted
+            }
+        );
+        assert_eq!(entry.prompt.as_deref(), Some("project"));
+    }
+
+    #[test]
+    fn untrusted_project_tasks_do_not_enter_effective_merge() {
+        let mut config = task();
+        config.prompt = Some("config".to_owned());
+        let mut project = task();
+        project.prompt = Some("project".to_owned());
+
+        let tasks = load_all_from_layers(
+            Tasks::default(),
+            Tasks(BTreeMap::from([("wake".to_owned(), config)])),
+            trusted_project(Some((
+                Tasks(BTreeMap::from([("wake".to_owned(), project)])),
+                TrustState::Untrusted,
+            ))),
+        );
+
+        let (entry, source) = tasks.get("wake").expect("wake task");
+        assert_eq!(source, &TaskSource::Config);
+        assert_eq!(entry.prompt.as_deref(), Some("config"));
+    }
+
+    #[test]
+    fn visible_reads_show_untrusted_project_tasks() {
+        let mut config = task();
+        config.prompt = Some("config".to_owned());
+        let mut project = task();
+        project.prompt = Some("project".to_owned());
+
+        let tasks = load_all_from_layers(
+            Tasks::default(),
+            Tasks(BTreeMap::from([("wake".to_owned(), config)])),
+            Some((
+                Tasks(BTreeMap::from([("wake".to_owned(), project)])),
+                TrustState::Untrusted,
+            )),
+        );
+
+        let (entry, source) = tasks.get("wake").expect("wake task");
+        assert_eq!(
+            source,
+            &TaskSource::Project {
+                state: TrustState::Untrusted
             }
         );
         assert_eq!(entry.prompt.as_deref(), Some("project"));

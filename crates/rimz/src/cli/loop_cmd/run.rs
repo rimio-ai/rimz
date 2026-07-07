@@ -48,7 +48,7 @@ pub(super) fn run_one(
     keep: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (entry, source) = load_task(name, globals)?
+    let (entry, source) = load_runnable_task(name, globals)?
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     block_untrusted_project_task(name, &entry, source)?;
     let started = Instant::now();

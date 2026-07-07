@@ -124,6 +124,62 @@ fn loop_project_tasks_list_and_refuse_until_trusted() {
 }
 
 #[test]
+fn loop_untrusted_project_shadow_does_not_block_machine_task() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.shared]\n\
+             check = \"printf machine\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+    write_project_config(
+        &env,
+        "[tasks.shared]\ncheck = \"printf project\"\nevery = \"15m\"\n",
+    );
+
+    let stdout = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        stdout.contains("shared") && stdout.contains("project · untrusted"),
+        "untrusted project task should stay visible: {stdout}"
+    );
+
+    loop_ok(&env, &["loop", "run", "shared"]);
+    let records = read_loop_run_records(&env);
+    assert!(
+        records
+            .last()
+            .and_then(|record| record.check.as_ref())
+            .is_some_and(|check| check.output.contains("machine")),
+        "untrusted project shadow should leave machine task runnable: {records:?}"
+    );
+
+    let grant = env
+        .rimz()
+        .args(["trust", "grant"])
+        .output()
+        .expect("trust grant");
+    assert!(
+        grant.status.success(),
+        "trust grant failed: {}",
+        String::from_utf8_lossy(&grant.stderr)
+    );
+
+    loop_ok(&env, &["loop", "run", "shared"]);
+    let records = read_loop_run_records(&env);
+    assert!(
+        records
+            .last()
+            .and_then(|record| record.check.as_ref())
+            .is_some_and(|check| check.output.contains("project")),
+        "trusted project task should shadow machine task: {records:?}"
+    );
+}
+
+#[test]
 fn loop_add_ephemeral_tasks_use_instance_state() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -1041,6 +1097,41 @@ fn loop_add_bind_validates_mode_selection() {
         stderr.contains("only apply to --spec tasks"),
         "unexpected stderr: {stderr}"
     );
+}
+
+#[test]
+fn loop_add_project_rejects_one_shots() {
+    let env = Env::new();
+
+    for args in [
+        &[
+            "loop",
+            "add",
+            "bad-once",
+            "--project",
+            "--check",
+            "true",
+            "--at",
+            "07:00",
+            "--once",
+        ][..],
+        &[
+            "loop",
+            "add",
+            "bad-in",
+            "--project",
+            "--check",
+            "true",
+            "--in",
+            "30m",
+        ][..],
+    ] {
+        let (_stdout, stderr) = loop_fail(&env, args);
+        assert!(
+            stderr.contains("--once or --in") && stderr.contains("committed project config"),
+            "unexpected stderr: {stderr}"
+        );
+    }
 }
 
 #[test]

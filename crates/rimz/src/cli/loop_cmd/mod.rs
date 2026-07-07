@@ -371,10 +371,19 @@ fn project_tasks_for_root(
         .with_context(|| format!("reading project loop tasks in {}", project_root.display()))
 }
 
-fn project_merge(
-    project: Option<rimz::config::effective::ProjectTasks>,
+fn project_effective_merge(
+    project: &Option<rimz::config::effective::ProjectTasks>,
 ) -> Option<(rimz::config::Tasks, TrustState)> {
-    project.map(|project| (project.tasks, project.state))
+    let project = project.as_ref()?;
+    (project.state == TrustState::Trusted).then(|| (project.tasks.clone(), project.state))
+}
+
+fn project_visible_merge(
+    project: &Option<rimz::config::effective::ProjectTasks>,
+) -> Option<(rimz::config::Tasks, TrustState)> {
+    project
+        .as_ref()
+        .map(|project| (project.tasks.clone(), project.state))
 }
 
 fn project_tasks_for_globals(
@@ -392,15 +401,42 @@ fn project_tasks_for_globals(
 
 fn load_all_tasks(globals: &GlobalFlags) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
     let project = project_tasks_for_globals(globals)?;
-    Ok(instances::load_all_with_project(project_merge(project)))
+    Ok(instances::load_all_visible_with_project(
+        project_visible_merge(&project),
+    ))
 }
 
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<(TaskEntry, TaskSource)>> {
     let project = project_tasks_for_globals(globals)?;
-    Ok(instances::load_entry_with_project(
+    Ok(instances::load_entry_visible_with_project(
         name,
-        project_merge(project),
+        project_visible_merge(&project),
     ))
+}
+
+fn load_runnable_task(
+    name: &str,
+    globals: &GlobalFlags,
+) -> Result<Option<(TaskEntry, TaskSource)>> {
+    let project = project_tasks_for_globals(globals)?;
+    if let Some(task) = instances::load_entry_with_project(name, project_effective_merge(&project))
+    {
+        return Ok(Some(task));
+    }
+    let Some(project) = project else {
+        return Ok(None);
+    };
+    if project.state == TrustState::Trusted {
+        return Ok(None);
+    }
+    Ok(project.tasks.0.get(name).cloned().map(|entry| {
+        (
+            entry,
+            TaskSource::Project {
+                state: project.state,
+            },
+        )
+    }))
 }
 
 fn project_trust_fix(state: TrustState) -> &'static str {

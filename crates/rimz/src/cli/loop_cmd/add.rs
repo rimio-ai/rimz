@@ -33,6 +33,11 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.project && args.until.is_some() {
         bail!("--project tasks cannot use --until; poll-until deadlines are machine state");
     }
+    if args.project && (args.once || args.in_after.is_some()) {
+        bail!(
+            "--project tasks cannot use --once or --in; one-shot cleanup would edit committed project config"
+        );
+    }
     let agent_action_requested = args.spec.is_some() || args.bind.is_some();
     if !agent_action_requested && args.check.is_none() {
         bail!("loop task `{}` needs --spec, --bind, or --check", args.name);
@@ -211,9 +216,9 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.project {
         project_config_set_entry(&project_root, &args.name, &entry)?;
     } else if matches!(
-        instances::load_entry_with_project(
+        instances::load_entry_visible_with_project(
             &args.name,
-            project_merge(project_tasks_for_root(&project_root)?)
+            project_visible_merge(&project_tasks_for_root(&project_root)?)
         ),
         Some((_, TaskSource::Project { .. }))
     ) {

@@ -172,6 +172,10 @@ fn project_tasks_reject_machine_local_fields() {
             "[tasks.wake]\nspec = \"codex\"\ndeadline = \"2026-07-01T12:00:00Z\"\nat = \"08:00\"\n",
             "deadline",
         ),
+        (
+            "[tasks.wake]\nspec = \"codex\"\nonce = true\nat = \"08:00\"\n",
+            "once",
+        ),
     ];
     for (text, field) in cases {
         let project = tempdir().expect("project");
