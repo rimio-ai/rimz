@@ -30,3 +30,26 @@ tmux source-file ~/.tmux.conf
 cp examples/zellij/config.kdl ~/.config/zellij/config.kdl
 zellij setup --check
 ```
+
+## Forge agent team — `teams/forge/`
+
+[`teams/forge`](./teams/forge/) is one Rimz drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles and the team, and the three Markdown files are the role prompts.
+
+Install the fragment by copying it into the agents home:
+
+```sh
+mkdir -p ~/.agents/teams
+cp -r examples/teams/forge ~/.agents/teams/
+```
+
+A same-named directory in `~/.agents/teams` is overwritten; remove it first if you want a clean copy. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
+
+Launch with `rimz agents forge`; the launch grammar lives in the [agents CLI reference](../docs/reference/cli/agents.md). Each role answers to `@planner`, `@coder`, or `@reviewer`.
+
+The `claude` and `codex` CLIs must be on `PATH`. The profiles in `team.toml` pin models (`fable`, `opus`) and Codex feature flags; adjust them there to taste. The coder's PR step expects a `pr` skill from the author's private skills collection and falls back to plain `gh` or `tea` without it.
+
+Try the team before installing by pointing Rimz at this checkout:
+
+```sh
+RIMZ_AGENTS_HOME="$PWD/examples" rimz agents forge
+```
