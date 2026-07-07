@@ -49,6 +49,12 @@ pub enum TrustErr {
         #[source]
         source: toml::de::Error,
     },
+    #[error("parsing stored surface json in trust record at {path}: {source}")]
+    RecordSurfaceJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("removed project config table in {path}: {detail}")]
     RemovedProjectTable { path: PathBuf, detail: String },
     #[error("serializing trust record: {0}")]
@@ -95,21 +101,10 @@ pub struct TrustReport {
     pub current_hash: Option<String>,
     pub granted_hash: Option<String>,
     pub granted_at: Option<Timestamp>,
-    pub surface_diff: Option<TrustSurfaceDiff>,
+    pub surface_diff: Option<Vec<SurfaceDiffEntry>>,
 }
 
-/// Difference between the surface from the previous grant and the live
-/// executable surface.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum TrustSurfaceDiff {
-    /// The trust record predates stored surface JSON, so Rimz can detect staleness
-    /// but cannot explain which fields changed.
-    LegacyRecord,
-    /// Leaf-level changes from the granted surface to the current surface.
-    Changes { entries: Vec<SurfaceDiffEntry> },
-}
-
+/// Leaf-level change from the granted surface to the current surface.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SurfaceDiffEntry {
     pub kind: SurfaceDiffKind,
@@ -173,9 +168,11 @@ pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
     };
 
     let surface_diff = match (&current_surface, &record, state) {
-        (Some(current), Some(record), TrustState::Stale) => {
-            Some(surface_diff_for_record(record, &current.value))
-        }
+        (Some(current), Some(record), TrustState::Stale) => Some(surface_diff_for_record(
+            &record_path,
+            record,
+            &current.value,
+        )?),
         _ => None,
     };
 
@@ -213,15 +210,17 @@ pub fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<Trust
 
     let current_surface = surface_snapshot(&config);
     let previous_record = read_trust_record(&record_path)?;
-    let surface_diff = previous_record
-        .as_ref()
-        .filter(|record| record.surface_hash != current_surface.hash)
-        .map(|record| surface_diff_for_record(record, &current_surface.value));
+    let surface_diff = match previous_record.as_ref() {
+        Some(record) if record.surface_hash != current_surface.hash => Some(
+            surface_diff_for_record(&record_path, record, &current_surface.value)?,
+        ),
+        _ => None,
+    };
     let granted_at = Timestamp::now();
     let record = TrustRecord {
         project_root: project_root.to_path_buf(),
         surface_hash: current_surface.hash.clone(),
-        surface_json: Some(current_surface.json.clone()),
+        surface_json: current_surface.json.clone(),
         granted_at,
     };
     let text = toml::to_string_pretty(&record)?;
@@ -406,8 +405,7 @@ fn surface_snapshot(config: &ProjectConfig) -> SurfaceSnapshot {
 struct TrustRecord {
     project_root: PathBuf,
     surface_hash: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    surface_json: Option<String>,
+    surface_json: String,
     granted_at: Timestamp,
 }
 
@@ -700,16 +698,18 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
     }
 }
 
-fn surface_diff_for_record(record: &TrustRecord, current: &Value) -> TrustSurfaceDiff {
-    let Some(granted_json) = &record.surface_json else {
-        return TrustSurfaceDiff::LegacyRecord;
-    };
-    let Ok(granted) = serde_json::from_str::<Value>(granted_json) else {
-        return TrustSurfaceDiff::LegacyRecord;
-    };
-    TrustSurfaceDiff::Changes {
-        entries: executable_surface_diff(&granted, current),
-    }
+fn surface_diff_for_record(
+    record_path: &Path,
+    record: &TrustRecord,
+    current: &Value,
+) -> Result<Vec<SurfaceDiffEntry>> {
+    let granted = serde_json::from_str::<Value>(&record.surface_json).map_err(|source| {
+        TrustErr::RecordSurfaceJson {
+            path: record_path.to_path_buf(),
+            source,
+        }
+    })?;
+    Ok(executable_surface_diff(&granted, current))
 }
 
 pub fn executable_surface_diff(granted: &Value, current: &Value) -> Vec<SurfaceDiffEntry> {
@@ -846,12 +846,9 @@ mod tests {
         let report = status_with_roots(dir.path(), config.path()).expect("status");
         assert_eq!(report.state, TrustState::Stale);
         assert_ne!(report.current_hash, report.granted_hash);
-        let TrustSurfaceDiff::Changes { entries } = report
+        let entries = report
             .surface_diff
-            .expect("stale status should explain changed fields")
-        else {
-            panic!("expected changed-field diff");
-        };
+            .expect("stale status should explain changed fields");
         assert!(entries.iter().any(|entry| {
             entry.kind == SurfaceDiffKind::Changed
                 && entry.path == vec!["hooks".to_owned(), "[0]".to_owned(), "command".to_owned()]
@@ -948,13 +945,50 @@ mod tests {
         let record = read_trust_record(&granted.record_path)
             .expect("read trust record")
             .expect("record present");
-        let surface_json = record.surface_json.expect("stored surface json");
-        let parsed: Value = serde_json::from_str(&surface_json).expect("surface json");
+        let parsed: Value = serde_json::from_str(&record.surface_json).expect("surface json");
         assert_eq!(parsed["hooks"][0]["command"], "rimz hooks claude");
     }
 
     #[test]
-    fn legacy_trust_record_reports_stale_without_diff() {
+    fn trust_record_without_surface_json_fails_to_parse() {
+        let dir =
+            project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
+        let config = tempdir().expect("config root");
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let record_path = trust_record_path(config.path(), &workspace_id);
+        let original_config = read_project_config(&dir.path().join(CONFIG_REL))
+            .expect("read config")
+            .expect("config present");
+        #[derive(Serialize)]
+        struct LegacyTrustRecord<'a> {
+            project_root: &'a Path,
+            surface_hash: String,
+            granted_at: Timestamp,
+        }
+        let record = LegacyTrustRecord {
+            project_root: dir.path(),
+            surface_hash: executable_surface_hash(&original_config),
+            granted_at: Timestamp::now(),
+        };
+        let text = toml::to_string_pretty(&record).expect("serialize legacy record");
+        write_bytes_atomically(&record_path, text.as_bytes()).expect("write record");
+
+        let err = status_with_roots(dir.path(), config.path()).expect_err("status must fail");
+        match err {
+            TrustErr::RecordParse { path, source } => {
+                assert_eq!(path, record_path);
+                let rendered = source.to_string();
+                assert!(
+                    rendered.contains("missing field `surface_json`"),
+                    "{rendered}"
+                );
+            }
+            other => panic!("expected record parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corrupt_stored_surface_json_returns_structured_error() {
         let dir =
             project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
         let config = tempdir().expect("config root");
@@ -966,10 +1000,10 @@ mod tests {
         let record = TrustRecord {
             project_root: dir.path().to_path_buf(),
             surface_hash: executable_surface_hash(&original_config),
-            surface_json: None,
+            surface_json: "not-json".to_owned(),
             granted_at: Timestamp::now(),
         };
-        let text = toml::to_string_pretty(&record).expect("serialize legacy record");
+        let text = toml::to_string_pretty(&record).expect("serialize record");
         write_bytes_atomically(&record_path, text.as_bytes()).expect("write record");
 
         std::fs::write(
@@ -978,9 +1012,14 @@ mod tests {
         )
         .expect("rewrite");
 
-        let report = status_with_roots(dir.path(), config.path()).expect("status");
-        assert_eq!(report.state, TrustState::Stale);
-        assert_eq!(report.surface_diff, Some(TrustSurfaceDiff::LegacyRecord));
+        let err = status_with_roots(dir.path(), config.path()).expect_err("status must fail");
+        match err {
+            TrustErr::RecordSurfaceJson { path, source } => {
+                assert_eq!(path, record_path);
+                assert!(source.is_syntax(), "{source}");
+            }
+            other => panic!("expected surface json error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -999,7 +1038,7 @@ mod tests {
         assert_eq!(granted.state, TrustState::Trusted);
         assert!(matches!(
             granted.surface_diff,
-            Some(TrustSurfaceDiff::Changes { ref entries }) if !entries.is_empty()
+            Some(ref entries) if !entries.is_empty()
         ));
         let now = status_with_roots(dir.path(), config.path()).expect("status");
         assert_eq!(now.state, TrustState::Trusted);

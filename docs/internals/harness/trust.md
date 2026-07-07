@@ -60,7 +60,7 @@ granted_at   = "2026-05-23T12:34:56Z"
 
 ## The surface diff
 
-A `stale` report carries a field-level diff of granted vs current surface: a structured walk over the two canonical JSON values yielding added, removed, and changed leaves with their paths ([`trust.rs::executable_surface_diff`](../../../crates/rimz/src/trust.rs)). `rimz trust status` renders it under the state line; `rimz trust grant` renders it before pinning the new surface, so a re-grant is informed rather than blind; `--json` carries the entries structurally. A record written before `surface_json` existed reports the diff as unavailable, with the fix to review the project config and re-grant.
+A `stale` report carries a field-level diff of granted vs current surface: a structured walk over the two canonical JSON values yielding added, removed, and changed leaves with their paths ([`trust.rs::executable_surface_diff`](../../../crates/rimz/src/trust.rs)). `rimz trust status` renders it under the state line; `rimz trust grant` renders it before pinning the new surface, so a re-grant is informed rather than blind; `--json` carries the entries as the `surface_diff` array.
 
 ## CLI
 

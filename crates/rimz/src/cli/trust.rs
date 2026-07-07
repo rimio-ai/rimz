@@ -11,7 +11,7 @@ use std::io::Write;
 
 use super::GlobalFlags;
 use crate::cli::render;
-use rimz::trust::{self, SurfaceDiffKind, TrustReport, TrustState, TrustSurfaceDiff};
+use rimz::trust::{self, SurfaceDiffEntry, SurfaceDiffKind, TrustReport, TrustState};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -57,7 +57,7 @@ struct ReportJson<'a> {
     current_hash: Option<&'a str>,
     granted_hash: Option<&'a str>,
     granted_at: Option<String>,
-    surface_diff: Option<&'a TrustSurfaceDiff>,
+    surface_diff: Option<&'a [SurfaceDiffEntry]>,
 }
 
 fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
@@ -71,7 +71,7 @@ fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
             current_hash: report.current_hash.as_deref(),
             granted_hash: report.granted_hash.as_deref(),
             granted_at: report.granted_at.map(|t| t.to_string()),
-            surface_diff: report.surface_diff.as_ref(),
+            surface_diff: report.surface_diff.as_deref(),
         })
         .expect("trust report serializes");
         #[expect(clippy::print_stdout, reason = "json emitter")]
@@ -126,54 +126,44 @@ fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
         kv.push("granted at", render::cell(at.to_string()));
     }
     kv.render(&mut out)?;
-    render_surface_diff(&mut out, report.surface_diff.as_ref())
+    render_surface_diff(&mut out, report.surface_diff.as_deref())
 }
 
 fn render_surface_diff(
     out: &mut impl std::io::Write,
-    diff: Option<&TrustSurfaceDiff>,
+    entries: Option<&[SurfaceDiffEntry]>,
 ) -> std::io::Result<()> {
-    let Some(diff) = diff else {
+    let Some(entries) = entries else {
         return Ok(());
     };
-    match diff {
-        TrustSurfaceDiff::LegacyRecord => {
-            writeln!(
-                out,
-                "  surface diff: unavailable (grant predates diff support; review the project config and rerun `rimz trust grant`)"
-            )
-        }
-        TrustSurfaceDiff::Changes { entries } => {
-            writeln!(out, "  surface diff:")?;
-            if entries.is_empty() {
-                writeln!(out, "    no field changes")
-            } else {
-                for entry in entries {
-                    match entry.kind {
-                        SurfaceDiffKind::Added => writeln!(
-                            out,
-                            "    added {} = {}",
-                            format_diff_path(&entry.path),
-                            format_diff_value(entry.current.as_ref())
-                        )?,
-                        SurfaceDiffKind::Removed => writeln!(
-                            out,
-                            "    removed {} (was {})",
-                            format_diff_path(&entry.path),
-                            format_diff_value(entry.granted.as_ref())
-                        )?,
-                        SurfaceDiffKind::Changed => writeln!(
-                            out,
-                            "    changed {}: {} -> {}",
-                            format_diff_path(&entry.path),
-                            format_diff_value(entry.granted.as_ref()),
-                            format_diff_value(entry.current.as_ref())
-                        )?,
-                    }
-                }
-                Ok(())
+    writeln!(out, "  surface diff:")?;
+    if entries.is_empty() {
+        writeln!(out, "    no field changes")
+    } else {
+        for entry in entries {
+            match entry.kind {
+                SurfaceDiffKind::Added => writeln!(
+                    out,
+                    "    added {} = {}",
+                    format_diff_path(&entry.path),
+                    format_diff_value(entry.current.as_ref())
+                )?,
+                SurfaceDiffKind::Removed => writeln!(
+                    out,
+                    "    removed {} (was {})",
+                    format_diff_path(&entry.path),
+                    format_diff_value(entry.granted.as_ref())
+                )?,
+                SurfaceDiffKind::Changed => writeln!(
+                    out,
+                    "    changed {}: {} -> {}",
+                    format_diff_path(&entry.path),
+                    format_diff_value(entry.granted.as_ref()),
+                    format_diff_value(entry.current.as_ref())
+                )?,
             }
         }
+        Ok(())
     }
 }
 
