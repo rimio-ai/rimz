@@ -412,9 +412,9 @@ struct TrustRecord {
 }
 
 /// Project config schema for the trust subsystem. Lenient on unknown keys
-/// (non-command fields like `display_name` or `sidebar_width` flow through
-/// the [`Self::other`] catch-all without affecting the hash) but exact on
-/// the command-running fields documented in `docs/guide/security.md`.
+/// (non-command fields like `display_name` or `sidebar_width` deserialize
+/// without affecting the hash) but exact on the command-running fields
+/// documented in `docs/guide/security.md`.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ProjectConfig {
