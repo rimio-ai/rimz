@@ -107,6 +107,14 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
         map.extend(std::iter::repeat_n(Some(this_row), row_lines.len()));
         lines.extend(row_lines);
     }
+    let natural_hidden = if filter.is_none() {
+        group
+            .rows
+            .len()
+            .saturating_sub(group_visible_rows(group, None, false, None).len())
+    } else {
+        0
+    };
     let hidden = if filter.is_none() {
         group
             .rows
@@ -128,7 +136,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
             width,
         ));
         map.push(None);
-    } else if filter.is_none() && hidden > 0 && expanded {
+    } else if filter.is_none() && natural_hidden > 0 && expanded {
         more_hits.push(MoreHit {
             line: lines.len(),
             group_key: group.key.clone(),

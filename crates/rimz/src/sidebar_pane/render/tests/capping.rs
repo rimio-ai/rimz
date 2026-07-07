@@ -124,6 +124,57 @@ fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
 }
 
 #[test]
+fn expanded_group_keeps_less_control_when_hold_makes_all_rows_visible() {
+    let group = group(idle_rows(9));
+    let held = group
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<HashSet<_>>();
+
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut more_hits = Vec::new();
+    let mut row_index = 0;
+    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    worktree_group_lines(
+        &Theme::fixed(true),
+        &group,
+        &[],
+        fixed_now(),
+        54,
+        &snapshot.theme.display.context_meter,
+        snapshot.theme.display.card_density,
+        None,
+        true,
+        Some(&held),
+        &mut row_index,
+        0,
+        0,
+        &CostRolls::default(),
+        None,
+        &mut lines,
+        &mut map,
+        &mut more_hits,
+    );
+    let texts = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        texts.iter().any(|line| line.contains("− less")),
+        "expanded group collapse control follows natural hidden tail: {texts:?}"
+    );
+    assert_eq!(more_hits.len(), 1);
+}
+
+#[test]
 fn make_up_filter_ignores_held_visible_rows() {
     let group = group(idle_rows(9));
     let held = HashSet::from(["idle-8".to_owned()]);
