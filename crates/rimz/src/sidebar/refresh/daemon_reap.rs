@@ -31,8 +31,8 @@ fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
 pub fn write_codex_daemon_reap(
     runtime: &RuntimePaths,
     cache: &CodexDaemonReap,
-) -> crate::ledger::atomic::Result<()> {
-    crate::ledger::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
+) -> crate::store::atomic::Result<()> {
+    crate::store::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
 }
 
 pub fn read_codex_daemon_reap(runtime: &RuntimePaths) -> Option<CodexDaemonReap> {
@@ -167,7 +167,7 @@ mod tests {
         let mut base = pre_reap.clone();
         let daemon_pids = BTreeSet::from([77]);
         let loaded = BTreeSet::new();
-        base.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+        base.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
             daemon_pids: &daemon_pids,
             loaded: Some(&loaded),
             frame_panes: None,

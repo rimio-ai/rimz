@@ -47,7 +47,7 @@ pub enum ControlLine {
 }
 
 /// A live tmux control-mode presence stream — the tmux fast path for pane
-/// topology and command/focus overlays (docs/internals/sidebar/multiplexers.md).
+/// topology and command/focus overlays (docs/internals/mux/multiplexers.md).
 /// Attaches a writable, size-excluded (`ignore-size`), output-suppressed
 /// (`no-output`) control client to one session, registers one `refresh-client -B`
 /// subscription, and surfaces typed presence changes. Writable keeps tmux

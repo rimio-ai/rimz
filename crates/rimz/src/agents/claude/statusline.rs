@@ -481,7 +481,7 @@ mod tests {
     fn full_payload_projects_every_field() {
         let ctx = parse(json!({
             "session_id": "abc123",
-            "session_name": "ledger-refactor",
+            "session_name": "store-refactor",
             "model": { "id": "claude-opus-4-8", "display_name": "Opus" },
             "cost": {
                 "total_cost_usd": 0.01234,
@@ -517,7 +517,7 @@ mod tests {
         }));
 
         assert_eq!(ctx.source, "claude");
-        assert_eq!(ctx.session_name.as_deref(), Some("ledger-refactor"));
+        assert_eq!(ctx.session_name.as_deref(), Some("store-refactor"));
         assert_eq!(ctx.model_id.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(ctx.model_display_name.as_deref(), Some("Opus"));
         assert_eq!(ctx.effort.as_deref(), Some("high"));

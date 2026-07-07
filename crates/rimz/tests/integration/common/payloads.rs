@@ -9,7 +9,7 @@ use serde_json::json;
 use super::harness::Harness;
 
 /// One `agent.lifecycle` event envelope, registered-signal shaped — the
-/// fixture every ledger suite seeds agents with. One builder so the wire
+/// fixture every store suite seeds agents with. One builder so the wire
 /// shape lives in one place; a shape change lands here, not per suite.
 pub fn lifecycle_event(
     h: &Harness,

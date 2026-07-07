@@ -1,4 +1,4 @@
-// Rimz bridge for pi — _rimz_managed, written by `rimz hooks install pi`.
+// Rimz Pi extension — _rimz_managed, written by `rimz hooks install pi`.
 // Re-install with `rimz hooks install pi`; remove the file (or run
 // `rimz hooks uninstall pi`) to unwire. Edits are overwritten on re-install.
 //

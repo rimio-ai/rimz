@@ -15,8 +15,8 @@ use kdl::{KdlDocument, KdlEntry, KdlNode};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{InlinePalette, parse_hex};
-use crate::ledger::{atomic, paths};
 use crate::mux::CommandSpec;
+use crate::store::{atomic, paths};
 
 pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v1";
 pub const DEFAULT_ZELLIJ_WEB_BASE_URL: &str = "http://127.0.0.1:8082";

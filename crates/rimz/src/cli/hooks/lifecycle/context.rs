@@ -5,7 +5,7 @@ use super::*;
 pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     let AgentContextHook {
         workspace,
-        ledger,
+        store,
         agent,
         context,
     } = ctx;
@@ -20,8 +20,8 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     // Tombstone the session's statusline context sidecar so it cannot pin stale
     // enrichment to a session the rollup has dropped.
     if agent.ends_session(event_name)
-        && let Err(err) = rimz::ledger::agent_context::remove(
-            ledger.runtime_paths(),
+        && let Err(err) = rimz::store::agent_context::remove(
+            store.runtime_paths(),
             agent.descriptor().kind,
             agent_id,
         )
@@ -37,7 +37,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     // sidebar's `last_activity` advances per tool call, not just per turn.
     if agent.descriptor().records_activity(event_name)
         && let Err(err) =
-            rimz::agent_activity::touch(ledger.runtime_paths(), agent.descriptor().kind, agent_id)
+            rimz::agent_activity::touch(store.runtime_paths(), agent.descriptor().kind, agent_id)
     {
         warn!(
             agent = agent.descriptor().kind,
@@ -49,7 +49,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     if let Some(context_agent_id) = payload_context_agent_id(payload) {
         merge_agent_context_sidecars(ContextSidecarInput {
             workspace,
-            ledger,
+            store,
             agent,
             event_name,
             payload,
@@ -78,7 +78,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
 pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     let ContextSidecarInput {
         workspace,
-        ledger,
+        store,
         agent,
         event_name,
         payload,
@@ -91,7 +91,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     if let Some(marker) = observed_turn_error {
         turn_error_updated |= merge_turn_error_marker_and_chat(
             workspace,
-            ledger,
+            store,
             agent,
             event_name,
             context_agent_id,
@@ -100,7 +100,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     } else if let Some(marker) = agent.observe_turn_error_from_hook(event_name, payload) {
         turn_error_updated |= merge_turn_error_marker_and_chat(
             workspace,
-            ledger,
+            store,
             agent,
             event_name,
             context_agent_id,
@@ -111,7 +111,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     {
         turn_error_updated |= merge_turn_error_marker_and_chat(
             workspace,
-            ledger,
+            store,
             agent,
             event_name,
             context_agent_id,
@@ -119,21 +119,21 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         );
     }
     if turn_error_updated {
-        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+        let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
     }
 
     if payload_carries_observed_context(payload)
         && let Some(context) = agent.observe_context(agent.descriptor().kind, payload)
     {
         let kind = agent.descriptor().kind;
-        match rimz::ledger::agent_context::merge_observed(
-            ledger.runtime_paths(),
+        match rimz::store::agent_context::merge_observed(
+            store.runtime_paths(),
             kind,
             context_agent_id,
             context,
         ) {
             Ok(true) => {
-                let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+                let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
             }
             Ok(false) => {}
             Err(err) => {
@@ -148,8 +148,8 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         }
     }
 
-    let prior = rimz::ledger::agent_context::read_one(
-        ledger.runtime_paths(),
+    let prior = rimz::store::agent_context::read_one(
+        store.runtime_paths(),
         agent.descriptor().kind,
         context_agent_id,
     );
@@ -180,8 +180,8 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     let Some(refresh) = refresh else {
         return;
     };
-    if let Err(err) = rimz::ledger::agent_context::merge_local_context(
-        ledger.runtime_paths(),
+    if let Err(err) = rimz::store::agent_context::merge_local_context(
+        store.runtime_paths(),
         agent.descriptor().kind,
         context_agent_id,
         prior,
@@ -195,7 +195,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             "lifecycle: failed to merge local context sidecar",
         );
     } else {
-        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+        let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
     }
 }
 
@@ -203,7 +203,7 @@ pub(super) fn supplement_realtime_cost(
     agent: &dyn AgentAdapter,
     context_agent_id: &str,
     turn_ended: bool,
-    prior: Option<&rimz::ledger::agent_context::AgentContextRecord>,
+    prior: Option<&rimz::store::agent_context::AgentContextRecord>,
     refresh: &mut Option<rimz::agents::LocalContextRefresh>,
 ) {
     if !turn_ended || refresh_total_cost(refresh.as_ref()).is_some() {
@@ -288,7 +288,7 @@ pub(super) fn refresh_total_cost(
 }
 
 pub(super) fn prior_total_cost(
-    prior: Option<&rimz::ledger::agent_context::AgentContextRecord>,
+    prior: Option<&rimz::store::agent_context::AgentContextRecord>,
 ) -> Option<f64> {
     prior
         .and_then(|record| record.context.cost.as_ref())

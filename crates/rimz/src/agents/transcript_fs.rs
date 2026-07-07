@@ -9,7 +9,7 @@
 //! gauge each adapter reads in its `observe_lifecycle`: that scans only the
 //! trailing window for the live row's `context_pct`/`total_tokens`; this walks
 //! the whole log for spend. Spend parsers are read-only and sidebar-safe — no
-//! ledger writes, bridge, or broker imports (CI grep).
+//! store writes, run-wake, or broker imports (CI grep).
 //!
 //! [`AgentAdapter::transcript_files`]: super::AgentAdapter::transcript_files
 

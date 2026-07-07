@@ -37,7 +37,7 @@ pub(super) fn reconcile_named_team_launch(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
     backend: &dyn rimz::mux::MuxBackend,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     name: &str,
     team: &str,
 ) -> Result<Reconciled> {
@@ -53,7 +53,7 @@ pub(super) fn reconcile_named_team_launch(
         return Ok(Reconciled::Continue);
     };
 
-    let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let members = named_team_members(&projection.agents, team, &path);
     let present_members = members.iter().any(|member| member_is_present(member));
     let status = if present_members || members.is_empty() {
@@ -83,7 +83,7 @@ pub(super) fn reconcile_named_team_launch(
         }
         ReconcileAction::Resume => resume_or_done(name, team, &path),
         ReconcileAction::Recreate => {
-            recreate_or_done(workspace, machine_config, ledger, name, team, marker)
+            recreate_or_done(workspace, machine_config, store, name, team, marker)
         }
     }
 }
@@ -115,10 +115,10 @@ fn newest_present_member_with_pane<'a>(members: &[&'a AgentState]) -> Option<&'a
 }
 
 fn member_is_present(member: &AgentState) -> bool {
-    match rimz::ledger::runtime::agent_liveness(member) {
-        rimz::ledger::runtime::AgentLiveness::Live { .. } => true,
-        rimz::ledger::runtime::AgentLiveness::Unknown => member.pane.is_some(),
-        rimz::ledger::runtime::AgentLiveness::Dead => false,
+    match rimz::store::runtime::agent_liveness(member) {
+        rimz::store::runtime::AgentLiveness::Live { .. } => true,
+        rimz::store::runtime::AgentLiveness::Unknown => member.pane.is_some(),
+        rimz::store::runtime::AgentLiveness::Dead => false,
     }
 }
 
@@ -143,7 +143,7 @@ fn resume_or_done(name: &str, team: &str, path: &Path) -> Result<Reconciled> {
 fn recreate_or_done(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     name: &str,
     team: &str,
     marker: rimz::worktree::WorktreeMarker,
@@ -173,7 +173,7 @@ fn recreate_or_done(
             .map_err(Into::into)
         },
         |channel, _reason| {
-            ledger
+            store
                 .archive_channel_messages(channel, "worktree recreated", &workspace.session_name)
                 .map(|_| ())
                 .map_err(Into::into)

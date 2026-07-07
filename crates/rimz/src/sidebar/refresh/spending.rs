@@ -14,7 +14,7 @@ use crate::agents::spending::{
     read_provider_spending_cache, read_spending_cache, unix_secs_now,
 };
 use crate::harness::schedule::run_log;
-use crate::ledger::parse_cache::FileStamp;
+use crate::store::parse_cache::FileStamp;
 use crate::sidebar::refresh::live_spend::{live_card_sessions, live_excluded_sessions};
 use crate::sidebar::timing::SPENDING_STALE_GRACE;
 use crate::sidebar::timing::unix_now_ms;
@@ -44,7 +44,7 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 ///
 /// Every registered adapter is discovered fleet-wide
 /// ([`transcript_files`](crate::agents::AgentAdapter::transcript_files)) so each
-/// counts on the same footing, and the dashboard panel and fleet ledger read
+/// counts on the same footing, and the dashboard panel and fleet store read
 /// one provider's spend the same way regardless of which project it ran in.
 pub(crate) fn compute_fleet_spending_with_walker(
     walker: &mut crate::agents::spending::SpendingWalker,
@@ -118,17 +118,17 @@ pub(crate) fn compute_fleet_spending_with_walker(
             workspace,
         })
     };
-    match crate::ledger::single_flight::coalesce(
+    match crate::store::single_flight::coalesce(
         &runtime.shared_spending_lock(),
         SPENDING_WAIT_STEP,
         SPENDING_WAIT_STEPS,
         fresh,
     ) {
-        crate::ledger::single_flight::Coalesced::Shared(cache) => cache,
-        crate::ledger::single_flight::Coalesced::Produce(_guard) => {
+        crate::store::single_flight::Coalesced::Shared(cache) => cache,
+        crate::store::single_flight::Coalesced::Produce(_guard) => {
             walk_fleet_spending(walker, runtime, snapshot, spec, true)
         }
-        crate::ledger::single_flight::Coalesced::ProduceLocal => {
+        crate::store::single_flight::Coalesced::ProduceLocal => {
             served_within_grace(runtime, scope_hash.as_deref())
                 .unwrap_or_else(|| walk_fleet_spending(walker, runtime, snapshot, spec, false))
         }

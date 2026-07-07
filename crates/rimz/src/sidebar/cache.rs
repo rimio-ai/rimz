@@ -11,17 +11,17 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::ledger::parse_cache::ParseCache;
 use crate::mux::zellij::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
     EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, unix_now_ms,
 };
+use crate::store::parse_cache::ParseCache;
 
 // The shared pane frame cache is keyed to one `(workspace, session)`: the
 // per-workspace runtime root scopes the workspace, and `session_name` prevents
 // serving one session's panes to another during detach or session rotation. It
-// caches only the expensive pane roster read; the ledger rollup stays
+// caches only the expensive pane roster read; the store rollup stays
 // event-fresh and is folded over this frame by producer and consumer reads.
 thread_local! {
     /// This thread's last `snapshot.json` parse ([`ParseCache`]). The consumer
@@ -126,7 +126,7 @@ pub fn write_presence_stamp(runtime: &RuntimePaths) {
         written_at_ms: unix_now_ms(),
     };
     let path = presence_stamp_path(runtime);
-    if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(&path, &stamp) {
+    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(&path, &stamp) {
         tracing::debug!(path = %path.display(), error = %err, "presence stamp write failed");
     }
 }
@@ -176,8 +176,8 @@ pub fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
 pub fn write_pane_topology_cache(
     runtime: &RuntimePaths,
     cache: &PaneTopologyCache,
-) -> crate::ledger::atomic::Result<()> {
-    crate::ledger::atomic::write_temp_then_rename_cache(&pane_topology_cache_path(runtime), cache)
+) -> crate::store::atomic::Result<()> {
+    crate::store::atomic::write_temp_then_rename_cache(&pane_topology_cache_path(runtime), cache)
 }
 
 /// Read a same-session topology cache regardless of freshness. `None` means

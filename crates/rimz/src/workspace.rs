@@ -32,7 +32,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{MuxName, WorkspaceId};
-use crate::ledger::workspace_record::{self, WorkspaceRecord};
+use crate::store::workspace_record::{self, WorkspaceRecord};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceErr {
@@ -135,12 +135,12 @@ pub fn root_contains(outer: &Path, inner: &Path) -> bool {
 /// maintenance commands operate on the current workspace record only. Errors only
 /// when the state root itself cannot be read.
 pub fn known_workspaces() -> io::Result<Vec<KnownWorkspace>> {
-    known_workspaces_under(&crate::ledger::paths::workspaces_dir())
+    known_workspaces_under(&crate::store::paths::workspaces_dir())
 }
 
 /// [`known_workspaces`] over an explicit state root, for tests against a tempdir.
 pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWorkspace>> {
-    use crate::ledger::workspace_record::WorkspaceRecordErr;
+    use crate::store::workspace_record::WorkspaceRecordErr;
 
     let entries = match std::fs::read_dir(workspaces_root) {
         Ok(entries) => entries,
@@ -415,7 +415,7 @@ fn read_verified_pin(env: EnvReader) -> Option<PathBuf> {
 
 /// Verify one identity pin: `None` unless the id parses, the root exists, and
 /// the id is the hash of that root, so a stale or corrupt pin never misroutes
-/// a write into the wrong ledger. The single validation path for the env pin
+/// a write into the wrong store. The single validation path for the env pin
 /// and every sibling-process candidate a [`PinScan`] yields.
 pub fn verify_pin(id: &str, root: &Path) -> Option<PathBuf> {
     let Ok(id) = WorkspaceId::parse(id) else {

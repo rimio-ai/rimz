@@ -9,7 +9,7 @@ use std::process::{Child, Command, Output, Stdio};
 
 use super::command::ScrubSessionEnvExt;
 use rimz::pane::PaneRef;
-use rimz::{EventEnvelope, Ledger, RuntimePaths, StatePaths, WorkspaceId, WorkspaceResolver};
+use rimz::{EventEnvelope, RuntimePaths, StatePaths, Store, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -99,7 +99,7 @@ impl Env {
             runtime_root,
             agent_owner: std::sync::OnceLock::new(),
         };
-        // Pre-create the heartbeat dir so sidebar writes never race the ledger creating it.
+        // Pre-create the heartbeat dir so sidebar writes never race the store creating it.
         std::fs::create_dir_all(env.heartbeat_dir()).expect("mkdir heartbeat");
         env
     }
@@ -346,13 +346,13 @@ impl Env {
     }
 
     /// Read every persisted agent-context sidecar for the harness workspace.
-    pub fn agent_contexts(&self) -> Vec<rimz::ledger::agent_context::AgentContextRecord> {
-        rimz::ledger::agent_context::read_all(&self.runtime_paths())
+    pub fn agent_contexts(&self) -> Vec<rimz::store::agent_context::AgentContextRecord> {
+        rimz::store::agent_context::read_all(&self.runtime_paths())
     }
 
     /// Read every persisted subagent-context sidecar for the harness workspace.
-    pub fn subagent_contexts(&self) -> Vec<rimz::ledger::subagent_context::SubagentContextRecord> {
-        rimz::ledger::subagent_context::read_all(&self.runtime_paths())
+    pub fn subagent_contexts(&self) -> Vec<rimz::store::subagent_context::SubagentContextRecord> {
+        rimz::store::subagent_context::read_all(&self.runtime_paths())
     }
 
     pub fn snapshot_json(&self) -> Value {
@@ -411,24 +411,24 @@ impl Env {
         path
     }
 
-    // --- ledger access (per project root) ---
+    // --- store access (per project root) ---
 
     pub fn state_path_for(&self, project_root: &Path) -> StatePaths {
         let workspace_id = WorkspaceId::from_project_root(&canonical(project_root));
         StatePaths::under(workspace_id, &self.state_root()).expect("state paths")
     }
 
-    pub fn ledger_for(&self, project_root: &Path) -> Ledger {
+    pub fn store_for(&self, project_root: &Path) -> Store {
         let workspace_id = WorkspaceId::from_project_root(&canonical(project_root));
         let state =
             StatePaths::under(workspace_id.clone(), &self.state_root()).expect("state paths");
         let runtime = self.runtime_paths_for(workspace_id);
-        Ledger::open(state, runtime).expect("open ledger")
+        Store::open(state, runtime).expect("open store")
     }
 
-    /// Open the ledger for the harness's own project root.
-    pub fn ledger(&self) -> Ledger {
-        self.ledger_for(&self.project_root)
+    /// Open the store for the harness's own project root.
+    pub fn store(&self) -> Store {
+        self.store_for(&self.project_root)
     }
 
     /// Runtime paths (heartbeat/sock dirs) for the harness workspace.
@@ -445,7 +445,7 @@ impl Env {
     }
 
     pub fn publish_accounts(&self, accounts: &rimz::sidebar::refresh::AccountsCache) {
-        rimz::ledger::atomic::write_temp_then_rename_cache(
+        rimz::store::atomic::write_temp_then_rename_cache(
             &self.runtime_paths().shared_accounts_path(),
             accounts,
         )
@@ -453,7 +453,7 @@ impl Env {
     }
 
     pub fn publish_rate_limits(&self, cache: &rimz::agents::RateLimitsCache) {
-        rimz::ledger::atomic::write_temp_then_rename_cache(
+        rimz::store::atomic::write_temp_then_rename_cache(
             &self.runtime_paths().shared_rate_limits_path(),
             cache,
         )
@@ -471,7 +471,7 @@ impl Env {
     pub fn record(&self, project_root: &Path) {
         std::fs::create_dir_all(project_root).expect("mkdir project");
         let workspace = WorkspaceResolver::resolve(project_root, None).expect("resolve");
-        self.ledger_for(project_root)
+        self.store_for(project_root)
             .record_workspace(&workspace)
             .expect("record workspace");
     }
@@ -483,10 +483,10 @@ impl Env {
         std::fs::write(dir.join("config.toml"), body).expect("write config");
     }
 
-    /// Read the harness project's event log through the public `Ledger` API,
+    /// Read the harness project's event log through the public `Store` API,
     /// so test code never hand-rolls the length framing.
     pub fn read_events(&self) -> Vec<EventEnvelope> {
-        self.ledger().read_events().expect("read events")
+        self.store().read_events().expect("read events")
     }
 
     /// `true` when the sandbox forbids binding AF_UNIX datagram sockets; tests

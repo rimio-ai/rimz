@@ -1,6 +1,6 @@
 use super::launch::*;
 use super::*;
-use crate::cli::{open_ledger, worktree};
+use crate::cli::{open_store, worktree};
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
@@ -401,11 +401,11 @@ fn run_exec_context(
     let Some(run_id) = args.run_id.clone() else {
         return Ok(None);
     };
-    let ledger = open_ledger(workspace).context("opening supervised run ledger")?;
+    let store = open_store(workspace).context("opening supervised run store")?;
     Ok(Some(RunExecContext {
         run_id,
-        paths: ledger.paths().clone(),
-        runtime: ledger.runtime_paths().clone(),
+        paths: store.paths().clone(),
+        runtime: store.runtime_paths().clone(),
         session_name: workspace.session_name.clone(),
     }))
 }
@@ -460,9 +460,9 @@ fn record_own_launch_pane(
         return;
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
-    match open_ledger(workspace).and_then(|ledger| {
+    match open_store(workspace).and_then(|store| {
         append_launch_event(
-            &ledger,
+            &store,
             workspace,
             identity,
             LaunchEventParams {
@@ -470,7 +470,7 @@ fn record_own_launch_pane(
                 worktree_name: None,
                 channel: identity.channel.as_deref(),
                 prompt,
-                state: rimz::ledger::event::AgentLaunchState::Bound,
+                state: rimz::store::event::AgentLaunchState::Bound,
                 pane_id: Some(pane_id.clone()),
             },
         )
@@ -491,9 +491,9 @@ fn record_launch_failed(
     prompt: Option<&str>,
 ) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
-    if let Err(err) = open_ledger(workspace).and_then(|ledger| {
+    if let Err(err) = open_store(workspace).and_then(|store| {
         append_launch_event(
-            &ledger,
+            &store,
             workspace,
             identity,
             LaunchEventParams {
@@ -501,7 +501,7 @@ fn record_launch_failed(
                 worktree_name: None,
                 channel: identity.channel.as_deref(),
                 prompt,
-                state: rimz::ledger::event::AgentLaunchState::Failed,
+                state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
         )
@@ -555,13 +555,13 @@ fn resolve_own_agent_end_trace(
     args: &ExecArgs,
 ) -> Result<Option<(AgentKind, AgentSessionId)>> {
     if let Some(pane_id) = rimz::mux::ambient_pane_id() {
-        let ledger = open_ledger(workspace).context("opening ledger for agent exit tombstone")?;
-        let projection = ledger
+        let store = open_store(workspace).context("opening store for agent exit tombstone")?;
+        let projection = store
             .runtime_projection(rimz::RuntimeScope::Audit)
             .context("reading audit projection for agent exit tombstone")?;
         let pane = rimz::pane::PaneRef::from_id(pane_id);
         if let Some(agent) =
-            rimz::ledger::snapshot::stamped_agent_for_pane(&pane, &projection.agents)
+            rimz::store::snapshot::stamped_agent_for_pane(&pane, &projection.agents)
             && !agent.agent_id.is_empty()
         {
             return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));
@@ -584,7 +584,7 @@ fn append_agent_lifecycle_trace(
     label: &'static str,
 ) {
     let appended = (|| -> Result<()> {
-        let ledger = open_ledger(workspace).context("opening ledger for agent lifecycle trace")?;
+        let store = open_store(workspace).context("opening store for agent lifecycle trace")?;
         let observation =
             rimz::agents::AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
         let event = rimz::EventEnvelope::agent_lifecycle(
@@ -594,7 +594,7 @@ fn append_agent_lifecycle_trace(
             event_name,
             &observation,
         );
-        ledger.append_event(&event)?;
+        store.append_event(&event)?;
         Ok(())
     })();
     if let Err(err) = appended {
@@ -611,7 +611,7 @@ fn launch_is_still_provisional(
     workspace: &rimz::ResolvedWorkspace,
     identity: &LaunchIdentity,
 ) -> bool {
-    match open_ledger(workspace).and_then(|ledger| ledger.snapshot_cached().map_err(Into::into)) {
+    match open_store(workspace).and_then(|store| store.snapshot_cached().map_err(Into::into)) {
         Ok(snapshot) => snapshot.agents.iter().any(|agent| {
             agent.kind == identity.kind
                 && agent.agent_id == identity.agent_id
@@ -655,7 +655,7 @@ fn fail_run_if_nonterminal(context: &RunExecContext, reason: &'static str) {
         Ok(record) if record.status.is_terminal() => {}
         Ok(_) => match rimz::harness::run::fail_if_nonterminal(&context.paths, &context.run_id) {
             Ok(Some(record)) => {
-                if let Err(err) = rimz::ledger::wakeup::wake_run(&context.runtime, &record) {
+                if let Err(err) = rimz::store::wakeup::wake_run(&context.runtime, &record) {
                     tracing::debug!(
                         run_id = %context.run_id,
                         error = %err,

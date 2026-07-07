@@ -127,7 +127,7 @@ fn append_registered_agent(
     observation.worktree_path = Some(worktree.display().to_string());
     observation.worktree_branch = Some("zellij-fixes".to_owned());
     observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_99"));
-    env.ledger()
+    env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
             &workspace.session_name,
@@ -283,7 +283,7 @@ fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         let projection = env
-            .ledger()
+            .store()
             .runtime_projection(rimz::RuntimeScope::Audit)
             .expect("audit projection");
         if projection.ended.contains(&key) {
@@ -296,7 +296,7 @@ fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
 
 fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
     let projection = env
-        .ledger()
+        .store()
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
     rimz::harness::resume::plan_resume(

@@ -53,10 +53,10 @@ pub(super) fn collect_host() -> model::Host {
 }
 
 pub(super) fn collect_storage() -> model::Storage {
-    let storage = rimz::storage::measure();
+    let disk_usage = rimz::disk_usage::measure();
     model::Storage {
-        total_bytes: storage.total_bytes(),
-        roots: storage
+        total_bytes: disk_usage.total_bytes(),
+        roots: disk_usage
             .roots
             .into_iter()
             .map(|root| model::StorageRootView {
@@ -496,17 +496,15 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
 pub(super) fn collect_socket_headroom(
     ws: &rimz::ResolvedWorkspace,
 ) -> model::Probe<model::SockBudget> {
-    let runtime = match RuntimePaths::under(
-        ws.workspace_id.clone(),
-        &rimz::ledger::paths::runtime_home(),
-    ) {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            return model::Probe::Unavailable {
-                error: err.to_string(),
-            };
-        }
-    };
+    let runtime =
+        match RuntimePaths::under(ws.workspace_id.clone(), &rimz::store::paths::runtime_home()) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                return model::Probe::Unavailable {
+                    error: err.to_string(),
+                };
+            }
+        };
     let budget = rimz::sock::SockBudget::for_sock_dir(&runtime.sock_dir);
     let fits = budget.fits();
     model::Probe::Ready(model::SockBudget {

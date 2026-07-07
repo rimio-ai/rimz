@@ -9,10 +9,8 @@ use rimz::agents::{
     LifecycleSignal, RateLimitWindow, TurnErrorClass,
 };
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
-use rimz::ledger::event::{
-    AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod,
-};
 use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
 
 use crate::common::Env;
 
@@ -50,7 +48,7 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
     let second = queued_id_from_stdout(&out.stdout);
     assert_ne!(first, second);
 
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 2);
     assert_eq!(pending[0].text, "first task");
     assert_eq!(pending[1].text, "second task");
@@ -92,7 +90,7 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
         "queue remove failed: {}",
         String::from_utf8_lossy(&removed.stderr)
     );
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), second);
 
@@ -109,7 +107,7 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
     let cleared_stdout = String::from_utf8_lossy(&cleared.stdout);
     assert!(cleared_stdout.contains("removed 1 message(s) for @claude"));
     assert!(cleared_stdout.contains(&second));
-    assert!(env.ledger().list_pending_messages().unwrap().is_empty());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
 
     let methods: Vec<String> = env
         .read_events()
@@ -136,7 +134,7 @@ fn message_list_scopes_by_channel_status_and_newest_first() {
     let docs = queue_add_in_channel(&env, "docs", "@claude", "docs task");
     std::thread::sleep(Duration::from_millis(2));
     let ops = queue_direct_channel_message(&env, "ops", "ops task");
-    env.ledger()
+    env.store()
         .archive_channel_messages("docs", "test archive", "rimz-test")
         .expect("archive docs channel");
 
@@ -216,7 +214,7 @@ fn terminal_message_history_keeps_text_for_list_and_show() {
     let env = Env::new();
     register_running_agent(&env, "sess-history", "history", &[]);
     let message_id = queue_direct_channel_message(&env, "history", "kept body");
-    env.ledger()
+    env.store()
         .settle_message(
             &MessageId::parse(&message_id).expect("message id"),
             MessageStatus::Delivered,
@@ -270,7 +268,7 @@ fn terminal_message_history_keeps_text_for_list_and_show() {
 fn message_show_keeps_channel_in_textless_transcript_hint() {
     let env = Env::new();
     register_running_agent(&env, "sess-textless", "docs", &[]);
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -289,7 +287,7 @@ fn message_show_keeps_channel_in_textless_transcript_hint() {
     let message_id = message.message_id.to_string();
     let event =
         EventEnvelope::message_event(&message, "rimz-test", MessageEventMethod::Delivered, None);
-    env.ledger().append_event(&event).expect("append event");
+    env.store().append_event(&event).expect("append event");
 
     let shown = env
         .rimz()
@@ -374,7 +372,7 @@ fn message_edit_updates_queued_record_and_show_timeline() {
     assert!(stdout.contains(&format!("edited {message_id}")));
     assert!(stdout.contains("text, gate, schedule"));
 
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].text, "new text");
     assert_eq!(pending[0].gate, DeliveryGate::Any);
@@ -437,7 +435,7 @@ fn remove_accepts_many_ids_and_keeps_processing_after_miss() {
     let stdout = String::from_utf8_lossy(&removed.stdout);
     assert!(stdout.contains(&format!("removed {first}")));
     assert!(stdout.contains(&format!("removed {second}")));
-    assert!(env.ledger().list_pending_messages().unwrap().is_empty());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
 
     let valid = queue_direct_channel_message(&env, "remove-many", "third");
     let missing = "msg_0000000000009999";
@@ -450,7 +448,7 @@ fn remove_accepts_many_ids_and_keeps_processing_after_miss() {
     let stdout = String::from_utf8_lossy(&mixed.stdout);
     assert!(stdout.contains(&format!("removed {valid}")));
     assert!(stdout.contains(&format!("{missing} is not queued or claimed")));
-    assert!(env.ledger().list_pending_messages().unwrap().is_empty());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
 }
 
 #[test]
@@ -477,7 +475,7 @@ fn clear_without_target_removes_scoped_channel_lane() {
     assert!(stdout.contains(&docs));
     // Lane membership is exact: the `docs/forge` team lane is its own scope.
     assert!(!stdout.contains(&docs_team));
-    let pending = env.ledger().list_pending_messages().unwrap();
+    let pending = env.store().list_pending_messages().unwrap();
     let pending_ids: Vec<&str> = pending
         .iter()
         .map(|message| message.message_id.as_str())
@@ -719,7 +717,7 @@ fn receiver_end_archives_open_messages() {
         &[],
     );
 
-    assert!(env.ledger().list_messages().expect("messages").is_empty());
+    assert!(env.store().list_messages().expect("messages").is_empty());
     let archived = env
         .read_events()
         .into_iter()
@@ -748,7 +746,7 @@ fn scheduled_message_parks_with_not_before_and_wake_stamp() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     let not_before = pending[0].not_before.expect("scheduled timestamp");
     assert!(not_before > before);
@@ -789,7 +787,7 @@ fn message_sweep_delivers_due_message_and_registers_reconcile_wake() {
         pane_env,
     );
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -805,10 +803,10 @@ fn message_sweep_delivers_due_message_and_registers_reconcile_wake() {
     )
     .with_not_before(Some(due));
     let message_id = message.message_id.clone();
-    env.ledger()
+    env.store()
         .queue_message(&message, "rimz-test")
         .expect("queue due message");
-    rimz::ledger::atomic::write_temp_then_rename_cache(&wake_stamp_path(&env), &Some(due))
+    rimz::store::atomic::write_temp_then_rename_cache(&wake_stamp_path(&env), &Some(due))
         .expect("write wake stamp");
 
     let trace_log = env.project_root.join("zellij-sweep-trace.log");
@@ -828,7 +826,7 @@ fn message_sweep_delivers_due_message_and_registers_reconcile_wake() {
 
     assert_text_then_enter(&trace_log, "due now");
     let sent = env
-        .ledger()
+        .store()
         .list_messages()
         .expect("messages")
         .into_iter()
@@ -865,7 +863,7 @@ fn message_sweep_defers_ready_head_when_target_gate_is_closed() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), message_id);
     assert_eq!(pending[0].status, MessageStatus::Queued);
@@ -889,7 +887,7 @@ fn resume_gate_delivers_only_after_recovered_paused_park() {
     seed_turn_error(&env, "sess-resume-ready", TurnErrorClass::PausedSpendLimit);
     seed_rate_limit_budget(&env, 20);
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -904,7 +902,7 @@ fn resume_gate_delivers_only_after_recovered_paused_park() {
     )
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
     let message_id = message.message_id.clone();
-    env.ledger()
+    env.store()
         .queue_message(&message, "rimz-test")
         .expect("queue resume message");
 
@@ -926,7 +924,7 @@ fn resume_gate_delivers_only_after_recovered_paused_park() {
 
     assert_text_then_enter(&trace_log, "continue");
     let sent = env
-        .ledger()
+        .store()
         .list_messages()
         .expect("messages")
         .into_iter()
@@ -944,7 +942,7 @@ fn resume_gate_defers_unrecovered_and_ordinary_parked_messages() {
     seed_turn_error(&env, "sess-resume-wait", TurnErrorClass::PausedRateLimit);
     seed_rate_limit_budget(&env, 100);
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -967,10 +965,10 @@ fn resume_gate_defers_unrecovered_and_ordinary_parked_messages() {
     );
     let resume_id = resume.message_id.clone();
     let ordinary_id = ordinary.message_id.clone();
-    env.ledger()
+    env.store()
         .queue_message(&resume, "rimz-test")
         .expect("queue resume message");
-    env.ledger()
+    env.store()
         .queue_message(&ordinary, "rimz-test")
         .expect("queue ordinary message");
 
@@ -996,7 +994,7 @@ fn resume_gate_defers_unrecovered_and_ordinary_parked_messages() {
         !trace_log.exists() || trace_lines(&trace_log).is_empty(),
         "no paused message should be sent"
     );
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     assert!(messages.iter().any(|message| {
         message.message_id == resume_id
             && message.status == MessageStatus::Queued
@@ -1058,7 +1056,7 @@ fn message_add_uses_audit_resolution_for_runtime_filtered_agent() {
         },
     );
     assert!(
-        env.ledger()
+        env.store()
             .snapshot_cached()
             .expect("runtime snapshot")
             .agents
@@ -1078,7 +1076,7 @@ fn message_add_uses_audit_resolution_for_runtime_filtered_agent() {
         String::from_utf8_lossy(&out.stderr)
     );
     let message_id = queued_id_from_stdout(&out.stdout);
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), message_id);
     assert_eq!(pending[0].agent_id.as_str(), "sess-audit-reviewer");
@@ -1119,7 +1117,7 @@ fn deliver_leaves_ineligible_message_unclaimed() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].status, MessageStatus::Queued);
     assert_eq!(pending[0].attempts, 0, "no-pane miss must not claim");
@@ -1162,7 +1160,7 @@ fn steer_refuses_waiting_agent_before_touching_pane() {
         "unexpected stderr: {stderr}"
     );
     assert!(
-        env.ledger()
+        env.store()
             .list_pending_messages()
             .expect("pending queue")
             .is_empty(),
@@ -1198,7 +1196,7 @@ fn message_steer_delivers_gate_closed_queued_record() {
     assert!(stdout.contains(&format!("sent to @claude ({message_id})")));
     assert_text_then_enter(&trace_log, "push now");
     let sent = env
-        .ledger()
+        .store()
         .list_messages()
         .expect("messages")
         .into_iter()
@@ -1227,7 +1225,7 @@ fn message_steer_waiting_agent_requires_force() {
         stderr.contains("is waiting on your input") && stderr.contains("--force"),
         "unexpected stderr: {stderr}"
     );
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), message_id);
     assert_eq!(pending[0].attempts, 0, "waiting steer must not claim");
@@ -1252,13 +1250,13 @@ fn message_requeue_copies_terminal_record_and_refuses_open_record() {
     );
 
     let message = env
-        .ledger()
+        .store()
         .list_messages()
         .expect("messages")
         .into_iter()
         .find(|message| message.message_id.as_str() == open_id)
         .expect("open message");
-    env.ledger()
+    env.store()
         .record_send_error(&message, "test error", "rimz-test")
         .expect("record error");
 
@@ -1282,7 +1280,7 @@ fn message_requeue_copies_terminal_record_and_refuses_open_record() {
     );
     let stdout = String::from_utf8_lossy(&requeued.stdout);
     assert!(stdout.contains(&format!("(from {open_id})")));
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_ne!(pending[0].message_id.as_str(), open_id);
     assert_eq!(pending[0].text, "try again");
@@ -1323,7 +1321,7 @@ fn steer_queues_when_durable_agent_has_no_live_pane() {
         String::from_utf8_lossy(&out.stderr)
     );
     let message_id = queued_id_from_stdout(&out.stdout);
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), message_id);
     assert_eq!(pending[0].agent_id.as_str(), "sess-steer-audit");
@@ -1441,7 +1439,7 @@ fn steer_wait_times_out_without_turn_started_ack() {
         "stdout reports timeout: {}",
         String::from_utf8_lossy(&out.stdout)
     );
-    assert!(env.ledger().list_messages().unwrap().is_empty());
+    assert!(env.store().list_messages().unwrap().is_empty());
     assert!(
         env.read_events()
             .iter()
@@ -1496,7 +1494,7 @@ fn steer_wait_returns_delivered_after_terminal_record_self_cleans() {
         String::from_utf8_lossy(&out.stdout)
     );
     assert!(
-        env.ledger().list_messages().unwrap().is_empty(),
+        env.store().list_messages().unwrap().is_empty(),
         "delivered record self-cleans while wait still succeeds"
     );
 }
@@ -1665,11 +1663,11 @@ fn queue_delivery_presses_enter_as_discrete_key() {
     assert_single_sigil_sent(&out.stdout);
 
     assert!(
-        env.ledger().list_pending_messages().unwrap().is_empty(),
+        env.store().list_pending_messages().unwrap().is_empty(),
         "an idle agent with a bound pane should receive queue text immediately"
     );
     assert_text_then_enter(&trace_log, "go");
-    let messages = env.ledger().list_messages().unwrap();
+    let messages = env.store().list_messages().unwrap();
     assert_eq!(messages.len(), 1, "send-now queue writes a durable record");
     assert_eq!(messages[0].status, MessageStatus::Sent);
 }
@@ -1726,7 +1724,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     assert_text_then_enter(&second_trace, "recover me");
 
     let sent = env
-        .ledger()
+        .store()
         .list_messages()
         .expect("messages")
         .into_iter()
@@ -1747,7 +1745,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
         pane_env,
     );
     assert!(
-        env.ledger()
+        env.store()
             .list_messages()
             .expect("messages")
             .into_iter()
@@ -1796,7 +1794,7 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
         String::from_utf8_lossy(&out.stderr)
     );
     let message_id = queued_id_from_stdout(&out.stdout);
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), message_id);
     assert_eq!(pending[0].status, MessageStatus::Queued);
@@ -1820,7 +1818,7 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
     );
     assert_text_then_enter(&retry_trace, "retry me");
     let sent = env
-        .ledger()
+        .store()
         .list_messages()
         .expect("messages")
         .into_iter()
@@ -1850,7 +1848,7 @@ fn queue_deliver_sends_deferred_message_and_marks_delivered() {
         String::from_utf8_lossy(&add.stderr)
     );
     let message_id = queued_id_from_stdout(&add.stdout);
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1, "running agent should park the message");
     assert_eq!(pending[0].status, MessageStatus::Queued);
 
@@ -1886,7 +1884,7 @@ fn queue_deliver_sends_deferred_message_and_marks_delivered() {
     );
 
     assert_text_then_enter(&trace_log, "later");
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     let message = messages
         .iter()
         .find(|message| message.message_id.as_str() == message_id)
@@ -1917,7 +1915,7 @@ fn queue_deliver_sends_deferred_message_and_marks_delivered() {
         pane_env,
     );
     assert!(
-        env.ledger()
+        env.store()
             .list_messages()
             .expect("messages")
             .into_iter()
@@ -1959,7 +1957,7 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
         String::from_utf8_lossy(&add.stderr)
     );
     let message_id = queued_id_from_stdout(&add.stdout);
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1, "running launch card should park");
     assert_eq!(pending[0].agent_id.as_str(), "launch_deferred_fold");
     assert_eq!(pending[0].agent_name.as_deref(), Some("swift-otter"));
@@ -1997,13 +1995,13 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
     );
 
     assert_text_then_enter(&trace_log, "read plan");
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     let message = messages
         .iter()
         .find(|message| message.message_id.as_str() == message_id)
         .expect("sent message");
     assert_eq!(message.status, MessageStatus::Sent);
-    let agents = env.ledger().snapshot_cached().expect("snapshot").agents;
+    let agents = env.store().snapshot_cached().expect("snapshot").agents;
     assert!(
         agents.iter().any(|agent| {
             agent.agent_id.as_str() == "codex-real-session"
@@ -2029,7 +2027,7 @@ fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
         pane_env,
     );
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -2075,13 +2073,13 @@ fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
     let first_id = first.message_id.clone();
     let second_id = second.message_id.clone();
     let third_id = third.message_id.clone();
-    env.ledger()
+    env.store()
         .queue_message(&first, "rimz-test")
         .expect("queue first");
-    env.ledger()
+    env.store()
         .queue_message(&second, "rimz-test")
         .expect("queue second");
-    env.ledger()
+    env.store()
         .queue_message(&third, "rimz-test")
         .expect("queue third");
 
@@ -2110,7 +2108,7 @@ fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
     );
     assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
 
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     let sent_first = messages
         .iter()
         .find(|message| message.message_id == first_id)
@@ -2140,7 +2138,7 @@ fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
         }),
         pane_env,
     );
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].message_id, third_id);
     assert_eq!(messages[0].status, MessageStatus::Queued);
@@ -2216,7 +2214,7 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
         String::from_utf8_lossy(&out.stdout)
     );
 
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     let command = messages
         .iter()
         .find(|message| message.body == MessageBody::Command)
@@ -2241,7 +2239,7 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
         }),
         &[("ZELLIJ_PANE_ID", "3")],
     );
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     assert!(
         messages
             .iter()
@@ -2268,7 +2266,7 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
         &[("ZELLIJ_PANE_ID", "3")],
     );
     assert!(
-        env.ledger()
+        env.store()
             .list_messages()
             .expect("messages")
             .iter()
@@ -2313,7 +2311,7 @@ fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].text, "go");
     assert_eq!(pending[0].body, MessageBody::Prompt);
@@ -2428,7 +2426,7 @@ fn steer_auto_compact_reuses_baseline_until_context_reading_changes() {
         "fresh token reading should compact again before prompt; trace: {third_lines:?}"
     );
 
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     let commands: Vec<_> = messages
         .iter()
         .filter(|message| message.body == MessageBody::Command && message.text == "/compact")
@@ -2573,7 +2571,7 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
         );
 
         assert_eq!(
-            env.ledger().list_pending_messages().unwrap().len(),
+            env.store().list_pending_messages().unwrap().len(),
             1,
             "a waiting agent defers delivery; the message stays queued"
         );
@@ -2617,7 +2615,7 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
         );
 
         assert!(
-            env.ledger().list_pending_messages().unwrap().is_empty(),
+            env.store().list_pending_messages().unwrap().is_empty(),
             "--force delivers past the waiting agent inline"
         );
         assert_text_then_enter(&trace_log, "go");
@@ -2646,7 +2644,7 @@ fn queue_fanout_two_agents() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(
         pending.len(),
         2,
@@ -2682,7 +2680,7 @@ fn broadcast_at_all_sends_without_yes() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].text, "@all, heads up");
 }
@@ -2981,20 +2979,20 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &
 /// Seed a context sidecar so `--smart-compact` reads `used_pct` as the agent's
 /// window fill — the same record the producer would fold from a live statusline.
 fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
-    let mut context = rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
+    let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         used_percentage: Some(used_pct),
         ..Default::default()
     });
-    let record = rimz::ledger::agent_context::new_record("claude", agent_id, context);
-    rimz::ledger::agent_context::write_record(&env.runtime_paths(), &record)
+    let record = rimz::store::agent_context::new_record("claude", agent_id, context);
+    rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed context sidecar");
 }
 
 /// Seed a context sidecar with token composition so `occupied_context_tokens`
 /// has the deterministic baseline smart-compact uses to suppress duplicates.
 fn seed_context_tokens(env: &Env, agent_id: &str, used: u64, window: u64) {
-    let mut context = rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
+    let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         context_window_size: Some(window),
         current_usage: Some(rimz::agents::AgentCurrentUsage {
@@ -3003,27 +3001,27 @@ fn seed_context_tokens(env: &Env, agent_id: &str, used: u64, window: u64) {
         }),
         ..Default::default()
     });
-    let record = rimz::ledger::agent_context::new_record("claude", agent_id, context);
-    rimz::ledger::agent_context::write_record(&env.runtime_paths(), &record)
+    let record = rimz::store::agent_context::new_record("claude", agent_id, context);
+    rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed context sidecar");
 }
 
 fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass) {
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
         .find(|agent| agent.agent_id.as_str() == agent_id)
         .expect("agent");
     let at = agent.last_activity + jiff::SignedDuration::from_secs(1);
-    let mut context = rimz::ledger::agent_context::empty_context("claude", at);
+    let mut context = rimz::store::agent_context::empty_context("claude", at);
     context.turn_error = Some(AgentTurnError {
         class,
         at,
         label: Some("provider parked".to_owned()),
     });
-    let record = rimz::ledger::agent_context::new_record("claude", agent_id, context);
-    rimz::ledger::agent_context::write_record(&env.runtime_paths(), &record)
+    let record = rimz::store::agent_context::new_record("claude", agent_id, context);
+    rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed turn error");
 }
 
@@ -3046,7 +3044,7 @@ fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
         .collect(),
         pending: Default::default(),
     };
-    rimz::ledger::atomic::write_temp_then_rename_cache(
+    rimz::store::atomic::write_temp_then_rename_cache(
         &env.runtime_paths().shared_rate_limits_path(),
         &cache,
     )
@@ -3147,7 +3145,7 @@ fn append_lifecycle(
         event_name,
         &observation,
     );
-    env.ledger().append_event(&event).expect("append lifecycle");
+    env.store().append_event(&event).expect("append lifecycle");
 }
 
 fn trust_codex_hooks(env: &Env) {
@@ -3204,7 +3202,7 @@ fn queue_add_in_channel(env: &Env, channel: &str, target: &str, text: &str) -> S
 }
 
 fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String {
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -3219,14 +3217,14 @@ fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String 
     )
     .with_channel(Some(channel.to_owned()));
     let message_id = message.message_id.to_string();
-    env.ledger()
+    env.store()
         .queue_message(&message, "rimz-test")
         .expect("queue message");
     message_id
 }
 
 fn queue_main_message(env: &Env, text: &str) -> String {
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -3240,7 +3238,7 @@ fn queue_main_message(env: &Env, text: &str) -> String {
         DeliveryGate::Done,
     );
     let message_id = message.message_id.to_string();
-    env.ledger()
+    env.store()
         .queue_message(&message, "rimz-test")
         .expect("queue message");
     message_id
@@ -3319,7 +3317,7 @@ fn push_pending_agent_ask(env: &Env, session_id: &str) {
             kind: AskKind::Permission,
         },
     );
-    env.ledger()
+    env.store()
         .append_event(&EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),
             "rimz-test",
@@ -3398,7 +3396,7 @@ fn seed_provisional_codex_launch(
             description: None,
         },
     );
-    env.ledger().append_event(&event).expect("append launch");
+    env.store().append_event(&event).expect("append launch");
 }
 
 /// `steer @codex` reaches a bare codex started in a pane before its first turn:
@@ -3452,7 +3450,7 @@ fn queue_sends_now_to_unbound_codex_pane() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "later");
-    let messages = env.ledger().list_messages().unwrap();
+    let messages = env.store().list_messages().unwrap();
     assert_eq!(messages.len(), 1, "send-now queue writes a durable record");
     assert_eq!(messages[0].status, MessageStatus::Sent);
     let methods: Vec<String> = env
@@ -3499,7 +3497,7 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "read plan");
-    let messages = env.ledger().list_messages().unwrap();
+    let messages = env.store().list_messages().unwrap();
     assert_eq!(
         messages.len(),
         1,
@@ -3550,7 +3548,7 @@ fn provisional_without_live_frame_parks_queue_and_steer() {
         "queue to a provisional codex should park without a live pane: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let messages = env.ledger().list_messages().unwrap();
+    let messages = env.store().list_messages().unwrap();
     assert_eq!(
         messages.len(),
         1,
@@ -3594,7 +3592,7 @@ fn provisional_without_live_frame_parks_queue_and_steer() {
         "steer to a provisional codex without a live pane should park: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let messages = env.ledger().list_messages().unwrap();
+    let messages = env.store().list_messages().unwrap();
     assert_eq!(messages.len(), 2, "steer parks a second record");
     assert!(
         messages

@@ -421,7 +421,7 @@ fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
     let previous = snapshot(&ws);
     let first_failure = fetch_failed(
         &ws,
-        "ledger not found",
+        "store not found",
         Some(previous.clone()),
         &Health::default(),
     );
@@ -432,16 +432,16 @@ fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
 
     let second_failure = fetch_failed(
         &ws,
-        "ledger not found",
+        "store not found",
         first_failure.last_snapshot,
         &first_failure.health,
     );
     let alert = active_alert(&second_failure.health);
     assert!(alert.reason.contains("snapshot failed"));
-    assert!(alert.reason.contains("ledger not found"));
+    assert!(alert.reason.contains("store not found"));
 
-    let cold_first = fetch_failed(&ws, "ledger not found", None, &Health::default());
-    let cold_second = fetch_failed(&ws, "ledger not found", None, &cold_first.health);
+    let cold_first = fetch_failed(&ws, "store not found", None, &Health::default());
+    let cold_second = fetch_failed(&ws, "store not found", None, &cold_first.health);
     active_alert(&cold_second.health);
     assert!(cold_second.last_snapshot.is_none());
     assert_eq!(cold_second.snapshot.workspace_id, ws);

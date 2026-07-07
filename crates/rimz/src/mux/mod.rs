@@ -1,6 +1,6 @@
 //! Multiplexer abstraction.
 //!
-//! Everything correctness-critical (ledger, hooks, schemas) sits
+//! Everything correctness-critical (store, hooks, schemas) sits
 //! above this trait and is identical across backends. Raw pane IDs live
 //! only inside the adapter — see [`crate::ids::PaneId`] for the normalized
 //! form that travels everywhere else.
@@ -316,7 +316,7 @@ pub struct SidebarPaneOptions {
     /// every launch that births nothing to restore (first start, healthy
     /// reattach) — then the birth is exactly the bare working room. Built from
     /// the durable agent rollup by [`crate::harness::resume::plan_resume`]; the backend
-    /// seeds the tabs and stays ignorant of agents and the ledger.
+    /// seeds the tabs and stays ignorant of agents and the store.
     pub resume_tabs: Vec<ResumeTab>,
     /// One-shot render-cadence override passed to newly spawned sidebars. This
     /// is intentionally not persisted; crash recovery rebuilds argv from
@@ -348,7 +348,7 @@ pub(crate) fn sidebar_serve_args(mux: MuxName, opts: &SidebarPaneOptions) -> Vec
 /// One worktree channel the reborn session re-seeds: a fresh tab running the
 /// restored pane layout for that channel, keeping resumed conversations idle
 /// (no auto-prompt, no new token spend until the user types). Pure data — the
-/// backend seeds `{layout, cwd}` and knows nothing of agents or the ledger.
+/// backend seeds `{layout, cwd}` and knows nothing of agents or the store.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResumeTab {
     /// Short display and view label, e.g. `#feature-migration`. Doubles as the

@@ -10,9 +10,9 @@ pub(super) struct LiveRootAgent {
 }
 
 pub(super) fn live_root_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveRootAgent> {
-    crate::cli::open_ledger(workspace)
+    crate::cli::open_store(workspace)
         .ok()
-        .and_then(|ledger| ledger.snapshot_cached().ok())
+        .and_then(|store| store.snapshot_cached().ok())
         .map(|snapshot| {
             snapshot
                 .agents

@@ -9,13 +9,13 @@ use clap::{Args, Subcommand};
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::ids::WorkspaceId;
-use rimz::ledger::event_log::RotationOutcome;
+use rimz::store::event_log::RotationOutcome;
 use rimz::workspace::WorkspaceResolver;
-use rimz::{Ledger, RuntimePaths, StatePaths};
+use rimz::{RuntimePaths, StatePaths, Store};
 
 const MIB: u64 = 1024 * 1024;
 pub(crate) const DEFAULT_EVENT_LOG_ROTATE_BYTES: u64 = 64 * MIB;
-const DEFAULT_EVENT_LOG_ARCHIVE_RETENTION: &str = rimz::ledger::event_log::DEFAULT_RETENTION_ARG;
+const DEFAULT_EVENT_LOG_ARCHIVE_RETENTION: &str = rimz::store::event_log::DEFAULT_RETENTION_ARG;
 
 #[derive(Debug, Args)]
 pub struct WorkspaceArgs {
@@ -30,7 +30,7 @@ enum WorkspaceSubcmd {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Move a ledger after a project root moved on disk.
+    /// Move a store after a project root moved on disk.
     Migrate {
         old_root: PathBuf,
         new_root: PathBuf,
@@ -85,7 +85,7 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
 
     if !old_paths.root.exists() {
         bail!(
-            "workspace ledger {} not found at {}",
+            "workspace store {} not found at {}",
             old_workspace_id,
             old_paths.root.display()
         );
@@ -94,7 +94,7 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
     if old_workspace_id != new_workspace.workspace_id {
         if new_paths.root.exists() {
             bail!(
-                "destination workspace ledger {} already exists at {}",
+                "destination workspace store {} already exists at {}",
                 new_workspace.workspace_id,
                 new_paths.root.display()
             );
@@ -105,7 +105,7 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
         }
         std::fs::rename(&old_paths.root, &new_paths.root).with_context(|| {
             format!(
-                "moving ledger {} to {}",
+                "moving store {} to {}",
                 old_paths.root.display(),
                 new_paths.root.display()
             )
@@ -114,8 +114,8 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
 
     let runtime = RuntimePaths::for_workspace(new_workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
-    let ledger = Ledger::open(new_paths, runtime).context("opening migrated ledger")?;
-    let outcome = ledger
+    let store = Store::open(new_paths, runtime).context("opening migrated store")?;
+    let outcome = store
         .rewrite_workspace_identity(&new_workspace)
         .context("rewriting workspace identity")?;
 
@@ -148,11 +148,11 @@ fn rotate_events(args: RotateEventsArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
         .context("resolving current workspace")?;
     let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing ledger paths")?;
+        .context("preparing store paths")?;
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
-    let ledger = Ledger::open(paths, runtime).context("opening ledger")?;
-    let outcome = ledger
+    let store = Store::open(paths, runtime).context("opening store")?;
+    let outcome = store
         .rotate_event_log(args.max_bytes, args.archive_older_than)
         .context("rotating event log")?;
 

@@ -358,7 +358,7 @@ mod tests {
     }
 
     fn statusline_agent(id: &str, observed_at: Timestamp) -> AgentState {
-        let mut context = crate::ledger::agent_context::empty_context("claude", observed_at);
+        let mut context = crate::store::agent_context::empty_context("claude", observed_at);
         context.rate_limits = Some(AgentRateLimits {
             windows: vec![RateLimitWindow {
                 used_percentage: Some(12),

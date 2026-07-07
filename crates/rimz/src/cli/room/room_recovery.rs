@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rimz::mux::{DaemonView, MuxBackend, SessionHealth};
-use rimz::{Ledger, RuntimePaths, StatePaths};
+use rimz::{RuntimePaths, StatePaths, Store};
 
 use crate::cli::{AttachFlags, GlobalFlags, StartArgs};
 
@@ -99,7 +99,7 @@ fn reset_rebirth_start_args(path: PathBuf) -> StartArgs {
     StartArgs {
         attach: AttachFlags::default(),
         path,
-        // A manual reset is a deliberate fresh start. Ledger carryover stays
+        // A manual reset is a deliberate fresh start. Store carryover stays
         // available for audit, but it does not re-seed the reborn room.
         no_resume: true,
         refresh_ms: None,
@@ -109,7 +109,7 @@ fn reset_rebirth_start_args(path: PathBuf) -> StartArgs {
 /// Report what a teardown removed, to stderr (diagnostic, not stdout output).
 pub(crate) fn print_reset_report(
     report: &rimz::mux::recovery::TeardownReport,
-    records: Option<&rimz::ledger::ResetRecordsOutcome>,
+    records: Option<&rimz::store::ResetRecordsOutcome>,
 ) -> Result<()> {
     let mut stderr = std::io::stderr().lock();
     writeln!(
@@ -135,7 +135,7 @@ pub(crate) fn print_reset_report(
     )?;
     if let Some(records) = records {
         match &records.rotation {
-            rimz::ledger::event_log::RotationOutcome::Rotated {
+            rimz::store::event_log::RotationOutcome::Rotated {
                 archive_path,
                 bytes_rotated,
             } => {
@@ -146,7 +146,7 @@ pub(crate) fn print_reset_report(
                     archive_path.display(),
                 )?;
             }
-            rimz::ledger::event_log::RotationOutcome::Skipped { current_bytes } => {
+            rimz::store::event_log::RotationOutcome::Skipped { current_bytes } => {
                 writeln!(
                     stderr,
                     "Records: no active event log archived ({current_bytes} byte{}).",
@@ -193,13 +193,13 @@ pub(crate) fn reset_room_records(
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
     hard: bool,
-) -> Result<rimz::ledger::ResetRecordsOutcome> {
+) -> Result<rimz::store::ResetRecordsOutcome> {
     let paths = StatePaths::for_workspace(workspace_id.clone())
-        .context("preparing ledger paths for reset")?;
+        .context("preparing store paths for reset")?;
     let runtime = RuntimePaths::for_workspace(workspace_id.clone())
         .context("preparing runtime paths for reset")?;
-    let ledger = Ledger::open(paths, runtime).context("opening ledger for reset")?;
-    ledger
+    let store = Store::open(paths, runtime).context("opening store for reset")?;
+    store
         .reset_records(session_name, hard)
         .context("resetting workspace records")
 }

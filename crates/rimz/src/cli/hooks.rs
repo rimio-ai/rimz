@@ -16,18 +16,18 @@ use serde::Serialize;
 use serde_json::Value;
 use tracing::{debug, warn};
 
-use super::{GlobalFlags, open_ledger};
+use super::{GlobalFlags, open_store};
 use rimz::EventEnvelope;
-use rimz::Ledger;
+use rimz::Store;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
 use rimz::agents::{
     AgentAdapter, AgentHookClass, AgentLifecycleObservation, AgentState, adapter_by_kind,
 };
 use rimz::ids::{MuxName, PaneId};
-use rimz::ledger::runtime::process_owner;
-use rimz::ledger::snapshot::pane_start_allows_bind;
 use rimz::mux::ClientFocusOptions;
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
+use rimz::store::runtime::process_owner;
+use rimz::store::snapshot::pane_start_allows_bind;
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
 mod binding;
@@ -132,7 +132,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         globals.root.clone(),
         &|cwd: &Path| sibling_agent_pins(&source, cwd),
     )?;
-    let ledger = open_ledger(&workspace)?;
+    let store = open_store(&workspace)?;
     let mut buf = String::new();
     io::stdin()
         .read_to_string(&mut buf)
@@ -155,11 +155,11 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     let classified = agent.classify_hook(&event_name, &payload);
 
     if classified.class != AgentHookClass::AwaitingUser {
-        return handle_lifecycle_hook(&workspace, &ledger, agent, &event_name, &payload, globals);
+        return handle_lifecycle_hook(&workspace, &store, agent, &event_name, &payload, globals);
     }
 
     if agent.descriptor().capabilities.native_ask_ui {
-        handle_lifecycle_hook(&workspace, &ledger, agent, &event_name, &payload, globals)?;
+        handle_lifecycle_hook(&workspace, &store, agent, &event_name, &payload, globals)?;
     }
     emit_neutral(agent, &event_name)
 }

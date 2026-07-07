@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::{MachineConfig, TaskEntry, Tasks};
-use crate::ledger::atomic::{Result, write_temp_then_rename_cache};
-use crate::ledger::paths::state_home;
+use crate::store::atomic::{Result, write_temp_then_rename_cache};
+use crate::store::paths::state_home;
 
 const NAME: &str = "loop-instances.json";
 

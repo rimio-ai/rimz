@@ -35,7 +35,7 @@ pub(super) struct DoctorReport {
     pub(super) hooks: Vec<HookRow>,
     pub(super) loop_tasks: LoopTasks,
     pub(super) remote_control: RemoteControl,
-    pub(super) storage: Storage,
+    pub(super) disk_usage: Storage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) protocols: Option<Protocols>,
     #[serde(skip_serializing_if = "Option::is_none")]

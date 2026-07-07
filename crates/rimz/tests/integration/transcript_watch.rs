@@ -5,8 +5,8 @@
 //! driven end-to-end — platform event semantics vary — so this asserts the
 //! refresh the watcher's flush invokes, against real sidecar and rollout files.
 
-use rimz::ledger::agent_context::{self, empty_context, new_record};
 use rimz::sidebar::refresh::refresh_session_transcript_context;
+use rimz::store::agent_context::{self, empty_context, new_record};
 
 use crate::common::Harness;
 

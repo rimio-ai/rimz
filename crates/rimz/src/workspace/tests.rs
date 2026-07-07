@@ -41,8 +41,8 @@ fn session_name_hash_matches_workspace_id_prefix() {
 
 #[test]
 fn known_workspaces_reads_records_and_skips_recordless_dirs() {
-    use crate::ledger::paths::{StatePaths, workspaces_dir_under};
-    use crate::ledger::workspace_record::{self, WorkspaceRecord};
+    use crate::store::paths::{StatePaths, workspaces_dir_under};
+    use crate::store::workspace_record::{self, WorkspaceRecord};
 
     let dir = tempfile::TempDir::new().expect("tempdir");
     let state_root = dir.path();
@@ -87,8 +87,8 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
 
 #[test]
 fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
-    use crate::ledger::paths::{StatePaths, workspaces_dir_under};
-    use crate::ledger::workspace_record::{self, WorkspaceRecord};
+    use crate::store::paths::{StatePaths, workspaces_dir_under};
+    use crate::store::workspace_record::{self, WorkspaceRecord};
 
     let dir = tempfile::TempDir::new().expect("tempdir");
     let state_root = dir.path().join("state");
@@ -126,8 +126,8 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
 
 #[test]
 fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
-    use crate::ledger::paths::{StatePaths, workspaces_dir_under};
-    use crate::ledger::workspace_record::{self, WorkspaceRecord};
+    use crate::store::paths::{StatePaths, workspaces_dir_under};
+    use crate::store::workspace_record::{self, WorkspaceRecord};
 
     let dir = tempfile::TempDir::new().expect("tempdir");
     let state_root = dir.path().join("state");

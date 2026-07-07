@@ -462,7 +462,7 @@ fn gallery_fixture_frames_render_decisive_markers() {
     );
     assert_fixture_frame_contains(
         SidebarFixtureState::Economy,
-        &["OpenAI OAuth", "provider-ledger", "GPT 5.5", "pnpm serve"],
+        &["OpenAI OAuth", "provider-store", "GPT 5.5", "pnpm serve"],
     );
     assert_fixture_frame_contains(
         SidebarFixtureState::Reach,

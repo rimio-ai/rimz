@@ -347,7 +347,7 @@ fn write_topology_cache_from_value(
         .join("pane-topology.json");
     std::fs::create_dir_all(path.parent().expect("topology parent"))
         .expect("create topology parent");
-    rimz::ledger::atomic::write_temp_then_rename_cache_compact(&path, &topology)
+    rimz::store::atomic::write_temp_then_rename_cache_compact(&path, &topology)
         .expect("write topology cache");
 }
 
@@ -404,7 +404,7 @@ pub(in crate::backend::zellij) fn record_known_workspace_session(
         root_class: rimz::workspace::RootClass::Directory,
         updated_at: jiff::Timestamp::now(),
     };
-    rimz::ledger::workspace_record::write(&state, &record).expect("workspace record");
+    rimz::store::workspace_record::write(&state, &record).expect("workspace record");
 }
 
 fn tab_positions_from_list_panes_json(panes: &serde_json::Value) -> BTreeMap<u64, u64> {

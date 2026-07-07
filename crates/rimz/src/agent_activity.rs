@@ -1,6 +1,6 @@
 //! Per-agent activity liveness heartbeat.
 //!
-//! A latency hint, not ledger truth. The durable event log is turn-grained —
+//! A latency hint, not store truth. The durable event log is turn-grained —
 //! an agent's `last_activity` advances only on `SessionStart`/`UserPromptSubmit`
 //! /`Stop` — so the sidebar cannot tell a busy agent (running tools silently
 //! between turn boundaries) from a wedged one. This file closes that gap: the
@@ -28,8 +28,8 @@ use sha2::{Digest, Sha256};
 use tracing::debug;
 
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::ledger::RuntimePaths;
-use crate::ledger::atomic;
+use crate::store::RuntimePaths;
+use crate::store::atomic;
 
 /// One agent's most recent progress timestamp. The identity rides inside the
 /// file so the reader can fold it onto the rollup; the filename is a digest of

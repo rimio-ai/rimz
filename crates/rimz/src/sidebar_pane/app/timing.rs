@@ -61,7 +61,7 @@ pub(super) const FOCUS_RESUME_WATCH_WINDOW: Duration = Duration::from_secs(3);
 
 /// The animation frame index for `now`, derived from elapsed wall-clock since
 /// the serve loop's monotonic base. Every redraw path sets the phase from this,
-/// so the spin advances on real time and survives re-fetches and ledger deltas
+/// so the spin advances on real time and survives re-fetches and store deltas
 /// without a per-tick counter that a break-and-refetch could reset.
 pub(super) fn wall_clock_phase(start: Instant, refresh_ms: u16) -> u64 {
     (start.elapsed().as_millis() / u128::from(refresh_ms)) as u64

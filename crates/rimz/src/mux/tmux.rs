@@ -5,7 +5,7 @@
 //! from the user's running tmux. Production code constructs the unit form
 //! (`TmuxBackend::default()`) and inherits the system default socket.
 //!
-//! Caveats live in `docs/internals/sidebar/multiplexers.md` under "tmux backend
+//! Caveats live in `docs/internals/mux/multiplexers.md` under "tmux backend
 //! caveats" — namely that the managed sidebar pane is the channel of record.
 
 mod backend;

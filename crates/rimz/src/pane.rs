@@ -2,7 +2,7 @@
 //!
 //! Pane references are live-view routing metadata shared by agent rollups, mux
 //! snapshots, and sidebar projections. They stay outside the
-//! ledger snapshot modules so live-presence types do not depend on durable
+//! store snapshot modules so live-presence types do not depend on durable
 //! read/write layers.
 
 use jiff::Timestamp;
@@ -12,7 +12,7 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewKind};
 
 /// Pane title/name that marks Rimz's own sidebar renderer — the one chrome
 /// classification key. The renderer sets it (terminal title escape), the
-/// Zellij layout names its pane with it, and the tmux/Zellij/ledger
+/// Zellij layout names its pane with it, and the tmux/Zellij/store
 /// classifiers all match against it.
 pub const SIDEBAR_CHROME_TITLE: &str = "rimz-sidebar";
 
@@ -86,7 +86,7 @@ pub struct PaneRef {
     /// (Zellij `tab_15`, tmux `@3`). An opaque grouping key, never the view's
     /// on-screen label: a Zellij tab *named* "Tab #15" and the internal id
     /// `tab_15` are routinely different tabs — see
-    /// docs/internals/sidebar/multiplexers.md → Pane and view IDs.
+    /// docs/internals/mux/multiplexers.md → Pane and view IDs.
     #[serde(default)]
     pub view_id: Option<String>,
     #[serde(default)]
@@ -99,7 +99,7 @@ pub struct PaneRef {
     /// Whether the pane is its mux view's active pane — the mux marks exactly
     /// one per tab/window, defined whether or not a client is viewing it. The
     /// sidebar derives its selection baseline from it. Advisory UI routing
-    /// metadata; ledger correctness never depends on focus.
+    /// metadata; store correctness never depends on focus.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_focused: bool,
     /// Whether this pane is a floating overlay rather than part of the tiled
@@ -181,7 +181,7 @@ impl PaneRef {
     pub fn is_rimz_sidebar(&self) -> bool {
         self.command
             .as_deref()
-            .is_some_and(crate::ledger::snapshot::command_is_sidebar_chrome)
+            .is_some_and(crate::store::snapshot::command_is_sidebar_chrome)
     }
 }
 

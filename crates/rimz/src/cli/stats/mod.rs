@@ -41,7 +41,7 @@ use rimz::agents::spending::{
     write_provider_spending_cache_with_rollups,
 };
 use rimz::config::{GlyphRole, Semantic, ThemeConfig};
-use rimz::ledger::single_flight::{Coalesced, coalesce};
+use rimz::store::single_flight::{Coalesced, coalesce};
 use rimz::tui::{MouseCapture, TerminalModeGuard};
 
 const DAY_SECS: i64 = 86_400;
@@ -361,9 +361,9 @@ fn ensure_shared_runtime(paths: &RuntimePaths) -> Result<()> {
     let runtime_root = rimz_root
         .parent()
         .ok_or_else(|| anyhow!("invalid Rimz runtime path"))?;
-    rimz::ledger::paths::ensure_private_runtime_dir(runtime_root)?;
-    rimz::ledger::paths::ensure_private_runtime_dir(rimz_root)?;
-    rimz::ledger::paths::ensure_private_runtime_dir(&paths.shared_root)?;
+    rimz::store::paths::ensure_private_runtime_dir(runtime_root)?;
+    rimz::store::paths::ensure_private_runtime_dir(rimz_root)?;
+    rimz::store::paths::ensure_private_runtime_dir(&paths.shared_root)?;
     Ok(())
 }
 

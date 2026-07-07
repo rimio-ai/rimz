@@ -68,7 +68,7 @@ fn trust_ignores_non_command_field_edits() {
     let env = Env::new();
     env.write_config(
         &env.project_root,
-        "display_name = \"Query Engine\"\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+        "display_name = \"Query Engine\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
     );
 
     env.rimz().args(["trust", "grant"]).assert().success();
@@ -77,7 +77,7 @@ fn trust_ignores_non_command_field_edits() {
     // executable surface.
     env.write_config(
         &env.project_root,
-        "display_name = \"Query Engine dev\"\nsidebar = true\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+        "display_name = \"Query Engine dev\"\nsidebar = true\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
     );
 
     env.rimz()
@@ -116,6 +116,43 @@ fn trust_status_json_emits_canonical_fields() {
     );
     assert!(parsed["granted_hash"].is_null());
     assert!(parsed["granted_at"].is_null());
+    assert!(parsed["surface_diff"].is_null());
+}
+
+#[test]
+fn trust_status_shows_stale_field_diff() {
+    let env = Env::new();
+    env.write_config(&env.project_root, CLAUDE_HOOK_CONFIG);
+    env.rimz().args(["trust", "grant"]).assert().success();
+    env.write_config(
+        &env.project_root,
+        "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
+    );
+
+    env.rimz()
+        .args(["trust", "status"])
+        .assert()
+        .success()
+        .stdout(contains("trust: stale"))
+        .stdout(contains("changed hooks[0].command"))
+        .stdout(contains("rimz hooks claude"))
+        .stdout(contains("rimz hooks codex"));
+}
+
+#[test]
+fn trust_rejects_project_layout_table_with_per_machine_fix() {
+    let env = Env::new();
+    env.write_config(
+        &env.project_root,
+        "[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+    );
+
+    env.rimz()
+        .args(["trust", "status"])
+        .assert()
+        .failure()
+        .stderr(contains("[layout]"))
+        .stderr(contains("per-machine"));
 }
 
 #[test]

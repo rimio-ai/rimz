@@ -12,9 +12,9 @@ use super::{GlobalFlags, machine_config};
 use crate::cli::room;
 use rimz::config::MachineConfig;
 use rimz::ids::MuxName;
-use rimz::ledger::{atomic, paths};
 use rimz::mux::CommandSpec;
 use rimz::sidebar_pane::render::scheme;
+use rimz::store::{atomic, paths};
 use rimz::web::{
     ParsedWebStatus, WebClientColors, WebOpenPayload, WebServerStatus, WebStartOptions,
     WebStatusPayload, WebTokenCommand, active_zellij_config_path, cache_login_token,
@@ -323,7 +323,7 @@ fn ensure_session_addressable_for_web(session: &str) -> Result<()> {
 }
 
 fn warn_if_web_sharing_unconfirmed(session: &str) {
-    let cache_root = rimz::ledger::paths::cache_home();
+    let cache_root = rimz::store::paths::cache_home();
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if rimz::mux::recovery::zellij_session_web_clients_allowed_in(&cache_root, session)

@@ -1,15 +1,15 @@
-//! In-process ledger fixture (the library tier): opens a real [`Ledger`] over
-//! a tempdir for tests that drive ledger APIs directly without spawning the
+//! In-process store fixture (the library tier): opens a real [`Store`] over
+//! a tempdir for tests that drive store APIs directly without spawning the
 //! `rimz` binary.
 
-use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceId};
+use rimz::{RuntimePaths, StatePaths, Store, WorkspaceId};
 use tempfile::TempDir;
 
-/// In-process ledger fixture for tests that drive `Ledger` APIs directly.
+/// In-process store fixture for tests that drive `Store` APIs directly.
 pub struct Harness {
     pub workspace_id: WorkspaceId,
     pub runtime_paths: RuntimePaths,
-    pub ledger: Ledger,
+    pub store: Store,
     _tempdir: TempDir,
 }
 
@@ -25,12 +25,12 @@ impl Harness {
         let paths = StatePaths::under(workspace_id.clone(), &state_root).expect("state paths");
         let runtime_paths =
             RuntimePaths::under(workspace_id.clone(), &runtime_root).expect("runtime paths");
-        let ledger = Ledger::open(paths, runtime_paths.clone()).expect("open ledger");
+        let store = Store::open(paths, runtime_paths.clone()).expect("open store");
 
         Self {
             workspace_id,
             runtime_paths,
-            ledger,
+            store,
             _tempdir: tempdir,
         }
     }

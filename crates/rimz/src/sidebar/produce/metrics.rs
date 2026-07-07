@@ -7,10 +7,10 @@ use std::path::Path;
 
 use crate::ProcessState;
 use crate::ids::PaneId;
-use crate::ledger::atomic;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL};
+use crate::store::atomic;
 
 mod zellij;
 
@@ -471,7 +471,7 @@ fn unbound_entry(command: Option<String>, sampled_at_ms: u64) -> MetricsSampleEn
 /// sample or match.
 fn pane_sampleable(pane: &PaneState) -> bool {
     match pane.current.command.as_deref() {
-        Some(command) => !crate::ledger::snapshot::command_is_sidebar_chrome(command),
+        Some(command) => !crate::store::snapshot::command_is_sidebar_chrome(command),
         None => pane.current.pid.is_some(),
     }
 }

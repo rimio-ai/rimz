@@ -1,5 +1,5 @@
 //! The pinned provider dashboard — per-provider header, brand emblem, stats and
-//! budget bars — and the W/M fleet ledger rows.
+//! budget bars — and the W/M fleet store rows.
 
 use crate::agents::{ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
@@ -89,23 +89,23 @@ enum TokenDetail {
     Summary,
 }
 
-/// The fallback fleet ledger rows pinned below no-table dashboards: the trailing
+/// The fallback fleet store rows pinned below no-table dashboards: the trailing
 /// week (`W:`) and month (`M:`), each reading `◎ sessions  ◇ ↘ ↗ ◌  $spend`
 /// across every provider. The token figures read the precise one-decimal form
-/// (`16.5k`) at the soft tier — the ledger is the exact record next to the cockpit's
+/// (`16.5k`) at the soft tier — the store is the exact record next to the cockpit's
 /// coarse live read — each marker in its one shared color (the sky-blue window
 /// tag, the teal `◎`, the blue `◇`/`↗`, the deep-red `↘`, and the green `◌`)
 /// and the `$` bold dollar green; the
 /// spend deliberately does **not** animate (only the headline does). Both
 /// rows share one set of right-aligned column widths so the labels stack and
-/// every number column lines up. Always present once the ledger is rendered;
+/// every number column lines up. Always present once the store is rendered;
 /// empty history reads `$0.00`.
-pub(in crate::sidebar_pane::render) fn fleet_ledger_lines(
+pub(in crate::sidebar_pane::render) fn fleet_store_lines(
     theme: &Theme,
     tally: Option<&SpendTally>,
     width: usize,
 ) -> Vec<Line<'static>> {
-    total_ledger_rows(theme, tally, width, ProviderLayout::Wide)
+    total_store_rows(theme, tally, width, ProviderLayout::Wide)
 }
 
 pub(in crate::sidebar_pane::render) fn fleet_total_lines(
@@ -123,7 +123,7 @@ fn total_spend_lines(
     width: usize,
     layout: ProviderLayout,
 ) -> Vec<Line<'static>> {
-    let rows = total_ledger_rows(theme, tally, width, layout);
+    let rows = total_store_rows(theme, tally, width, layout);
     let has_spacer = matches!(layout, ProviderLayout::Wide | ProviderLayout::Normal);
     let mut lines = Vec::with_capacity(rows.len() + 1 + usize::from(has_spacer));
     if has_spacer {
@@ -134,7 +134,7 @@ fn total_spend_lines(
     lines
 }
 
-fn total_ledger_rows(
+fn total_store_rows(
     theme: &Theme,
     tally: Option<&SpendTally>,
     width: usize,
@@ -200,7 +200,7 @@ fn total_token_detail(
     }
 }
 
-/// The shared right-aligned column widths for ledger rows, measured across every
+/// The shared right-aligned column widths for store rows, measured across every
 /// rendered window so a 2- and a 3-digit figure stack on one right edge.
 struct WmColumns {
     sessions: usize,
@@ -249,7 +249,7 @@ fn total_delimiter_row(theme: &Theme, width: usize) -> Vec<Span<'static>> {
             Span::raw(" "),
             Span::styled(
                 label,
-                theme.styled(Component::LedgerLabel, Modifier::empty()),
+                theme.styled(Component::StoreLabel, Modifier::empty()),
             ),
             Span::styled(hairline.repeat(fill), theme.faint()),
         ],
@@ -257,7 +257,7 @@ fn total_delimiter_row(theme: &Theme, width: usize) -> Vec<Span<'static>> {
     )
 }
 
-/// One ledger row — `W: ◎ {sessions}  ◇ {total} ↘ {in} ↗ {out} ◌ {cache_read}`
+/// One store row — `W: ◎ {sessions}  ◇ {total} ↘ {in} ↗ {out} ◌ {cache_read}`
 /// left-clustered, the `$ {spend}` pinned to the right edge. A one-cell lead
 /// pad sets the `W:`/`M:` tags a hair off the chrome edge. The window tag wears
 /// sky blue — distinct from the teal `◎` beside it — and each token marker its
@@ -265,7 +265,7 @@ fn total_delimiter_row(theme: &Theme, width: usize) -> Vec<Span<'static>> {
 /// ([`Theme::soft`]).
 /// Every numeric field is right-aligned to the shared [`WmColumns`] width, so
 /// the `W:` and `M:` rows stack into one tidy grid. Cache-write is folded into
-/// the `↘` input column, so the ledger keeps to the four headline token figures
+/// the `↘` input column, so the store keeps to the four headline token figures
 /// the all-time read needs.
 fn wm_row(
     theme: &Theme,
@@ -306,7 +306,7 @@ fn total_usd_row(
     month: &SpendWindow,
     width: usize,
 ) -> Line<'static> {
-    let label = theme.style(theme.component(Component::LedgerLabel), Modifier::empty());
+    let label = theme.style(theme.component(Component::StoreLabel), Modifier::empty());
     let left = vec![
         Span::raw(" "),
         Span::styled("W: ".to_owned(), label),
@@ -350,7 +350,7 @@ fn spend_session_spans(
         Span::raw(" "),
         Span::styled(
             format!("{label}: "),
-            marker(theme.component(Component::LedgerLabel)),
+            marker(theme.component(Component::StoreLabel)),
         ),
         Span::styled(
             theme.glyph(GlyphRole::CockpitSessions).to_owned(),

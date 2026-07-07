@@ -114,7 +114,7 @@ mod tests {
     use crate::RuntimePaths;
     use crate::agents::{AgentState, AgentStatus, TurnPhase};
     use crate::ids::{AgentKind, WorkspaceId};
-    use crate::ledger::atomic;
+    use crate::store::atomic;
     use crate::sidebar::enrich::{FoldOpts, enrich};
     use crate::sidebar::refresh::AccountsCache;
     use crate::sidebar::test_support::{activity_row, worktree_group};

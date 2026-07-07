@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use rimz::{Ledger, RuntimePaths, StatePaths, WorkspaceId, WorkspaceResolver};
+use rimz::{RuntimePaths, StatePaths, Store, WorkspaceId, WorkspaceResolver};
 
 const EVENTS_PER_AGENT: usize = 50;
 
@@ -32,18 +32,18 @@ fn main() -> Result<()> {
 
     let workspace =
         WorkspaceResolver::resolve(&project_root, None).context("resolving workspace")?;
-    Ledger::open(paths.clone(), runtime.clone())
-        .context("opening ledger")?
+    Store::open(paths.clone(), runtime.clone())
+        .context("opening store")?
         .record_workspace(&workspace)
         .context("recording workspace")?;
 
     let panes = synthetic_panes(&scratch_root, &project_root, &args)?;
     if args.git_worktrees {
-        rimz::testkit::fleet::seed_fleet_ledger_with_panes(&paths, &panes, args.history_events)
-            .context("seeding git-backed fleet ledger")?;
+        rimz::testkit::fleet::seed_fleet_store_with_panes(&paths, &panes, args.history_events)
+            .context("seeding git-backed fleet store")?;
     } else {
-        rimz::testkit::fleet::seed_fleet_ledger(&paths, args.fleet, args.history_events)
-            .context("seeding fleet ledger")?;
+        rimz::testkit::fleet::seed_fleet_store(&paths, args.fleet, args.history_events)
+            .context("seeding fleet store")?;
     }
     rimz::testkit::fleet::publish_fresh_produce_inputs_for_panes(&runtime, panes.clone())
         .context("publishing fresh produce inputs")?;

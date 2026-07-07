@@ -2,8 +2,8 @@
 //!
 //! Each adapter classifies an incoming hook event, observes lifecycle
 //! transitions, and renders the agent-native neutral no-op. Adapters never
-//! touch the ledger directly;
-//! they're called by `rimz hooks <agent>` which owns the ledger writes.
+//! touch the store directly;
+//! they're called by `rimz hooks <agent>` which owns the store writes.
 //!
 //! Adapters also own hook install and uninstall — translating the trait
 //! defaults into whatever per-agent config file the upstream agent reads.
@@ -127,7 +127,7 @@ pub enum AgentErr {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error("writing hook config: {0}")]
-    WriteHookConfig(#[from] crate::ledger::atomic::AtomicErr),
+    WriteHookConfig(#[from] crate::store::atomic::AtomicErr),
 }
 
 pub type Result<T> = std::result::Result<T, AgentErr>;
@@ -435,7 +435,7 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Observe a lifecycle event payload and translate it into the
     /// [`LifecycleSignal`](lifecycle::LifecycleSignal) (plus enrichment) the
-    /// ledger should record. The adapter names the intent; the
+    /// store should record. The adapter names the intent; the
     /// shared [`step`](lifecycle::step) table derives the status. Returns `None`
     /// when the event carries no transition the adapter recognises (a read-only
     /// tool, a quarantined subagent with no distinct child id).
@@ -572,7 +572,7 @@ pub trait AgentAdapter: Send + Sync {
 
     /// A cheap, synchronous local enrichment read to run inline after a
     /// progress-proving hook event. This is for bounded file reads that are
-    /// lighter than the ledger write already performed by the hook or cheap
+    /// lighter than the store write already performed by the hook or cheap
     /// enough for a producer tick; network, subprocess, broker, or app-server
     /// work belongs in [`context_refresh_spawn`](Self::context_refresh_spawn).
     /// The adapter returns mapped fields only and never writes the sidecar
@@ -624,7 +624,7 @@ pub trait AgentAdapter: Send + Sync {
     }
 
     /// Probe the provider's own realtime account channel while idle.
-    /// Producer-only, best-effort, and read-only: no ledger writes happen in the
+    /// Producer-only, best-effort, and read-only: no store writes happen in the
     /// adapter, and the caller owns every cache merge. `RuntimePaths` lets the
     /// adapter locate its local sockets.
     fn probe_realtime_account_usage(
@@ -644,7 +644,7 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Probe the agent binary's version out-of-band. Producer-only and
     /// display-only: a failure leaves the provider header without a version,
-    /// never affecting account truth, cache freshness, or ledger correctness.
+    /// never affecting account truth, cache freshness, or store correctness.
     fn probe_version(&self) -> Option<String> {
         probe_descriptor_version(self.descriptor())
     }
@@ -685,7 +685,7 @@ pub trait AgentAdapter: Send + Sync {
     /// to the file's set. `None` parses the whole file cold. An adapter whose
     /// transcripts log dollars reads them verbatim and ignores `prices`; a
     /// token-only adapter (Codex) multiplies its counts through the book.
-    /// Read-only and sidebar-safe — spend parsing never writes the ledger or
+    /// Read-only and sidebar-safe — spend parsing never writes the store or
     /// blocks on a socket (CI grep on the adapter `spend.rs` files).
     fn parse_spend(
         &self,

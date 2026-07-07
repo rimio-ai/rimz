@@ -17,7 +17,7 @@ pub(super) fn display_model(row: &SidebarRow) -> Option<String> {
 }
 
 /// Reasoning effort: the session's observed live value is preferred; the
-/// hook/ledger scalar falls back for the window before first observation.
+/// hook/store scalar falls back for the window before first observation.
 pub(super) fn display_effort(row: &SidebarRow) -> Option<&str> {
     ctx(row)
         .and_then(|context| context.effort.as_deref())
@@ -230,7 +230,7 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// from cache, `◍` newly written to it, `↘` fresh input, `↗` output generated
 /// (which joins the window next turn) — each marker in its bar-segment color,
 /// so the line doubles as the bar's legend. The `◇` totals stay the cockpit /
-/// fleet-ledger / subagent vocabulary — this line answers "what is in the
+/// fleet-store / subagent vocabulary — this line answers "what is in the
 /// window", not "what did today burn". The rich statusline blob is preferred;
 /// the row-level [`SidebarRow::call_split`] stands in when the blob carries no
 /// split. Falls

@@ -112,7 +112,7 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let Some(fixture) = Fixture::new() else {
         return;
     };
-    let _ledger = fixture.env.ledger();
+    let _store = fixture.env.store();
     let session = fixture.publish_pane_frame();
     let state = fixture.env.state_path_for(&fixture.env.project_root);
     let runtime = fixture.env.runtime_paths();

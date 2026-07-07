@@ -8,10 +8,10 @@ use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
-use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
-use rimz::ledger::event::EventEnvelope;
+use rimz::store::event::EventEnvelope;
 use rimz::workspace::WorkspaceResolver;
 
 use crate::common::Env;
@@ -51,8 +51,8 @@ fn reset_purges_the_resurrection_cache() {
 #[test]
 fn reset_archives_records_and_clears_room_state() {
     let env = Env::new();
-    let ledger = env.ledger();
-    ledger
+    let store = env.store();
+    store
         .append_event(&EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),
             "rimz-test",
@@ -95,7 +95,7 @@ fn reset_archives_records_and_clears_room_state() {
 
     let archives = archive_paths(&paths.events_archive_dir);
     assert_eq!(archives.len(), 1, "one reset archive written");
-    let archived = rimz::ledger::event_log::read_all(&archives[0]).expect("read archive");
+    let archived = rimz::store::event_log::read_all(&archives[0]).expect("read archive");
     assert!(
         archived
             .iter()
@@ -103,13 +103,13 @@ fn reset_archives_records_and_clears_room_state() {
     );
 
     let projection = env
-        .ledger()
+        .store()
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("projection");
     assert_eq!(projection.agents.len(), 1, "soft reset keeps resume rollup");
 
     let hard = Env::new();
-    hard.ledger()
+    hard.store()
         .append_event(&EventEnvelope::agent_lifecycle(
             hard.workspace_id.clone(),
             "rimz-test",
@@ -131,7 +131,7 @@ fn reset_archives_records_and_clears_room_state() {
     );
     assert_eq!(archive_paths(&paths.events_archive_dir).len(), 1);
     let projection = hard
-        .ledger()
+        .store()
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("projection");
     assert!(projection.agents.is_empty(), "hard reset starts blank");
@@ -144,7 +144,7 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
         return;
     }
 
-    let ledger = env.ledger();
+    let store = env.store();
     let mut record = RunRecord::new(
         env.workspace_id.clone(),
         AgentKind::new_unchecked("claude"),
@@ -154,9 +154,9 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
     );
     record.status = RunStatus::Running;
     let run_id = record.run_id.clone();
-    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
     let (sock, _sock_path) =
-        rimz::bridge::bind_run(ledger.runtime_paths(), &run_id).expect("bind run socket");
+        rimz::harness::run_wake::bind_run(store.runtime_paths(), &run_id).expect("bind run socket");
 
     env.rimz()
         .args(["--mux", "zellij", "reset", "--no-start", "--yes"])
@@ -169,7 +169,7 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
         .build()
         .expect("tokio runtime");
     let outcome = runtime
-        .block_on(rimz::bridge::wait_for_run_completion_owning(
+        .block_on(rimz::harness::run_wake::wait_for_run_completion_owning(
             sock,
             ExpectedRunFrame {
                 workspace_id: env.workspace_id.clone(),
@@ -180,7 +180,7 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
         .expect("wait for run wakeup");
     assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Canceled));
 
-    let after = rimz::harness::run::load(ledger.paths(), &run_id).expect("load run");
+    let after = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
     assert_eq!(after.status, RunStatus::Canceled);
 }
 

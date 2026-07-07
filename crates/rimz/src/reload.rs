@@ -20,8 +20,6 @@ use std::time::{Duration, Instant};
 
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::{MuxName, PaneId};
-use crate::ledger::RuntimePaths;
-use crate::ledger::wakeup;
 use crate::mux::recovery;
 use crate::mux::{
     MuxBackend, PaneListOptions, SidebarLiveness, SidebarPaneOptions, SidebarWidth, backend_for,
@@ -30,6 +28,8 @@ use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
     RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, unix_now_ms,
 };
+use crate::store::RuntimePaths;
+use crate::store::wakeup;
 use crate::workspace::{self, KnownWorkspace};
 
 /// Resolve the on-disk binary that should be executed after the current image

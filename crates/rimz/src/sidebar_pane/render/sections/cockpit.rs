@@ -16,7 +16,7 @@ use super::{metric_spans, pin_right, spans_width};
 
 /// The cockpit's first summary line, directly beneath the repo identity:
 /// `◎ {sessions}` — the threads that have run in the configured headline
-/// window, the glyph in the teal it shares with the W/M ledger rows — on the
+/// window, the glyph in the teal it shares with the W/M store rows — on the
 /// left, with the headline token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the
 /// live coarse form) pinned to the right edge. The breakdown reads the
 /// workspace-scoped JSONL tally's headline window and paints zeroes before any
@@ -52,7 +52,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 /// fleet spend pinned to the right edge, counting up as a turn lands. The
 /// figure ticks toward the workspace tally's headline total via the shared
 /// [`TallyAnim`] roll — big decaying steps, then penny by penny onto the exact
-/// figure — and brightens for a beat the instant it settles (the W/M ledger
+/// figure — and brightens for a beat the instant it settles (the W/M store
 /// rows below stay static). Always present — an empty room reads `¤ 0` with
 /// `$0.00` on the right edge.
 /// The steady unread count is a click-to-filter target and paints as a picked

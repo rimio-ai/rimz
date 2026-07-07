@@ -44,7 +44,7 @@ pub(super) fn ingest(args: LinkStatsIngestArgs) -> Result<()> {
             client.clone(),
             probe.stats.clone(),
         );
-        rimz::ledger::atomic::write_temp_then_rename_cache(&path, &file)
+        rimz::store::atomic::write_temp_then_rename_cache(&path, &file)
             .with_context(|| format!("writing {}", path.display()))?;
         serde_json::to_writer(&mut stdout, &LinkAck::new(probe.seq)).context("writing link ack")?;
         writeln!(stdout).context("writing link ack newline")?;

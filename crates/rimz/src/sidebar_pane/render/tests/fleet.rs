@@ -82,7 +82,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
 }
 
 #[test]
-fn cockpit_reads_workspace_tally_while_ledger_reads_global_tally() {
+fn cockpit_reads_workspace_tally_while_store_reads_global_tally() {
     let mut snapshot = snapshot_with(Vec::new(), Vec::new());
     snapshot.value_tally = Some(bottom_tally());
     let headline = crate::SpendWindow {
@@ -113,7 +113,7 @@ fn cockpit_reads_workspace_tally_while_ledger_reads_global_tally() {
     );
     assert!(
         rendered.contains("$12.34") && rendered.contains("$56.78"),
-        "global ledger week/month stay visible:\n{rendered}"
+        "global store week/month stay visible:\n{rendered}"
     );
 }
 /// The read cockpit `?`/`!` buckets hold their fixed semantic tone at rest —

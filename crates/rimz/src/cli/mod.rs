@@ -49,7 +49,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use rimz::agents::AgentState;
 use rimz::ids::MuxName;
-use rimz::{Ledger, RuntimePaths, StatePaths};
+use rimz::{RuntimePaths, StatePaths, Store};
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
     reject_removed_top_level_tokens()?;
@@ -291,12 +291,12 @@ pub(crate) fn resolve_pane_targets<'a>(
 /// falls back to the rollup when there is no mux to enumerate.
 pub(crate) fn resolution_snapshot(
     workspace: &rimz::ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     globals: &GlobalFlags,
 ) -> Result<rimz::SidebarSnapshot> {
     Ok(rimz::sidebar::produce::resolution_snapshot(
         workspace,
-        ledger,
+        store,
         globals.mux,
     )?)
 }
@@ -605,16 +605,16 @@ pub(crate) fn machine_config() -> std::sync::Arc<rimz::config::MachineConfig> {
     rimz::config::MachineConfig::load_lenient()
 }
 
-pub(crate) fn open_ledger(workspace: &rimz::ResolvedWorkspace) -> Result<Ledger> {
+pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
     let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing ledger paths")?;
+        .context("preparing store paths")?;
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
-    let ledger = Ledger::open(paths, runtime).context("opening ledger")?;
-    ledger
+    let store = Store::open(paths, runtime).context("opening store")?;
+    store
         .record_workspace(workspace)
         .context("recording workspace metadata")?;
-    Ok(ledger)
+    Ok(store)
 }
 
 /// The agent roster the sidebar shows: the cached rollup with the daemon-mode
@@ -623,11 +623,11 @@ pub(crate) fn open_ledger(workspace: &rimz::ResolvedWorkspace) -> Result<Ledger>
 /// fail-safe — an absent daemon-reap cache keeps every session
 /// (see `SidebarSnapshot::reap_runtime`).
 pub(crate) fn alive_snapshot(
-    ledger: &Ledger,
+    store: &Store,
     runtime: &RuntimePaths,
     session: &str,
 ) -> Result<rimz::SidebarSnapshot> {
-    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     apply_cached_daemon_reap(&mut snapshot, runtime, session);
     Ok(snapshot)
 }
@@ -641,7 +641,7 @@ pub(crate) fn apply_cached_daemon_reap(
     let frame_panes =
         rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
             .map(|frame| frame.to_pane_refs());
-    snapshot.reap_runtime(rimz::ledger::snapshot::RuntimeReapInputs {
+    snapshot.reap_runtime(rimz::store::snapshot::RuntimeReapInputs {
         daemon_pids: &cache.daemon_pids,
         loaded: cache.loaded.as_ref(),
         frame_panes: frame_panes.as_deref(),
@@ -650,7 +650,7 @@ pub(crate) fn apply_cached_daemon_reap(
 }
 
 pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()> {
-    open_ledger(workspace).map(|_| ())
+    open_store(workspace).map(|_| ())
 }
 
 #[cfg(test)]
@@ -746,7 +746,7 @@ mod tests {
         let worktree_path = "/repo-worktrees/ghost";
         let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
         let mut ghost = test_agent("ghost", worktree_path, now);
-        ghost.runtime_owner = Some(rimz::ledger::runtime::current_process_owner(
+        ghost.runtime_owner = Some(rimz::store::runtime::current_process_owner(
             rimz::RuntimeOwnerKind::Daemon,
             "ghost",
         ));

@@ -16,9 +16,9 @@
 //! A roll fires only on an *increase*: a decrease (today's UTC-midnight reset)
 //! and the first observed value both snap, so a figure never plays a sad
 //! count-down or a dramatic `0 → today` roll on boot, and an *unchanged*
-//! target is a no-op — refolds land on every ledger wakeup, and re-anchoring
+//! target is a no-op — refolds land on every store wakeup, and re-anchoring
 //! the roll would snap a climb in flight and erase the settle flash
-//! mid-window. The provider dashboard's W/M ledger rows are deliberately
+//! mid-window. The provider dashboard's W/M store rows are deliberately
 //! static — only the cockpit headline and the per-card costs climb.
 
 use std::collections::{HashMap, HashSet};
@@ -74,7 +74,7 @@ pub(crate) struct Roll {
 impl Roll {
     /// Fold in the latest `target`. An increase starts an eased sweep from the
     /// value painted right now (so an interrupted climb continues, never jumps);
-    /// an *unchanged* target is a no-op — refolds land on every ledger wakeup,
+    /// an *unchanged* target is a no-op — refolds land on every store wakeup,
     /// and re-anchoring would snap a climb in flight and erase the settle flash
     /// mid-window; a decrease or the first-ever value snaps.
     fn observe(&mut self, target: f64, phase: u64) {
@@ -172,7 +172,7 @@ impl Roll {
 }
 
 /// The cockpit's one animated figure: today's fleet spend, the headline that
-/// climbs as a turn lands. The W/M ledger rows below read straight from the
+/// climbs as a turn lands. The W/M store rows below read straight from the
 /// tally with no roll.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TallyAnim {

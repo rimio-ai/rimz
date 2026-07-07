@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{ExtraCredits, ResetCredits};
 use crate::config::AccountsConfig;
-use crate::ledger::snapshot::format_plan_label;
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL};
+use crate::store::snapshot::format_plan_label;
 use crate::{RuntimePaths, SidebarSnapshot};
 
 /// Shared provider extra-credits cache, keyed by agent kind.
@@ -53,7 +53,7 @@ pub(crate) fn read_credits_cache(path: &Path) -> CreditsCache {
 }
 
 pub(crate) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
-    if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
+    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.credits_write",

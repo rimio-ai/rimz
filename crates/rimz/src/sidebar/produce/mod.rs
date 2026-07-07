@@ -1,6 +1,6 @@
 //! The sidebar produce pipeline — what the elected producer runs per data tick.
 //!
-//! [`produce_snapshot`] resolves the base (the event-fresh ledger rollup folded
+//! [`produce_snapshot`] resolves the base (the event-fresh store rollup folded
 //! through the caller's [`RollupCursor`], plus the live pane frame shared
 //! through the single-flight pane cache) and folds the producer enrichments:
 //! group roots, context/activity sidecars, the pane overlay, and projection of
@@ -8,13 +8,13 @@
 //! inspection path uses [`produce_snapshot_with_refresh`] to refresh heavy
 //! lanes between two folds over one produced pane frame.
 //!
-//! The module is read-only on ledger truth: the rollup arrives through the
+//! The module is read-only on store truth: the rollup arrives through the
 //! cursor fold, and every write is a cache-class runtime file
 //! (`snapshot.json`, `diff-stats.json`, `metrics-sample.json`,
 //! shared provider/account/spending caches) via
 //! `write_temp_then_rename_cache` — rebuilt from truth on the next read, never
-//! truth itself. `cargo xtask invariants` pins the boundary: no ledger-writer,
-//! bridge, or broker imports under `crates/rimz/src/sidebar/`.
+//! truth itself. `cargo xtask invariants` pins the boundary: no store-writer,
+//! run-wake, or broker imports under `crates/rimz/src/sidebar/`.
 //! The consumer-side read lives in [`super::consumer`]; performance model in
 //! [docs/internals/health/performance.md](../../../../../docs/internals/health/performance.md).
 
@@ -34,7 +34,7 @@ use crate::sidebar::enrich::{FoldOpts, enrich, wired_default_models, wired_kinds
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::{RefreshedLanes, refresh_heavy_lanes};
 use crate::sidebar::timing::unix_now_ms;
-use crate::{Ledger, ResolvedWorkspace, RuntimePaths, SidebarSnapshot, StatePaths};
+use crate::{ResolvedWorkspace, RuntimePaths, SidebarSnapshot, StatePaths, Store};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProduceErr {
@@ -49,15 +49,15 @@ pub enum ProduceErr {
     /// available to hold.
     #[error("pane frame rejected: {0:?}")]
     FrameRejected(crate::diag::record::FrameRejectReason),
-    /// The ledger rollup could not be read or projected.
+    /// The store rollup could not be read or projected.
     #[error(transparent)]
-    Rollup(#[from] crate::ledger::snapshot::SnapshotErr),
+    Rollup(#[from] crate::store::snapshot::SnapshotErr),
     /// State or runtime paths could not be prepared for the workspace.
     #[error(transparent)]
-    Path(#[from] crate::ledger::paths::PathErr),
-    /// The cached ledger snapshot fallback could not be read.
+    Path(#[from] crate::store::paths::PathErr),
+    /// The cached store snapshot fallback could not be read.
     #[error(transparent)]
-    Ledger(#[from] crate::ledger::LedgerErr),
+    Store(#[from] crate::store::StoreErr),
 }
 
 pub type Result<T> = std::result::Result<T, ProduceErr>;
@@ -88,14 +88,14 @@ struct ProducerEnrich<'a> {
 pub(crate) fn publish_test_pane_frame(
     runtime: &RuntimePaths,
     frame: &PaneFrame,
-) -> crate::ledger::atomic::Result<()> {
-    crate::ledger::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), frame)
+) -> crate::store::atomic::Result<()> {
+    crate::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), frame)
 }
 
 /// Produce the full sidebar snapshot: rollup base + live pane frame + producer
 /// enrichments. Inline `Refresh` publishes every shared cache consumers read;
 /// live `Project` publishes pane/root truth and projects the cache refresher's
-/// heavy lanes. `Err` on pane-discovery failure (or an unreadable ledger) —
+/// heavy lanes. `Err` on pane-discovery failure (or an unreadable store) —
 /// the caller owns the fallback: the serve loop degrades to its held frame, and
 /// CLI inspection can fall back to a frameless refreshed rollup.
 pub fn produce_snapshot(
@@ -172,7 +172,7 @@ pub fn produce_resolution_snapshot(
 /// fails, it falls back to the rollup's stamped panes.
 pub fn resolution_snapshot(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     mux: Option<MuxName>,
 ) -> Result<SidebarSnapshot> {
     let mux = mux
@@ -181,7 +181,7 @@ pub fn resolution_snapshot(
         // reads it without touching the real backend, so any mux value serves.
         .or_else(|| pane_fixture_active().then_some(MuxName::Zellij));
     let Some(mux) = mux else {
-        return rollup_resolution_snapshot(ledger);
+        return rollup_resolution_snapshot(store);
     };
     let state = StatePaths::for_workspace(workspace.workspace_id.clone())?;
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
@@ -205,7 +205,7 @@ pub fn resolution_snapshot(
                 .emit(crate::diag::record::DiagEvent::ResolutionFallback {
                     reason: err.to_string(),
                 });
-            rollup_resolution_snapshot(ledger)
+            rollup_resolution_snapshot(store)
         }
     }
 }
@@ -214,8 +214,8 @@ pub fn resolution_snapshot(
 /// registered session's stamped pane. Without a live frame there is nothing to
 /// cwd-bind or verify, so launch placeholders stay pane-less and only registered
 /// sessions that already carry a pane are reachable.
-fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<SidebarSnapshot> {
-    let mut snapshot = ledger.snapshot_cached()?;
+fn rollup_resolution_snapshot(store: &Store) -> Result<SidebarSnapshot> {
+    let mut snapshot = store.snapshot_cached()?;
     snapshot.agent_panes = snapshot
         .root_agents()
         .filter(|agent| !agent.agent_id.is_provisional())

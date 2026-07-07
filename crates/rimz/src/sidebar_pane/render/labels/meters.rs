@@ -8,7 +8,7 @@ use jiff::SignedDuration;
 /// the cumulative total (input with cache-write folded in, plus output), the
 /// directional arrows for input read in / output generated, and a hollow ring
 /// for cache reads. The breakdown reads the same on the cockpit, the provider
-/// dashboard, and the W/M ledger rows — one grammar, built by
+/// dashboard, and the W/M store rows — one grammar, built by
 /// [`token_breakdown_spans`], each marker in its one color everywhere. The `◍`
 /// marker belongs to the agent card's context-composition line, which answers
 /// a different question — what is in the window, not what the fleet burned —
@@ -19,7 +19,7 @@ pub(in crate::sidebar_pane::render) fn token_total_glyph(theme: &Theme) -> Strin
 }
 
 /// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
-/// token line shares (cockpit headline line, provider headline line, W/M ledger
+/// token line shares (cockpit headline line, provider headline line, W/M store
 /// rows). Each marker wears its one color everywhere: the `◇` total in blue,
 /// `↘` input in the expense vermilion, `↗` output in blue, and `◌` cache-read
 /// in green. The figures read at the soft tier

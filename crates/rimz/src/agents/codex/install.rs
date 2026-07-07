@@ -8,7 +8,7 @@ use crate::agents::{
     AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
     agent_config_path, read_optional_file,
 };
-use crate::ledger::atomic;
+use crate::store::atomic;
 
 use super::{
     CODEX_HOOK_TIMEOUT_SECS, HOOKS_TABLE, INSTALLED_EVENTS, RIMZ_BLOCK, RIMZ_HOOK_COMMAND,

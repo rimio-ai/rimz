@@ -13,10 +13,10 @@ use clap::Args;
 use std::time::Duration;
 
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
-use rimz::ledger::workspace_record;
 use rimz::message::{DeliveryGate, MessageRecord, MessageSender, deliver};
+use rimz::store::workspace_record;
 use rimz::workspace::ResolvedWorkspace;
-use rimz::{Ledger, RuntimePaths, StatePaths};
+use rimz::{RuntimePaths, StatePaths, Store};
 
 #[derive(Debug, Args)]
 pub struct AutoContinueArgs {
@@ -53,8 +53,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         return Ok(());
     }
 
-    let paths =
-        StatePaths::for_workspace(workspace_id.clone()).context("preparing ledger paths")?;
+    let paths = StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
     let runtime =
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     let record = workspace_record::read(&paths.workspace_record).with_context(|| {
@@ -63,7 +62,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
             paths.workspace_record.display()
         )
     })?;
-    let ledger = Ledger::open(paths, runtime).context("opening ledger")?;
+    let store = Store::open(paths, runtime).context("opening store")?;
     let workspace = ResolvedWorkspace {
         workspace_id: workspace_id.clone(),
         project_root: record.project_root.clone(),
@@ -74,11 +73,10 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         mux_hint: Some(pane_id.mux()),
     };
     let mut snapshot =
-        rimz::sidebar::produce::resolution_snapshot(&workspace, &ledger, Some(pane_id.mux()))
+        rimz::sidebar::produce::resolution_snapshot(&workspace, &store, Some(pane_id.mux()))
             .context("reading auto-continue delivery snapshot")?;
-    snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(
-        ledger.runtime_paths(),
-    ));
+    snapshot =
+        snapshot.with_agent_context(rimz::store::agent_context::read_all(store.runtime_paths()));
     let agent = snapshot
         .agents
         .iter()
@@ -108,14 +106,14 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         .with_sender(MessageSender::Human)
         .with_pane_id(pane_id.clone());
         let message_id = message.message_id.clone();
-        ledger
+        store
             .queue_message(&message, &workspace.session_name)
             .context("queueing auto-continue resume message")?;
         message_id
     };
     let delivered = deliver::deliver_one(
         &workspace,
-        &ledger,
+        &store,
         &message_id,
         Duration::ZERO,
         Some(pane_id.mux()),
@@ -124,7 +122,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
     .context("delivering auto-continue resume message")?;
     if !delivered {
         let reason = format!("resume delivery gate closed ({})", args.reason);
-        ledger
+        store
             .record_message_delivery_failure(&message_id, &reason, &workspace.session_name)
             .context("recording auto-continue delivery miss")?;
     }

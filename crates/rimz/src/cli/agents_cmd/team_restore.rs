@@ -6,10 +6,10 @@ use jiff::Timestamp;
 use rimz::agents::AgentState;
 use rimz::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use rimz::harness::spec::LayoutSpec;
-use rimz::ledger::AgentLaunchAppend;
-use rimz::ledger::event::AgentLaunchState;
-use rimz::ledger::runtime::AgentLiveness;
 use rimz::mux::ResumeTab;
+use rimz::store::AgentLaunchAppend;
+use rimz::store::event::AgentLaunchState;
+use rimz::store::runtime::AgentLiveness;
 
 use super::launch::{
     LayoutPaneParams, cohort_cells, fresh_resume_launch_requests, layout_panes_with_names,
@@ -100,7 +100,7 @@ pub(crate) fn plan_team_restore_tabs(
 }
 
 pub(crate) fn materialize_team_restore_tab(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
     teams: &TeamsConfig,
@@ -117,7 +117,7 @@ pub(crate) fn materialize_team_restore_tab(
     let identities = if launch_requests.is_empty() {
         Vec::new()
     } else {
-        ledger.append_agent_launches_allocating(
+        store.append_agent_launches_allocating(
             &launch_requests,
             &AgentLaunchAppend {
                 workspace_id: workspace_id.clone(),

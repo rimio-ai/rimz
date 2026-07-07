@@ -1,6 +1,6 @@
 //! Agent rollup state, displayed-status projections, and context severity.
 //!
-//! This is the provider-agnostic model the ledger reducer writes and the
+//! This is the provider-agnostic model the store reducer writes and the
 //! sidebar projects. The rollup itself lives with the agent integration layer.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1084,7 +1084,7 @@ impl AgentState {
     }
 
     pub(crate) fn backfill_rotation_enrichment_from(&mut self, base: &Self) {
-        // Fill-only rotation merge. `ledger::snapshot::project::carried_state`
+        // Fill-only rotation merge. `store::snapshot::project::carried_state`
         // owns the authoritative reducer lifetime list.
         if self.transcript_path.is_none() {
             self.transcript_path = base.transcript_path.clone();

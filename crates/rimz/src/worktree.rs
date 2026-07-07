@@ -25,7 +25,7 @@ const AUTO_ADJECTIVES: &[&str] = &[
     "rapid", "ready", "sharp", "steady", "swift", "vivid",
 ];
 const AUTO_NOUNS: &[&str] = &[
-    "anchor", "bridge", "cedar", "delta", "ember", "field", "harbor", "ion", "juniper", "keel",
+    "anchor", "birch", "cedar", "delta", "ember", "field", "harbor", "ion", "juniper", "keel",
     "lantern", "meadow", "north", "orbit", "pilot", "quartz",
 ];
 
@@ -62,7 +62,7 @@ pub enum WorktreeErr {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Atomic(#[from] crate::ledger::atomic::AtomicErr),
+    Atomic(#[from] crate::store::atomic::AtomicErr),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
@@ -601,7 +601,7 @@ fn add_and_seed(
 }
 
 fn write_marker(path: &Path, marker: &WorktreeMarker) -> Result<()> {
-    crate::ledger::atomic::write_temp_then_rename(&marker_path(path)?, marker).map_err(Into::into)
+    crate::store::atomic::write_temp_then_rename(&marker_path(path)?, marker).map_err(Into::into)
 }
 
 fn resolve_base_commit(repo_root: &Path, base_ref: &str) -> Result<String> {
@@ -1151,7 +1151,7 @@ branch refs/heads/swift-otter
             worktree_path: worktree.clone(),
             created_at: jiff::Timestamp::now(),
         };
-        crate::ledger::atomic::write_temp_then_rename(&admin.join(MARKER_FILE), &marker).unwrap();
+        crate::store::atomic::write_temp_then_rename(&admin.join(MARKER_FILE), &marker).unwrap();
 
         assert_eq!(
             read_marker_from_checkout_metadata(&worktree)

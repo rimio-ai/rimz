@@ -4,19 +4,19 @@
 //! out of the shipped binary while integration tests and benches can share the
 //! same event and pane shapes.
 
-pub use crate::ledger::atomic::testkit::fsync_count;
-pub use crate::ledger::event_log::testkit::{bytes_read, bytes_written};
 pub use crate::proc::testkit::spawn_count;
+pub use crate::store::atomic::testkit::fsync_count;
+pub use crate::store::event_log::testkit::{bytes_read, bytes_written};
 
 pub mod fleet {
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::agents::{AgentLifecycleObservation, LaunchParams};
     use crate::ids::{AgentSessionId, MuxName, PaneId, ViewKind, WorkspaceId};
-    use crate::ledger::event::EventEnvelope;
-    use crate::ledger::{StatePaths, event_log};
     use crate::pane::PaneRef;
     use crate::sidebar::produce::ProduceOptions;
     use crate::sidebar::refresh::AccountsCache;
+    use crate::store::event::EventEnvelope;
+    use crate::store::{StatePaths, event_log};
     use crate::{RuntimePaths, agents, sidebar};
 
     use std::io;
@@ -41,7 +41,7 @@ pub mod fleet {
     }
 
     /// Append `history_events` lifecycle frames spread across `fleet` slots.
-    pub fn seed_fleet_ledger(
+    pub fn seed_fleet_store(
         paths: &StatePaths,
         fleet: usize,
         history_events: usize,
@@ -59,7 +59,7 @@ pub mod fleet {
     }
 
     /// Append lifecycle frames bound to synthetic panes with real worktree paths.
-    pub fn seed_fleet_ledger_with_panes(
+    pub fn seed_fleet_store_with_panes(
         paths: &StatePaths,
         panes: &[PaneRef],
         history_events: usize,

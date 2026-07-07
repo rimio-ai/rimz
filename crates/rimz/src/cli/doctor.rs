@@ -61,7 +61,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         hooks: agents::collect_hooks(),
         loop_tasks: collect_loop(),
         remote_control: runtime::collect_remote_control(),
-        storage: runtime::collect_storage(),
+        disk_usage: runtime::collect_storage(),
         protocols: ws.map(protocol::collect_protocols),
         trust: ws.map(agents::collect_trust),
         agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
@@ -128,7 +128,7 @@ fn emit(report: &DoctorReport, json: bool, output: Option<&Path>) -> Result<()> 
             render::render_human(report, &mut stream)?;
             stream.into_inner()
         };
-        return rimz::ledger::atomic::write_bytes_atomically(path, &bytes)
+        return rimz::store::atomic::write_bytes_atomically(path, &bytes)
             .with_context(|| format!("writing doctor report to {}", path.display()));
     }
 

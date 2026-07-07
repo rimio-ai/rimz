@@ -6,23 +6,23 @@ use std::time::{Duration, Instant};
 
 use crate::agents::AgentState;
 use crate::ids::{AgentSessionId, MessageId, WorkspaceId};
-use crate::ledger::event::EventKind;
-use crate::ledger::event_log;
 use crate::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
+use crate::store::event::EventKind;
+use crate::store::event_log;
 use crate::workspace::ResolvedWorkspace;
-use crate::{Ledger, PaneAgent, SidebarSnapshot};
+use crate::{PaneAgent, SidebarSnapshot, Store};
 
 pub type Result<T> = std::result::Result<T, SendErr>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SendErr {
     #[error(transparent)]
-    Ledger(#[from] crate::ledger::LedgerErr),
+    Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
-    EventLog(#[from] crate::ledger::event_log::EventLogErr),
+    EventLog(#[from] crate::store::event_log::EventLogErr),
     #[error("{0}")]
     Mux(#[from] crate::mux::MuxErr),
     #[error("io error on {path}: {source}")]
@@ -109,7 +109,7 @@ pub fn message_for_target(
 
 pub fn send_batch_to_live_pane(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     snapshot: &SidebarSnapshot,
     target: &PaneAgent,
     bound: Option<&AgentState>,
@@ -122,7 +122,7 @@ pub fn send_batch_to_live_pane(
         .expect("send_batch_to_live_pane requires at least one message");
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
-        let outcome = write_batch(workspace, ledger, snapshot, target, bound, batch, send)?;
+        let outcome = write_batch(workspace, store, snapshot, target, bound, batch, send)?;
         return Ok(SentPrompt {
             outcome,
             compacted: None,
@@ -136,12 +136,12 @@ pub fn send_batch_to_live_pane(
     let mut compacted = None;
     let command = batch
         .iter()
-        .find_map(|message| compact_message_for_target(ledger, target, bound, message));
+        .find_map(|message| compact_message_for_target(store, target, bound, message));
     if let Some(command) = command {
-        ledger.queue_message(&command, &workspace.session_name)?;
+        store.queue_message(&command, &workspace.session_name)?;
         match write_batch(
             workspace,
-            ledger,
+            store,
             snapshot,
             target,
             bound,
@@ -158,12 +158,12 @@ pub fn send_batch_to_live_pane(
                 });
             }
             Err(err) => {
-                ledger.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
+                store.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
                 return Err(err);
             }
         }
     }
-    let outcome = write_batch(workspace, ledger, snapshot, target, bound, batch, send)?;
+    let outcome = write_batch(workspace, store, snapshot, target, bound, batch, send)?;
     Ok(SentPrompt { outcome, compacted })
 }
 
@@ -207,7 +207,7 @@ impl Pacer {
 
 fn write_batch(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     snapshot: &SidebarSnapshot,
     target: &PaneAgent,
     bound: Option<&AgentState>,
@@ -260,7 +260,7 @@ fn write_batch(
     // Record the send once the text lands and before the submit keystroke, so a
     // submitted message is always preceded by its durable record and audit event.
     for message in batch {
-        ledger.record_sent_message(message, &workspace.session_name)?;
+        store.record_sent_message(message, &workspace.session_name)?;
     }
     if head.enter {
         press_pane_key(pane_id, NamedKey::Enter)?;
@@ -285,7 +285,7 @@ pub fn handle_for_pane_target(
 }
 
 pub fn compact_message_for_target(
-    ledger: &Ledger,
+    store: &Store,
     target: &PaneAgent,
     bound: Option<&AgentState>,
     prompt: &MessageRecord,
@@ -301,7 +301,7 @@ pub fn compact_message_for_target(
     let command = crate::agents::find_adapter(target.kind.as_str())?.compact_command()?;
     let occupied = agent.occupied_context_tokens();
     if let Some(used) = occupied
-        && already_compacted_at(ledger, agent, command, used)
+        && already_compacted_at(store, agent, command, used)
     {
         return None;
     }
@@ -325,8 +325,8 @@ pub fn compact_message_for_target(
     Some(record)
 }
 
-pub fn already_compacted_at(ledger: &Ledger, agent: &AgentState, command: &str, used: u64) -> bool {
-    let live = ledger
+pub fn already_compacted_at(store: &Store, agent: &AgentState, command: &str, used: u64) -> bool {
+    let live = store
         .list_messages()
         .map(|messages| {
             messages.iter().any(|message| {
@@ -357,7 +357,7 @@ pub fn bound_agent<'a>(
 }
 
 pub fn wait_for_message_until(
-    ledger: &Ledger,
+    store: &Store,
     message_id: &MessageId,
     session_name: &str,
     mut base: u64,
@@ -366,20 +366,19 @@ pub fn wait_for_message_until(
     const POLL: Duration = Duration::from_millis(500);
 
     loop {
-        if let Some(message) = ledger
+        if let Some(message) = store
             .list_messages()?
             .into_iter()
             .find(|message| message.message_id == *message_id)
         {
             if message.status == MessageStatus::Sent && Instant::now() >= deadline {
                 let timed_out =
-                    ledger.mark_message_timed_out(message_id, session_name, Some("wait"))?;
+                    store.mark_message_timed_out(message_id, session_name, Some("wait"))?;
                 return Ok(timed_out
                     .map(|message| message.status)
                     .unwrap_or(MessageStatus::TimedOut));
             }
-        } else if let Some(status) = latest_terminal_message_status(ledger, message_id, &mut base)?
-        {
+        } else if let Some(status) = latest_terminal_message_status(store, message_id, &mut base)? {
             return Ok(status);
         }
         if Instant::now() >= deadline {
@@ -391,12 +390,12 @@ pub fn wait_for_message_until(
 }
 
 pub fn latest_terminal_message_status(
-    ledger: &Ledger,
+    store: &Store,
     message_id: &MessageId,
     base: &mut u64,
 ) -> Result<Option<MessageStatus>> {
     let mut latest = None;
-    let path = &ledger.paths().events_log;
+    let path = &store.paths().events_log;
     let log_len = match std::fs::metadata(path) {
         Ok(meta) => meta.len(),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
@@ -430,8 +429,8 @@ mod tests {
 
     use crate::agents::{AgentStatus, TurnPhase};
     use crate::ids::{AgentKind, WorkspaceId};
-    use crate::ledger::event::{EventEnvelope, MessageEventMethod};
-    use crate::ledger::{RuntimePaths, StatePaths};
+    use crate::store::event::{EventEnvelope, MessageEventMethod};
+    use crate::store::{RuntimePaths, StatePaths};
     use jiff::Timestamp;
 
     fn agent() -> AgentState {
@@ -496,7 +495,7 @@ mod tests {
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         paths.ensure_dirs().unwrap();
         runtime.ensure_dirs().unwrap();
-        let ledger = Ledger::open(paths.clone(), runtime).unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
         let agent = agent();
         let mut old = MessageRecord::new(
             workspace_id.clone(),
@@ -506,11 +505,11 @@ mod tests {
             DeliveryGate::Any,
         );
         event_log::append(&paths.events_log, &delivered_message_event(&mut old)).unwrap();
-        let mut base = ledger.wait_fold_base().unwrap();
+        let mut base = store.wait_fold_base().unwrap();
 
         let before = event_log::testkit::bytes_read();
         assert_eq!(
-            latest_terminal_message_status(&ledger, &old.message_id, &mut base).unwrap(),
+            latest_terminal_message_status(&store, &old.message_id, &mut base).unwrap(),
             None
         );
         assert_eq!(event_log::testkit::bytes_read() - before, 0);
@@ -528,7 +527,7 @@ mod tests {
         let before = event_log::testkit::bytes_read();
 
         assert_eq!(
-            latest_terminal_message_status(&ledger, &message.message_id, &mut base).unwrap(),
+            latest_terminal_message_status(&store, &message.message_id, &mut base).unwrap(),
             Some(MessageStatus::Delivered)
         );
         assert_eq!(event_log::testkit::bytes_read() - before, appended);

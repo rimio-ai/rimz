@@ -16,7 +16,7 @@ use crate::message::{
     queue_head_for_message,
 };
 use crate::workspace::ResolvedWorkspace;
-use crate::{Ledger, PaneAgent, RuntimePaths, SidebarSnapshot};
+use crate::{Store, PaneAgent, RuntimePaths, SidebarSnapshot};
 
 use super::{dispatch, send};
 
@@ -25,11 +25,11 @@ pub type Result<T> = std::result::Result<T, DeliverErr>;
 #[derive(Debug, thiserror::Error)]
 pub enum DeliverErr {
     #[error(transparent)]
-    Ledger(#[from] crate::ledger::LedgerErr),
+    Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
-    Path(#[from] crate::ledger::paths::PathErr),
+    Path(#[from] crate::store::paths::PathErr),
     #[error(transparent)]
-    Atomic(#[from] crate::ledger::atomic::AtomicErr),
+    Atomic(#[from] crate::store::atomic::AtomicErr),
     #[error(transparent)]
     Produce(#[from] crate::sidebar::produce::ProduceErr),
     #[error(transparent)]
@@ -50,7 +50,7 @@ pub enum DeliveryPolicy {
 
 pub fn deliver_one(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     message_id: &MessageId,
     settle: Duration,
     mux: Option<MuxName>,
@@ -59,15 +59,15 @@ pub fn deliver_one(
     if !settle.is_zero() {
         std::thread::sleep(settle);
     }
-    let Some(candidate) = delivery_candidate(workspace, ledger, message_id, mux, policy)? else {
+    let Some(candidate) = delivery_candidate(workspace, store, message_id, mux, policy)? else {
         return Ok(false);
     };
     let claimed_head = match policy {
         DeliveryPolicy::Boundary => {
-            ledger.claim_message_for_delivery(message_id, jiff::Timestamp::now())?
+            store.claim_message_for_delivery(message_id, jiff::Timestamp::now())?
         }
         DeliveryPolicy::Steer { .. } => {
-            ledger.claim_message_for_steer(message_id, jiff::Timestamp::now())?
+            store.claim_message_for_steer(message_id, jiff::Timestamp::now())?
         }
     };
     let Some(message) = claimed_head else {
@@ -79,7 +79,7 @@ pub fn deliver_one(
     debug_assert_eq!(message.message_id, candidate.message.message_id);
     let mut claimed = vec![message];
     for tail in &candidate.batch_tail {
-        match ledger.claim_message_for_delivery(&tail.message_id, jiff::Timestamp::now())? {
+        match store.claim_message_for_delivery(&tail.message_id, jiff::Timestamp::now())? {
             Some(message) => claimed.push(message),
             None => break,
         }
@@ -103,7 +103,7 @@ pub fn deliver_one(
         .collect();
     let sent = send::send_batch_to_live_pane(
         workspace,
-        ledger,
+        store,
         &candidate.snapshot,
         &candidate.target,
         send::bound_agent(&candidate.snapshot, &candidate.target),
@@ -115,7 +115,7 @@ pub fn deliver_one(
             outcome: send::Outcome::Sent { .. },
             ..
         }) => {
-            register_message_wake(workspace, ledger)?;
+            register_message_wake(workspace, store)?;
             Ok(true)
         }
         Ok(send::SentPrompt {
@@ -123,7 +123,7 @@ pub fn deliver_one(
             ..
         }) => {
             for message in &claimed {
-                ledger.record_message_delivery_failure(
+                store.record_message_delivery_failure(
                     &message.message_id,
                     "agent is waiting on input in its pane",
                     &workspace.session_name,
@@ -134,10 +134,10 @@ pub fn deliver_one(
         Err(err) => {
             let mut head_failure_recorded = true;
             for message in &claimed {
-                if message_recorded_as_sent(ledger, &message.message_id)? {
+                if message_recorded_as_sent(store, &message.message_id)? {
                     continue;
                 }
-                let recorded = ledger.record_message_delivery_failure(
+                let recorded = store.record_message_delivery_failure(
                     &message.message_id,
                     &err.to_string(),
                     &workspace.session_name,
@@ -147,32 +147,32 @@ pub fn deliver_one(
                 }
             }
             if !head_failure_recorded {
-                ledger.record_send_error(
+                store.record_send_error(
                     &send_messages[0],
                     &err.to_string(),
                     &workspace.session_name,
                 )?;
             }
-            register_message_wake(workspace, ledger)?;
+            register_message_wake(workspace, store)?;
             Ok(false)
         }
     }
 }
 
-pub fn sweep(workspace: &ResolvedWorkspace, ledger: &Ledger, mux: Option<MuxName>) -> Result<()> {
+pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>) -> Result<()> {
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
     let Some(_guard) = try_start_sweep(&runtime)? else {
         return Ok(());
     };
     let now = Timestamp::now();
     let delivery_window = delivery_window_from_env();
-    ledger.reconcile_stale_sent_messages(
+    store.reconcile_stale_sent_messages(
         &workspace.session_name,
         now,
         delivery_window,
         max_delivery_attempts_from_env(),
     )?;
-    let pending = ledger.list_pending_messages()?;
+    let pending = store.list_pending_messages()?;
     let mut heads_seen = std::collections::BTreeSet::new();
     for message in pending.iter().filter(|message| message.is_ready(now)) {
         let Some(head) = queue_head(
@@ -187,18 +187,18 @@ pub fn sweep(workspace: &ResolvedWorkspace, ledger: &Ledger, mux: Option<MuxName
         if heads_seen.insert(head.message_id.to_string()) {
             let delivered = deliver_one(
                 workspace,
-                ledger,
+                store,
                 &head.message_id,
                 Duration::ZERO,
                 mux,
                 DeliveryPolicy::Boundary,
             )?;
             if !delivered {
-                ledger.defer_message_wake(&head.message_id, now + delivery_window)?;
+                store.defer_message_wake(&head.message_id, now + delivery_window)?;
             }
         }
     }
-    register_message_wake(workspace, ledger)?;
+    register_message_wake(workspace, store)?;
     Ok(())
 }
 
@@ -378,12 +378,12 @@ pub fn explain(
 
 fn delivery_candidate(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     message_id: &MessageId,
     mux: Option<MuxName>,
     policy: DeliveryPolicy,
 ) -> Result<Option<DeliveryCandidate>> {
-    let pending = ledger.list_pending_messages()?;
+    let pending = store.list_pending_messages()?;
     let Some(message) = pending
         .iter()
         .find(|message| message.message_id == *message_id)
@@ -403,12 +403,12 @@ fn delivery_candidate(
             return Ok(None);
         }
     }
-    let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, ledger, mux)?;
+    let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
     // The resolution snapshot carries live panes but not rich context sidecars.
     // Fold them here for smart-compact gauges and parked-status delivery gates.
     let runtime = RuntimePaths::for_workspace(message.workspace_id.clone()).ok();
     if let Some(runtime) = runtime.as_ref() {
-        snapshot = snapshot.with_agent_context(crate::ledger::agent_context::read_all(runtime));
+        snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(runtime));
     }
     let Some(agent) = snapshot
         .agents
@@ -468,17 +468,17 @@ fn delivery_candidate(
     }))
 }
 
-pub fn register_message_wake(workspace: &ResolvedWorkspace, ledger: &Ledger) -> Result<()> {
+pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) -> Result<()> {
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
-    refresh_wake_stamp(&runtime, ledger, Timestamp::now())
+    refresh_wake_stamp(&runtime, store, Timestamp::now())
 }
 
-pub fn refresh_wake_stamp(runtime: &RuntimePaths, ledger: &Ledger, now: Timestamp) -> Result<()> {
+pub fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp) -> Result<()> {
     let path = wake_stamp_path(runtime);
-    let next = ledger.earliest_message_wake(now, delivery_window_from_env())?;
+    let next = store.earliest_message_wake(now, delivery_window_from_env())?;
     match next {
         Some(not_before) => {
-            crate::ledger::atomic::write_temp_then_rename_cache(&path, &Some(not_before))?;
+            crate::store::atomic::write_temp_then_rename_cache(&path, &Some(not_before))?;
         }
         None => match std::fs::remove_file(&path) {
             Ok(()) => {}
@@ -491,8 +491,8 @@ pub fn refresh_wake_stamp(runtime: &RuntimePaths, ledger: &Ledger, now: Timestam
     Ok(())
 }
 
-pub fn message_recorded_as_sent(ledger: &Ledger, message_id: &MessageId) -> Result<bool> {
-    Ok(ledger
+pub fn message_recorded_as_sent(store: &Store, message_id: &MessageId) -> Result<bool> {
+    Ok(store
         .list_messages()?
         .iter()
         .any(|message| message.message_id == *message_id && message.status == MessageStatus::Sent))
@@ -508,7 +508,7 @@ mod tests {
 
     use crate::agents::{AgentContext, AgentState, TurnPhase};
     use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
-    use crate::ledger::snapshot::PaneAgent;
+    use crate::store::snapshot::PaneAgent;
 
     #[test]
     fn sweep_guard_is_single_flight() {

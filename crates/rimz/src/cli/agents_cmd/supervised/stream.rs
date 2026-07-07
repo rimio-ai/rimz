@@ -6,13 +6,13 @@ use anyhow::{Context, Result};
 
 use super::output;
 use rimz::agents::AgentAdapter;
-use rimz::bridge::{self, ExpectedRunFrame, RunWakeOutcome};
 use rimz::harness::run::{RunLiveStatus, RunRecord};
+use rimz::harness::run_wake::{self, ExpectedRunFrame, RunWakeOutcome};
 
 pub(crate) fn stream_blocking_run(
     sock: std::os::unix::net::UnixDatagram,
     expected: ExpectedRunFrame,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     run_id: &rimz::RunId,
     adapter: &dyn AgentAdapter,
     timeout: Option<Duration>,
@@ -23,30 +23,30 @@ pub(crate) fn stream_blocking_run(
         .build()
         .context("creating run stream runtime")?;
     runtime.block_on(async {
-        let sock = bridge::adopt(sock).context("adopting run socket")?;
+        let sock = run_wake::adopt(sock).context("adopting run socket")?;
         let deadline = timeout.map(|duration| Instant::now() + duration);
         let mut cursor = TranscriptCursor::new(true);
         let mut last_live = None;
         loop {
-            let record = rimz::harness::run::load(ledger.paths(), run_id)?;
-            emit_stream_updates(ledger, adapter, &mut cursor, &mut last_live, &record)?;
+            let record = rimz::harness::run::load(store.paths(), run_id)?;
+            emit_stream_updates(store, adapter, &mut cursor, &mut last_live, &record)?;
             if record.status.is_terminal() {
                 emit_stream_end(&record)?;
                 return Ok(record);
             }
             let Some(wait) = next_stream_wait(deadline) else {
-                let timed_out = rimz::harness::run::timeout(ledger.paths(), run_id)?;
-                emit_stream_updates(ledger, adapter, &mut cursor, &mut last_live, &timed_out)?;
+                let timed_out = rimz::harness::run::timeout(store.paths(), run_id)?;
+                emit_stream_updates(store, adapter, &mut cursor, &mut last_live, &timed_out)?;
                 emit_stream_end(&timed_out)?;
                 return Ok(timed_out);
             };
-            match bridge::wait_for_run_completion(&sock, &expected, Some(wait))
+            match run_wake::wait_for_run_completion(&sock, &expected, Some(wait))
                 .await
                 .context("waiting for run stream tick")?
             {
                 RunWakeOutcome::Completed(_status) => {
-                    let record = rimz::harness::run::load(ledger.paths(), run_id)?;
-                    emit_stream_updates(ledger, adapter, &mut cursor, &mut last_live, &record)?;
+                    let record = rimz::harness::run::load(store.paths(), run_id)?;
+                    emit_stream_updates(store, adapter, &mut cursor, &mut last_live, &record)?;
                     emit_stream_end(&record)?;
                     return Ok(record);
                 }
@@ -57,7 +57,7 @@ pub(crate) fn stream_blocking_run(
 }
 
 pub(crate) fn stream_attached_run(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     run_id: &rimz::RunId,
     adapter: &dyn AgentAdapter,
     from_start: bool,
@@ -67,8 +67,8 @@ pub(crate) fn stream_attached_run(
     let mut last_live = None;
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
-        let record = rimz::harness::run::load(ledger.paths(), run_id)?;
-        emit_stream_updates(ledger, adapter, &mut cursor, &mut last_live, &record)?;
+        let record = rimz::harness::run::load(store.paths(), run_id)?;
+        emit_stream_updates(store, adapter, &mut cursor, &mut last_live, &record)?;
         if record.status.is_terminal() {
             emit_stream_end(&record)?;
             return Ok(Some(record));
@@ -160,7 +160,7 @@ impl TranscriptCursor {
 }
 
 fn emit_stream_updates(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     adapter: &dyn AgentAdapter,
     cursor: &mut TranscriptCursor,
     last_live: &mut Option<RunLiveStatus>,
@@ -169,7 +169,7 @@ fn emit_stream_updates(
     for text in cursor.messages(record, adapter) {
         emit_ndjson(&output::RunStreamEvent::Message { text })?;
     }
-    if let Some(live) = ledger
+    if let Some(live) = store
         .snapshot_cached()
         .ok()
         .and_then(|snapshot| rimz::harness::run::live_status(record, &snapshot))

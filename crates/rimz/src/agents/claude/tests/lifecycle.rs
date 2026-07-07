@@ -42,7 +42,7 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
                 "session_id": "sess-parent",
                 "agent_id": "child-1",
                 "subagent_type": "Explore",
-                "description": "search the ledger",
+                "description": "search the store",
                 "permission_mode": "acceptEdits",
             }),
         )

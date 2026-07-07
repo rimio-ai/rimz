@@ -13,7 +13,7 @@ use super::chrome::{
 };
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
-    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_ledger_lines, fleet_size,
+    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_size, fleet_store_lines,
     fleet_total_lines, trim_spans_to_width, unread_total, worktree_group_lines,
 };
 use super::theme::Theme;
@@ -25,7 +25,7 @@ use super::{
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
 /// summary, make-up line, the conditional unread banner, and fixed separator),
 /// a scroll viewport over the agent cards, and the bottom chrome pinned to the
-/// bottom edge like a status bar — the provider dashboard, ledger, centered
+/// bottom edge like a status bar — the provider dashboard, store, centered
 /// navigation footer, and beneath them the sticky health alert. Space for the
 /// pinned zones is always reserved — including the fixed separators under the
 /// cockpit and above the provider dashboard — so the scroll zone is windowed
@@ -227,7 +227,7 @@ pub(crate) fn compose_lines(
 /// Bottom-pinned chrome, top to bottom: a fixed separator when the provider
 /// dashboard is present, the per-provider dashboard (account-scoped budgets +
 /// brand emblem, which opens with its own top hairline — the tab rail when
-/// several accounts register), the fallback fleet ledger for no-table layouts,
+/// several accounts register), the fallback fleet store for no-table layouts,
 /// the navigation footer (centered), then the sticky health alert. While an
 /// alert is active the body is a stale/empty fetch, so the panel and footer step
 /// aside and the alert speaks alone. Every chrome line is gutter-padded so it
@@ -244,11 +244,11 @@ pub(super) fn build_bottom_chrome(
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
     let dashboard_present = dashboard_present(snapshot, active);
     let tabbed = dashboard_present && dashboard_tabbed(snapshot);
-    let dashboard_owns_ledger = dashboard_present
+    let dashboard_owns_store = dashboard_present
         && tabbed
         && !snapshot.providers.is_empty()
         && snapshot.theme.pets.enabled;
-    let fold_footer_into_dashboard = dashboard_owns_ledger
+    let fold_footer_into_dashboard = dashboard_owns_store
         && !active
         && snapshot.truth_degraded.is_none()
         && ui.gate_notice.is_none()
@@ -291,11 +291,11 @@ pub(super) fn build_bottom_chrome(
     }
     // The static `W:`/`M:` rows seal the main dashboard. The pet-enabled tall
     // provider block owns those totals inside its `Total:` section.
-    if !active && !dashboard_owns_ledger {
+    if !active && !dashboard_owns_store {
         let corner = if dashboard_present {
             fleet_total_lines(theme, snapshot.value_tally.as_ref(), inner)
         } else {
-            fleet_ledger_lines(theme, snapshot.value_tally.as_ref(), inner)
+            fleet_store_lines(theme, snapshot.value_tally.as_ref(), inner)
         };
         if !corner.is_empty() {
             if !dashboard_present {

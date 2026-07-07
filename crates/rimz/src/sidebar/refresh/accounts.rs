@@ -88,16 +88,16 @@ pub(crate) fn produce_accounts(
         (cache.is_fresh(now_ms) && !accounts_cache_version_refresh_due(&cache, snapshot, now_ms))
             .then(|| cache_with_context_versions(cache, &context_versions))
     };
-    match crate::ledger::single_flight::coalesce(
+    match crate::store::single_flight::coalesce(
         &lock_path,
         ACCOUNTS_WAIT_STEP,
         ACCOUNTS_WAIT_STEPS,
         fresh,
     ) {
         // A peer published a fresh map between our miss and the lock, or as we polled.
-        crate::ledger::single_flight::Coalesced::Shared(cache) => cache.accounts,
+        crate::store::single_flight::Coalesced::Shared(cache) => cache.accounts,
         // We won: probe once and publish for every consumer and loser to read back.
-        crate::ledger::single_flight::Coalesced::Produce(_guard) => {
+        crate::store::single_flight::Coalesced::Produce(_guard) => {
             let (accounts, ok) = probe_accounts(snapshot);
             let active_kinds = active_provider_kinds(snapshot);
             let accounts =
@@ -114,7 +114,7 @@ pub(crate) fn produce_accounts(
         }
         // The elder wedged: probe locally for our own frame, but do not publish —
         // its result will be fresher, and a failed local probe must not pin the cache.
-        crate::ledger::single_flight::Coalesced::ProduceLocal => {
+        crate::store::single_flight::Coalesced::ProduceLocal => {
             let active_kinds = active_provider_kinds(snapshot);
             merge_versions(
                 probe_accounts(snapshot).0,
@@ -326,7 +326,7 @@ pub(crate) fn read_accounts_cache(path: &Path) -> AccountsCache {
 /// reader never observes a half-written file. Best-effort: a write failure logs
 /// and leaves the prior cache in place.
 pub(super) fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
-    if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
+    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.accounts_write",

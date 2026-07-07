@@ -1,6 +1,6 @@
 //! Typed sidebar wakeup events and loop-owned realtime sidebar event store.
 //!
-//! These datagrams are latency hints. The ledger and producer pulls remain the
+//! These datagrams are latency hints. The store and producer pulls remain the
 //! durable truth; a renderer may drop any event that is stale, malformed, for a
 //! different workspace/session, or superseded by a newer pull. The renderer
 //! appends overlay datagrams to an in-memory per-process store and fuses them
@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::LifecycleSignal;
 use crate::ids::{PaneId, WorkspaceId};
-use crate::ledger::event::AGENT_LIFECYCLE_METHOD;
 use crate::sidebar::timing::EVENT_STORE_TTL;
+use crate::store::event::AGENT_LIFECYCLE_METHOD;
 
 pub const SIDEBAR_EVENT_VERSION: &str = "rimz.sidebar-event.v2";
 /// Version-stable renderer reload control word. Reload uses this bare datagram
@@ -29,7 +29,7 @@ pub struct SidebarEventEnvelope {
     pub workspace_id: WorkspaceId,
     /// `Some` scopes the event to one mux session — pane ids are only
     /// meaningful inside the session that issued them. `None` is
-    /// workspace-scoped: ledger deltas, reloads, and pane-frame publications
+    /// workspace-scoped: store deltas, reloads, and pane-frame publications
     /// apply to every session renderer of the workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
@@ -95,7 +95,7 @@ pub enum SidebarEvent {
     /// nudge backends emit when they can observe a change but not name the
     /// pane (the tmux control-mode watch, the Zellij plugin's manifest fold).
     PanesChanged,
-    LedgerDelta {
+    StoreDelta {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         event_method: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,7 +153,7 @@ impl SidebarEvent {
                 | Self::PanesChanged
         ) || matches!(
             self,
-            Self::LedgerDelta {
+            Self::StoreDelta {
                 event_method: Some(method),
                 agent_signal: Some(signal)
             } if method == AGENT_LIFECYCLE_METHOD
@@ -261,7 +261,7 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         SidebarEvent::PaneOpened { command: None, .. }
         | SidebarEvent::FocusStranded { .. }
         | SidebarEvent::PanesChanged
-        | SidebarEvent::LedgerDelta { .. }
+        | SidebarEvent::StoreDelta { .. }
         | SidebarEvent::PaneFramePublished
         | SidebarEvent::Notify { .. }
         | SidebarEvent::Reload => None,
@@ -308,7 +308,7 @@ mod tests {
                 command: Some("zsh".to_owned()),
             },
             SidebarEvent::PanesChanged,
-            SidebarEvent::LedgerDelta {
+            SidebarEvent::StoreDelta {
                 event_method: Some(AGENT_LIFECYCLE_METHOD.to_owned()),
                 agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
             },
@@ -451,7 +451,7 @@ mod tests {
             101,
         );
         store.append(
-            SidebarEvent::LedgerDelta {
+            SidebarEvent::StoreDelta {
                 event_method: None,
                 agent_signal: None,
             },

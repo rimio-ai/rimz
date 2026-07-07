@@ -13,7 +13,7 @@ use crate::agents::{longest_window_reset_at, longest_window_running, shortest_wi
 use crate::config::{CheckOn, TaskEntry};
 use crate::harness::schedule::run_log::{CheckRecord, LoopRunResult};
 use crate::ids::WorkspaceId;
-use crate::ledger::paths::{RuntimePaths, runtime_home};
+use crate::store::paths::{RuntimePaths, runtime_home};
 use crate::workspace::WorkspaceResolver;
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);

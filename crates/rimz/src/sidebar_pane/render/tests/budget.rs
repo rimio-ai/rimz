@@ -118,7 +118,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         }),
         extra_credits: None,
         reset_credits: None,
-        // Two budget windows per panel so the mana bars and the fleet ledger's
+        // Two budget windows per panel so the mana bars and the fleet store's
         // W/M columns pay their real per-window cost at provider scale.
         windows: vec![
             RateLimitWindow {
@@ -141,13 +141,13 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
 /// dashboard blocks — the synthetic fleet the guard scales. Every card carries
 /// sub-agents and every panel carries spend figures and budget windows, so the
 /// loop-heavy compose paths (the selected card's sub-agent expansion, the
-/// dashboard's mana bars, the fleet ledger's per-window columns) sit inside the
+/// dashboard's mana bars, the fleet store's per-window columns) sit inside the
 /// measured work rather than short-circuiting on empty fixtures.
 fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
     let now = super::fixed_now();
     SidebarSnapshot {
-        snapshot_version: crate::ledger::snapshot::SNAPSHOT_VERSION,
+        snapshot_version: crate::store::snapshot::SNAPSHOT_VERSION,
         workspace_id,
         display_name: "query-engine".to_owned(),
         generated_at: now,

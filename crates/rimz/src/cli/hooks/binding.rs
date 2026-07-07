@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn enrich_pane_stamp_from_cache(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     observation: &mut AgentLifecycleObservation,
 ) {
     if observation.pane_stamp.is_some() || !observation.signal.establishes_identity() {
@@ -16,7 +16,7 @@ pub(super) fn enrich_pane_stamp_from_cache(
         return;
     };
     let Some(frame) = rimz::sidebar::cache::read_snapshot_cache(
-        &ledger.runtime_paths().pane_frame_path(),
+        &store.runtime_paths().pane_frame_path(),
         &workspace.session_name,
     ) else {
         return;
@@ -32,7 +32,7 @@ pub(super) fn recover_focused_pane_binding(
     registers_lazily: bool,
     mux_hint: Option<MuxName>,
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     observation: &mut AgentLifecycleObservation,
 ) {
     if observation.pane_id.is_some() || !registers_lazily {
@@ -64,7 +64,7 @@ pub(super) fn recover_focused_pane_binding(
         return;
     };
 
-    let snapshot = match ledger.snapshot_cached() {
+    let snapshot = match store.snapshot_cached() {
         Ok(snapshot) => snapshot,
         Err(err) => {
             debug!(
@@ -84,12 +84,12 @@ pub(super) fn recover_focused_pane_binding(
     let Some(inputs) = live_binding_inputs(
         mux_hint,
         &workspace.session_name,
-        ledger.runtime_paths(),
+        store.runtime_paths(),
         kind,
         &agent_id,
     ) else {
         log_binding_recovery(
-            ledger,
+            store,
             BindingRecoveryLog::new(
                 kind,
                 &agent_id,
@@ -119,7 +119,7 @@ pub(super) fn recover_focused_pane_binding(
         },
     };
     log_binding_recovery(
-        ledger,
+        store,
         BindingRecoveryLog::new(kind, &agent_id, observation, &worktree_path, outcome)
             .with_probes(inputs.probes)
             .with_candidates(selection.candidates.clone()),
@@ -161,8 +161,8 @@ pub(super) fn apply_recovered_pane_binding(
     observation.pane_stamp = Some(pane);
 }
 
-fn log_binding_recovery(ledger: &Ledger, record: BindingRecoveryLog) {
-    rimz::diag::binding::log(ledger.runtime_paths()).append(&record);
+fn log_binding_recovery(store: &Store, record: BindingRecoveryLog) {
+    rimz::diag::binding::log(store.runtime_paths()).append(&record);
 }
 
 #[derive(Debug, Serialize)]

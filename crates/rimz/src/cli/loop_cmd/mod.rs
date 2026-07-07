@@ -44,10 +44,10 @@ use rimz::harness::schedule::{
 };
 use rimz::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use rimz::ids::WorkspaceId;
-use rimz::ledger::atomic::write_bytes_atomically;
-use rimz::ledger::paths::{RuntimePaths, StatePaths, agents_home, config_home, state_home};
 use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
+use rimz::store::atomic::write_bytes_atomically;
+use rimz::store::paths::{RuntimePaths, StatePaths, agents_home, config_home, state_home};
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;

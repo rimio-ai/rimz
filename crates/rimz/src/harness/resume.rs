@@ -2,7 +2,7 @@
 //! reborn session re-seeds.
 //!
 //! When the CLI admits agent recovery for a reborn room — a machine reboot or
-//! mux crash — the agents' processes are gone, but the ledger remembers them.
+//! mux crash — the agents' processes are gone, but the store remembers them.
 //! This module reads that memory (the audit rollup, which keeps the
 //! dead-process agents the runtime projection would expel) and plans one
 //! `#channel` tab per worktree, with one resume pane per prior root agent, so
@@ -13,7 +13,7 @@
 //! ended sessions, so every filtering rule is unit-tested without a multiplexer
 //! or the filesystem. The launcher ([`crate::mux::MuxBackend`]) seeds the
 //! resulting [`ResumeTab`]s at birth and stays ignorant of agents and the
-//! ledger.
+//! store.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use crate::agents::AgentState;
 use crate::agents::find_adapter;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::ledger::runtime::AgentLiveness;
 use crate::mux::ResumeTab;
+use crate::store::runtime::AgentLiveness;
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
 /// long-lived workspace cannot fork-bomb a fleet of agent processes on birth.
@@ -132,7 +132,7 @@ impl ResumePlan {
 /// the rebirth replaces — exactly the set to bring back. One pane hosts one
 /// agent: a relaunch that re-used a pane id collapses to its newest stamp —
 /// the same rule the live sidebar binds by (`stamped_agent_for_pane`, in
-/// `ledger::snapshot::panes`) — so resume never doubles a pane, while two
+/// `store::snapshot::panes`) — so resume never doubles a pane, while two
 /// concurrent agents in one worktree (distinct panes) share one `#channel` tab.
 pub fn plan_resume(
     agents: &[AgentState],

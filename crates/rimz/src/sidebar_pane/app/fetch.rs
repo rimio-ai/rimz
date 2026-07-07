@@ -23,7 +23,7 @@ use super::input::SNAPSHOT_WAKEUP;
 use super::{ServeConfig, tick_for};
 
 /// Run one in-process produce behind a panic guard. The produce pipeline
-/// folds ledger truth, runtime caches, and `/proc` on this worker thread; a
+/// folds store truth, runtime caches, and `/proc` on this worker thread; a
 /// bug anywhere in it must cost one degraded outcome — the loop holds its
 /// last good frame and raises the health line — never the renderer. The
 /// workspace builds with unwinding panics; under a future `panic = "abort"`
@@ -80,7 +80,7 @@ pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut Sideba
 /// cycle by the worker loop, so a `workspace migrate` lands without a restart.
 ///
 /// **Fast lane (every cycle, producer and consumer alike):** fold the
-/// event-fresh ledger rollup over the published pane frame entirely in process
+/// event-fresh store rollup over the published pane frame entirely in process
 /// ([`crate::sidebar::consumer::read_published_snapshot`]) — no `list-panes`,
 /// no git. This is the paint that lands a status flip or a cost update within
 /// one wakeup, in single-digit milliseconds — and it runs even over an aged
@@ -96,7 +96,7 @@ pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut Sideba
 /// construction. It refreshes pane truth and roots, then publishes the shared
 /// frame every other tab reads. One producer per
 /// workspace — the eldest live instance — and on it the produce is gated to
-/// the data tick: a ledger-delta storm paints per delta but produces at most
+/// the data tick: a store-delta storm paints per delta but produces at most
 /// once per tick. Heavy git/spend/account lanes are refreshed by the elder's
 /// cache refresher and projected here, so this worker stays responsible for
 /// pane truth, roots, notifications, and publish order. Topology freshness is
@@ -213,7 +213,7 @@ fn run_fetch_cycle(
     // this cycle: a frame younger than one data tick still carries the truth
     // the produce would re-derive (pane TTL, git TTL, spend caches all outlive
     // it). Read from the published pane-frame stamp, and only when the fast
-    // lane actually folded that frame — an unreadable ledger must produce,
+    // lane actually folded that frame — an unreadable store must produce,
     // never coast on a young stamp it could not use.
     let frame_age_ms = fast
         .as_ref()
@@ -261,7 +261,7 @@ fn run_fetch_cycle(
                 folded_consumer_ok = true;
             }
         }
-        // The consumer lane only misses when the ledger rollup itself could
+        // The consumer lane only misses when the store rollup itself could
         // not be read — a missing pane frame is a successful frameless fold.
         // With no produce to deliver the cycle's verdict, the miss is final
         // and carries the rollup error so the health line names the cause.
@@ -273,7 +273,7 @@ fn run_fetch_cycle(
             producer: is_producer,
         }),
         // An unreadable rollup on a producing cycle defers to the produce
-        // below, which folds the same ledger and reports its own error.
+        // below, which folds the same store and reports its own error.
         Err(_) => {}
     }
     if produce {
@@ -396,7 +396,7 @@ fn deliver_notifications(
             crate::sidebar::notify::spawn_notify_handlers(prefs, &notification);
         }
         diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));
-        if let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
+        if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
             runtime,
             Some(&config.session_name),
             SidebarEvent::Notify {
@@ -570,7 +570,7 @@ impl FetchRequest {
 
     /// Fold from current caches even when the worker's unchanged-input memo
     /// would skip. Renderer-local timers use this when fold side effects depend
-    /// on local state rather than ledger or pane-frame inputs.
+    /// on local state rather than store or pane-frame inputs.
     pub(super) fn force_fold() -> Self {
         Self {
             mode: FetchMode::Normal,
@@ -611,7 +611,7 @@ impl FetchRequest {
 }
 
 /// Spawn the background fetch worker. It blocks for a request, coalesces any
-/// that piled up (a ledger-delta storm collapses to one fetch), runs one
+/// that piled up (a store-delta storm collapses to one fetch), runs one
 /// [`run_fetch_cycle`], hands the result back over `result_tx`, and pokes the
 /// loop's wakeup socket so it folds the result without polling. The thread ends
 /// when the loop drops `request_tx`.
@@ -661,7 +661,7 @@ pub(super) fn spawn_fetch_worker(
                 }
             };
             // Re-resolved every cycle (not cached at spawn), so a
-            // `workspace migrate` repoints the ledger without a restart.
+            // `workspace migrate` repoints the store without a restart.
             match StatePaths::for_workspace(config.workspace_id.clone()) {
                 Ok(state) => {
                     let tick = meter.begin();
@@ -720,7 +720,7 @@ impl FetchDispatcher {
 
     /// Ask the fetch worker for a fresh snapshot. `in_flight` collapses
     /// redundant requests while one is already running; `force_after` (set by a
-    /// ledger delta, i.e. new committed data) guarantees one more fetch once
+    /// store delta, i.e. new committed data) guarantees one more fetch once
     /// the in-flight one returns, so a delta that races an in-flight fetch is
     /// never lost. `request` carries the strongest freshness requirement
     /// currently known.

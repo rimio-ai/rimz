@@ -1,6 +1,6 @@
 //! Strongly-typed identifiers.
 //!
-//! Every ID that travels through the ledger, the wakeup socket, or the agent
+//! Every ID that travels through the store, the wakeup socket, or the agent
 //! hook protocol is a newtype. Rimz-minted long IDs (`RunId`, `EventId`,
 //! `SidebarInstanceId`) use UUIDv7, while message IDs use a shorter
 //! time-sortable token. IDs derived from external truth (`WorkspaceId`,
@@ -375,7 +375,7 @@ impl<'de> Deserialize<'de> for MessageId {
 /// An open set, deliberately: the registry
 /// ([`registry::ADAPTERS`](crate::agents::registry)) is the source of truth
 /// for *known* kinds — every dispatch resolves through it and an unknown kind
-/// degrades gracefully (skipped probe, title-cased panel) — while ledger
+/// degrades gracefully (skipped probe, title-cased panel) — while store
 /// replay and snapshot decode stay open so events from a removed adapter
 /// still fold and render. CLI boundaries validate by registry lookup
 /// (`find_adapter`), which is where a typo dies; internally the kind is a

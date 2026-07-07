@@ -164,11 +164,11 @@ fn backfill_wrapper_spawn_commands_matrix() {
         assert_eq!(pane.spawn_command.as_deref(), expected_spawn, "{name}");
         if name == "recovers tmux agent wrapper" {
             assert_eq!(
-                crate::ledger::snapshot::pane_agent_kind(&pane),
+                crate::store::snapshot::pane_agent_kind(&pane),
                 Some("codex")
             );
             assert_eq!(
-                crate::ledger::snapshot::pane_worktree_path(&pane),
+                crate::store::snapshot::pane_worktree_path(&pane),
                 Some("/repo/wt")
             );
         }

@@ -23,7 +23,7 @@ static REAPER_INIT: Mutex<()> = Mutex::new(());
 static REAPER_STARTS: AtomicUsize = AtomicUsize::new(0);
 
 /// Build a detached `rimz` helper command, anchored to Rimz-owned shared
-/// storage so a deleted launch CWD cannot ENOENT the spawn.
+/// disk_usage so a deleted launch CWD cannot ENOENT the spawn.
 pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
     let mut cmd = Command::new(exe);
     cmd.current_dir(&runtime.shared_root)

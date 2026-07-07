@@ -94,14 +94,14 @@ fn root_observation() -> AgentLifecycleObservation {
     )
 }
 
-fn hooks_test_ledger() -> (tempfile::TempDir, rimz::Ledger) {
+fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
     let dir = tempfile::TempDir::new().unwrap();
     let workspace_id =
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"));
-    let paths = rimz::ledger::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let runtime = rimz::ledger::RuntimePaths::under(workspace_id, dir.path()).unwrap();
-    let ledger = rimz::Ledger::open(paths, runtime).unwrap();
-    (dir, ledger)
+    let paths = rimz::store::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    let runtime = rimz::store::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    let store = rimz::Store::open(paths, runtime).unwrap();
+    (dir, store)
 }
 
 fn hooks_test_workspace(worktree_branch: Option<&str>) -> rimz::ResolvedWorkspace {
@@ -225,13 +225,13 @@ fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
 
 #[test]
 fn stop_failure_records_turn_error_transcript_entry() {
-    let (_dir, ledger) = hooks_test_ledger();
+    let (_dir, store) = hooks_test_store();
     let workspace = hooks_test_workspace(Some("main"));
     let globals = hooks_test_globals();
 
     handle_lifecycle_hook(
         &workspace,
-        &ledger,
+        &store,
         &rimz::agents::ClaudeAdapter,
         "StopFailure",
         &serde_json::json!({
@@ -243,7 +243,7 @@ fn stop_failure_records_turn_error_transcript_entry() {
     )
     .unwrap();
 
-    let entries = rimz::chat::read_all(ledger.paths()).unwrap();
+    let entries = rimz::chat::read_all(store.paths()).unwrap();
     let [entry] = entries.as_slice() else {
         panic!("expected one transcript entry, got {entries:?}");
     };

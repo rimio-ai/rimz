@@ -1,6 +1,6 @@
-//! History-independence of the ledger write path under concurrency.
+//! History-independence of the store write path under concurrency.
 //!
-//! Tens of agents in one session put a ledger write behind every hook event,
+//! Tens of agents in one session put a store write behind every hook event,
 //! all serialized through the workspace flock. The write path's contract:
 //! the critical section is an event append only, the snapshot publishes off
 //! the lock from a resumable fold base, and archive history does not enter
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::AgentSessionId;
-use rimz::ledger::event::EventEnvelope;
+use rimz::store::event::EventEnvelope;
 
 use crate::common::Harness;
 
@@ -35,14 +35,14 @@ fn lifecycle(workspace_id: rimz::WorkspaceId, agent_id: &str) -> EventEnvelope {
 /// Seed archived event-log history. Plain writes: the seed is fixture state,
 /// not a durability subject.
 fn seed_archive_history(h: &Harness, count: usize) {
-    std::fs::create_dir_all(&h.ledger.paths().events_archive_dir).expect("mkdir archive");
+    std::fs::create_dir_all(&h.store.paths().events_archive_dir).expect("mkdir archive");
     let archive = h
-        .ledger
+        .store
         .paths()
         .events_archive_dir
         .join("events.000000.jsonl");
     for i in 0..count {
-        rimz::ledger::event_log::append(
+        rimz::store::event_log::append(
             &archive,
             &lifecycle(h.workspace_id.clone(), &format!("history-{i}")),
         )
@@ -54,11 +54,11 @@ fn timed_burst(h: &Harness) -> Duration {
     let start = Instant::now();
     let handles: Vec<_> = (0..WRITERS)
         .map(|w| {
-            let ledger = h.ledger.clone();
+            let store = h.store.clone();
             let workspace_id = h.workspace_id.clone();
             std::thread::spawn(move || {
                 for i in 0..EVENTS_EACH {
-                    ledger
+                    store
                         .append_event(&lifecycle(workspace_id.clone(), &format!("writer-{w}-{i}")))
                         .expect("append");
                 }
@@ -72,7 +72,7 @@ fn timed_burst(h: &Harness) -> Duration {
 }
 
 fn assert_burst_landed(h: &Harness, label: &str) {
-    let events = h.ledger.read_events().expect("events");
+    let events = h.store.read_events().expect("events");
     assert_eq!(
         events
             .iter()
@@ -81,11 +81,11 @@ fn assert_burst_landed(h: &Harness, label: &str) {
         WRITERS * EVENTS_EACH,
         "{label}: every concurrent append lands durably"
     );
-    let log_len = std::fs::metadata(&h.ledger.paths().events_log)
+    let log_len = std::fs::metadata(&h.store.paths().events_log)
         .expect("log meta")
         .len();
     let snapshot = h
-        .ledger
+        .store
         .snapshot()
         .unwrap_or_else(|err| panic!("{label}: lock-free read after the burst: {err}"));
     assert_eq!(
@@ -94,7 +94,7 @@ fn assert_burst_landed(h: &Harness, label: &str) {
         "{label}: the reader folds to the log's end"
     );
     let checkpoint: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&h.ledger.paths().latest_snapshot)
+        &std::fs::read(&h.store.paths().latest_snapshot)
             .unwrap_or_else(|err| panic!("{label}: checkpoint exists: {err}")),
     )
     .expect("checkpoint parses");

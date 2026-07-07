@@ -4,7 +4,7 @@
 //! module of this one binary rather than a separate `tests/*.rs` target: the
 //! shared harness in `common` is declared once, and the workspace links a
 //! single test executable instead of one per file. Related suites group under
-//! a subdirectory module (`backend`, `examples`, `ledger`).
+//! a subdirectory module (`backend`, `examples`, `store`).
 
 mod common;
 
@@ -21,7 +21,6 @@ mod examples;
 mod gc;
 mod hooks;
 mod journey;
-mod ledger;
 mod list;
 mod list_pets;
 mod list_themes;
@@ -41,6 +40,7 @@ mod sidebar_snapshot;
 mod sidebar_supervisor;
 mod sidebar_unread;
 mod start;
+mod store;
 mod transcript;
 mod transcript_watch;
 mod trust;

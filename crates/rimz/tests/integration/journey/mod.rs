@@ -2,7 +2,7 @@
 //!
 //! These tests read as the session story in `docs/guide/product.md` and
 //! `docs/guide/experience.md`. They drive the real `rimz sidebar serve`
-//! renderer through a `portable-pty` over a real ledger and assert on
+//! renderer through a `portable-pty` over a real store and assert on
 //! `vt100`-parsed screen text — what the column actually shows. Renderer
 //! mechanics stay in `docs/internals/sidebar/sidebar.md`.
 //!
@@ -59,9 +59,9 @@ pub const KEY_RIGHT: &[u8] = b"\x1b[C";
 pub const SETTLE: Duration = Duration::from_secs(45);
 
 /// A live Rimz "room": a real `rimz sidebar serve` renderer in a
-/// `portable-pty`, reading the [`Env`] ledger that hooks mutate.
+/// `portable-pty`, reading the [`Env`] store that hooks mutate.
 ///
-/// The renderer shares the `Env` *state* (the ledger, via `XDG_STATE_HOME`) but
+/// The renderer shares the `Env` *state* (the store, via `XDG_STATE_HOME`) but
 /// gets its own short `XDG_RUNTIME_DIR`: the per-instance wakeup socket
 /// (`sock/sidebar.<35-char-id>.sock`) must stay under the 108-byte AF_UNIX
 /// limit, which `Env`'s deep tempdir would overflow. The renderer only needs
@@ -85,7 +85,7 @@ impl<'a> RoomHarness<'a> {
     /// Spawn the renderer against `env`'s workspace. `mux` only selects the
     /// pane-discovery/wakeup backend; with no live mux session the self-close
     /// latch never trips (the renderer never sees a sibling pane), so the
-    /// column renders deterministically off the ledger and the tick.
+    /// column renders deterministically off the store and the tick.
     pub fn launch(env: &'a Env, mux: MuxName) -> Self {
         Self::launch_inner(env, mux, false, ROWS, COLS)
     }
@@ -112,10 +112,10 @@ impl<'a> RoomHarness<'a> {
         let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
         assert!(bin.exists(), "rimz binary missing: {}", bin.display());
 
-        // Materialize the workspace ledger so a never-used room answers
+        // Materialize the workspace store so a never-used room answers
         // `sidebar snapshot` with an empty-but-valid snapshot (Phase 0), not a
-        // degraded "ledger not found" banner.
-        let _ = env.ledger();
+        // degraded "store not found" banner.
+        let _ = env.store();
 
         let runtime = tempfile::Builder::new()
             .prefix("rz")
@@ -123,7 +123,7 @@ impl<'a> RoomHarness<'a> {
             .tempdir()
             .expect("short runtime tempdir");
         let pane_file = runtime.path().join("panes.json");
-        let initial_roster = PaneRoster::from_ledger(env);
+        let initial_roster = PaneRoster::from_store(env);
         if broken_pane_fixture {
             // Unparseable on purpose: the produce's fixture read errors every
             // cycle, exercising the degraded outcome path end to end.
@@ -245,7 +245,7 @@ impl<'a> RoomHarness<'a> {
     pub fn publish_link_stats(&self, stats: &rimz::remote::link::LinkStatsFile) {
         let paths = rimz::RuntimePaths::under(self.env.workspace_id.clone(), self.runtime.path())
             .expect("runtime paths");
-        rimz::ledger::atomic::write_temp_then_rename_cache(
+        rimz::store::atomic::write_temp_then_rename_cache(
             &rimz::remote::link::stats_path(&paths),
             stats,
         )
@@ -266,7 +266,7 @@ impl<'a> RoomHarness<'a> {
     /// hook. The event is read from the payload's `hook_event_name`.
     ///
     /// With no hook wired (the room was never onboarded), the agent never
-    /// calls Rimz — so this is a no-op and nothing reaches the ledger,
+    /// calls Rimz — so this is a no-op and nothing reaches the store,
     /// faithfully reproducing "I ran an agent and nothing showed up". Hand-firing
     /// `rimz hooks feed` regardless would mask exactly that bug.
     pub fn agent_hook(&self, source: &str, payload: &Value) {
@@ -275,7 +275,7 @@ impl<'a> RoomHarness<'a> {
 
     /// Run an installed hook with `XDG_RUNTIME_DIR` pointed at the renderer's
     /// short runtime, for events whose visible effect lives in runtime
-    /// sidecars rather than the durable ledger.
+    /// sidecars rather than the durable store.
     pub fn agent_hook_in_room_runtime(&self, source: &str, payload: &Value) {
         self.agent_hook_with_identity(
             source,
@@ -448,9 +448,9 @@ struct PaneProcess {
 }
 
 impl PaneRoster {
-    fn from_ledger(env: &Env) -> Self {
+    fn from_store(env: &Env) -> Self {
         let mut roster = Self::default();
-        let Ok(snapshot) = env.ledger().snapshot() else {
+        let Ok(snapshot) = env.store().snapshot() else {
             return roster;
         };
         for agent in snapshot.agents {

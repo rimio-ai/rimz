@@ -25,10 +25,10 @@ use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::ids::PaneId;
-use crate::ledger::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::message::{MessageSender, identity_handle};
+use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 
-pub use crate::ledger::snapshot::compose_channel;
+pub use crate::store::snapshot::compose_channel;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TargetErr {

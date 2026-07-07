@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::ledger::atomic;
+use crate::store::atomic;
 
 use super::{
     AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,

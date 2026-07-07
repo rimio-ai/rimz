@@ -134,7 +134,7 @@ pub struct UiState {
     pub(crate) tab_hits: Vec<ProviderTabHit>,
     /// The cockpit filter target the user picked to filter the agent-card
     /// body, or `None` for the resting show-all view.
-    /// Renderer-local display state — the producer, the ledger, and the
+    /// Renderer-local display state — the producer, the store, and the
     /// cockpit counts (always the full fleet) are untouched; only the body
     /// iteration narrows, through the one shared `group_visible_rows` walk. A
     /// pure toggle: a click on the active target clears it, and

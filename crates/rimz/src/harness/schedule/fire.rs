@@ -18,7 +18,7 @@ use crate::config::TaskEntry;
 use crate::harness::schedule;
 use crate::harness::spec;
 use crate::ids::WorkspaceId;
-use crate::ledger::atomic::write_temp_then_rename_cache;
+use crate::store::atomic::write_temp_then_rename_cache;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {

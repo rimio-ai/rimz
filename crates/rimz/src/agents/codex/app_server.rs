@@ -9,8 +9,8 @@
 //! rejoin/own the user's live Codex thread). It is the out-of-band producer
 //! behind `rimz codex refresh-context` and the daemon-mode liveness probe behind
 //! the sidebar cache refresher's TTL-gated ghost-session reap;
-//! storage
-//! ([`crate::ledger::agent_context`]) and the snapshot fold-in are
+//! disk_usage
+//! ([`crate::store::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, exactly as for Claude.
 //!
 //! Connection preference (warmest first): this session's broker

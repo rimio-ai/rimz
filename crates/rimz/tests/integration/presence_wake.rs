@@ -25,7 +25,6 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-use rimz::ledger::RuntimePaths;
 use rimz::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use rimz::pane::PaneRef;
 use rimz::sidebar::cache::{
@@ -34,6 +33,7 @@ use rimz::sidebar::cache::{
 use rimz::sidebar::frame::assemble_frame;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::timing::unix_now_ms;
+use rimz::store::RuntimePaths;
 use tempfile::TempDir;
 
 use crate::common::ScrubSessionEnvExt;

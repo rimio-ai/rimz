@@ -7,11 +7,11 @@ use super::raw_pane::{RawPaneListing, SessionCleanliness, classify_session_panes
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::WorkspaceId;
-use crate::ledger::paths::{self, RuntimePaths};
 use crate::mux::PresencePluginOptions;
 use crate::mux::{MuxErr, Result};
 use crate::sidebar::cache::{pane_topology_cache_is_fresh, read_pane_topology_cache};
 use crate::sidebar::timing::unix_now_ms;
+use crate::store::paths::{self, RuntimePaths};
 use crate::workspace::{self, KnownWorkspace};
 
 impl ZellijBackend {

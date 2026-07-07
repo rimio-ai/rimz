@@ -26,7 +26,7 @@ fn remote_link_badge_renders_with_reconstructed_agents() {
     let screen = room.wait_for(|s| s.contains("coder"), SETTLE);
     assert!(
         screen.contains("coder"),
-        "rendered remote room should reconstruct agent rows from the ledger:\n{screen}"
+        "rendered remote room should reconstruct agent rows from the store:\n{screen}"
     );
 
     room.publish_link_stats(&LinkStatsFile::new(

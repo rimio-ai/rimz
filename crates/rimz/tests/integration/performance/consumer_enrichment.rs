@@ -18,8 +18,8 @@ use jiff::Timestamp;
 use rimz::agent_activity;
 use rimz::agents::AgentContext;
 use rimz::ids::WorkspaceId;
-use rimz::ledger::RuntimePaths;
-use rimz::ledger::agent_context;
+use rimz::store::RuntimePaths;
+use rimz::store::agent_context;
 
 const FLEET: usize = 20;
 

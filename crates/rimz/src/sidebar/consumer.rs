@@ -1,10 +1,10 @@
-//! Consumer-side snapshot read: fresh ledger rollup over the producer pane cache.
+//! Consumer-side snapshot read: fresh store rollup over the producer pane cache.
 //!
 //! Renderers that are not the elected producer stay in this lane: no mux call,
-//! no git call, no provider probe, and no durable ledger writes.
+//! no git call, no provider probe, and no durable store writes.
 
 use crate::ids::PaneId;
-use crate::ledger::parse_cache::StampedPath;
+use crate::store::parse_cache::StampedPath;
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::cache::read_snapshot_cache;
@@ -14,8 +14,8 @@ use super::enrich::{FoldOpts, enrich};
 mod tests;
 
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
-/// behind this module's read-only boundary and never import `crate::ledger`.
-pub use crate::ledger::snapshot::RollupCursor;
+/// behind this module's read-only boundary and never import `crate::store`.
+pub use crate::store::snapshot::RollupCursor;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsumerFoldInputsStamp {
@@ -25,26 +25,26 @@ pub struct ConsumerFoldInputsStamp {
     config_generation: u64,
 }
 
-/// The event-fresh ledger rollup, read in process: `latest.json` when it
+/// The event-fresh store rollup, read in process: `latest.json` when it
 /// reflects the log (lock-free, O(snapshot)), else a re-projection folded
 /// through the caller's [`RollupCursor`] — O(new log bytes) per delta from
 /// the in-memory base, and a fresh cursor folds cold, so a one-shot caller
 /// just passes `&mut RollupCursor::new()`. The read-only twin of the
-/// producer's `Ledger::snapshot_cached`, exposed so a consumer tab folds the
+/// producer's `Store::snapshot_cached`, exposed so a consumer tab folds the
 /// freshest rollup over the producer's coalesced panes without holding a
 /// writer handle — the rollup is what makes a status change or a new agent in
 /// an existing pane repaint within one wakeup, independent of the slower
-/// pane-list cadence. `Err` preserves *why* the ledger was unreadable (a torn
+/// pane-list cadence. `Err` preserves *why* the store was unreadable (a torn
 /// frame, a permissions failure): the serve loop treats it as a soft miss —
 /// hold the last good frame, name the cause on the health line — where a
 /// produce or inspection call propagates it.
 pub fn rollup_snapshot(
     state: &StatePaths,
     cursor: &mut RollupCursor,
-) -> crate::ledger::snapshot::Result<SidebarSnapshot> {
-    match crate::ledger::snapshot::read_fresh_latest(state) {
+) -> crate::store::snapshot::Result<SidebarSnapshot> {
+    match crate::store::snapshot::read_fresh_latest(state) {
         Some(snapshot) => Ok(snapshot),
-        None => crate::ledger::snapshot::build_with_cursor(state, cursor),
+        None => crate::store::snapshot::build_with_cursor(state, cursor),
     }
 }
 
@@ -56,11 +56,11 @@ pub fn rollup_snapshot(
 /// renderer's own-pane exclusion, and projects the cached diff stats. Before
 /// the producer's first pane-frame publish, the fold is intentionally
 /// frameless: `panes_produced_at_ms == None` and no pane-admitted cards render,
-/// while ledger metadata can still paint. `Err` means the ledger rollup itself
+/// while store metadata can still paint. `Err` means the store rollup itself
 /// was unreadable and carries why; the serve loop holds its last good frame
 /// and surfaces the reason.
 ///
-/// Pairing fresh rollup + coalesced panes is the lag fix: a `LedgerDelta` folds
+/// Pairing fresh rollup + coalesced panes is the lag fix: a `StoreDelta` folds
 /// the new agent/status in this tab within one wakeup, while the slower pane
 /// roster cadence only governs genuine pane open/close.
 ///
@@ -77,7 +77,7 @@ pub fn read_published_snapshot(
     runtime: &RuntimePaths,
     session: &str,
     exclude: Option<&PaneId>,
-) -> crate::ledger::snapshot::Result<SidebarSnapshot> {
+) -> crate::store::snapshot::Result<SidebarSnapshot> {
     let base = rollup_snapshot(state, cursor)?;
     let cache = read_snapshot_cache(&runtime.pane_frame_path(), session);
     Ok(enrich(

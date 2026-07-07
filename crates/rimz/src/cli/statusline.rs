@@ -4,7 +4,7 @@
 //! unchanged to any wrapped user command and forwards its stdout + exit code so
 //! the user's statusline renders exactly as before.
 //!
-//! This path is deliberately ledger-free and lock-free — it runs on every
+//! This path is deliberately store-free and lock-free — it runs on every
 //! statusline render. It resolves only the workspace runtime dir, writes one
 //! atomic sidecar file, and (when wrapping) spawns one child. It never blocks
 //! on the workspace lock and never opens the event log.
@@ -80,7 +80,7 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
         }
     });
 
-    // Best-effort context capture. Never fatal, never blocks on the ledger.
+    // Best-effort context capture. Never fatal, never blocks on the store.
     let persisted = if subagent {
         persist_subagent_context(&source, &buf, globals)
     } else {
@@ -100,7 +100,7 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
 }
 
 /// Parse the payload, normalize it via the agent adapter, and write the sidecar.
-/// Resolves only `RuntimePaths` (no ledger open/lock) to stay fast and
+/// Resolves only `RuntimePaths` (no store open/lock) to stay fast and
 /// lock-free on the per-render path.
 fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<()> {
     let payload: Value = serde_json::from_slice(stdin).context("parsing statusline payload")?;
@@ -120,19 +120,19 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     let runtime =
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
-    rimz::ledger::agent_context::write(&runtime, agent.descriptor().kind, session_id, &context)
+    rimz::store::agent_context::write(&runtime, agent.descriptor().kind, session_id, &context)
         .context("writing agent-context sidecar")?;
     // Push the update so the `$`/token figure repaints within a wakeup rather
     // than waiting for the sidebar's next poll tick. Best-effort, like every
     // other wakeup: a send failure never fails the statusline render.
-    let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
+    let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     Ok(())
 }
 
 /// Parse a `subagentStatusLine` payload, harvest its `tasks`, and write one
 /// per-child sidecar keyed by `(kind, task id)` — the same id the child's
 /// `SubagentStart` lifecycle row is keyed under, so the snapshot fold attaches
-/// it. Like [`persist_context`] this resolves only `RuntimePaths` (no ledger
+/// it. Like [`persist_context`] this resolves only `RuntimePaths` (no store
 /// open/lock) to stay fast and lock-free on the per-render path. Nothing to
 /// persist (a non-Claude source, or a payload with no attributable task) is
 /// success, not an error.
@@ -149,7 +149,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     for observation in &observations {
-        rimz::ledger::subagent_context::write(
+        rimz::store::subagent_context::write(
             &runtime,
             agent.descriptor().kind,
             &observation.agent_id,
@@ -159,7 +159,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
     }
     // Repaint the parent's expanded card within a wakeup rather than on the next
     // poll tick. Best-effort, like every other wakeup.
-    let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
+    let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     Ok(())
 }
 

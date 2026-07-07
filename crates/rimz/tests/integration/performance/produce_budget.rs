@@ -5,17 +5,15 @@
 //! warm-producer pass). The contract: a warm steady-state produce — every
 //! fork-bearing input pre-published fresh, the rollup folding O(new bytes)
 //! through the worker's cursor — finishes far inside one data tick even with a
-//! fleet-scale ledger and pane set, so the reconciling post never starves the
+//! fleet-scale store and pane set, so the reconciling post never starves the
 //! paint behind it. Companion to `compose_budget` in `sidebar_pane`,
 //! which bounds the frame composition over the produced snapshot.
 
 use std::time::{Duration, Instant};
 
-use rimz::ledger::event_log;
 use rimz::sidebar::consumer::RollupCursor;
-use rimz::testkit::fleet::{
-    SESSION_NAME, registered_lifecycle, seed_fleet_ledger, synthetic_panes,
-};
+use rimz::store::event_log;
+use rimz::testkit::fleet::{SESSION_NAME, registered_lifecycle, seed_fleet_store, synthetic_panes};
 use rimz::testkit::spawn_count;
 
 use crate::common::Harness;
@@ -27,8 +25,8 @@ const ROUNDS: u32 = 20;
 #[test]
 fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
     let h = Harness::new();
-    let paths = h.ledger.paths();
-    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    let paths = h.store.paths();
+    seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
     let panes = synthetic_panes(FLEET);
     let opts = rimz::sidebar::produce::ProduceOptions {
         mux: rimz::MuxName::Zellij,
@@ -78,8 +76,8 @@ fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
 #[test]
 fn project_produce_over_stale_heavy_caches_forks_zero_subprocesses() {
     let h = Harness::new();
-    let paths = h.ledger.paths();
-    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    let paths = h.store.paths();
+    seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
     h.publish_fresh_produce_inputs(SESSION_NAME, synthetic_panes(FLEET));
     let _ = std::fs::remove_file(h.runtime_paths.shared_provider_spending_path());
     let _ = std::fs::remove_file(h.runtime_paths.shared_accounts_path());

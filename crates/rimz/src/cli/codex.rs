@@ -18,8 +18,8 @@ use rimz::agents;
 use rimz::agents::AgentContext;
 use rimz::agents::codex;
 use rimz::ids::{PaneId, WorkspaceId};
-use rimz::ledger::workspace_record;
-use rimz::{Ledger, ResolvedWorkspace, RuntimePaths, StatePaths};
+use rimz::store::workspace_record;
+use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 use super::GlobalFlags;
 
@@ -126,7 +126,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
-    let prior = rimz::ledger::agent_context::read_one(&runtime, "codex", session_id);
+    let prior = rimz::store::agent_context::read_one(&runtime, "codex", session_id);
     let transcript_model_hint = model.or_else(|| {
         prior
             .as_ref()
@@ -147,7 +147,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         confirm_codex_turn_death(&runtime, &workspace_id, session_id, refresh);
     }
     if let Some(refresh) = transcript_refresh {
-        rimz::ledger::agent_context::merge_local_context(
+        rimz::store::agent_context::merge_local_context(
             &runtime,
             "codex",
             session_id,
@@ -159,10 +159,10 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         wrote = true;
     }
 
-    let prior = rimz::ledger::agent_context::read_one(&runtime, "codex", session_id);
+    let prior = rimz::store::agent_context::read_one(&runtime, "codex", session_id);
     if !app_server_due(prior.as_ref(), REFRESH_THROTTLE_SECS) {
         if wrote {
-            let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
+            let _ = rimz::store::wakeup::wake_sidebars(&runtime);
         }
         return Ok(());
     }
@@ -179,7 +179,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         // App-server unreachable / nothing to record. Transcript context, if it
         // changed, was already written above.
         if wrote || oauth_wrote {
-            let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
+            let _ = rimz::store::wakeup::wake_sidebars(&runtime);
         }
         return Ok(());
     };
@@ -197,12 +197,12 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     }
     merge_app_server_context(&runtime, session_id, enrichment.context)
         .context("writing app-server agent-context sidecar")?;
-    let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
+    let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     Ok(())
 }
 
 fn app_server_due(
-    record: Option<&rimz::ledger::agent_context::AgentContextRecord>,
+    record: Option<&rimz::store::agent_context::AgentContextRecord>,
     within: i64,
 ) -> bool {
     let now = Timestamp::now().as_second();
@@ -236,7 +236,7 @@ fn codex_session_pane(
 ) -> Option<PaneId> {
     let paths = StatePaths::for_workspace(workspace_id.clone()).ok()?;
     let record = workspace_record::read(&paths.workspace_record).ok()?;
-    let ledger = Ledger::open(paths, runtime.clone()).ok()?;
+    let store = Store::open(paths, runtime.clone()).ok()?;
     let workspace = ResolvedWorkspace {
         workspace_id: workspace_id.clone(),
         project_root: record.project_root.clone(),
@@ -246,7 +246,7 @@ fn codex_session_pane(
         session_name: record.session_name,
         mux_hint: None,
     };
-    let snapshot = rimz::sidebar::produce::resolution_snapshot(&workspace, &ledger, None).ok()?;
+    let snapshot = rimz::sidebar::produce::resolution_snapshot(&workspace, &store, None).ok()?;
     snapshot
         .agent_panes
         .into_iter()
@@ -266,10 +266,10 @@ fn merge_app_server_context(
     context: AgentContext,
 ) -> Result<()> {
     let observed_at = context.observed_at;
-    let prior = rimz::ledger::agent_context::read_one(runtime, "codex", session_id);
+    let prior = rimz::store::agent_context::read_one(runtime, "codex", session_id);
     let mut record = prior.unwrap_or_else(|| {
-        rimz::ledger::agent_context::new_record("codex", session_id, {
-            rimz::ledger::agent_context::empty_context("codex", observed_at)
+        rimz::store::agent_context::new_record("codex", session_id, {
+            rimz::store::agent_context::empty_context("codex", observed_at)
         })
     });
 
@@ -289,7 +289,7 @@ fn merge_app_server_context(
     record.context.account = context.account;
     record.context.observed_at = observed_at;
     record.rate_limits_observed_at = Some(observed_at);
-    rimz::ledger::agent_context::write_record(runtime, &record)
+    rimz::store::agent_context::write_record(runtime, &record)
         .context("writing merged app-server context")
 }
 
@@ -312,10 +312,10 @@ mod tests {
     #[test]
     fn app_server_due_uses_app_server_stamp_not_whole_sidecar() {
         let now = Timestamp::now();
-        let mut record = rimz::ledger::agent_context::new_record(
+        let mut record = rimz::store::agent_context::new_record(
             "codex",
             "sess-1",
-            rimz::ledger::agent_context::empty_context("codex", now),
+            rimz::store::agent_context::empty_context("codex", now),
         );
         assert!(app_server_due(None, REFRESH_THROTTLE_SECS));
         assert!(
@@ -342,7 +342,7 @@ mod tests {
 
     fn seed_transcript_context(runtime: &RuntimePaths) {
         let transcript_at = Timestamp::from_second(1_700_000_000).unwrap();
-        rimz::ledger::agent_context::merge_local_context(
+        rimz::store::agent_context::merge_local_context(
             runtime,
             "codex",
             "sess-1",
@@ -422,7 +422,7 @@ mod tests {
     }
 
     fn assert_merged_context(runtime: &RuntimePaths, app_at: Timestamp) {
-        let merged = rimz::ledger::agent_context::read_one(runtime, "codex", "sess-1").unwrap();
+        let merged = rimz::store::agent_context::read_one(runtime, "codex", "sess-1").unwrap();
         assert_eq!(
             merged
                 .context

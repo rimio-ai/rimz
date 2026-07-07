@@ -73,7 +73,7 @@ fn refresh_session_transcript_context_with_snapshot(
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return;
     };
-    let prior = crate::ledger::agent_context::read_one(runtime, kind, session_id);
+    let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
     let ctx = LocalContextRefreshCtx {
         agent_id: session_id,
         model_hint,
@@ -92,7 +92,7 @@ fn refresh_session_transcript_context_with_snapshot(
     if let Some(snapshot) = snapshot {
         confirm_codex_turn_death_from_snapshot(snapshot, kind, session_id, &mut refresh);
     }
-    if let Err(err) = crate::ledger::agent_context::merge_local_context(
+    if let Err(err) = crate::store::agent_context::merge_local_context(
         runtime,
         kind,
         session_id,
@@ -109,7 +109,7 @@ fn refresh_session_transcript_context_with_snapshot(
         );
         return;
     }
-    let _ = crate::ledger::wakeup::wake_sidebars(runtime);
+    let _ = crate::store::wakeup::wake_sidebars(runtime);
 }
 
 fn confirm_codex_turn_death_from_snapshot(
@@ -436,7 +436,7 @@ mod tests {
 
         refresh_session_transcript_context(&runtime, "claude", "sess-1", Some("opus"));
 
-        assert!(crate::ledger::agent_context::read_all(&runtime).is_empty());
+        assert!(crate::store::agent_context::read_all(&runtime).is_empty());
     }
 
     #[test]
@@ -455,16 +455,16 @@ mod tests {
         )
         .unwrap();
 
-        let mut record = crate::ledger::agent_context::new_record(
+        let mut record = crate::store::agent_context::new_record(
             "codex",
             "sess-1",
-            crate::ledger::agent_context::empty_context("codex", Timestamp::now()),
+            crate::store::agent_context::empty_context("codex", Timestamp::now()),
         );
         record.transcript_path = Some(path.to_string_lossy().into_owned());
-        crate::ledger::agent_context::write_record(&runtime, &record).unwrap();
+        crate::store::agent_context::write_record(&runtime, &record).unwrap();
 
         refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
-        let first = crate::ledger::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        let first = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         // The sidecar carries the derivation inputs (window + current usage), not a
         // baked percentage; the gauge derives 50% (50 of 100) downstream.
         let first_tokens = first
@@ -484,7 +484,7 @@ mod tests {
         let stat = first.transcript_stat;
 
         refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
-        let second = crate::ledger::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         assert_eq!(second.context.observed_at, observed_at);
         assert_eq!(second.transcript_stat, stat);
 
@@ -499,7 +499,7 @@ mod tests {
             )
             .unwrap();
         refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
-        let third = crate::ledger::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        let third = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         assert_eq!(
             third
                 .context

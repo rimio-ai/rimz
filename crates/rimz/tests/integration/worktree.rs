@@ -16,9 +16,9 @@ use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 #[cfg(unix)]
 use rimz::ids::AgentKind;
 use rimz::ids::AgentSessionId;
-#[cfg(unix)]
-use rimz::ledger::event::{AgentLaunchPayload, AgentLaunchState};
 use rimz::message::{DeliveryGate, MessageRecord};
+#[cfg(unix)]
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState};
 use serde_json::Value;
 
 use crate::common::Env;
@@ -199,7 +199,7 @@ fn worktree_new_archives_messages_for_recreated_channel() {
         .assert()
         .success();
 
-    assert!(env.ledger().list_messages().expect("messages").is_empty());
+    assert!(env.store().list_messages().expect("messages").is_empty());
     let archived = env
         .read_events()
         .into_iter()
@@ -229,7 +229,7 @@ fn worktree_remove_archives_messages_for_removed_channel() {
         .assert()
         .success();
 
-    assert!(env.ledger().list_messages().expect("messages").is_empty());
+    assert!(env.store().list_messages().expect("messages").is_empty());
     let archived = env
         .read_events()
         .into_iter()
@@ -581,7 +581,7 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
     let env = Env::new();
     init_repo(&env.project_root);
     let missing = env.home_root.join("project-worktrees").join("missing");
-    let ledger = env.ledger();
+    let store = env.store();
     let record = rimz::harness::run::RunRecord::new(
         env.workspace_id.clone(),
         AgentKind::new_unchecked("codex"),
@@ -590,7 +590,7 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
         missing.clone(),
     );
     let run_id = record.run_id.clone();
-    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
     seed_agent_launch(
         &env,
         &missing,
@@ -619,14 +619,14 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
         .stderr(contains("refusing to launch the agent in the project root"));
 
     assert!(!ready.exists(), "agent shim was not spawned");
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
         .find(|agent| agent.agent_id.as_str() == "launch_missing")
         .expect("failed launch remains in roster");
     assert_eq!(agent.status, rimz::agents::AgentStatus::Failed);
-    let run = rimz::harness::run::load(ledger.paths(), &run_id).expect("load run");
+    let run = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
     assert_eq!(run.status, rimz::harness::run::RunStatus::Failed);
 }
 
@@ -1045,8 +1045,8 @@ fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageI
         "SessionStart",
         &observation,
     );
-    env.ledger().append_event(&event).expect("append agent");
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    env.store().append_event(&event).expect("append agent");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -1061,7 +1061,7 @@ fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageI
     )
     .with_channel(Some(channel.to_owned()));
     let message_id = message.message_id.clone();
-    env.ledger()
+    env.store()
         .queue_message(&message, "rimz-test")
         .expect("queue message");
     message_id
@@ -1242,7 +1242,7 @@ fn seed_agent_launch(
             description: None,
         },
     );
-    env.ledger().append_event(&event).expect("append launch");
+    env.store().append_event(&event).expect("append launch");
 }
 
 #[cfg(unix)]

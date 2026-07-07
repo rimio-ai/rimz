@@ -4,7 +4,7 @@
 //! non-sidebar callers route by pane. The sidebar producer lifts that list into
 //! tabs/windows, keeps process state as one record, and publishes the topology
 //! as cache-class `snapshot.json`. The frame admits every rendered sidebar
-//! card; ledger, sidecars, and realtime events only enrich cards whose pane is
+//! card; store, sidecars, and realtime events only enrich cards whose pane is
 //! present here.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::diag::record::DiagEvent;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewId, ViewKind};
-use crate::ledger::snapshot::{PresenceSample, SidebarOwnView};
 use crate::pane::{ElevatedAgent, PaneRef};
+use crate::store::snapshot::{PresenceSample, SidebarOwnView};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneFrame {
@@ -121,7 +121,7 @@ pub struct PaneMetrics {
     /// The sampler's stuck verdict only — `Some(Stuck)` when `/proc` reported a
     /// zombie or repeated uninterruptible sleep, else `None`. Idle-vs-busy is
     /// never carried here; the fold classifies it from the pane's program
-    /// (`ledger::snapshot::process`).
+    /// (`store::snapshot::process`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_state: Option<crate::ProcessState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,7 +244,7 @@ impl PaneState {
                 .current
                 .command
                 .as_deref()
-                .is_none_or(|command| !crate::ledger::snapshot::process_is_active(command));
+                .is_none_or(|command| !crate::store::snapshot::process_is_active(command));
             let same_known_pid = matches!(
                 (self.current.pid, prior.current.pid),
                 (Some(fresh), Some(previous)) if fresh == previous
@@ -272,7 +272,7 @@ impl PaneState {
 }
 
 // The constructor lives here, beside the frame it consumes, rather than with
-// the `SidebarOwnView` type in `ledger/snapshot` — the ledger read path stays
+// the `SidebarOwnView` type in `store/snapshot` — the store read path stays
 // free of sidebar imports and only the sidebar fold derives an own-view.
 impl SidebarOwnView {
     pub fn from_frame(own: &PaneId, frame: &PaneFrame) -> Option<Self> {
@@ -483,7 +483,7 @@ fn pane_is_sidebar_chrome(pane: &PaneState) -> bool {
     pane.current
         .command
         .as_deref()
-        .is_some_and(crate::ledger::snapshot::command_is_sidebar_chrome)
+        .is_some_and(crate::store::snapshot::command_is_sidebar_chrome)
 }
 
 #[cfg(test)]

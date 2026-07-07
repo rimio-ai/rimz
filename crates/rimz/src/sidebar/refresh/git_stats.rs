@@ -15,12 +15,12 @@ use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentStatus;
-use crate::ledger::atomic;
-use crate::ledger::single_flight::{self, Coalesced};
 use crate::sidebar::timing::{
     DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_IDLE_TTL,
     DIFF_STATS_TTL, WORKTREE_ROOTS_TTL, unix_now_ms,
 };
+use crate::store::atomic;
+use crate::store::single_flight::{self, Coalesced};
 use crate::worktree::{self, LandedVerdict};
 use crate::{PaneId, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
 

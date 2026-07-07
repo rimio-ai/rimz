@@ -2,7 +2,7 @@
 //!
 //! The elected sidebar elder keeps time for queued messages with a future
 //! delivery floor while a room is open. The elder reads only the wake cache and
-//! spawns the hidden `rimz message sweep` helper; ledger reads and writes stay in
+//! spawns the hidden `rimz message sweep` helper; store reads and writes stay in
 //! that helper.
 
 use std::path::Path;

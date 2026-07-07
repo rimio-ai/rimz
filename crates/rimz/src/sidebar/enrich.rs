@@ -1,4 +1,4 @@
-//! Shared sidebar projection fold over a ledger rollup and optional pane frame.
+//! Shared sidebar projection fold over a store rollup and optional pane frame.
 //!
 //! One ordered spine serves both producer and consumer reads. It projects lane
 //! caches and sidecars; it forks no subprocess and writes no cache files.
@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::agents::spending::SpendingCaches;
 use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
-use crate::ledger::snapshot::{
+use crate::store::snapshot::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, ResumeOutcome, RuntimeReapInputs,
     SidebarPresence,
 };
@@ -205,7 +205,7 @@ pub(crate) fn classify_trunk_sync(
 /// The wired agent kinds whose Rimz hooks are installed — the gate for idle
 /// synthesis on a pane no session has claimed yet. Per-agent hook checks keep an
 /// unwired pane as a process row, where it cannot become a forever-idle agent
-/// Rimz can report no status for. Environment, not ledger.
+/// Rimz can report no status for. Environment, not store.
 pub fn wired_kinds() -> Vec<String> {
     crate::agents::ADAPTERS
         .iter()
@@ -333,9 +333,9 @@ pub fn enrich(
     // and the stall window all see the truer per-tool value rather than
     // the turn-grained event timestamp.
     if !snapshot.agents.is_empty() {
-        snapshot = snapshot.with_agent_context(crate::ledger::agent_context::read_all(runtime));
+        snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(runtime));
         snapshot =
-            snapshot.with_subagent_context(crate::ledger::subagent_context::read_all(runtime));
+            snapshot.with_subagent_context(crate::store::subagent_context::read_all(runtime));
         let activity = crate::agent_activity::read_for_keys(
             runtime,
             snapshot
@@ -403,7 +403,7 @@ pub fn enrich(
         let panes = frame.to_pane_refs();
         let admitted_panes = SidebarSnapshot::card_admitted_live_panes(panes.clone(), exclude);
         let lazy_pairings =
-            crate::ledger::snapshot::compute_lazy_agent_pairings(&admitted_panes, &snapshot.agents);
+            crate::store::snapshot::compute_lazy_agent_pairings(&admitted_panes, &snapshot.agents);
         if producing {
             log_lazy_pairing_ambiguities(&snapshot, runtime, &lazy_pairings);
         }
@@ -428,10 +428,10 @@ pub fn enrich(
         apply_pane_metrics(&mut snapshot, metrics);
     }
     // Per-machine display preferences and the per-provider dashboard are
-    // environment, not ledger, so the rollup base carries neither. The
+    // environment, not store, so the rollup base carries neither. The
     // producer probes accounts out of band and publishes them alongside its
     // walked spending; a consumer reads both published caches back — never a
-    // per-tick fork or a ledger lock. Git rides the same split: the heavy-lane
+    // per-tick fork or a store lock. Git rides the same split: the heavy-lane
     // refresher refreshes the per-worktree facts (single-flighted), while
     // consumers and the live fetch worker project the cached ones.
     let lanes = opts.lanes;

@@ -3,11 +3,11 @@
 //! [`AgentContext`] is the normalized shape for the rich, high-frequency
 //! per-session data an agent publishes out of band — Claude's statusline,
 //! Codex's rollout tail plus app-server metadata, and future provider surfaces.
-//! It is sidecar enrichment, not durable ledger truth. Most fields are
+//! It is sidecar enrichment, not durable store truth. Most fields are
 //! render-only; turn-error and turn-settle markers also feed the shared status
 //! projection so read paths agree about hookless turn ends. Each agent
 //! integration produces it from its own transport or local refresh via
-//! [`super::AgentAdapter`]; storage ([`crate::ledger::agent_context`]) and the
+//! [`super::AgentAdapter`]; storage ([`crate::store::agent_context`]) and the
 //! snapshot fold-in are
 //! transport-agnostic, so a new agent slots in with only a new producer — no
 //! change to this type, the sidecar, or the fold-in.
@@ -136,7 +136,7 @@ pub struct SubagentContext {
 }
 
 /// One child's enrichment paired with the `agent_id` it belongs to — the
-/// adapter's output for a single `subagentStatusLine` task, before the ledger
+/// adapter's output for a single `subagentStatusLine` task, before the store
 /// stamps the `kind` it is filed under. A payload renders many rows, so one
 /// observation maps to one sidecar write keyed by `(kind, agent_id)`.
 #[derive(Clone, Debug, PartialEq)]

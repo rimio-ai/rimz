@@ -1,7 +1,7 @@
 //! Durable anomaly diagnostics for sidebar state.
 //!
 //! The log is a human/debugging surface: producer and renderer code append
-//! typed JSONL records, while correctness continues to read ledger/cache truth.
+//! typed JSONL records, while correctness continues to read store/cache truth.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -214,7 +214,7 @@ impl DiagSink {
             "prior": prior,
             "offending": offending,
         });
-        if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(&path, &record) {
+        if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(&path, &record) {
             tracing::debug!(path = %path.display(), error = %err, "diagnostic frame capture failed");
             return None;
         }

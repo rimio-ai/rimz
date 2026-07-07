@@ -34,10 +34,7 @@ fn provider_dashboard_renders_spend_cost_and_tabs() {
             Some("main"),
         ),
     );
-    room.agent_hook(
-        "claude",
-        &user_prompt_submit("sess-dash", "ledger refactor"),
-    );
+    room.agent_hook("claude", &user_prompt_submit("sess-dash", "store refactor"));
     let payload = claude_statusline("sess-dash", 76);
     let out = room.run_statusline_feed("claude", &payload);
     assert!(

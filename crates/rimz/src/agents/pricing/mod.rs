@@ -414,7 +414,7 @@ fn read_cache(path: &Path) -> PricingCache {
     }
 }
 
-/// Atomic write: temp file + rename, matching the ledger durability contract.
+/// Atomic write: temp file + rename, matching the store durability contract.
 fn write_cache(path: &Path, cache: &PricingCache) {
     let mut cache = cache.clone();
     cache.schema = PRICING_CACHE_SCHEMA;

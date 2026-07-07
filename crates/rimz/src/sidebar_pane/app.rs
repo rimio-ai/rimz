@@ -19,7 +19,6 @@ use std::time::{Duration, Instant};
 use crate::config::NotificationsPrefs;
 use crate::diag::record::DiagEvent;
 use crate::ids::PaneId;
-use crate::ledger::paths::PathErr;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::fuse::fuse;
@@ -27,6 +26,7 @@ use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};
 use crate::sidebar_pane::pets::{PetRenderCaps, detect_pet_render_caps};
+use crate::store::paths::PathErr;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::{ClearType, CrosstermBackend};
@@ -144,7 +144,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // Redraw the instant the pane is resized — most importantly when a user
     // attaches to a background session and Zellij sizes the pane for the first
     // time. The watcher nudges this loop through the same wakeup socket the
-    // ledger uses, so a resize is just another wakeup; without it the first
+    // store uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
     let pet_render_caps =
@@ -179,14 +179,14 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     );
     // Monotonic base for the animation frame. Deriving the phase from elapsed
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
-    // across re-fetches and ledger deltas, so no redraw path can stall it.
+    // across re-fetches and store deltas, so no redraw path can stall it.
     let anim_start = Instant::now();
 
     // The snapshot fetch (fast in-process fold plus optional produce) runs on a
     // background worker, so animation and input never block on it. The worker
     // posts `SNAPSHOT_WAKEUP` when a result is ready; the frame/tick path also
     // drains the result channel so that wakeup stays a latency hint. The
-    // dispatcher coalesces requests so a ledger-delta storm or a slow produce
+    // dispatcher coalesces requests so a store-delta storm or a slow produce
     // can never queue more than one extra run.
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
@@ -571,7 +571,7 @@ fn reload_or_refetch(session_name: &str, fetch: &mut FetchDispatcher) -> bool {
 /// sub-second window since the snapshot is a benign, self-correcting race, so
 /// the line stays local under `RUST_LOG=debug` and off the off-box error
 /// channel. The command is the whole jump: no local state changes, and the
-/// highlight converges on the next data fold (the backstop tick or a ledger
+/// highlight converges on the next data fold (the backstop tick or a store
 /// wakeup) once the mux reports the new focus.
 fn spawn_pane_focus(pane_id: PaneId, session_name: &str) {
     let session_name = session_name.to_owned();

@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use rimz::config::{GlyphRole, MachineConfig, validate_glyph_cells, validate_glyph_source};
-use rimz::ledger::atomic::write_bytes_atomically;
-use rimz::ledger::paths;
+use rimz::store::atomic::write_bytes_atomically;
+use rimz::store::paths;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 use super::GlobalFlags;

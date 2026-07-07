@@ -617,12 +617,12 @@ fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
     let (mut fetch, request_rx) = fetch_dispatcher();
 
     for event in [
-        SidebarEvent::LedgerDelta {
+        SidebarEvent::StoreDelta {
             event_method: None,
             agent_signal: None,
         },
         SidebarEvent::PanesChanged,
-        SidebarEvent::LedgerDelta {
+        SidebarEvent::StoreDelta {
             event_method: None,
             agent_signal: None,
         },
@@ -704,7 +704,7 @@ fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
                 &mut terminal,
                 event_envelope(
                     &ws,
-                    SidebarEvent::LedgerDelta {
+                    SidebarEvent::StoreDelta {
                         event_method: None,
                         agent_signal: None,
                     },
@@ -736,7 +736,7 @@ fn focus_resume_flushes_pending_unwatched_fetch() {
             &mut terminal,
             event_envelope(
                 &ws,
-                SidebarEvent::LedgerDelta {
+                SidebarEvent::StoreDelta {
                     event_method: None,
                     agent_signal: None,
                 },
@@ -744,7 +744,7 @@ fn focus_resume_flushes_pending_unwatched_fetch() {
             Instant::now(),
             &crate::diag::DiagSink::disabled(),
         )
-        .expect("defer ledger delta");
+        .expect("defer store delta");
     assert!(state.pending_fetch.is_some());
 
     state

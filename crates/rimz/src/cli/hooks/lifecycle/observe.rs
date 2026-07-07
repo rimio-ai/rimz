@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn record_lifecycle_observation(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
@@ -43,20 +43,20 @@ pub(super) fn record_lifecycle_observation(
         if observation.worktree_branch.is_none() {
             observation.worktree_branch = workspace.worktree_branch.clone();
         }
-        enrich_pane_stamp_from_cache(workspace, ledger, &mut observation);
+        enrich_pane_stamp_from_cache(workspace, store, &mut observation);
         recover_focused_pane_binding(
             agent.descriptor().kind,
             agent.descriptor().capabilities.registers_lazily,
             globals.mux,
             workspace,
-            ledger,
+            store,
             &mut observation,
         );
         let model_hint = observation.launch.model.clone();
         // Validate the transition this event drives against the prior rollup
         // and log any anomaly once, here at ingestion. Replay re-derives the
         // same state silently.
-        let transition = log_lifecycle_transition(ledger, agent.descriptor().kind, &observation);
+        let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
         if transition.is_some_and(|transition| {
             transition.compaction_closed
                 && !matches!(observation.signal, LifecycleSignal::CompactionEnded { .. })
@@ -87,7 +87,7 @@ pub(super) fn record_lifecycle_observation(
                 event_name,
                 &event_observation,
             );
-            match ledger.append_event(&envelope) {
+            match store.append_event(&envelope) {
                 Ok(()) => true,
                 Err(err) => {
                     warn!(
@@ -143,7 +143,7 @@ pub(super) fn event_lifecycle_observation(
 /// to surface a reconciled or ignored transition while we still have the event
 /// in hand to attribute it.
 pub(super) fn log_lifecycle_transition(
-    ledger: &Ledger,
+    store: &Store,
     kind: &str,
     observation: &AgentLifecycleObservation,
 ) -> Option<agent_lifecycle::Transition> {
@@ -161,7 +161,7 @@ pub(super) fn log_lifecycle_transition(
     // The prior state for this one agent, from the lock-free cached snapshot —
     // the projection of every event before this one, exactly the `prev` the
     // reducer folds this event onto.
-    let snapshot = match ledger.snapshot_cached() {
+    let snapshot = match store.snapshot_cached() {
         Ok(snapshot) => snapshot,
         Err(err) => {
             debug!(

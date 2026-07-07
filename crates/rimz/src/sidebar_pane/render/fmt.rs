@@ -103,7 +103,7 @@ pub(super) fn window_label(duration_mins: Option<u32>) -> String {
 /// Spend at full cent resolution with thousands grouped — `$0.00`, `$3.50`,
 /// `$124.05`, `$1,240.57`. Every spend in the sidebar reads as money at two
 /// decimals: the per-row cost, the cockpit's count-up headline total, the provider
-/// dashboard, and the fleet ledger all share this one shape, so a price never
+/// dashboard, and the fleet store all share this one shape, so a price never
 /// jitters between a cents and a whole-dollar form. Grouping keeps a large
 /// accumulating pile (`$12,480.13`) legible without changing that shape.
 pub(super) fn dollars2(usd: f64) -> String {
@@ -178,7 +178,7 @@ fn looks_like_slug(value: &str) -> bool {
 
 /// A token count as a whole-unit magnitude with no decimal — `523`, `76k`,
 /// `1M`, `2B` — for the agent card and the live cockpit / provider lines, where a
-/// tenths place is noise beside the precise `76.5k` the W/M ledger rows carry.
+/// tenths place is noise beside the precise `76.5k` the W/M store rows carry.
 /// Truncates to the unit (`76_500` → `76k`), matching the live figures' coarser
 /// read; sub-thousand counts stay exact.
 pub(super) fn tokens_int(count: u64) -> String {

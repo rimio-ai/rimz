@@ -4,7 +4,7 @@
 //! proceed unchanged. The budgets live beside the detector and are maintained
 //! with the cost map in `docs/internals/health/performance.md`.
 //! Counter deltas are scoped by producer lane so concurrent fetch and cache
-//! refresh work attribute their forks and ledger reads to the loop that caused
+//! refresh work attribute their forks and store reads to the loop that caused
 //! them. The same consecutive-tick window filters both breach start and
 //! recovery, so one cheap tick inside a saturated episode does not flap the
 //! diagnostic identity.

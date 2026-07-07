@@ -24,7 +24,7 @@ pub struct SidebarHeartbeat {
     pub workspace_id: WorkspaceId,
     pub instance_id: SidebarInstanceId,
     pub mux: MuxName,
-    /// Multiplexer session this sidebar is pinned to. The ledger wakeup walk
+    /// Multiplexer session this sidebar is pinned to. The store wakeup walk
     /// uses it to address backend-specific fast paths (e.g. the broadcast
     /// `zellij pipe` on the Zellij backend).
     pub session_name: String,

@@ -11,7 +11,7 @@ use std::time::Duration;
 #[test]
 fn hooks_bind_and_complete_supervised_run() {
     let env = Env::new();
-    let ledger = env.ledger();
+    let store = env.store();
     let sessions = env.home_root.join("codex-sessions");
     let day = sessions.join("2026").join("06").join("10");
     std::fs::create_dir_all(&day).expect("mkdir codex sessions");
@@ -29,7 +29,7 @@ fn hooks_bind_and_complete_supervised_run() {
         env.project_root.clone(),
     );
     let run_id = record.run_id.clone();
-    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
 
     let prompt_payload = json!({
         "hook_event_name": "UserPromptSubmit",
@@ -50,7 +50,7 @@ fn hooks_bind_and_complete_supervised_run() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let running = rimz::harness::run::load(ledger.paths(), &run_id).expect("load running run");
+    let running = rimz::harness::run::load(store.paths(), &run_id).expect("load running run");
     assert_eq!(running.status, RunStatus::Running);
     assert_eq!(running.agent_id.as_deref(), Some("sess-run"));
     assert_eq!(
@@ -77,7 +77,7 @@ fn hooks_bind_and_complete_supervised_run() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let completed = rimz::harness::run::load(ledger.paths(), &run_id).expect("load completed run");
+    let completed = rimz::harness::run::load(store.paths(), &run_id).expect("load completed run");
     assert_eq!(completed.status, RunStatus::Completed);
     assert_eq!(completed.last_message.as_deref(), Some("done"));
     assert_eq!(
@@ -121,7 +121,7 @@ fn run_rejects_invalid_agent_env_before_recording() {
         "agents -p error should name the invalid key\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let records = rimz::harness::run::list(env.ledger().paths()).expect("list runs");
+    let records = rimz::harness::run::list(env.store().paths()).expect("list runs");
     assert!(
         records.is_empty(),
         "invalid launch env should fail before recording a run: {records:?}"
@@ -228,7 +228,7 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
     if env.skip_if_sandboxed() {
         return;
     }
-    let ledger = env.ledger();
+    let store = env.store();
     let mut record = RunRecord::new(
         env.workspace_id.clone(),
         AgentKind::new_unchecked("codex"),
@@ -238,9 +238,9 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
     );
     record.status = RunStatus::Running;
     let run_id = record.run_id.clone();
-    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
     let (sock, _sock_path) =
-        rimz::bridge::bind_run(ledger.runtime_paths(), &run_id).expect("bind run socket");
+        rimz::harness::run_wake::bind_run(store.runtime_paths(), &run_id).expect("bind run socket");
 
     let out = env
         .rimz()
@@ -254,7 +254,7 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let canceled = rimz::harness::run::load(ledger.paths(), &run_id).expect("load canceled run");
+    let canceled = rimz::harness::run::load(store.paths(), &run_id).expect("load canceled run");
     assert_eq!(canceled.status, RunStatus::Canceled);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -262,9 +262,9 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
         .build()
         .expect("runtime");
     let outcome = runtime
-        .block_on(rimz::bridge::wait_for_run_completion_owning(
+        .block_on(rimz::harness::run_wake::wait_for_run_completion_owning(
             sock,
-            rimz::bridge::ExpectedRunFrame {
+            rimz::harness::run_wake::ExpectedRunFrame {
                 workspace_id: env.workspace_id.clone(),
                 run_id,
             },
@@ -273,7 +273,7 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
         .expect("wait for wake");
     assert_eq!(
         outcome,
-        rimz::bridge::RunWakeOutcome::Completed(RunStatus::Canceled)
+        rimz::harness::run_wake::RunWakeOutcome::Completed(RunStatus::Canceled)
     );
 }
 
@@ -294,7 +294,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
         }
     }
 
-    let ledger = env.ledger();
+    let store = env.store();
     let record = RunRecord::new(
         env.workspace_id.clone(),
         AgentKind::new_unchecked("codex"),
@@ -303,7 +303,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
         nested.clone(),
     );
     let run_id = record.run_id.clone();
-    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
 
     let out = env
         .rimz()
@@ -315,7 +315,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
         .expect("spawn agents show");
     assert!(
         out.status.success(),
-        "agents show should read the pinned room ledger\nstdout:\n{}\nstderr:\n{}",
+        "agents show should read the pinned room store\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -328,7 +328,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
 #[test]
 fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
     let env = Env::new();
-    let ledger = env.ledger();
+    let store = env.store();
     let observation = rimz::agents::AgentLifecycleObservation {
         agent_id: Some("sess-stale".into()),
         agent_name: Some("lucid-atlas".to_owned()),
@@ -360,7 +360,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         pane_stamp: None,
         parent_agent_id: None,
     };
-    ledger
+    store
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),
             "session",
@@ -376,7 +376,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
     // A fresh `observed_at`: `read_all` ages out a sidecar past its TTL.
-    let mut context = rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
+    let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         context_window_size: Some(1_000_000),
         used_percentage: Some(30),
@@ -387,8 +387,8 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         }),
         ..Default::default()
     });
-    let record = rimz::ledger::agent_context::new_record("claude", "sess-stale", context);
-    rimz::ledger::agent_context::write_record(&runtime, &record).expect("write context sidecar");
+    let record = rimz::store::agent_context::new_record("claude", "sess-stale", context);
+    rimz::store::agent_context::write_record(&runtime, &record).expect("write context sidecar");
 
     let out = env
         .rimz()
@@ -418,14 +418,14 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
 #[test]
 fn agents_show_capture_errors_when_agent_has_no_bound_pane() {
     let env = Env::new();
-    let ledger = env.ledger();
+    let store = env.store();
     let mut observation = rimz::agents::AgentLifecycleObservation::new(
         Some("sess-captureless".into()),
         rimz::agents::LifecycleSignal::Registered,
     );
     observation.agent_name = Some("lucid-atlas".to_owned());
     observation.worktree_path = Some(env.project_root.display().to_string());
-    ledger
+    store
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),
             "session",
@@ -484,7 +484,7 @@ fn assert_agents_list_requires_live_room(env: &Env, args: &[&str]) {
 #[test]
 fn run_stream_polls_transcript_until_terminal_record() {
     let env = Env::new();
-    let ledger = env.ledger();
+    let store = env.store();
     let transcript = env.runtime_root.join("run-stream.jsonl");
     std::fs::write(&transcript, "").expect("seed transcript");
     let mut record = RunRecord::new(
@@ -497,7 +497,7 @@ fn run_stream_polls_transcript_until_terminal_record() {
     record.status = RunStatus::Running;
     record.transcript_path = Some(transcript.to_string_lossy().into_owned());
     let run_id = record.run_id.clone();
-    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
 
     let child = env
         .rimz()
@@ -521,12 +521,12 @@ fn run_stream_polls_transcript_until_terminal_record() {
             b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hello\"}}\n",
         )
         .expect("append transcript");
-    let mut terminal = rimz::harness::run::load(ledger.paths(), &run_id).expect("load run");
+    let mut terminal = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
     terminal.status = RunStatus::Completed;
     terminal.last_message = Some("hello".to_owned());
     terminal.updated_at = Timestamp::now();
     terminal.completed_at = Some(terminal.updated_at);
-    rimz::ledger::run_store::write(&ledger.paths().runs_dir, &terminal).expect("write terminal");
+    rimz::store::run_store::write(&store.paths().runs_dir, &terminal).expect("write terminal");
 
     let out = child.wait_with_output().expect("wait agents stream");
     assert!(
@@ -549,7 +549,7 @@ fn run_stream_polls_transcript_until_terminal_record() {
 #[test]
 fn run_stream_timeout_stops_watching_without_timing_out_run() {
     let env = Env::new();
-    let ledger = env.ledger();
+    let store = env.store();
     let mut record = RunRecord::new(
         env.workspace_id.clone(),
         AgentKind::new_unchecked("codex"),
@@ -559,7 +559,7 @@ fn run_stream_timeout_stops_watching_without_timing_out_run() {
     );
     record.status = RunStatus::Running;
     let run_id = record.run_id.clone();
-    rimz::harness::run::create(ledger.paths(), &record).expect("create run");
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
 
     let out = env
         .rimz()
@@ -580,6 +580,6 @@ fn run_stream_timeout_stops_watching_without_timing_out_run() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let loaded = rimz::harness::run::load(ledger.paths(), &run_id).expect("load run");
+    let loaded = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
     assert_eq!(loaded.status, RunStatus::Running);
 }

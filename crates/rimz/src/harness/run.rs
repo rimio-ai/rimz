@@ -10,9 +10,9 @@ use crate::agents::{AgentLifecycleObservation, LifecycleSignal, TurnPhase};
 use crate::agents::{AgentState, AgentStatus};
 use crate::harness::schedule::runner::tail_output;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
-use crate::ledger::lock::WorkspaceLock;
-use crate::ledger::run_store::{self, RunStoreErr};
-use crate::ledger::{SidebarSnapshot, StatePaths};
+use crate::store::lock::WorkspaceLock;
+use crate::store::run_store::{self, RunStoreErr};
+use crate::store::{SidebarSnapshot, StatePaths};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 /// The launched adapter kind (`claude`, `codex`, ...). Its presence marks the

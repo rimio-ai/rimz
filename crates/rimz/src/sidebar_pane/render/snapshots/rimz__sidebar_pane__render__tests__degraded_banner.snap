@@ -19,4 +19,4 @@ expression: screen
 
 
 
- ⚠ Sidebar degraded for <elapsed>: snapshot failed: ledger not found
+ ⚠ Sidebar degraded for <elapsed>: snapshot failed: store not found

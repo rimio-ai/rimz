@@ -75,7 +75,7 @@ fn standalone_team_role_uses_team_channel_and_role_handle() {
         "team role handle renders:\n{screen}"
     );
 
-    let snapshot = env.ledger().snapshot().expect("snapshot");
+    let snapshot = env.store().snapshot().expect("snapshot");
     let planner = snapshot
         .agents
         .iter()

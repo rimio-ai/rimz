@@ -1,4 +1,4 @@
-//! Verifies the wakeup-walk contract: after a ledger write, the walk fans out a
+//! Verifies the wakeup-walk contract: after a store write, the walk fans out a
 //! per-instance UDP datagram to every fresh sidebar — and does **not** shell out
 //! to `zellij`. The broadcast `zellij pipe` it used to issue alongside the
 //! datagram had no consumer — the native pane wakes over the socket — so
@@ -13,8 +13,8 @@
 //!
 //! `unsafe_code = "forbid"` is workspace-wide and includes test targets, so
 //! we cannot mutate process env from inside this test. Instead we run the
-//! whole ledger write through a `rimz hooks feed` subprocess and seed its
-//! env. The subprocess constructs its own `Ledger` rooted at the test's
+//! whole store write through a `rimz hooks feed` subprocess and seed its
+//! env. The subprocess constructs its own `Store` rooted at the test's
 //! `XDG_STATE_HOME`/`XDG_RUNTIME_DIR` overrides, walks the heartbeats we
 //! planted there, and sends one wakeup datagram per fresh sidebar — never
 //! shelling out to the trace shim.
@@ -28,8 +28,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
-use rimz::ledger::RuntimePaths;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
+use rimz::store::RuntimePaths;
 use tempfile::TempDir;
 
 use crate::common::ScrubSessionEnvExt;
@@ -50,10 +50,10 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
 
     // The datagram — the channel of record — reaches *both* fresh sidebars on the
     // session: the walk fans out one datagram per instance, which is what replaced
-    // the old per-session pipe dedup. Each payload is the typed `LedgerDelta` event
+    // the old per-session pipe dedup. Each payload is the typed `StoreDelta` event
     // the renderer folds.
-    assert_ledger_delta(&fixture.recv_a, "sidebar.a", &fixture.workspace_id);
-    assert_ledger_delta(&fixture.recv_b, "sidebar.b", &fixture.workspace_id);
+    assert_store_delta(&fixture.recv_a, "sidebar.a", &fixture.workspace_id);
+    assert_store_delta(&fixture.recv_b, "sidebar.b", &fixture.workspace_id);
 
     // The walk must not shell out to `zellij`: the consumerless pipe broadcast
     // was removed, so the trace shim is never invoked. The push has returned, so
@@ -190,7 +190,7 @@ fn run_wakeup_trigger(rimz_bin: &Path, trace_bin: &Path, fixture: &WakeupFixture
     );
 }
 
-fn assert_ledger_delta(
+fn assert_store_delta(
     recv: &std::os::unix::net::UnixDatagram,
     who: &str,
     workspace_id: &WorkspaceId,
@@ -208,7 +208,7 @@ fn assert_ledger_delta(
     );
     assert!(parsed.get("session_name").is_none());
     assert!(parsed["sent_at_ms"].as_u64().is_some());
-    assert_eq!(parsed["event"]["kind"], "ledger_delta");
+    assert_eq!(parsed["event"]["kind"], "store_delta");
 }
 
 fn assert_no_zellij_pipe_spawned(log_path: &Path) {

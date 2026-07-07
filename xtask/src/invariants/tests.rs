@@ -98,7 +98,7 @@ fn sidebar_event_log_reads_must_route_through_rollup() {
         std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
     }
     let direct_read = concat!(
-        "fn f() { crate::ledger::event_log",
+        "fn f() { crate::store::event_log",
         "::",
         "read_all(path); }\n"
     );

@@ -77,7 +77,7 @@ fn refresh_context(
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
-    let prior = rimz::ledger::agent_context::read_one(&runtime, "opencode", session_id);
+    let prior = rimz::store::agent_context::read_one(&runtime, "opencode", session_id);
     if !rich_context_due(prior.as_ref(), REFRESH_THROTTLE_SECS) {
         return Ok(());
     }
@@ -95,13 +95,13 @@ fn refresh_context(
     if merge_opencode_context(&runtime, session_id, context)
         .context("writing OpenCode rich-context sidecar")?
     {
-        let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
+        let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     }
     Ok(())
 }
 
 fn rich_context_due(
-    record: Option<&rimz::ledger::agent_context::AgentContextRecord>,
+    record: Option<&rimz::store::agent_context::AgentContextRecord>,
     within: i64,
 ) -> bool {
     let now = Timestamp::now().as_second();
@@ -119,10 +119,10 @@ fn merge_opencode_context(
         return Ok(false);
     }
     let observed_at = context.observed_at;
-    let prior = rimz::ledger::agent_context::read_one(runtime, "opencode", session_id);
+    let prior = rimz::store::agent_context::read_one(runtime, "opencode", session_id);
     let mut record = prior.unwrap_or_else(|| {
-        rimz::ledger::agent_context::new_record("opencode", session_id, {
-            rimz::ledger::agent_context::empty_context("opencode", observed_at)
+        rimz::store::agent_context::new_record("opencode", session_id, {
+            rimz::store::agent_context::empty_context("opencode", observed_at)
         })
     });
 
@@ -134,7 +134,7 @@ fn merge_opencode_context(
     record.context.agent_version = context.agent_version;
     record.context.observed_at = observed_at;
     record.rich_observed_at = Some(observed_at);
-    rimz::ledger::agent_context::write_record(runtime, &record)
+    rimz::store::agent_context::write_record(runtime, &record)
         .context("writing merged OpenCode context")?;
     Ok(true)
 }
@@ -163,10 +163,10 @@ mod tests {
     #[test]
     fn rich_context_due_uses_rich_stamp_not_whole_sidecar() {
         let now = Timestamp::now();
-        let mut record = rimz::ledger::agent_context::new_record(
+        let mut record = rimz::store::agent_context::new_record(
             "opencode",
             "sess-1",
-            rimz::ledger::agent_context::empty_context("opencode", now),
+            rimz::store::agent_context::empty_context("opencode", now),
         );
         assert!(rich_context_due(None, REFRESH_THROTTLE_SECS));
         assert!(
@@ -191,7 +191,7 @@ mod tests {
             merge_opencode_context(&runtime, "sess-1", rich_context(rich_at)).unwrap(),
             "rich fields write the sidecar"
         );
-        let merged = rimz::ledger::agent_context::read_one(&runtime, "opencode", "sess-1").unwrap();
+        let merged = rimz::store::agent_context::read_one(&runtime, "opencode", "sess-1").unwrap();
 
         assert_eq!(
             merged
@@ -226,16 +226,16 @@ mod tests {
             !merge_opencode_context(
                 &runtime,
                 "sess-1",
-                rimz::ledger::agent_context::empty_context("opencode", observed_at)
+                rimz::store::agent_context::empty_context("opencode", observed_at)
             )
             .unwrap()
         );
-        assert!(rimz::ledger::agent_context::read_one(&runtime, "opencode", "sess-1").is_none());
+        assert!(rimz::store::agent_context::read_one(&runtime, "opencode", "sess-1").is_none());
     }
 
     fn seed_push_context(runtime: &RuntimePaths) {
         let push_at = Timestamp::from_second(1_700_000_000).unwrap();
-        rimz::ledger::agent_context::merge_local_context(
+        rimz::store::agent_context::merge_local_context(
             runtime,
             "opencode",
             "sess-1",

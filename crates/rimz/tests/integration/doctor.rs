@@ -1,13 +1,13 @@
-//! `rimz doctor` integration tests. Inject ledger and heartbeat state directly,
+//! `rimz doctor` integration tests. Inject store and heartbeat state directly,
 //! then run the binary and assert the report. The JSON report is the stable
 //! contract checked here; a smoke test pins the human report's shape.
 
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::ids::{MuxName, SidebarInstanceId};
-use rimz::ledger::event::{EventEnvelope, MessageEventMethod};
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
+use rimz::store::event::{EventEnvelope, MessageEventMethod};
 use serde_json::Value;
 
 use crate::common::Env;
@@ -56,7 +56,7 @@ fn inject_lifecycle(
         "SessionStart",
         &obs,
     );
-    env.ledger().append_event(&envelope).expect("append");
+    env.store().append_event(&envelope).expect("append");
 }
 
 /// Run `rimz doctor --json …` and parse the report, failing loudly on a non-zero
@@ -376,7 +376,7 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
         LifecycleSignal::Registered,
         Some("messages"),
     );
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()
@@ -394,7 +394,7 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
     stuck.attempts = 3;
     stuck.last_error = Some("pane rejected".to_owned());
     let stuck_id = stuck.message_id.to_string();
-    env.ledger()
+    env.store()
         .queue_message(&stuck, "test-session")
         .expect("queue stuck message");
 
@@ -407,7 +407,7 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
     );
     failed.status = MessageStatus::Errored;
     let failed_id = failed.message_id.to_string();
-    env.ledger()
+    env.store()
         .append_event(&EventEnvelope::message_event(
             &failed,
             "test-session",
@@ -425,7 +425,7 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
     );
     delivered.status = MessageStatus::Delivered;
     let delivered_id = delivered.message_id.to_string();
-    env.ledger()
+    env.store()
         .append_event(&EventEnvelope::message_event(
             &delivered,
             "test-session",
@@ -670,7 +670,7 @@ fn doctor_json_reports_protocol_version_mismatches() {
         serde_json::json!({ "kind": "build.started" }),
     );
     event.schema_version = "rimz.event.v0".to_owned();
-    env.ledger().append_event(&event).expect("append old event");
+    env.store().append_event(&event).expect("append old event");
 
     let rt = env.runtime_paths();
     rt.ensure_dirs().expect("runtime dirs");
@@ -684,7 +684,7 @@ fn doctor_json_reports_protocol_version_mismatches() {
         None,
     );
     sidebar.protocol_version = "rimz.plugin.v0".to_owned();
-    rimz::ledger::atomic::write_temp_then_rename(
+    rimz::store::atomic::write_temp_then_rename(
         &rt.heartbeat_dir.join("sidebar.old.json"),
         &sidebar,
     )

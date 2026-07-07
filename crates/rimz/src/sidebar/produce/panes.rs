@@ -9,9 +9,6 @@ use std::time::Duration;
 use super::Result;
 use crate::diag::record::{DiagEvent, FrameRejectReason};
 use crate::ids::{AgentSessionId, MuxName, PaneId};
-use crate::ledger::atomic;
-use crate::ledger::single_flight::{self, Coalesced};
-use crate::ledger::snapshot::PresenceSample;
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::sidebar::cache::{
     effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched, read_snapshot_cache,
@@ -19,6 +16,9 @@ use crate::sidebar::cache::{
 };
 use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
 use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL, unix_now_ms};
+use crate::store::atomic;
+use crate::store::single_flight::{self, Coalesced};
+use crate::store::snapshot::PresenceSample;
 
 mod carry;
 mod starts;
@@ -64,7 +64,7 @@ fn fresh_snapshot_cache(
 }
 
 /// The session's live panes from the mux — the roster read the snapshot cache
-/// amortizes across the fleet. The ledger rollup is read separately (fresh from
+/// amortizes across the fleet. The store rollup is read separately (fresh from
 /// `latest.json`), so this enumerates only the pane set.
 /// The per-view `is_focused` mark rides the pane list itself as a fallback
 /// focus candidate. The elected producer also samples the attached clients'
@@ -142,7 +142,7 @@ fn stamp_pane_resumed_session_ids(
             .current
             .command
             .as_deref()
-            .and_then(crate::ledger::snapshot::command_agent_kind)
+            .and_then(crate::store::snapshot::command_agent_kind)
             == Some("codex")
             || pane
                 .current
@@ -226,7 +226,7 @@ fn backfill_wrapper_spawn_commands(
             continue;
         };
         if let Some(cmdline) = proc_cmdline(pid)
-            .filter(|cmdline| crate::ledger::snapshot::command_agent_kind(cmdline).is_some())
+            .filter(|cmdline| crate::store::snapshot::command_agent_kind(cmdline).is_some())
         {
             pane.current.spawn_command = Some(cmdline);
         }
@@ -329,7 +329,7 @@ fn drop_finished_active_commands(
         let Some(command) = pane.current.command.as_deref() else {
             continue;
         };
-        if !crate::ledger::snapshot::process_is_active(command) {
+        if !crate::store::snapshot::process_is_active(command) {
             continue;
         }
         let Some(root_pid) = pane.current.pid else {
@@ -433,7 +433,7 @@ fn process_command_probe(
     if command.is_empty() {
         return ProcessCommandProbe::Unknown;
     }
-    let command_label = crate::ledger::snapshot::program_label(command);
+    let command_label = crate::store::snapshot::program_label(command);
     let mut saw_cmdline_mismatch = false;
     match proc_cmdline(pid).map(|cmdline| cmdline.trim().to_owned()) {
         Some(cmdline) if !cmdline.is_empty() => match match_mode {
@@ -442,7 +442,7 @@ fn process_command_probe(
             }
             ProcessCommandMatch::ExactCmdline => return ProcessCommandProbe::Mismatch,
             ProcessCommandMatch::ProgramLabel
-                if crate::ledger::snapshot::program_label(&cmdline) == command_label =>
+                if crate::store::snapshot::program_label(&cmdline) == command_label =>
             {
                 return ProcessCommandProbe::Match;
             }
@@ -1220,7 +1220,7 @@ fn refresh_cached_presence(
 fn publish_frame(runtime: &crate::RuntimePaths, cache_path: &Path, frame: &PaneFrame) {
     if let Err(err) = atomic::write_temp_then_rename_cache(cache_path, frame) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
-    } else if let Err(err) = crate::ledger::wakeup::wake_sidebars_pane_frame_published(runtime) {
+    } else if let Err(err) = crate::store::wakeup::wake_sidebars_pane_frame_published(runtime) {
         tracing::debug!(error = %err, "sidebar pane-frame publication wakeup failed");
     }
 }

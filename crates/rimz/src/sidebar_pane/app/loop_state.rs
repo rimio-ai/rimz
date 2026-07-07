@@ -569,7 +569,7 @@ impl LoopState {
                     self.ui.help_visible = false;
                 }
             }
-            // Identity-free nudges — `LedgerDelta`, `PanesChanged`, a
+            // Identity-free nudges — `StoreDelta`, `PanesChanged`, a
             // `PaneOpened` without a command: nothing to fuse, so refetch,
             // bypassing the pane cache when the event says topology moved.
             _ => {
@@ -686,7 +686,7 @@ impl LoopState {
     }
 
     /// Apply an input wakeup (key/mouse/resize) to the local UI in place. Input
-    /// never changes ledger data, so it redraws the *current* snapshot and may
+    /// never changes store data, so it redraws the *current* snapshot and may
     /// jump focus, but it never re-runs the snapshot burst — that per-keystroke
     /// refetch was the input lag. Input paints synchronously so a keypress or
     /// click feels instant rather than waiting for the next frame; the returned
@@ -861,7 +861,7 @@ impl LoopState {
             fetch.request(FetchRequest::force_fold(), false);
         }
 
-        // Data backstop: catch pane/git drift no ledger delta announced. It is
+        // Data backstop: catch pane/git drift no store delta announced. It is
         // self-gated to the data tick and no-ops while a fetch is in flight.
         if self.pending_fetch.is_none() && self.fetched_at.elapsed() >= ctx.tick {
             fetch.request(FetchRequest::default(), false);
@@ -1354,7 +1354,7 @@ impl LoopState {
         )?;
         self.next_frame = Instant::now();
         if let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone())
-            && let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
+            && let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
                 &runtime,
                 Some(&config.session_name),
                 event,
@@ -1402,7 +1402,7 @@ impl LoopState {
 /// Ping every sidebar in the room to refold after a mark read/unread — the
 /// elder prunes or keeps the episode and peer tabs converge on the new state.
 fn wake_room(runtime: &RuntimePaths) {
-    if let Err(err) = crate::ledger::wakeup::wake_sidebars(runtime) {
+    if let Err(err) = crate::store::wakeup::wake_sidebars(runtime) {
         debug!(error = %err, "mark read/unread sidebar wake failed");
     }
 }

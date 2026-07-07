@@ -9,13 +9,13 @@ use std::time::Instant;
 use crate::diag::record::DiagEvent;
 use crate::diag::{DiagSink, Limiter};
 use crate::ids::SidebarInstanceId;
-use crate::ledger::paths::RuntimePaths;
 use crate::sidebar::cache::read_snapshot_cache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{
     OBSERVE_COOLDOWN, OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS,
 };
+use crate::store::paths::RuntimePaths;
 use jiff::Timestamp;
 
 use super::{AnomalyDraft, AnomalyKind, ObserveMsg, ObserveRole, RosterSig, cap_vec};

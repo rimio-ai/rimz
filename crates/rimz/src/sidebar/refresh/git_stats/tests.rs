@@ -73,7 +73,7 @@ fn write_rimz_worktree_marker_named(repo: &GitFixture, name: &str, base_ref: &st
         worktree_path: repo.path().to_path_buf(),
         created_at: jiff::Timestamp::now(),
     };
-    crate::ledger::atomic::write_temp_then_rename(
+    crate::store::atomic::write_temp_then_rename(
         &crate::worktree::marker_path(repo.path()).unwrap(),
         &marker,
     )

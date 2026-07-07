@@ -383,7 +383,7 @@ fn render_enriched_selected_agent_card() {
     // Per-row cost now reads at full cent resolution, like every other spend.
     assert!(rendered.contains("$1.27"));
     // Line 2 is the full-width description.
-    assert!(rendered.contains("ledger refactor"));
+    assert!(rendered.contains("store refactor"));
     // The context bar carries the `▣` label and the percent used as its
     // value (always — the window size moved to the token line below); the
     // fill carries the same reading.
@@ -397,7 +397,7 @@ fn render_enriched_selected_agent_card() {
     // 38.2% above and this 76k are one measurement), a · seam, then the
     // latest call's composition ordered by how the window filled — ◌
     // cache read, ◍ cache write, ↘ fresh input, ↗ output. The ◇ totals
-    // stay the cockpit/ledger vocabulary; the window size no longer rides
+    // stay the cockpit/store vocabulary; the window size no longer rides
     // this line.
     assert!(
         rendered.contains("▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k"),
@@ -448,7 +448,7 @@ fn render_api_error_dead_turn_card() {
         "line 2 quotes the upstream error text:\n{rendered}"
     );
     assert!(
-        !rendered.contains("ledger refactor"),
+        !rendered.contains("store refactor"),
         "the reason takes the line over the session-name fall-through:\n{rendered}"
     );
     assert_snapshot("api_error_dead_turn_card", rendered);

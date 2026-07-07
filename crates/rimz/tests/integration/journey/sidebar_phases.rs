@@ -1,7 +1,7 @@
 //! The user journey, phase by phase (`docs/guide/product.md` and
 //! `docs/guide/experience.md`).
 //!
-//! Backend-neutral: each test drives the renderer once over a real ledger and
+//! Backend-neutral: each test drives the renderer once over a real store and
 //! reads the parsed pane. Renderer mechanics live in `docs/internals/sidebar/sidebar.md`;
 //! layout/tabs/focus live in `backend/zellij.rs`; the actual mux-pane content
 //! smokes live in `journey/deep.rs`.
@@ -17,13 +17,13 @@ use crate::common::Env;
 /// invisible: the pane is live, so it shows as a dim `○ codex` process row (the
 /// same hollow idle glyph an agent shows, set apart by the dim process tone). But
 /// the row carries no agent enrichment — without an installed hook nothing reaches
-/// the ledger, so no model, status, or task folds in. Only after `rimz hooks
+/// the store, so no model, status, or task folds in. Only after `rimz hooks
 /// install` does a fresh `SessionStart` light up the agent row with its model. The
 /// room is deliberately correct to require `rimz hooks install` (Rimz never
 /// silently rewrites the user's agent config).
 ///
 /// The harness fires agents through their *installed* hook, so an un-onboarded
-/// `agent_hook` reaches the ledger as a no-op — exactly what a real agent does
+/// `agent_hook` reaches the store as a no-op — exactly what a real agent does
 /// with no Rimz hook configured — while the pane it runs in stays live.
 #[test]
 fn phase0_onboarding_hint_then_wire_then_agent_appears() {
@@ -38,7 +38,7 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
 
     // The user runs codex before wiring it. The pane is live, so it shows as a
     // process row and the first-run hint steps aside — but with no installed hook
-    // nothing reaches the ledger, so the row carries no agent enrichment. The
+    // nothing reaches the store, so the row carries no agent enrichment. The
     // idle process row and an idle agent row share the hollow `○`, so the model
     // (`GPT 5.5`), which only an enriched agent row shows, is what tells them
     // apart here.
@@ -50,11 +50,11 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
     );
     assert!(
         !screen.contains("GPT 5.5"),
-        "with no installed hook nothing reaches the ledger, so the process row carries no agent model:\n{screen}"
+        "with no installed hook nothing reaches the store, so the process row carries no agent model:\n{screen}"
     );
 
     // The user follows the hint, installs hooks, and runs codex again. Now the
-    // installed `SessionStart` reaches the ledger and the process row resolves
+    // installed `SessionStart` reaches the store and the process row resolves
     // into an idle agent row addressed by its team role.
     room.onboard(&["codex"]);
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
@@ -213,11 +213,11 @@ fn phase4_fleet_groups_and_tallies() {
     );
 }
 
-/// Phase 6 — detach and reattach. Walk away (drop the renderer); the ledger
+/// Phase 6 — detach and reattach. Walk away (drop the renderer); the store
 /// keeps the state. A fresh renderer reconstructs every agent where you left
-/// it. (Implemented — the renderer is a stateless projection of the ledger.)
+/// it. (Implemented — the renderer is a stateless projection of the store.)
 #[test]
-fn phase6_reattach_reconstructs_from_ledger() {
+fn phase6_reattach_reconstructs_from_store() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
@@ -227,7 +227,7 @@ fn phase6_reattach_reconstructs_from_ledger() {
         room.onboard(&["codex"]);
         room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
         room.wait_for(|s| s.contains("○ coder"), SETTLE);
-    } // walk away — the renderer drops, the ledger stays.
+    } // walk away — the renderer drops, the store stays.
 
     let room = RoomHarness::launch(&env, MuxName::Tmux);
     let screen = room.wait_for(|s| s.contains("○ coder"), SETTLE);

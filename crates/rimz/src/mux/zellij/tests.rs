@@ -55,11 +55,11 @@ exit 0
 #[test]
 fn list_panes_uses_fresh_topology_without_zellij_action() {
     use crate::ids::WorkspaceId;
-    use crate::ledger::paths::RuntimePaths;
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
     use crate::mux::{MuxBackend, PaneListOptions};
     use crate::sidebar::cache::write_pane_topology_cache;
     use crate::sidebar::timing::unix_now_ms;
+    use crate::store::paths::RuntimePaths;
 
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
@@ -181,11 +181,11 @@ exit 0
 fn add_sidebar_timeout_never_closes_stdout_only_hint() {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
-    use crate::ledger::paths::RuntimePaths;
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
     use crate::mux::{SidebarPaneOptions, SidebarWidth};
     use crate::sidebar::cache::write_pane_topology_cache;
     use crate::sidebar::timing::unix_now_ms;
+    use crate::store::paths::RuntimePaths;
 
     let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
     let project_temp = tempfile::TempDir::new().expect("project tempdir");
@@ -309,11 +309,11 @@ esac
 fn reconcile_targets_tabs_by_position_from_topology_cache() {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
-    use crate::ledger::paths::RuntimePaths;
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
     use crate::mux::{SidebarPaneOptions, SidebarWidth};
     use crate::sidebar::cache::write_pane_topology_cache;
     use crate::sidebar::timing::unix_now_ms;
+    use crate::store::paths::RuntimePaths;
 
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh

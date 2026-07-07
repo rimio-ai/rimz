@@ -195,11 +195,11 @@ pub fn stats_path(runtime: &crate::RuntimePaths) -> PathBuf {
 /// runtime budget, so callers that hand it to OpenSSH use
 /// [`validated_control_path`] to fail with Rimz's AF_UNIX remedy first.
 pub fn control_path() -> PathBuf {
-    control_path_under(&crate::ledger::paths::runtime_home(), std::process::id())
+    control_path_under(&crate::store::paths::runtime_home(), std::process::id())
 }
 
 pub fn validated_control_path() -> std::result::Result<PathBuf, sock::SocketPathTooLong> {
-    validated_control_path_under(&crate::ledger::paths::runtime_home(), std::process::id())
+    validated_control_path_under(&crate::store::paths::runtime_home(), std::process::id())
 }
 
 fn validated_control_path_under(

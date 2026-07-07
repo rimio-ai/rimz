@@ -13,10 +13,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand, ValueEnum};
 
-use super::{GlobalFlags, current_channel, open_ledger};
+use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
-use rimz::ledger::workspace_record;
 use rimz::sidebar::consumer::read_published_snapshot;
 use rimz::sidebar::events::SidebarEvent;
 use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
@@ -25,6 +24,7 @@ use rimz::sidebar::produce::{
     produce_snapshot_with_refresh,
 };
 use rimz::sidebar::{cache::write_presence_stamp, consumer::RollupCursor};
+use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{PaneAgent, RuntimePaths, SidebarRow, SidebarSnapshot, StatePaths};
 
@@ -797,7 +797,7 @@ fn write_plugin_presence_sample(workspace_id: &WorkspaceId, command: &WakeComman
 }
 
 fn broadcast_wake_event(runtime: &RuntimePaths, session_name: Option<&str>, event: SidebarEvent) {
-    if let Err(err) = rimz::ledger::wakeup::broadcast_sidebar_event(runtime, session_name, event) {
+    if let Err(err) = rimz::store::wakeup::broadcast_sidebar_event(runtime, session_name, event) {
         tracing::debug!(error = %err, "presence poke: event datagram failed");
     }
 }
@@ -1015,7 +1015,7 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
         .iter()
         .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.clone()))
         .collect::<Vec<_>>();
-    rimz::ledger::wakeup::broadcast_sidebar_event(
+    rimz::store::wakeup::broadcast_sidebar_event(
         &resolved.runtime,
         Some(&resolved.workspace.session_name),
         SidebarEvent::Notify {
@@ -1066,8 +1066,8 @@ fn resolve_sidebar_targets(
         });
     }
 
-    let ledger = open_ledger(&workspace)?;
-    let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    let store = open_store(&workspace)?;
+    let snapshot = super::resolution_snapshot(&workspace, &store, globals)?;
     let rows = resolve_rows(&snapshot, target, worktree, channel.as_deref())?;
     Ok(ResolvedSidebarTargets {
         workspace,
@@ -1127,7 +1127,7 @@ fn diag_for_workspace(workspace: &rimz::ResolvedWorkspace) -> rimz::diag::DiagSi
 }
 
 fn wake_sidebars(runtime: &RuntimePaths) {
-    if let Err(err) = rimz::ledger::wakeup::wake_sidebars(runtime) {
+    if let Err(err) = rimz::store::wakeup::wake_sidebars(runtime) {
         tracing::debug!(error = %err, "sidebar unread wake failed");
     }
 }

@@ -63,7 +63,7 @@ fn registered(
 /// does, so the `AgentState` under test is whatever the fold actually produces.
 fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
     let projection = h
-        .ledger
+        .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
     rimz::harness::resume::plan_resume(
@@ -122,7 +122,7 @@ fn resumes_an_agent_stamped_in_the_real_rollup() {
         "/repo/feature",
         "feature",
     );
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
         .expect("append");
 
@@ -152,7 +152,7 @@ fn resume_replays_role_and_team() {
     obs.launch.role = Some("planner".to_owned());
     obs.launch.team = Some("pcr".to_owned());
     obs.launch.profile = Some("claude-planner".to_owned());
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
         .expect("append");
 
@@ -194,10 +194,10 @@ fn two_same_kind_agents_in_one_worktree_each_resume_their_own_pane() {
     let h = Harness::new();
     let first = registered("sess-a", "lane-a", "terminal_3", "/repo/shared", "main");
     let second = registered("sess-b", "lane-b", "terminal_4", "/repo/shared", "main");
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &first))
         .expect("append first");
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &second))
         .expect("append second");
 
@@ -219,10 +219,10 @@ fn a_relaunch_reusing_one_pane_resumes_only_the_newest() {
     let h = Harness::new();
     let older = registered("sess-old", "ember", "terminal_3", "/repo/work", "main");
     let newer = registered("sess-new", "ember", "terminal_3", "/repo/work", "main");
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &older))
         .expect("append older");
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &newer))
         .expect("append newer");
 
@@ -241,10 +241,10 @@ fn a_rebirth_boundary_clears_a_prior_stamp_so_it_is_not_resumed() {
     // surviving pane and leaves the agent out.
     let h = Harness::new();
     let obs = registered("sess-old", "old-ember", "terminal_3", "/repo/old", "old");
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
         .expect("append agent");
-    h.ledger
+    h.store
         .append_event(&EventEnvelope::session_rebirth(
             h.workspace_id.clone(),
             "rimz-test",
@@ -271,10 +271,10 @@ fn a_stamp_after_the_rebirth_boundary_survives_and_is_resumed() {
         "/repo/work",
         "work",
     );
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "codex", "SessionStart", &before))
         .expect("append pre-boundary");
-    h.ledger
+    h.store
         .append_event(&EventEnvelope::session_rebirth(
             h.workspace_id.clone(),
             "rimz-test",
@@ -288,7 +288,7 @@ fn a_stamp_after_the_rebirth_boundary_survives_and_is_resumed() {
         "/repo/work",
         "work",
     );
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "codex", "SessionStart", &after))
         .expect("append post-boundary");
 
@@ -310,11 +310,11 @@ fn an_agent_ended_trace_is_not_resumed() {
         "/repo/work",
         "work",
     );
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
         .expect("append start");
     let ended = AgentLifecycleObservation::new(Some("sess-claude".into()), LifecycleSignal::Ended);
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "rimz.agent-ended", &ended))
         .expect("append ended");
 
@@ -335,11 +335,11 @@ fn missing_worktree_candidate_is_tombstoned_not_reported() {
         "/repo/gone",
         "gone",
     );
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
         .expect("append start");
     let projection = h
-        .ledger
+        .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
     let plan = rimz::harness::resume::plan_resume(
@@ -361,7 +361,7 @@ fn missing_worktree_candidate_is_tombstoned_not_reported() {
     );
 
     let ended = AgentLifecycleObservation::new(Some("sess-claude".into()), LifecycleSignal::Ended);
-    h.ledger
+    h.store
         .append_event(&lifecycle(&h, "claude", "rimz.worktree-gone", &ended))
         .expect("append tombstone");
     assert!(

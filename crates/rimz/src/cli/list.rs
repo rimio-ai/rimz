@@ -2,7 +2,7 @@
 //!
 //! "Known" means a `workspace.json` record exists under
 //! `$XDG_STATE_HOME/rimz/workspaces/<id>/` from a previous `rimz start` or
-//! ledger write. "Running" means the session name shows up in
+//! store write. "Running" means the session name shows up in
 //! `zellij list-sessions` or `tmux list-sessions`. The two are joined by
 //! session name so reattach decisions stay local — no daemon, no index file.
 //!
@@ -22,8 +22,8 @@ use tracing::warn;
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::ids::MuxName;
-use rimz::ledger::event::{LastDeathMarker, SessionDeathCause};
-use rimz::ledger::paths::workspaces_dir;
+use rimz::store::event::{LastDeathMarker, SessionDeathCause};
+use rimz::store::paths::workspaces_dir;
 
 /// Workspaces idle longer than this are hidden from the default view; `--all`
 /// reveals them.
@@ -221,7 +221,7 @@ fn last_seen(row: &WorkspaceRow) -> String {
 mod tests {
     use super::*;
     use rimz::ids::AgentKind;
-    use rimz::ledger::event::SessionDeathAgent;
+    use rimz::store::event::SessionDeathAgent;
 
     #[test]
     fn recency_window_bounds() {

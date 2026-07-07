@@ -76,7 +76,7 @@ pub(crate) fn render_agents_table(
     now: jiff::Timestamp,
     max_width: usize,
 ) -> std::io::Result<()> {
-    let groups = rimz::ledger::snapshot::group_live_agents_by_worktree(agents, snapshot);
+    let groups = rimz::store::snapshot::group_live_agents_by_worktree(agents, snapshot);
     let ordered_agents: Vec<&AgentState> = groups
         .iter()
         .flat_map(|group| group.agents.iter().copied())
@@ -95,7 +95,7 @@ pub(crate) fn render_agents_table(
 }
 
 fn group_header_cells(
-    group: &rimz::ledger::snapshot::AgentWorktreeGroup<'_>,
+    group: &rimz::store::snapshot::AgentWorktreeGroup<'_>,
     snapshot: &rimz::SidebarSnapshot,
 ) -> Vec<render::Cell> {
     if group.kind == rimz::SidebarWorktreeKind::External {
@@ -121,7 +121,7 @@ fn group_header_cells(
 }
 
 fn channel_group_is_worktree_backed(
-    group: &rimz::ledger::snapshot::AgentWorktreeGroup<'_>,
+    group: &rimz::store::snapshot::AgentWorktreeGroup<'_>,
     snapshot: &rimz::SidebarSnapshot,
 ) -> bool {
     let Some(project_root) = snapshot.project_root.as_deref() else {
@@ -141,7 +141,7 @@ fn channel_group_is_worktree_backed(
             .all(|agent| agent.worktree_path.as_deref() == Some(first))
 }
 
-fn shared_group_team(group: &rimz::ledger::snapshot::AgentWorktreeGroup<'_>) -> Option<String> {
+fn shared_group_team(group: &rimz::store::snapshot::AgentWorktreeGroup<'_>) -> Option<String> {
     let first = group
         .agents
         .first()
@@ -185,14 +185,14 @@ pub(super) fn show_agent(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = crate::cli::open_ledger(&workspace)?;
+    let store = crate::cli::open_store(&workspace)?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
     // Fold the rich statusline context so the shown card — and the `--json`
     // payload — carries the real token window, not the carried-forward
     // `context_pct`.
-    let snapshot = crate::cli::alive_snapshot(&ledger, &runtime, &workspace.session_name)?
-        .with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    let snapshot = crate::cli::alive_snapshot(&store, &runtime, &workspace.session_name)?
+        .with_agent_context(rimz::store::agent_context::read_all(&runtime));
     let agent_result = crate::cli::resolve_agent_one(
         &snapshot,
         &reference,
@@ -203,7 +203,7 @@ pub(super) fn show_agent(
     let mut stale = false;
     let mut audit_error = None;
     if agent.is_none() {
-        match resolve_audit_agent(&ledger, &workspace, &runtime, &reference) {
+        match resolve_audit_agent(&store, &workspace, &runtime, &reference) {
             Ok(Some(audit_agent)) => {
                 agent = Some(audit_agent);
                 stale = true;
@@ -212,7 +212,7 @@ pub(super) fn show_agent(
             Err(err) => audit_error = Some(err),
         }
     }
-    let run = newest_run_by_ref(&ledger, &reference, agent.as_ref())?;
+    let run = newest_run_by_ref(&store, &reference, agent.as_ref())?;
     let ask = match agent.as_ref() {
         Some(agent) => crate::cli::transcript::latest_ask_view(&workspace, agent)?,
         None => None,
@@ -239,7 +239,7 @@ pub(super) fn show_agent(
         .as_ref()
         .and_then(|agent| session_cost(&runtime, agent));
     let messages = match agent.as_ref() {
-        Some(agent) => show_messages(&ledger, agent)?,
+        Some(agent) => show_messages(&store, agent)?,
         None => Vec::new(),
     };
     let recent_transcript = match agent.as_ref() {
@@ -300,7 +300,7 @@ pub(super) fn show_agent(
     render_activity_section(&mut out, agent, ask.as_ref(), stale, now)?;
     render_context_section(&mut out, agent, cost.as_ref())?;
     render_placement_section(&mut out, agent)?;
-    if let Some(run) = run.or_else(|| newest_run_for_agent(&ledger, agent).ok().flatten()) {
+    if let Some(run) = run.or_else(|| newest_run_for_agent(&store, agent).ok().flatten()) {
         render_run_section(&mut out, &run, now)?;
     }
     if !messages.is_empty() {
@@ -326,12 +326,12 @@ pub(super) fn show_agent(
 }
 
 fn resolve_audit_agent(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
     reference: &str,
 ) -> Result<Option<AgentState>> {
-    let audit = ledger
+    let audit = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     if audit.agents.is_empty() {
@@ -343,7 +343,7 @@ fn resolve_audit_agent(
         audit.agents,
         jiff::Timestamp::now(),
     )
-    .with_agent_context(rimz::ledger::agent_context::read_all(runtime));
+    .with_agent_context(rimz::store::agent_context::read_all(runtime));
     match crate::cli::resolve_agent_one(&snapshot, reference, None, None) {
         Ok(agent) => Ok(Some(agent.clone())),
         Err(err) => Err(err),
@@ -621,9 +621,9 @@ fn session_cost(
     rimz::agents::spending::session_cost_usd(adapter, agent.agent_id.as_str(), transcript, &prices)
 }
 
-fn show_messages(ledger: &rimz::Ledger, agent: &AgentState) -> Result<Vec<ShowMessage>> {
+fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMessage>> {
     let now = jiff::Timestamp::now();
-    let mut rows: Vec<ShowMessage> = ledger
+    let mut rows: Vec<ShowMessage> = store
         .list_messages()?
         .into_iter()
         .filter(|message| message.same_agent_card(agent))
@@ -636,8 +636,8 @@ fn show_messages(ledger: &rimz::Ledger, agent: &AgentState) -> Result<Vec<ShowMe
         })
         .collect();
     let mut delivered = Vec::new();
-    for event in ledger.read_events()?.into_iter().rev() {
-        let rimz::ledger::event::EventKind::Message { payload, .. } = event.kind() else {
+    for event in store.read_events()?.into_iter().rev() {
+        let rimz::store::event::EventKind::Message { payload, .. } = event.kind() else {
             continue;
         };
         if payload.status != rimz::message::MessageStatus::Delivered
@@ -683,8 +683,8 @@ fn recent_agent_transcript(
 
 pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = crate::cli::open_ledger(&workspace)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let store = crate::cli::open_store(&workspace)?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let agent = crate::cli::resolve_agent_one(
         &snapshot,
         &reference,
@@ -710,8 +710,8 @@ pub(super) fn wait_agent(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = crate::cli::open_ledger(&workspace)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let store = crate::cli::open_store(&workspace)?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let live_agent = crate::cli::resolve_agent_one(
         &snapshot,
         &reference,
@@ -719,10 +719,10 @@ pub(super) fn wait_agent(
         crate::cli::current_channel(&workspace).as_deref(),
     )
     .ok();
-    if let Some(run) = newest_run_by_ref(&ledger, &reference, live_agent)?
+    if let Some(run) = newest_run_by_ref(&store, &reference, live_agent)?
         && (!run.status.is_terminal() || live_agent.is_none() || run.run_id.as_str() == reference)
     {
-        return wait_run_record(&ledger, &run, timeout, stream_output, from_start, json);
+        return wait_run_record(&store, &run, timeout, stream_output, from_start, json);
     }
     if live_agent.is_none() {
         crate::cli::resolve_agent_one(
@@ -734,7 +734,7 @@ pub(super) fn wait_agent(
     }
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
-        let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
         let agent = crate::cli::resolve_agent_one(
             &snapshot,
             &reference,
@@ -893,8 +893,8 @@ fn write_json_pretty(value: &impl serde::Serialize) -> std::io::Result<()> {
 
 pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = crate::cli::open_ledger(&workspace)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let store = crate::cli::open_store(&workspace)?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let current_channel = crate::cli::current_channel(&workspace);
     if all {
         let agents = rimz::harness::target::resolve_many(
@@ -908,7 +908,7 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
         let mut out = render::out();
         for agent in agents {
             let label = rimz::harness::target::agent_handle(agent, &peers, true);
-            match stop_live_agent(&workspace, &ledger, globals, agent) {
+            match stop_live_agent(&workspace, &store, globals, agent) {
                 Ok(()) => writeln!(out, "stopped {label}")?,
                 Err(err) => {
                     failed = true;
@@ -924,8 +924,8 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
     let live_agent_result =
         crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel.as_deref());
     let live_agent = live_agent_result.as_ref().ok().copied();
-    if let Some(run) = newest_run_by_ref(&ledger, &reference, live_agent)? {
-        stop_run(&workspace, &ledger, globals, &run)?;
+    if let Some(run) = newest_run_by_ref(&store, &reference, live_agent)? {
+        stop_run(&workspace, &store, globals, &run)?;
         return Ok(());
     }
     let live_agent = live_agent_result.map_err(|err| stop_resolve_error(err, &reference))?;
@@ -947,12 +947,12 @@ fn stop_resolve_error(err: anyhow::Error, reference: &str) -> anyhow::Error {
 
 fn stop_live_agent(
     workspace: &rimz::ResolvedWorkspace,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     globals: &GlobalFlags,
     agent: &AgentState,
 ) -> Result<()> {
-    if let Some(run) = newest_run_for_agent(ledger, agent)? {
-        stop_run(workspace, ledger, globals, &run)
+    if let Some(run) = newest_run_for_agent(store, agent)? {
+        stop_run(workspace, store, globals, &run)
     } else {
         close_agent_pane(workspace, agent)
     }
@@ -960,21 +960,21 @@ fn stop_live_agent(
 
 fn stop_run(
     workspace: &rimz::ResolvedWorkspace,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     globals: &GlobalFlags,
     run: &RunRecord,
 ) -> Result<()> {
     if run_stop_should_cancel(run) {
-        let (record, wrote) = rimz::harness::run::cancel(ledger.paths(), &run.run_id)?;
+        let (record, wrote) = rimz::harness::run::cancel(store.paths(), &run.run_id)?;
         if wrote {
-            rimz::ledger::wakeup::wake_run(ledger.runtime_paths(), &record)
+            rimz::store::wakeup::wake_run(store.runtime_paths(), &record)
                 .context("waking run waiter")?;
         }
     }
     if let Ok(backend) = supervised::pane::backend_for_workspace_session(workspace, globals) {
         supervised::pane::close_stopped_run_pane_after_grace(
             backend.as_ref(),
-            ledger,
+            store,
             &workspace.session_name,
             run,
             supervised::pane::STOP_BACKSTOP_GRACE,
@@ -1109,10 +1109,10 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
     let was_live = backend.list_sessions()?.contains(&workspace.session_name);
-    let ledger = crate::cli::open_ledger(&workspace)?;
+    let store = crate::cli::open_store(&workspace)?;
     if let Some(channel) = args.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
-        rimz::channel::register(ledger.paths(), channel)?;
+        rimz::channel::register(store.paths(), channel)?;
     }
     let room_channel = rimz::harness::target::resolve_room_channel(
         &workspace.project_root,
@@ -1179,7 +1179,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             request
         })
         .collect::<Vec<_>>();
-    let mut launch_identities = ledger.append_agent_launches_allocating(
+    let mut launch_identities = store.append_agent_launches_allocating(
         &launch_requests,
         &AgentLaunchAppend {
             workspace_id: workspace.workspace_id.clone(),
@@ -1189,7 +1189,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             channel: room_channel.clone(),
             prompt: Some(prompt.clone()),
             description: args.description.clone(),
-            state: rimz::ledger::event::AgentLaunchState::Starting,
+            state: rimz::store::event::AgentLaunchState::Starting,
             pane_id: None,
         },
     )?;
@@ -1216,12 +1216,12 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
     let bound = if args.detach {
         None
     } else {
-        Some(bridge::bind_run(ledger.runtime_paths(), &run_id).context("binding run socket")?)
+        Some(run_wake::bind_run(store.runtime_paths(), &run_id).context("binding run socket")?)
     };
     let socket_guard = bound
         .as_ref()
         .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
-    rimz::harness::run::create(ledger.paths(), &record).context("recording run")?;
+    rimz::harness::run::create(store.paths(), &record).context("recording run")?;
     let target = own_pane_id(mux);
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
@@ -1255,9 +1255,9 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         }),
     };
     if let Err(err) = open_result {
-        let _ = rimz::harness::run::fail(ledger.paths(), &run_id);
+        let _ = rimz::harness::run::fail(store.paths(), &run_id);
         let _ = append_launch_event(
-            &ledger,
+            &store,
             &workspace,
             &launch_identity,
             LaunchEventParams {
@@ -1265,7 +1265,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
                 worktree_name: launch.worktree_name.as_deref(),
                 channel: room_channel.as_deref(),
                 prompt: Some(&prompt),
-                state: rimz::ledger::event::AgentLaunchState::Failed,
+                state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
         );
@@ -1289,25 +1289,25 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         supervised::stream::stream_blocking_run(
             sock,
             expected,
-            &ledger,
+            &store,
             &run_id,
             adapter,
             args.timeout,
         )?
     } else {
         let outcome = supervised::wait_for_run(sock, expected, args.timeout)?;
-        supervised::terminal_record_after_wait(ledger.paths(), &run_id, outcome)?
+        supervised::terminal_record_after_wait(store.paths(), &run_id, outcome)?
     };
     record = record_failure_tail_before_cleanup(
         backend.as_ref(),
-        &ledger,
+        &store,
         &workspace.session_name,
         record,
     );
     if !args.keep {
         supervised::pane::close_run_pane(
             backend.as_ref(),
-            &ledger,
+            &store,
             &workspace.session_name,
             &record,
         );
@@ -1318,20 +1318,20 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
 
 fn record_failure_tail_before_cleanup(
     backend: &dyn rimz::mux::MuxBackend,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     session_name: &str,
     record: RunRecord,
 ) -> RunRecord {
     if record.status == RunStatus::Completed || record.failure_tail.is_some() {
         return record;
     }
-    let Some(pane) = supervised::pane::resolve_run_pane(ledger, session_name, &record) else {
+    let Some(pane) = supervised::pane::resolve_run_pane(store, session_name, &record) else {
         return record;
     };
     let Some(tail) = supervised::pane::capture_failure_tail(backend, &pane.pane_id) else {
         return record;
     };
-    match rimz::harness::run::record_failure_tail(ledger.paths(), &record.run_id, &tail) {
+    match rimz::harness::run::record_failure_tail(store.paths(), &record.run_id, &tail) {
         Ok(record) => record,
         Err(err) => {
             tracing::debug!(
@@ -1370,7 +1370,7 @@ fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<
 }
 
 fn wait_run_record(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     run: &RunRecord,
     timeout: Option<Duration>,
     stream_output: bool,
@@ -1381,7 +1381,7 @@ fn wait_run_record(
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", run.kind))?;
     if stream_output {
         match supervised::stream::stream_attached_run(
-            ledger,
+            store,
             &run.run_id,
             adapter,
             from_start,
@@ -1393,7 +1393,7 @@ fn wait_run_record(
     }
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
-        let current = rimz::harness::run::load(ledger.paths(), &run.run_id)?;
+        let current = rimz::harness::run::load(store.paths(), &run.run_id)?;
         if current.status.is_terminal() {
             if json {
                 supervised::output::print_json(&current)?;
@@ -1407,16 +1407,16 @@ fn wait_run_record(
     }
 }
 
-fn newest_run_for_agent(ledger: &rimz::Ledger, agent: &AgentState) -> Result<Option<RunRecord>> {
-    newest_run_by_ref(ledger, agent.name.as_deref().unwrap_or(""), Some(agent))
+fn newest_run_for_agent(store: &rimz::Store, agent: &AgentState) -> Result<Option<RunRecord>> {
+    newest_run_by_ref(store, agent.name.as_deref().unwrap_or(""), Some(agent))
 }
 
 fn newest_run_by_ref(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     reference: &str,
     agent: Option<&AgentState>,
 ) -> Result<Option<RunRecord>> {
-    let mut records = rimz::harness::run::list(ledger.paths())?;
+    let mut records = rimz::harness::run::list(store.paths())?;
     records.retain(|record| {
         if record.run_id.as_str() == reference || record.agent_name.as_deref() == Some(reference) {
             return true;

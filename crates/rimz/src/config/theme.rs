@@ -21,7 +21,7 @@ pub enum ThemeStyle {
 /// `[theme]`: per-machine appearance. It owns palette depth, scheme selection,
 /// semantic slot overrides, sidebar render preferences, glyphs, provider
 /// styling, status-head animations, and pets. Display-only — it tunes what the
-/// renderer paints, never ledger correctness.
+/// renderer paints, never store correctness.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ThemeConfig {

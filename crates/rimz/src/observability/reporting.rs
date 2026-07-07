@@ -45,7 +45,7 @@ const ENV_ENVIRONMENT: &str = "RIMZ_SENTRY_ENVIRONMENT";
 
 /// The tracing target the hook lifecycle emits agent-observed turn errors on —
 /// provider rate-limit/overload conditions Rimz watches, not Rimz faults.
-/// Events on this target carry `fault=agent`; every other bridge event carries
+/// Events on this target carry `fault=agent`; every other reporting event carries
 /// `fault=rimz`, so triage filters our bugs from upstream hiccups.
 const AGENT_CONDITION_TARGET: &str = "rimz::agent::turn_error";
 
@@ -130,7 +130,7 @@ fn client_options(dsn: Dsn, environment: String) -> sentry::ClientOptions {
         // (a callsite's `error = &err as &dyn Error`) so a report names where it
         // came from, not just what failed. Free with the `backtrace` feature.
         attach_stacktrace: true,
-        // Mark Rimz frames in-app and the bridge crates out-of-app so Sentry
+        // Mark Rimz frames in-app and the Sentry crates out-of-app so Sentry
         // picks the Rimz callsite as the culprit instead of a `tracing`/`sentry`
         // internal. The payoff lands once debug files are uploaded per release.
         in_app_include: vec!["rimz"],
@@ -152,9 +152,9 @@ fn release() -> Option<Cow<'static, str>> {
     }
 }
 
-/// The before-send hook: strip the hostname, then on bridge events (those
+/// The before-send hook: strip the hostname, then on reporting events (those
 /// carrying a tracing target) add the `fault` tag, pin a stable fingerprint, and
-/// rate-limit per fingerprint. Non-bridge events — a panic, a manual capture —
+/// rate-limit per fingerprint. Non-reporting events — a panic, a manual capture —
 /// keep Sentry's default grouping and are never throttled.
 fn before_send() -> Arc<dyn Fn(Event<'static>) -> Option<Event<'static>> + Send + Sync> {
     let limiter = Arc::new(Mutex::new(RateLimiter::new()));
@@ -186,7 +186,7 @@ fn before_send() -> Arc<dyn Fn(Event<'static>) -> Option<Event<'static>> + Send 
     })
 }
 
-/// Classify a bridge event by its tracing target: an agent-observed condition
+/// Classify a reporting event by its tracing target: an agent-observed condition
 /// (provider rate-limit/overload) versus a Rimz fault.
 fn fault_for(logger: &str) -> &'static str {
     if logger == AGENT_CONDITION_TARGET {
@@ -196,7 +196,7 @@ fn fault_for(logger: &str) -> &'static str {
     }
 }
 
-/// Stable Sentry grouping key for a bridge event: a namespace, the tracing
+/// Stable Sentry grouping key for a reporting event: a namespace, the tracing
 /// target, the `operation` tag, and the static message. The unsymbolicated
 /// release stack varies frame-to-frame and splits one callsite across groups;
 /// pinning the fingerprint to these stable facts collapses it back to one issue.
@@ -303,7 +303,7 @@ pub fn set_command_scope(facts: ScopeFacts<'_>) {
     });
 }
 
-/// The Sentry bridge layer: `warn!`/`error!` become Sentry events and an `info!`
+/// The Sentry reporting layer layer: `warn!`/`error!` become Sentry events and an `info!`
 /// on [`BREADCRUMB_TARGET`] becomes a breadcrumb attached to the next event, so
 /// a warning arrives with the trail that led to it. The `INFO` level filter
 /// keeps the global max-level hint at `INFO` — `debug!`/`trace!` are still never

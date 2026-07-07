@@ -67,7 +67,7 @@ pub enum CardDensityMode {
 }
 
 /// Sidebar render preferences. A personal, machine-wide tuning of how the
-/// renderer paints; it never affects ledger correctness.
+/// renderer paints; it never affects store correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct DisplayConfig {
@@ -113,11 +113,11 @@ pub struct DisplayConfig {
     pub card_density: CardDensityMode,
     /// The context meter's color stops - where the card's context read leaves
     /// calm green and reaches yellow, amber, and red. Display-only; it tunes the
-    /// color ramp, never the ledger.
+    /// color ramp, never the store.
     pub context_meter: ContextMeterConfig,
     /// The provider dashboard's budget-bar color zones - where the draining
     /// mana bar leaves green for yellow, amber, and red as the remaining budget
-    /// shrinks. Display-only; it tunes the color ramp, never the ledger.
+    /// shrinks. Display-only; it tunes the color ramp, never the store.
     pub budget_bar: BudgetBarConfig,
     /// How far the selected-card band and unread-row wash step off the
     /// `selection_bg` panel, in units of 0.01 OKLab lightness. Display-only.

@@ -11,16 +11,16 @@ use clap::Args;
 
 use super::GlobalFlags;
 use super::render::fmt_bytes;
+use rimz::disk_usage::{RuntimeStorage, StorageKind, StorageRoot};
 use rimz::ids::{MuxName, WorkspaceId};
-use rimz::ledger::paths;
 use rimz::mux::{self, MuxErr};
-use rimz::storage::{RuntimeStorage, StorageKind, StorageRoot};
+use rimz::store::paths;
 use rimz::uninstall::{RemovalOutcome, Removed};
 use rimz::workspace::{KnownWorkspace, known_workspaces};
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
-    /// Also delete durable ledgers, spend history, and shared state.
+    /// Also delete durable stores, spend history, and shared state.
     #[arg(long)]
     pub state: bool,
     /// Also delete per-machine config, themes, trust grants, and notification handlers.
@@ -45,7 +45,7 @@ struct LiveRoom {
 }
 
 struct Preview<'a> {
-    storage: &'a RuntimeStorage,
+    disk_usage: &'a RuntimeStorage,
     remove_state: bool,
     remove_config: bool,
     live_rooms: &'a [LiveRoom],
@@ -70,7 +70,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     };
     ensure_not_in_rimz_room(&workspaces)?;
 
-    let storage = rimz::storage::measure();
+    let disk_usage = rimz::disk_usage::measure();
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
     let hook_agents = managed_hook_agents();
@@ -86,7 +86,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     let project_dirs = project_local_dirs(&workspaces);
 
     render_preview(Preview {
-        storage: &storage,
+        disk_usage: &disk_usage,
         remove_state,
         remove_config,
         live_rooms: &live_rooms,
@@ -118,7 +118,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     }
 
     remove_roots(
-        &storage,
+        &disk_usage,
         remove_state,
         remove_config,
         &mut stderr,
@@ -167,7 +167,7 @@ fn render_preview(preview: Preview<'_>) -> Result<()> {
     let mut stderr = std::io::stderr().lock();
     writeln!(stderr, "Rimz uninstall preview")?;
     writeln!(stderr, "Storage:")?;
-    for root in &preview.storage.roots {
+    for root in &preview.disk_usage.roots {
         let action = if root_removed(root.kind, preview.remove_state, preview.remove_config) {
             "remove".to_owned()
         } else if root.kind == StorageKind::State {
@@ -351,7 +351,7 @@ fn teardown_rooms(
 }
 
 fn remove_roots(
-    storage: &RuntimeStorage,
+    disk_usage: &RuntimeStorage,
     remove_state: bool,
     remove_config: bool,
     stderr: &mut impl Write,
@@ -372,8 +372,8 @@ fn remove_roots(
             render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
             continue;
         }
-        let Some(root) = storage_root(storage, kind) else {
-            failures.push(format!("missing {} storage root", kind.label()));
+        let Some(root) = storage_root(disk_usage, kind) else {
+            failures.push(format!("missing {} disk_usage root", kind.label()));
             continue;
         };
         let outcomes = [rimz::uninstall::remove_root(&root.path)];
@@ -423,8 +423,8 @@ fn root_removed(kind: StorageKind, remove_state: bool, remove_config: bool) -> b
     }
 }
 
-fn storage_root(storage: &RuntimeStorage, kind: StorageKind) -> Option<&StorageRoot> {
-    storage.roots.iter().find(|root| root.kind == kind)
+fn storage_root(disk_usage: &RuntimeStorage, kind: StorageKind) -> Option<&StorageRoot> {
+    disk_usage.roots.iter().find(|root| root.kind == kind)
 }
 
 fn managed_hook_agents() -> Vec<&'static str> {

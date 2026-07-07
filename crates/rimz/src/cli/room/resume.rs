@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use jiff::Timestamp;
 use rimz::mux::{MuxBackend, SessionHealth};
-use rimz::{Ledger, RuntimePaths, StatePaths};
+use rimz::{RuntimePaths, StatePaths, Store};
 
 use crate::cli::agents_cmd::team_restore::{
     PlannedTeamTab, materialize_team_restore_tab, plan_team_restore_tabs,
@@ -118,7 +118,7 @@ fn write_boot_marker(path: &Path, boot_id: &str) {
     let marker = BootMarker {
         boot_id: boot_id.to_owned(),
     };
-    if let Err(err) = rimz::ledger::atomic::write_temp_then_rename_cache(path, &marker) {
+    if let Err(err) = rimz::store::atomic::write_temp_then_rename_cache(path, &marker) {
         tracing::debug!(
             path = %path.display(),
             error = %err,
@@ -243,10 +243,10 @@ fn plan_agent_resume_at(
     profiles: &rimz::config::ProfilesConfig,
     commands: &rimz::config::CommandsConfig,
 ) -> Result<RoomResumePlan> {
-    let ledger = Ledger::open(paths.clone(), runtime.clone())?;
-    let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let store = Store::open(paths.clone(), runtime.clone())?;
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let rimz_bin = rimz::proc::rimz_exe();
-    let workspace_record = rimz::ledger::workspace_record::read(&paths.workspace_record).ok();
+    let workspace_record = rimz::store::workspace_record::read(&paths.workspace_record).ok();
     let project_root = workspace_record
         .as_ref()
         .map(|record| record.project_root.as_path());
@@ -292,8 +292,8 @@ pub(super) fn materialize_room_resume(
         skipped: plan.flat.skipped,
         tombstone: plan.flat.tombstone,
     };
-    let ledger = match Ledger::open(paths.clone(), runtime.clone()) {
-        Ok(ledger) => Some(ledger),
+    let store = match Store::open(paths.clone(), runtime.clone()) {
+        Ok(store) => Some(store),
         Err(err) => {
             tracing::warn!(
                 workspace = %paths.workspace_id,
@@ -304,10 +304,10 @@ pub(super) fn materialize_room_resume(
         }
     };
 
-    let flat_agents = ledger
+    let flat_agents = store
         .as_ref()
-        .and_then(|ledger| {
-            ledger
+        .and_then(|store| {
+            store
                 .runtime_projection(rimz::RuntimeScope::Audit)
                 .ok()
                 .map(|projection| projection.agents)
@@ -315,16 +315,11 @@ pub(super) fn materialize_room_resume(
         .unwrap_or_default();
     let mut tabs = Vec::new();
     for planned in &plan.team {
-        let Some(ledger) = ledger.as_ref() else {
+        let Some(store) = store.as_ref() else {
             continue;
         };
-        match materialize_team_restore_tab(
-            ledger,
-            &paths.workspace_id,
-            session_name,
-            teams,
-            planned,
-        ) {
+        match materialize_team_restore_tab(store, &paths.workspace_id, session_name, teams, planned)
+        {
             Ok(tab) => tabs.push(MaterializedTab {
                 freshest: Some(planned.freshest),
                 tab,
@@ -344,8 +339,8 @@ pub(super) fn materialize_room_resume(
     tabs.sort_by(materialized_tab_cmp);
     final_plan.tabs = tabs.into_iter().map(|tab| tab.tab).collect();
     add_empty_named_channel_tabs(paths, &mut final_plan);
-    if let Some(ledger) = ledger.as_ref() {
-        record_worktree_gone_tombstones(ledger, &paths.workspace_id, session_name, &final_plan);
+    if let Some(store) = store.as_ref() {
+        record_worktree_gone_tombstones(store, &paths.workspace_id, session_name, &final_plan);
     }
     final_plan
 }
@@ -408,7 +403,7 @@ fn flat_agent_matches_tab(agent: &rimz::agents::AgentState, tab: &rimz::mux::Res
 }
 
 fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::harness::resume::ResumePlan) {
-    let Ok(record) = rimz::ledger::workspace_record::read(&paths.workspace_record) else {
+    let Ok(record) = rimz::store::workspace_record::read(&paths.workspace_record) else {
         return;
     };
     let Ok(channels) = rimz::channel::list(&paths.channels_record) else {
@@ -427,7 +422,7 @@ fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::harness::re
     }
 }
 
-/// Draw the rebirth boundary in the ledger: a reborn mux session renumbers
+/// Draw the rebirth boundary in the store: a reborn mux session renumbers
 /// panes from zero, so every pane stamp in the rollup now names a pane that no
 /// longer exists — and the new session reuses those ids. The appended
 /// `session.rebirth` event makes the fold clear all prior stamps, so a stale
@@ -439,9 +434,9 @@ pub(super) fn record_rebirth_boundary(workspace_id: &rimz::WorkspaceId, session_
     let appended = (|| -> Result<()> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
-        let ledger = Ledger::open(paths, runtime)?;
+        let store = Store::open(paths, runtime)?;
         let event = rimz::EventEnvelope::session_rebirth(workspace_id.clone(), session_name);
-        ledger.append_event(&event)?;
+        store.append_event(&event)?;
         Ok(())
     })();
     if let Err(err) = appended {
@@ -495,7 +490,7 @@ fn resume_skip_reason(reason: rimz::harness::resume::ResumeSkipReason) -> &'stat
 }
 
 fn record_worktree_gone_tombstones(
-    ledger: &Ledger,
+    store: &Store,
     workspace_id: &rimz::WorkspaceId,
     session_name: &str,
     plan: &rimz::harness::resume::ResumePlan,
@@ -512,7 +507,7 @@ fn record_worktree_gone_tombstones(
             "rimz.worktree-gone",
             &observation,
         );
-        if let Err(err) = ledger.append_event(&event) {
+        if let Err(err) = store.append_event(&event) {
             tracing::warn!(
                 workspace = %workspace_id,
                 kind = %kind,
@@ -586,7 +581,7 @@ processes 2915
         let runtime =
             RuntimePaths::under(workspace_id.clone(), &runtime_root).expect("runtime paths");
         paths.ensure_dirs().expect("state dirs");
-        let ledger = Ledger::open(paths.clone(), runtime.clone()).expect("open ledger");
+        let store = Store::open(paths.clone(), runtime.clone()).expect("open store");
         let worktree = dir.path().join("worktree");
         std::fs::create_dir_all(&worktree).expect("worktree");
         let mut observation =
@@ -595,7 +590,7 @@ processes 2915
         observation.worktree_path = Some(worktree.display().to_string());
         observation.worktree_branch = Some("feature".to_owned());
         observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%99"));
-        ledger
+        store
             .append_event(&rimz::EventEnvelope::agent_lifecycle(
                 workspace_id,
                 "rimz-test",

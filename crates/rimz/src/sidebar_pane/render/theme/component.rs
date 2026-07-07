@@ -26,7 +26,7 @@ use super::Palette;
 /// semantic tone; never to a raw terminal color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Component {
-    /// `◎` sessions glyph — the cockpit summary and the W/M ledger rows.
+    /// `◎` sessions glyph — the cockpit summary and the W/M store rows.
     Sessions,
     /// The selected worktree's lane bracket spine — the dim selection tone, so
     /// the bracket, band, and bright card spine read as one selection language.
@@ -49,8 +49,8 @@ pub(crate) enum Component {
     WorktreePrClosed,
     /// The `◌` cache-read token marker.
     CacheRead,
-    /// The `W:`/`M:` timeframe label on a ledger row.
-    LedgerLabel,
+    /// The `W:`/`M:` timeframe label on a store row.
+    StoreLabel,
     /// The `◇` token-total marker.
     TokenTotal,
     /// The process `C` (CPU) marker.
@@ -107,7 +107,7 @@ impl Component {
         Component::WorktreePrOpen,
         Component::WorktreePrClosed,
         Component::CacheRead,
-        Component::LedgerLabel,
+        Component::StoreLabel,
         Component::TokenTotal,
         Component::ProcCpu,
         Component::ProcMem,
@@ -138,7 +138,7 @@ impl Component {
             WorktreePristine | WindowSmall => palette.faint,
             WorktreeMerged | ProcMem | CacheRead => palette.good,
             WorktreeReconciling | Compaction => palette.warn,
-            WorktreePrOpen | LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
+            WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
             SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
             Input => palette.expense,
             WorktreePrClosed | WindowMedium | UnknownBrand => palette.muted,

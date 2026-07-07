@@ -11,7 +11,7 @@ use crate::message::{
     message_interval_from_env, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
-use crate::{Ledger, PaneAgent, SidebarSnapshot, TargetErr};
+use crate::{PaneAgent, SidebarSnapshot, Store, TargetErr};
 
 use super::{deliver, send};
 
@@ -97,7 +97,7 @@ pub enum DispatchOutcome {
 
 pub struct DispatchContext<'a> {
     pub workspace: &'a ResolvedWorkspace,
-    pub ledger: &'a Ledger,
+    pub store: &'a Store,
     pub snapshot: &'a SidebarSnapshot,
     pub pending: Option<&'a mut Vec<MessageRecord>>,
     pub scope_channel: Option<&'a str>,
@@ -109,7 +109,7 @@ pub type Result<T> = std::result::Result<T, DispatchErr>;
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchErr {
     #[error(transparent)]
-    Ledger(#[from] crate::ledger::LedgerErr),
+    Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
     Send(#[from] send::SendErr),
     #[error(transparent)]
@@ -143,7 +143,7 @@ enum LiveAttempt {
 
 struct LiveRecovery<'a> {
     workspace: &'a ResolvedWorkspace,
-    ledger: &'a Ledger,
+    store: &'a Store,
     snapshot: &'a SidebarSnapshot,
     live_send: &'a mut send::LiveSend,
     park_on_failure: bool,
@@ -221,8 +221,8 @@ pub fn queue_targets<'a>(
     }
 }
 
-pub fn durable_target_agents(ledger: &Ledger) -> Result<Vec<AgentState>> {
-    Ok(ledger
+pub fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
+    Ok(store
         .runtime_projection(crate::RuntimeScope::Audit)?
         .agents
         .into_iter()
@@ -460,11 +460,11 @@ pub fn dispatch_for_targets(
                 },
             );
             let message_id = message.message_id.clone();
-            ctx.ledger
+            ctx.store
                 .queue_message(&message, &ctx.workspace.session_name)?;
             let mut recovery = LiveRecovery {
                 workspace: ctx.workspace,
-                ledger: ctx.ledger,
+                store: ctx.store,
                 snapshot: ctx.snapshot,
                 live_send: &mut live_send,
                 park_on_failure: target.agent.is_some(),
@@ -485,7 +485,7 @@ pub fn dispatch_for_targets(
                 }
                 LiveAttempt::SkippedWaiting { message_id } => {
                     if mode.is_steer() {
-                        ctx.ledger.record_send_error(
+                        ctx.store.record_send_error(
                             &message,
                             "agent is waiting on input in its pane",
                             &ctx.workspace.session_name,
@@ -495,7 +495,7 @@ pub fn dispatch_for_targets(
                             message_id,
                         });
                     } else {
-                        ctx.ledger.record_message_delivery_failure(
+                        ctx.store.record_message_delivery_failure(
                             &message_id,
                             "agent is waiting on input in its pane",
                             &ctx.workspace.session_name,
@@ -543,7 +543,7 @@ pub fn dispatch_for_targets(
         .with_auto_compact(mode.auto_compact())
         .with_not_before(mode.not_before());
         let message_id = message.message_id.clone();
-        ctx.ledger
+        ctx.store
             .queue_message(&message, &ctx.workspace.session_name)?;
         push_pending(&mut ctx.pending, message);
         outcomes.push(DispatchOutcome::Queued {
@@ -551,7 +551,7 @@ pub fn dispatch_for_targets(
             message_id,
         });
     }
-    deliver::register_message_wake(ctx.workspace, ctx.ledger)?;
+    deliver::register_message_wake(ctx.workspace, ctx.store)?;
     Ok(DispatchResult {
         outcomes,
         compacted,
@@ -572,7 +572,7 @@ fn send_live_with_recovery(
 ) -> Result<LiveAttempt> {
     let sent = match send::send_batch_to_live_pane(
         recovery.workspace,
-        recovery.ledger,
+        recovery.store,
         recovery.snapshot,
         pane,
         bound,
@@ -581,27 +581,27 @@ fn send_live_with_recovery(
     ) {
         Ok(sent) => sent,
         Err(err) => {
-            if deliver::message_recorded_as_sent(recovery.ledger, &message.message_id)? {
+            if deliver::message_recorded_as_sent(recovery.store, &message.message_id)? {
                 return Ok(LiveAttempt::Sent {
                     message_id: message.message_id.clone(),
                     compacted: false,
                 });
             }
             if recovery.park_on_failure {
-                recovery.ledger.record_message_delivery_failure(
+                recovery.store.record_message_delivery_failure(
                     &message.message_id,
                     &err.to_string(),
                     &recovery.workspace.session_name,
                 )?;
-                deliver::register_message_wake(recovery.workspace, recovery.ledger)?;
+                deliver::register_message_wake(recovery.workspace, recovery.store)?;
                 return Ok(LiveAttempt::ParkInstead);
             }
-            recovery.ledger.record_send_error(
+            recovery.store.record_send_error(
                 message,
                 &err.to_string(),
                 &recovery.workspace.session_name,
             )?;
-            deliver::register_message_wake(recovery.workspace, recovery.ledger)?;
+            deliver::register_message_wake(recovery.workspace, recovery.store)?;
             return Err(err.into());
         }
     };

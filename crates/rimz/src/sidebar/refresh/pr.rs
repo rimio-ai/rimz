@@ -115,14 +115,14 @@ pub(crate) fn produce_pr_states(
             || unsupported_probe_due(&cache, &needed, &hot, &focused, now_ms);
         (due.is_empty() && !needs_reconcile).then_some(cache)
     };
-    match crate::ledger::single_flight::coalesce(
+    match crate::store::single_flight::coalesce(
         &lock_path,
         PR_STATE_WAIT_STEP,
         PR_STATE_WAIT_STEPS,
         fresh,
     ) {
-        crate::ledger::single_flight::Coalesced::Shared(cache) => cache.states,
-        crate::ledger::single_flight::Coalesced::Produce(_guard) => {
+        crate::store::single_flight::Coalesced::Shared(cache) => cache.states,
+        crate::store::single_flight::Coalesced::Produce(_guard) => {
             let prior = read_pr_state_cache(&path);
             let now_ms = unix_now_ms();
             let due = due_repo_keys(&groups, &prior, &hot, &focused, now_ms);
@@ -136,7 +136,7 @@ pub(crate) fn produce_pr_states(
             write_pr_state_cache(&path, &cache);
             cache.states
         }
-        crate::ledger::single_flight::Coalesced::ProduceLocal => {
+        crate::store::single_flight::Coalesced::ProduceLocal => {
             let prior = read_pr_state_cache(&path);
             let now_ms = unix_now_ms();
             let due = due_repo_keys(&groups, &prior, &hot, &focused, now_ms);
@@ -810,7 +810,7 @@ pub(crate) fn read_pr_state_cache(path: &Path) -> PrStateCache {
 }
 
 fn write_pr_state_cache(path: &Path, cache: &PrStateCache) {
-    if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
+    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.pr_state_write",

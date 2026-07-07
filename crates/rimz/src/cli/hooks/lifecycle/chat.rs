@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn record_native_answer(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
@@ -22,7 +22,7 @@ pub(super) fn record_native_answer(
     };
 
     let awaiting = recorded.is_some_and(|recorded| recorded.waiting_cleared)
-        || ledger
+        || store
             .snapshot_cached()
             .ok()
             .and_then(|snapshot| {
@@ -31,7 +31,7 @@ pub(super) fn record_native_answer(
                 })
             })
             .is_some_and(|state| state.is_awaiting_input())
-        || has_open_native_ask(ledger, agent.descriptor().kind, agent_id);
+        || has_open_native_ask(store, agent.descriptor().kind, agent_id);
     if !awaiting {
         return;
     }
@@ -57,7 +57,7 @@ pub(super) fn record_native_answer(
     entry.channel = channel;
     entry.from = Some("you".to_owned());
     entry.answers = answers;
-    if let Err(err) = rimz::chat::append(ledger.paths(), &entry) {
+    if let Err(err) = rimz::chat::append(store.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
             event = %event_name,
@@ -68,10 +68,10 @@ pub(super) fn record_native_answer(
     }
 }
 
-fn has_open_native_ask(ledger: &Ledger, kind: &str, agent_id: &str) -> bool {
+fn has_open_native_ask(store: &Store, kind: &str, agent_id: &str) -> bool {
     let kind = rimz::ids::AgentKind::new_unchecked(kind);
     let agent_id = rimz::ids::AgentSessionId::from(agent_id);
-    let Ok(entries) = rimz::chat::read_all(ledger.paths()) else {
+    let Ok(entries) = rimz::chat::read_all(store.paths()) else {
         return false;
     };
     let mut open = 0usize;
@@ -90,7 +90,7 @@ fn has_open_native_ask(ledger: &Ledger, kind: &str, agent_id: &str) -> bool {
 
 pub(super) fn record_chat_conversation(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
@@ -151,7 +151,7 @@ pub(super) fn record_chat_conversation(
                     } else {
                         entry_base(rimz::chat::ChatKind::Prompt, segment.to_owned())
                     };
-                    rimz::chat::append(ledger.paths(), &entry)?;
+                    rimz::chat::append(store.paths(), &entry)?;
                 }
             }
         }
@@ -162,7 +162,7 @@ pub(super) fn record_chat_conversation(
                 .filter(|message| !message.is_empty())
             {
                 rimz::chat::append(
-                    ledger.paths(),
+                    store.paths(),
                     &entry_base(rimz::chat::ChatKind::Assistant, message),
                 )?;
             }
@@ -181,7 +181,7 @@ pub(super) fn record_chat_conversation(
                 .unwrap_or_default();
             let mut entry = entry_base(rimz::chat::ChatKind::Ask, last);
             entry.questions = questions;
-            rimz::chat::append(ledger.paths(), &entry)?;
+            rimz::chat::append(store.paths(), &entry)?;
         }
         _ => {}
     }
@@ -194,18 +194,18 @@ pub(super) fn turn_error_refresh_event(event_name: &str) -> bool {
 
 pub(super) fn merge_turn_error_marker_and_chat(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     context_agent_id: &str,
     marker: rimz::agents::AgentTurnError,
 ) -> bool {
     let updated =
-        merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker.clone());
+        merge_turn_error_marker(store, agent, event_name, context_agent_id, marker.clone());
     if updated {
         record_turn_error_chat_entry(
             workspace,
-            ledger,
+            store,
             agent,
             event_name,
             context_agent_id,
@@ -217,7 +217,7 @@ pub(super) fn merge_turn_error_marker_and_chat(
 
 pub(super) fn record_turn_error_chat_entry(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     context_agent_id: &str,
@@ -237,7 +237,7 @@ pub(super) fn record_turn_error_chat_entry(
         .worktree_root
         .file_name()
         .map(|name| name.to_string_lossy().into_owned());
-    if let Err(err) = rimz::chat::append(ledger.paths(), &entry) {
+    if let Err(err) = rimz::chat::append(store.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
             event = %event_name,
@@ -249,7 +249,7 @@ pub(super) fn record_turn_error_chat_entry(
 }
 
 pub(super) fn merge_turn_error_marker(
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     context_agent_id: &str,
@@ -258,8 +258,8 @@ pub(super) fn merge_turn_error_marker(
     let kind = agent.descriptor().kind;
     let class = marker.class;
     let label = marker.label.clone();
-    match rimz::ledger::agent_context::merge_turn_error(
-        ledger.runtime_paths(),
+    match rimz::store::agent_context::merge_turn_error(
+        store.runtime_paths(),
         kind,
         context_agent_id,
         marker,
@@ -268,7 +268,7 @@ pub(super) fn merge_turn_error_marker(
             if updated {
                 // The agent's turn ended on a provider condition (rate limit,
                 // overload, or other API failure) — observed, not a Rimz fault.
-                // Warn once per transition; the Sentry bridge lifts it to a
+                // Warn once per transition; the Sentry reporting layer lifts it to a
                 // warning event keyed by `class`.
                 warn!(
                     target: "rimz::agent::turn_error",

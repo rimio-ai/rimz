@@ -39,7 +39,7 @@ const REFILL_FLOOR_PCT: u8 = 25;
 /// reader never observes a half-written file. Best-effort: a write failure logs
 /// and leaves the prior cache in place.
 pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
-    if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
+    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.rate_limits_write",

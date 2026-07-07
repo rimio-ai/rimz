@@ -7,8 +7,8 @@ use anyhow::{Context, Result, bail};
 
 use crate::cli::GlobalFlags;
 use rimz::agents::{AgentAdapter, hook_trust_fix};
-use rimz::bridge::{self, ExpectedRunFrame, RunWakeOutcome};
 use rimz::harness::run::RunRecord;
+use rimz::harness::run_wake::{self, ExpectedRunFrame, RunWakeOutcome};
 use rimz::mux::PaneCmd;
 use rimz::workspace::WorkspaceResolver;
 
@@ -131,7 +131,7 @@ pub(super) fn wait_for_run(
         .build()
         .context("creating run wait runtime")?;
     runtime
-        .block_on(bridge::wait_for_run_completion_owning(
+        .block_on(run_wake::wait_for_run_completion_owning(
             sock, expected, timeout,
         ))
         .context("waiting for run completion")

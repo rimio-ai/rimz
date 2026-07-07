@@ -6,7 +6,7 @@ pub(super) fn heartbeat_write_due(last_heartbeat: Option<Instant>) -> bool {
 
 /// Refresh this instance's liveness heartbeat. Written in-process — no `rimz
 /// sidebar heartbeat` fork per tick — through the shared liveness helper, which
-/// keeps the JSON shape and atomic write identical to what the ledger wakeup
+/// keeps the JSON shape and atomic write identical to what the store wakeup
 /// fanout and launch freshness gate expect.
 pub(super) fn write_heartbeat(
     config: &ServeConfig,

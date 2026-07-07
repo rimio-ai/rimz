@@ -451,7 +451,7 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
         "codex reply",
     );
 
-    let entries = rimz::chat::read_all(env.ledger().paths()).expect("read log");
+    let entries = rimz::chat::read_all(env.store().paths()).expect("read log");
     let message = entries
         .iter()
         .find(|entry| {
@@ -630,7 +630,7 @@ fn message_entry(
 }
 
 fn append_transcript(env: &Env, entry: ChatEntry) {
-    rimz::chat::append(env.ledger().paths(), &entry).expect("append transcript");
+    rimz::chat::append(env.store().paths(), &entry).expect("append transcript");
 }
 
 fn write_claude_transcript(path: &std::path::Path, draft: &str, final_message: &str) {

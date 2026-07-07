@@ -76,7 +76,7 @@ fn temp_runtime() -> (tempfile::TempDir, RuntimePaths) {
 }
 
 fn write_rate_limits_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
-    crate::ledger::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), cache)
+    crate::store::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), cache)
         .expect("write rate-limits cache");
 }
 

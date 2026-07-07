@@ -7,7 +7,7 @@ use super::{RoomHarness, SETTLE};
 use crate::common::Env;
 
 #[test]
-fn rendered_room_recovers_post_rebirth_agents_from_the_ledger() {
+fn rendered_room_recovers_post_rebirth_agents_from_the_store() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
@@ -19,12 +19,12 @@ fn rendered_room_recovers_post_rebirth_agents_from_the_ledger() {
     let screen = room.wait_for(|s| s.contains("○ coder") && s.contains("main"), SETTLE);
     assert!(
         screen.contains("○ coder") && screen.contains("main"),
-        "reborn rendered room should recover durable agent rows from the ledger:\n{screen}"
+        "reborn rendered room should recover durable agent rows from the store:\n{screen}"
     );
 }
 
 fn append_rebirth(env: &Env) {
-    env.ledger()
+    env.store()
         .append_event(&EventEnvelope::session_rebirth(
             env.workspace_id.clone(),
             "rimz-journey",
@@ -51,5 +51,5 @@ fn append_registered_agent(env: &Env, session: &str, role: &str, pane: &str, bra
         "SessionStart",
         &obs,
     );
-    env.ledger().append_event(&event).expect("append lifecycle");
+    env.store().append_event(&event).expect("append lifecycle");
 }

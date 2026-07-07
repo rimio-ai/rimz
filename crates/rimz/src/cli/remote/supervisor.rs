@@ -290,9 +290,9 @@ fn prepare_control_path(path: &Path) -> Result<()> {
     let runtime_dir = rimz_dir
         .parent()
         .with_context(|| format!("SSH control directory {} has no parent", rimz_dir.display()))?;
-    rimz::ledger::paths::ensure_private_runtime_dir(runtime_dir)?;
-    rimz::ledger::paths::ensure_private_runtime_dir(rimz_dir)?;
-    rimz::ledger::paths::ensure_private_runtime_dir(link_dir)?;
+    rimz::store::paths::ensure_private_runtime_dir(runtime_dir)?;
+    rimz::store::paths::ensure_private_runtime_dir(rimz_dir)?;
+    rimz::store::paths::ensure_private_runtime_dir(link_dir)?;
     remove_control_path(path);
     Ok(())
 }

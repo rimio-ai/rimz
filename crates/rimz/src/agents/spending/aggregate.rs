@@ -89,7 +89,7 @@ pub struct HeadlineSpec {
 pub(crate) const SESSION_GAP_SECS: u64 = 5 * 3_600;
 
 /// Rolling spend and token tally over the configured headline window plus three
-/// trailing ledger windows: 7 days, 30 days, and 365 days. The ledger windows
+/// trailing store windows: 7 days, 30 days, and 365 days. The store windows
 /// nest — `year` (365 days) is the widest and subsumes the rest — while the
 /// headline window is independent.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -120,7 +120,7 @@ impl SpendTally {
 
 /// The result of a spending pass: the fleet-wide total plus a per-provider
 /// breakdown keyed by agent kind (`"claude"`, `"codex"`, `"pi"`). The fleet
-/// ledger reads [`Spending::total`]; each provider dashboard panel reads its own
+/// store reads [`Spending::total`]; each provider dashboard panel reads its own
 /// entry from [`Spending::by_provider`]. The cockpit uses a separate
 /// workspace-scoped tally.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -743,7 +743,7 @@ fn accum_scoped(
     suppress_headline_usd: bool,
 ) {
     let usd = entry.cost_usd;
-    // Ledger-window bucketing: an entry counts toward each trailing window whose
+    // Store-window bucketing: an entry counts toward each trailing window whose
     // span it still falls within. The configured headline window is independent
     // and may be calendar-day or session scoped.
     if !within_widest_window(entry.ts_secs, now_secs) {
@@ -764,7 +764,7 @@ fn accum_scoped(
     }
 }
 
-/// Count one session (thread) toward each trailing ledger window its youngest
+/// Count one session (thread) toward each trailing store window its youngest
 /// entry still falls within, plus the configured headline window.
 fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64, headline_cutoff: u64) {
     let age = now_secs.saturating_sub(youngest_ts);

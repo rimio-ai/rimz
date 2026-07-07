@@ -45,7 +45,7 @@ fn bin_name(stem: &str) -> String {
 /// replacement at the stripped path instead of failing until the process
 /// restarts.
 pub fn rimz_exe() -> PathBuf {
-    crate::ledger::paths::env_path("RIMZ_BIN")
+    crate::store::paths::env_path("RIMZ_BIN")
         .or_else(|| {
             std::env::current_exe()
                 .ok()
@@ -392,7 +392,7 @@ pub fn exe_path(_pid: u32) -> Option<(std::path::PathBuf, bool)> {
 }
 
 /// Always-on observability seam for subprocesses on hot paths. The counter is
-/// per-process and relaxed, matching the ledger counters: benchmarks,
+/// per-process and relaxed, matching the store counters: benchmarks,
 /// integration gates, and the sidebar tick meter care about exact call counts at
 /// the fork funnels, not cross-process aggregation.
 #[doc(hidden)]

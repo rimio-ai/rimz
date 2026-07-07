@@ -15,7 +15,7 @@ use super::NavKeymap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Wakeup {
     Tick,
-    /// A typed sidebar event posted by the ledger, presence CLI, reload path,
+    /// A typed sidebar event posted by the store, presence CLI, reload path,
     /// or pane-frame publisher.
     Event(SidebarEventEnvelope),
     /// The background fetch worker finished a snapshot and posted
@@ -332,7 +332,7 @@ mod tests {
             crate::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
             Some("rimz-test".to_owned()),
             42,
-            crate::sidebar::events::SidebarEvent::LedgerDelta {
+            crate::sidebar::events::SidebarEvent::StoreDelta {
                 event_method: None,
                 agent_signal: None,
             },
@@ -344,13 +344,13 @@ mod tests {
 
     #[test]
     fn agent_session_boundary_event_requests_fresh_panes() {
-        let start = crate::sidebar::events::SidebarEvent::LedgerDelta {
+        let start = crate::sidebar::events::SidebarEvent::StoreDelta {
             event_method: Some("agent.lifecycle".to_owned()),
             agent_signal: Some(crate::agents::LifecycleSignal::Registered.tag().to_owned()),
         };
         assert!(start.requests_producer_verification());
 
-        let status = crate::sidebar::events::SidebarEvent::LedgerDelta {
+        let status = crate::sidebar::events::SidebarEvent::StoreDelta {
             event_method: Some("agent.lifecycle".to_owned()),
             agent_signal: Some(crate::agents::LifecycleSignal::TurnStarted.tag().to_owned()),
         };
@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn control_words_never_start_with_brace() {
-        // The leading-brace discriminator (ledger delta vs control/input) holds
+        // The leading-brace discriminator (store delta vs control/input) holds
         // only while no control or input wire word can begin with `{`.
         let mut words = vec![
             "resize".to_owned(),
@@ -623,7 +623,7 @@ mod tests {
             assert_ne!(
                 word.as_bytes().first(),
                 Some(&b'{'),
-                "{word:?} must not collide with the ledger-delta discriminator"
+                "{word:?} must not collide with the store-delta discriminator"
             );
         }
     }

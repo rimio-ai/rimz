@@ -115,7 +115,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
 ///
 /// The pane enumeration is the spine and always works. The agent annotations are
 /// a best-effort overlay folded from the workspace snapshot the same way the
-/// sidebar reads it — when no snapshot is available (no ledger, foreign session),
+/// sidebar reads it — when no snapshot is available (no store, foreign session),
 /// panes still list, just labelled `process` rather than carrying a `@handle`.
 /// Enrichment, never a precondition.
 fn list(
@@ -206,12 +206,12 @@ fn list(
 }
 
 /// Best-effort snapshot for the agent overlay: the cached rollup the sidebar
-/// reads, or `None` when no ledger is reachable.
+/// reads, or `None` when no store is reachable.
 fn load_agent_overlay(workspace: &ResolvedWorkspace) -> Option<rimz::SidebarSnapshot> {
-    let ledger = crate::cli::open_ledger(workspace).ok()?;
-    let mut snapshot = ledger.snapshot_cached().ok()?;
+    let store = crate::cli::open_store(workspace).ok()?;
+    let mut snapshot = store.snapshot_cached().ok()?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone()).ok()?;
-    snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
     Some(snapshot)
 }
 

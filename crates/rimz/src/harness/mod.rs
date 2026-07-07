@@ -5,6 +5,7 @@ pub mod launch;
 pub mod petname;
 pub mod resume;
 pub mod run;
+pub mod run_wake;
 pub mod schedule;
 pub mod spec;
 pub mod target;

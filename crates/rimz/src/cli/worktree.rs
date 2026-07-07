@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use super::{GlobalFlags, open_ledger};
+use super::{GlobalFlags, open_store};
 use crate::cli::render;
 use rimz::agents::AgentState;
 use rimz::config::WorktreeBase;
@@ -107,7 +107,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             from_pr,
             branch,
         } => {
-            let ledger = open_ledger(&workspace)?;
+            let store = open_store(&workspace)?;
             let requested_name = name
                 .as_deref()
                 .map(rimz::worktree::parse_requested_name)
@@ -115,7 +115,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             if let Some(name) = requested_name
                 .as_ref()
                 .map(|requested| requested.name.as_str())
-                && super::channel::named_channel_registered(&ledger, name)
+                && super::channel::named_channel_registered(&store, name)
             {
                 bail!(
                     "channel `{name}` is a named channel; use `rimz channel new` or pick another name"
@@ -140,7 +140,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                     false,
                 )?
             };
-            ledger
+            store
                 .archive_channel_messages(
                     &created.name,
                     "channel recreated",
@@ -178,9 +178,9 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                 }
             } else {
                 // Best-effort overlay: which agent-colleagues live in each channel.
-                let snapshot = crate::cli::open_ledger(&workspace)
+                let snapshot = crate::cli::open_store(&workspace)
                     .ok()
-                    .and_then(|ledger| ledger.snapshot_cached().ok());
+                    .and_then(|store| store.snapshot_cached().ok());
                 let agents: Vec<&AgentState> = snapshot
                     .as_ref()
                     .map(|snapshot| {
@@ -237,7 +237,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             Ok(())
         }
         WorktreeSubcmd::Remove { name, force } => {
-            let ledger = open_ledger(&workspace)?;
+            let store = open_store(&workspace)?;
             let path = rimz::worktree::worktree_path(&workspace.project_root, &config, &name)?;
             let marker = rimz::worktree::read_marker_for_worktree(&path)?.ok_or_else(|| {
                 rimz::worktree::WorktreeErr::Unmarked {
@@ -252,7 +252,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                         .map_err(Into::into)
                 },
                 |channel, reason| {
-                    ledger
+                    store
                         .archive_channel_messages(channel, reason, &workspace.session_name)
                         .map(|_| ())
                         .map_err(Into::into)
@@ -303,7 +303,7 @@ pub(super) fn cleanup_worktree(
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
     let other_pane_inside = other_live_pane_inside(path, globals);
-    let roster_bound = roster_binds_worktree_from_ledger(path, &marker, globals);
+    let roster_bound = roster_binds_worktree_from_store(path, &marker, globals);
     match rimz::worktree::cleanup_decision(status, true, other_pane_inside || roster_bound) {
         rimz::worktree::CleanupDecision::RemoveClean => {
             let removed = remove_and_archive(
@@ -357,7 +357,7 @@ pub(super) fn cleanup_worktree(
     Ok(())
 }
 
-fn roster_binds_worktree_from_ledger(
+fn roster_binds_worktree_from_store(
     path: &Path,
     marker: &rimz::worktree::WorktreeMarker,
     globals: &GlobalFlags,
@@ -373,8 +373,8 @@ fn roster_binds_worktree_from_ledger(
             return false;
         }
     };
-    let snapshot = match super::open_ledger(&workspace).and_then(|ledger| {
-        super::alive_snapshot(&ledger, ledger.runtime_paths(), &workspace.session_name)
+    let snapshot = match super::open_store(&workspace).and_then(|store| {
+        super::alive_snapshot(&store, store.runtime_paths(), &workspace.session_name)
     }) {
         Ok(snapshot) => snapshot,
         Err(err) => {
@@ -403,14 +403,14 @@ pub(super) fn agent_pinned_paths(
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for agent in agents.iter().filter(|agent| agent_is_not_own(agent, own)) {
-        match rimz::ledger::runtime::agent_liveness(agent) {
-            rimz::ledger::runtime::AgentLiveness::Dead => {}
-            rimz::ledger::runtime::AgentLiveness::Unknown => {
+        match rimz::store::runtime::agent_liveness(agent) {
+            rimz::store::runtime::AgentLiveness::Dead => {}
+            rimz::store::runtime::AgentLiveness::Unknown => {
                 if let Some(path) = agent.worktree_path.as_deref() {
                     paths.push(rimz::worktree::normalize_path_lexical(Path::new(path)));
                 }
             }
-            rimz::ledger::runtime::AgentLiveness::Live { pid } => {
+            rimz::store::runtime::AgentLiveness::Live { pid } => {
                 if let Some(path) = agent.worktree_path.as_deref() {
                     paths.push(rimz::worktree::normalize_path_lexical(Path::new(path)));
                 }
@@ -448,8 +448,8 @@ fn archive_removed_worktree_messages(
     reason: &str,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    ledger.archive_channel_messages(channel, reason, &workspace.session_name)?;
+    let store = open_store(&workspace)?;
+    store.archive_channel_messages(channel, reason, &workspace.session_name)?;
     Ok(())
 }
 
@@ -646,7 +646,7 @@ mod tests {
             assert!(!roster_binds_worktree(&[dead], Some(&own), worktree));
         }
         let mut live = agent("live", Some("/repo-worktrees/demo"), None, now);
-        live.runtime_owner = Some(rimz::ledger::runtime::current_process_owner(
+        live.runtime_owner = Some(rimz::store::runtime::current_process_owner(
             rimz::RuntimeOwnerKind::Agent,
             "live",
         ));
@@ -706,7 +706,7 @@ mod tests {
     fn agent_pinned_paths_includes_realtime_process_cwd() {
         let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
         let mut live = agent("live", Some("/repo-worktrees/other"), None, now);
-        live.runtime_owner = Some(rimz::ledger::runtime::current_process_owner(
+        live.runtime_owner = Some(rimz::store::runtime::current_process_owner(
             rimz::RuntimeOwnerKind::Agent,
             "live",
         ));

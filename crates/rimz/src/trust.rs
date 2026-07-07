@@ -10,18 +10,19 @@
 //! [`ExecutableSurface`] is a CI invariant violation per
 //! [`docs/guide/security.md`](../../docs/guide/security.md).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::config::Team;
 use crate::harness::run::PermissionMode;
 use crate::ids::WorkspaceId;
-use crate::ledger::atomic::{self, write_bytes_atomically};
-use crate::ledger::paths::config_home;
+use crate::store::atomic::{self, write_bytes_atomically};
+use crate::store::paths::config_home;
 
 const CONFIG_REL: &str = ".rimz/config.toml";
 const PROJECTS_SUBDIR: [&str; 2] = ["rimz", "projects"];
@@ -48,6 +49,8 @@ pub enum TrustErr {
         #[source]
         source: toml::de::Error,
     },
+    #[error("removed project config table in {path}: {detail}")]
+    RemovedProjectTable { path: PathBuf, detail: String },
     #[error("serializing trust record: {0}")]
     RecordSerialize(#[from] toml::ser::Error),
     #[error(transparent)]
@@ -92,6 +95,47 @@ pub struct TrustReport {
     pub current_hash: Option<String>,
     pub granted_hash: Option<String>,
     pub granted_at: Option<Timestamp>,
+    pub surface_diff: Option<TrustSurfaceDiff>,
+}
+
+/// Difference between the surface from the previous grant and the live
+/// executable surface.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TrustSurfaceDiff {
+    /// The trust record predates stored surface JSON, so Rimz can detect staleness
+    /// but cannot explain which fields changed.
+    LegacyRecord,
+    /// Leaf-level changes from the granted surface to the current surface.
+    Changes { entries: Vec<SurfaceDiffEntry> },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SurfaceDiffEntry {
+    pub kind: SurfaceDiffKind,
+    pub path: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub granted: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<Value>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceDiffKind {
+    Added,
+    Removed,
+    Changed,
+}
+
+impl SurfaceDiffKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Removed => "removed",
+            Self::Changed => "changed",
+        }
+    }
 }
 
 /// Read the current trust state for `project_root`. The executable-surface
@@ -116,8 +160,9 @@ pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
     let config_path = project_root.join(CONFIG_REL);
     let record_path = trust_record_path(config_root, &workspace_id);
 
-    let current_hash =
-        read_project_config(&config_path)?.map(|config| executable_surface_hash(&config));
+    let current_surface =
+        read_project_config(&config_path)?.map(|config| surface_snapshot(&config));
+    let current_hash = current_surface.as_ref().map(|surface| surface.hash.clone());
     let record = read_trust_record(&record_path)?;
 
     let state = match (&current_hash, &record) {
@@ -125,6 +170,13 @@ pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
         (Some(_), None) => TrustState::Untrusted,
         (Some(now), Some(rec)) if &rec.surface_hash == now => TrustState::Trusted,
         (Some(_), Some(_)) => TrustState::Stale,
+    };
+
+    let surface_diff = match (&current_surface, &record, state) {
+        (Some(current), Some(record), TrustState::Stale) => {
+            Some(surface_diff_for_record(record, &current.value))
+        }
+        _ => None,
     };
 
     Ok(TrustReport {
@@ -136,6 +188,7 @@ pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
         current_hash,
         granted_hash: record.as_ref().map(|r| r.surface_hash.clone()),
         granted_at: record.as_ref().map(|r| r.granted_at),
+        surface_diff,
     })
 }
 
@@ -154,14 +207,21 @@ pub fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<Trust
             current_hash: None,
             granted_hash: None,
             granted_at: None,
+            surface_diff: None,
         });
     };
 
-    let surface_hash = executable_surface_hash(&config);
+    let current_surface = surface_snapshot(&config);
+    let previous_record = read_trust_record(&record_path)?;
+    let surface_diff = previous_record
+        .as_ref()
+        .filter(|record| record.surface_hash != current_surface.hash)
+        .map(|record| surface_diff_for_record(record, &current_surface.value));
     let granted_at = Timestamp::now();
     let record = TrustRecord {
         project_root: project_root.to_path_buf(),
-        surface_hash: surface_hash.clone(),
+        surface_hash: current_surface.hash.clone(),
+        surface_json: Some(current_surface.json.clone()),
         granted_at,
     };
     let text = toml::to_string_pretty(&record)?;
@@ -173,9 +233,10 @@ pub fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<Trust
         project_root: project_root.to_path_buf(),
         config_path,
         record_path,
-        current_hash: Some(surface_hash.clone()),
-        granted_hash: Some(surface_hash),
+        current_hash: Some(current_surface.hash.clone()),
+        granted_hash: Some(current_surface.hash),
         granted_at: Some(granted_at),
+        surface_diff,
     })
 }
 
@@ -262,6 +323,7 @@ fn trust_record_path(config_root: &Path, workspace_id: &WorkspaceId) -> PathBuf 
 fn read_project_config(path: &Path) -> Result<Option<ProjectConfig>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
+            check_project_config_removed_tables(path, &text)?;
             let config =
                 toml::from_str::<ProjectConfig>(&text).map_err(|source| TrustErr::ConfigParse {
                     path: path.to_path_buf(),
@@ -275,6 +337,20 @@ fn read_project_config(path: &Path) -> Result<Option<ProjectConfig>> {
             source,
         }),
     }
+}
+
+fn check_project_config_removed_tables(path: &Path, text: &str) -> Result<()> {
+    let Ok(doc) = toml::from_str::<toml::Table>(text) else {
+        return Ok(());
+    };
+    if doc.contains_key("layout") {
+        return Err(TrustErr::RemovedProjectTable {
+            path: path.to_path_buf(),
+            detail: "`[layout]` and `[[layout.initial_panes]]` are per-machine room layout config; move them to `$XDG_CONFIG_HOME/rimz/config.toml`"
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn read_trust_record(path: &Path) -> Result<Option<TrustRecord>> {
@@ -301,12 +377,27 @@ fn read_trust_record(path: &Path) -> Result<Option<TrustRecord>> {
 /// field order is fixed, `BTreeMap` keys sort, and `Option::None` serializes
 /// as `null`. The wire format is `sha256:<hex>`. Changing this projection is
 /// a product-invariant change that must land alongside a doc update in
-/// [`docs/internals/sidebar/trust.md`](../../docs/internals/sidebar/trust.md).
+/// [`docs/internals/harness/trust.md`](../../docs/internals/harness/trust.md).
 pub fn executable_surface_hash(config: &ProjectConfig) -> String {
+    surface_snapshot(config).hash
+}
+
+struct SurfaceSnapshot {
+    hash: String,
+    json: String,
+    value: Value,
+}
+
+fn surface_snapshot(config: &ProjectConfig) -> SurfaceSnapshot {
     let surface = ExecutableSurface::from(config);
-    let bytes = serde_json::to_vec(&surface).expect("ExecutableSurface serializes");
-    let digest = Sha256::digest(&bytes);
-    format!("{HASH_PREFIX}{}", hex::encode(digest))
+    let json = serde_json::to_string(&surface).expect("ExecutableSurface serializes");
+    let digest = Sha256::digest(json.as_bytes());
+    let value = serde_json::from_str(&json).expect("ExecutableSurface parses as JSON value");
+    SurfaceSnapshot {
+        hash: format!("{HASH_PREFIX}{}", hex::encode(digest)),
+        json,
+        value,
+    }
 }
 
 /// On-disk trust record at
@@ -315,6 +406,8 @@ pub fn executable_surface_hash(config: &ProjectConfig) -> String {
 struct TrustRecord {
     project_root: PathBuf,
     surface_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    surface_json: Option<String>,
     granted_at: Timestamp,
 }
 
@@ -325,7 +418,6 @@ struct TrustRecord {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ProjectConfig {
-    pub layout: LayoutConfig,
     pub agents: ProjectAgents,
     pub profiles: BTreeMap<String, ProjectProfile>,
     pub hooks: Vec<HookConfig>,
@@ -369,30 +461,6 @@ pub struct ProjectAgentsTable {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub struct LayoutConfig {
-    pub initial_panes: Vec<PaneConfig>,
-    pub tmux: TmuxLayoutConfig,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct PaneConfig {
-    pub name: Option<String>,
-    pub command: Option<String>,
-    pub cwd: Option<String>,
-    pub env: BTreeMap<String, String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct TmuxLayoutConfig {
-    pub status_left: Option<String>,
-    pub status_right: Option<String>,
-    pub popup_command: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
 pub struct AgentConfig {
     pub name: String,
     pub launch_command: Option<String>,
@@ -426,28 +494,11 @@ pub struct HookConfig {
 /// serializes as `null`).
 #[derive(Serialize)]
 struct ExecutableSurface<'a> {
-    layout_initial_panes: Vec<ExecutablePane<'a>>,
-    layout_tmux: ExecutableTmux<'a>,
     agents: Vec<ExecutableAgent<'a>>,
     profiles: Vec<ExecutableProfile<'a>>,
     teams: Vec<ExecutableTeam<'a>>,
     hooks: Vec<ExecutableHook<'a>>,
     env: &'a BTreeMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct ExecutablePane<'a> {
-    name: Option<&'a str>,
-    command: Option<&'a str>,
-    cwd: Option<&'a str>,
-    env: &'a BTreeMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct ExecutableTmux<'a> {
-    status_left: Option<&'a str>,
-    status_right: Option<&'a str>,
-    popup_command: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -506,22 +557,6 @@ fn permission_mode_name(mode: PermissionMode) -> &'static str {
 impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
     fn from(config: &'a ProjectConfig) -> Self {
         Self {
-            layout_initial_panes: config
-                .layout
-                .initial_panes
-                .iter()
-                .map(|p| ExecutablePane {
-                    name: p.name.as_deref(),
-                    command: p.command.as_deref(),
-                    cwd: p.cwd.as_deref(),
-                    env: &p.env,
-                })
-                .collect(),
-            layout_tmux: ExecutableTmux {
-                status_left: config.layout.tmux.status_left.as_deref(),
-                status_right: config.layout.tmux.status_right.as_deref(),
-                popup_command: config.layout.tmux.popup_command.as_deref(),
-            },
             agents: config
                 .agent_entries()
                 .iter()
@@ -586,6 +621,89 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
     }
 }
 
+fn surface_diff_for_record(record: &TrustRecord, current: &Value) -> TrustSurfaceDiff {
+    let Some(granted_json) = &record.surface_json else {
+        return TrustSurfaceDiff::LegacyRecord;
+    };
+    let Ok(granted) = serde_json::from_str::<Value>(granted_json) else {
+        return TrustSurfaceDiff::LegacyRecord;
+    };
+    TrustSurfaceDiff::Changes {
+        entries: executable_surface_diff(&granted, current),
+    }
+}
+
+pub fn executable_surface_diff(granted: &Value, current: &Value) -> Vec<SurfaceDiffEntry> {
+    let mut entries = Vec::new();
+    diff_value(&mut Vec::new(), Some(granted), Some(current), &mut entries);
+    entries
+}
+
+fn diff_value(
+    path: &mut Vec<String>,
+    granted: Option<&Value>,
+    current: Option<&Value>,
+    entries: &mut Vec<SurfaceDiffEntry>,
+) {
+    match (granted, current) {
+        (Some(Value::Object(left)), Some(Value::Object(right))) => {
+            let keys: BTreeSet<_> = left.keys().chain(right.keys()).collect();
+            for key in keys {
+                path.push(key.to_owned());
+                diff_value(path, left.get(key), right.get(key), entries);
+                path.pop();
+            }
+        }
+        (Some(Value::Array(left)), Some(Value::Array(right))) => {
+            for index in 0..left.len().max(right.len()) {
+                path.push(format!("[{index}]"));
+                diff_value(path, left.get(index), right.get(index), entries);
+                path.pop();
+            }
+        }
+        (Some(left), Some(right)) if left == right => {}
+        (Some(left), Some(right)) => entries.push(SurfaceDiffEntry {
+            kind: SurfaceDiffKind::Changed,
+            path: path.clone(),
+            granted: Some(left.clone()),
+            current: Some(right.clone()),
+        }),
+        (None, Some(right)) => push_missing(path, right, SurfaceDiffKind::Added, entries),
+        (Some(left), None) => push_missing(path, left, SurfaceDiffKind::Removed, entries),
+        (None, None) => {}
+    }
+}
+
+fn push_missing(
+    path: &mut Vec<String>,
+    value: &Value,
+    kind: SurfaceDiffKind,
+    entries: &mut Vec<SurfaceDiffEntry>,
+) {
+    match value {
+        Value::Object(map) if !map.is_empty() => {
+            for (key, child) in map {
+                path.push(key.clone());
+                push_missing(path, child, kind, entries);
+                path.pop();
+            }
+        }
+        Value::Array(values) if !values.is_empty() => {
+            for (index, child) in values.iter().enumerate() {
+                path.push(format!("[{index}]"));
+                push_missing(path, child, kind, entries);
+                path.pop();
+            }
+        }
+        _ => entries.push(SurfaceDiffEntry {
+            kind,
+            path: path.clone(),
+            granted: (kind != SurfaceDiffKind::Added).then(|| value.clone()),
+            current: (kind == SurfaceDiffKind::Added).then(|| value.clone()),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,7 +730,7 @@ mod tests {
     #[test]
     fn fresh_config_reports_untrusted() {
         let dir =
-            project_with("[[layout.initial_panes]]\nname = \"shell\"\ncommand = \"$SHELL\"\n");
+            project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
         let config = tempdir().expect("config root");
         let report = status_with_roots(dir.path(), config.path()).expect("status");
         assert_eq!(report.state, TrustState::Untrusted);
@@ -649,6 +767,18 @@ mod tests {
         let report = status_with_roots(dir.path(), config.path()).expect("status");
         assert_eq!(report.state, TrustState::Stale);
         assert_ne!(report.current_hash, report.granted_hash);
+        let TrustSurfaceDiff::Changes { entries } = report
+            .surface_diff
+            .expect("stale status should explain changed fields")
+        else {
+            panic!("expected changed-field diff");
+        };
+        assert!(entries.iter().any(|entry| {
+            entry.kind == SurfaceDiffKind::Changed
+                && entry.path == vec!["hooks".to_owned(), "[0]".to_owned(), "command".to_owned()]
+                && entry.granted == Some(serde_json::json!("rimz hooks claude"))
+                && entry.current == Some(serde_json::json!("rimz hooks codex"))
+        }));
     }
 
     #[test]
@@ -671,10 +801,10 @@ mod tests {
     #[test]
     fn unknown_non_command_field_does_not_change_hash() {
         let base = project_with(
-            "display_name = \"Query Engine\"\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+            "display_name = \"Query Engine\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
         );
         let extra = project_with(
-            "display_name = \"Query Engine dev\"\nsidebar = true\n\n[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
+            "display_name = \"Query Engine dev\"\nsidebar = true\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
         );
         let a = read_project_config(&base.path().join(CONFIG_REL))
             .expect("read base")
@@ -687,9 +817,10 @@ mod tests {
 
     #[test]
     fn project_notifications_do_not_enter_trust_hash() {
-        let base = project_with("[[layout.initial_panes]]\ncommand = \"$SHELL\"\n");
+        let base =
+            project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
         let extra = project_with(
-            "[[layout.initial_panes]]\ncommand = \"$SHELL\"\n\n[notifications]\ntitle = \"{{task}}\"\n[[notifications.handler]]\ncommand = \"ntfy publish rimz {{body}}\"\n",
+            "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n\n[notifications]\ntitle = \"{{task}}\"\n[[notifications.handler]]\ncommand = \"ntfy publish rimz {{body}}\"\n",
         );
         let a = read_project_config(&base.path().join(CONFIG_REL))
             .expect("read base")
@@ -716,6 +847,84 @@ mod tests {
         let config = tempdir().expect("config root");
         let report = revoke_with_roots(dir.path(), config.path()).expect("revoke");
         assert_eq!(report.state, TrustState::Untrusted);
+    }
+
+    #[test]
+    fn project_layout_table_fails_with_per_machine_fix() {
+        let dir =
+            project_with("[[layout.initial_panes]]\nname = \"shell\"\ncommand = \"$SHELL\"\n");
+        let config = tempdir().expect("config root");
+        let err = status_with_roots(dir.path(), config.path()).expect_err("layout must fail");
+        let rendered = err.to_string();
+        assert!(rendered.contains("[layout]"), "{rendered}");
+        assert!(rendered.contains("per-machine"), "{rendered}");
+    }
+
+    #[test]
+    fn grant_record_stores_canonical_surface_json() {
+        let dir =
+            project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
+        let config = tempdir().expect("config root");
+        let granted = grant_with_roots(dir.path(), config.path()).expect("grant");
+        let record = read_trust_record(&granted.record_path)
+            .expect("read trust record")
+            .expect("record present");
+        let surface_json = record.surface_json.expect("stored surface json");
+        let parsed: Value = serde_json::from_str(&surface_json).expect("surface json");
+        assert_eq!(parsed["hooks"][0]["command"], "rimz hooks claude");
+    }
+
+    #[test]
+    fn legacy_trust_record_reports_stale_without_diff() {
+        let dir =
+            project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
+        let config = tempdir().expect("config root");
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let record_path = trust_record_path(config.path(), &workspace_id);
+        let original_config = read_project_config(&dir.path().join(CONFIG_REL))
+            .expect("read config")
+            .expect("config present");
+        let record = TrustRecord {
+            project_root: dir.path().to_path_buf(),
+            surface_hash: executable_surface_hash(&original_config),
+            surface_json: None,
+            granted_at: Timestamp::now(),
+        };
+        let text = toml::to_string_pretty(&record).expect("serialize legacy record");
+        write_bytes_atomically(&record_path, text.as_bytes()).expect("write record");
+
+        std::fs::write(
+            dir.path().join(CONFIG_REL),
+            "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
+        )
+        .expect("rewrite");
+
+        let report = status_with_roots(dir.path(), config.path()).expect("status");
+        assert_eq!(report.state, TrustState::Stale);
+        assert_eq!(report.surface_diff, Some(TrustSurfaceDiff::LegacyRecord));
+    }
+
+    #[test]
+    fn grant_returns_diff_before_repinning_stale_surface() {
+        let dir =
+            project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
+        let config = tempdir().expect("config root");
+        grant_with_roots(dir.path(), config.path()).expect("grant");
+        std::fs::write(
+            dir.path().join(CONFIG_REL),
+            "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
+        )
+        .expect("rewrite");
+
+        let granted = grant_with_roots(dir.path(), config.path()).expect("regrant");
+        assert_eq!(granted.state, TrustState::Trusted);
+        assert!(matches!(
+            granted.surface_diff,
+            Some(TrustSurfaceDiff::Changes { ref entries }) if !entries.is_empty()
+        ));
+        let now = status_with_roots(dir.path(), config.path()).expect("status");
+        assert_eq!(now.state, TrustState::Trusted);
+        assert!(now.surface_diff.is_none());
     }
 
     #[test]
@@ -791,12 +1000,6 @@ mod tests {
         // hash to distinct values; if a future refactor drops a field from
         // `ExecutableSurface`, two cases collide and this test fires.
         let cases = [
-            "[[layout.initial_panes]]\ncommand = \"$SHELL\"\n",
-            "[[layout.initial_panes]]\ncwd = \"$RIMZ_PROJECT_ROOT\"\n",
-            "[[layout.initial_panes]]\nenv = { FOO = \"bar\" }\n",
-            "[layout.tmux]\nstatus_left = 'left'\n",
-            "[layout.tmux]\nstatus_right = 'right'\n",
-            "[layout.tmux]\npopup_command = 'fzf-projects'\n",
             "[[agents]]\nname = \"claude\"\nlaunch_command = \"claude code\"\n",
             "[[agents]]\nname = \"claude\"\nenv = { PATH = \"/opt/llms/bin\" }\n",
             "[profiles.x]\nagent = \"claude\"\n",
@@ -830,5 +1033,62 @@ mod tests {
                 "case `{text}` collided with another surface case",
             );
         }
+    }
+
+    #[test]
+    fn surface_diff_reports_added_leaf() {
+        let diff = executable_surface_diff(
+            &serde_json::json!({"env": {}}),
+            &serde_json::json!({"env": {"FOO": "1"}}),
+        );
+        assert_eq!(
+            diff,
+            vec![SurfaceDiffEntry {
+                kind: SurfaceDiffKind::Added,
+                path: vec!["env".to_owned(), "FOO".to_owned()],
+                granted: None,
+                current: Some(serde_json::json!("1")),
+            }]
+        );
+    }
+
+    #[test]
+    fn surface_diff_reports_removed_leaf() {
+        let diff = executable_surface_diff(
+            &serde_json::json!({"env": {"FOO": "1"}}),
+            &serde_json::json!({"env": {}}),
+        );
+        assert_eq!(
+            diff,
+            vec![SurfaceDiffEntry {
+                kind: SurfaceDiffKind::Removed,
+                path: vec!["env".to_owned(), "FOO".to_owned()],
+                granted: Some(serde_json::json!("1")),
+                current: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn surface_diff_reports_changed_leaf() {
+        let diff = executable_surface_diff(
+            &serde_json::json!({"hooks": [{"command": "a"}]}),
+            &serde_json::json!({"hooks": [{"command": "b"}]}),
+        );
+        assert_eq!(
+            diff,
+            vec![SurfaceDiffEntry {
+                kind: SurfaceDiffKind::Changed,
+                path: vec!["hooks".to_owned(), "[0]".to_owned(), "command".to_owned()],
+                granted: Some(serde_json::json!("a")),
+                current: Some(serde_json::json!("b")),
+            }]
+        );
+    }
+
+    #[test]
+    fn surface_diff_noops_on_equal_values() {
+        let value = serde_json::json!({"hooks": [{"command": "a"}]});
+        assert!(executable_surface_diff(&value, &value).is_empty());
     }
 }

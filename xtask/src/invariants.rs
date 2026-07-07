@@ -50,7 +50,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_no_hardcoded_ui_colors(root, &files)?;
     ensure_no_hardcoded_glyphs(root, &files)?;
     ensure_presence_plugin_vendored(root)?;
-    ensure_ledger_durability(root, &files)?;
+    ensure_store_durability(root, &files)?;
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_inline_tests_stay_small(&files)?;
@@ -97,10 +97,10 @@ fn ensure_hook_stdio(root: &Path, files: &[PathBuf]) -> Result<()> {
 
 fn ensure_sidebar_renderer_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
     for needle in [
-        "rimz::ledger::atomic",
-        "crate::ledger::atomic",
-        "rimz::ledger::writer",
-        "crate::ledger::writer",
+        "rimz::store::atomic",
+        "crate::store::atomic",
+        "rimz::store::writer",
+        "crate::store::writer",
     ] {
         ensure_no_match(
             files,
@@ -109,7 +109,7 @@ fn ensure_sidebar_renderer_boundaries(root: &Path, files: &[PathBuf]) -> Result<
                 !path.starts_with(root.join("crates/rimz/src/sidebar_pane"))
                     || path.starts_with(root.join("xtask"))
             },
-            "sidebar renderer must not import ledger writer APIs",
+            "sidebar renderer must not import store writer APIs",
         )?;
     }
     Ok(())
@@ -120,8 +120,8 @@ fn ensure_spend_parser_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> 
     for needle in [
         concat!("::", "atomic"),
         concat!("atomic", "::"),
-        concat!("::", "bridge"),
-        concat!("bridge", "::"),
+        concat!("::", "run_wake"),
+        concat!("run_wake", "::"),
         concat!("::", "broker"),
         concat!("broker", "::"),
     ] {
@@ -129,7 +129,7 @@ fn ensure_spend_parser_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> 
             files,
             needle,
             |path| !is_agent_spend_parser_path(path, &agents_root),
-            "adapter spend parsers are read-only: no ledger writes, bridge, or broker imports",
+            "adapter spend parsers are read-only: no store writes, run-wake, or broker imports",
         )?;
     }
     Ok(())
@@ -138,9 +138,9 @@ fn ensure_spend_parser_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> 
 fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
     let sidebar_root = root.join("crates/rimz/src/sidebar");
     for needle in [
-        concat!("ledger", "::", "writer"),
-        concat!("::", "bridge"),
-        concat!("bridge", "::"),
+        concat!("store", "::", "writer"),
+        concat!("::", "run_wake"),
+        concat!("run_wake", "::"),
         concat!("::", "broker"),
         concat!("broker", "::"),
     ] {
@@ -148,7 +148,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
             files,
             needle,
             |path| !path.starts_with(&sidebar_root),
-            "crates/rimz/src/sidebar is read-only on the ledger: no writer, bridge, or broker imports",
+            "crates/rimz/src/sidebar is read-only on the store: no writer, run-wake, or broker imports",
         )?;
     }
     Ok(())
@@ -227,15 +227,15 @@ fn is_test_source_path(root: &Path, path: &Path) -> bool {
             .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
 }
 
-fn ensure_ledger_durability(root: &Path, files: &[PathBuf]) -> Result<()> {
+fn ensure_store_durability(root: &Path, files: &[PathBuf]) -> Result<()> {
     for needle in [concat!(".sync_", "all("), concat!(".sync_", "data(")] {
         ensure_no_match(
             files,
             needle,
             |path| {
-                path.ends_with("crates/rimz/src/ledger/atomic.rs") || is_docs_or_xtask(root, path)
+                path.ends_with("crates/rimz/src/store/atomic.rs") || is_docs_or_xtask(root, path)
             },
-            "fsync syscalls live in ledger/atomic.rs alone — route through its helpers",
+            "fsync syscalls live in store/atomic.rs alone — route through its helpers",
         )?;
     }
     Ok(())
@@ -378,7 +378,7 @@ fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
     );
 }
 
-/// Render files that own or bridge the color pipeline (theme module, depth
+/// Render files that own or connect the color pipeline (theme module, depth
 /// quantizer, Alacritty parser, OKLab math), plus every test module.
 fn ui_color_exempt(relative: &Path) -> bool {
     let file = relative.file_name().and_then(OsStr::to_str);
@@ -567,7 +567,7 @@ fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
 }
 
 fn ensure_card_admission_predicate(root: &Path) -> Result<()> {
-    let path = root.join("crates/rimz/src/ledger/snapshot/view/live.rs");
+    let path = root.join("crates/rimz/src/store/snapshot/view/live.rs");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let Some(live_fold) = text.find("pub fn with_live_panes(") else {

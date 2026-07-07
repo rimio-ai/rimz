@@ -26,7 +26,7 @@ use observe::event_lifecycle_observation;
 
 pub(super) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
@@ -34,10 +34,10 @@ pub(super) fn handle_lifecycle_hook(
 ) -> Result<()> {
     let agent_id = payload_agent_id(payload);
     let recorded =
-        record_lifecycle_observation(workspace, ledger, agent, event_name, payload, globals);
+        record_lifecycle_observation(workspace, store, agent, event_name, payload, globals);
     record_native_answer(
         workspace,
-        ledger,
+        store,
         agent,
         event_name,
         payload,
@@ -58,7 +58,7 @@ pub(super) fn handle_lifecycle_hook(
             .and_then(|recorded| recorded.observation.turn_error.clone());
         manage_agent_context(AgentContextHook {
             workspace,
-            ledger,
+            store,
             agent,
             context: LifecycleEventContext {
                 event_name,
@@ -71,9 +71,9 @@ pub(super) fn handle_lifecycle_hook(
         });
     }
     if let Some(recorded) = recorded.as_ref() {
-        record_run_lifecycle(ledger, agent, event_name, payload, recorded);
+        record_run_lifecycle(store, agent, event_name, payload, recorded);
         if let Err(err) =
-            record_chat_conversation(workspace, ledger, agent, event_name, payload, recorded)
+            record_chat_conversation(workspace, store, agent, event_name, payload, recorded)
         {
             warn!(
                 agent = agent.descriptor().kind,
@@ -82,12 +82,12 @@ pub(super) fn handle_lifecycle_hook(
                 "lifecycle: failed to record chat entry",
             );
         }
-        confirm_sent_message_for_lifecycle(ledger, agent, recorded, &workspace.session_name);
+        confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
         if recorded.observation.signal == LifecycleSignal::Ended
             && let Some(agent_id) = agent_id
         {
             let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
-            if let Err(err) = ledger.archive_messages_for_card(
+            if let Err(err) = store.archive_messages_for_card(
                 &kind,
                 &rimz::ids::AgentSessionId::from(agent_id),
                 recorded.observation.agent_name.as_deref(),
@@ -102,9 +102,9 @@ pub(super) fn handle_lifecycle_hook(
                 );
             }
         }
-        spawn_queue_delivery_if_checkpoint(workspace, ledger, agent, recorded);
+        spawn_queue_delivery_if_checkpoint(workspace, store, agent, recorded);
         if recorded.appended_lifecycle {
-            spawn_auto_rotation_if_due(workspace, ledger);
+            spawn_auto_rotation_if_due(workspace, store);
         }
     }
     Ok(())
@@ -119,7 +119,7 @@ struct RecordedLifecycle {
 
 struct AgentContextHook<'a> {
     workspace: &'a ResolvedWorkspace,
-    ledger: &'a Ledger,
+    store: &'a Store,
     agent: &'a dyn AgentAdapter,
     context: LifecycleEventContext<'a>,
 }
@@ -135,7 +135,7 @@ struct LifecycleEventContext<'a> {
 
 struct ContextSidecarInput<'a> {
     workspace: &'a ResolvedWorkspace,
-    ledger: &'a Ledger,
+    store: &'a Store,
     agent: &'a dyn AgentAdapter,
     event_name: &'a str,
     payload: &'a Value,
@@ -146,7 +146,7 @@ struct ContextSidecarInput<'a> {
 }
 
 fn record_run_lifecycle(
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
@@ -160,14 +160,14 @@ fn record_run_lifecycle(
         .then(|| agent.last_assistant_message(event_name, payload, &recorded.observation))
         .flatten();
     match rimz::harness::run::record_lifecycle(
-        ledger.paths(),
+        store.paths(),
         &run_id,
         agent.descriptor().kind,
         &recorded.observation,
         last_message,
     ) {
         Ok(Some(record)) => {
-            if let Err(err) = rimz::ledger::wakeup::wake_run(ledger.runtime_paths(), &record) {
+            if let Err(err) = rimz::store::wakeup::wake_run(store.runtime_paths(), &record) {
                 warn!(
                     agent = agent.descriptor().kind,
                     event = %event_name,
@@ -195,14 +195,14 @@ mod tests {
     use super::*;
     use std::io::Write as _;
 
-    fn test_ledger() -> (tempfile::TempDir, Ledger) {
+    fn test_store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::TempDir::new().unwrap();
         let workspace_id =
             rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"));
-        let paths = rimz::ledger::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        let runtime = rimz::ledger::RuntimePaths::under(workspace_id, dir.path()).unwrap();
-        let ledger = Ledger::open(paths, runtime).unwrap();
-        (dir, ledger)
+        let paths = rimz::store::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let runtime = rimz::store::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+        let store = Store::open(paths, runtime).unwrap();
+        (dir, store)
     }
 
     fn workspace_id() -> rimz::ids::WorkspaceId {
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn lifecycle_confirms_matching_message_body() {
-        let (_dir, ledger) = test_ledger();
+        let (_dir, store) = test_store();
         let agent = test_agent();
         let command = rimz::message::MessageRecord::new(
             workspace_id(),
@@ -281,11 +281,11 @@ mod tests {
             true,
             rimz::message::DeliveryGate::Done,
         );
-        ledger
+        store
             .record_sent_message(&command, "session")
             .unwrap()
             .expect("command sent");
-        ledger
+        store
             .record_sent_message(&prompt, "session")
             .unwrap()
             .expect("prompt sent");
@@ -295,7 +295,7 @@ mod tests {
             LifecycleSignal::Compacting,
         );
         confirm_sent_message_for_lifecycle(
-            &ledger,
+            &store,
             &rimz::agents::ClaudeAdapter,
             &RecordedLifecycle {
                 model_hint: None,
@@ -305,7 +305,7 @@ mod tests {
             },
             "session",
         );
-        let messages = ledger.list_messages().unwrap();
+        let messages = store.list_messages().unwrap();
         assert!(
             messages
                 .iter()
@@ -328,7 +328,7 @@ mod tests {
         );
         real_observation.prompt = Some("real prompt".to_owned());
         confirm_sent_message_for_lifecycle(
-            &ledger,
+            &store,
             &rimz::agents::ClaudeAdapter,
             &RecordedLifecycle {
                 model_hint: None,
@@ -338,7 +338,7 @@ mod tests {
             },
             "session",
         );
-        let messages = ledger.list_messages().unwrap();
+        let messages = store.list_messages().unwrap();
         assert!(
             messages
                 .iter()
@@ -346,7 +346,7 @@ mod tests {
             "delivered prompt self-cleans from the live queue"
         );
         assert!(
-            ledger
+            store
                 .read_events()
                 .unwrap()
                 .iter()
@@ -367,10 +367,10 @@ mod tests {
         .unwrap();
 
         let observed_at = jiff::Timestamp::from_second(1_780_394_400).unwrap();
-        let mut prior = rimz::ledger::agent_context::new_record(
+        let mut prior = rimz::store::agent_context::new_record(
             "pi",
             "sess-1",
-            rimz::ledger::agent_context::empty_context("pi", observed_at),
+            rimz::store::agent_context::empty_context("pi", observed_at),
         );
         prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
         prior.context.cost = Some(rimz::agents::AgentCost {
@@ -431,9 +431,9 @@ mod tests {
 
         let workspace_id =
             rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"));
-        let runtime = rimz::ledger::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+        let runtime = rimz::store::RuntimePaths::under(workspace_id, dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        rimz::ledger::agent_context::merge_local_context(
+        rimz::store::agent_context::merge_local_context(
             &runtime,
             "pi",
             "sess-1",
@@ -442,7 +442,7 @@ mod tests {
             observed_at,
         )
         .unwrap();
-        let merged = rimz::ledger::agent_context::read_one(&runtime, "pi", "sess-1").unwrap();
+        let merged = rimz::store::agent_context::read_one(&runtime, "pi", "sess-1").unwrap();
         assert_eq!(
             merged
                 .context

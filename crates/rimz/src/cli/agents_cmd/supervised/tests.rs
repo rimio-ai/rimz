@@ -1,10 +1,10 @@
 use super::*;
 use rimz::agents::{AgentState, AgentStatus};
-use rimz::bridge::{ExpectedRunFrame, WakeupFrame};
 use rimz::harness::run::{PermissionMode, RunStatus};
+use rimz::harness::run_wake::{self, ExpectedRunFrame, WakeupFrame};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
-use rimz::ledger::{RuntimePaths, StatePaths};
 use rimz::pane::PaneRef;
+use rimz::store::{RuntimePaths, StatePaths};
 use std::path::PathBuf;
 use tokio::net::UnixDatagram;
 
@@ -105,14 +105,14 @@ fn stop_backstop_uses_late_recorded_pane_id() {
     let fixture = RunFixture::new(RunStatus::Canceled);
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%8");
     rimz::harness::run::record_pane(
-        fixture.ledger.paths(),
+        fixture.store.paths(),
         &fixture.record.run_id,
         pane_id.clone(),
     )
     .unwrap();
 
     let (latest, resolved) =
-        latest_resolved_run_pane(&fixture.ledger, "rimz-test", &fixture.record).unwrap();
+        latest_resolved_run_pane(&fixture.store, "rimz-test", &fixture.record).unwrap();
     assert_eq!(latest.pane_id.as_ref(), Some(&pane_id));
     assert_eq!(resolved.pane_id, pane_id);
     assert_eq!(resolved.session_name, "rimz-test");
@@ -140,7 +140,7 @@ struct RunFixture {
     workspace_id: WorkspaceId,
     paths: StatePaths,
     runtime: RuntimePaths,
-    ledger: rimz::Ledger,
+    store: rimz::Store,
     record: RunRecord,
 }
 
@@ -155,7 +155,7 @@ impl RunFixture {
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         paths.ensure_dirs().unwrap();
         runtime.ensure_dirs().unwrap();
-        let ledger = rimz::Ledger::open(paths.clone(), runtime.clone()).unwrap();
+        let store = rimz::Store::open(paths.clone(), runtime.clone()).unwrap();
         let mut record = RunRecord::new(
             workspace_id.clone(),
             AgentKind::new_unchecked("codex"),
@@ -170,7 +170,7 @@ impl RunFixture {
             workspace_id,
             paths,
             runtime,
-            ledger,
+            store,
             record,
         }
     }
@@ -187,13 +187,13 @@ impl RunFixture {
     }
 
     fn bind(&self) -> (std::os::unix::net::UnixDatagram, PathBuf) {
-        bridge::bind_run(&self.runtime, &self.record.run_id).unwrap()
+        run_wake::bind_run(&self.runtime, &self.record.run_id).unwrap()
     }
 
     fn complete(&mut self, message: &str) {
         self.record.status = RunStatus::Completed;
         self.record.last_message = Some(message.to_owned());
-        rimz::ledger::run_store::write(&self.paths.runs_dir, &self.record).unwrap();
+        rimz::store::run_store::write(&self.paths.runs_dir, &self.record).unwrap();
     }
 }
 
@@ -216,7 +216,7 @@ fn blocking_stream_wakeup_reloads_terminal_record() {
     let loaded = stream_blocking_run(
         sock,
         fixture.expected(),
-        &fixture.ledger,
+        &fixture.store,
         &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::from_secs(1)),
@@ -236,7 +236,7 @@ fn blocking_stream_timeout_marks_run_timed_out() {
     let timed_out = stream_blocking_run(
         sock,
         fixture.expected(),
-        &fixture.ledger,
+        &fixture.store,
         &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::ZERO),
@@ -258,7 +258,7 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
     let run_id = fixture.run_id();
 
     let outcome = stream_attached_run(
-        &fixture.ledger,
+        &fixture.store,
         &run_id,
         &rimz::agents::CodexAdapter,
         false,

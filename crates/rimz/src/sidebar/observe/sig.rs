@@ -300,7 +300,7 @@ fn extract_events(event_store: &EventStore, now_ms: u64) -> EventsSig {
             | SidebarEvent::FocusChanged { .. }
             | SidebarEvent::FocusStranded { .. }
             | SidebarEvent::PanesChanged
-            | SidebarEvent::LedgerDelta { .. }
+            | SidebarEvent::StoreDelta { .. }
             | SidebarEvent::PaneFramePublished
             | SidebarEvent::Notify { .. }
             | SidebarEvent::Reload => {}

@@ -2,9 +2,9 @@ use super::exec::*;
 use super::launch::*;
 use super::*;
 use clap::Parser;
-use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::config::LaunchPlacement;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::harness::spec::Column;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewId, WorkspaceId};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1386,7 +1386,8 @@ mod runs {
         );
         let run_id = record.run_id.clone();
         rimz::harness::run::create(&paths, &record).expect("create run");
-        let (sock, _sock_path) = rimz::bridge::bind_run(&runtime, &run_id).expect("bind run");
+        let (sock, _sock_path) =
+            rimz::harness::run_wake::bind_run(&runtime, &run_id).expect("bind run");
         let context = RunExecContext {
             run_id: run_id.clone(),
             paths: paths.clone(),
@@ -1406,7 +1407,7 @@ mod runs {
 
         let failed = rimz::harness::run::load(&paths, &run_id).expect("load failed run");
         assert_eq!(failed.status, RunStatus::Failed);
-        let outcome = rimz::bridge::wait_for_run_completion_owning(
+        let outcome = rimz::harness::run_wake::wait_for_run_completion_owning(
             sock,
             ExpectedRunFrame {
                 workspace_id,
@@ -1536,7 +1537,7 @@ mod render {
             focused_pane: None,
             presence: None,
         };
-        rimz::ledger::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
+        rimz::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
             .unwrap();
 
         crate::cli::apply_cached_daemon_reap(&mut snapshot, &runtime, "rimz-test");

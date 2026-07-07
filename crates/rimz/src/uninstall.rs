@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ledger::paths;
+use crate::store::paths;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Removed {

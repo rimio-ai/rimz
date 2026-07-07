@@ -13,8 +13,8 @@ use tracing::debug;
 
 use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::ledger::{RuntimePaths, atomic};
 use crate::sidebar::read_marks::ReadMarks;
+use crate::store::{RuntimePaths, atomic};
 use crate::{SidebarRow, SidebarSnapshot};
 
 pub const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";

@@ -16,15 +16,15 @@ struct ProduceFixture {
     paths: rimz::StatePaths,
     runtime: rimz::RuntimePaths,
     cursor: rimz::sidebar::consumer::RollupCursor,
-    ledger_bytes: u64,
+    store_bytes: u64,
 }
 
 impl ProduceFixture {
     fn cold(fleet: usize) -> Self {
         let (tempdir, paths, runtime) = workspace();
-        rimz::testkit::fleet::seed_fleet_ledger(&paths, fleet, fleet * EVENTS_PER_AGENT)
+        rimz::testkit::fleet::seed_fleet_store(&paths, fleet, fleet * EVENTS_PER_AGENT)
             .expect("seed fleet");
-        let ledger_bytes = std::fs::metadata(&paths.events_log)
+        let store_bytes = std::fs::metadata(&paths.events_log)
             .expect("log metadata")
             .len();
         rimz::testkit::fleet::publish_fresh_produce_inputs(&runtime, fleet)
@@ -34,13 +34,13 @@ impl ProduceFixture {
             paths,
             runtime,
             cursor: rimz::sidebar::consumer::RollupCursor::new(),
-            ledger_bytes,
+            store_bytes,
         }
     }
 
     fn warm(fleet: usize) -> Self {
         let (tempdir, paths, runtime) = workspace();
-        rimz::testkit::fleet::seed_fleet_ledger(&paths, fleet, fleet * EVENTS_PER_AGENT)
+        rimz::testkit::fleet::seed_fleet_store(&paths, fleet, fleet * EVENTS_PER_AGENT)
             .expect("seed fleet");
         rimz::testkit::fleet::publish_fresh_produce_inputs(&runtime, fleet)
             .expect("publish produce inputs");
@@ -56,12 +56,12 @@ impl ProduceFixture {
         let log_len = std::fs::metadata(&paths.events_log)
             .expect("log metadata")
             .len();
-        rimz::ledger::event_log::append(
+        rimz::store::event_log::append(
             &paths.events_log,
             &rimz::testkit::fleet::registered_lifecycle(&paths.workspace_id, 0),
         )
         .expect("append delta");
-        let ledger_bytes = std::fs::metadata(&paths.events_log)
+        let store_bytes = std::fs::metadata(&paths.events_log)
             .expect("log metadata")
             .len()
             - log_len;
@@ -72,7 +72,7 @@ impl ProduceFixture {
             paths,
             runtime,
             cursor,
-            ledger_bytes,
+            store_bytes,
         }
     }
 }
@@ -94,7 +94,7 @@ fn workspace() -> (TempDir, rimz::StatePaths, rimz::RuntimePaths) {
 fn produce_cold(bencher: Bencher, fleet: usize) {
     bencher
         .with_inputs(move || ProduceFixture::cold(fleet))
-        .input_counter(|fixture| BytesCount::new(fixture.ledger_bytes))
+        .input_counter(|fixture| BytesCount::new(fixture.store_bytes))
         .bench_local_values(|mut fixture| {
             divan::black_box(
                 rimz::sidebar::produce::produce_snapshot(
@@ -112,7 +112,7 @@ fn produce_cold(bencher: Bencher, fleet: usize) {
 fn produce_warm(bencher: Bencher, fleet: usize) {
     bencher
         .with_inputs(move || ProduceFixture::warm(fleet))
-        .input_counter(|fixture| BytesCount::new(fixture.ledger_bytes))
+        .input_counter(|fixture| BytesCount::new(fixture.store_bytes))
         .bench_local_values(|mut fixture| {
             divan::black_box(
                 rimz::sidebar::produce::produce_snapshot(

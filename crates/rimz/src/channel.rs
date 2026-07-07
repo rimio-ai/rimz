@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::ledger::atomic::{self, write_temp_then_rename};
-use crate::ledger::lock::{self, WorkspaceLock};
-use crate::ledger::paths::StatePaths;
+use crate::store::atomic::{self, write_temp_then_rename};
+use crate::store::lock::{self, WorkspaceLock};
+use crate::store::paths::StatePaths;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelErr {

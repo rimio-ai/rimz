@@ -54,7 +54,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
     let display_name = workspace_id.as_str().to_owned();
     let now = Timestamp::now();
     SidebarSnapshot {
-        snapshot_version: crate::ledger::snapshot::SNAPSHOT_VERSION,
+        snapshot_version: crate::store::snapshot::SNAPSHOT_VERSION,
         workspace_id,
         display_name,
         generated_at: now,

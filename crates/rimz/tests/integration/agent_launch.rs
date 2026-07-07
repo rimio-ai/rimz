@@ -9,7 +9,7 @@ use rimz::agents::LaunchParams;
 #[cfg(unix)]
 use rimz::ids::{AgentKind, AgentSessionId};
 #[cfg(unix)]
-use rimz::ledger::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
 #[cfg(unix)]
 use crate::common::{
@@ -156,7 +156,7 @@ fn missing_shell_path_falls_back_to_direct_exec() {
 }
 
 /// An invalid explicit `--new-pane` (here a multi-cell layout) refuses the
-/// whole launch before any side effect, so it leaves no provisional ledger rows
+/// whole launch before any side effect, so it leaves no provisional store rows
 /// and never creates the requested worktree. Resolution runs ahead of the
 /// live-session probe, so the rejection needs neither a running room nor a mux.
 #[cfg(unix)]
@@ -185,7 +185,7 @@ fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
 
 #[cfg(unix)]
 #[test]
-fn resume_with_empty_ledger_refuses_before_mux_probe() {
+fn resume_with_empty_store_refuses_before_mux_probe() {
     let env = Env::new();
 
     env.rimz()
@@ -301,5 +301,5 @@ fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
             description: None,
         },
     );
-    env.ledger().append_event(&event).expect("append launch");
+    env.store().append_event(&event).expect("append launch");
 }

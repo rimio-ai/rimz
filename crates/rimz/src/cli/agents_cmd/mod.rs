@@ -25,14 +25,14 @@ use super::GlobalFlags;
 use crate::cli::room::RoomTarget;
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
-use rimz::bridge::{self, ExpectedRunFrame, SocketGuard};
 use rimz::config::LaunchPlacement;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
+use rimz::harness::run_wake::{self, ExpectedRunFrame, SocketGuard};
 use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId, EventId};
-use rimz::ledger::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::message::{DeliveryGate, gate_open};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
+use rimz::store::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::workspace::WorkspaceResolver;
 
 use auto_continue::{AutoContinueArgs, run_auto_continue};
@@ -63,7 +63,7 @@ struct LaunchEventParams<'a> {
     worktree_name: Option<&'a str>,
     channel: Option<&'a str>,
     prompt: Option<&'a str>,
-    state: rimz::ledger::event::AgentLaunchState,
+    state: rimz::store::event::AgentLaunchState,
     pane_id: Option<rimz::ids::PaneId>,
 }
 

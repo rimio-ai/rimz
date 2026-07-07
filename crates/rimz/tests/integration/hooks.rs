@@ -429,7 +429,7 @@ fn codex_subagent_permission_without_parent_frame_stays_metadata_only() {
     assert_eq!(
         agents.len(),
         1,
-        "the child waiting state remains ledger metadata"
+        "the child waiting state remains store metadata"
     );
     assert_eq!(agents[0]["agent_id"], "child-thread-1");
     assert_eq!(agents[0]["status"], "waiting");

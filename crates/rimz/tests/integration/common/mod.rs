@@ -1,12 +1,12 @@
-//! Shared harness for integration tests. Real tempdir, real ledger files —
+//! Shared harness for integration tests. Real tempdir, real store files —
 //! no in-memory stubs.
 //!
 //! Two entry points, one module each:
 //! - [`Env`] (`env`) drives the `rimz` binary out of process (the CLI tier):
 //!   XDG roots scoped to a tempdir, the workspace resolved from the project
 //!   root, and helpers for hook round trips every CLI test repeats.
-//! - [`Harness`] (`harness`) opens a real [`rimz::Ledger`] in process (the
-//!   library tier) for tests that drive ledger APIs directly.
+//! - [`Harness`] (`harness`) opens a real [`rimz::Store`] in process (the
+//!   library tier) for tests that drive store APIs directly.
 //!
 //! `payloads` holds the agent hook-payload fixtures and environment probes
 //! shared across tiers.

@@ -3,7 +3,7 @@
 //! OpenCode stores sessions and messages in one WAL-mode SQLite database under
 //! the XDG data root. The dashboard reads it directly through a read-only
 //! connection: positive stored `cost` values are authoritative, while zero-cost
-//! token rows are priced through Rimz's [`PriceBook`]. Older flat JSON storage
+//! token rows are priced through Rimz's [`PriceBook`]. Older flat JSON disk_usage
 //! is intentionally skipped; OpenCode 1.15's SQLite store is the current source
 //! of truth.
 

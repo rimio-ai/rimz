@@ -29,7 +29,7 @@ const NOUNS: &[&str] = &[
     "canyon", "cargo", "cipher", "cliff", "cloud", "cobalt", "comet", "compass", "copper", "coral",
     "dock", "drift", "echo", "fig", "flare", "forge", "frame", "frost", "garden", "gate", "glyph",
     "grain", "grove", "haven", "hazel", "hinge", "index", "iris", "isle", "jolt", "kernel",
-    "keystone", "lagoon", "lane", "ledger", "lens", "linen", "lumen", "maple", "marker", "mesa",
+    "keystone", "lagoon", "lane", "store", "lens", "linen", "lumen", "maple", "marker", "mesa",
     "meter", "mint", "mirror", "module", "needle", "notch", "nova", "oak", "parcel", "path",
     "pillar", "pixel", "plaza", "portal", "ridge", "river", "rivet", "route", "saddle", "signal",
     "silver", "slate", "spark", "spire", "spring", "square", "stone", "strand", "summit",

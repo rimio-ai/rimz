@@ -10,9 +10,9 @@ use serde::Serialize;
 
 use super::render::{self, Table, cell, fmt_bytes, paint, palette};
 use super::spinner::Spinner;
-use super::{GlobalFlags, open_ledger};
-use rimz::ledger::event_log::RepairOutcome;
-use rimz::ledger::gc;
+use super::{GlobalFlags, open_store};
+use rimz::store::event_log::RepairOutcome;
+use rimz::store::gc;
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -39,22 +39,22 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     let (messages_archived, messages_reconciled, repaired, carryover_pruned) = if args.dry_run {
         (0, 0, None, 0)
     } else {
-        spinner.set("repairing ledger…");
+        spinner.set("repairing store…");
         match WorkspaceResolver::resolve(".", globals.root.clone()) {
-            Ok(workspace) => match open_ledger(&workspace) {
-                Ok(ledger) => {
+            Ok(workspace) => match open_store(&workspace) {
+                Ok(store) => {
                     // Repair before the sweep: the sweep's forced publish folds the
                     // log and would self-heal a corpse itself, leaving this explicit
                     // repair nothing to find — and the report below silent about a
                     // cut this very run made.
-                    let repaired = ledger
+                    let repaired = store
                         .repair_event_log()
                         .context("repairing the event log")?;
                     spinner.set("archiving orphan messages…");
-                    let messages_archived = ledger
+                    let messages_archived = store
                         .archive_orphan_messages(&workspace.session_name)
                         .context("archiving orphan messages")?;
-                    let reconcile = ledger
+                    let reconcile = store
                         .reconcile_stale_sent_messages(
                             &workspace.session_name,
                             jiff::Timestamp::now(),
@@ -62,9 +62,9 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                             rimz::message::max_delivery_attempts_from_env(),
                         )
                         .context("reconciling sent messages")?;
-                    spinner.set("pruning ledger caches...");
-                    let carryover_pruned = ledger
-                        .prune_carryover(rimz::ledger::event_log::DEFAULT_RETENTION)
+                    spinner.set("pruning store caches...");
+                    let carryover_pruned = store
+                        .prune_carryover(rimz::store::event_log::DEFAULT_RETENTION)
                         .context("pruning carryover agents")?;
                     (
                         messages_archived,
@@ -76,7 +76,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                 Err(err) => {
                     tracing::debug!(
                         error = %err,
-                        "workspace ledger unavailable; runtime gc continues"
+                        "workspace store unavailable; runtime gc continues"
                     );
                     (0, 0, None, 0)
                 }
@@ -184,22 +184,22 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
     if workspace.root_class != rimz::workspace::RootClass::Repo {
         return WorktreeSweep::default();
     }
-    let ledger = match open_ledger_for_worktree_gc(&workspace, dry_run) {
-        Ok(Some(ledger)) => ledger,
+    let store = match open_store_for_worktree_gc(&workspace, dry_run) {
+        Ok(Some(store)) => store,
         Ok(None) => {
-            tracing::debug!("workspace ledger absent; worktree gc skipped");
+            tracing::debug!("workspace store absent; worktree gc skipped");
             return WorktreeSweep::default();
         }
         Err(err) => {
             tracing::debug!(
                 error = %err,
-                "workspace ledger unavailable; worktree gc skipped"
+                "workspace store unavailable; worktree gc skipped"
             );
             return WorktreeSweep::default();
         }
     };
     let snapshot =
-        match super::alive_snapshot(&ledger, ledger.runtime_paths(), &workspace.session_name) {
+        match super::alive_snapshot(&store, store.runtime_paths(), &workspace.session_name) {
             Ok(snapshot) => snapshot,
             Err(err) => {
                 tracing::debug!(
@@ -256,7 +256,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
         else {
             continue;
         };
-        let bytes = rimz::storage::dir_size(&entry.path);
+        let bytes = rimz::disk_usage::dir_size(&entry.path);
         if dry_run {
             sweep.removed.push(SweptWorktree {
                 name: marker.name,
@@ -280,7 +280,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
                 .map_err(Into::into)
             },
             |channel, reason| {
-                ledger
+                store
                     .archive_channel_messages(channel, reason, &workspace.session_name)
                     .map(|_| ())
                     .map_err(Into::into)
@@ -308,18 +308,18 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
     sweep
 }
 
-fn open_ledger_for_worktree_gc(
+fn open_store_for_worktree_gc(
     workspace: &rimz::ResolvedWorkspace,
     dry_run: bool,
-) -> Result<Option<rimz::Ledger>> {
+) -> Result<Option<rimz::Store>> {
     if !dry_run {
-        return open_ledger(workspace).map(Some);
+        return open_store(workspace).map(Some);
     }
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing ledger paths")?;
+        .context("preparing store paths")?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
-    Ok(rimz::Ledger::open_existing(paths, runtime))
+    Ok(rimz::Store::open_existing(paths, runtime))
 }
 
 fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::pane::PaneRef>) -> Vec<PathBuf> {
@@ -383,7 +383,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             cell("workspaces"),
             cell(plural(out.prune.removed.len(), "pruned", "pruned")),
             cell(fmt_bytes(out.prune.bytes_removed())),
-            cell("dead ledgers"),
+            cell("dead stores"),
         ]);
     }
     if out.temps.files_removed > 0 {
@@ -438,7 +438,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         )?;
     }
     if out.dry_run {
-        report_note(w, "ledger maintenance skipped (dry run)")?;
+        report_note(w, "store maintenance skipped (dry run)")?;
     }
     let worktree_verb = if out.dry_run {
         "would sweep worktree"
@@ -541,7 +541,7 @@ struct JsonReport {
     carryover_pruned: usize,
     schedules_reaped: usize,
     repair: Option<JsonRepair>,
-    ledger_maintenance_skipped: bool,
+    store_maintenance_skipped: bool,
 }
 
 impl From<&GcOutcome> for JsonReport {
@@ -561,7 +561,7 @@ impl From<&GcOutcome> for JsonReport {
             carryover_pruned: out.carryover_pruned,
             schedules_reaped: out.schedules_reaped,
             repair: out.repaired.map(JsonRepair::from),
-            ledger_maintenance_skipped: out.dry_run,
+            store_maintenance_skipped: out.dry_run,
         }
     }
 }
@@ -858,7 +858,7 @@ mod tests {
         let out = strip_report(&full_outcome(true));
 
         assert!(out.contains("gc would reclaim"));
-        assert!(out.contains("ledger maintenance skipped (dry run)"));
+        assert!(out.contains("store maintenance skipped (dry run)"));
         assert!(out.contains("would sweep worktree: demo /repo-worktrees/demo"));
         assert!(out.contains("would prune workspace: ws_0123456789abcdef01234567 /gone"));
         assert!(!out.contains("branch kept"));
@@ -890,7 +890,7 @@ mod tests {
         let dry_run = serde_json::to_value(JsonReport::from(&full_outcome(true))).unwrap();
         assert!(dry_run["repair"].is_null());
         assert!(dry_run["worktrees"]["removed"][0]["branch_deleted"].is_null());
-        assert_eq!(dry_run["ledger_maintenance_skipped"], true);
+        assert_eq!(dry_run["store_maintenance_skipped"], true);
     }
 
     #[test]

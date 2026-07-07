@@ -9,8 +9,8 @@ use anyhow::{Context, Result};
 use jiff::Timestamp;
 
 use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
-use rimz::ledger::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
-use rimz::{Ledger, RuntimePaths, StatePaths};
+use rimz::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
+use rimz::{RuntimePaths, StatePaths, Store};
 
 use super::resume::reboot_since_last_birth;
 
@@ -24,7 +24,7 @@ pub(super) struct BirthRecovery {
 
 struct AuditState {
     paths: StatePaths,
-    ledger: Ledger,
+    store: Store,
     projection: rimz::RuntimeProjection,
 }
 
@@ -61,7 +61,7 @@ pub(super) fn inspect_previous_incarnation(
         lost_agents: lost_agents.clone(),
         at: Timestamp::now(),
     };
-    append_session_death(&audit.ledger, workspace_id, session_name, &marker);
+    append_session_death(&audit.store, workspace_id, session_name, &marker);
     write_last_death_marker(&audit.paths, &marker);
     if cause == SessionDeathCause::Crash {
         let roster = lost_agent_roster(&audit.projection.agents, &lost_now);
@@ -99,11 +99,11 @@ fn death_notice(death: &LastDeathMarker) -> String {
 fn read_audit_state(workspace_id: &WorkspaceId) -> Option<AuditState> {
     let paths = StatePaths::for_workspace(workspace_id.clone()).ok()?;
     let runtime = RuntimePaths::for_workspace(workspace_id.clone()).ok()?;
-    let ledger = Ledger::open(paths.clone(), runtime).ok()?;
-    let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit).ok()?;
+    let store = Store::open(paths.clone(), runtime).ok()?;
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit).ok()?;
     Some(AuditState {
         paths,
-        ledger,
+        store,
         projection,
     })
 }
@@ -149,7 +149,7 @@ fn lost_agent_roster(
 }
 
 fn append_session_death(
-    ledger: &Ledger,
+    store: &Store,
     workspace_id: &WorkspaceId,
     session_name: &str,
     marker: &LastDeathMarker,
@@ -160,7 +160,7 @@ fn append_session_death(
         marker.cause,
         marker.lost_agents.clone(),
     );
-    if let Err(err) = ledger.append_event(&event) {
+    if let Err(err) = store.append_event(&event) {
         tracing::warn!(
             workspace = %workspace_id,
             session = %session_name,
@@ -171,7 +171,7 @@ fn append_session_death(
 }
 
 fn write_last_death_marker(paths: &StatePaths, marker: &LastDeathMarker) {
-    if let Err(err) = rimz::ledger::atomic::write_temp_then_rename(&paths.last_death_marker, marker)
+    if let Err(err) = rimz::store::atomic::write_temp_then_rename(&paths.last_death_marker, marker)
     {
         tracing::debug!(
             path = %paths.last_death_marker.display(),
@@ -192,13 +192,13 @@ fn archive_crash(
     let mux_cache = archive.join("mux-cache");
     std::fs::create_dir_all(&mux_cache)
         .with_context(|| format!("creating crash archive {}", mux_cache.display()))?;
-    let cache_root = rimz::ledger::paths::cache_home();
+    let cache_root = rimz::store::paths::cache_home();
     for source in backend.resurrection_cache_paths(session_name) {
         let dest = cache_archive_destination(&mux_cache, &cache_root, &source);
         copy_path(&source, &dest)
             .with_context(|| format!("archiving mux cache {}", source.display()))?;
     }
-    rimz::ledger::atomic::write_temp_then_rename(&archive.join("roster.json"), &roster)
+    rimz::store::atomic::write_temp_then_rename(&archive.join("roster.json"), &roster)
         .with_context(|| format!("writing crash roster {}", archive.display()))?;
     prune_crash_archives(&paths.crashes_dir)?;
     Ok(())

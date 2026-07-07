@@ -68,7 +68,7 @@ pub struct LaunchParams {
 /// event carries plus the enrichment it reports. Returned by
 /// [`AgentAdapter::observe_lifecycle`](super::AgentAdapter::observe_lifecycle)
 /// so the CLI layer can record an `agent.lifecycle` event without each adapter
-/// touching the ledger. The status is *derived* from the signal through
+/// touching the store. The status is *derived* from the signal through
 /// [`step`](super::lifecycle::step), never decided by the adapter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecycleObservation {
@@ -90,7 +90,7 @@ pub struct AgentLifecycleObservation {
     /// final [`AgentStatus`](crate::agents::AgentStatus).
     pub signal: LifecycleSignal,
     /// Process identity observed by the hook runner. The sidebar uses this
-    /// best-effort liveness marker to suppress stale ledger overlays when the
+    /// best-effort liveness marker to suppress stale store overlays when the
     /// process disappears.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_pid: Option<u32>,
@@ -140,7 +140,7 @@ pub struct AgentLifecycleObservation {
     pub total_tokens: Option<u64>,
     /// Provider-native turn-death marker discovered while building this
     /// observation. The CLI merges it into the context sidecar; it is skipped in
-    /// the durable lifecycle event so the ledger still carries only the
+    /// the durable lifecycle event so the store still carries only the
     /// normalized signal.
     #[serde(skip)]
     pub turn_error: Option<AgentTurnError>,

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::ledger::snapshot::WorktreePrState;
+use crate::store::snapshot::WorktreePrState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Forge {

@@ -10,7 +10,7 @@ use crate::agents::{
     AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, Result, StatusLineChange,
     agent_config_path, read_optional_file,
 };
-use crate::ledger::atomic;
+use crate::store::atomic;
 
 use super::{
     BLOCKING_EVENTS, CLAUDE_HOOK_TIMEOUT_SECS, HOOKS_KEY, INSTALLED_EVENTS, RIMZ_HOOK_COMMAND,

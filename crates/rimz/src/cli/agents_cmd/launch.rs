@@ -1,6 +1,6 @@
 use super::*;
 use crate::cli::room::build_sidebar_opts;
-use crate::cli::{agents_launch, machine_config, open_ledger, record_workspace};
+use crate::cli::{agents_launch, machine_config, open_store, record_workspace};
 
 pub(super) fn launch_layout(
     args: AgentsArgs,
@@ -26,7 +26,7 @@ pub(super) fn launch_layout(
         agent_launch_env(&workspace.project_root, kind)?;
     }
     // Resolve where the launch lands before any side effect — the live-session
-    // probe, worktree creation, the ledger append, the sidebar build — so an
+    // probe, worktree creation, the store append, the sidebar build — so an
     // invalid `--new-pane` (a multi-cell layout, or run outside a room) refuses
     // cleanly and leaves no provisional rows or worktree behind. Feasibility
     // reads the ambient pane; the split target is re-derived for the resolved
@@ -71,7 +71,7 @@ pub(super) fn launch_layout(
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
-    let ledger = open_ledger(&workspace)?;
+    let store = open_store(&workspace)?;
 
     if let Some(team) = team_name.as_deref() {
         let explicit_worktree_name = args
@@ -88,7 +88,7 @@ pub(super) fn launch_layout(
                 &workspace,
                 &machine_config,
                 backend.as_ref(),
-                &ledger,
+                &store,
                 name,
                 team,
             )? {
@@ -122,7 +122,7 @@ pub(super) fn launch_layout(
     )?;
     if let Some(channel) = args.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
-        rimz::channel::register(ledger.paths(), channel)?;
+        rimz::channel::register(store.paths(), channel)?;
     }
     let room_channel = rimz::harness::target::resolve_room_channel(
         &workspace.project_root,
@@ -141,7 +141,7 @@ pub(super) fn launch_layout(
             .map(|team| team.roles.as_slice()),
         room_channel.as_deref(),
     )?;
-    let launch_identities = ledger.append_agent_launches_allocating(
+    let launch_identities = store.append_agent_launches_allocating(
         &launch_requests,
         &AgentLaunchAppend {
             workspace_id: workspace.workspace_id.clone(),
@@ -151,7 +151,7 @@ pub(super) fn launch_layout(
             channel: room_channel.clone(),
             prompt: args.prompt.clone(),
             description: args.description.clone(),
-            state: rimz::ledger::event::AgentLaunchState::Starting,
+            state: rimz::store::event::AgentLaunchState::Starting,
             pane_id: None,
         },
     )?;
@@ -245,7 +245,7 @@ pub(super) fn launch_layout(
     };
     if let Err(err) = open_result {
         let _ = append_launch_events(
-            &ledger,
+            &store,
             &workspace,
             &launch_identities,
             LaunchEventParams {
@@ -253,7 +253,7 @@ pub(super) fn launch_layout(
                 worktree_name: worktree_name.as_deref(),
                 channel: room_channel.as_deref(),
                 prompt: args.prompt.as_deref(),
-                state: rimz::ledger::event::AgentLaunchState::Failed,
+                state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
         );
@@ -275,8 +275,8 @@ fn launch_resume_layout(
     single_cell: bool,
     worktree_filter: Option<&Path>,
 ) -> Result<()> {
-    let ledger = open_ledger(workspace)?;
-    let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let store = open_store(workspace)?;
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let agents = match worktree_filter {
         Some(target) => {
             let target = rimz::worktree::normalize_path_lexical(target);
@@ -293,7 +293,7 @@ fn launch_resume_layout(
     let scope = worktree_filter.and_then(worktree_scope_label);
     let mut plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
-        rimz::ledger::runtime::agent_liveness,
+        rimz::store::runtime::agent_liveness,
         &cells,
         team_name.as_deref(),
         |path| path.is_dir(),
@@ -344,7 +344,7 @@ fn launch_resume_layout(
             .map(|team| team.roles.as_slice()),
         channel.as_deref(),
     )?;
-    let launch_identities = ledger.append_agent_launches_allocating(
+    let launch_identities = store.append_agent_launches_allocating(
         &launch_requests,
         &AgentLaunchAppend {
             workspace_id: workspace.workspace_id.clone(),
@@ -354,7 +354,7 @@ fn launch_resume_layout(
             channel: channel.clone(),
             prompt: None,
             description: None,
-            state: rimz::ledger::event::AgentLaunchState::Starting,
+            state: rimz::store::event::AgentLaunchState::Starting,
             pane_id: None,
         },
     )?;
@@ -433,7 +433,7 @@ fn launch_resume_layout(
     };
     if let Err(err) = open_result {
         let _ = append_launch_events(
-            &ledger,
+            &store,
             workspace,
             &launch_identities,
             LaunchEventParams {
@@ -441,7 +441,7 @@ fn launch_resume_layout(
                 worktree_name: None,
                 channel: channel.as_deref(),
                 prompt: None,
-                state: rimz::ledger::event::AgentLaunchState::Failed,
+                state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
         );
@@ -875,7 +875,7 @@ pub(super) fn effective_launch_agents(
     rimz::config::effective::load(
         &machine_config.agents,
         &workspace.project_root,
-        &rimz::ledger::paths::config_home(),
+        &rimz::store::paths::config_home(),
     )
     .map_err(Into::into)
 }
@@ -1210,34 +1210,34 @@ fn index_to_launch_ordinal(index: usize) -> u32 {
 }
 
 pub(super) fn append_launch_events(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
     identities: &[LaunchIdentity],
     params: LaunchEventParams<'_>,
 ) -> Result<()> {
     for identity in identities {
-        append_launch_event(ledger, workspace, identity, params.clone())?;
+        append_launch_event(store, workspace, identity, params.clone())?;
     }
     Ok(())
 }
 
 pub(super) fn append_launch_event(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
     identity: &LaunchIdentity,
     params: LaunchEventParams<'_>,
 ) -> Result<()> {
     let runtime_owner = params.pane_id.as_ref().map(|_| {
-        rimz::ledger::runtime::current_process_owner(
+        rimz::store::runtime::current_process_owner(
             rimz::pane::RuntimeOwnerKind::Agent,
             identity.agent_id.as_str(),
         )
     });
-    let event = rimz::ledger::event::EventEnvelope::agent_launched(
+    let event = rimz::store::event::EventEnvelope::agent_launched(
         workspace.workspace_id.clone(),
         workspace.session_name.clone(),
         &identity.kind,
-        rimz::ledger::event::AgentLaunchPayload {
+        rimz::store::event::AgentLaunchPayload {
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
             launch: rimz::agents::LaunchParams {
@@ -1267,7 +1267,7 @@ pub(super) fn append_launch_event(
             description: None,
         },
     );
-    ledger.append_event(&event)?;
+    store.append_event(&event)?;
     Ok(())
 }
 

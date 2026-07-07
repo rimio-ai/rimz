@@ -15,8 +15,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::harness::run::RunStatus;
-use crate::ledger::parse_cache::FileStamp;
-use crate::ledger::paths::state_home;
+use crate::store::parse_cache::FileStamp;
+use crate::store::paths::state_home;
 
 const NAME: &str = "loop-runs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;

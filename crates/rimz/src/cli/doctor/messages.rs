@@ -3,29 +3,29 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use rimz::agents::AgentState;
-use rimz::ledger::event::{EventKind, MessageEventPayload};
 use rimz::message::{MessageRecord, MessageStatus};
+use rimz::store::event::{EventKind, MessageEventPayload};
 
 use crate::cli::address;
 
-use super::super::open_ledger;
+use super::super::open_store;
 use super::model::{MessageProblemRow, Messages, OpenCounts, Probe};
 
 const RECENT_FAILURE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_FAILURE_ROWS: usize = 10;
 
 /// Message queue health: live stuck records and recent terminal delivery
-/// failures from the ledger's event log.
+/// failures from the store's event log.
 pub(super) fn collect_messages(ws: &rimz::ResolvedWorkspace) -> Probe<Messages> {
-    let ledger = match open_ledger(ws) {
-        Ok(ledger) => ledger,
+    let store = match open_store(ws) {
+        Ok(store) => store,
         Err(err) => {
             return Probe::Unavailable {
                 error: err.to_string(),
             };
         }
     };
-    let live = match ledger.list_messages() {
+    let live = match store.list_messages() {
         Ok(messages) => messages,
         Err(err) => {
             return Probe::Unavailable {
@@ -35,7 +35,7 @@ pub(super) fn collect_messages(ws: &rimz::ResolvedWorkspace) -> Probe<Messages> 
     };
     let mut open = OpenCounts::default();
     let mut stuck = Vec::new();
-    let snapshot = ledger.snapshot_cached().ok();
+    let snapshot = store.snapshot_cached().ok();
     let agents = snapshot
         .as_ref()
         .map(|snapshot| snapshot.root_agents().collect::<Vec<_>>())
@@ -52,7 +52,7 @@ pub(super) fn collect_messages(ws: &rimz::ResolvedWorkspace) -> Probe<Messages> 
         }
     }
 
-    let events = match ledger.read_events() {
+    let events = match store.read_events() {
         Ok(events) => events,
         Err(err) => {
             return Probe::Unavailable {

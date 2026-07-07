@@ -239,7 +239,7 @@ fn binding_candidate_record(
             got: pane.cwd.clone(),
         });
     }
-    if rimz::ledger::snapshot::pane_agent_kind(pane) != Some(kind) {
+    if rimz::store::snapshot::pane_agent_kind(pane) != Some(kind) {
         reject_reasons.push(BindingRejectReason::CommandMismatch {
             got: pane.command.clone(),
         });

@@ -38,12 +38,12 @@ use std::time::{Duration, SystemTime};
 use tracing::debug;
 
 use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-use crate::ledger::RuntimePaths;
-use crate::ledger::atomic;
-use crate::ledger::single_flight::{self, Coalesced};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
 use crate::sidebar::heartbeat::{SidebarHeartbeat, read_current_heartbeats};
 use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
+use crate::store::RuntimePaths;
+use crate::store::atomic;
+use crate::store::single_flight::{self, Coalesced};
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
 /// daemon it spawned starts and publishes its first heartbeat, and a peer queued
@@ -70,10 +70,10 @@ pub struct HeartbeatWriteErr {
 
 /// Write this sidebar instance's liveness heartbeat in-process.
 ///
-/// The heartbeat is a runtime liveness file, not ledger truth, so the renderer
+/// The heartbeat is a runtime liveness file, not store truth, so the renderer
 /// owns it directly rather than forking `rimz sidebar heartbeat` once per tick.
 /// The JSON shape and the atomic temp-then-rename are identical to the CLI path
-/// they replace, so the ledger wakeup fanout and the launch freshness gate that
+/// they replace, so the store wakeup fanout and the launch freshness gate that
 /// read it are unchanged. The heartbeat carries this process's build id when
 /// the running image is readable. The renderer ensures the runtime dirs at
 /// startup, so this only does the write.
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn in_process_write_heartbeat_is_fresh_and_round_trips() {
         // The renderer writes its heartbeat in-process now; it must land in the
-        // same shape and freshness the ledger wakeup fanout and launch gate read.
+        // same shape and freshness the store wakeup fanout and launch gate read.
         let h = Harness::new();
         h.ensure_runtime();
         let instance = SidebarInstanceId::new();

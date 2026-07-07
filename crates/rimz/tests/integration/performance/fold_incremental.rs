@@ -8,11 +8,9 @@
 //! Companion to `spending_incremental`, which proves the same shape for the
 //! transcript walk.
 
-use rimz::ledger::event_log::{self, testkit::bytes_read};
-use rimz::ledger::snapshot::RollupCursor;
-use rimz::testkit::fleet::{
-    SESSION_NAME, registered_lifecycle, seed_fleet_ledger, synthetic_panes,
-};
+use rimz::store::event_log::{self, testkit::bytes_read};
+use rimz::store::snapshot::RollupCursor;
+use rimz::testkit::fleet::{SESSION_NAME, registered_lifecycle, seed_fleet_store, synthetic_panes};
 
 use crate::common::Harness;
 
@@ -22,10 +20,10 @@ const FLEET: usize = 30;
 #[test]
 fn delta_fold_is_o_new_bytes() {
     let h = Harness::new();
-    let paths = h.ledger.paths();
+    let paths = h.store.paths();
     // Seed history through the raw log API: mutator tails would publish per
     // append, and the subject here is the reader's fold alone.
-    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
     let log_len = std::fs::metadata(&paths.events_log)
         .expect("log meta")
         .len();
@@ -64,9 +62,9 @@ fn delta_fold_is_o_new_bytes() {
 #[test]
 fn runtime_projection_uses_persisted_rollup_delta() {
     let h = Harness::new();
-    let paths = h.ledger.paths();
-    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
-    h.ledger
+    let paths = h.store.paths();
+    seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    h.store
         .append_event(&registered_lifecycle(&paths.workspace_id, 0))
         .expect("publish rollup");
     let log_len = std::fs::metadata(&paths.events_log)
@@ -75,7 +73,7 @@ fn runtime_projection_uses_persisted_rollup_delta() {
 
     let warm_before = bytes_read();
     let projection = h
-        .ledger
+        .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("runtime projection");
     let warm_bytes = bytes_read() - warm_before;
@@ -97,7 +95,7 @@ fn runtime_projection_uses_persisted_rollup_delta() {
 
     let delta_before = bytes_read();
     let projection = h
-        .ledger
+        .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("runtime projection after append");
     let delta_bytes = bytes_read() - delta_before;
@@ -118,8 +116,8 @@ fn runtime_projection_uses_persisted_rollup_delta() {
 #[test]
 fn warm_produce_folds_o_new_bytes() {
     let h = Harness::new();
-    let paths = h.ledger.paths();
-    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    let paths = h.store.paths();
+    seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
     let log_len = std::fs::metadata(&paths.events_log)
         .expect("log meta")
         .len();
@@ -177,8 +175,8 @@ fn warm_produce_folds_o_new_bytes() {
 #[test]
 fn warm_auto_continue_tick_reads_no_event_log_history() {
     let h = Harness::new();
-    let paths = h.ledger.paths();
-    seed_fleet_ledger(paths, FLEET, HISTORY_EVENTS).expect("seed event");
+    let paths = h.store.paths();
+    seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
     let log_len = std::fs::metadata(&paths.events_log)
         .expect("log meta")
         .len();
@@ -229,7 +227,7 @@ fn auto_continue_tick(
     state: &rimz::StatePaths,
     runtime: &rimz::RuntimePaths,
 ) -> rimz::SidebarSnapshot {
-    let base = rimz::ledger::snapshot::build_with_cursor(state, cursor).expect("rollup");
+    let base = rimz::store::snapshot::build_with_cursor(state, cursor).expect("rollup");
     let mut config = rimz::config::MachineConfig::default();
     config.resume.auto_continue = true;
     rimz::sidebar::enrich::enrich(

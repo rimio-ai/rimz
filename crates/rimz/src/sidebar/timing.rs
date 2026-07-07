@@ -28,7 +28,7 @@ pub const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
 pub const BACKGROUND_PAINT_MIN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Maximum extra staleness an off-screen consumer renderer accepts before
-/// folding identity-free ledger/pane nudges. Watched renderers and the elected
+/// folding identity-free store/pane nudges. Watched renderers and the elected
 /// producer stay immediate.
 pub const UNWATCHED_FOLD_CLAMP: Duration = Duration::from_secs(1);
 
@@ -60,10 +60,10 @@ pub const TAB_READ_DWELL: Duration = Duration::from_millis(2500);
 
 /// Coalescing window for the shared snapshot cache — the **poll-mode** pane
 /// TTL, in effect whenever the presence push channel is dead or absent. Just
-/// under the default 1s data tick: when one ledger-delta wakeup wakes every
+/// under the default 1s data tick: when one store-delta wakeup wakes every
 /// sidebar at once, the first produces the heavy snapshot and the rest read it
 /// back within this window instead of each running their own mux roster read.
-/// Short enough that live pane/git drift (which fires no ledger delta) still
+/// Short enough that live pane/git drift (which fires no store delta) still
 /// surfaces inside one tick. While the presence stamp is fresh the producer
 /// uses [`EVENT_PANE_TTL`] instead.
 pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
@@ -85,7 +85,7 @@ pub const PRESENCE_SAMPLE_TTL: Duration = Duration::from_secs(1);
 
 /// Maximum time a pane omitted by the mux source may be carried from the last
 /// good frame while `/proc` still proves the old pane root alive. Long enough
-/// to bridge several bad pane pulls, short enough that a persistently lying mux
+/// to cover several bad pane pulls, short enough that a persistently lying mux
 /// source cannot freeze the room indefinitely.
 pub const PANE_CARRY_TTL: Duration = Duration::from_secs(30);
 
@@ -119,7 +119,7 @@ pub const PRESENCE_STAMP_FRESH: Duration = Duration::from_secs(150);
 
 /// How long a *hot* worktree's git diff-stats stay cached before the
 /// per-worktree `git` forks behind them are re-run. A working-tree edit fires
-/// no ledger delta, so this column is never push-refreshed — it rides this TTL
+/// no store delta, so this column is never push-refreshed — it rides this TTL
 /// plus the sidebar's backstop poll.
 pub const DIFF_STATS_TTL: Duration = Duration::from_secs(5);
 
@@ -268,7 +268,7 @@ pub const SIDEBAR_HEARTBEAT_TTL: Duration = Duration::from_secs(5);
 /// How often a renderer re-stamps its heartbeat. 2s keeps two missed writes of
 /// slack under [`SIDEBAR_HEARTBEAT_TTL`] — the same 2.5× ratio
 /// [`PRESENCE_STAMP_FRESH`] keeps over the plugin keepalive — while avoiding an
-/// atomic file write for every ledger-delta fetch in a busy fleet.
+/// atomic file write for every store-delta fetch in a busy fleet.
 pub const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How long `rimz reload` waits for signaled renderers to publish a heartbeat
@@ -295,7 +295,7 @@ pub const RESIZE_PAINT_HOLD_CEILING: Duration = Duration::from_secs(2);
 /// How long the refresh loop may stay continuously degraded before the renderer
 /// gives up and exits. Generous so a transient mux hiccup or the sub-second gap
 /// while `cargo install` swaps `rimz` never closes a healthy sidebar; short
-/// enough that a genuinely broken renderer (deleted ledger, dead mux, or an old
+/// enough that a genuinely broken renderer (deleted store, dead mux, or an old
 /// build past the current runtime contract) heals on the next reload/attach
 /// instead of lingering for minutes.
 pub const GIVE_UP_AFTER_DEGRADED: Duration = Duration::from_secs(30);

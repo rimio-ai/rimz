@@ -97,7 +97,7 @@ pub struct FileCacheEntry {
     #[serde(default, rename = "p", skip_serializing_if = "Option::is_none")]
     pub origin_path: Option<PathBuf>,
     /// One nonzero token-usage entry per parsed transcript record. Retry-write
-    /// duplicates within each parsed chunk collapse before storage; aggregation
+    /// duplicates within each parsed chunk collapse before disk_usage; aggregation
     /// still owns cross-file dedup.
     #[serde(default, rename = "e", skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<CachedEntry>,
@@ -467,7 +467,7 @@ fn skip_json_ws(bytes: &[u8]) -> &[u8] {
     &bytes[skipped..]
 }
 
-/// Atomic write: temp file + rename, matching the project's ledger durability
+/// Atomic write: temp file + rename, matching the project's store durability
 /// contract.
 pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) -> bool {
     if let Some(on_disk) = peek_cache_version(path)
@@ -481,11 +481,11 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) -> bool {
         );
         return true;
     }
-    let _ = crate::ledger::atomic::sweep_stale_temp_siblings(
+    let _ = crate::store::atomic::sweep_stale_temp_siblings(
         path,
         std::time::Duration::from_secs(3_600),
     );
-    match crate::ledger::atomic::write_temp_then_rename_cache_compact(path, cache) {
+    match crate::store::atomic::write_temp_then_rename_cache_compact(path, cache) {
         Ok(()) => true,
         Err(err) => {
             warn!(

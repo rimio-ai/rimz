@@ -555,14 +555,14 @@ impl MuxBackend for ZellijBackend {
         // crashed server can leave the cache behind with no live session to
         // delete, so reset removes it directly as well.
         super::super::recovery::purge_zellij_session_cache_in(
-            &crate::ledger::paths::cache_home(),
+            &crate::store::paths::cache_home(),
             name,
         )
     }
 
     fn resurrection_cache_paths(&self, name: &str) -> Vec<PathBuf> {
         super::super::recovery::zellij_session_cache_paths_in(
-            &crate::ledger::paths::cache_home(),
+            &crate::store::paths::cache_home(),
             name,
         )
     }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
-use rimz::ledger::event::EventEnvelope;
+use rimz::store::event::EventEnvelope;
 
 use crate::common::Env;
 
@@ -43,7 +43,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         "SessionStart",
         &obs,
     );
-    env.ledger().append_event(&envelope).expect("append");
+    env.store().append_event(&envelope).expect("append");
 }
 
 fn write_claude_settings(env: &Env, text: &str) -> PathBuf {

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use super::chrome::abbreviate_under;
 use super::sections::{
-    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_ledger_lines,
+    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_store_lines,
     reset_expiry_heat_amount, worktree_group_lines,
 };
 
@@ -269,7 +269,7 @@ fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
 fn claude_context(now: Timestamp) -> AgentContext {
     AgentContext {
         source: "claude".to_owned(),
-        session_name: Some("ledger refactor".to_owned()),
+        session_name: Some("store refactor".to_owned()),
         session_preview: None,
         model_id: Some("claude-opus-4-8".to_owned()),
         model_display_name: Some("Opus 4.8 (1M context)".to_owned()),

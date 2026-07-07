@@ -468,7 +468,7 @@ fn unchanged_consumer_inputs_skip_the_second_fold() {
         Vec::new(),
         jiff::Timestamp::now(),
     );
-    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
         generation: 0,
         offset: 0,
     });
@@ -501,7 +501,7 @@ fn force_fold_bypasses_consumer_unchanged_skip_without_fresh_pane_claim() {
         Vec::new(),
         jiff::Timestamp::now(),
     );
-    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
         generation: 0,
         offset: 0,
     });
@@ -534,7 +534,7 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
         jiff::Timestamp::now(),
     );
     rollup.display_name = "cold-room".to_owned();
-    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
         generation: 0,
         offset: 0,
     });
@@ -573,7 +573,7 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
     assert!(!outcome.fresh_pane_frame);
     let reason = outcome
         .snapshot
-        .expect_err("an unreadable ledger rollup is the one failed consumer read");
+        .expect_err("an unreadable store rollup is the one failed consumer read");
     assert!(
         reason.contains(&fixture.state.events_log.display().to_string()),
         "the outcome names the unreadable path, got: {reason}"

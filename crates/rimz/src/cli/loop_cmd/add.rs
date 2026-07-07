@@ -249,8 +249,8 @@ fn resolve_delivery_target(
     args: &AddArgs,
     address: &str,
 ) -> Result<TaskTarget> {
-    let ledger = crate::cli::open_ledger(workspace)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let store = crate::cli::open_store(workspace)?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let channel = crate::cli::current_channel(workspace);
     let agent = match crate::cli::resolve_agent_one(
         &snapshot,

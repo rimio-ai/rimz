@@ -5,7 +5,7 @@
 //! stream, and broadcasts the same typed overlays Zellij's presence plugin
 //! emits. Identity-free topology lines stay as [`PanesChanged`] nudges. Latency
 //! only, never truth: the poll remains the presence backstop
-//! (docs/internals/sidebar/multiplexers.md), a dead watcher degrades to the
+//! (docs/internals/mux/multiplexers.md), a dead watcher degrades to the
 //! poll, and this thread respawns the client with backoff.
 //!
 //! One control client per workspace: only the eldest live instance (the same
@@ -65,7 +65,7 @@ fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId, session_n
                     let deadline = seed_deadline.get_or_insert(now + SEED_WINDOW);
                     let seeding = now < *deadline;
                     for event in roster.apply(line, seeding) {
-                        let _ = crate::ledger::wakeup::broadcast_sidebar_event(
+                        let _ = crate::store::wakeup::broadcast_sidebar_event(
                             runtime,
                             Some(session_name),
                             event,

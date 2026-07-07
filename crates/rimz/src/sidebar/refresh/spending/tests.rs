@@ -11,9 +11,9 @@ use crate::agents::spending::{
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::AgentKind;
 use crate::ids::WorkspaceId;
-use crate::ledger::single_flight::{Coalesced, coalesce};
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{SPENDING_STALE_GRACE, SPENDING_TTL};
+use crate::store::single_flight::{Coalesced, coalesce};
 
 use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -91,9 +91,7 @@ fn claude_cost_line_in(ts_secs: u64, cost_usd: f64, id: &str, cwd: &std::path::P
     )
 }
 
-fn hold_shared_spending_lock(
-    runtime: &RuntimePaths,
-) -> crate::ledger::single_flight::ProducerGuard {
+fn hold_shared_spending_lock(runtime: &RuntimePaths) -> crate::store::single_flight::ProducerGuard {
     match coalesce::<()>(&runtime.shared_spending_lock(), Duration::ZERO, 1, || None) {
         Coalesced::Produce(guard) => guard,
         _ => panic!("test must hold the global spending lock"),

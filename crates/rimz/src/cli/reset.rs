@@ -37,7 +37,7 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
 
-    // Reset the backend that owns the live room, so teardown and shared-ledger
+    // Reset the backend that owns the live room, so teardown and shared-store
     // reset target the same session. An explicit rival `--mux` refuses before
     // prompting or destroying anything.
     let mux = pick_mux_for_session(
@@ -73,8 +73,8 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.session_name,
         &runtime,
     );
-    let ledger = super::open_ledger(&workspace)?;
-    let records = ledger
+    let store = super::open_store(&workspace)?;
+    let records = store
         .reset_records(&workspace.session_name, args.hard)
         .context("resetting workspace records")?;
     print_reset_report(&report, Some(&records))?;

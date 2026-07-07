@@ -539,8 +539,8 @@ fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool>
     let root = entry.resolved_root();
     let workspace = WorkspaceResolver::resolve(&root, None)
         .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let ledger = crate::cli::open_ledger(&workspace)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let store = crate::cli::open_store(&workspace)?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     Ok(snapshot.agents.iter().any(|agent| {
         agent.parent_agent_id.is_none()
             && agent.kind.as_str() == target.kind.as_str()

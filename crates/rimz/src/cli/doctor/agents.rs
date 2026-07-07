@@ -1,15 +1,15 @@
 use rimz::agents::AgentStatus;
 use rimz::trust::{self};
 
-use super::super::open_ledger;
+use super::super::open_store;
 use super::model::{AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus, Probe, Trust};
 
 /// Walk the snapshot's agent rollup into health counts and problem rows. The
 /// default scope is live runtime state; audit widens to durable history and
 /// emits every observed row.
 pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) -> AgentRollup {
-    let ledger = match open_ledger(ws) {
-        Ok(ledger) => ledger,
+    let store = match open_store(ws) {
+        Ok(store) => store,
         Err(err) => {
             return AgentRollup::Unavailable {
                 error: err.to_string(),
@@ -21,7 +21,7 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
     } else {
         rimz::RuntimeScope::Runtime
     };
-    let projection = match ledger.runtime_projection(scope) {
+    let projection = match store.runtime_projection(scope) {
         Ok(projection) => projection,
         Err(err) => {
             return AgentRollup::Unavailable {

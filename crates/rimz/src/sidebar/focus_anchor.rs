@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::ids::PaneId;
-use crate::ledger::{RuntimePaths, atomic};
 use crate::sidebar::timing::FOCUS_ANCHOR_FRESH;
+use crate::store::{RuntimePaths, atomic};
 
 pub const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v1";
 

@@ -29,7 +29,7 @@ pub(crate) fn backend_for_workspace_session(
 
 pub(crate) fn close_run_pane(
     backend: &dyn rimz::mux::MuxBackend,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     session_name: &str,
     record: &RunRecord,
 ) {
@@ -44,7 +44,7 @@ pub(crate) fn close_run_pane(
             ),
         }
     }
-    let Some(pane) = resolve_run_pane_from_snapshot(ledger, session_name, record) else {
+    let Some(pane) = resolve_run_pane_from_snapshot(store, session_name, record) else {
         return;
     };
     if let Err(err) = backend.close_pane(&pane.session_name, &pane.pane_id) {
@@ -83,14 +83,14 @@ pub(crate) fn capture_failure_tail(
 
 pub(crate) fn close_stopped_run_pane_after_grace(
     backend: &dyn rimz::mux::MuxBackend,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     session_name: &str,
     record: &RunRecord,
     grace: Duration,
 ) {
     let deadline = Instant::now() + grace;
     loop {
-        let Some((latest, pane)) = latest_resolved_run_pane(ledger, session_name, record) else {
+        let Some((latest, pane)) = latest_resolved_run_pane(store, session_name, record) else {
             if Instant::now() >= deadline {
                 return;
             }
@@ -109,7 +109,7 @@ pub(crate) fn close_stopped_run_pane_after_grace(
                     .any(|candidate| candidate.pane_id == pane.pane_id) =>
             {
                 if Instant::now() >= deadline {
-                    close_run_pane(backend, ledger, session_name, &latest);
+                    close_run_pane(backend, store, session_name, &latest);
                     return;
                 }
             }
@@ -128,17 +128,17 @@ pub(crate) fn close_stopped_run_pane_after_grace(
 }
 
 pub(crate) fn latest_resolved_run_pane(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     session_name: &str,
     fallback: &RunRecord,
 ) -> Option<(RunRecord, ResolvedRunPane)> {
-    let latest = latest_run_record(ledger, fallback);
-    let pane = resolve_run_pane(ledger, session_name, &latest)?;
+    let latest = latest_run_record(store, fallback);
+    let pane = resolve_run_pane(store, session_name, &latest)?;
     Some((latest, pane))
 }
 
-fn latest_run_record(ledger: &rimz::Ledger, fallback: &RunRecord) -> RunRecord {
-    rimz::harness::run::load(ledger.paths(), &fallback.run_id).unwrap_or_else(|err| {
+fn latest_run_record(store: &rimz::Store, fallback: &RunRecord) -> RunRecord {
+    rimz::harness::run::load(store.paths(), &fallback.run_id).unwrap_or_else(|err| {
         tracing::debug!(
             run_id = %fallback.run_id,
             error = %err,
@@ -155,7 +155,7 @@ pub(crate) struct ResolvedRunPane {
 }
 
 pub(crate) fn resolve_run_pane(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     session_name: &str,
     record: &RunRecord,
 ) -> Option<ResolvedRunPane> {
@@ -166,15 +166,15 @@ pub(crate) fn resolve_run_pane(
             pane_id: pane_id.clone(),
             session_name: session_name.to_owned(),
         })
-        .or_else(|| resolve_run_pane_from_snapshot(ledger, session_name, record))
+        .or_else(|| resolve_run_pane_from_snapshot(store, session_name, record))
 }
 
 fn resolve_run_pane_from_snapshot(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     session_name: &str,
     record: &RunRecord,
 ) -> Option<ResolvedRunPane> {
-    let snapshot = match ledger.snapshot_cached() {
+    let snapshot = match store.snapshot_cached() {
         Ok(snapshot) => snapshot,
         Err(err) => {
             tracing::debug!(run_id = %record.run_id, error = %err, "run pane resolution skipped; snapshot unavailable");

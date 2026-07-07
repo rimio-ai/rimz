@@ -15,7 +15,7 @@
 pub const BREADCRUMB_TARGET: &str = "rimz::trail";
 
 /// The target for sidebar health warnings that are already recorded locally as
-/// diagnostics. The Sentry bridge ignores this target to keep hot-loop refresh
+/// diagnostics. The Sentry reporting layer ignores this target to keep hot-loop refresh
 /// flaps on-box.
 pub const SIDEBAR_HEALTH_TARGET: &str = "rimz::sidebar::health";
 

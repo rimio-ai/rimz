@@ -12,13 +12,13 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::address;
 use super::send::{self, SendFlags, resolve_message};
-use super::{GlobalFlags, current_channel, open_ledger};
+use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
-use rimz::ledger::event::{EventEnvelope, EventKind, MessageEventPayload};
-use rimz::ledger::{EditOutcome, MessageEdit};
+use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
+use rimz::store::{EditOutcome, MessageEdit};
 use rimz::message::dispatch::{DispatchContext, DispatchOutcome, SendMode};
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
@@ -456,7 +456,7 @@ fn map_queue_target_err(target: &str, err: rimz::TargetErr) -> anyhow::Error {
 }
 
 fn record_resolution_bounce(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     workspace: &ResolvedWorkspace,
     target: &str,
     channel: Option<&str>,
@@ -472,7 +472,7 @@ fn record_resolution_bounce(
     ) {
         return Ok(());
     }
-    ledger.record_unresolved_message(rimz::ledger::UnresolvedMessage {
+    store.record_unresolved_message(rimz::store::UnresolvedMessage {
         workspace_id: workspace.workspace_id.clone(),
         session_name: &workspace.session_name,
         address: target,
@@ -618,15 +618,15 @@ fn dispatch_message(
 ) -> Result<()> {
     rimz::harness::target::require_mention(&target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
+    let store = open_store(&workspace)?;
     let channel = current_channel(&workspace);
     let sender = send::sender_from_env(channel.as_deref(), spec.no_from);
     let mut pending = Vec::new();
     let rollup_only = match mode {
         MessageDispatchMode::Steer => false,
         MessageDispatchMode::Boundary => {
-            pending = ledger.list_pending_messages()?;
-            let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+            pending = store.list_pending_messages()?;
+            let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
             let rollup_only = dispatch::rollup_targets_all_park_without_live(
                 &snapshot,
                 &target,
@@ -637,9 +637,9 @@ fn dispatch_message(
                 spec.force,
             );
             if rollup_only {
-                let durable_agents = dispatch::durable_target_agents(&ledger)?;
+                let durable_agents = dispatch::durable_target_agents(&store)?;
                 let Some(targets) = resolve_message_targets(
-                    &ledger,
+                    &store,
                     &workspace,
                     &snapshot,
                     &sender,
@@ -657,25 +657,25 @@ fn dispatch_message(
                     return Ok(());
                 };
                 return dispatch_resolved_message(
-                    mode, &workspace, &ledger, &snapshot, pending, &sender, target, text, spec,
+                    mode, &workspace, &store, &snapshot, pending, &sender, target, text, spec,
                     flags, targets, channel,
                 );
             }
             false
         }
     };
-    let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    let mut snapshot = super::resolution_snapshot(&workspace, &store, globals)?;
     // Smart compaction reads context fill. Immediate message sends share the
     // live path, so fold the disposable context sidecars before any send-now
     // decision that might compact first.
     if spec.auto_compact.is_some()
         && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
     {
-        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+        snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
     }
-    let durable_agents = dispatch::durable_target_agents(&ledger)?;
+    let durable_agents = dispatch::durable_target_agents(&store)?;
     let Some(targets) = resolve_message_targets(
-        &ledger,
+        &store,
         &workspace,
         &snapshot,
         &sender,
@@ -693,14 +693,14 @@ fn dispatch_message(
         return Ok(());
     };
     dispatch_resolved_message(
-        mode, &workspace, &ledger, &snapshot, pending, &sender, target, text, spec, flags, targets,
+        mode, &workspace, &store, &snapshot, pending, &sender, target, text, spec, flags, targets,
         channel,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn resolve_message_targets<'a>(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     workspace: &ResolvedWorkspace,
     snapshot: &'a SidebarSnapshot,
     sender: &MessageSender,
@@ -737,7 +737,7 @@ fn resolve_message_targets<'a>(
                 )
                 .map(|()| None);
             }
-            record_resolution_bounce(ledger, workspace, target, channel, sender, text.len(), &err)?;
+            record_resolution_bounce(store, workspace, target, channel, sender, text.len(), &err)?;
             let err = map_queue_target_err(target, err);
             message_miss(snapshot, channel, &err).map(|()| None)
         }
@@ -748,7 +748,7 @@ fn resolve_message_targets<'a>(
 fn dispatch_resolved_message(
     mode: MessageDispatchMode,
     workspace: &ResolvedWorkspace,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     snapshot: &SidebarSnapshot,
     mut pending: Vec<MessageRecord>,
     sender: &MessageSender,
@@ -776,14 +776,14 @@ fn dispatch_resolved_message(
         text
     };
     let wait_base = if spec.wait.is_some() {
-        Some(ledger.wait_fold_base()?)
+        Some(store.wait_fold_base()?)
     } else {
         None
     };
     let result = dispatch::dispatch_for_targets(
         DispatchContext {
             workspace,
-            ledger,
+            store,
             snapshot,
             pending: matches!(mode, MessageDispatchMode::Boundary).then_some(&mut pending),
             scope_channel: channel.as_deref(),
@@ -812,7 +812,7 @@ fn dispatch_resolved_message(
             MessageDispatchMode::Steer => ReportMode::Steer,
             MessageDispatchMode::Boundary => ReportMode::Boundary,
         },
-        ledger,
+        store,
         &workspace.session_name,
         wait,
         &target,
@@ -831,8 +831,8 @@ fn list_messages(
     target: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
-    let mut messages = projected_messages(&ledger)?;
+    let (workspace, store, snapshot) = workspace_store_snapshot(globals)?;
+    let mut messages = projected_messages(&store)?;
     let ambient_channel = current_channel(&workspace);
     let lane_scope = if all {
         LaneScope::All
@@ -897,9 +897,9 @@ fn list_messages(
     Ok(())
 }
 
-fn projected_messages(ledger: &rimz::Ledger) -> Result<Vec<MessageListRow>> {
+fn projected_messages(store: &rimz::Store) -> Result<Vec<MessageListRow>> {
     let mut rows = std::collections::BTreeMap::new();
-    for event in ledger.read_events()? {
+    for event in store.read_events()? {
         let EventKind::Message { payload, .. } = event.kind() else {
             continue;
         };
@@ -908,11 +908,11 @@ fn projected_messages(ledger: &rimz::Ledger) -> Result<Vec<MessageListRow>> {
         };
         rows.insert(row.message_id.to_string(), row);
     }
-    for message in ledger.list_message_history()? {
+    for message in store.list_message_history()? {
         let row = MessageListRow::from_record(message);
         rows.insert(row.message_id.to_string(), row);
     }
-    for message in ledger.list_messages()? {
+    for message in store.list_messages()? {
         let row = MessageListRow::from_record(message);
         rows.insert(row.message_id.to_string(), row);
     }
@@ -944,16 +944,16 @@ struct MessageShowJson {
 
 fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    let cached_snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    let Some(message) = projected_messages(&ledger)?
+    let store = open_store(&workspace)?;
+    let cached_snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let Some(message) = projected_messages(&store)?
         .into_iter()
         .find(|message| message.message_id == message_id)
     else {
         bail!("message {message_id} not found");
     };
-    let timeline = message_timeline(&ledger, &message_id)?;
-    let live_messages = ledger.list_messages()?;
+    let timeline = message_timeline(&store, &message_id)?;
+    let live_messages = store.list_messages()?;
     let now = Timestamp::now();
     let delivery = if message.status.is_open() {
         match live_messages
@@ -961,11 +961,11 @@ fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Res
             .find(|record| record.message_id == message.message_id)
         {
             Some(record) => {
-                let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+                let mut snapshot = super::resolution_snapshot(&workspace, &store, globals)?;
                 if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone())
                 {
                     snapshot = snapshot
-                        .with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+                        .with_agent_context(rimz::store::agent_context::read_all(&runtime));
                 }
                 let check = deliver::explain(record, &live_messages, &snapshot, now);
                 let agents: Vec<&AgentState> = snapshot.root_agents().collect();
@@ -1123,11 +1123,11 @@ fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Res
 }
 
 fn message_timeline(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     message_id: &MessageId,
 ) -> Result<Vec<MessageTimelineRow>> {
     let mut rows = Vec::new();
-    for event in ledger.read_events()? {
+    for event in store.read_events()? {
         let EventKind::Message { method, payload } = event.kind() else {
             continue;
         };
@@ -1146,15 +1146,15 @@ fn message_timeline(
 
 fn edit_message(message_id: MessageId, flags: EditFlags, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
+    let store = open_store(&workspace)?;
     let edit = edit_from_flags(flags)?;
     if edit.is_empty() {
         bail!("nothing to edit; pass --text, --file, --on, --schedule, or another edit flag");
     }
     let fields = edit.changed_fields();
-    match ledger.edit_message(&message_id, edit, &workspace.session_name)? {
+    match store.edit_message(&message_id, edit, &workspace.session_name)? {
         EditOutcome::Edited(_) => {
-            deliver::register_message_wake(&workspace, &ledger)?;
+            deliver::register_message_wake(&workspace, &store)?;
             #[expect(clippy::print_stdout, reason = "command result")]
             {
                 println!("edited {message_id} ({})", fields.join(", "));
@@ -1176,13 +1176,13 @@ fn edit_message(message_id: MessageId, flags: EditFlags, globals: &GlobalFlags) 
 
 fn steer_queued_message(message_id: MessageId, force: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    let messages = ledger.list_messages()?;
+    let store = open_store(&workspace)?;
+    let messages = store.list_messages()?;
     let Some(record) = messages
         .iter()
         .find(|record| record.message_id == message_id)
     else {
-        if let Some(history) = ledger
+        if let Some(history) = store
             .list_message_history()?
             .into_iter()
             .find(|record| record.message_id == message_id)
@@ -1202,14 +1202,14 @@ fn steer_queued_message(message_id: MessageId, force: bool, globals: &GlobalFlag
         }
         status => bail!("{message_id} is {status}; only queued messages can be steered"),
     }
-    let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    let mut snapshot = super::resolution_snapshot(&workspace, &store, globals)?;
     if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone()) {
-        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+        snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
     }
     let label = message_target_for_record(record, &snapshot);
     let delivered = deliver::deliver_one(
         &workspace,
-        &ledger,
+        &store,
         &message_id,
         Duration::ZERO,
         globals.mux,
@@ -1222,7 +1222,7 @@ fn steer_queued_message(message_id: MessageId, force: bool, globals: &GlobalFlag
         }
         return Ok(());
     }
-    let messages = ledger.list_messages()?;
+    let messages = store.list_messages()?;
     let Some(record) = messages
         .iter()
         .find(|record| record.message_id == message_id)
@@ -1235,20 +1235,20 @@ fn steer_queued_message(message_id: MessageId, force: bool, globals: &GlobalFlag
 
 fn requeue_message(message_id: MessageId, flags: EditFlags, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    let record = if let Some(record) = ledger
+    let store = open_store(&workspace)?;
+    let record = if let Some(record) = store
         .list_message_history()?
         .into_iter()
         .find(|record| record.message_id == message_id)
     {
         record
-    } else if let Some(record) = ledger
+    } else if let Some(record) = store
         .list_messages()?
         .into_iter()
         .find(|record| record.message_id == message_id)
     {
         record
-    } else if projected_messages(&ledger)?
+    } else if projected_messages(&store)?
         .into_iter()
         .any(|row| row.message_id == message_id)
     {
@@ -1290,9 +1290,9 @@ fn requeue_message(message_id: MessageId, flags: EditFlags, globals: &GlobalFlag
     .with_not_before(record.not_before);
     apply_edit_to_record(&mut copy, edit);
     let new_id = copy.message_id.clone();
-    ledger.queue_message(&copy, &workspace.session_name)?;
-    deliver::register_message_wake(&workspace, &ledger)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    store.queue_message(&copy, &workspace.session_name)?;
+    deliver::register_message_wake(&workspace, &store)?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let label = message_target_for_record(&copy, &snapshot);
     #[expect(clippy::print_stdout, reason = "command result")]
     {
@@ -1365,10 +1365,10 @@ fn delivery_conditions_pass(check: &deliver::DeliveryCheck) -> bool {
 
 fn remove_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
+    let store = open_store(&workspace)?;
     let mut failed = false;
     for message_id in message_ids {
-        if ledger.remove_message(&message_id, &workspace.session_name, "remove")? {
+        if store.remove_message(&message_id, &workspace.session_name, "remove")? {
             #[expect(clippy::print_stdout, reason = "command result")]
             {
                 println!("removed {message_id}");
@@ -1393,7 +1393,7 @@ fn clear_messages(
     channel_flag: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
+    let (workspace, store, snapshot) = workspace_store_snapshot(globals)?;
     let channel = current_channel(&workspace);
     if let Some(target) = target {
         rimz::harness::target::require_mention(&target)?;
@@ -1403,7 +1403,7 @@ fn clear_messages(
             worktree.as_deref().or(channel_flag.as_deref()),
             channel.as_deref(),
         )?;
-        let removed = ledger.clear_messages_for(
+        let removed = store.clear_messages_for(
             &agent.kind,
             &agent.agent_id,
             agent.name.as_deref(),
@@ -1421,7 +1421,7 @@ fn clear_messages(
                 "message clear needs an @agent target or scoped channel; pass --channel NAME or run from a Rimz channel"
             )
         })?;
-    let removed = ledger.clear_channel_messages(lane, &workspace.session_name)?;
+    let removed = store.clear_channel_messages(lane, &workspace.session_name)?;
     print_removed_summary(&format!("in #{lane}"), &removed);
     Ok(())
 }
@@ -1446,7 +1446,7 @@ fn print_removed_summary(scope: &str, removed: &[MessageRecord]) {
 }
 
 fn wait_and_print_message(
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     session_name: &str,
     label: &str,
     message_id: &MessageId,
@@ -1454,7 +1454,7 @@ fn wait_and_print_message(
     deadline: std::time::Instant,
 ) -> Result<bool> {
     let status =
-        send::wait_for_message_until(ledger, message_id, session_name, wait_base, deadline)?;
+        send::wait_for_message_until(store, message_id, session_name, wait_base, deadline)?;
     #[expect(clippy::print_stdout, reason = "wait status")]
     {
         println!("{} {label} ({message_id})", wait_status_label(status));
@@ -1485,7 +1485,7 @@ fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
 #[allow(clippy::too_many_arguments)]
 fn report_dispatch(
     mode: ReportMode,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     session_name: &str,
     wait: Option<(Duration, u64)>,
     target: &str,
@@ -1510,7 +1510,7 @@ fn report_dispatch(
                     DispatchOutcome::SkippedWaiting { .. } => continue,
                 };
                 if !wait_and_print_message(
-                    ledger,
+                    store,
                     session_name,
                     label,
                     message_id,
@@ -1581,7 +1581,7 @@ fn report_dispatch(
                 print_compacted_if_needed(label, compacted);
             }
             if !wait_and_print_message(
-                ledger,
+                store,
                 session_name,
                 label,
                 message_id,
@@ -1665,10 +1665,10 @@ fn wait_status_label(status: MessageStatus) -> &'static str {
 
 fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
+    let store = open_store(&workspace)?;
     deliver::deliver_one(
         &workspace,
-        &ledger,
+        &store,
         &message_id,
         rimz::message::settle_duration_from_env(),
         globals.mux,
@@ -1679,18 +1679,18 @@ fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
 
 fn sweep_messages(globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    deliver::sweep(&workspace, &ledger, globals.mux)?;
+    let store = open_store(&workspace)?;
+    deliver::sweep(&workspace, &store, globals.mux)?;
     Ok(())
 }
 
-fn workspace_ledger_snapshot(
+fn workspace_store_snapshot(
     globals: &GlobalFlags,
-) -> Result<(ResolvedWorkspace, rimz::Ledger, rimz::SidebarSnapshot)> {
+) -> Result<(ResolvedWorkspace, rimz::Store, rimz::SidebarSnapshot)> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    Ok((workspace, ledger, snapshot))
+    let store = open_store(&workspace)?;
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    Ok((workspace, store, snapshot))
 }
 
 pub(crate) fn parse_gate(raw: &str) -> std::result::Result<DeliveryGate, String> {

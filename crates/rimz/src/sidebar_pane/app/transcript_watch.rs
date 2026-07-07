@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use notify::{RecursiveMode, Watcher};
 use tracing::debug;
 
-use crate::ledger::agent_context::AgentContextRecord;
+use crate::store::agent_context::AgentContextRecord;
 use crate::{RuntimePaths, SidebarInstanceId};
 
 /// Idle cadence for the producer-election re-check while not elected.
@@ -138,7 +138,7 @@ fn reconcile_roster(
     watcher: &mut notify::RecommendedWatcher,
     roster: &mut BTreeMap<PathBuf, WatchTarget>,
 ) {
-    let live = transcript_targets(&crate::ledger::agent_context::read_all(runtime));
+    let live = transcript_targets(&crate::store::agent_context::read_all(runtime));
     roster.retain(|path, _| {
         if live.contains_key(path) {
             return true;
@@ -213,7 +213,7 @@ fn is_producer(runtime: &RuntimePaths, instance_id: &SidebarInstanceId) -> bool 
 mod tests {
     use super::*;
     use crate::agents::context::AgentContext;
-    use crate::ledger::agent_context::{empty_context, new_record};
+    use crate::store::agent_context::{empty_context, new_record};
 
     fn context(kind: &str) -> AgentContext {
         empty_context(kind, jiff::Timestamp::UNIX_EPOCH)

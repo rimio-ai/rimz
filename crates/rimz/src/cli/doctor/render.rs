@@ -97,7 +97,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_hooks(w, report, &mut tally)?;
     render_loop(w, &report.loop_tasks, &mut tally)?;
     render_remote_control(w, &report.remote_control, &mut tally)?;
-    render_storage(w, &report.storage, &mut tally)?;
+    render_storage(w, &report.disk_usage, &mut tally)?;
 
     if let Some(protocols) = &report.protocols {
         section(w, "PROTOCOLS")?;
@@ -657,18 +657,18 @@ fn render_remote_control(
     }
 }
 
-fn render_storage(w: &mut impl Write, storage: &Storage, tally: &mut Tally) -> io::Result<()> {
+fn render_storage(w: &mut impl Write, disk_usage: &Storage, tally: &mut Tally) -> io::Result<()> {
     section(w, "STORAGE")?;
     writeln!(
         w,
         "  {}",
         paint(
             palette::MUTED,
-            &format!("rimz on disk: {}", fmt_bytes(storage.total_bytes))
+            &format!("rimz on disk: {}", fmt_bytes(disk_usage.total_bytes))
         )
     )?;
     let mut table = Table::new(["", "AREA", "SIZE", "PATH"]).right(&[2]);
-    for root in &storage.roots {
+    for root in &disk_usage.roots {
         let size = if root.present {
             fmt_bytes(root.bytes)
         } else {
@@ -1044,7 +1044,7 @@ mod tests {
             hooks: Vec::new(),
             loop_tasks: LoopTasks { tasks: Vec::new() },
             remote_control: RemoteControl::Off,
-            storage: storage_fixture(),
+            disk_usage: storage_fixture(),
             protocols: None,
             trust: None,
             agents: None,
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[test]
     fn storage_section_renders_total_and_roots() {
-        let storage = Storage {
+        let disk_usage = Storage {
             total_bytes: 13_018,
             roots: vec![
                 StorageRootView {
@@ -1236,7 +1236,7 @@ mod tests {
         };
         let out = strip(|w| {
             let mut tally = Tally::default();
-            render_storage(w, &storage, &mut tally)
+            render_storage(w, &disk_usage, &mut tally)
         });
         assert!(out.contains("STORAGE"), "section title:\n{out}");
         assert!(out.contains("rimz on disk: 13 KB"), "total:\n{out}");

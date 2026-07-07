@@ -9,8 +9,8 @@ use super::{
     PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_SHARE_PIPE, PRESENCE_TOPOLOGY_PIPE,
     ZellijBackend,
 };
-use crate::ledger::{atomic, paths};
 use crate::mux::{MuxErr, Result};
+use crate::store::{atomic, paths};
 
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));

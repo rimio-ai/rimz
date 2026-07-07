@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use super::{GlobalFlags, machine_config, open_ledger, record_workspace};
+use super::{GlobalFlags, machine_config, open_store, record_workspace};
 use crate::cli::render;
 use crate::cli::room::{RoomTarget, build_sidebar_opts};
 use rimz::agents::AgentState;
@@ -42,12 +42,12 @@ enum ChannelSubcmd {
 pub fn run(args: ChannelArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace =
         WorkspaceResolver::resolve(".", globals.root.clone()).context("resolving current room")?;
-    let ledger = open_ledger(&workspace)?;
+    let store = open_store(&workspace)?;
     record_workspace(&workspace)?;
     match args.command {
         ChannelSubcmd::New { name } => {
             ensure_named_channel_available(&workspace, &name)?;
-            let record = rimz::channel::register(ledger.paths(), &name)?;
+            let record = rimz::channel::register(store.paths(), &name)?;
             open_channel_tab(&workspace, globals, &record.name);
             #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
             {
@@ -55,9 +55,9 @@ pub fn run(args: ChannelArgs, globals: &GlobalFlags) -> Result<()> {
             }
             Ok(())
         }
-        ChannelSubcmd::List { json } => list_channels(&workspace, &ledger, json),
+        ChannelSubcmd::List { json } => list_channels(&workspace, &store, json),
         ChannelSubcmd::Rm { name } => {
-            let removed = rimz::channel::remove(ledger.paths(), &name)?;
+            let removed = rimz::channel::remove(store.paths(), &name)?;
             if removed.is_none() && worktree_channel_exists(&workspace, &name) {
                 bail!(
                     "channel `{name}` is backed by a worktree; use `rimz worktree remove {name}`"
@@ -77,11 +77,11 @@ pub fn run(args: ChannelArgs, globals: &GlobalFlags) -> Result<()> {
 
 fn list_channels(
     workspace: &rimz::ResolvedWorkspace,
-    ledger: &rimz::Ledger,
+    store: &rimz::Store,
     json: bool,
 ) -> Result<()> {
     let mut entries = BTreeMap::<String, ChannelListEntry>::new();
-    for record in rimz::channel::list(&ledger.paths().channels_record)? {
+    for record in rimz::channel::list(&store.paths().channels_record)? {
         entries.insert(
             record.name.clone(),
             ChannelListEntry {
@@ -99,7 +99,7 @@ fn list_channels(
         });
     }
 
-    let snapshot = ledger.snapshot_cached().ok();
+    let snapshot = store.snapshot_cached().ok();
     let agents: Vec<&AgentState> = snapshot
         .as_ref()
         .map(|snapshot| {
@@ -210,8 +210,8 @@ pub(crate) fn ensure_named_channel_available(
     Ok(())
 }
 
-pub(crate) fn named_channel_registered(ledger: &rimz::Ledger, name: &str) -> bool {
-    rimz::channel::list(&ledger.paths().channels_record)
+pub(crate) fn named_channel_registered(store: &rimz::Store, name: &str) -> bool {
+    rimz::channel::list(&store.paths().channels_record)
         .is_ok_and(|records| records.iter().any(|record| record.name == name))
 }
 

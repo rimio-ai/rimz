@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use serde::{Deserialize, Serialize};
 
 /// `[agents.attention]`: timing knobs for the attention projection. The values
-/// are per-machine display/routing preferences, never ledger truth.
+/// are per-machine display/routing preferences, never store truth.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AttentionConfig {
@@ -18,7 +18,7 @@ pub struct AttentionConfig {
     /// Seconds a row may record no activity before the sidebar parks it in the
     /// archive partition, below hot and warm work. Values at or below
     /// `inactive_after_secs` are lifted at projection time because this is a
-    /// display preference, not a ledger invariant.
+    /// display preference, not a store invariant.
     pub archive_after_secs: NonZeroU32,
 }
 

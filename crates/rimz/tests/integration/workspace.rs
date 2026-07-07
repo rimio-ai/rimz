@@ -10,13 +10,13 @@ use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::agents::{AgentState, AgentStatus};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::ledger::event::EventEnvelope;
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
+use rimz::store::event::EventEnvelope;
 
 use crate::common::{Env, canonical};
 
 #[test]
-fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
+fn workspace_migrate_moves_store_and_rewrites_workspace_ids() {
     let env = Env::new();
     let old_root = env.project_root.join("old-project");
     let new_root = env.project_root.join("new-project");
@@ -28,7 +28,7 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
     let old_paths = env.state_path_for(&old_root);
     let new_paths = env.state_path_for(&new_root);
 
-    let old_ledger = env.ledger_for(&old_root);
+    let old_store = env.store_for(&old_root);
 
     let agent = message_agent();
     let pending_message = MessageRecord::new(
@@ -39,7 +39,7 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
         DeliveryGate::Done,
     );
     let pending_message_id = pending_message.message_id.clone();
-    old_ledger
+    old_store
         .queue_message(&pending_message, "old-session")
         .expect("queue pending message");
     let delivered_message = MessageRecord::new(
@@ -50,10 +50,10 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
         DeliveryGate::Done,
     );
     let delivered_message_id = delivered_message.message_id.clone();
-    old_ledger
+    old_store
         .queue_message(&delivered_message, "old-session")
         .expect("message delivered message");
-    old_ledger
+    old_store
         .settle_message(
             &delivered_message_id,
             MessageStatus::Delivered,
@@ -75,10 +75,10 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
         .success()
         .stdout(contains(format!("migrated {old_id} -> {new_id}")));
 
-    assert!(!old_paths.root.exists(), "old ledger dir should be gone");
-    assert!(new_paths.root.exists(), "new ledger dir should exist");
+    assert!(!old_paths.root.exists(), "old store dir should be gone");
+    assert!(new_paths.root.exists(), "new store dir should exist");
 
-    let migrated = env.ledger_for(&new_root);
+    let migrated = env.store_for(&new_root);
     let messages = migrated.list_messages().expect("list messages");
     let pending = messages
         .iter()
@@ -97,8 +97,8 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
         "delivered message is represented by the rewritten event log"
     );
 
-    let record = rimz::ledger::workspace_record::read(&new_paths.workspace_record)
-        .expect("workspace record");
+    let record =
+        rimz::store::workspace_record::read(&new_paths.workspace_record).expect("workspace record");
     assert_eq!(record.workspace_id, new_id);
     assert_eq!(record.project_root, canonical(&new_root));
 }
@@ -159,7 +159,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
     std::fs::create_dir_all(&project).expect("mkdir project");
 
     let workspace_id = WorkspaceId::from_project_root(&canonical(&project));
-    let ledger = env.ledger_for(&project);
+    let store = env.store_for(&project);
 
     // Append two lifecycle events for the same agent so the rollup carries a
     // worktree branch we can assert on after rotation. Older first; newer wins.
@@ -178,7 +178,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
             event_name,
             &lifecycle_observation(signal, branch),
         );
-        ledger.append_event(&event).expect("append lifecycle");
+        store.append_event(&event).expect("append lifecycle");
     }
 
     // A stale archive that the default 14d prune step should remove.
@@ -214,7 +214,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 
     // After rotation the sidebar snapshot should still know the latest agent
     // observation because it was folded into the carryover.
-    let projection = ledger
+    let projection = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("audit projection");
     assert_eq!(projection.agents.len(), 1);
@@ -266,7 +266,7 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
 // The split-brain regression this guards: a directory room at the harness
 // root with an agent pane cwd'd inside a nested git repo. Without the pin the
 // hook's static ladder resolves the *repo's* workspace, and its events land
-// in a ledger the room's sidebar never reads.
+// in a store the room's sidebar never reads.
 
 /// `git init` a nested repo, or skip when git is absent (host-dependency
 /// self-skip, per the suite contract).
@@ -311,11 +311,11 @@ fn hook_inside_a_nested_repo_lands_in_the_pinned_room() {
     let repo = env.state_path_for(&nested);
     assert!(
         pinned.events_log.exists(),
-        "the pinned room's ledger holds the hook's event",
+        "the pinned room's store holds the hook's event",
     );
     assert!(
         !repo.events_log.exists(),
-        "no split-brain ledger appears for the nested repo",
+        "no split-brain store appears for the nested repo",
     );
 }
 
@@ -409,7 +409,7 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
     // The daemon-routed regression this guards: Codex's per-user app-server
     // spawns hook children with the daemon's env — no session pin — and the
     // session cwd. Without recovery the static ladder mints a workspace at
-    // the cwd (`cd ~; codex` lands in a hidden `$HOME` ledger the room's
+    // the cwd (`cd ~; codex` lands in a hidden `$HOME` store the room's
     // sidebar never reads); recovery adopts the pin from the in-pane agent
     // process sharing that cwd.
     #[cfg(not(target_os = "linux"))]
@@ -441,14 +441,14 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
         let pinned = env.state_path_for(&env.project_root);
         let stray = env.state_path_for(&elsewhere);
         let events = std::fs::read_to_string(&pinned.events_log)
-            .expect("the recovered pin routes the hook into the room's ledger");
+            .expect("the recovered pin routes the hook into the room's store");
         assert!(
             events.contains("\"source\":\"codex\""),
-            "the room's ledger holds the codex hook event:\n{events}",
+            "the room's store holds the codex hook event:\n{events}",
         );
         assert!(
             !stray.events_log.exists(),
-            "no hidden cwd-derived ledger appears beside the room",
+            "no hidden cwd-derived store appears beside the room",
         );
     }
 }

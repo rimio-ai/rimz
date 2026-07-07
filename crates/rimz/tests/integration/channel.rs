@@ -127,7 +127,7 @@ fn message_routes_to_named_channel_targets() {
         "channel miss names target and real channel: {stderr}"
     );
 
-    let messages = env.ledger().list_messages().expect("messages");
+    let messages = env.store().list_messages().expect("messages");
     assert_eq!(messages.len(), 2, "only successful sends are recorded");
     assert!(messages.iter().all(|message| {
         message.agent_id.as_str() == "sess-channel-message" && message.status == MessageStatus::Sent
@@ -155,7 +155,7 @@ fn register_idle_channel_agent(env: &Env, session_id: &str, channel: &str) {
         "channel hook failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
         .iter()

@@ -2,7 +2,7 @@
 //!
 //! The global counters in hot-path test seams stay process-wide for perf gates.
 //! The sidebar tick meter reads these lane counters so concurrent fetch and
-//! cache-refresh work does not attribute one lane's forks or ledger reads to
+//! cache-refresh work does not attribute one lane's forks or store reads to
 //! the other's tick.
 
 use std::cell::Cell;

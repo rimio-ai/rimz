@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::ids::MuxName;
-use crate::ledger::atomic;
-use crate::ledger::paths::config_home;
 use crate::remote::{RemoteTarget, RemoteTargetError};
+use crate::store::atomic;
+use crate::store::paths::config_home;
 
 pub const REMOTE_FILE: &str = "remote.toml";
 pub const REMOTE_TEMPLATE: &str = include_str!("../config/templates/remote.template.toml");

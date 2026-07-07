@@ -31,7 +31,7 @@ pub(crate) fn command_starts_with_elevation_wrapper(command: &str) -> bool {
 /// A different-real-uid agent descendant under an elevation wrapper in this
 /// pane, if one is visible through `/proc`. The marker is display-only; callers
 /// must keep the pane's original command unchanged so the sidebar never binds a
-/// foreign-user agent as a local ledger session.
+/// foreign-user agent as a local store session.
 pub fn elevated_in_pane_agent(pane_pid: u32) -> Option<ElevatedAgent> {
     elevated_in_pane_agent_with(
         pane_pid,
@@ -62,7 +62,7 @@ fn elevated_in_pane_agent_with(
         let wrapper_seen = wrapper_seen || command_starts_with_elevation_wrapper(&command);
         if wrapper_seen
             && let Some(kind) =
-                crate::ledger::snapshot::command_agent_kind_with_comm(&command, comm.as_deref())
+                crate::store::snapshot::command_agent_kind_with_comm(&command, comm.as_deref())
             && let Some(uid) = real_uid(pid)
             && uid != own_uid
         {
@@ -227,7 +227,7 @@ fn in_pane_agent_cmdline_matches(kind: &str, cmdline: &str) -> bool {
     if kind == "codex" {
         return crate::agents::codex::is_codex_cli_cmdline(cmdline);
     }
-    crate::ledger::snapshot::command_agent_kind(cmdline) == Some(kind)
+    crate::store::snapshot::command_agent_kind(cmdline) == Some(kind)
 }
 
 fn in_pane_agent_probe_supported(kind: &str) -> bool {

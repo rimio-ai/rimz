@@ -44,7 +44,7 @@ impl BenchWorkspace {
     }
 
     fn seed_fleet(&self, fleet: usize, history_events: usize) {
-        rimz::testkit::fleet::seed_fleet_ledger(&self.paths, fleet, history_events)
+        rimz::testkit::fleet::seed_fleet_store(&self.paths, fleet, history_events)
             .expect("seed fleet");
     }
 
@@ -157,7 +157,7 @@ fn fold_fixture() -> FoldFixture {
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
     let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
     cursor.fold(&workspace.paths).expect("cold fold");
-    rimz::ledger::event_log::append(
+    rimz::store::event_log::append(
         &workspace.paths.events_log,
         &rimz::testkit::fleet::registered_lifecycle(&workspace.paths.workspace_id, 0),
     )

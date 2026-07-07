@@ -118,7 +118,7 @@ fn ensure_excluded(worktree: &Path, rel: &str) {
     }
     text.push_str(&pattern);
     text.push('\n');
-    if let Err(err) = crate::ledger::atomic::write_bytes_atomically(&exclude, text.as_bytes()) {
+    if let Err(err) = crate::store::atomic::write_bytes_atomically(&exclude, text.as_bytes()) {
         tracing::warn!(path = %exclude.display(), error = %err, "writing git info/exclude for .worktreelink");
     }
 }

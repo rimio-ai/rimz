@@ -13,10 +13,10 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
-use rimz::ledger::RuntimePaths;
-use rimz::ledger::wakeup::reload_sidebars;
 use rimz::sidebar::events::RELOAD_CONTROL_WORD;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
+use rimz::store::RuntimePaths;
+use rimz::store::wakeup::reload_sidebars;
 
 const SESSION_NAME: &str = "rimz-reload-test";
 

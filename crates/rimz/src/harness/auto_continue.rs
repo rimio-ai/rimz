@@ -43,9 +43,9 @@ use crate::agents::{
 use crate::child_process::detached_rimz_command;
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
-use crate::ledger::atomic::write_temp_then_rename_cache;
-use crate::ledger::snapshot::{PaneAgent, ResumeOutcome};
 use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus, card_matches};
+use crate::store::atomic::write_temp_then_rename_cache;
+use crate::store::snapshot::{PaneAgent, ResumeOutcome};
 
 /// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
 /// nudge resumes the turn within a frame, so this mostly bounds the brief window
@@ -491,7 +491,7 @@ pub(crate) fn read_resume_messages(
         return messages;
     };
     messages.extend(
-        crate::ledger::message_store::list(messages_dir)
+        crate::store::message_store::list(messages_dir)
             .map(|messages| {
                 messages
                     .iter()

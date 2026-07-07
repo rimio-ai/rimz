@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     // Start reading the executable identity off-thread so the build-id Sentry
     // tag is usually ready by the time `dispatch` sets the command scope.
     rimz::build_id::warm();
-    // Sentry is created before the subscriber so its bridge layer attaches to a
+    // Sentry is created before the subscriber so its reporting layer attaches to a
     // live client; the guard is held for the whole process and flushes on exit.
     let reporting = observability::init();
     install_tracing(reporting.enabled());

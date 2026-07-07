@@ -23,7 +23,7 @@ use crate::common::{
 
 const CAPTURE_BUDGET: Duration = Duration::from_secs(30);
 
-/// Shell line that runs the renderer over `env`'s ledger but with its own short
+/// Shell line that runs the renderer over `env`'s store but with its own short
 /// `XDG_RUNTIME_DIR` (the wakeup socket must stay under the AF_UNIX limit).
 fn sidebar_serve_line(
     env: &Env,
@@ -99,7 +99,7 @@ fn tmux_room_shows_agent_after_hook() {
     let fake_codex = fake_codex_bin(server_dir.path());
 
     // A session with a foreground agent-shaped command, then a sidebar pane
-    // beside it. The hook still drives ledger identity; the live pane list
+    // beside it. The hook still drives store identity; the live pane list
     // supplies presence.
     tmux(
         &socket,
@@ -129,7 +129,7 @@ fn tmux_room_shows_agent_after_hook() {
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
     // Wire codex the way the user does, then run it through its installed
-    // hook against the shared ledger — the only way a real agent reaches Rimz.
+    // hook against the shared store — the only way a real agent reaches Rimz.
     env.install_agent_hooks("codex");
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),
@@ -358,7 +358,7 @@ fn zellij_room_shows_agent_after_hook() {
     };
 
     // Birth a background session whose left pane is a real renderer over the
-    // shared ledger (the self-close layout shape from `backend/zellij.rs`).
+    // shared store (the self-close layout shape from `backend/zellij.rs`).
     let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "zellij", name, &[]);
     let layout = format!(
         r#"layout {{
@@ -519,7 +519,7 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
 
     // `rimz agents -p` births the tmux session and run tab cold, launches the
     // trusted agent binary, and waits for it. The stub fires its hooks against
-    // the shared ledger, then exits 0 with a final `stub done` message that the
+    // the shared store, then exits 0 with a final `stub done` message that the
     // supervised run surfaces on stdout. Reading the child's stdout directly
     // keeps this on the deterministic launch-and-exit path; the run's sidebar
     // rendering is owned by `tmux_room_shows_agent_after_hook`, which avoids the

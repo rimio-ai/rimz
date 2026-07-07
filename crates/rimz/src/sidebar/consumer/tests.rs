@@ -1,12 +1,12 @@
 use super::*;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::ledger::atomic;
 use crate::sidebar::enrich::{FoldOpts, enrich};
 use crate::sidebar::frame::{CarriedPane, assemble_frame};
 use crate::sidebar::refresh::PrStateCache;
 use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
 use crate::sidebar::timing::unix_now_ms;
+use crate::store::atomic;
 use crate::{RuntimePaths, SidebarSnapshot, SidebarWorktreeKind, StatePaths};
 use jiff::Timestamp;
 use std::path::{Path, PathBuf};
@@ -302,7 +302,7 @@ fn read_published_snapshot_folds_subagent_context() {
         Timestamp::now(),
     );
     rollup = rollup.with_project_root(Some(worktree));
-    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
         generation: 0,
         offset: 0,
     });
@@ -311,7 +311,7 @@ fn read_published_snapshot_folds_subagent_context() {
     let base = assemble_frame(vec![live_pane], unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &base).unwrap();
     let now = Timestamp::now();
-    crate::ledger::subagent_context::write(
+    crate::store::subagent_context::write(
         &runtime,
         "claude",
         "child-1",
@@ -400,13 +400,13 @@ fn read_published_snapshot_is_frameless_until_the_producer_publishes() {
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     // No published pane set yet (the producer hasn't run), so the consumer
-    // read folds the ledger rollup without pane-admitted cards rather than
+    // read folds the store rollup without pane-admitted cards rather than
     // reporting a failed snapshot.
     let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     state.ensure_dirs().unwrap();
     let mut rollup = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
     rollup.display_name = "cold-room".to_owned();
-    rollup.reflects_log = Some(crate::ledger::event_log::LogExtent {
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
         generation: 0,
         offset: 0,
     });
@@ -427,7 +427,7 @@ fn read_published_snapshot_is_frameless_until_the_producer_publishes() {
 }
 
 #[test]
-fn read_published_snapshot_reports_why_the_ledger_was_unreadable() {
+fn read_published_snapshot_reports_why_the_store_was_unreadable() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -445,7 +445,7 @@ fn read_published_snapshot_reports_why_the_ledger_was_unreadable() {
         "rimz-test",
         None,
     )
-    .expect_err("an unreadable ledger rollup is the one failed consumer read");
+    .expect_err("an unreadable store rollup is the one failed consumer read");
     assert!(
         err.to_string()
             .contains(&state.events_log.display().to_string()),
@@ -539,7 +539,7 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
 
     // A served publish carries the extent stamp; the workspace has no
     // events, so the matching extent is the empty log's.
-    let stamp = Some(crate::ledger::event_log::LogExtent {
+    let stamp = Some(crate::store::event_log::LogExtent {
         generation: 0,
         offset: 0,
     });

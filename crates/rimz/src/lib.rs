@@ -1,6 +1,6 @@
-//! Rimz core library — domain model, ledger, multiplexer trait, agent hooks.
+//! Rimz core library — domain model, store, multiplexer trait, agent hooks.
 //!
-//! Read [`crate::agents`] for normalized agent state and [`crate::ledger`] for
+//! Read [`crate::agents`] for normalized agent state and [`crate::store`] for
 //! durability rules. The product contract lives in the repo's `DESIGN.md`;
 //! this crate is its implementation.
 
@@ -9,7 +9,6 @@
 
 pub mod agent_activity;
 pub mod agents;
-pub mod bridge;
 pub mod build_id;
 pub mod channel;
 pub mod chat;
@@ -17,11 +16,11 @@ pub mod child_process;
 pub mod config;
 pub mod daemon_content;
 pub mod diag;
+pub mod disk_usage;
 pub mod forge;
 pub mod harness;
 pub mod ids;
 pub mod lane;
-pub mod ledger;
 pub mod message;
 pub mod mux;
 pub mod observability;
@@ -34,7 +33,7 @@ pub mod remote_control;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;
-pub mod storage;
+pub mod store;
 #[cfg(feature = "testkit")]
 #[doc(hidden)]
 pub mod testkit;
@@ -49,19 +48,19 @@ pub use crate::agents::{
     AccountUsageSnapshot, ExtraCredits, HeadlineSpec, ResetCredits, SpendTally, SpendWindow,
     SpendWindowMode,
 };
-pub use crate::bridge::BridgeErr;
+pub use crate::harness::run_wake::RunWakeErr;
 pub use crate::harness::target::TargetErr;
 pub use crate::ids::{
     EventId, MessageId, MuxName, PaneId, RunId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
-pub use crate::ledger::event::EventEnvelope;
-pub use crate::ledger::{
-    AgentCard, Ledger, PaneAgent, PresenceSample, ProcessCard, ProcessState, RowCallSplit, RowCard,
+pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
+pub use crate::store::event::EventEnvelope;
+pub use crate::store::{
+    AgentCard, PaneAgent, PresenceSample, ProcessCard, ProcessState, RowCallSplit, RowCard,
     RuntimePaths, RuntimeProjection, RuntimeScope, SidebarLinkFreshness, SidebarLinkHealth,
     SidebarOwnView, SidebarPresence, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
     SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths,
-    TruthNotice, WorkspaceRecord, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
-    lead_unread_row, triage_key,
+    Store, TruthNotice, WorkspaceRecord, WorktreePrState, WorktreeTrunkSync,
+    actionable_unread_count, lead_unread_row, triage_key,
 };
-pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

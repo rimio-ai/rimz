@@ -11,12 +11,12 @@ fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Opti
     process
         .spawn_command
         .as_deref()
-        .and_then(crate::ledger::snapshot::command_agent_kind)
+        .and_then(crate::store::snapshot::command_agent_kind)
         .or_else(|| {
             process
                 .command
                 .as_deref()
-                .and_then(crate::ledger::snapshot::command_agent_kind)
+                .and_then(crate::store::snapshot::command_agent_kind)
         })
         .or_else(|| {
             process

@@ -764,7 +764,7 @@ pub(crate) fn register_focus_key(
 fn resume_plan_for_birth(
     was_live: bool,
     recover_agents: bool,
-    death: Option<&rimz::ledger::event::LastDeathMarker>,
+    death: Option<&rimz::store::event::LastDeathMarker>,
     room: &RoomTarget<'_>,
     machine_config: &rimz::config::MachineConfig,
     no_resume: bool,
@@ -776,7 +776,7 @@ fn resume_plan_for_birth(
     let effective_launch = rimz::config::effective::load(
         &machine_config.agents,
         room.project_root,
-        &rimz::ledger::paths::config_home(),
+        &rimz::store::paths::config_home(),
     );
     let (teams, profiles) = match &effective_launch {
         Ok(launch) => (&launch.teams, &launch.profiles),

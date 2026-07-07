@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::ids::SidebarInstanceId;
-use crate::ledger::{RuntimePaths, atomic};
+use crate::store::{RuntimePaths, atomic};
 
 const MANUAL_READ_MARKS_FILE: &str = "manual.json";
 

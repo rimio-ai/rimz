@@ -49,7 +49,7 @@ pub(super) fn run_refresh_usage(args: RefreshUsageArgs, _globals: &GlobalFlags) 
 
     let wrote = refresh_usage(&runtime, &args.kind, args.merge_windows);
     if wrote {
-        let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
+        let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     }
     Ok(())
 }

@@ -4,7 +4,7 @@ use super::*;
 fn render_active_alert_shows_banner_below_snapshot() {
     let snapshot = snapshot_with(Vec::new(), Vec::new());
     let alert = Alert {
-        reason: "snapshot failed: ledger not found".to_owned(),
+        reason: "snapshot failed: store not found".to_owned(),
         since: fixed_now() - Duration::from_secs(8),
         recovered_at: None,
     };
@@ -18,7 +18,7 @@ fn render_active_alert_shows_banner_below_snapshot() {
 fn render_recovered_alert_lingers_with_dismiss_hint() {
     let snapshot = snapshot_with(Vec::new(), Vec::new());
     let alert = Alert {
-        reason: "snapshot failed: ledger not found".to_owned(),
+        reason: "snapshot failed: store not found".to_owned(),
         since: fixed_now() - Duration::from_secs(20),
         recovered_at: Some(fixed_now() - Duration::from_secs(8)),
     };
@@ -53,7 +53,7 @@ fn render_truth_degraded_notice_keeps_room_chrome() {
 }
 
 #[test]
-fn bottom_chrome_active_alert_suppresses_dashboard_ledger_and_footer() {
+fn bottom_chrome_active_alert_suppresses_dashboard_store_and_footer() {
     let mut snapshot = snapshot_with(Vec::new(), Vec::new());
     snapshot.providers = vec![provider_panel(
         "claude",

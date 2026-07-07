@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 
-use crate::ledger::atomic;
+use crate::store::atomic;
 
 const ROTATE_LOCK_STALE: Duration = Duration::from_secs(60);
 

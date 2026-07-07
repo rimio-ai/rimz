@@ -44,7 +44,7 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
 
     loop_ok(&env, &["loop", "run", "wake"]);
 
-    let messages = env.ledger().list_pending_messages().expect("messages");
+    let messages = env.store().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].text, "next step");
     assert_eq!(messages[0].kind.as_str(), "claude");
@@ -379,7 +379,7 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
     );
     loop_ok(&env, &["loop", "run", "healthy"]);
     assert!(
-        env.ledger()
+        env.store()
             .list_pending_messages()
             .expect("messages")
             .is_empty(),
@@ -417,7 +417,7 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
         ],
     );
     loop_ok(&env, &["loop", "run", "broken"]);
-    let messages = env.ledger().list_pending_messages().expect("messages");
+    let messages = env.store().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
     assert!(messages[0].text.contains("fix it"));
     assert!(
@@ -590,10 +590,7 @@ fn loop_run_poll_until_fires_once_and_expires() {
     );
     loop_ok(&env, &["loop", "run", "green"]);
     assert_eq!(
-        env.ledger()
-            .list_pending_messages()
-            .expect("messages")
-            .len(),
+        env.store().list_pending_messages().expect("messages").len(),
         1
     );
     assert!(
@@ -632,7 +629,7 @@ fn loop_run_poll_until_fires_once_and_expires() {
     );
     assert!(
         expired
-            .ledger()
+            .store()
             .list_pending_messages()
             .expect("messages")
             .is_empty(),
@@ -689,7 +686,7 @@ fn loop_run_bind_git_worktree_session_queues_prompt() {
 
     loop_ok(&env, &["loop", "run", "wake-worktree"]);
 
-    let messages = env.ledger().list_pending_messages().expect("messages");
+    let messages = env.store().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].text, "worktree next step");
     assert_eq!(messages[0].agent_id.as_str(), "sess-loop-worktree");
@@ -770,7 +767,7 @@ fn loop_fire_bind_delivers_prompt() {
 
     loop_ok(&env, &["loop", "fire", "manual"]);
 
-    let messages = env.ledger().list_pending_messages().expect("messages");
+    let messages = env.store().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].text, "fire now");
     assert_eq!(messages[0].agent_id.as_str(), "sess-loop-fire");
@@ -966,7 +963,7 @@ fn loop_run_bind_tilde_root_queues_prompt() {
 
     loop_ok(&env, &["loop", "run", "tilde"]);
 
-    let messages = env.ledger().list_pending_messages().expect("messages");
+    let messages = env.store().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].text, "tilde wake");
     assert_eq!(messages[0].agent_id.as_str(), "sess-loop-tilde");

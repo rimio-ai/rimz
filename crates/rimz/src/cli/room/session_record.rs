@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use rimz::ids::MuxName;
-use rimz::ledger::workspace_record;
 use rimz::mux::MuxBackend;
+use rimz::store::workspace_record;
 use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
 use super::MissingSessionReport;
@@ -44,7 +44,7 @@ pub(crate) fn pick_mux_for_session(
 
 /// Whether a rival backend already owns this path's room. Session identity is
 /// path-derived and shared across backends, so a live rival session under the
-/// derived name means a second backend would share this room's ledger while its
+/// derived name means a second backend would share this room's store while its
 /// panes stay unreachable. Pure over the rival's live session list.
 fn rival_backend_owns_room(session_name: &str, rival_sessions: &[String]) -> bool {
     rival_sessions.iter().any(|name| name == session_name)
@@ -156,8 +156,8 @@ pub(super) fn retire_renamed_session(
 pub(crate) fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
     workspace_record_for_session_under(
         session,
-        &rimz::ledger::paths::state_home(),
-        &rimz::ledger::paths::runtime_home(),
+        &rimz::store::paths::state_home(),
+        &rimz::store::paths::runtime_home(),
     )
 }
 
@@ -166,7 +166,7 @@ fn workspace_record_for_session_under(
     state_root: &Path,
     runtime_root: &Path,
 ) -> Result<Option<WorkspaceRecord>> {
-    let root = rimz::ledger::paths::workspaces_dir_under(state_root);
+    let root = rimz::store::paths::workspaces_dir_under(state_root);
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),

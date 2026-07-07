@@ -15,7 +15,7 @@ fn line_one_prefers_session_name_over_task() {
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
     let rendered = snapshot_to_screen(&snapshot, 44, 15);
 
-    assert!(rendered.contains("ledger refactor"));
+    assert!(rendered.contains("store refactor"));
     assert!(!rendered.contains("db migrate"));
 }
 /// An unnamed session whose turn has ended (the activity-bound `task` cleared)
@@ -31,11 +31,11 @@ fn line_two_falls_back_to_the_latest_prompt_when_unnamed() {
         Some("main"),
         None, // idle cleared the task; no session name (no context)
     );
-    claude.prompt = Some("wire the bridge".to_owned());
+    claude.prompt = Some("wire the relay".to_owned());
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
     let rendered = snapshot_to_screen(&snapshot, 44, 15);
 
-    assert!(rendered.contains("wire the bridge"));
+    assert!(rendered.contains("wire the relay"));
     assert!(
         !rendered.contains('—'),
         "the prompt stands in for the em dash"
@@ -53,12 +53,12 @@ fn line_two_uses_launch_description_before_task_and_prompt() {
         Some("db migrate"),
     );
     claude.description = Some("port auth".to_owned());
-    claude.prompt = Some("wire the bridge".to_owned());
+    claude.prompt = Some("wire the relay".to_owned());
     let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![claude]), 44, 15);
 
     assert!(rendered.contains("port auth"));
     assert!(!rendered.contains("db migrate"));
-    assert!(!rendered.contains("wire the bridge"));
+    assert!(!rendered.contains("wire the relay"));
 }
 
 #[test]

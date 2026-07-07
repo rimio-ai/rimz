@@ -1,7 +1,6 @@
 use super::*;
 use crate::agents::SessionOrigin;
 use crate::agents::{AgentState, AgentStatus, TurnPhase};
-use crate::ledger::atomic;
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
 use crate::sidebar::refresh::AccountsCache;
@@ -13,6 +12,7 @@ use crate::sidebar::refresh::{CodexDaemonReap, read_codex_daemon_reap, write_cod
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use crate::sidebar::timing::GIT_ACTIVITY_WINDOW;
 use crate::sidebar::timing::unix_now_ms;
+use crate::store::atomic;
 use jiff::SignedDuration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -623,7 +623,7 @@ fn cleared_codex_reap_drops_only_fresh_same_pane_roots() {
         Timestamp::now(),
     );
 
-    snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+    snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
         daemon_pids: &BTreeSet::new(),
         loaded: None,
         frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
@@ -656,7 +656,7 @@ fn cleared_codex_reap_requires_both_sessions_on_live_pane() {
         Timestamp::now(),
     );
 
-    snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+    snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
         daemon_pids: &BTreeSet::new(),
         loaded: None,
         frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
@@ -681,7 +681,7 @@ fn cleared_codex_reap_keeps_unknown_lineage() {
         Timestamp::now(),
     );
 
-    snapshot.reap_runtime(crate::ledger::snapshot::RuntimeReapInputs {
+    snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
         daemon_pids: &BTreeSet::new(),
         loaded: None,
         frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
@@ -1290,7 +1290,7 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
             .as_ref()
             .map(|tally| tally.headline.usd),
         Some(50.0),
-        "global tally remains available for the ledger"
+        "global tally remains available for the store"
     );
     assert_eq!(
         snapshot

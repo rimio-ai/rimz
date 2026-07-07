@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use super::JsonlLog;
-use crate::ledger::paths::RuntimePaths;
+use crate::store::paths::RuntimePaths;
 
 const BINDING_LOG_NAME: &str = "binding.log.jsonl";
 const BINDING_LOG_MAX_BYTES: u64 = 1_048_576;

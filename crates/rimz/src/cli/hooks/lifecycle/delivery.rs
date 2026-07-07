@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) fn confirm_sent_message_for_lifecycle(
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     recorded: &RecordedLifecycle,
     session_name: &str,
@@ -17,7 +17,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
         return;
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
-    if let Err(err) = ledger.confirm_delivered_for_card(
+    if let Err(err) = store.confirm_delivered_for_card(
         &kind,
         agent_id,
         recorded.observation.agent_name.as_deref(),
@@ -35,7 +35,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
 
 pub(super) fn spawn_queue_delivery_if_checkpoint(
     workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
+    store: &Store,
     agent: &dyn AgentAdapter,
     recorded: &RecordedLifecycle,
 ) {
@@ -45,7 +45,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
         return;
     };
-    let pending = match ledger.list_pending_messages() {
+    let pending = match store.list_pending_messages() {
         Ok(messages) => messages,
         Err(err) => {
             debug!(
