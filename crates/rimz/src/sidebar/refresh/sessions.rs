@@ -23,6 +23,8 @@ use super::SidebarSnapshot;
 
 const CODEX_TURN_DEATH_CAPTURE_LINES: u16 = 60;
 
+type SessionRefreshResult<T> = std::result::Result<T, crate::store::atomic::AtomicErr>;
+
 /// Refresh every live root session's adapter-owned context sidecar from the
 /// producer. Inline transcript reads run first with their adapter stat gate;
 /// detached helpers run on a coarse per-session cadence for richer realtime
@@ -63,6 +65,64 @@ pub fn refresh_session_transcript_context(
     refresh_session_transcript_context_with_snapshot(None, runtime, kind, session_id, model_hint);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForcedSessionRefresh {
+    pub transcript_refreshed: bool,
+    pub helper_spawned: bool,
+}
+
+/// Force one session's local context refresh for a user-requested card update.
+/// The transcript stat gate is bypassed, while the remembered transcript path
+/// stays in use so the adapter re-reads the known rollout tail before falling
+/// back to discovery.
+pub fn force_refresh_session_context(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    kind: &str,
+    session_id: &str,
+    model_hint: Option<&str>,
+) -> SessionRefreshResult<ForcedSessionRefresh> {
+    let transcript_refreshed = refresh_session_transcript_context_core(
+        Some(snapshot),
+        runtime,
+        kind,
+        session_id,
+        model_hint,
+        true,
+    )?;
+    let spawn = session_context_refresh_spawn(runtime, kind, session_id, model_hint);
+    let helper_spawned = spawn.is_some();
+    if let Some(spawn) = spawn {
+        let _ = session_probe_due(runtime, kind, session_id);
+        spawn_forced_session_context_refresh(runtime, kind, session_id, spawn);
+    }
+    Ok(ForcedSessionRefresh {
+        transcript_refreshed,
+        helper_spawned,
+    })
+}
+
+#[cfg(not(test))]
+fn spawn_forced_session_context_refresh(
+    runtime: &RuntimePaths,
+    kind: &str,
+    session_id: &str,
+    spawn: RefreshSpawn,
+) {
+    spawn_session_context_refresh(runtime, kind, session_id, spawn);
+}
+
+#[cfg(test)]
+// Unit tests exercise the forced inline merge without forking the test binary
+// as a detached `rimz` helper.
+fn spawn_forced_session_context_refresh(
+    _runtime: &RuntimePaths,
+    _kind: &str,
+    _session_id: &str,
+    _spawn: RefreshSpawn,
+) {
+}
+
 fn refresh_session_transcript_context_with_snapshot(
     snapshot: Option<&SidebarSnapshot>,
     runtime: &RuntimePaths,
@@ -70,8 +130,23 @@ fn refresh_session_transcript_context_with_snapshot(
     session_id: &str,
     model_hint: Option<&str>,
 ) {
+    if let Err(err) = refresh_session_transcript_context_core(
+        snapshot, runtime, kind, session_id, model_hint, false,
+    ) {
+        warn_session_transcript_merge(kind, session_id, &err);
+    }
+}
+
+fn refresh_session_transcript_context_core(
+    snapshot: Option<&SidebarSnapshot>,
+    runtime: &RuntimePaths,
+    kind: &str,
+    session_id: &str,
+    model_hint: Option<&str>,
+    force: bool,
+) -> SessionRefreshResult<bool> {
     let Some(adapter) = crate::agents::find_adapter(kind) else {
-        return;
+        return Ok(false);
     };
     let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
     let ctx = LocalContextRefreshCtx {
@@ -80,36 +155,46 @@ fn refresh_session_transcript_context_with_snapshot(
         prior_transcript_path: prior
             .as_ref()
             .and_then(|record| record.transcript_path.as_deref()),
-        prior_transcript_stat: prior
-            .as_ref()
-            .and_then(|record| record.transcript_stat.as_ref()),
+        prior_transcript_stat: if force {
+            None
+        } else {
+            prior
+                .as_ref()
+                .and_then(|record| record.transcript_stat.as_ref())
+        },
     };
     let refresh = adapter.local_context_refresh(RefreshTrigger::Tick, &ctx);
     let Some(refresh) = refresh else {
-        return;
+        return Ok(false);
     };
     let mut refresh = refresh;
     if let Some(snapshot) = snapshot {
         confirm_codex_turn_death_from_snapshot(snapshot, runtime, kind, session_id, &mut refresh);
     }
-    if let Err(err) = crate::store::agent_context::merge_local_context(
+    crate::store::agent_context::merge_local_context(
         runtime,
         kind,
         session_id,
         prior,
         refresh,
         Timestamp::now(),
-    ) {
-        tracing::warn!(
-            kind,
-            session = %session_id,
-            tags.operation = "session.transcript_merge",
-            error = &err as &dyn std::error::Error,
-            "sidebar: failed to merge session transcript context",
-        );
-        return;
-    }
+    )?;
     let _ = crate::store::wakeup::wake_sidebars(runtime);
+    Ok(true)
+}
+
+fn warn_session_transcript_merge(
+    kind: &str,
+    session_id: &str,
+    err: &crate::store::atomic::AtomicErr,
+) {
+    tracing::warn!(
+        kind,
+        session = %session_id,
+        tags.operation = "session.transcript_merge",
+        error = err as &dyn std::error::Error,
+        "sidebar: failed to merge session transcript context",
+    );
 }
 
 fn confirm_codex_turn_death_from_snapshot(
@@ -445,29 +530,7 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        let now = Timestamp::now();
-        let reset = now
-            .checked_add(jiff::SignedDuration::from_secs(60 * 60))
-            .unwrap();
-        let cache = crate::agents::RateLimitsCache {
-            windows: BTreeMap::from([(
-                "codex".to_owned(),
-                crate::agents::AgentRateLimits {
-                    windows: vec![crate::agents::RateLimitWindow {
-                        used_percentage: Some(100),
-                        resets_at: Some(reset),
-                        duration_mins: Some(300),
-                        ..Default::default()
-                    }],
-                },
-            )]),
-            ..Default::default()
-        };
-        std::fs::write(
-            runtime.shared_rate_limits_path(),
-            serde_json::to_vec(&cache).unwrap(),
-        )
-        .unwrap();
+        let now = write_spent_codex_window(&runtime);
         let mut refresh = LocalContextRefresh {
             model_id: None,
             effort: None,
@@ -492,6 +555,33 @@ mod tests {
             error.label.as_deref(),
             Some("usage limit inferred (rate-limit window spent)")
         );
+    }
+
+    fn write_spent_codex_window(runtime: &RuntimePaths) -> Timestamp {
+        let now = Timestamp::now();
+        let reset = now
+            .checked_add(jiff::SignedDuration::from_secs(60 * 60))
+            .unwrap();
+        let cache = crate::agents::RateLimitsCache {
+            windows: BTreeMap::from([(
+                "codex".to_owned(),
+                crate::agents::AgentRateLimits {
+                    windows: vec![crate::agents::RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some(reset),
+                        duration_mins: Some(300),
+                        ..Default::default()
+                    }],
+                },
+            )]),
+            ..Default::default()
+        };
+        std::fs::write(
+            runtime.shared_rate_limits_path(),
+            serde_json::to_vec(&cache).unwrap(),
+        )
+        .unwrap();
+        now
     }
 
     #[test]
@@ -577,5 +667,113 @@ mod tests {
             Some(80)
         );
         assert_ne!(third.transcript_stat, stat);
+    }
+
+    #[test]
+    fn forced_refresh_bypasses_stat_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let path = dir.path().join("rollout-session.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n\
+             {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":50,\"total_tokens\":60},\
+             \"model_context_window\":100}}}\n",
+        )
+        .unwrap();
+
+        let mut record = crate::store::agent_context::new_record(
+            "codex",
+            "sess-1",
+            crate::store::agent_context::empty_context("codex", Timestamp::now()),
+        );
+        record.transcript_path = Some(path.to_string_lossy().into_owned());
+        crate::store::agent_context::write_record(&runtime, &record).unwrap();
+
+        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        let first = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        let observed_at = first.context.observed_at;
+        let stat = first.transcript_stat;
+        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        assert_eq!(second.context.observed_at, observed_at);
+        assert_eq!(second.transcript_stat, stat);
+
+        let snapshot = snapshot_with_panels(workspace, Vec::new());
+        let refresh =
+            force_refresh_session_context(&snapshot, &runtime, "codex", "sess-1", Some("gpt-5"))
+                .unwrap();
+
+        assert!(refresh.transcript_refreshed);
+        assert!(refresh.helper_spawned);
+        let forced = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        assert_ne!(forced.context.observed_at, observed_at);
+        assert_eq!(forced.transcript_stat, stat);
+        assert_eq!(
+            forced
+                .context
+                .tokens
+                .as_ref()
+                .and_then(|tokens| tokens.current_usage.as_ref())
+                .and_then(|usage| usage.input_tokens),
+            Some(50)
+        );
+    }
+
+    #[test]
+    fn forced_refresh_reruns_turn_death_ladder() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let path = dir.path().join("rollout-session.jsonl");
+        std::fs::write(
+            &path,
+            "{\"timestamp\":\"2026-07-03T12:55:00.000Z\",\
+             \"type\":\"event_msg\",\
+             \"payload\":{\"type\":\"task_complete\",\"last_agent_message\":null}}\n",
+        )
+        .unwrap();
+
+        let mut record = crate::store::agent_context::new_record(
+            "codex",
+            "sess-1",
+            crate::store::agent_context::empty_context("codex", Timestamp::now()),
+        );
+        record.transcript_path = Some(path.to_string_lossy().into_owned());
+        crate::store::agent_context::write_record(&runtime, &record).unwrap();
+        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        let stat_gated =
+            crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        assert_eq!(
+            stat_gated
+                .context
+                .turn_error
+                .as_ref()
+                .map(|error| error.class),
+            Some(crate::agents::TurnErrorClass::Unknown)
+        );
+
+        write_spent_codex_window(&runtime);
+        let snapshot = snapshot_with_panels(workspace, Vec::new());
+        let refresh =
+            force_refresh_session_context(&snapshot, &runtime, "codex", "sess-1", Some("gpt-5"))
+                .unwrap();
+
+        assert!(refresh.transcript_refreshed);
+        let forced = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+        let error = forced
+            .context
+            .turn_error
+            .expect("turn death remains stamped");
+        assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
+        assert_eq!(
+            error.label.as_deref(),
+            Some("usage limit inferred (rate-limit window spent)")
+        );
+        assert_eq!(forced.transcript_stat, stat_gated.transcript_stat);
     }
 }

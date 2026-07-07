@@ -183,6 +183,20 @@ mod parse {
             })
         ));
 
+        let parsed =
+            AgentsHarness::try_parse_from(["rimz", "refresh", "@codex"]).expect("parse refresh");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Refresh(_))
+        ));
+
+        let parsed =
+            AgentsHarness::try_parse_from(["rimz", "refresh", "--all"]).expect("parse refresh all");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Refresh(_))
+        ));
+
         let parsed = AgentsHarness::try_parse_from([
             "rimz",
             "claude",
@@ -251,6 +265,14 @@ mod parse {
         let err = AgentsHarness::try_parse_from(["rimz", "show", "swift-otter", "--ansi"])
             .expect_err("ansi requires capture");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+
+        let err = AgentsHarness::try_parse_from(["rimz", "refresh"])
+            .expect_err("refresh requires target");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+
+        let err = AgentsHarness::try_parse_from(["rimz", "refresh", "@codex", "--all"])
+            .expect_err("refresh target and all conflict");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
 
         let parsed = AgentsHarness::try_parse_from([
             "rimz",

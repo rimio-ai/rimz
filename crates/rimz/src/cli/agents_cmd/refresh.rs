@@ -1,0 +1,101 @@
+//! User-facing agent-card context refresh (`rimz agents refresh`).
+//!
+//! Forces one or more live agent cards through the local transcript refresh
+//! path and any adapter-owned detached rich-context helper.
+
+use std::io::Write;
+
+use anyhow::{Context, Result};
+use clap::Args;
+
+use rimz::agents::AgentState;
+use rimz::sidebar::refresh::force_refresh_session_context;
+use rimz::{RuntimePaths, WorkspaceResolver};
+
+use crate::cli::{GlobalFlags, render};
+
+#[derive(Debug, Args)]
+pub(super) struct RefreshArgs {
+    /// Agent to refresh (@handle, bare selector, or pane id).
+    #[arg(required_unless_present = "all")]
+    reference: Option<String>,
+    /// Refresh every live agent in the workspace.
+    #[arg(long, conflicts_with = "reference")]
+    all: bool,
+}
+
+pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let store = crate::cli::open_store(&workspace)?;
+    let snapshot = crate::cli::resolution_snapshot(&workspace, &store, globals)
+        .context("reading agent snapshot")?;
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let current_channel = crate::cli::current_channel(&workspace);
+    let targets = if args.all {
+        refresh_targets(&snapshot)
+    } else {
+        vec![crate::cli::resolve_agent_one(
+            &snapshot,
+            args.reference.as_deref().unwrap_or_default(),
+            None,
+            current_channel.as_deref(),
+        )?]
+    };
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    let peers: Vec<&AgentState> = snapshot.root_agents().collect();
+    let mut failed = false;
+    let mut out = render::out();
+    for agent in targets {
+        let label = rimz::harness::target::agent_handle(agent, &peers, true);
+        let kind = agent.kind.as_str();
+        let model_hint = agent.model.as_deref().or_else(|| {
+            agent
+                .context
+                .as_ref()
+                .and_then(|context| context.model_id.as_deref())
+        });
+        match force_refresh_session_context(
+            &snapshot,
+            &runtime,
+            kind,
+            agent.agent_id.as_str(),
+            model_hint,
+        ) {
+            Ok(refresh) if refresh.transcript_refreshed => {
+                writeln!(out, "refreshed {label}")?;
+            }
+            Ok(refresh) if refresh.helper_spawned => {
+                writeln!(out, "refreshed {label} (rich-context helper spawned)")?;
+            }
+            Ok(_) => {
+                writeln!(
+                    out,
+                    "{label}: nothing to refresh ({kind} has no local context channel)"
+                )?;
+            }
+            Err(err) => {
+                failed = true;
+                writeln!(out, "error {label}: {err:#}")?;
+            }
+        }
+    }
+    if failed {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn refresh_targets(snapshot: &rimz::SidebarSnapshot) -> Vec<&AgentState> {
+    snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| !agent.agent_id.is_empty())
+        .filter(|agent| rimz::agents::find_adapter(agent.kind.as_str()).is_some())
+        .collect()
+}

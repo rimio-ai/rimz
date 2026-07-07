@@ -5,6 +5,7 @@ mod commands;
 mod exec;
 mod launch;
 mod reconcile;
+mod refresh;
 mod refresh_usage;
 mod supervised;
 pub(crate) mod team_restore;
@@ -45,6 +46,7 @@ use commands::{
 };
 use exec::run_exec;
 use launch::*;
+use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
 use top::{TopArgs, run_top};
 
@@ -262,6 +264,8 @@ enum AgentsSubcmd {
         #[arg(long)]
         all: bool,
     },
+    /// Force-refresh agent-card context from local transcripts and helpers.
+    Refresh(RefreshArgs),
     /// Hidden wrapper used inside launched agent panes.
     #[command(hide = true)]
     Exec(Box<ExecArgs>),
@@ -366,6 +370,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             json,
         }) => return wait_agent(reference, timeout, stream, from_start, json, globals),
         Some(AgentsSubcmd::Stop { reference, all }) => return stop_agent(reference, all, globals),
+        Some(AgentsSubcmd::Refresh(args)) => return run_refresh(args, globals),
         None => {}
     }
     if args.spec.is_none() {

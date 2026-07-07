@@ -15,7 +15,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 ## Addressing agents
 
-`message`, `transcript`, and the `agents show`/`logs`/`focus`/`wait`/`stop` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the stamped lane,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
+`message`, `transcript`, and the `agents show`/`logs`/`focus`/`wait`/`stop`/`refresh` verbs share one address grammar: **`@<handle>` names who, an optional `#<channel>` names the stamped lane,** and a raw pane id is the precise fallback. This is the one place it is spelled out; every command below assumes it.
 
 **Handles that name one agent:**
 
@@ -41,10 +41,10 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 **One agent or many:**
 
-- The management verbs (`show`, `logs`, `focus`, `wait`, and `stop` by default) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `stop --all` is the explicit fan-out exception.
+- The management verbs (`show`, `logs`, `focus`, `wait`, `stop`, and `refresh` by default) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `stop --all` fans out every match for the reference, while `refresh --all` takes no reference and refreshes every live root agent in the workspace.
 - `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`; a fan-out delivers to every match with no confirmation and prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
-The `@` sigil is required for `message` (it also keeps a target from being read as a launch spec); `show`, `logs`, `wait`, and `stop` also accept a bare selector (`swift-otter`) or a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
+The `@` sigil is required for `message` (it also keeps a target from being read as a launch spec); `show`, `logs`, `wait`, `stop`, and `refresh` also accept a bare selector (`swift-otter`), while `wait` and `stop` also accept a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
 
 ## Agents
 
@@ -112,7 +112,7 @@ cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
 
 Supervised runs need installed and trusted hooks, because hooks are the completion signal. The run records, wakeup socket, streaming, and pane cleanup are in [harness.md → Supervised runs](../../internals/harness/harness.md#supervised-runs).
 
-### List, inspect, logs, top, focus, wait, and stop
+### List, inspect, logs, top, focus, wait, refresh, and stop
 
 ```sh
 rimz agents                              # room root-agent cards, current channel
@@ -125,6 +125,8 @@ rimz agents logs swift-otter -f          # follow new transcript lines
 rimz agents top --once                   # one resource-ranked fleet table
 rimz agents focus @claude-2#cli-docs     # jump to the pane
 rimz agents wait swift-otter --stream    # block until it lands, tailing the transcript
+rimz agents refresh @codex               # force-refresh one agent card's local context
+rimz agents refresh --all                # force-refresh every live root agent card
 rimz agents stop run_0123…               # cancel a run or close a pane
 rimz agents stop @claude --all           # stop every matching Claude in scope
 ```
@@ -137,7 +139,7 @@ Bare `rimz agents` lists the live room's pane-backed root-agent cards in attenti
 
 `top` ranks live root agents by pane process-tree resources: CPU, memory, I/O per second, process count, context fill, tokens, and age. It streams by default; `--once` takes two samples 500 ms apart and exits for scripts. Resource columns read `-` on platforms or panes where `/proc` metrics are unavailable, while context and token columns still render.
 
-`focus` jumps to an agent's pane. `wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate; `--stream` tails the transcript and `--from-start` replays from the top. `stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
+`focus` jumps to an agent's pane. `wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate; `--stream` tails the transcript and `--from-start` replays from the top. `refresh` forces the transcript tail re-read past the stat gate, re-runs Codex turn-death confirmation against the live pane when one is bound, spawns the kind's detached rich-context helper when one exists, and wakes sidebars after an inline merge. Without `--all`, `refresh` resolves to exactly one agent; with `--all`, it takes no reference and covers every live root agent in the workspace. `stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
 
 ## Message an agent
 

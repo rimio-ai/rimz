@@ -34,7 +34,9 @@ pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemo
 pub use live_spend::apply_live_today_spend;
 pub use pr::PrStateCache;
 pub use rate_limits::{drop_kind_rate_limits, merge_account_rate_limits};
-pub use sessions::refresh_session_transcript_context;
+pub use sessions::{
+    ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,
+};
 pub use usage::merge_oauth_usage_if_due;
 
 use self::accounts::produce_accounts;
