@@ -128,7 +128,7 @@ The cockpit compresses the fleet into one line, and the column below arrives alr
 
 You do not read where to go; you go. Press `n` (or `␣`) to jump to the next thing that needs you, oldest first, and Rimz focuses that agent's pane. The prompt and its safe defaults live in the agent's own UI, where the full context is, so you read and answer there; focusing the pane clears its unread mark, and `N` walks back. The full key table is in [the interface reference](../interface/sidebar.md#jump--the-row-is-the-link).
 
-Glance, jump, answer: that loop is the product. Desktop, bell, and command notifications carry the same cues when you are off-screen ([notifications](../internals/sidebar/notifications.md)), and handlers or loops you wire can clear routine cues before they reach you ([engineer the loop](./product.md#engineer-the-loop)); the ranking below spends whatever attention is left.
+Glance, jump, answer: that loop is the product. Desktop, bell, and command notifications carry the same cues when you are off-screen ([notifications](../internals/sidebar/notifications.md)), and handlers or loops you wire can clear routine cues before they reach you ([loops and hands-off operation](./loops.md)); the ranking below spends whatever attention is left.
 
 ### The unread inbox surfaces in place
 

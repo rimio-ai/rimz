@@ -97,11 +97,16 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 
 **Guide** — `docs/guide/`
 - [installation.md](./docs/guide/installation.md) — prerequisites and every install path: Homebrew, prebuilt binaries, Cargo, source.
+- [quickstart.md](./docs/guide/quickstart.md) — the first session walked step by step: install, consent gate, first agent, first fleet, reattach.
 - [setup.md](./docs/guide/setup.md) — first-pass machine setup: config init, hooks, true color, pets, loop knobs, Zellij/tmux baselines.
-- [product.md](./docs/guide/product.md) — the working tour: the room, the loop, and the scenarios from local fleet to scripted pipeline.
-- [experience.md](./docs/guide/experience.md) — the first session walked step by step: install, consent gate, first agent, first fleet.
+- [agents.md](./docs/guide/agents.md) — launching agents by name, the layout grammar, Rimz-owned worktrees and their lifecycle, and teams.
+- [messaging.md](./docs/guide/messaging.md) — addresses, park/steer/schedule delivery, smart compaction, agent-to-agent chat, and channels.
 - [sidebar.md](./docs/guide/sidebar.md) — reading the sidebar: zones, agent cards and process rows, the agent lifecycle, attention routing and card ranking.
+- [remote.md](./docs/guide/remote.md) — local reattach, SSH remote rooms with self-healing reconnect, and browser access.
+- [scripting.md](./docs/guide/scripting.md) — supervised `-p` runs: exit codes, JSON and streaming output, detach and wait, and the orchestration primitives.
+- [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, notification handlers, budget priming, and the unattended permission posture.
 - [theme.md](./docs/guide/theme.md) — sidebar theming: palettes, color depth and slot overrides, custom themes, animations, provider branding, pets.
+- [troubleshooting.md](./docs/guide/troubleshooting.md) — `rimz doctor` first, then room-start refusals, hooks not reporting, degraded banners, version drift, reset and GC.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.
 
 **Interface** — `docs/interface/`
@@ -110,6 +115,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 **Reference** — `docs/reference/`
 - [cli.md](./docs/reference/cli.md) — CLI entry and command map; leaves [getting-started.md](./docs/reference/cli/getting-started.md) (start/attach/remote/web/list/setup/doctor), [web.md](./docs/reference/cli/web.md) (Zellij browser + token helpers), [agents.md](./docs/reference/cli/agents.md) (launch, `-p`, message, transcript, pane, worktree, loop, addressing), [channel.md](./docs/reference/cli/channel.md), [hooks-trust.md](./docs/reference/cli/hooks-trust.md), [maintenance.md](./docs/reference/cli/maintenance.md).
 - [configuration.md](./docs/reference/configuration.md) — config tiers, per-machine template, project trust shape, privacy.
+- [agent-support.md](./docs/reference/agent-support.md) — per-agent status, integration surface, and permission-mode mapping for Claude, Codex, Pi, OpenCode.
 
 **Internals** — `docs/internals/`, one group per subsystem.
 - **`harness/`** — [harness.md](./docs/internals/harness/harness.md) (layout IR, address grammar, `-p` runs and the run wake, loop tasks), [message.md](./docs/internals/harness/message.md) (routing, records, delivery, channels, transcript), [worktree.md](./docs/internals/harness/worktree.md) (Rimz-owned Git worktrees), [trust.md](./docs/internals/harness/trust.md) (the harness permission model: executable surface, grants, the stale diff).

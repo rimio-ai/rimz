@@ -1,7 +1,7 @@
 //! End-user journey suite: launch the room, run agents, watch the sidebar.
 //!
-//! These tests read as the session story in `docs/guide/product.md` and
-//! `docs/guide/experience.md`. They drive the real `rimz sidebar serve`
+//! These tests read as the session story in `docs/guide/quickstart.md`.
+//! They drive the real `rimz sidebar serve`
 //! renderer through a `portable-pty` over a real store and assert on
 //! `vt100`-parsed screen text — what the column actually shows. Renderer
 //! mechanics stay in `docs/internals/sidebar/sidebar.md`.

@@ -114,4 +114,4 @@ When an agent version is outside the tested range:
 - blocking ask hooks keep returning the agent-native neutral output, so the prompt stays in the agent's UI either way,
 - drift degrades observability fidelity only; `rimz doctor` warns.
 
-For the two unattended-run patterns (the agent-native bypass flag vs answering in the agent's own UI) and their audit tradeoffs, see [product.md](./product.md).
+For the two unattended-run patterns (the agent-native bypass flag vs answering in the agent's own UI) and their audit tradeoffs, see [the loops guide → the permission posture for unattended runs](./loops.md#the-permission-posture-for-unattended-runs).
