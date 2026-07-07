@@ -31,23 +31,10 @@ fn relative_install_paths_report_as_absolute() {
 }
 
 #[test]
-fn install_destinations_include_cargo_bin_and_usr_local_bin() {
-    let dirs = install_bin_dirs_from(PathBuf::from("/home/me/.cargo/bin"));
+fn install_destination_is_home_cargo_bin() {
+    let dir = home_cargo_bin_dir_from(PathBuf::from("/home/me"));
 
-    assert_eq!(
-        dirs,
-        vec![
-            PathBuf::from("/home/me/.cargo/bin"),
-            PathBuf::from("/usr/local/bin")
-        ]
-    );
-}
-
-#[test]
-fn install_destinations_do_not_duplicate_usr_local_bin() {
-    let dirs = install_bin_dirs_from(PathBuf::from("/usr/local/bin"));
-
-    assert_eq!(dirs, vec![PathBuf::from("/usr/local/bin")]);
+    assert_eq!(dir, PathBuf::from("/home/me/.cargo/bin"));
 }
 
 #[test]

@@ -263,7 +263,7 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 
 ```sh
 git clone https://github.com/rimio/rimz.git && cd rimz
-cargo xtask install     # build and install the binary to Cargo bin + /usr/local/bin
+cargo xtask install     # build and install the binary to ~/.cargo/bin
 cargo xtask test        # the nextest suite
 cargo xtask ci          # non-test checks + the plain nextest suite
 ```

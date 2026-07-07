@@ -15,7 +15,6 @@ use crate::runner::{run, run_with_env};
 
 const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
 const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
-const SYSTEM_INSTALL_BIN_DIR: &str = "/usr/local/bin";
 const PROFILING_RUSTFLAGS: &str = "-C force-frame-pointers=yes -C symbol-mangling-version=v0";
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
@@ -244,35 +243,14 @@ fn dist_dir(root: &Path) -> PathBuf {
     target_dir(root).join("dist")
 }
 
-/// Where a user install lands binaries — the same ladder `cargo install` walks.
-fn cargo_install_bin_dir() -> PathBuf {
-    if let Some(install_root) = env::var_os("CARGO_INSTALL_ROOT") {
-        return PathBuf::from(install_root).join("bin");
-    }
-    if let Some(cargo_home) = env::var_os("CARGO_HOME") {
-        return PathBuf::from(cargo_home).join("bin");
-    }
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
-        .join(".cargo")
-        .join("bin")
+/// Where `cargo xtask install` lands binaries.
+fn home_cargo_bin_dir() -> Result<PathBuf> {
+    let home = env::var_os("HOME").context("$HOME is required to install rimz to ~/.cargo/bin")?;
+    Ok(home_cargo_bin_dir_from(PathBuf::from(home)))
 }
 
-fn install_bin_dirs() -> Vec<PathBuf> {
-    install_bin_dirs_from(cargo_install_bin_dir())
-}
-
-fn install_bin_dirs_from(cargo_bin_dir: PathBuf) -> Vec<PathBuf> {
-    let mut dirs = vec![cargo_bin_dir];
-    push_unique_path(&mut dirs, PathBuf::from(SYSTEM_INSTALL_BIN_DIR));
-    dirs
-}
-
-fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|existing| existing == &path) {
-        paths.push(path);
-    }
+fn home_cargo_bin_dir_from(home: PathBuf) -> PathBuf {
+    home.join(".cargo").join("bin")
 }
 
 pub(crate) fn install(root: &Path) -> Result<()> {
@@ -304,26 +282,17 @@ pub(crate) fn profile_build(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy the staged install artifacts onto the `cargo install` ladder and
-/// `/usr/local/bin`, then report the version the way `rimz --version` does.
+/// Copy the staged install artifacts into `~/.cargo/bin`, then report the
+/// version the way `rimz --version` does.
 fn install_from_stage(stage: &Path) -> Result<()> {
-    let dest_dirs = install_bin_dirs();
-    for dest_dir in &dest_dirs {
-        fs::create_dir_all(dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
-        for artifact in INSTALL_ARTIFACTS {
-            copy_atomically(&stage.join(artifact), &dest_dir.join(artifact))
-                .with_context(|| format!("installing {artifact} to {}", dest_dir.display()))?;
-        }
+    let dest_dir = home_cargo_bin_dir()?;
+    fs::create_dir_all(&dest_dir).with_context(|| format!("creating {}", dest_dir.display()))?;
+    for artifact in INSTALL_ARTIFACTS {
+        copy_atomically(&stage.join(artifact), &dest_dir.join(artifact))
+            .with_context(|| format!("installing {artifact} to {}", dest_dir.display()))?;
     }
-    let installed: Vec<_> = dest_dirs
-        .iter()
-        .map(|dest_dir| absolute_lexical_path(&dest_dir.join("rimz")))
-        .collect::<Result<_>>()?;
-    let version = binary_build_version(
-        installed
-            .first()
-            .context("install destination list unexpectedly empty")?,
-    )?;
+    let installed = vec![absolute_lexical_path(&dest_dir.join("rimz"))?];
+    let version = binary_build_version(&installed[0])?;
     report_install(&version, &installed);
     Ok(())
 }

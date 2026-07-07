@@ -52,12 +52,12 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "install",
         summary: "Build and install the host rimz binary.",
-        runs: "cargo xtask stage-install, then atomically installs host rimz to Cargo bin and /usr/local/bin",
+        runs: "cargo xtask stage-install, then atomically installs host rimz to ~/.cargo/bin",
     },
     TaskInfo {
         name: "install-dev",
         summary: "Build and install host rimz with off-box reporting (sentry) for dev.",
-        runs: "build-plugin, host rimz with --profile profiling --features sentry and profiling RUSTFLAGS, atomically installs to Cargo bin and /usr/local/bin, then best-effort uploads debug files with sentry-cli",
+        runs: "build-plugin, host rimz with --profile profiling --features sentry and profiling RUSTFLAGS, atomically installs to ~/.cargo/bin, then best-effort uploads debug files with sentry-cli",
     },
     TaskInfo {
         name: "profile-build",
