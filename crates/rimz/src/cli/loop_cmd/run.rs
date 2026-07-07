@@ -185,7 +185,11 @@ fn execute_task(
                         return Ok(run);
                     }
                     check_detail = Some(record);
-                    Some(augment_prompt(resolve_task_prompt(entry)?, cmd, &outcome))
+                    Some(augment_prompt(
+                        resolve_task_prompt(name, entry)?,
+                        cmd,
+                        &outcome,
+                    ))
                 }
             }
         }
@@ -229,7 +233,7 @@ fn execute_task(
     }
     let prompt = match prompt_override {
         Some(prompt) => prompt,
-        None => resolve_task_prompt(entry)?,
+        None => resolve_task_prompt(name, entry)?,
     };
     let system_prompt_file = entry
         .system_prompt_file
@@ -321,7 +325,7 @@ fn execute_delivery_task(
     }
     let prompt = match prompt_override {
         Some(prompt) => prompt,
-        None => resolve_task_prompt(entry)?,
+        None => resolve_task_prompt(name, entry)?,
     };
     if disposition.mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
         let _ = remove_loaded_task(name, entry, disposition.source)?;

@@ -19,7 +19,6 @@ use crate::ids::AgentKind;
 const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
 const PING_SUFFIX: &str = "ping";
-pub const PING_PROMPT: &str = "ping";
 const RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES: &[&str] = &[
     "list", "ls", "show", "stop", "focus", "wait", "term", "exec",
 ];

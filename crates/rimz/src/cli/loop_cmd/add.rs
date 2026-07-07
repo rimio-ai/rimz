@@ -119,14 +119,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     }
     let on = args.on.as_deref().map(parse_check_on).transpose()?;
     let timing = resolve_add_timing(&args)?;
-    let prompt = match &action {
-        AddTaskAction::Spawn { is_ping: true, .. }
-            if args.prompt.is_none() && args.prompt_file.is_none() =>
-        {
-            Some(agents_spec::PING_PROMPT.to_owned())
-        }
-        _ => args.prompt,
-    };
+    let prompt = args.prompt;
     if !matches!(action, AddTaskAction::CheckOnly) && prompt.is_none() && args.prompt_file.is_none()
     {
         bail!(

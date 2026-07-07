@@ -57,6 +57,8 @@ pub enum ProjectTasksErr {
         field: &'static str,
         fix: &'static str,
     },
+    #[error("task `{task}` has no prompt; set `prompt` or `prompt-file`")]
+    MissingPrompt { task: String },
     #[error(transparent)]
     Schedule(#[from] ScheduleErr),
 }
@@ -198,6 +200,12 @@ pub fn project_tasks_from_value(
             source: source.into(),
         })?;
         entry.root = project_root.to_path_buf();
+        if entry.spec.is_some() && !task_has_prompt(entry) {
+            return Err(EffectiveConfigErr::Tasks {
+                path: config_path.to_path_buf(),
+                source: ProjectTasksErr::MissingPrompt { task: name.clone() },
+            });
+        }
         resolve_task_prompt_paths(entry, config_dir);
         schedule::parse_schedule(name, entry).map_err(|source| EffectiveConfigErr::Tasks {
             path: config_path.to_path_buf(),
@@ -209,6 +217,17 @@ pub fn project_tasks_from_value(
         state,
         config_path: config_path.to_path_buf(),
     }))
+}
+
+fn task_has_prompt(entry: &TaskEntry) -> bool {
+    entry
+        .prompt
+        .as_deref()
+        .is_some_and(|prompt| !prompt.trim().is_empty())
+        || entry
+            .prompt_file
+            .as_deref()
+            .is_some_and(|path| !path.as_os_str().is_empty())
 }
 
 impl LaunchAgents {

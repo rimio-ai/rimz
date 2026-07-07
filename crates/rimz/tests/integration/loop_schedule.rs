@@ -931,9 +931,35 @@ fn loop_add_at_reset_is_ping_only_and_renders_without_cold_cache() {
     );
 
     env.install_agent_hooks("claude");
+    let (_stdout, stderr) = loop_fail(
+        &env,
+        &[
+            "loop",
+            "add",
+            "pingless",
+            "--spec",
+            "claude-ping",
+            "--at",
+            "07:00",
+        ],
+    );
+    assert!(
+        stderr.contains("loop task `pingless` needs a prompt"),
+        "promptless ping should fail: {stderr}"
+    );
+
     loop_ok(
         &env,
-        &["loop", "add", "w7", "--spec", "claude-ping", "--at-reset"],
+        &[
+            "loop",
+            "add",
+            "w7",
+            "--spec",
+            "claude-ping",
+            "--prompt",
+            "ping",
+            "--at-reset",
+        ],
     );
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(

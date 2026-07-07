@@ -161,6 +161,7 @@ base = "fresh"
 ```toml
 [tasks.morning]
 spec = "claude-ping"     # `<kind>-ping` primes a provider window
+prompt = "ping"
 root = "/home/you/code/app"
 at = "07:00"             # 24h time in the configured timezone
 days = "weekdays"        # daily | weekdays | weekends | mon,wed,fri
@@ -200,7 +201,7 @@ handle = "@planner"
 
 Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`. Shared project tasks use the same `[tasks.<name>]` shape in `<root>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. Each task chooses `spec`, `bind`, `check`, or `check` plus one agent action. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. Bind-mode pins delivery to one live agent session and sends the prompt through the message path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, and `on = "success"` wakes on zero exit. Check output is appended to the agent prompt when the guard fires. `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
 
-Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Machine tasks carry a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, and reject `root`, `bind`, `deadline`, and one-shots because those are machine-local state or would rewrite committed config on fire. Trusted project tasks win over same-named machine tasks and state instances; untrusted or stale project tasks stay visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up. Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file. The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
+Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it skips when that provider's budget window is already counting down, and it takes a short prompt like any spawn task. Machine tasks carry a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, and reject `root`, `bind`, `deadline`, and one-shots because those are machine-local state or would rewrite committed config on fire. Trusted project tasks win over same-named machine tasks and state instances; untrusted or stale project tasks stay visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up. Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file. The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
 
 ## Behavior settings
 
@@ -420,6 +421,7 @@ command = "notify-send rimz"
 
 [tasks.morning-codex-ping]
 spec = "codex-ping"
+prompt = "ping"
 at = "08:00"
 days = "daily"
 ```

@@ -508,7 +508,7 @@ fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
     super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
 }
 
-fn resolve_task_prompt(entry: &TaskEntry) -> Result<String> {
+fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
     if let Some(prompt) = entry
         .prompt
         .as_deref()
@@ -519,7 +519,7 @@ fn resolve_task_prompt(entry: &TaskEntry) -> Result<String> {
     let Some(path) = entry.prompt_file.as_deref() else {
         bail!(
             "loop task `{}` has no prompt; set `prompt` or `prompt-file`",
-            task_subject(entry)
+            name
         );
     };
     let path = resolve_config_path(path)?;

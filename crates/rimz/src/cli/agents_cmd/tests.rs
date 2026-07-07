@@ -1916,48 +1916,6 @@ mod automation {
             "manual loop fire can keep the transient pane"
         );
     }
-
-    #[test]
-    fn virtual_ping_defaults_prompt_unless_explicit_or_stream_json() {
-        let mut args = AgentsHarness::try_parse_from(["rimz", "codex-ping"])
-            .expect("parse ping")
-            .args;
-        default_virtual_ping_prompt(&mut args);
-        assert_eq!(
-            args.prompt.as_deref(),
-            Some(rimz::harness::spec::PING_PROMPT)
-        );
-
-        let mut explicit = AgentsHarness::try_parse_from(["rimz", "codex-ping", "status"])
-            .expect("parse explicit ping")
-            .args;
-        default_virtual_ping_prompt(&mut explicit);
-        assert_eq!(explicit.prompt.as_deref(), Some("status"));
-
-        let mut normal = AgentsHarness::try_parse_from(["rimz", "codex"])
-            .expect("parse normal")
-            .args;
-        default_virtual_ping_prompt(&mut normal);
-        assert!(normal.prompt.is_none());
-
-        let mut stream_json = AgentsHarness::try_parse_from([
-            "rimz",
-            "codex-ping",
-            "-p",
-            "--input-format",
-            "stream-json",
-        ])
-        .expect("parse stream-json ping")
-        .args;
-        default_virtual_ping_prompt(&mut stream_json);
-        assert!(stream_json.prompt.is_none());
-
-        let mut resume = AgentsHarness::try_parse_from(["rimz", "codex-ping", "--resume"])
-            .expect("parse resume ping")
-            .args;
-        default_virtual_ping_prompt(&mut resume);
-        assert!(resume.prompt.is_none());
-    }
 }
 
 fn bare_exec_args() -> ExecArgs {

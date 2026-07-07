@@ -545,7 +545,7 @@ fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
         ]
     );
     assert!(
-        !args.iter().any(|arg| arg == PING_PROMPT),
+        !args.iter().any(|arg| arg == "ping"),
         "ping prompt stays out of cell args"
     );
 }
@@ -641,7 +641,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
         vec!["-c".to_owned(), "model_reasoning_effort=low".to_owned()]
     );
     assert!(
-        !args.iter().any(|arg| arg == PING_PROMPT),
+        !args.iter().any(|arg| arg == "ping"),
         "codex ping prompt stays out of cell args"
     );
     assert!(matches!(

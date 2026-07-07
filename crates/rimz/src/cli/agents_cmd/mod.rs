@@ -331,7 +331,7 @@ struct ExecArgs {
     extra_args: Vec<String>,
 }
 
-pub fn run(mut args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
+pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
@@ -372,7 +372,6 @@ pub fn run(mut args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         reject_launch_flags_without_spec(&args)?;
         return list_agents(args.json, false, args.worktree, globals);
     }
-    default_virtual_ping_prompt(&mut args);
     if args.print {
         return match run_print(args, globals) {
             Ok(Some(record)) => std::process::exit(record.status.exit_code()),
@@ -386,19 +385,6 @@ pub fn run(mut args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         );
     }
     launch_layout(args, globals, true)
-}
-
-fn default_virtual_ping_prompt(args: &mut AgentsArgs) {
-    if args.prompt.is_none()
-        && !args.resume
-        && args
-            .spec
-            .as_deref()
-            .is_some_and(rimz::harness::spec::virtual_ping_shape)
-        && args.input_format.unwrap_or_default() != InputFormat::StreamJson
-    {
-        args.prompt = Some(rimz::harness::spec::PING_PROMPT.to_owned());
-    }
 }
 
 fn exit_print_usage_error(err: anyhow::Error) -> ! {

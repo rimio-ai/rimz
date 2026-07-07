@@ -11,6 +11,7 @@
 # [tasks]
 ## [tasks.morning]
 ## spec = "claude-ping"                # `<kind>-ping` primes the provider window
+## prompt = "ping"
 ## root = "/home/you/code/app"         # absolute project root whose room hosts the turn
 ## at = "07:00"                        # 24h firing time in the configured timezone
 ## days = "weekdays"                   # "daily", "weekdays", "weekends", or "mon,wed,fri"

@@ -81,7 +81,7 @@ Built-ins first. `[resume] auto_continue = true` (off by default) resumes rate-l
 Then the clock. `rimz loop` drives supervised turns on a schedule (calendar, interval, cron, or poll-until), and a check-guarded task watches a command and wakes an agent on the result, so a failing test suite becomes a fix prompt instead of a red morning ([harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop)):
 
 ```sh
-rimz loop add morning --spec claude-ping --at 07:00 --days weekdays   # prime the 5h window
+rimz loop add morning --spec claude-ping --prompt ping --at 07:00 --days weekdays   # prime the 5h window
 rimz loop add watchdog --check "cargo test" --on fail \
     --spec codex --prompt "fix the failing test" --every 15m
 ```

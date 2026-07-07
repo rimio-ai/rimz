@@ -149,7 +149,10 @@ fn trusted_project_tasks_load_with_project_root_and_prompt_paths() {
 fn untrusted_project_tasks_stay_visible_with_state() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
-    write_project_config(&project, "[tasks.wake]\nspec = \"codex\"\nat = \"08:00\"\n");
+    write_project_config(
+        &project,
+        "[tasks.wake]\nspec = \"codex\"\nprompt = \"wake\"\nat = \"08:00\"\n",
+    );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("project tasks");
 
@@ -195,10 +198,54 @@ fn project_tasks_reject_machine_local_fields() {
 }
 
 #[test]
+fn project_tasks_require_prompt_for_spawn_tasks() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[tasks.wake]\nspec = \"codex-ping\"\nat = \"08:00\"\n",
+    );
+
+    let err = project_tasks(project.path(), config.path()).expect_err("missing prompt");
+
+    assert!(matches!(
+        err,
+        EffectiveConfigErr::Tasks {
+            source: ProjectTasksErr::MissingPrompt { ref task },
+            ..
+        } if task == "wake"
+    ));
+    assert!(
+        err.to_string()
+            .contains("task `wake` has no prompt; set `prompt` or `prompt-file`"),
+        "unexpected error: {err}"
+    );
+
+    write_project_config(
+        &project,
+        "[tasks.wake]\nspec = \"codex-ping\"\nprompt = \"ping\"\nat = \"08:00\"\n",
+    );
+
+    let loaded = load_project_tasks(project.path(), config.path()).expect("prompted project task");
+
+    assert_eq!(
+        loaded
+            .tasks
+            .0
+            .get("wake")
+            .and_then(|entry| entry.prompt.as_deref()),
+        Some("ping")
+    );
+}
+
+#[test]
 fn project_tasks_validate_schedule_shape() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
-    write_project_config(&project, "[tasks.wake]\nspec = \"codex\"\n");
+    write_project_config(
+        &project,
+        "[tasks.wake]\nspec = \"codex\"\nprompt = \"wake\"\n",
+    );
 
     let err = project_tasks(project.path(), config.path()).expect_err("invalid schedule");
 

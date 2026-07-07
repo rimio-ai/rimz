@@ -4,11 +4,13 @@
 
 [tasks.morning-claude-ping]
 spec = "claude-ping"
+prompt = "ping"
 at = "08:00"
 days = "daily"
 
 [tasks.morning-codex-ping]
 spec = "codex-ping"
+prompt = "ping"
 at = "08:00"
 days = "daily"
 
