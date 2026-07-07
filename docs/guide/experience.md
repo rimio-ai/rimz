@@ -24,31 +24,21 @@ The first run detects your multiplexer and your agents, writes the per-machine c
 One question comes before the room: showing what an agent is doing means adding reporting hooks to the agent's own config, and Rimz never edits your agent config without asking. The same first-run flow carries the appearance probe and the pet opt-in, so the whole exchange reads top to bottom:
 
 ```
-╭──────────────────────────────────────────────╮
-│ rimz · first-run setup                       │
-│                                              │
-│ Rimz routes attention across your coding     │
-│ agents into one sidebar.                     │
-│                                              │
-│ These hooks only report events to Rimz. They │
-│ never answer a prompt for you.               │
-╰──────────────────────────────────────────────╯
+rimz · first-run setup
+────────────────────────────────────────────────
 
-Rimz found 2 coding agents on this machine: claude, codex.
-To show what an agent is doing, Rimz adds reporting hooks to the agent's config.
-Each hook is one line like:  rimz hooks feed --source <agent>.
-One quick question. Reversible any time with `rimz hooks uninstall`.
+Rimz found 2 coding agents: claude, codex.
+To show them live in the sidebar, it adds reporting hooks to each agent's config.
 
-  claude · 1 of 2
-    13 hooks → ~/.claude/settings.json (additive — existing hooks kept)
-    also sets your statusLine to report context to Rimz (removed on uninstall)
-    undo → rimz hooks uninstall claude
+  claude  13 hooks → ~/.claude/settings.json  existing kept
+          + wraps your statusline for live context — yours restored on uninstall
+  codex   10 hooks → ~/.codex/config.toml     new file
 
-  codex · 2 of 2
-    10 hooks → ~/.codex/config.toml (new file)
-    undo → rimz hooks uninstall codex
+Each hook is one `rimz hooks feed` line — it reports events, never acts or answers for you.
+  undo     rimz hooks uninstall
+  preview  rimz hooks install --dry-run
 
-  Add reporting hooks?  [Y/n]
+Add reporting hooks? [Y/n]
 
 ✓ claude  13 hooks → ~/.claude/settings.json
 ✓ codex  10 hooks → ~/.codex/config.toml
@@ -61,20 +51,20 @@ All set — your agents appear in the sidebar as they run.
   Want a pet? It lives in the sidebar and reacts to your fleet. [y/N] y
 ✓ modern style: truecolor + Nerd Font icons
 ✓ rocky joins the room (rimz list-pets: more)
-Next: docs/guide/setup.md for setup, `rimz config` for preferences.
-Hands-off loop knobs live in ~/.config/rimz/loop.toml.
+Next → docs/guide/setup.md · rimz config for preferences
+Hands-off loop knobs: ~/.config/rimz/loop.toml
 Opening the room...
 ```
 
 The gate answers the reasonable fears before you can ask them.
 
-- The change is additive and names the exact config path; `rimz hooks install --dry-run` prints the full patch before you consent, and replays it any time after.
-- The boundary is stated in the consent itself: the hooks report events, and answering a prompt stays with you.
+- The change is additive and names the exact config path; the `preview` line advertises `rimz hooks install --dry-run`, which prints the full patch before you consent and replays it any time after.
+- The boundary is stated in the consent itself: each hook is a `rimz hooks feed` line, hooks report events, and answering a prompt stays with you.
 - Every exit stays open: Enter wires every listed agent, `n` or EOF installs nothing, and an unwired agent still shows up as a plain process row with a hint on how to wire it later.
 - Install is per-machine state: later runs go straight to the room, and `rimz doctor` reports per-agent status.
 - A committed project config is its own separate gate with its own diff ([trust.md](../internals/harness/trust.md)); a toy project never shows it.
 
-Backing out is the mirror of opting in: `rimz hooks uninstall` removes exactly what the gate added and restores your statusline. The authoritative hook set and config shape live in [agent.md → Hook install](../internals/agents/agent.md#hook-install-the-visible-security-step).
+Backing out is the mirror of opting in: the footer's `rimz hooks uninstall` removes exactly what the gate added and restores your statusline. The authoritative hook set and config shape live in [agent.md → Hook install](../internals/agents/agent.md#hook-install-the-visible-security-step).
 
 ## The room, empty
 

@@ -4,15 +4,11 @@ use std::io::{BufRead, Write};
 
 use anyhow::Result;
 use rimz::config::{MachineConfig, ThemeStyle};
-use unicode_width::UnicodeWidthStr;
 
 use super::{config, render};
 
-const CARD_TEXT_WIDTH: usize = 44;
-pub(crate) const CONSENT_REVERSIBLE: &str = "Reversible any time with `rimz hooks uninstall`.";
+const HEADER_RULE_WIDTH: usize = 48;
 const CONSENT_INTRO: &str = "Rimz routes attention across your coding agents into one sidebar.";
-const CONSENT_BOUNDARY: &str =
-    "These hooks only report events to Rimz. They never answer a prompt for you.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Defaults {
@@ -41,7 +37,9 @@ pub(crate) fn run(defaults: Defaults, intro_rendered: bool) -> Result<()> {
     let mut input = stdin.lock();
     let mut out = render::err();
     if !intro_rendered {
-        write_intro_card(&mut out)?;
+        write_header(&mut out)?;
+        writeln!(out)?;
+        writeln!(out, "{CONSENT_INTRO}")?;
         writeln!(out)?;
     }
     let answers = ask(defaults, &mut input, &mut out)?;
@@ -116,82 +114,38 @@ pub(crate) fn apply(answers: &Answers, out: &mut dyn Write) -> Result<()> {
 pub(crate) fn write_next_steps(out: &mut dyn Write) -> Result<()> {
     let loop_path = rimz::config::MachineConfig::loop_path();
     let loop_path = render::home_relative(&loop_path.display().to_string());
-    let loop_hint = format!("Hands-off loop knobs live in {loop_path}.");
+    let loop_hint = format!("Hands-off loop knobs: {loop_path}");
+    writeln!(
+        out,
+        "{}",
+        render::paint(
+            render::palette::MUTED,
+            "Next → docs/guide/setup.md · rimz config for preferences"
+        )
+    )?;
+    writeln!(out, "{}", render::paint(render::palette::MUTED, &loop_hint))?;
+    Ok(())
+}
+
+pub(crate) fn write_header(out: &mut dyn Write) -> Result<()> {
+    writeln!(
+        out,
+        "{}",
+        render::paint(render::palette::ACCENT.bold(), "rimz · first-run setup")
+    )?;
     writeln!(
         out,
         "{}",
         render::paint(
             render::palette::FAINT,
-            "Next: docs/guide/setup.md for setup, `rimz config` for preferences."
+            &header_rule(render::terminal_columns(80))
         )
     )?;
-    writeln!(out, "{}", render::paint(render::palette::FAINT, &loop_hint))?;
     Ok(())
 }
 
-pub(crate) fn write_intro_card(out: &mut dyn Write) -> Result<()> {
-    for line in intro_card_lines(render::terminal_columns(80)) {
-        writeln!(out, "{line}")?;
-    }
-    Ok(())
-}
-
-pub(crate) fn intro_card_lines(term_cols: usize) -> Vec<String> {
-    let card_text = intro_card_text();
-    let box_width = CARD_TEXT_WIDTH + 4;
-    if term_cols < box_width {
-        return card_text
-            .iter()
-            .map(|line| {
-                if line.is_empty() {
-                    String::new()
-                } else {
-                    format!("  {line}")
-                }
-            })
-            .collect();
-    }
-
-    let rule = "─".repeat(CARD_TEXT_WIDTH + 2);
-    let mut lines = Vec::with_capacity(card_text.len() + 2);
-    lines.push(format!("╭{rule}╮"));
-    for line in card_text {
-        let pad = CARD_TEXT_WIDTH.saturating_sub(line.width());
-        lines.push(format!("│ {line}{:pad$} │", "", pad = pad));
-    }
-    lines.push(format!("╰{rule}╯"));
-    lines
-}
-
-fn intro_card_text() -> Vec<String> {
-    let mut lines = vec!["rimz · first-run setup".to_owned(), String::new()];
-    lines.extend(wrap_words(CONSENT_INTRO, CARD_TEXT_WIDTH));
-    lines.push(String::new());
-    lines.extend(wrap_words(CONSENT_BOUNDARY, CARD_TEXT_WIDTH));
-    lines
-}
-
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let next_width = if current.is_empty() {
-            word.width()
-        } else {
-            current.width() + 1 + word.width()
-        };
-        if next_width > width && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
+fn header_rule(term_cols: usize) -> String {
+    "─".repeat(term_cols.min(HEADER_RULE_WIDTH))
 }
 
 fn probe_lines() -> Vec<String> {
@@ -347,23 +301,24 @@ mod tests {
     }
 
     #[test]
-    fn intro_card_lines_use_border_when_wide_and_plain_when_narrow() {
-        let wide = intro_card_lines(80).join("\n");
-        assert!(wide.contains('╭'));
-        assert!(wide.contains('╰'));
+    fn header_uses_title_and_terminal_width_rule_without_box() {
+        let rendered = strip(|w| write_header(w));
 
-        let narrow = intro_card_lines(20).join("\n");
-        assert!(!narrow.contains('╭'));
-        assert!(narrow.contains("These hooks only report events to Rimz."));
-        assert!(narrow.contains("never answer a prompt for you."));
+        assert!(rendered.contains("rimz · first-run setup"));
+        assert!(rendered.contains('─'));
+        assert!(!rendered.contains('╭'));
+        assert!(!rendered.contains('╰'));
+        assert_eq!(header_rule(80).chars().count(), 48);
+        assert_eq!(header_rule(20).chars().count(), 20);
     }
 
     #[test]
-    fn next_steps_are_faint_setup_and_config_pointers() {
+    fn next_steps_are_muted_setup_config_and_loop_pointers() {
         let rendered = strip(|w| write_next_steps(w));
 
         assert!(rendered.contains("docs/guide/setup.md"));
         assert!(rendered.contains("rimz config"));
         assert!(rendered.contains("loop.toml"));
+        assert!(rendered.contains("Hands-off loop knobs:"));
     }
 }

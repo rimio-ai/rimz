@@ -5,6 +5,7 @@ use std::io::{BufRead, IsTerminal, Write};
 use anyhow::Result;
 use rimz::agents::{HookInstallPreview, HookInstallReport, StatusLineChange};
 use similar::TextDiff;
+use unicode_width::UnicodeWidthStr;
 
 use crate::cli::{first_run, render};
 
@@ -71,10 +72,10 @@ fn prompt_consent(
     out: &mut dyn Write,
 ) -> Result<Vec<&'static str>> {
     write_intro(out, previews)?;
-    for (idx, preview) in previews.iter().enumerate() {
-        writeln!(out)?;
-        write_agent_body(out, preview, idx, previews.len())?;
-    }
+    writeln!(out)?;
+    write_agent_table(out, previews)?;
+    writeln!(out)?;
+    write_consent_footer(out)?;
     writeln!(out)?;
     loop {
         write_prompt(out)?;
@@ -90,7 +91,7 @@ fn prompt_consent(
             _ => {
                 writeln!(
                     out,
-                    "  Enter adds reporting hooks for every listed agent; n skips them."
+                    "  Enter installs hooks for every listed agent; n skips."
                 )?;
             }
         }
@@ -155,19 +156,18 @@ fn write_untrusted_hooks_notice(
 }
 
 fn write_intro(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
-    write_intro_context(out, previews)?;
-    writeln!(out, "One quick question. {}", first_run::CONSENT_REVERSIBLE)?;
-    Ok(())
+    write_intro_context(out, previews)
 }
 
 fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
-    first_run::write_intro_card(out)?;
+    first_run::write_header(out)?;
     writeln!(out)?;
     let agent_word = if previews.len() == 1 {
         "agent"
     } else {
         "agents"
     };
+    let pronoun = if previews.len() == 1 { "it" } else { "them" };
     let agent_names = previews
         .iter()
         .map(|preview| preview.agent)
@@ -175,68 +175,63 @@ fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> 
         .join(", ");
     writeln!(
         out,
-        "Rimz found {} coding {agent_word} on this machine: {agent_names}.",
-        previews.len()
+        "Rimz found {} coding {agent_word}: {}.",
+        previews.len(),
+        render::paint(render::palette::ACCENT, &agent_names)
     )?;
     writeln!(
         out,
-        "To show what an agent is doing, Rimz adds reporting hooks to the agent's config."
-    )?;
-    writeln!(
-        out,
-        "Each hook is one line like:  rimz hooks feed --source <agent>."
+        "To show {pronoun} live in the sidebar, it adds reporting hooks to each agent's config."
     )?;
     Ok(())
 }
 
-fn write_agent_body(
+fn write_agent_table(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
+    let layout = AgentTableLayout::from_previews(previews);
+    for preview in previews {
+        write_agent_table_entry(out, preview, &layout)?;
+    }
+    Ok(())
+}
+
+fn write_agent_table_entry(
     out: &mut dyn Write,
     preview: &HookInstallPreview,
-    idx: usize,
-    total: usize,
+    layout: &AgentTableLayout,
 ) -> Result<()> {
-    let counter = format!("· {} of {}", idx + 1, total);
-    writeln!(
-        out,
-        "  {} {}",
-        render::paint(render::palette::ACCENT.bold(), preview.agent),
-        render::paint(render::palette::FAINT, &counter)
-    )?;
-    let config_path = home_relative_path(&preview.config_path);
-    let tag = if preview.merged {
-        "(additive — existing hooks kept)"
+    let cell = agent_hook_cell(preview);
+    let annotation = if preview.merged {
+        "existing kept"
     } else {
-        "(new file)"
+        "new file"
     };
     writeln!(
         out,
-        "    {} hooks → {} {}",
-        preview.planned_events.len(),
-        config_path,
-        render::paint(render::palette::FAINT, tag)
+        "  {}{:name_pad$}  {}{:cell_pad$}  {}",
+        render::paint(render::palette::ACCENT.bold(), preview.agent),
+        "",
+        cell,
+        "",
+        render::paint(render::palette::MUTED, annotation),
+        name_pad = layout.name_width.saturating_sub(preview.agent.width()),
+        cell_pad = layout.cell_width.saturating_sub(cell.width())
     )?;
-    for summary in status_line_summaries(preview) {
+
+    if let Some(summary) = status_line_summary(preview) {
         writeln!(
             out,
-            "    {}",
-            render::paint(render::palette::FAINT, &format!("also {summary}"))
+            "{}{}",
+            " ".repeat(layout.continuation_indent()),
+            render::paint(render::palette::MUTED, &format!("+ {summary}"))
         )?;
     }
-    writeln!(
-        out,
-        "    {}",
-        render::paint(
-            render::palette::FAINT,
-            &format!("undo → rimz hooks uninstall {}", preview.agent)
-        )
-    )?;
     Ok(())
 }
 
 fn write_prompt(out: &mut dyn Write) -> Result<()> {
     write!(
         out,
-        "  Add reporting hooks?  {} ",
+        "Add reporting hooks? {} ",
         render::paint(render::palette::ACCENT.bold(), "[Y/n]")
     )?;
     out.flush()?;
@@ -244,11 +239,12 @@ fn write_prompt(out: &mut dyn Write) -> Result<()> {
 }
 
 pub(crate) fn render_dry_run(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
+    let layout = AgentTableLayout::from_previews(previews);
     for (idx, preview) in previews.iter().enumerate() {
         if idx > 0 {
             writeln!(out)?;
         }
-        write_agent_body(out, preview, idx, previews.len())?;
+        write_agent_table_entry(out, preview, &layout)?;
         for line in preview_diff(preview).lines() {
             writeln!(out, "    {}", color_diff_line(line))?;
         }
@@ -289,15 +285,13 @@ fn print_noninteractive_notice(previews: &[HookInstallPreview]) -> Result<()> {
 
 fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
     write_intro_context(out, previews)?;
-    for (idx, preview) in previews.iter().enumerate() {
-        writeln!(out)?;
-        write_agent_body(out, preview, idx, previews.len())?;
-    }
     writeln!(out)?;
-    writeln!(out, "{}", first_run::CONSENT_REVERSIBLE)?;
+    write_agent_table(out, previews)?;
+    writeln!(out)?;
+    write_consent_footer(out)?;
     writeln!(
         out,
-        "No terminal input is available, so Rimz installs nothing and continues into the room.",
+        "No terminal input — nothing installed. Rimz continues into the room; wire agents later with rimz hooks install.",
     )?;
     Ok(())
 }
@@ -330,42 +324,78 @@ fn preview_diff(preview: &HookInstallPreview) -> String {
     }
 }
 
-fn status_line_summaries(preview: &HookInstallPreview) -> Vec<String> {
-    let mut summaries = Vec::new();
-    push_status_line_summary(
-        &mut summaries,
-        "statusLine",
-        "report context to Rimz",
-        &preview.status_line_change,
-    );
-    push_status_line_summary(
-        &mut summaries,
-        "subagentStatusLine",
-        "report subagent activity to Rimz",
-        &preview.subagent_status_line_change,
-    );
-    summaries
+fn write_consent_footer(out: &mut dyn Write) -> Result<()> {
+    writeln!(
+        out,
+        "Each hook is one `rimz hooks feed` line — it reports events, never acts or answers for you."
+    )?;
+    writeln!(
+        out,
+        "  {}     rimz hooks uninstall",
+        render::paint(render::palette::MUTED, "undo")
+    )?;
+    writeln!(
+        out,
+        "  {}  rimz hooks install --dry-run",
+        render::paint(render::palette::MUTED, "preview")
+    )?;
+    Ok(())
 }
 
-fn push_status_line_summary(
-    summaries: &mut Vec<String>,
-    key: &str,
-    purpose: &str,
-    change: &Option<StatusLineChange>,
-) {
-    match change {
-        Some(StatusLineChange::Added) => {
-            summaries.push(format!(
-                "sets your {key} to {purpose} (removed on uninstall)"
-            ));
+struct AgentTableLayout {
+    name_width: usize,
+    cell_width: usize,
+}
+
+impl AgentTableLayout {
+    fn from_previews(previews: &[HookInstallPreview]) -> Self {
+        Self {
+            name_width: previews
+                .iter()
+                .map(|preview| preview.agent.width())
+                .max()
+                .unwrap_or_default(),
+            cell_width: previews
+                .iter()
+                .map(|preview| agent_hook_cell(preview).width())
+                .max()
+                .unwrap_or_default(),
         }
-        Some(StatusLineChange::Wrapping { original }) => {
-            summaries.push(format!(
-                "wraps your {key} command ({original}) — restored on uninstall"
-            ));
-        }
-        Some(StatusLineChange::Unchanged) | None => {}
     }
+
+    fn continuation_indent(&self) -> usize {
+        2 + self.name_width + 2
+    }
+}
+
+fn agent_hook_cell(preview: &HookInstallPreview) -> String {
+    format!(
+        "{} hooks → {}",
+        preview.planned_events.len(),
+        home_relative_path(&preview.config_path)
+    )
+}
+
+fn status_line_summary(preview: &HookInstallPreview) -> Option<&'static str> {
+    if status_line_is_wrapping(&preview.status_line_change)
+        || status_line_is_wrapping(&preview.subagent_status_line_change)
+    {
+        Some("wraps your statusline for live context — yours restored on uninstall")
+    } else if status_line_is_added(&preview.status_line_change)
+        || status_line_is_added(&preview.subagent_status_line_change)
+    {
+        Some("sets your statusline to show live context")
+    } else {
+        None
+    }
+}
+
+fn status_line_is_wrapping(change: &Option<StatusLineChange>) -> bool {
+    matches!(change, Some(StatusLineChange::Wrapping { .. }))
+}
+
+fn status_line_is_added(change: &Option<StatusLineChange>) -> bool {
+    matches!(change, Some(StatusLineChange::Added))
 }
 
 fn home_relative_path(path: &std::path::Path) -> String {
@@ -443,32 +473,53 @@ mod tests {
     #[test]
     fn prompt_content_names_intro_agent_path_and_change_kind() {
         let mut additive = preview("claude", Some("{}\n"), "{\"hooks\": []}\n");
-        additive.status_line_change = Some(StatusLineChange::Added);
+        additive.status_line_change = Some(StatusLineChange::Wrapping {
+            original: "RIMZ_AGENT_PID=$PPID exec rimz statusline feed".to_owned(),
+        });
         let created = preview("codex", None, "{\"hooks\": []}\n");
         let previews = [additive, created];
 
         let (_, rendered) = drive(&previews, b"n\n");
 
         assert!(rendered.contains("first-run setup"));
-        assert!(rendered.contains("Rimz found 2 coding agents on this machine: claude, codex."));
-        assert!(rendered.contains("One quick question."));
-        assert!(
-            rendered.contains("Each hook is one line like:  rimz hooks feed --source <agent>.")
-        );
+        assert!(rendered.contains("Rimz found 2 coding agents: claude, codex."));
+        assert!(rendered.contains(
+            "To show them live in the sidebar, it adds reporting hooks to each agent's config."
+        ));
+        assert!(rendered.contains("Each hook is one `rimz hooks feed` line"));
+        assert_eq!(rendered.matches("rimz hooks uninstall").count(), 1);
+        assert!(rendered.contains("rimz hooks install --dry-run"));
         assert!(rendered.contains("Add reporting hooks?"));
         assert_eq!(rendered.matches("[Y/n]").count(), 1);
+        assert!(!rendered.contains("One quick question."));
+        assert!(!rendered.contains("rimz hooks feed --source"));
+        assert!(!rendered.contains("undo →"));
+        assert!(!rendered.contains("1 of 2"));
+        assert!(!rendered.contains("$PPID"));
         assert!(!rendered.contains("d=diff"));
         assert!(!rendered.contains("skip remaining"));
-        assert!(rendered.contains("claude"));
-        assert!(rendered.contains("codex"));
-        assert!(rendered.contains("~/.claude/settings.json"));
-        assert!(rendered.contains("(additive"));
-        assert!(rendered.contains("(new file)"));
-        assert!(rendered.contains("sets your statusLine"));
+        assert!(rendered.contains("claude  2 hooks → ~/.claude/settings.json"));
+        assert!(rendered.contains("codex   2 hooks → ~/.codex/settings.json"));
+        assert!(rendered.contains("existing kept"));
+        assert!(rendered.contains("new file"));
+        assert!(
+            rendered
+                .contains("+ wraps your statusline for live context — yours restored on uninstall")
+        );
+
+        let existing_row = rendered
+            .lines()
+            .find(|line| line.contains("existing kept"))
+            .expect("existing row");
+        let new_row = rendered
+            .lines()
+            .find(|line| line.contains("new file"))
+            .expect("new row");
+        assert_eq!(existing_row.find("existing kept"), new_row.find("new file"));
     }
 
     #[test]
-    fn noninteractive_notice_has_no_questions_and_one_reversible_line() {
+    fn noninteractive_notice_has_table_footer_and_no_question() {
         let previews = [
             preview("claude", Some("{}\n"), "{\"hooks\": []}\n"),
             preview("codex", None, "{\"hooks\": []}\n"),
@@ -476,26 +527,18 @@ mod tests {
 
         let rendered = strip(|w| write_noninteractive_notice(w, &previews));
 
-        assert!(rendered.contains("Rimz found 2 coding agents on this machine: claude, codex."));
-        assert!(rendered.contains("claude · 1 of 2"));
-        assert!(rendered.contains("codex · 2 of 2"));
+        assert!(rendered.contains("Rimz found 2 coding agents: claude, codex."));
+        assert!(rendered.contains("claude  2 hooks → ~/.claude/settings.json"));
+        assert!(rendered.contains("codex   2 hooks → ~/.codex/settings.json"));
+        assert!(rendered.contains("Each hook is one `rimz hooks feed` line"));
+        assert_eq!(rendered.matches("rimz hooks uninstall").count(), 1);
+        assert!(rendered.contains("rimz hooks install --dry-run"));
+        assert!(!rendered.contains("Add reporting hooks?"));
         assert!(!rendered.contains("quick question"));
-        assert_eq!(rendered.matches(first_run::CONSENT_REVERSIBLE).count(), 1);
+        assert!(!rendered.contains("1 of 2"));
         assert!(rendered.contains(
-            "No terminal input is available, so Rimz installs nothing and continues into the room."
+            "No terminal input — nothing installed. Rimz continues into the room; wire agents later with rimz hooks install."
         ));
-    }
-
-    #[test]
-    fn intro_card_lines_use_border_when_wide_and_plain_when_narrow() {
-        let wide = first_run::intro_card_lines(80).join("\n");
-        assert!(wide.contains('╭'));
-        assert!(wide.contains('╰'));
-
-        let narrow = first_run::intro_card_lines(20).join("\n");
-        assert!(!narrow.contains('╭'));
-        assert!(narrow.contains("These hooks only report events to Rimz."));
-        assert!(narrow.contains("never answer a prompt for you."));
     }
 
     #[test]
@@ -529,8 +572,9 @@ mod tests {
 
         let rendered = strip(|w| render_dry_run(w, &previews));
 
-        assert!(rendered.contains("claude · 1 of 2"));
-        assert!(rendered.contains("codex · 2 of 2"));
+        assert!(rendered.contains("claude  2 hooks → ~/.claude/settings.json"));
+        assert!(rendered.contains("codex   2 hooks → ~/.codex/settings.json"));
+        assert!(!rendered.contains("1 of 2"));
         assert!(rendered.contains("-old"));
         assert!(rendered.contains("+new"));
         assert!(rendered.contains("+one\n"));
