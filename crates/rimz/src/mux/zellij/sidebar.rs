@@ -442,10 +442,11 @@ impl ZellijBackend {
                 break; // docked, or no progress — stop rather than spin.
             }
             last_x = x;
+            let action_floor = unix_now_ms();
             if self.dock_left(&opts.session_name, &pane_raw).is_err() {
                 break;
             }
-            floor = Some(unix_now_ms());
+            floor = Some(action_floor);
         }
         if let Some(action_ms) = self.stack_nested_work_panes(opts, tab_position, raw_id, floor) {
             floor = Some(action_ms);
@@ -567,8 +568,9 @@ impl ZellijBackend {
         };
         let mut args = vec!["stack-panes".to_owned(), "--".to_owned()];
         args.extend(work.iter().map(|id| format!("terminal_{id}")));
+        let action_floor = unix_now_ms();
         match self.zellij_action(&opts.session_name).args(args).run() {
-            Ok(_) => Some(unix_now_ms()),
+            Ok(_) => Some(action_floor),
             Err(err) => {
                 tracing::warn!(
                     session = %opts.session_name,
@@ -683,12 +685,13 @@ impl ZellijBackend {
         target_cols: u64,
         min_topology_produced_at_ms: Option<u64>,
     ) -> Option<u64> {
-        const RESIZE_MAX_STEPS: u32 = 16;
+        const RESIZE_MAX_STEPS: u32 = 64;
         let Some(target_raw) = parse_terminal_id(pane_id) else {
             return min_topology_produced_at_ms;
         };
         let mut floor = min_topology_produced_at_ms;
         let mut last_cols = u64::MAX;
+        let mut no_progress_retry = false;
         for _ in 0..RESIZE_MAX_STEPS {
             let Some(cols) =
                 self.sidebar_cols(session, workspace_id, tab_position, target_raw, floor)
@@ -699,16 +702,26 @@ impl ZellijBackend {
                 return floor;
             }
             if cols >= last_cols {
+                // A cache produced after action start but before Zellij applies
+                // the resize can repeat once; require one newer read before
+                // treating the pane as pinned at a backend minimum.
+                if !no_progress_retry {
+                    no_progress_retry = true;
+                    floor = Some(unix_now_ms());
+                    continue;
+                }
                 return floor; // no progress (hit a minimum) — stop rather than spin.
             }
+            no_progress_retry = false;
             last_cols = cols;
+            let action_floor = unix_now_ms();
             if self
                 .resize_sidebar_step(session, pane_id, "decrease")
                 .is_err()
             {
                 return floor;
             }
-            floor = Some(unix_now_ms());
+            floor = Some(action_floor);
         }
         floor
     }
