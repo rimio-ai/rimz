@@ -46,6 +46,7 @@ pub(crate) use self::ui_state::{
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
 
+use std::collections::HashSet;
 use std::io::{self, Write};
 
 use crate::agents::AgentStatus;
@@ -284,20 +285,24 @@ const WORKTREE_ROW_CAP: usize = 6;
 /// The rows a worktree group paints and the selection model can browse.
 ///
 /// With a make-up filter active, every matching row passes: the cockpit bucket
-/// count and the narrowed body stay exact. With an expanded group, the full
-/// roster passes. Otherwise the calm idle/process tail trims to
+/// count and the narrowed body stay exact, ignoring any held visibility set.
+/// With an expanded group, the full roster passes. Otherwise the calm
+/// idle/process tail trims to
 /// [`WORKTREE_ROW_CAP`], always keeping unread rows, non-idle agent rows, and
 /// the focused pane. Inactive success rows still stay visible so a renderer
 /// never drops an unread stamp before receipts converge; sticky unread idle
 /// rows stay visible until the human reads them, and the first live process row
 /// stays visible when it is the group's only live member, so capping never
-/// turns a live shell's group into an inactive one. Ordinary inactive idle rows
-/// are the first calm rows hidden behind `+K more`.
-pub(crate) fn group_visible_rows(
-    group: &crate::SidebarWorktreeGroup,
+/// turns a live shell's group into an inactive one. An active order hold unions
+/// in rows painted in the frozen frame, so cap exemptions settle together with
+/// the held order. Ordinary inactive idle rows are the first calm rows hidden
+/// behind `+K more`.
+pub(crate) fn group_visible_rows<'a>(
+    group: &'a crate::SidebarWorktreeGroup,
     filter: Option<BodyFilter>,
     expanded: bool,
-) -> Vec<&SidebarRow> {
+    held: Option<&HashSet<String>>,
+) -> Vec<&'a SidebarRow> {
     if filter.is_some() {
         return group
             .rows
@@ -333,6 +338,7 @@ pub(crate) fn group_visible_rows(
                 .is_some_and(|status| status != AgentStatus::Idle)
             || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
             || liveness_process_id == Some(row.id.as_str())
+            || held.is_some_and(|ids| ids.contains(&row.id))
             || visible.len() < WORKTREE_ROW_CAP
         {
             visible.push(row);
@@ -352,7 +358,7 @@ fn row_band(row: &SidebarRow) -> u8 {
 }
 
 fn group_has_hidden_tail(group: &crate::SidebarWorktreeGroup) -> bool {
-    group_visible_rows(group, None, false).len() < group.rows.len()
+    group_visible_rows(group, None, false, None).len() < group.rows.len()
 }
 
 fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut UiState) {
@@ -373,6 +379,7 @@ fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a S
                 group,
                 ui.make_up_filter,
                 ui.expanded_groups.contains(&group.key),
+                ui.held_visible(),
             )
         })
         .nth(ui.selected_index)

@@ -12,7 +12,7 @@ use crate::sidebar_pane::render::{
 };
 
 use super::input::{FilterAction, KeyAction};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Content lines a wheel tick moves the viewport — about one card line-group
 /// per notch, so a flick traverses cards rather than crawling line by line.
@@ -101,14 +101,20 @@ fn jump_to(ui: &mut UiState, snapshot: &SidebarSnapshot, pane: PaneId) -> InputO
 /// through the rows that need you, oldest episode first. A walk with nothing to
 /// triage does nothing.
 fn inbox_jump(ui: &mut UiState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
-    if let Some(index) = step_attention_index(
+    if let Some(index) = step_attention_index_with_held(
         snapshot,
         ui.make_up_filter,
         &ui.expanded_groups,
+        ui.held_visible(),
         ui.selected_index,
         forward,
-    ) && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, &ui.expanded_groups, index)
-    {
+    ) && let Some(pane) = pane_at_row(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+        index,
+    ) {
         return jump_to(ui, snapshot, pane);
     }
     InputOutcome::default()
@@ -124,7 +130,12 @@ enum End {
 /// jump. Selection only, no focus, over the same filtered row universe ordinary
 /// selection walks. A no-op when already there or the body is empty.
 fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
-    let len = visible_row_count(snapshot, ui.make_up_filter, &ui.expanded_groups);
+    let len = visible_row_count_with_held(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    );
     if len == 0 {
         return InputOutcome::default();
     }
@@ -136,7 +147,12 @@ fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> Inp
 }
 
 fn select_to_index(ui: &mut UiState, snapshot: &SidebarSnapshot, target: usize) -> InputOutcome {
-    let len = visible_row_count(snapshot, ui.make_up_filter, &ui.expanded_groups);
+    let len = visible_row_count_with_held(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    );
     if len == 0 {
         return InputOutcome::default();
     }
@@ -202,7 +218,12 @@ pub(super) fn handle_key(
             InputOutcome::default()
         }
         KeyAction::Down => {
-            let len = visible_row_count(snapshot, ui.make_up_filter, &ui.expanded_groups);
+            let len = visible_row_count_with_held(
+                snapshot,
+                ui.make_up_filter,
+                &ui.expanded_groups,
+                ui.held_visible(),
+            );
             if ui.selected_index + 1 < len {
                 select_row(ui, snapshot, ui.selected_index + 1);
                 begin_or_continue_browse(ui);
@@ -243,8 +264,13 @@ pub(super) fn handle_key(
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
-            if let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, &ui.expanded_groups, index)
-            {
+            if let Some(pane) = pane_at_row(
+                snapshot,
+                ui.make_up_filter,
+                &ui.expanded_groups,
+                ui.held_visible(),
+                index,
+            ) {
                 return jump_to(ui, snapshot, pane);
             }
             InputOutcome::default()
@@ -328,7 +354,13 @@ pub(super) fn handle_mouse_click(
         return InputOutcome::redraw();
     }
     if let Some(index) = row_index_at_screen_position(ui, row)
-        && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, &ui.expanded_groups, index)
+        && let Some(pane) = pane_at_row(
+            snapshot,
+            ui.make_up_filter,
+            &ui.expanded_groups,
+            ui.held_visible(),
+            index,
+        )
     {
         return jump_to(ui, snapshot, pane);
     }
@@ -459,7 +491,12 @@ fn select_adjacent_worktree(
     snapshot: &SidebarSnapshot,
     step: isize,
 ) -> InputOutcome {
-    let ranges = visible_group_ranges(snapshot, ui.make_up_filter, &ui.expanded_groups);
+    let ranges = visible_group_ranges(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    );
     if ranges.len() < 2 {
         return InputOutcome::default();
     }
@@ -503,11 +540,13 @@ fn visible_group_ranges(
     snapshot: &SidebarSnapshot,
     filter: Option<BodyFilter>,
     expanded_groups: &BTreeSet<String>,
+    held: Option<&HashSet<String>>,
 ) -> Vec<VisibleGroupRange> {
     let mut start = 0;
     let mut ranges = Vec::new();
     for group in &snapshot.worktree_groups {
-        let len = group_visible_rows(group, filter, expanded_groups.contains(&group.key)).len();
+        let len =
+            group_visible_rows(group, filter, expanded_groups.contains(&group.key), held).len();
         if len > 0 {
             ranges.push(VisibleGroupRange { start, len });
             start += len;
@@ -523,7 +562,13 @@ fn visible_group_ranges(
 /// any wheel pin, so the viewport snaps back to following the selection.
 fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
     ui.selected_index = index;
-    ui.selected_pane = pane_at_row(snapshot, ui.make_up_filter, &ui.expanded_groups, index);
+    ui.selected_pane = pane_at_row(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+        index,
+    );
     ui.manual_scroll = None;
 }
 
@@ -533,9 +578,10 @@ fn pane_at_row(
     snapshot: &SidebarSnapshot,
     filter: Option<BodyFilter>,
     expanded_groups: &BTreeSet<String>,
+    held: Option<&HashSet<String>>,
     index: usize,
 ) -> Option<PaneId> {
-    visible_rows(snapshot, filter, expanded_groups)
+    visible_rows(snapshot, filter, expanded_groups, held)
         .nth(index)
         .and_then(|row| row.pane.as_ref())
         .map(|pane| pane.pane_id.clone())
@@ -556,13 +602,18 @@ fn agent_row_mark_target_at(
     ui: &UiState,
     index: usize,
 ) -> Option<RowMarkTarget> {
-    visible_rows(snapshot, ui.make_up_filter, &ui.expanded_groups)
-        .nth(index)
-        .filter(|row| row.status().is_some())
-        .map(|row| RowMarkTarget {
-            row_id: row.id.clone(),
-            unread: row.unread,
-        })
+    visible_rows(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    )
+    .nth(index)
+    .filter(|row| row.status().is_some())
+    .map(|row| RowMarkTarget {
+        row_id: row.id.clone(),
+        unread: row.unread,
+    })
 }
 
 /// Pin the just-selected pane as the arrow-browse pick. The first arrow of a
@@ -584,7 +635,12 @@ fn begin_or_continue_browse(ui: &mut UiState) {
 }
 
 fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
-    let len = visible_row_count(snapshot, ui.make_up_filter, &ui.expanded_groups);
+    let len = visible_row_count_with_held(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    );
     if len == 0 {
         ui.selected_index = 0;
     } else if ui.selected_index >= len {
@@ -677,6 +733,7 @@ pub(super) fn reconcile_selection(
             snapshot,
             ui.make_up_filter,
             &ui.expanded_groups,
+            ui.held_visible(),
             &browse.pane,
         )
         .is_none()
@@ -748,9 +805,13 @@ pub(super) fn reconcile_selection(
 /// pick re-seats it.
 pub(super) fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     if let Some(pane) = ui.selected_pane.clone() {
-        if let Some(index) =
-            row_index_of_pane_expanded(snapshot, ui.make_up_filter, &ui.expanded_groups, &pane)
-        {
+        if let Some(index) = row_index_of_pane_expanded(
+            snapshot,
+            ui.make_up_filter,
+            &ui.expanded_groups,
+            ui.held_visible(),
+            &pane,
+        ) {
             ui.selected_index = index;
             return;
         }
@@ -768,16 +829,17 @@ pub(super) fn row_index_of_pane(
     filter: Option<BodyFilter>,
     pane_id: &PaneId,
 ) -> Option<usize> {
-    row_index_of_pane_expanded(snapshot, filter, &BTreeSet::new(), pane_id)
+    row_index_of_pane_expanded(snapshot, filter, &BTreeSet::new(), None, pane_id)
 }
 
 fn row_index_of_pane_expanded(
     snapshot: &SidebarSnapshot,
     filter: Option<BodyFilter>,
     expanded_groups: &BTreeSet<String>,
+    held: Option<&HashSet<String>>,
     pane_id: &PaneId,
 ) -> Option<usize> {
-    visible_rows(snapshot, filter, expanded_groups).position(|row| {
+    visible_rows(snapshot, filter, expanded_groups, held).position(|row| {
         row.pane
             .as_ref()
             .is_some_and(|pane| pane.pane_id == *pane_id)
@@ -796,12 +858,22 @@ fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
     ui.line_map.get(usize::from(row)).copied().flatten()
 }
 
+#[cfg(test)]
 fn visible_row_count(
     snapshot: &SidebarSnapshot,
     filter: Option<BodyFilter>,
     expanded_groups: &BTreeSet<String>,
 ) -> usize {
-    visible_rows(snapshot, filter, expanded_groups).count()
+    visible_row_count_with_held(snapshot, filter, expanded_groups, None)
+}
+
+fn visible_row_count_with_held(
+    snapshot: &SidebarSnapshot,
+    filter: Option<BodyFilter>,
+    expanded_groups: &BTreeSet<String>,
+    held: Option<&HashSet<String>>,
+) -> usize {
+    visible_rows(snapshot, filter, expanded_groups, held).count()
 }
 
 /// Every rendered row in body order — the snapshot's groups flattened through
@@ -811,9 +883,10 @@ fn visible_rows<'a>(
     snapshot: &'a SidebarSnapshot,
     filter: Option<BodyFilter>,
     expanded_groups: &'a BTreeSet<String>,
+    held: Option<&'a HashSet<String>>,
 ) -> impl Iterator<Item = &'a crate::SidebarRow> {
     snapshot.worktree_groups.iter().flat_map(move |group| {
-        group_visible_rows(group, filter, expanded_groups.contains(&group.key))
+        group_visible_rows(group, filter, expanded_groups.contains(&group.key), held)
     })
 }
 
@@ -822,6 +895,7 @@ fn visible_rows<'a>(
 /// read actionable rows (oldest first); `forward` wraps to the next, backward to
 /// the previous, and a selection outside the list enters at the first row
 /// forward or the last row backward.
+#[cfg(test)]
 fn step_attention_index(
     snapshot: &SidebarSnapshot,
     filter: Option<BodyFilter>,
@@ -829,7 +903,18 @@ fn step_attention_index(
     selected: usize,
     forward: bool,
 ) -> Option<usize> {
-    let mut candidates = visible_rows(snapshot, filter, expanded_groups)
+    step_attention_index_with_held(snapshot, filter, expanded_groups, None, selected, forward)
+}
+
+fn step_attention_index_with_held(
+    snapshot: &SidebarSnapshot,
+    filter: Option<BodyFilter>,
+    expanded_groups: &BTreeSet<String>,
+    held: Option<&HashSet<String>>,
+    selected: usize,
+    forward: bool,
+) -> Option<usize> {
+    let mut candidates = visible_rows(snapshot, filter, expanded_groups, held)
         .enumerate()
         .filter_map(|(index, row)| triage_key(row).map(|key| (index, key)))
         .collect::<Vec<_>>();

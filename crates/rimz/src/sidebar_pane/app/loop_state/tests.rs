@@ -1,6 +1,7 @@
 use super::*;
 use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot_with_panes, workspace};
 use crate::sidebar_pane::app::input::KeyAction;
+use std::collections::HashSet;
 
 fn read_marks(ws: &WorkspaceId) -> (tempfile::TempDir, ReadMarkStore) {
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -872,7 +873,7 @@ fn input_browse_arms_order_hold_before_next_fold() {
     state.current = snapshot_with_panes(&ws, panes);
     state.ui.selected_pane = Some(first);
     state.ui.selected_index = 0;
-    state.ui.last_order = super::super::order_hold::capture_order(&state.current);
+    state.ui.last_order = super::super::order_hold::capture_order(&state.current, &state.ui);
     let (mut fetch, _request_rx) = fetch_dispatcher();
     let mut terminal = fixed_terminal();
 
@@ -908,7 +909,7 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
     snapshot.worktree_groups[0].rows.push(second);
     state.current = snapshot;
     state.ui.unread_guard = Some("agent-1".to_owned());
-    state.ui.last_order = super::super::order_hold::capture_order(&state.current);
+    state.ui.last_order = super::super::order_hold::capture_order(&state.current, &state.ui);
     let (mut fetch, request_rx) = fetch_dispatcher();
     let mut terminal = fixed_terminal();
 
@@ -950,12 +951,18 @@ fn focus_anchor_write_carries_current_scroll_offset() {
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
     state.ui.scroll_offset = 11;
+    state.ui.last_order = crate::sidebar_pane::render::FrozenOrder {
+        groups: vec!["main".to_owned()],
+        rows: vec!["row-2".to_owned(), "row-1".to_owned()],
+        visible: HashSet::from(["row-2".to_owned()]),
+    };
 
     state.record_focus_anchor(&pane);
 
     let anchor = crate::sidebar::focus_anchor::load(&runtime).expect("focus anchor");
     assert_eq!(anchor.pane_id, pane);
     assert_eq!(anchor.offset, 11);
+    assert_eq!(anchor.order, Some(state.ui.last_order.clone()));
     assert!(crate::sidebar::focus_anchor::is_fresh(
         anchor.stamp_ms,
         crate::sidebar::timing::unix_now_ms(),
@@ -976,6 +983,7 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
             pane_id: target.clone(),
             offset: 7,
             stamp_ms,
+            order: None,
         },
     )
     .expect("store anchor");
@@ -993,7 +1001,7 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
         true,
     );
 
-    assert_eq!(state.ui.selected_pane, Some(target));
+    assert_eq!(state.ui.selected_pane, Some(target.clone()));
     assert_eq!(state.ui.scroll_offset, 7);
     assert_eq!(state.ui.manual_scroll, None);
     assert!(
@@ -1001,6 +1009,58 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
         "a sidebar jump's fresh anchor suppresses external-focus group reveal"
     );
     assert_eq!(state.ui.last_focus_anchor_ms, stamp_ms);
+}
+
+#[test]
+fn fresh_focus_anchor_with_order_installs_shared_hold() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (dir, mut state) = loop_state(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    let first = PaneId::from_parts(crate::MuxName::Zellij, "terminal_1");
+    let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    let stamp_ms = crate::sidebar::timing::unix_now_ms();
+    crate::sidebar::focus_anchor::store(
+        &runtime,
+        &crate::sidebar::focus_anchor::FocusAnchor {
+            pane_id: target.clone(),
+            offset: 7,
+            stamp_ms,
+            order: Some(crate::sidebar_pane::render::FrozenOrder {
+                groups: vec!["/repo/main".to_owned()],
+                rows: vec![target.to_string(), first.to_string()],
+                visible: HashSet::from([target.to_string()]),
+            }),
+        },
+    )
+    .expect("store anchor");
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    fold_snapshot(
+        &mut state,
+        &config,
+        &mut fetch,
+        snapshot_with_focused_pane(&ws, target.clone()),
+        true,
+    );
+
+    assert_eq!(state.ui.selected_pane, Some(target.clone()));
+    assert_eq!(state.ui.scroll_offset, 7);
+    assert_eq!(
+        state.current.worktree_groups[0]
+            .rows
+            .iter()
+            .map(|row| row.pane.as_ref().expect("pane").pane_id.clone())
+            .collect::<Vec<_>>(),
+        vec![target.clone(), first],
+        "fold snapshot adopts anchor row order before paint"
+    );
+    let hold = state.ui.order_hold.as_ref().expect("shared hold");
+    assert_eq!(hold.frozen.visible, HashSet::from([target.to_string()]));
+    assert_eq!(
+        hold.expires_ms,
+        stamp_ms as i64 + crate::sidebar::timing::REORDER_HOLD.as_millis() as i64
+    );
 }
 
 #[test]
@@ -1053,6 +1113,7 @@ fn focus_anchor_for_other_pane_leaves_scroll_untouched() {
             pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
             offset: 7,
             stamp_ms: crate::sidebar::timing::unix_now_ms(),
+            order: None,
         },
     )
     .expect("store anchor");
@@ -1086,6 +1147,7 @@ fn focus_anchor_stamp_applies_once() {
             pane_id: target.clone(),
             offset: 7,
             stamp_ms,
+            order: None,
         },
     )
     .expect("store anchor");
@@ -1131,6 +1193,7 @@ fn stale_focus_anchor_is_ignored() {
             pane_id: target.clone(),
             offset: 7,
             stamp_ms: stale_stamp,
+            order: None,
         },
     )
     .expect("store anchor");

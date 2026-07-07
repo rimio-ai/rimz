@@ -1,5 +1,6 @@
 //! Runtime scroll anchor for sidebar-initiated pane jumps.
 
+use std::collections::HashSet;
 use std::fs;
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,20 @@ pub struct FocusAnchor {
     pub pane_id: PaneId,
     pub offset: usize,
     pub stamp_ms: u64,
+    #[serde(default)]
+    pub order: Option<FrozenOrder>,
+}
+
+/// A snapshot of painted row/group order and the rows visible in that frame.
+///
+/// Group keys and row ids preserve presentation order. `visible` names the row
+/// ids the renderer painted, so a peer renderer can keep cap exemptions stable
+/// while it adopts a shared hold.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrozenOrder {
+    pub(crate) groups: Vec<String>,
+    pub(crate) rows: Vec<String>,
+    pub(crate) visible: HashSet<String>,
 }
 
 pub fn store(runtime: &RuntimePaths, anchor: &FocusAnchor) -> atomic::Result<()> {
@@ -84,15 +99,37 @@ mod tests {
             pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
             offset: 7,
             stamp_ms,
+            order: None,
         }
     }
 
     #[test]
     fn stores_and_loads_anchor() {
         let (_dir, runtime) = runtime();
-        let anchor = anchor(1_000);
+        let mut anchor = anchor(1_000);
+        anchor.order = Some(FrozenOrder {
+            groups: vec!["main".to_owned()],
+            rows: vec!["row-1".to_owned(), "row-2".to_owned()],
+            visible: HashSet::from(["row-2".to_owned()]),
+        });
 
         store(&runtime, &anchor).expect("store anchor");
+
+        assert_eq!(load(&runtime), Some(anchor));
+    }
+
+    #[test]
+    fn missing_order_loads_scroll_only_anchor() {
+        let (_dir, runtime) = runtime();
+        let anchor = anchor(1_000);
+        let mut file = serde_json::to_value(FocusAnchorFile {
+            v: FOCUS_ANCHOR_VERSION.to_owned(),
+            anchor: anchor.clone(),
+        })
+        .expect("anchor json");
+        file.as_object_mut().expect("file object").remove("order");
+        atomic::write_temp_then_rename_cache(&runtime.focus_anchor_path(), &file)
+            .expect("write anchor");
 
         assert_eq!(load(&runtime), Some(anchor));
     }

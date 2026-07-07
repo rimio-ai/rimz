@@ -5,11 +5,11 @@
 //! so read state and attention signals update without moving the cards under
 //! the user's eyes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::SidebarSnapshot;
 use crate::sidebar::timing::REORDER_HOLD;
-use crate::sidebar_pane::render::{FrozenOrder, OrderHold, UiState};
+use crate::sidebar_pane::render::{FrozenOrder, OrderHold, UiState, group_visible_rows};
 
 pub(super) fn arm_order_hold(ui: &mut UiState, now_ms: i64) {
     ui.order_hold = Some(OrderHold {
@@ -39,7 +39,21 @@ pub(super) fn apply_order_hold(
     }
 }
 
-pub(super) fn capture_order(current: &SidebarSnapshot) -> FrozenOrder {
+pub(super) fn capture_order(current: &SidebarSnapshot, ui: &UiState) -> FrozenOrder {
+    let held = ui.held_visible();
+    let visible: HashSet<String> = current
+        .worktree_groups
+        .iter()
+        .flat_map(|group| {
+            group_visible_rows(
+                group,
+                ui.make_up_filter,
+                ui.expanded_groups.contains(&group.key),
+                held,
+            )
+        })
+        .map(|row| row.id.clone())
+        .collect();
     FrozenOrder {
         groups: current
             .worktree_groups
@@ -51,7 +65,23 @@ pub(super) fn capture_order(current: &SidebarSnapshot) -> FrozenOrder {
             .iter()
             .flat_map(|group| group.rows.iter().map(|row| row.id.clone()))
             .collect(),
+        visible,
     }
+}
+
+pub(super) fn adopt_shared_hold(
+    ui: &mut UiState,
+    current: &mut SidebarSnapshot,
+    order: FrozenOrder,
+    stamp_ms: i64,
+) {
+    reorder_to_frozen(current, &order);
+    ui.order_hold = Some(OrderHold {
+        frozen: order,
+        expires_ms: stamp_ms + REORDER_HOLD.as_millis() as i64,
+    });
+    super::selection::anchor_selection(ui, current);
+    ui.last_order = capture_order(current, ui);
 }
 
 fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
@@ -176,6 +206,7 @@ mod tests {
                 "b1".to_owned(),
                 "b2".to_owned(),
             ],
+            visible: HashSet::new(),
         };
 
         reorder_to_frozen(&mut current, &frozen);
@@ -187,16 +218,30 @@ mod tests {
     }
 
     #[test]
-    fn capture_order_collects_group_keys_and_flat_row_ids() {
-        let current = snapshot_with_groups(vec![
-            group("a", vec![row("a1", "terminal_1"), row("a2", "terminal_2")]),
-            group("b", vec![row("b1", "terminal_3")]),
-        ]);
+    fn capture_order_collects_group_keys_flat_row_ids_and_visible_ids() {
+        let current = snapshot_with_groups(vec![group(
+            "a",
+            (0..8)
+                .map(|index| row(&format!("a{index}"), &format!("terminal_{index}")))
+                .collect(),
+        )]);
+        let ui = UiState::default();
 
-        let order = capture_order(&current);
+        let order = capture_order(&current, &ui);
 
-        assert_eq!(order.groups, vec!["a", "b"]);
-        assert_eq!(order.rows, vec!["a1", "a2", "b1"]);
+        assert_eq!(order.groups, vec!["a"]);
+        assert_eq!(order.rows, ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"]);
+        assert_eq!(
+            order.visible,
+            HashSet::from([
+                "a0".to_owned(),
+                "a1".to_owned(),
+                "a2".to_owned(),
+                "a3".to_owned(),
+                "a4".to_owned(),
+                "a5".to_owned(),
+            ])
+        );
     }
 
     #[test]
@@ -205,6 +250,7 @@ mod tests {
             last_order: FrozenOrder {
                 groups: vec!["a".to_owned()],
                 rows: vec!["a2".to_owned(), "a1".to_owned()],
+                visible: HashSet::from(["a2".to_owned(), "a1".to_owned()]),
             },
             ..UiState::default()
         };
@@ -231,5 +277,37 @@ mod tests {
         apply_order_hold(&mut ui, &mut current, false, expires_ms);
         assert!(ui.order_hold.is_none());
         assert_eq!(row_ids(&current, "a"), vec!["a1", "a2"]);
+    }
+
+    #[test]
+    fn adopt_shared_hold_installs_reorders_and_recaptures() {
+        let mut ui = UiState::default();
+        let mut current = snapshot_with_groups(vec![group(
+            "a",
+            vec![row("a1", "terminal_1"), row("a2", "terminal_2")],
+        )]);
+        let order = FrozenOrder {
+            groups: vec!["a".to_owned()],
+            rows: vec!["a2".to_owned(), "a1".to_owned()],
+            visible: HashSet::from(["a2".to_owned()]),
+        };
+        let stamp_ms = 2_000;
+
+        adopt_shared_hold(&mut ui, &mut current, order.clone(), stamp_ms);
+
+        assert_eq!(row_ids(&current, "a"), vec!["a2", "a1"]);
+        assert_eq!(
+            ui.order_hold.as_ref().map(|hold| hold.expires_ms),
+            Some(stamp_ms + REORDER_HOLD.as_millis() as i64)
+        );
+        assert_eq!(
+            ui.order_hold.as_ref().map(|hold| &hold.frozen),
+            Some(&order)
+        );
+        assert_eq!(ui.last_order.rows, vec!["a2", "a1"]);
+        assert_eq!(
+            ui.last_order.visible,
+            HashSet::from(["a2".to_owned(), "a1".to_owned()])
+        );
     }
 }

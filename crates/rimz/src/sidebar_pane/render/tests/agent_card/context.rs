@@ -322,6 +322,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
             snapshot.theme.display.card_density,
             None,
             false,
+            None,
             &mut row_index,
             0,
             0,

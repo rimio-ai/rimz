@@ -172,6 +172,7 @@ fn rendered_group_lines_with(
         snapshot.theme.display.card_density,
         None,
         false,
+        None,
         &mut row_index,
         0,
         phase,

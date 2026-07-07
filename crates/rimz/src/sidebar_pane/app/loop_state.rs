@@ -1175,7 +1175,8 @@ impl LoopState {
         }
         let interacted = !clear.ids.is_empty() || ui.selected_pane != prev_selected;
         order_hold::apply_order_hold(ui, current, interacted, now.as_millisecond());
-        ui.last_order = order_hold::capture_order(current);
+        let last_order = order_hold::capture_order(current, ui);
+        ui.last_order = last_order;
         ui.animation_phase =
             wall_clock_phase(anim_start, current.theme.display.resolved_refresh_ms());
         // Fold the fresh headline spend into the count-up: a higher figure starts a
@@ -1289,6 +1290,7 @@ impl LoopState {
             pane_id: pane.clone(),
             offset: self.ui.scroll_offset,
             stamp_ms: crate::sidebar::timing::unix_now_ms(),
+            order: Some(self.ui.last_order.clone()),
         };
         if let Err(err) = crate::sidebar::focus_anchor::store(self.read_marks.runtime(), &anchor) {
             debug!(error = %err, "focus anchor write failed");
@@ -1312,6 +1314,14 @@ impl LoopState {
             // A sidebar jump freezes the clicked row; suppress the group reveal
             // armed for the same selection change.
             self.ui.focus_group_reveal = false;
+            if let Some(order) = anchor.order {
+                order_hold::adopt_shared_hold(
+                    &mut self.ui,
+                    &mut self.current,
+                    order,
+                    anchor.stamp_ms as i64,
+                );
+            }
             self.ui.last_focus_anchor_ms = anchor.stamp_ms;
         }
     }

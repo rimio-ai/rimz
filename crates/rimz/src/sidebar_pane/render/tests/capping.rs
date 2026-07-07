@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 #[test]
 fn collapsed_cap_keeps_attention_focused_unread_and_liveness_process_rows() {
@@ -72,6 +73,71 @@ fn expanded_and_filtered_groups_are_uncapped() {
     );
 }
 
+#[test]
+fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
+    let group = group(idle_rows(9));
+    let held = HashSet::from(["idle-8".to_owned()]);
+
+    let visible = visible_ids_with_held(&group, None, false, Some(&held));
+
+    assert!(visible.contains(&"idle-8"));
+    assert_eq!(visible.len(), 7);
+
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut more_hits = Vec::new();
+    let mut row_index = 0;
+    let snapshot = snapshot_with(Vec::new(), Vec::new());
+    worktree_group_lines(
+        &Theme::fixed(true),
+        &group,
+        &[],
+        fixed_now(),
+        54,
+        &snapshot.theme.display.context_meter,
+        snapshot.theme.display.card_density,
+        None,
+        false,
+        Some(&held),
+        &mut row_index,
+        0,
+        0,
+        &CostRolls::default(),
+        None,
+        &mut lines,
+        &mut map,
+        &mut more_hits,
+    );
+    let texts = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        texts.iter().any(|line| line.contains("+2 more")),
+        "more count follows held visibility: {texts:?}"
+    );
+}
+
+#[test]
+fn make_up_filter_ignores_held_visible_rows() {
+    let group = group(idle_rows(9));
+    let held = HashSet::from(["idle-8".to_owned()]);
+
+    let visible = visible_ids_with_held(
+        &group,
+        Some(BodyFilter::Status(AgentStatus::Waiting)),
+        false,
+        Some(&held),
+    );
+
+    assert!(visible.is_empty(), "filter wins over held rows");
+}
+
 fn assert_visible(
     rows: &[crate::SidebarRow],
     filter: Option<BodyFilter>,
@@ -80,7 +146,7 @@ fn assert_visible(
     message: &str,
 ) {
     let group = group(rows.to_vec());
-    let visible = visible_ids(&group, filter, expanded);
+    let visible = visible_ids_with_held(&group, filter, expanded, None);
     assert!(visible.contains(&id), "{message}: {visible:?}");
     assert!(visible.len() < group.rows.len(), "tail still trims");
 }
@@ -90,7 +156,16 @@ fn visible_ids(
     filter: Option<BodyFilter>,
     expanded: bool,
 ) -> Vec<&str> {
-    group_visible_rows(group, filter, expanded)
+    visible_ids_with_held(group, filter, expanded, None)
+}
+
+fn visible_ids_with_held<'a>(
+    group: &'a crate::SidebarWorktreeGroup,
+    filter: Option<BodyFilter>,
+    expanded: bool,
+    held: Option<&HashSet<String>>,
+) -> Vec<&'a str> {
+    group_visible_rows(group, filter, expanded, held)
         .into_iter()
         .map(|row| row.id.as_str())
         .collect()

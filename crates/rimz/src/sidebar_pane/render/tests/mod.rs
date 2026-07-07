@@ -398,6 +398,7 @@ fn group_lines(
         snapshot.theme.display.card_density,
         None,
         false,
+        None,
         &mut row_index,
         selected_index,
         0,

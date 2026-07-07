@@ -4,12 +4,14 @@ use crate::diag::record::GateRule;
 use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
 use jiff::Timestamp;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
 
 use super::sections::{MakeUpHit, ProviderTabHit};
 use super::theme::Theme;
 use super::{CostRolls, ScrollbarFade, TallyAnim};
+
+pub(crate) use crate::sidebar::focus_anchor::FrozenOrder;
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {
@@ -63,11 +65,12 @@ pub struct UiState {
     /// The transient arrow-key browse pick riding above the baseline, or `None`
     /// when not browsing (see [`Browse`]).
     pub(crate) browse: Option<Browse>,
-    /// The row/group order actually painted last fold; this is the source for
-    /// an order hold. Empty before the first paint, which makes the first hold
-    /// a no-op for ordering.
+    /// The row/group order and visible row set actually painted last fold; this
+    /// is the source for an order hold. Empty before the first paint, which
+    /// makes the first hold a no-op for ordering.
     pub(crate) last_order: FrozenOrder,
-    /// The active renderer-local order hold, or `None` while rows rank live.
+    /// The active renderer-local order/visibility hold, or `None` while rows
+    /// rank and cap live.
     pub(crate) order_hold: Option<OrderHold>,
     /// First scroll-zone content line visible in the agent-cards viewport.
     /// Resolved by every draw — clamped to the zone, then auto-scrolled so the
@@ -180,6 +183,10 @@ impl UiState {
         let (cached_config, theme) = self.theme_cache.as_ref()?;
         (cached_config == config).then(|| Rc::clone(theme))
     }
+
+    pub(crate) fn held_visible(&self) -> Option<&HashSet<String>> {
+        self.order_hold.as_ref().map(|hold| &hold.frozen.visible)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -242,17 +249,9 @@ pub(crate) struct ManualScroll {
     pub(crate) selection_at_start: Option<PaneId>,
 }
 
-/// A snapshot of painted row/group order. Group keys and row ids are in
-/// on-screen order; row ids are globally unique, so one flat row list can
-/// reorder rows across every group.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct FrozenOrder {
-    pub(crate) groups: Vec<String>,
-    pub(crate) rows: Vec<String>,
-}
-
 /// Renderer-local order hold that keeps rows and groups stable while the user
-/// is looking. Read state still clears immediately; only position holds.
+/// is looking. Read state still clears immediately; position and held cap
+/// exemptions are presentation-only.
 #[derive(Clone, Debug)]
 pub(crate) struct OrderHold {
     pub(crate) frozen: FrozenOrder,

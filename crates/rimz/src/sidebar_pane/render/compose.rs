@@ -482,6 +482,7 @@ fn selected_group_first_ordinal(
             group,
             ui.make_up_filter,
             ui.expanded_groups.contains(&group.key),
+            ui.held_visible(),
         )
         .len();
         if len == 0 {
@@ -508,6 +509,7 @@ fn visible_row_ordinal(snapshot: &SidebarSnapshot, ui: &UiState, id: &str) -> Op
                 group,
                 ui.make_up_filter,
                 ui.expanded_groups.contains(&group.key),
+                ui.held_visible(),
             )
         })
         .position(|row| row.id == id)
@@ -736,7 +738,9 @@ pub(super) fn scroll_lines(
         let mut emitted = false;
         for group in &snapshot.worktree_groups {
             let expanded = ui.expanded_groups.contains(&group.key);
-            let has_visible = !group_visible_rows(group, ui.make_up_filter, expanded).is_empty();
+            let has_visible =
+                !group_visible_rows(group, ui.make_up_filter, expanded, ui.held_visible())
+                    .is_empty();
             if !has_visible {
                 continue;
             }
@@ -755,6 +759,7 @@ pub(super) fn scroll_lines(
                 snapshot.theme.display.card_density,
                 ui.make_up_filter,
                 expanded,
+                ui.held_visible(),
                 &mut row_index,
                 ui.selected_index,
                 ui.animation_phase,

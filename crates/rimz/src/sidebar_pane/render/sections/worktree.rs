@@ -19,6 +19,7 @@ use crate::sidebar_pane::render::labels::{
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 use crate::sidebar_pane::render::{MoreHit, group_visible_rows};
+use std::collections::HashSet;
 
 use super::agent_card::row_lines;
 use super::{Gutter, Tier, content_width, with_gutter};
@@ -44,6 +45,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     card_density: CardDensityMode,
     filter: Option<BodyFilter>,
     expanded: bool,
+    held: Option<&HashSet<String>>,
     row_index: &mut usize,
     selected_index: usize,
     animation_phase: u64,
@@ -58,7 +60,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     // with the selected card itself lit bold `▌`. The `external` catch-all is
     // never a lane.
     let first_row = *row_index;
-    let visible = group_visible_rows(group, filter, expanded);
+    let visible = group_visible_rows(group, filter, expanded, held);
     let passing = visible.len();
     let group_selected = group.kind != SidebarWorktreeKind::External
         && (first_row..first_row + passing).contains(&selected_index);
@@ -109,7 +111,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
         group
             .rows
             .len()
-            .saturating_sub(group_visible_rows(group, None, false).len())
+            .saturating_sub(group_visible_rows(group, None, false, held).len())
     } else {
         0
     };
