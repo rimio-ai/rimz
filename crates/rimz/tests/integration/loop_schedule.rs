@@ -572,6 +572,30 @@ fn loop_run_error_records_and_show_displays_message() {
 }
 
 #[test]
+fn loop_run_missing_machine_prompt_error_names_task() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.named_spawn]\n\
+             spec = \"claude\"\n\
+             root = \"{}\"\n\
+             at = \"07:00\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let (_stdout, stderr) = loop_fail(&env, &["loop", "run", "named_spawn"]);
+
+    assert!(
+        stderr.contains("loop task `named_spawn` has no prompt")
+            && !stderr.contains("loop task `claude` has no prompt"),
+        "missing prompt error should name the task: {stderr}"
+    );
+}
+
+#[test]
 fn loop_show_displays_shadowed_error_and_run_tail() {
     let env = Env::new();
     write_loop_config(
