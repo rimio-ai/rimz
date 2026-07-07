@@ -258,6 +258,7 @@ mod tests {
             project_root: project_root.to_path_buf(),
             session_name: "rimz-test".to_owned(),
             root_class: crate::workspace::RootClass::Repo,
+            rimz_bin: None,
             updated_at: jiff::Timestamp::now(),
         };
         fs::write(

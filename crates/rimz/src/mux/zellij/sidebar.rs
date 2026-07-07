@@ -185,7 +185,7 @@ impl ZellijBackend {
     }
 
     fn ensure_birth_presence_plugin(&self, opts: &SidebarPaneOptions) -> Result<()> {
-        let wasm = super::presence_plugin_path().ok_or_else(|| MuxErr::Output {
+        let wasm = super::ensure_presence_plugin_artifact().ok_or_else(|| MuxErr::Output {
             program: "zellij".to_owned(),
             reason: "Zellij presence plugin artifact is unavailable; run `rimz doctor` or use the tmux backend".to_owned(),
         })?;
@@ -201,7 +201,11 @@ impl ZellijBackend {
             focus_follows_mouse: opts.config.zellij.focus_follows_mouse,
             mouse_click_through: opts.config.zellij.mouse_click_through,
         };
-        self.ensure_presence_plugin_for(&presence)
+        self.ensure_presence_plugin_for(&presence)?;
+        if let Err(err) = self.broadcast_presence_retire_for(&opts.session_name, &opts.rimz_bin) {
+            tracing::debug!(session = %opts.session_name, error = %err, "presence retire broadcast failed");
+        }
+        Ok(())
     }
 
     /// Inject a left-docked sidebar into a live tab without a rebirth: split a

@@ -240,6 +240,19 @@ pub enum DiagEvent {
         prior_build: String,
         own_build: String,
     },
+    TopologyWriterChanged {
+        prior_plugin_id: u32,
+        prior_loaded_at_ms: u64,
+        plugin_id: u32,
+        loaded_at_ms: u64,
+    },
+    TopologyWriteRejected {
+        plugin_id: u32,
+        loaded_at_ms: u64,
+        accepted_plugin_id: u32,
+        accepted_loaded_at_ms: u64,
+        rejected_count: u64,
+    },
     RendererPanic {
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -290,6 +303,7 @@ impl DiagEvent {
                 recovered_after_ms: None,
                 ..
             }
+            | Self::TopologyWriteRejected { .. }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
@@ -308,6 +322,7 @@ impl DiagEvent {
             | Self::GroupMigration { .. }
             | Self::NewbornQuarantined { .. }
             | Self::MixedBuildWriters { .. }
+            | Self::TopologyWriterChanged { .. }
             | Self::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
             }
@@ -349,6 +364,8 @@ impl DiagEvent {
             Self::GroupMigration { .. } => "group_migration",
             Self::NewbornQuarantined { .. } => "newborn_quarantined",
             Self::MixedBuildWriters { .. } => "mixed_build_writers",
+            Self::TopologyWriterChanged { .. } => "topology_writer_changed",
+            Self::TopologyWriteRejected { .. } => "topology_write_rejected",
             Self::RendererPanic { .. } => "renderer_panic",
             Self::RendererSignalDeath { .. } => "renderer_signal_death",
             Self::RendererExit { .. } => "renderer_exit",
@@ -451,6 +468,25 @@ impl DiagEvent {
                 prior_build,
                 own_build,
             } => format!("{}:{prior_build}:{own_build}", self.kind_name()),
+            Self::TopologyWriterChanged {
+                prior_plugin_id,
+                prior_loaded_at_ms,
+                plugin_id,
+                loaded_at_ms,
+            } => format!(
+                "{}:{prior_loaded_at_ms}:{prior_plugin_id}->{loaded_at_ms}:{plugin_id}",
+                self.kind_name()
+            ),
+            Self::TopologyWriteRejected {
+                plugin_id,
+                loaded_at_ms,
+                accepted_plugin_id,
+                accepted_loaded_at_ms,
+                ..
+            } => format!(
+                "{}:{loaded_at_ms}:{plugin_id}->{accepted_loaded_at_ms}:{accepted_plugin_id}",
+                self.kind_name()
+            ),
             Self::ProducerElected { .. }
             | Self::ProducerDemoted { .. }
             | Self::FrameShrinkVerified { .. }

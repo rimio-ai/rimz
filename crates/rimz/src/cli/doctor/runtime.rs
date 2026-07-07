@@ -3,7 +3,6 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
-use rimz::RuntimePaths;
 use rimz::config::{ColorDepth, MachineConfig, ThemeMode};
 use rimz::ids::MuxName;
 use rimz::mux::{
@@ -11,6 +10,7 @@ use rimz::mux::{
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
+use rimz::{RuntimePaths, StatePaths};
 
 use super::model;
 
@@ -109,6 +109,7 @@ pub(super) fn collect_mux(
         session_health: None,
         duplicate_sessions: None,
         presence: None,
+        topology_writer: None,
     };
     if mux == MuxName::Tmux {
         report.socket = Some(tmux_mod::default_server_socket_path().display().to_string());
@@ -120,6 +121,9 @@ pub(super) fn collect_mux(
         report.session_health = Some(collect_session_health(backend.as_ref(), &ws.session_name));
         report.duplicate_sessions = Some(collect_duplicate_sessions(ws));
         report.presence = Some(collect_presence(ws, mux));
+        if mux == MuxName::Zellij {
+            report.topology_writer = collect_topology_writer(ws);
+        }
     }
     model::Probe::Ready(report)
 }
@@ -432,6 +436,57 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
     model::Presence::Unavailable { error: reason }
 }
 
+fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::TopologyWriterHealth> {
+    const CONFLICT_FRESH_MS: u64 = 10 * 60 * 1000;
+
+    let recorded_bin = StatePaths::for_workspace(ws.workspace_id.clone())
+        .ok()
+        .and_then(|state| rimz::store::workspace_record::read(&state.workspace_record).ok())
+        .and_then(|record| record.rimz_bin)
+        .map(|path| {
+            let exists = path.is_file();
+            model::RecordedRoomBin {
+                path: path.display().to_string(),
+                exists,
+                fix: (!exists).then(|| "run `rimz reload`".to_owned()),
+            }
+        });
+    let conflict = RuntimePaths::for_workspace(ws.workspace_id.clone())
+        .ok()
+        .and_then(|runtime| {
+            let now_ms = rimz::sidebar::timing::unix_now_ms();
+            let cache_writer =
+                rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name)
+                    .and_then(|cache| cache.writer);
+            rimz::sidebar::cache::read_topology_writer_conflict(&runtime).and_then(|conflict| {
+                let age_ms = now_ms.saturating_sub(conflict.last_ms);
+                (age_ms <= CONFLICT_FRESH_MS).then(|| model::TopologyWriterConflict {
+                    stale: conflict.stale_writer.map(topology_writer_id),
+                    accepted: conflict
+                        .accepted_writer
+                        .or(cache_writer)
+                        .map(topology_writer_id),
+                    rejected_count: conflict.rejected_count,
+                    age_secs: age_ms / 1000,
+                    fix: "run `rimz reload`".to_owned(),
+                })
+            })
+        });
+    (recorded_bin.is_some() || conflict.is_some()).then_some(model::TopologyWriterHealth {
+        recorded_bin,
+        conflict,
+    })
+}
+
+fn topology_writer_id(
+    writer: rimz::mux::zellij::pane_topology::TopologyWriter,
+) -> model::TopologyWriterId {
+    model::TopologyWriterId {
+        plugin_id: writer.plugin_id,
+        loaded_at_ms: writer.loaded_at_ms,
+    }
+}
+
 /// Per-machine remote-control auto-launch posture. Doctor separates hard
 /// `rimz start` refusals for installed-agent misconfiguration from enabled
 /// hosts whose agent is not installed; start skips those inert toggles.
@@ -640,6 +695,23 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             Some(pid) => format!("expired carried {pane_id} pid {pid} after {carried_ms}ms"),
             None => format!("expired carried {pane_id} after {carried_ms}ms"),
         },
+        DiagEvent::TopologyWriterChanged {
+            prior_plugin_id,
+            prior_loaded_at_ms,
+            plugin_id,
+            loaded_at_ms,
+        } => format!(
+            "topology writer changed {prior_loaded_at_ms}:{prior_plugin_id}->{loaded_at_ms}:{plugin_id}"
+        ),
+        DiagEvent::TopologyWriteRejected {
+            plugin_id,
+            loaded_at_ms,
+            accepted_plugin_id,
+            accepted_loaded_at_ms,
+            rejected_count,
+        } => format!(
+            "rejected topology writer {loaded_at_ms}:{plugin_id}; accepted {accepted_loaded_at_ms}:{accepted_plugin_id}; count {rejected_count}"
+        ),
         DiagEvent::GateHold {
             rule,
             reject_streak,

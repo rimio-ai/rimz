@@ -6,8 +6,8 @@ use std::{env, fs};
 use kdl::{KdlDocument, KdlNode};
 
 use super::{
-    PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_SHARE_PIPE, PRESENCE_TOPOLOGY_PIPE,
-    ZellijBackend,
+    PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_SHARE_PIPE,
+    PRESENCE_TOPOLOGY_PIPE, ZellijBackend,
 };
 use crate::mux::{MuxErr, Result};
 use crate::store::{atomic, paths};
@@ -19,11 +19,11 @@ const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 3] =
     ["ReadApplicationState", "RunCommands", "Reconfigure"];
 const PRESENCE_PLUGIN_WEB_PERMISSION: &str = "StartWebServer";
 
-/// Locate the presence-plugin wasm: the `RIMZ_PRESENCE_PLUGIN` override, else
-/// the embedded plugin materialized under `$XDG_DATA_HOME/rimz/plugins/`, else
-/// a development fallback beside the running executable. `None` means the
-/// Zellij backend's required topology source is unavailable; `rimz doctor`
-/// names the missing artifact and the fix.
+/// Locate the presence-plugin wasm without writing: the
+/// `RIMZ_PRESENCE_PLUGIN` override, else an already-materialized embedded
+/// plugin under `$XDG_DATA_HOME/rimz/plugins/`, else a development fallback
+/// beside the running executable. Owner flows call
+/// [`ensure_presence_plugin_artifact`] to create/update the shared artifact.
 ///
 /// Canonical, because Zellij keys the user's one-time permission grant on the
 /// exact path string it is handed: one real artifact must read as one string
@@ -36,7 +36,7 @@ pub fn presence_plugin_path() -> Option<PathBuf> {
             .ok()
             .filter(|path| path.is_file());
     }
-    if let Some(path) = embedded_presence_plugin_path() {
+    if let Some(path) = materialized_presence_plugin_path() {
         return Some(path);
     }
     crate::proc::rimz_exe()
@@ -47,7 +47,17 @@ pub fn presence_plugin_path() -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-fn embedded_presence_plugin_path() -> Option<PathBuf> {
+/// Materialize the embedded presence-plugin artifact for room-owner flows and
+/// return the canonical load path. Generic topology reads use
+/// [`presence_plugin_path`] so every worktree build does not rewrite the shared
+/// wasm while merely asking for a cache refresh.
+pub fn ensure_presence_plugin_artifact() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("RIMZ_PRESENCE_PLUGIN") {
+        return PathBuf::from(path)
+            .canonicalize()
+            .ok()
+            .filter(|path| path.is_file());
+    }
     match materialize_presence_plugin_bytes(EMBEDDED_PRESENCE_PLUGIN, &paths::data_home()) {
         Ok(Some(path)) => path.canonicalize().ok().filter(|path| path.is_file()),
         Ok(None) => None,
@@ -56,6 +66,21 @@ fn embedded_presence_plugin_path() -> Option<PathBuf> {
             None
         }
     }
+    .or_else(|| {
+        crate::proc::rimz_exe()
+            .parent()?
+            .join(PRESENCE_PLUGIN_FILE)
+            .canonicalize()
+            .ok()
+            .filter(|path| path.is_file())
+    })
+}
+
+fn materialized_presence_plugin_path() -> Option<PathBuf> {
+    materialized_presence_plugin_path_under(&paths::data_home())
+        .canonicalize()
+        .ok()
+        .filter(|path| path.is_file())
 }
 
 pub(super) fn materialized_presence_plugin_path_under(data_root: &std::path::Path) -> PathBuf {
@@ -215,6 +240,33 @@ impl ZellijBackend {
             Ok(()) | Err(MuxErr::Timeout { .. }) => Ok(()),
             Err(err) => Err(err),
         }
+    }
+
+    pub(super) fn broadcast_presence_retire_for(
+        &self,
+        session_name: &str,
+        rimz_bin: &Path,
+    ) -> Result<()> {
+        let payload = rimz_bin.to_string_lossy();
+        if payload.contains([',', '=']) {
+            tracing::debug!(
+                rimz_bin = %payload,
+                "presence retire broadcast skipped because the canonical Rimz path is not expressible in plugin configuration",
+            );
+            return Ok(());
+        }
+        self.cmd()
+            .args([
+                "--session",
+                session_name,
+                "pipe",
+                "--name",
+                PRESENCE_RETIRE_PIPE,
+                "--",
+                payload.as_ref(),
+            ])
+            .run_with_timeout(PRESENCE_PIPE_TIMEOUT)
+            .map(|_| ())
     }
 
     fn seed_presence_permissions(&self, opts: &super::super::PresencePluginOptions) {

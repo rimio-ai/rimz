@@ -61,6 +61,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
                 project_root: project_root.clone(),
                 session_name: session_name_for(&project_root),
                 root_class: RootClass::Repo,
+                rimz_bin: None,
                 updated_at: jiff::Timestamp::UNIX_EPOCH,
             },
         )
@@ -107,6 +108,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
             project_root: noncanonical_root,
             session_name: "rimz-stale".to_owned(),
             root_class: RootClass::Repo,
+            rimz_bin: None,
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },
     )
@@ -146,6 +148,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
             project_root: canonical_root.clone(),
             session_name: session_name_for(&canonical_root),
             root_class: RootClass::Repo,
+            rimz_bin: None,
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },
     )
@@ -163,6 +166,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
             project_root: noncanonical_root,
             session_name: session_name_for(&canonical_root),
             root_class: RootClass::Repo,
+            rimz_bin: None,
             updated_at: jiff::Timestamp::now(),
         },
     )

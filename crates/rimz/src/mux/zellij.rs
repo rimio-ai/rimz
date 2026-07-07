@@ -22,7 +22,7 @@ pub mod socket;
 
 #[doc(hidden)]
 pub use pane_pid::ZellijPaneResolver;
-pub use presence::presence_plugin_path;
+pub use presence::{ensure_presence_plugin_artifact, presence_plugin_path};
 pub use socket::{socket_headroom, socket_preflight};
 
 use std::env;
@@ -102,6 +102,10 @@ const PRESENCE_SHARE_PIPE: &str = "rimz:share_session";
 /// Pipe name that asks the presence plugin for an immediate topology cache
 /// publish. Keep in sync with `crates/rimz-presence-zellij/src/wire.rs`.
 const PRESENCE_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
+
+/// Pipe name that tells stale presence-plugin instances to close themselves.
+/// Keep in sync with `crates/rimz-presence-zellij/src/wire.rs`.
+const PRESENCE_RETIRE_PIPE: &str = "rimz:retire";
 
 /// Deadline for the presence-plugin boot pipe.
 const PRESENCE_PIPE_TIMEOUT: Duration = Duration::from_secs(2);

@@ -12,7 +12,7 @@ mod start_notice;
 mod tests;
 
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -25,7 +25,7 @@ use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
 use crate::cli::{
     AttachArgs, GlobalFlags, StartArgs, confirm_with_default, first_run, machine_config,
-    record_workspace, render, setup, sidebar,
+    open_store, record_workspace, render, setup, sidebar,
 };
 
 use attach_exec::{
@@ -435,7 +435,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     | RoomEntry::StartWeb { workspace, .. }
     | RoomEntry::AttachCwd { workspace, .. } = &entry
     {
+        let rimz_bin = room_owner_bin();
         record_workspace(workspace)?;
+        record_room_bin(workspace, rimz_bin.as_path())?;
     }
 
     let mut attached_workspace_id = None;
@@ -657,6 +659,7 @@ pub(crate) fn ensure_presence_plugin(
         zellij_config,
         seed_permissions,
         focus_key,
+        false,
     ) else {
         tracing::debug!(
             session = %session_name,
@@ -687,6 +690,7 @@ pub(crate) fn enable_web_sharing(
         zellij_config,
         seed_permissions,
         focus_key,
+        true,
     ) else {
         tracing::debug!(
             session = %session_name,
@@ -720,13 +724,19 @@ fn presence_plugin_options(
     zellij_config: &rimz::config::ZellijConfig,
     seed_permissions: bool,
     focus_key: Option<&str>,
+    materialize_artifact: bool,
 ) -> Option<PresencePluginOptions> {
-    let wasm = rimz::mux::zellij::presence_plugin_path()?;
+    let wasm = if materialize_artifact {
+        rimz::mux::zellij::ensure_presence_plugin_artifact()?
+    } else {
+        rimz::mux::zellij::presence_plugin_path()?
+    };
+    let rimz_bin = room_bin_for_workspace(workspace_id);
     Some(PresencePluginOptions {
         session_name: session_name.to_owned(),
         workspace_id: workspace_id.clone(),
         wasm,
-        rimz_bin: sidebar::rimz_cli_program(),
+        rimz_bin,
         converge: false,
         seed_permissions,
         focus_key: focus_key.map(str::to_owned),
@@ -1012,7 +1022,7 @@ pub(crate) fn build_sidebar_opts(
     target: &RoomTarget<'_>,
     resume_tabs: Vec<rimz::mux::ResumeTab>,
 ) -> Result<SidebarPaneOptions> {
-    let rimz_bin = rimz::proc::rimz_exe();
+    let rimz_bin = room_bin_for_workspace(target.workspace_id);
     Ok(SidebarPaneOptions {
         session_name: target.session_name.to_owned(),
         workspace_id: target.workspace_id.clone(),
@@ -1026,6 +1036,24 @@ pub(crate) fn build_sidebar_opts(
         resume_tabs,
         refresh_ms: target.refresh_ms,
     })
+}
+
+fn room_owner_bin() -> PathBuf {
+    rimz::reload::current_reexec_target().unwrap_or_else(rimz::proc::rimz_exe)
+}
+
+fn record_room_bin(workspace: &rimz::ResolvedWorkspace, rimz_bin: &Path) -> Result<()> {
+    open_store(workspace)?
+        .record_room_bin(workspace, rimz_bin.to_path_buf())
+        .context("recording room binary")
+}
+
+fn room_bin_for_workspace(workspace_id: &WorkspaceId) -> PathBuf {
+    let recorded = StatePaths::for_workspace(workspace_id.clone())
+        .ok()
+        .and_then(|paths| rimz::store::workspace_record::read(&paths.workspace_record).ok())
+        .and_then(|record| record.rimz_bin);
+    rimz::workspace::resolve_recorded_rimz_bin(recorded.as_deref())
 }
 
 pub(crate) fn launch_sidebar_for_workspace(

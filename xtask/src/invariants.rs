@@ -171,16 +171,39 @@ fn ensure_sidebar_enrich_projection_only(root: &Path, files: &[PathBuf]) -> Resu
 }
 
 fn ensure_no_zellij_runtime_list_panes(root: &Path, files: &[PathBuf]) -> Result<()> {
-    ensure_no_match(
-        files,
-        concat!("list", "-panes"),
-        |path| {
-            path.extension().and_then(OsStr::to_str) != Some("rs")
-                || is_test_source_path(root, path)
-                || !is_zellij_or_sidebar_runtime_source(root, path)
-        },
-        "Zellij runtime must use presence-plugin topology, not zellij action list-panes",
+    let needle = concat!("list", "-panes");
+    let mut violations = Vec::new();
+    for path in files {
+        if path.extension().and_then(OsStr::to_str) != Some("rs")
+            || is_test_source_path(root, path)
+            || !is_zellij_or_sidebar_runtime_source(root, path)
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in text.lines().enumerate() {
+            if line.contains(needle)
+                && !is_allowed_authoritative_zellij_pane_query(root, path, line)
+            {
+                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            }
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "Zellij runtime must use presence-plugin topology; only the stale-topology confirmation path may query server panes\n{}",
+        violations.join("\n")
     )
+}
+
+fn is_allowed_authoritative_zellij_pane_query(root: &Path, path: &Path, line: &str) -> bool {
+    path == root.join("crates/rimz/src/mux/zellij/backend.rs")
+        && line.contains("--all")
+        && line.contains("--json")
 }
 
 fn is_zellij_or_sidebar_runtime_source(root: &Path, path: &Path) -> bool {

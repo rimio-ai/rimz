@@ -11,7 +11,7 @@ use crate::mux::PresencePluginOptions;
 use crate::mux::{MuxErr, Result};
 use crate::sidebar::cache::{pane_topology_cache_is_fresh, read_pane_topology_cache};
 use crate::sidebar::timing::unix_now_ms;
-use crate::store::paths::{self, RuntimePaths};
+use crate::store::paths::{self, RuntimePaths, StatePaths};
 use crate::workspace::{self, KnownWorkspace};
 
 impl ZellijBackend {
@@ -106,6 +106,7 @@ impl ZellijBackend {
                 project_root: std::path::PathBuf::new(),
                 session_name: session.to_owned(),
                 root_class: workspace::RootClass::Directory,
+                rimz_bin: self.recorded_rimz_bin(workspace_id),
             });
         }
         self.known_workspaces()
@@ -141,6 +142,17 @@ impl ZellijBackend {
         })
     }
 
+    fn recorded_rimz_bin(&self, workspace_id: &WorkspaceId) -> Option<std::path::PathBuf> {
+        let paths = match &self.runtime_dir {
+            Some(dir) => StatePaths::under(workspace_id.clone(), dir),
+            None => StatePaths::for_workspace(workspace_id.clone()),
+        }
+        .ok()?;
+        crate::store::workspace_record::read(&paths.workspace_record)
+            .ok()
+            .and_then(|record| record.rimz_bin)
+    }
+
     fn request_topology_dump(&self, known: &KnownWorkspace) {
         let Some(wasm) = super::presence_plugin_path() else {
             tracing::debug!(
@@ -155,7 +167,7 @@ impl ZellijBackend {
             session_name: known.session_name.clone(),
             workspace_id: known.workspace_id.clone(),
             wasm,
-            rimz_bin: crate::proc::rimz_exe(),
+            rimz_bin: workspace::resolve_recorded_rimz_bin(known.rimz_bin.as_deref()),
             converge: false,
             seed_permissions: machine_config.web.enabled,
             focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),

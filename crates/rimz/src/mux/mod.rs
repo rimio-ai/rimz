@@ -34,7 +34,7 @@ pub use zellij::ZellijBackend;
 
 use std::collections::BTreeMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -183,6 +183,9 @@ pub struct PaneListOptions {
     /// Minimum acceptable `produced_at_ms` for backend-specific topology
     /// caches. Backends without such a cache ignore it.
     pub min_topology_produced_at_ms: Option<u64>,
+    /// Bypass backend topology caches and query the server directly. Backends
+    /// whose primary listing is already authoritative ignore it.
+    pub authoritative: bool,
     /// Override the backend's default subprocess timeout. `None` uses the
     /// backend's default (30s). Set to a shorter value for latency-sensitive
     /// probes (e.g. the self-close watchdog) where a hung Zellij should not
@@ -708,6 +711,12 @@ pub trait MuxBackend: Send + Sync {
     /// it. Zellij implements it; the default no-op covers tmux, whose
     /// control-mode `PresenceWatch` already pushes.
     fn ensure_presence_plugin(&self, _opts: &PresencePluginOptions) -> Result<()> {
+        Ok(())
+    }
+    /// Broadcast the canonical room binary to every loaded presence plugin in
+    /// the session so stale instances can close themselves. Backends without a
+    /// persistent plugin ignore it.
+    fn broadcast_presence_retire(&self, _session_name: &str, _rimz_bin: &Path) -> Result<()> {
         Ok(())
     }
     /// Ask the session's presence plugin to enable Zellij web sharing for this

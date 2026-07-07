@@ -11,7 +11,7 @@ use super::support::*;
 /// The presence-plugin wasm `cargo xtask build-plugin` produces, honoring
 /// `CARGO_TARGET_DIR`. `None` self-skips the live plugin test — CI's
 /// build-plugin gate runs before the suite, so the artifact is present there.
-fn presence_wasm_artifact() -> Option<PathBuf> {
+pub(in crate::backend::zellij) fn presence_wasm_artifact() -> Option<PathBuf> {
     let target_root = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"));
@@ -21,7 +21,7 @@ fn presence_wasm_artifact() -> Option<PathBuf> {
     wasm.canonicalize().ok().filter(|wasm| wasm.is_file())
 }
 
-fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
+pub(in crate::backend::zellij) fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
     let cache_dir = xdg.join("zellij");
     std::fs::create_dir_all(&cache_dir).expect("zellij cache dir");
     std::fs::write(

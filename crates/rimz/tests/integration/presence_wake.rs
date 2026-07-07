@@ -207,6 +207,7 @@ impl WakeEnv {
         PaneTopologyCache {
             session_name: SESSION_NAME.to_owned(),
             produced_at_ms,
+            writer: None,
             focused_pane: Some(7),
             panes: vec![
                 PaneTopologyPane {
@@ -255,6 +256,7 @@ impl WakeEnv {
         PaneTopologyCache {
             session_name: SESSION_NAME.to_owned(),
             produced_at_ms,
+            writer: None,
             focused_pane: panes.first().map(|(id, _, _)| *id),
             panes: panes
                 .iter()

@@ -338,6 +338,7 @@ fn write_topology_cache_from_value(
     let topology = PaneTopologyCache {
         session_name: session.to_owned(),
         produced_at_ms: now_ms(),
+        writer: None,
         focused_pane: None,
         panes: topology_panes,
     };
@@ -402,6 +403,7 @@ pub(in crate::backend::zellij) fn record_known_workspace_session(
         project_root: project_root.to_path_buf(),
         session_name: session.to_owned(),
         root_class: rimz::workspace::RootClass::Directory,
+        rimz_bin: None,
         updated_at: jiff::Timestamp::now(),
     };
     rimz::store::workspace_record::write(&state, &record).expect("workspace record");

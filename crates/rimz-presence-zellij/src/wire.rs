@@ -23,6 +23,17 @@ pub const SHARE_SESSION_PIPE: &str = "rimz:share_session";
 /// `panes-changed` wake carrying the current topology payload.
 pub const DUMP_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
 
+/// Pipe message name the host broadcasts after loading the canonical plugin
+/// instance. A plugin configured with a different `rimz_bin` closes itself.
+pub const RETIRE_PIPE: &str = "rimz:retire";
+
+pub fn should_retire(configured_rimz_bin: Option<&str>, canonical_rimz_bin: Option<&str>) -> bool {
+    matches!(
+        (configured_rimz_bin, canonical_rimz_bin),
+        (Some(configured), Some(canonical)) if configured != canonical
+    )
+}
+
 /// The modifier half of a focus-key chord.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChordModifier {
@@ -322,6 +333,7 @@ pub fn focus_sidebar_argv(ctx: &WakeContext<'_>) -> Vec<String> {
 pub fn topology_json(
     session_name: Option<&str>,
     produced_at_ms: u64,
+    writer: Option<policy::TopologyWriter>,
     focused_pane: Option<u32>,
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     foreground: &BTreeMap<u32, String>,
@@ -330,6 +342,7 @@ pub fn topology_json(
     let payload = policy::published_topology_payload(
         session_name?,
         produced_at_ms,
+        writer,
         focused_pane,
         Some(tabs),
         foreground,
@@ -380,6 +393,10 @@ mod tests {
         let json = topology_json(
             Some("session-1"),
             42,
+            Some(policy::TopologyWriter {
+                plugin_id: 9,
+                loaded_at_ms: 1_000,
+            }),
             Some(7),
             &tabs,
             &BTreeMap::new(),
@@ -389,6 +406,8 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
         assert_eq!(payload["focused_pane"], 7);
+        assert_eq!(payload["writer"]["plugin_id"], 9);
+        assert_eq!(payload["writer"]["loaded_at_ms"], 1000);
     }
 
     #[test]
@@ -406,6 +425,7 @@ mod tests {
         let json = topology_json(
             Some("session-1"),
             42,
+            None,
             Some(7),
             &tabs,
             &BTreeMap::new(),
@@ -799,5 +819,13 @@ mod tests {
 
         assert_eq!(kdl.matches("bind \"Ctrl s\"").count(), 2);
         assert!(kdl.contains("MessagePluginId 7"));
+    }
+
+    #[test]
+    fn retire_predicate_requires_two_different_bins() {
+        assert!(should_retire(Some("/old/rimz"), Some("/new/rimz")));
+        assert!(!should_retire(Some("/new/rimz"), Some("/new/rimz")));
+        assert!(!should_retire(None, Some("/new/rimz")));
+        assert!(!should_retire(Some("/old/rimz"), None));
     }
 }

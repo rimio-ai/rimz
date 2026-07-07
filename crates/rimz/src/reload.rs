@@ -28,8 +28,7 @@ use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
     RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, unix_now_ms,
 };
-use crate::store::RuntimePaths;
-use crate::store::wakeup;
+use crate::store::{RuntimePaths, StatePaths, wakeup, workspace_record};
 use crate::workspace::{self, KnownWorkspace};
 
 /// Resolve the on-disk binary that should be executed after the current image
@@ -138,7 +137,7 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
         return outcome;
     }
 
-    let rimz_bin = crate::proc::rimz_exe();
+    let rimz_bin = current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
     let machine_config = MachineConfig::load_lenient();
     let live = LiveSessions::probe();
     let mut reconciled_sessions: HashSet<(MuxName, String)> = HashSet::new();
@@ -236,6 +235,7 @@ fn reconcile_live(
         ..ReloadOutcome::default()
     };
     let backend = backend_for(mux);
+    record_live_room_bin(ws, rimz_bin);
     let before_signal = session_heartbeats(runtime, mux, &ws.session_name);
     let on_disk_build = on_disk_build(rimz_bin);
 
@@ -311,7 +311,7 @@ fn reconcile_live(
     //    when a client is attached (a detached session converges on its next
     //    attached reload; the plugin is at worst the prior build, and poll
     //    mode backstops it regardless). Best-effort like every step here.
-    if let Some(wasm) = crate::mux::zellij::presence_plugin_path() {
+    if let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact() {
         let presence = crate::mux::PresencePluginOptions {
             session_name: ws.session_name.clone(),
             workspace_id: ws.workspace_id.clone(),
@@ -326,6 +326,9 @@ fn reconcile_live(
         if let Err(err) = backend.ensure_presence_plugin(&presence) {
             tracing::warn!(session = %ws.session_name, error = %err, "reload: presence plugin convergence failed");
         }
+        if let Err(err) = backend.broadcast_presence_retire(&ws.session_name, rimz_bin) {
+            tracing::debug!(session = %ws.session_name, error = %err, "reload: presence retire broadcast failed");
+        }
     }
 
     // 4. Reap orphan sidebar processes whose pane is gone — the mux cannot close a
@@ -338,6 +341,24 @@ fn reconcile_live(
     //    fresh or still starting.
     crate::sidebar::sweep_orphan_runtime(runtime);
     outcome
+}
+
+fn record_live_room_bin(ws: &KnownWorkspace, rimz_bin: &Path) {
+    let Ok(paths) = StatePaths::for_workspace(ws.workspace_id.clone()) else {
+        return;
+    };
+    let Ok(mut record) = workspace_record::read(&paths.workspace_record) else {
+        return;
+    };
+    record.rimz_bin = Some(rimz_bin.to_path_buf());
+    record.updated_at = jiff::Timestamp::now();
+    if let Err(err) = workspace_record::write_path(&paths.workspace_record, &record) {
+        tracing::debug!(
+            workspace = %ws.workspace_id,
+            error = %err,
+            "reload: recording room binary failed",
+        );
+    }
 }
 
 fn on_disk_build(rimz_bin: &Path) -> Option<String> {
@@ -469,6 +490,7 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         session_name: Some(ws.session_name.clone()),
         workspace_id: Some(ws.workspace_id.clone()),
         min_topology_produced_at_ms: Some(floor_ms),
+        authoritative: false,
         command_timeout: Some(RECONCILE_LIST_TIMEOUT),
     }) {
         Ok(listing) => listing.panes.into_iter().map(|pane| pane.pane_id).collect(),

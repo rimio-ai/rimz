@@ -110,6 +110,8 @@ pub(super) struct Mux {
     pub(super) duplicate_sessions: Option<Probe<DuplicateSessions>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) presence: Option<Presence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) topology_writer: Option<TopologyWriterHealth>,
 }
 
 #[derive(Debug, Serialize)]
@@ -227,6 +229,39 @@ pub(super) enum Presence {
     Event { poked_secs: u64 },
     Poll { reason: String },
     Unavailable { error: String },
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct TopologyWriterHealth {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) recorded_bin: Option<RecordedRoomBin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) conflict: Option<TopologyWriterConflict>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct RecordedRoomBin {
+    pub(super) path: String,
+    pub(super) exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fix: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct TopologyWriterConflict {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) stale: Option<TopologyWriterId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) accepted: Option<TopologyWriterId>,
+    pub(super) rejected_count: u64,
+    pub(super) age_secs: u64,
+    pub(super) fix: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct TopologyWriterId {
+    pub(super) plugin_id: u32,
+    pub(super) loaded_at_ms: u64,
 }
 
 /// One adapter's Rimz-hook wiring state, with the fix to advance it.

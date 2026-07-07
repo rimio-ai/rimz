@@ -77,11 +77,13 @@ fn list_session_panes(
     workspace_id: crate::WorkspaceId,
     min_topology_produced_at_ms: Option<u64>,
     command_timeout: Option<Duration>,
+    authoritative: bool,
 ) -> Result<PaneListing> {
     Ok(crate::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
         workspace_id: Some(workspace_id),
         min_topology_produced_at_ms,
+        authoritative,
         command_timeout,
     })?)
 }
@@ -261,6 +263,7 @@ pub fn repaired_pane_frame_for_binding(
             runtime.workspace_id.clone(),
             None,
             Some(command_timeout),
+            false,
         )?,
     };
     let prior = read_snapshot_cache(&cache_path, session);
@@ -572,64 +575,67 @@ pub(super) fn cached_panes_or_produce(
             diag,
         )
     };
-    let produce_candidate =
-        |enrich_metrics: bool, min_topology_produced_at_ms: Option<u64>| -> Result<PaneFrame> {
-            let listing = match list_session_panes(
-                mux,
-                session,
-                runtime.workspace_id.clone(),
-                min_topology_produced_at_ms,
-                None,
-            ) {
-                Ok(panes) => panes,
-                Err(err) => {
-                    emit_mux_error(diag, &cache_path, session, &err);
-                    return Err(err);
-                }
-            };
-            let observed_at_ms = listing.observed_at_ms;
-            let authoritative_focus = listing.authoritative_focus;
-            let panes = filter_foreign_session_panes(listing.panes, session, diag);
-            let prior = read_snapshot_cache(&cache_path, session);
-            // Renderer paint gating still depends on fresh client focus. Sample
-            // `client_view` on every producer tick so a newly viewed tab can
-            // repaint immediately; a failed Zellij sample carries the last
-            // publish forward because topology is the roster source.
-            let prior_client_view = || {
-                prior.as_ref().map_or_else(
-                    || (Vec::new(), None),
-                    |prior| (prior.viewed_panes.clone(), prior.presence),
-                )
-            };
-            let (viewed_panes, presence) = match client_view(mux, session) {
-                Ok(client_view) => {
-                    let presence = presence_sample_from_client_view(&client_view);
-                    (client_view.viewed_panes, Some(presence))
-                }
-                Err(_) if mux == MuxName::Zellij => prior_client_view(),
-                Err(_) => (Vec::new(), None),
-            };
-            let (mut frame, diagnostics) =
-                crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
-                    panes,
-                    produced_at_ms: unix_now_ms(),
-                    observed_at_ms,
-                    session_name: session.to_owned(),
-                    authoritative_focus,
-                    client_viewed: &viewed_panes,
-                    prior: prior.as_deref(),
-                });
-            frame.presence = presence;
-            emit_frame_diagnostics(diag, diagnostics);
-            repair_pane_frame(
-                &mut frame,
-                runtime,
-                prior.as_deref(),
-                session,
-                enrich_metrics,
-            );
-            Ok(frame)
+    let produce_candidate = |enrich_metrics: bool,
+                             min_topology_produced_at_ms: Option<u64>,
+                             authoritative: bool|
+     -> Result<PaneFrame> {
+        let listing = match list_session_panes(
+            mux,
+            session,
+            runtime.workspace_id.clone(),
+            min_topology_produced_at_ms,
+            None,
+            authoritative,
+        ) {
+            Ok(panes) => panes,
+            Err(err) => {
+                emit_mux_error(diag, &cache_path, session, &err);
+                return Err(err);
+            }
         };
+        let observed_at_ms = listing.observed_at_ms;
+        let authoritative_focus = listing.authoritative_focus;
+        let panes = filter_foreign_session_panes(listing.panes, session, diag);
+        let prior = read_snapshot_cache(&cache_path, session);
+        // Renderer paint gating still depends on fresh client focus. Sample
+        // `client_view` on every producer tick so a newly viewed tab can
+        // repaint immediately; a failed Zellij sample carries the last
+        // publish forward because topology is the roster source.
+        let prior_client_view = || {
+            prior.as_ref().map_or_else(
+                || (Vec::new(), None),
+                |prior| (prior.viewed_panes.clone(), prior.presence),
+            )
+        };
+        let (viewed_panes, presence) = match client_view(mux, session) {
+            Ok(client_view) => {
+                let presence = presence_sample_from_client_view(&client_view);
+                (client_view.viewed_panes, Some(presence))
+            }
+            Err(_) if mux == MuxName::Zellij => prior_client_view(),
+            Err(_) => (Vec::new(), None),
+        };
+        let (mut frame, diagnostics) =
+            crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
+                panes,
+                produced_at_ms: unix_now_ms(),
+                observed_at_ms,
+                session_name: session.to_owned(),
+                authoritative_focus,
+                client_viewed: &viewed_panes,
+                prior: prior.as_deref(),
+            });
+        frame.presence = presence;
+        emit_frame_diagnostics(diag, diagnostics);
+        repair_pane_frame(
+            &mut frame,
+            runtime,
+            prior.as_deref(),
+            session,
+            enrich_metrics,
+        );
+        Ok(frame)
+    };
     match single_flight::coalesce(
         &lock_path,
         SNAPSHOT_CACHE_WAIT_STEP,
@@ -648,7 +654,7 @@ pub(super) fn cached_panes_or_produce(
             {
                 return Ok(prior);
             }
-            let frame = produce_candidate(false, min_pane_cache_ms)?;
+            let frame = produce_candidate(false, min_pane_cache_ms, false)?;
             let frame = confirm_and_carry(
                 frame,
                 prior.as_deref(),
@@ -672,7 +678,7 @@ pub(super) fn cached_panes_or_produce(
         // until this arm returns.
         Coalesced::Produce(_guard) => {
             let prior = read_snapshot_cache(&cache_path, session);
-            let frame = produce_candidate(true, min_pane_cache_ms)?;
+            let frame = produce_candidate(true, min_pane_cache_ms, false)?;
             // A mid-tick mux race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, run the shared repaired-frame
@@ -730,7 +736,7 @@ fn confirm_and_carry(
     frame: PaneFrame,
     prior: Option<&PaneFrame>,
     own_pane: Option<&PaneId>,
-    produce_candidate: &dyn Fn(bool, Option<u64>) -> Result<PaneFrame>,
+    produce_candidate: &dyn Fn(bool, Option<u64>, bool) -> Result<PaneFrame>,
     diag: &crate::diag::DiagSink,
     enrich_metrics: bool,
     runtime: &crate::RuntimePaths,
@@ -756,7 +762,7 @@ fn confirm_and_carry(
 
     let prior_count = prior.map(pane_count).unwrap_or_default();
     let confirm_floor = Some(unix_now_ms());
-    let verified = produce_candidate(enrich_metrics, confirm_floor)?;
+    let verified = produce_candidate(enrich_metrics, confirm_floor, true)?;
     let verified_count = pane_count(&verified);
     let confirmed_at_ms = unix_now_ms();
     let verified_frame = verified.clone();
@@ -838,6 +844,8 @@ fn emit_pane_carry_forward(
         pids,
         prior: prior_count,
         fresh: fresh_count,
+        // Zellij confirmation asks the server for authoritative JSON panes;
+        // tmux's primary listing already comes from the server.
         cli_confirmed: true,
         frames_ref,
     });

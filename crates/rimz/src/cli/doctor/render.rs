@@ -379,6 +379,43 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
         };
         kv.push("presence", value);
     }
+    if let Some(writer) = &mux.topology_writer {
+        if let Some(bin) = &writer.recorded_bin {
+            let health = if bin.exists { Health::Ok } else { Health::Warn };
+            let label = if bin.exists {
+                bin.path.clone()
+            } else {
+                format!("missing ({})", bin.path)
+            };
+            kv.push("room binary", verdict(tally, health, label));
+            if let Some(fix) = &bin.fix {
+                kv.push("room binary fix", verdict(tally, Health::Warn, fix));
+            }
+        }
+        if let Some(conflict) = &writer.conflict {
+            let stale = conflict
+                .stale
+                .as_ref()
+                .map(topology_writer_label)
+                .unwrap_or_else(|| "legacy".to_owned());
+            let accepted = conflict
+                .accepted
+                .as_ref()
+                .map(topology_writer_label)
+                .unwrap_or_else(|| "legacy".to_owned());
+            kv.push(
+                "topology writers",
+                verdict(
+                    tally,
+                    Health::Warn,
+                    format!(
+                        "duplicate writers: rejected {stale}, accepted {accepted}; {} rejects, {}s ago — {}",
+                        conflict.rejected_count, conflict.age_secs, conflict.fix
+                    ),
+                ),
+            );
+        }
+    }
     kv.render(w)?;
 
     render_mux_binary_notes(w, mux, tally)?;
@@ -429,6 +466,10 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
         )?;
     }
     Ok(())
+}
+
+fn topology_writer_label(writer: &super::model::TopologyWriterId) -> String {
+    format!("{}:{}", writer.loaded_at_ms, writer.plugin_id)
 }
 
 fn binary_label(row: &MuxBinaryRow) -> String {
@@ -1196,6 +1237,7 @@ mod tests {
             session_health: None,
             duplicate_sessions: None,
             presence: None,
+            topology_writer: None,
         };
         let out = strip(|w| {
             let mut tally = Tally::default();

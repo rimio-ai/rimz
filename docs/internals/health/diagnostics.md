@@ -19,6 +19,7 @@ The `diag/` module owns a family of append-only JSONL surfaces that share one ro
 | `notify.log.jsonl` | state dir | notification emits, bell decisions, unread transitions | [notifications.md](../sidebar/notifications.md) |
 | `plugin-presence.log.jsonl` | state dir | Zellij presence-plugin keepalive telemetry | [below](#zellij-presence-plugin-rss) |
 | `binding.log.jsonl` | runtime dir | pane-binding decisions | [sidebar.md](../sidebar/sidebar.md) |
+| `topology-writer-conflict.json` | runtime dir | latest Zellij topology writer conflict sidecar | [multiplexers.md](../mux/multiplexers.md#zellij-presence-channel) |
 
 The rest of this doc is `diag.log.jsonl` and the observer that writes most of its rich records. The notification trace and pane-binding logs are diagnostic surfaces owned by their own subsystems; they share the rotating helper and nothing else.
 
@@ -47,6 +48,7 @@ The emitter is the triage pointer: producer kinds describe pane-source truth, re
 | `row_conflict`, `newborn_quarantined`, `group_migration` | `store::snapshot::view` via `sidebar::enrich` and renderer state diffing | duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, cwd-driven pane moves across group boundaries |
 | `frame_anomaly` | `sidebar::observe` writer thread | rendered-stream detector verdicts — flaps, oscillations, resets, per-frame consistency violations, elder cross-checks — each carrying its detector key, evidence, frame stamp, and the writer's elder/consumer role |
 | `mixed_build_writers` | `sidebar::produce::panes` | a prior published frame stamped by a different build than the producing process — the upgrade-overlap window where stale writers regress fresh state |
+| `topology_writer_changed`, `topology_write_rejected` | `cli::sidebar::wake` | Zellij presence topology writer generation flips and rejected stale writer attempts, with plugin id, loaded-at generation, accepted writer, reject count, and the conflict sidecar for doctor |
 
 The carry kinds attribute the pane-source fault precisely. `pane_carry_forward` marks a mux omission that survived a forced direct re-pull while `/proc` proved the omitted panes alive: the source under-reported, the producer carried the panes, the record is `warn`, and the prior/offending frame pair is captured. `pane_carry_refuted` marks an initial listing that the forced re-pull corrected: the first read lied and the truth healed within one produce, so the record is `info` with no frame pair, because the log line is the evidence. `carry_forward_expired` marks liveness proof running out, when a carried pane drops after `PANE_CARRY_TTL` ([`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs)). See [sidebar.md → honest reads](../sidebar/sidebar.md#honest-reads-across-a-mux-hiccup) for the guard these records come from.
 

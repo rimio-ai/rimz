@@ -6,14 +6,15 @@ use std::time::{Duration, Instant};
 
 use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
+use super::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 use super::parse::{
     SessionState, classify_session_not_found, is_no_active_sessions, is_session_not_found,
     is_transient_empty, live_session_name_from_line, parse_focused_client_panes,
     parse_focused_terminal_client_ids, trim_capture,
 };
 use super::raw_pane::{
-    RawPane, SessionCleanliness, SidebarDock, floating_panes_in_anchor_view, is_sidebar_pane,
-    own_zellij_pane_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
+    RawPane, RawPaneListing, SessionCleanliness, SidebarDock, floating_panes_in_anchor_view,
+    is_sidebar_pane, own_zellij_pane_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
     sidebar_geometry_off_spec, tabs_with_sidebars, views_with_sidebars,
 };
 use super::sidebar::DockOutcome;
@@ -56,7 +57,125 @@ struct RawTab {
     selectable_tiled_panes_count: u64,
 }
 
+#[derive(Debug, Deserialize)]
+struct RawListedPane {
+    id: u64,
+    #[serde(default)]
+    is_plugin: bool,
+    #[serde(default)]
+    is_held: bool,
+    #[serde(default)]
+    exited: bool,
+    #[serde(default)]
+    is_suppressed: bool,
+    #[serde(default)]
+    is_floating: bool,
+    #[serde(default)]
+    is_focused: bool,
+    #[serde(alias = "tab_id")]
+    tab_position: u64,
+    #[serde(default)]
+    tab_name: Option<String>,
+    #[serde(default)]
+    pane_columns: Option<u64>,
+    #[serde(default)]
+    pane_x: Option<u64>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    terminal_command: Option<String>,
+}
+
+impl From<RawListedPane> for PaneTopologyPane {
+    fn from(pane: RawListedPane) -> Self {
+        Self {
+            id: pane.id,
+            is_plugin: pane.is_plugin,
+            is_held: pane.is_held,
+            exited: pane.exited,
+            is_suppressed: pane.is_suppressed,
+            is_floating: pane.is_floating,
+            is_focused: pane.is_focused,
+            tab_position: pane.tab_position,
+            tab_name: pane.tab_name,
+            pane_columns: pane.pane_columns,
+            pane_x: pane.pane_x,
+            title: pane.title,
+            pane_command: None,
+            pane_cwd: None,
+            terminal_command: pane.terminal_command,
+        }
+    }
+}
+
+fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyCache) {
+    let enrichment = prior
+        .panes
+        .into_iter()
+        .map(|pane| (pane.id, (pane.pane_command, pane.pane_cwd)))
+        .collect::<HashMap<_, _>>();
+    for pane in &mut cache.panes {
+        let Some((command, cwd)) = enrichment.get(&pane.id) else {
+            continue;
+        };
+        if pane.pane_command.is_none() {
+            pane.pane_command.clone_from(command);
+        }
+        if pane.pane_cwd.is_none() {
+            pane.pane_cwd.clone_from(cwd);
+        }
+    }
+}
+
 impl ZellijBackend {
+    fn authoritative_pane_listing(
+        &self,
+        session_name: &str,
+        workspace_id: Option<&WorkspaceId>,
+        timeout: Duration,
+    ) -> Result<RawPaneListing> {
+        let observed_at_ms = crate::sidebar::timing::unix_now_ms();
+        let output = self
+            .zellij_action(session_name)
+            .args(["list-panes", "--all", "--json"])
+            .run_with_timeout(timeout)?;
+        let listed: Vec<RawListedPane> =
+            serde_json::from_slice(&output.stdout).map_err(|err| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("parsing `list-panes --all --json`: {err}"),
+            })?;
+        let focused_pane = listed
+            .iter()
+            .find(|pane| pane.is_focused && !pane.is_plugin)
+            .map(|pane| pane.id);
+        let mut cache = PaneTopologyCache {
+            session_name: session_name.to_owned(),
+            produced_at_ms: observed_at_ms,
+            writer: None,
+            focused_pane,
+            panes: listed.into_iter().map(Into::into).collect(),
+        };
+        if let Some(workspace_id) = workspace_id
+            && let Some(runtime) = self.runtime_paths_for_authoritative(workspace_id)
+            && let Some(prior) =
+                crate::sidebar::cache::read_pane_topology_cache(&runtime, session_name)
+        {
+            merge_topology_enrichment(&mut cache, prior);
+        }
+        Ok(RawPaneListing::from_topology(cache))
+    }
+
+    fn runtime_paths_for_authoritative(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> Option<crate::store::RuntimePaths> {
+        match &self.runtime_dir {
+            Some(dir) => crate::store::RuntimePaths::under(workspace_id.clone(), dir),
+            None => crate::store::RuntimePaths::for_workspace(workspace_id.clone()),
+        }
+        .ok()
+    }
+
     fn focus_restore_target(
         &self,
         session_name: &str,
@@ -288,13 +407,32 @@ impl MuxBackend for ZellijBackend {
         let timeout = opts
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
-        let raws = self.topology_listing(
-            opts.session_name.as_deref(),
-            opts.workspace_id.as_ref(),
-            opts.min_topology_produced_at_ms,
-            timeout,
-        )?;
         let session_name = opts.session_name.unwrap_or_default();
+        let raws = if opts.authoritative && !session_name.is_empty() {
+            match self.authoritative_pane_listing(
+                &session_name,
+                opts.workspace_id.as_ref(),
+                timeout,
+            ) {
+                Ok(listing) => listing,
+                Err(err) => {
+                    tracing::debug!(session = %session_name, error = %err, "authoritative Zellij pane listing failed; falling back to topology cache");
+                    self.topology_listing(
+                        Some(&session_name),
+                        opts.workspace_id.as_ref(),
+                        opts.min_topology_produced_at_ms,
+                        timeout,
+                    )?
+                }
+            }
+        } else {
+            self.topology_listing(
+                (!session_name.is_empty()).then_some(session_name.as_str()),
+                opts.workspace_id.as_ref(),
+                opts.min_topology_produced_at_ms,
+                timeout,
+            )?
+        };
         Ok(raws.into_pane_listing(session_name, |mut p, session_name| {
             if !p.is_listed_pane() {
                 return None;
@@ -811,6 +949,14 @@ impl MuxBackend for ZellijBackend {
 
     fn ensure_presence_plugin(&self, opts: &super::super::PresencePluginOptions) -> Result<()> {
         self.ensure_presence_plugin_for(opts)
+    }
+
+    fn broadcast_presence_retire(
+        &self,
+        session_name: &str,
+        rimz_bin: &std::path::Path,
+    ) -> Result<()> {
+        self.broadcast_presence_retire_for(session_name, rimz_bin)
     }
 
     fn share_web_session(&self, opts: &super::super::PresencePluginOptions) -> Result<()> {

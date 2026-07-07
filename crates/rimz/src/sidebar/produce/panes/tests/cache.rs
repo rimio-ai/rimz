@@ -396,9 +396,10 @@ fn degraded_first_read_publishes_verified_repull_result() {
             raced,
             Some(&prior),
             None,
-            &|enrich_metrics, min_topology_produced_at_ms| {
+            &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
                 assert!(enrich_metrics, "{name}");
                 assert!(min_topology_produced_at_ms.is_some(), "{name}");
+                assert!(authoritative, "{name}");
                 calls.set(calls.get() + 1);
                 Ok(verified.clone())
             },
@@ -465,9 +466,10 @@ fn ambiguous_plain_process_absence_repull_matrix() {
             fresh,
             Some(&prior),
             None,
-            &|enrich_metrics, min_topology_produced_at_ms| {
+            &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
                 assert!(enrich_metrics, "{name}");
                 assert!(min_topology_produced_at_ms.is_some(), "{name}");
+                assert!(authoritative, "{name}");
                 calls.set(calls.get() + 1);
                 Ok(verified.clone())
             },
@@ -516,9 +518,10 @@ fn refuted_initial_carry_records_diagnostic() {
         fresh,
         Some(&prior),
         None,
-        &|enrich_metrics, min_topology_produced_at_ms| {
+        &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
             assert!(enrich_metrics);
             assert!(min_topology_produced_at_ms.is_some());
+            assert!(authoritative);
             Ok(verified.clone())
         },
         &sink,
@@ -582,9 +585,10 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
         fresh.clone(),
         Some(&prior),
         None,
-        &|enrich_metrics, min_topology_produced_at_ms| {
+        &|enrich_metrics, min_topology_produced_at_ms, authoritative| {
             assert!(enrich_metrics);
             assert!(min_topology_produced_at_ms.is_some());
+            assert!(authoritative);
             calls.set(calls.get() + 1);
             Ok(fresh.clone())
         },

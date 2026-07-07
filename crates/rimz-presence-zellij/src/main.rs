@@ -15,7 +15,7 @@ mod shell {
         PaneFields, Poke, PokePolicy, RawStablePaneFields, TimerGate,
     };
     use rimz_presence_zellij::wire::{
-        self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, SHARE_SESSION_PIPE,
+        self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, RETIRE_PIPE, SHARE_SESSION_PIPE,
     };
     use zellij_tile::prelude::*;
 
@@ -341,6 +341,12 @@ mod shell {
                 self.dump_topology(now);
                 return false;
             }
+            if pipe_message.name == RETIRE_PIPE {
+                if wire::should_retire(self.rimz_bin.as_deref(), pipe_message.payload.as_deref()) {
+                    close_self();
+                }
+                return false;
+            }
             // Otherwise the launch channel: rimz loads this plugin via `zellij
             // pipe --plugin`, the one load verb that works on a clientless
             // session. The message carries nothing — loading was the point — and
@@ -515,9 +521,14 @@ mod shell {
                 self.active_tab,
                 self.session_focused_pane,
             );
+            let writer = self.plugin_id.map(|plugin_id| policy::TopologyWriter {
+                plugin_id,
+                loaded_at_ms: self.loaded_at_ms,
+            });
             let topology = wire::topology_json(
                 self.session_name.as_deref(),
                 now,
+                writer,
                 focused,
                 &self.tabs,
                 &self.foreground,

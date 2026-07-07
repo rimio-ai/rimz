@@ -109,6 +109,7 @@ pub struct KnownWorkspace {
     pub project_root: PathBuf,
     pub session_name: String,
     pub root_class: RootClass,
+    pub rimz_bin: Option<PathBuf>,
 }
 
 /// True when `inner` is `outer` itself or nested under it, compared by path
@@ -252,9 +253,27 @@ fn normalize_known_workspace_record(
             project_root: record.project_root,
             session_name: record.session_name,
             root_class: record.root_class,
+            rimz_bin: record.rimz_bin,
         },
         updated_at: record.updated_at,
     })
+}
+
+/// Resolve the room-owning Rimz binary recorded for session-local helpers.
+/// Missing or removed records fall back to the current executable so legacy
+/// rooms and unowned test fixtures keep working.
+pub fn resolve_recorded_rimz_bin(recorded: Option<&Path>) -> PathBuf {
+    match recorded {
+        Some(path) if path.is_file() => path.to_path_buf(),
+        Some(path) => {
+            tracing::debug!(
+                rimz_bin = %path.display(),
+                "recorded Rimz binary is unavailable; falling back to current executable",
+            );
+            crate::proc::rimz_exe()
+        }
+        None => crate::proc::rimz_exe(),
+    }
 }
 
 /// Markers that signal "this directory is a project root" for non-git projects.

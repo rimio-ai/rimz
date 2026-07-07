@@ -1,10 +1,13 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use rimz::ids::WorkspaceId;
+use rimz::mux::{MuxBackend, ZellijBackend, zellij};
 use tempfile::TempDir;
 
 use crate::common::CommandTimeoutExt;
 
+use super::presence::{presence_wasm_artifact, seed_presence_permissions};
 use super::support::*;
 
 fn wait_for_no_serve_processes(session: &str, timeout: Duration) -> bool {
@@ -29,10 +32,25 @@ fn sidebar_self_closes_when_its_tab_empties() {
         eprintln!("rimz binary not built; skipping self-close test");
         return;
     }
+    let Some(wasm) = presence_wasm_artifact() else {
+        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        return;
+    };
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
+        _ => {
+            eprintln!("zellij below the presence-plugin floor; skipping test");
+            return;
+        }
+    }
 
     let name = unique_session_name("selfclose");
     let cwd = TempDir::new().expect("cwd tempdir");
     let xdg = scoped_runtime_dir();
+    seed_presence_permissions(xdg.path(), &wasm);
     let _cleanup = ScopedSessionCleanup {
         name: name.clone(),
         xdg: xdg.path().to_path_buf(),
@@ -55,6 +73,19 @@ fn sidebar_self_closes_when_its_tab_empties() {
     let session = ZellijSession::attach_existing(xdg, name.clone());
     let xdg = session.xdg.path();
     wait_for_attached_client(xdg, &name);
+    ZellijBackend::with_runtime_dir(xdg)
+        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+            session_name: name.clone(),
+            workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
+            wasm,
+            rimz_bin: rimz,
+            converge: false,
+            seed_permissions: false,
+            focus_key: None,
+            focus_follows_mouse: false,
+            mouse_click_through: true,
+        })
+        .expect("load presence plugin for self-close topology");
 
     assert!(
         wait_for_nonplugin_panes(xdg, &name, 2, Duration::from_secs(15)),
@@ -118,10 +149,10 @@ fn self_close_layout(session: &str, rimz: &Path, xdg: &Path) -> String {
         }}
         children
     }}
-    tab name="rimz" {{
+        tab name="rimz" {{
         pane focus=true {{
             command "sleep"
-            args "3"
+            args "6"
             close_on_exit true
         }}
     }}

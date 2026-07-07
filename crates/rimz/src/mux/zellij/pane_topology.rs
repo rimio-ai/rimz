@@ -15,9 +15,17 @@ pub struct PaneTopologyCache {
     pub session_name: String,
     pub produced_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<TopologyWriter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_pane: Option<u64>,
     #[serde(default)]
     pub panes: Vec<PaneTopologyPane>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopologyWriter {
+    pub plugin_id: u32,
+    pub loaded_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +77,7 @@ mod tests {
         .expect("topology parses");
 
         assert_eq!(cache.focused_pane, None);
+        assert_eq!(cache.writer, None);
     }
 
     #[test]
@@ -86,6 +95,30 @@ mod tests {
         assert_eq!(cache.focused_pane, Some(7));
         let encoded = serde_json::to_value(&cache).expect("topology serializes");
         assert_eq!(encoded["focused_pane"], 7);
+    }
+
+    #[test]
+    fn topology_writer_round_trips_and_legacy_payloads_parse() {
+        let cache: PaneTopologyCache = serde_json::from_str(
+            r#"{
+                "session_name": "rimz-test",
+                "produced_at_ms": 42,
+                "writer": { "plugin_id": 9, "loaded_at_ms": 1000 },
+                "panes": []
+            }"#,
+        )
+        .expect("topology parses");
+
+        assert_eq!(
+            cache.writer,
+            Some(TopologyWriter {
+                plugin_id: 9,
+                loaded_at_ms: 1000
+            }),
+        );
+        let encoded = serde_json::to_value(&cache).expect("topology serializes");
+        assert_eq!(encoded["writer"]["plugin_id"], 9);
+        assert_eq!(encoded["writer"]["loaded_at_ms"], 1000);
     }
 
     #[test]

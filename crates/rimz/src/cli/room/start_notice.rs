@@ -114,6 +114,7 @@ mod tests {
             session_name: format!("rimz-{}", root.display()),
             project_root: root,
             root_class: rimz::workspace::RootClass::Repo,
+            rimz_bin: None,
         }
     }
 

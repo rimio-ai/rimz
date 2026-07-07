@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(test)]
@@ -177,7 +177,18 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
         self.commit(PublishPolicy::Skip, |txn| {
-            let record = workspace_record::WorkspaceRecord::from_resolved(workspace);
+            let record = workspace_record_preserving_rimz_bin(txn.paths, workspace, None);
+            workspace_record::write(txn.paths, &record)?;
+            Ok(())
+        })
+    }
+
+    /// Persist the room-owning Rimz binary for session-local helpers. Generic
+    /// re-records preserve this value; only room owner flows update it.
+    #[must_use = "durability barrier; check the result"]
+    pub fn record_room_bin(&self, workspace: &ResolvedWorkspace, rimz_bin: PathBuf) -> Result<()> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            let record = workspace_record_preserving_rimz_bin(txn.paths, workspace, Some(rimz_bin));
             workspace_record::write(txn.paths, &record)?;
             Ok(())
         })
@@ -216,7 +227,7 @@ impl Store {
             }
             event_log::replace_all(&self.inner.paths.events_log, &events)?;
 
-            let record = workspace_record::WorkspaceRecord::from_resolved(workspace);
+            let record = workspace_record_preserving_rimz_bin(&self.inner.paths, workspace, None);
             workspace_record::write(&self.inner.paths, &record)?;
             // The log was wholesale-replaced; reseed fold caches before rebuilding.
             invalidate_snapshot_caches(&self.inner.paths, RollupInvalidation::Reseed)?;
@@ -379,6 +390,20 @@ impl Store {
     }
 }
 
+fn workspace_record_preserving_rimz_bin(
+    paths: &StatePaths,
+    workspace: &ResolvedWorkspace,
+    rimz_bin: Option<PathBuf>,
+) -> workspace_record::WorkspaceRecord {
+    let mut record = workspace_record::WorkspaceRecord::from_resolved(workspace);
+    record.rimz_bin = rimz_bin.or_else(|| {
+        workspace_record::read(&paths.workspace_record)
+            .ok()
+            .and_then(|prior| prior.rimz_bin)
+    });
+    record
+}
+
 fn allocate_agent_launch_identities(
     requests: &[AgentLaunchRequest],
     agents: &[crate::agents::AgentState],
@@ -508,6 +533,30 @@ mod tests {
     use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
     use crate::store::event::MessageEventMethod;
     use crate::store::paths::{RuntimePaths, StatePaths};
+    use crate::workspace::WorkspaceResolver;
+
+    #[test]
+    fn record_workspace_preserves_existing_room_bin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).expect("project dir");
+        let workspace = WorkspaceResolver::resolve(&project, None).expect("workspace");
+        let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("state");
+        let runtime =
+            RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime");
+        let store = Store::open(paths.clone(), runtime).expect("open store");
+        let owner = dir.path().join("bin").join("rimz");
+
+        store
+            .record_room_bin(&workspace, owner.clone())
+            .expect("record owner bin");
+        store
+            .record_workspace(&workspace)
+            .expect("generic rerecord preserves owner bin");
+
+        let record = workspace_record::read(&paths.workspace_record).expect("read record");
+        assert_eq!(record.rimz_bin.as_deref(), Some(owner.as_path()));
+    }
 
     #[test]
     fn rotate_event_log_writes_carryover_before_archiving_active_log() {

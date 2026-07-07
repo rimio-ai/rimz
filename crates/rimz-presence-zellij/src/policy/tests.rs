@@ -174,6 +174,7 @@ fn published_topology_payload_carries_resolved_focus() {
     let payload = published_topology_payload(
         "rimz-test",
         42,
+        None,
         resolved,
         Some(&manifest),
         &BTreeMap::new(),
@@ -182,6 +183,31 @@ fn published_topology_payload_carries_resolved_focus() {
     .expect("topology payload publishes");
 
     assert_eq!(payload.focused_pane, Some(2));
+}
+
+#[test]
+fn published_topology_payload_carries_writer() {
+    let payload = published_topology_payload(
+        "rimz-test",
+        42,
+        Some(TopologyWriter {
+            plugin_id: 9,
+            loaded_at_ms: 1000,
+        }),
+        None,
+        Some(&tabs(vec![pane(1)])),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .expect("topology payload publishes");
+
+    assert_eq!(
+        payload.writer,
+        Some(TopologyWriter {
+            plugin_id: 9,
+            loaded_at_ms: 1000
+        }),
+    );
 }
 
 #[test]
@@ -275,6 +301,7 @@ fn published_topology_payload_carries_baseline_cwd() {
     let payload = published_topology_payload(
         "rimz-test",
         42,
+        None,
         Some(1),
         Some(&manifest),
         &BTreeMap::new(),

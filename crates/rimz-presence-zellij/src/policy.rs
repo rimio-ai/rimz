@@ -121,21 +121,31 @@ pub struct FocusPatch {
 pub struct TopologyPayload {
     pub session_name: String,
     pub produced_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writer: Option<TopologyWriter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_pane: Option<u32>,
     pub panes: Vec<PaneFields>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TopologyWriter {
+    pub plugin_id: u32,
+    pub loaded_at_ms: u64,
 }
 
 impl TopologyPayload {
     pub fn from_tabs(
         session_name: impl Into<String>,
         produced_at_ms: u64,
+        writer: Option<TopologyWriter>,
         focused_pane: Option<u32>,
         tabs: &BTreeMap<usize, Vec<PaneFields>>,
     ) -> Self {
         Self {
             session_name: session_name.into(),
             produced_at_ms,
+            writer,
             focused_pane,
             panes: tabs.values().flatten().cloned().collect(),
         }
@@ -145,6 +155,7 @@ impl TopologyPayload {
 pub fn published_topology_payload(
     session_name: impl Into<String>,
     produced_at_ms: u64,
+    writer: Option<TopologyWriter>,
     focused_pane: Option<u32>,
     tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
     foreground: &BTreeMap<u32, String>,
@@ -158,6 +169,7 @@ pub fn published_topology_payload(
     Some(TopologyPayload::from_tabs(
         session_name,
         produced_at_ms,
+        writer,
         focused_pane,
         &tabs,
     ))

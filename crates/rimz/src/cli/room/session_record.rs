@@ -409,6 +409,7 @@ mod tests {
             project_root: project_root.into(),
             session_name: session_name.to_owned(),
             root_class: rimz::workspace::RootClass::Repo,
+            rimz_bin: None,
             updated_at: jiff::Timestamp::now(),
         };
         workspace_record::write(&paths, &record).unwrap();

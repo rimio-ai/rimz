@@ -47,6 +47,11 @@ pub struct WorkspaceRecord {
     /// start/attach re-record.
     #[serde(default = "default_root_class")]
     pub root_class: RootClass,
+    /// Room-owning Rimz binary used for session-local helpers such as the
+    /// Zellij presence plugin. Generic re-records preserve it; owner flows
+    /// (`start`, `attach`, `reload`) set it explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rimz_bin: Option<PathBuf>,
     pub updated_at: Timestamp,
 }
 
@@ -61,6 +66,7 @@ impl WorkspaceRecord {
             project_root: workspace.project_root.clone(),
             session_name: workspace.session_name.clone(),
             root_class: workspace.root_class,
+            rimz_bin: None,
             updated_at: Timestamp::now(),
         }
     }
@@ -110,5 +116,21 @@ mod tests {
         assert_eq!(loaded.workspace_id, workspace.workspace_id);
         assert_eq!(loaded.project_root, workspace.project_root);
         assert_eq!(loaded.session_name, workspace.session_name);
+    }
+
+    #[test]
+    fn legacy_record_without_rimz_bin_parses() {
+        let record: WorkspaceRecord = serde_json::from_str(
+            r#"{
+                "workspace_id": "ws_0123456789abcdef01234567",
+                "project_root": "/repo",
+                "session_name": "rimz-repo",
+                "root_class": "repo",
+                "updated_at": "2024-01-01T00:00:00Z"
+            }"#,
+        )
+        .expect("legacy record parses");
+
+        assert_eq!(record.rimz_bin, None);
     }
 }
