@@ -71,7 +71,7 @@ fn prompt_consent(
     input: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Vec<&'static str>> {
-    write_intro(out, previews)?;
+    write_intro_context(out, previews)?;
     writeln!(out)?;
     write_agent_table(out, previews)?;
     writeln!(out)?;
@@ -153,10 +153,6 @@ fn write_untrusted_hooks_notice(
         )
     )?;
     Ok(())
-}
-
-fn write_intro(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
-    write_intro_context(out, previews)
 }
 
 fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
