@@ -114,6 +114,9 @@ pub(crate) fn apply(answers: &Answers, out: &mut dyn Write) -> Result<()> {
 }
 
 pub(crate) fn write_next_steps(out: &mut dyn Write) -> Result<()> {
+    let loop_path = rimz::config::MachineConfig::loop_path();
+    let loop_path = render::home_relative(&loop_path.display().to_string());
+    let loop_hint = format!("Hands-off loop knobs live in {loop_path}.");
     writeln!(
         out,
         "{}",
@@ -122,14 +125,7 @@ pub(crate) fn write_next_steps(out: &mut dyn Write) -> Result<()> {
             "Next: docs/guide/setup.md for setup, `rimz config` for preferences."
         )
     )?;
-    writeln!(
-        out,
-        "{}",
-        render::paint(
-            render::palette::FAINT,
-            "Hands-off loop knobs live in ~/.config/rimz/loop.toml."
-        )
-    )?;
+    writeln!(out, "{}", render::paint(render::palette::FAINT, &loop_hint))?;
     Ok(())
 }
 
