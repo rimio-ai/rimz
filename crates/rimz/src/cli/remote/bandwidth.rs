@@ -72,6 +72,9 @@ pub(super) fn run(secs: u64, json: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the current room")?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    if !host_write_rate_available() {
+        return emit_unavailable(secs as f64, json, UNAVAILABLE_NOTICE);
+    }
     let backend = rimz::mux::backend_for(mux);
     let mut panes = backend
         .list_panes(PaneListOptions {
@@ -365,6 +368,10 @@ fn no_pane_pids_notice(mux: MuxName) -> &'static str {
     }
 }
 
+fn host_write_rate_available() -> bool {
+    cfg!(target_os = "linux")
+}
+
 fn print_json(
     available: bool,
     sample_secs: f64,
@@ -421,6 +428,11 @@ mod tests {
         );
         assert_eq!(no_pane_pids_notice(MuxName::Tmux), NO_PANE_PIDS_NOTICE);
         assert!(!no_pane_pids_notice(MuxName::Tmux).contains("Zellij"));
+    }
+
+    #[test]
+    fn write_rate_availability_tracks_linux_vfs_counter() {
+        assert_eq!(host_write_rate_available(), cfg!(target_os = "linux"));
     }
 
     #[test]
