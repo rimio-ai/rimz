@@ -107,7 +107,7 @@ cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
 
 - `--detach` prints the pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`.
 - `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--detach`). The JSON `run_id` opens the Rimz transcript log with `rimz transcript <run_id>`; the JSON `transcript_path` is the provider-native session file used for streaming, context, and spend enrichment.
-- `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt.
+- `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it, wrapped in `<stdin>…</stdin>` tags when both are present; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt.
 - `--max-turns <N>` caps the agentic turn count where the adapter exposes a native limit (Claude today); an agent without one refuses the run.
 
 Supervised runs need installed and trusted hooks, because hooks are the completion signal. The run records, wakeup socket, streaming, and pane cleanup are in [harness.md → Supervised runs](../../internals/harness/harness.md#supervised-runs).

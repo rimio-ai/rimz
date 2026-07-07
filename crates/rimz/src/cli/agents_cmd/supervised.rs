@@ -199,13 +199,17 @@ pub(super) fn read_stream_json_prompt<R: std::io::BufRead>(reader: R) -> Result<
     Ok(parts.join("\n"))
 }
 
+/// Build a text-mode prompt with the positional instruction first; when both
+/// positional text and piped stdin are present, wrap stdin in `<stdin>` tags.
 pub(super) fn combine_text_prompt(positional: Option<&str>, piped: Option<&str>) -> Result<String> {
     let positional = positional
         .map(str::trim)
         .filter(|prompt| !prompt.is_empty());
     let piped = piped.map(str::trim).filter(|prompt| !prompt.is_empty());
     match (positional, piped) {
-        (Some(positional), Some(piped)) => Ok(format!("{positional}\n\n{piped}")),
+        (Some(positional), Some(piped)) => {
+            Ok(format!("{positional}\n\n<stdin>\n{piped}\n</stdin>"))
+        }
         (Some(positional), None) => Ok(positional.to_owned()),
         (None, Some(piped)) => Ok(piped.to_owned()),
         (None, None) => bail!(

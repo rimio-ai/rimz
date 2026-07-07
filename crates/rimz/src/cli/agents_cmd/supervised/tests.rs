@@ -31,7 +31,7 @@ fn stream_json_prompt_rejects_malformed_lines() {
 #[test]
 fn text_prompt_combines_instruction_before_piped_content() {
     let prompt = combine_text_prompt(Some("explain"), Some("boom")).expect("combine prompt");
-    assert_eq!(prompt, "explain\n\nboom");
+    assert_eq!(prompt, "explain\n\n<stdin>\nboom\n</stdin>");
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn text_prompt_ignores_empty_piped_input() {
 fn text_prompt_trims_surrounding_whitespace() {
     let prompt =
         combine_text_prompt(Some("  explain  "), Some("\nboom\t")).expect("combine prompt");
-    assert_eq!(prompt, "explain\n\nboom");
+    assert_eq!(prompt, "explain\n\n<stdin>\nboom\n</stdin>");
 }
 
 #[test]
