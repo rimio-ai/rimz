@@ -43,7 +43,7 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
         (None, false) => refresh_targets(&snapshot, current_channel.as_deref()),
     };
     if targets.is_empty() {
-        writeln!(render::err(), "no live agents to refresh")?;
+        writeln!(render::err(), "no matching agents to refresh")?;
         return Ok(());
     }
 
