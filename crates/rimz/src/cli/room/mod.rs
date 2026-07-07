@@ -626,12 +626,14 @@ fn mux_responsive_preflight(mux: MuxName) -> Result<()> {
         backend.list_sessions_within(session_probe_timeout())
     {
         let retry = session_probe_retry_timeout();
-        let mut out = render::err();
-        writeln!(
-            out,
-            "note: {err}; retrying once ({}).",
-            duration_label(retry)
-        )?;
+        {
+            let mut out = render::err();
+            writeln!(
+                out,
+                "note: {err}; retrying once ({}).",
+                duration_label(retry)
+            )?;
+        }
         if let Err(err @ rimz::mux::MuxErr::Timeout { .. }) = backend.list_sessions_within(retry) {
             bail!("{}", mux_not_responding_message(mux, retry, &err));
         }
