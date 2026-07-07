@@ -401,7 +401,8 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
         let sidebar_running = fresh_sidebar_heartbeats_for_doctor(&runtime)
             .map(|heartbeats| !heartbeats.is_empty())
             .unwrap_or(true);
-        return tmux_poll_presence(age, sidebar_running);
+        let watch_attached = tmux_watch_client_attached(&ws.session_name);
+        return tmux_poll_presence(age, sidebar_running, watch_attached);
     }
     if zellij_mod::presence_plugin_path().is_none() {
         return model::Presence::Unavailable {
@@ -430,10 +431,40 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
     model::Presence::Unavailable { error: reason }
 }
 
+fn tmux_watch_client_attached(session: &str) -> bool {
+    let output = rimz::mux::CommandSpec::new("tmux")
+        .args(["list-clients", "-t", session, "-F", "#{client_flags}"])
+        .run()
+        .ok();
+    let Some(output) = output else {
+        return false;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.split(',').any(|flag| flag.trim() == "ignore-size"))
+}
+
 /// The tmux polling verdict once the presence stamp is not fresh: expected
-/// while no sidebar producer runs (the watch starts with the sidebar), a
-/// warning while one runs without a live watch.
-fn tmux_poll_presence(stamp_age_ms: Option<u64>, sidebar_running: bool) -> model::Presence {
+/// while no sidebar producer runs (the watch starts with the sidebar) or the
+/// watch is attached but idle (no keepalive; events re-arm on activity), a
+/// warning only while a sidebar runs without a watch client.
+fn tmux_poll_presence(
+    stamp_age_ms: Option<u64>,
+    sidebar_running: bool,
+    watch_attached: bool,
+) -> model::Presence {
+    if watch_attached {
+        let age = stamp_age_ms
+            .map(|age| format!(", last poke {}s ago", age / 1000))
+            .unwrap_or_default();
+        return model::Presence::Poll {
+            reason: format!(
+                "live tmux watch attached, session idle{age}; events resume on activity"
+            ),
+            expected: true,
+        };
+    }
+
     if !sidebar_running {
         return model::Presence::Poll {
             reason: "no sidebar running in this workspace; the live pane watch starts with the sidebar (`rimz start`)"
@@ -442,18 +473,10 @@ fn tmux_poll_presence(stamp_age_ms: Option<u64>, sidebar_running: bool) -> model
         };
     }
 
-    let reason = match stamp_age_ms {
-        Some(age) => format!(
-            "live tmux watch idle — last poke {}s ago; reattach or run `rimz reload`",
-            age / 1000,
-        ),
-        None => {
-            "sidebar running but the live tmux watch is not attached; reattach or run `rimz reload`"
-                .to_owned()
-        }
-    };
     model::Presence::Poll {
-        reason,
+        reason:
+            "sidebar running but the live tmux watch is not attached; reattach or run `rimz reload`"
+                .to_owned(),
         expected: false,
     }
 }
@@ -949,13 +972,37 @@ mod tests {
     }
 
     #[test]
+    fn tmux_poll_presence_is_expected_when_watch_attached() {
+        for stamp_age_ms in [None, Some(61_000)] {
+            let presence = tmux_poll_presence(stamp_age_ms, true, true);
+            match presence {
+                model::Presence::Poll { reason, expected } => {
+                    assert!(
+                        expected,
+                        "attached watch is the expected idle polling state"
+                    );
+                    assert!(reason.contains("live tmux watch attached"), "{reason}");
+                    if stamp_age_ms.is_some() {
+                        assert!(reason.contains("last poke 61s ago"), "{reason}");
+                    } else {
+                        assert!(!reason.contains("last poke"), "{reason}");
+                    }
+                    assert!(!reason.contains("old tmux"), "{reason}");
+                }
+                other => panic!("expected poll verdict, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn tmux_poll_presence_is_expected_without_sidebar() {
         for stamp_age_ms in [None, Some(61_000)] {
-            let presence = tmux_poll_presence(stamp_age_ms, false);
+            let presence = tmux_poll_presence(stamp_age_ms, false, false);
             match presence {
                 model::Presence::Poll { reason, expected } => {
                     assert!(expected, "no sidebar is the expected polling state");
                     assert!(reason.contains("no sidebar running"), "{reason}");
+                    assert!(!reason.contains("last poke"), "{reason}");
                     assert!(!reason.contains("old tmux"), "{reason}");
                 }
                 other => panic!("expected poll verdict, got {other:?}"),
@@ -965,24 +1012,15 @@ mod tests {
 
     #[test]
     fn tmux_poll_presence_warns_when_sidebar_lacks_watch() {
-        let presence = tmux_poll_presence(None, true);
+        let presence = tmux_poll_presence(Some(61_000), true, false);
         match presence {
             model::Presence::Poll { reason, expected } => {
-                assert!(!expected, "running sidebar without a stamp is unhealthy");
+                assert!(!expected, "running sidebar without a watch is unhealthy");
                 assert!(
                     reason.contains("live tmux watch is not attached"),
                     "{reason}"
                 );
-                assert!(!reason.contains("old tmux"), "{reason}");
-            }
-            other => panic!("expected poll verdict, got {other:?}"),
-        }
-
-        let presence = tmux_poll_presence(Some(61_000), true);
-        match presence {
-            model::Presence::Poll { reason, expected } => {
-                assert!(!expected, "running sidebar with a stale stamp is unhealthy");
-                assert!(reason.contains("last poke 61s ago"), "{reason}");
+                assert!(!reason.contains("last poke"), "{reason}");
                 assert!(!reason.contains("old tmux"), "{reason}");
             }
             other => panic!("expected poll verdict, got {other:?}"),
