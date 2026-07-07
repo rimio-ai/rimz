@@ -250,6 +250,49 @@ fn diff_projection_keeps_worktree_channel_label_and_uses_live_branch() {
 }
 
 #[test]
+fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("codex-resets");
+    std::fs::create_dir_all(&worktree).unwrap();
+    write_worktree_marker(&worktree, "codex-resets");
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(dir.path()),
+        Vec::new(),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    snapshot.worktree_groups = vec![channel_group("codex-resets", &worktree)];
+
+    project_diff_stats(&mut snapshot, &DiffStatsCache::default());
+
+    let group = &snapshot.worktree_groups[0];
+    assert!(
+        group.worktree_backed,
+        "marker-backed channel keeps worktree identity while git cache is empty"
+    );
+    assert_eq!(group.trunk, None, "no git facts were projected");
+}
+
+#[test]
+fn diff_projection_leaves_unmarked_channel_plain() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("codex-resets");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(dir.path()),
+        Vec::new(),
+        Vec::new(),
+        Timestamp::now(),
+    );
+    snapshot.worktree_groups = vec![channel_group("codex-resets", &worktree)];
+    snapshot.worktree_groups[0].worktree_backed = true;
+
+    project_diff_stats(&mut snapshot, &DiffStatsCache::default());
+
+    assert!(!snapshot.worktree_groups[0].worktree_backed);
+}
+
+#[test]
 fn cached_enrich_resorts_groups_after_git_projection() {
     let (dir, runtime, mut snapshot) = runtime();
     let dirty = dir.path().join("dirty");
@@ -1115,6 +1158,7 @@ fn config_fold_stamps_agent_context_severity() {
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
+        worktree_backed: false,
         clean: None,
         landed: None,
         trunk_sync: None,

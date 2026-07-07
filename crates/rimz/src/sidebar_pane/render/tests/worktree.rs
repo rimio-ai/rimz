@@ -77,6 +77,7 @@ fn render_worktree_channel_leads_with_merge_glyph() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(Vec::new(), vec![design]);
+    snapshot.worktree_groups[0].worktree_backed = true;
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Pristine);
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Merged);
@@ -92,6 +93,32 @@ fn render_worktree_channel_leads_with_merge_glyph() {
 }
 
 #[test]
+fn render_worktree_channel_uses_fork_glyph_before_git_facts() {
+    let mut design = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/worktrees/codex-resets"),
+        Some("codex-resets"),
+        Some("reset flow"),
+    );
+    design.channel = Some("codex-resets".to_owned());
+    let mut snapshot = snapshot_with(Vec::new(), vec![design]);
+    snapshot.worktree_groups[0].worktree_backed = true;
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 14);
+
+    assert!(
+        rendered.contains("⑂ codex-resets"),
+        "worktree-backed channel keeps fork identity before git facts:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("# codex-resets"),
+        "worktree-backed channel must not flash as a plain lane:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_worktree_channel_leads_with_fork_glyph() {
     let mut design = agent(
         "claude-1",
@@ -103,6 +130,7 @@ fn render_worktree_channel_leads_with_fork_glyph() {
     );
     design.channel = Some("codex-resets".to_owned());
     let mut snapshot = snapshot_with(Vec::new(), vec![design]);
+    snapshot.worktree_groups[0].worktree_backed = true;
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
     snapshot.worktree_groups[0].pr_state = None;

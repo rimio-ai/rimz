@@ -160,7 +160,7 @@ fn group_header(
     // The worktree's git story pins right: live local reconciling leads, then a
     // PR verdict, then the local trunk verdict; diverged/reconciling keeps the
     // `⇡/⇣` commit delta and `+/-` churn before the marker.
-    // A worktree-backed channel leads with the same fork/merge glyph as a
+    // A marker-backed channel leads with the same fork/merge glyph as a
     // worktree pod and carries this same right-pinned story; only plain lanes
     // keep the `#` label.
     // The per-worktree status tally is gone: the cockpit owns the fleet
@@ -179,7 +179,7 @@ fn group_header(
     let label_width = cw.saturating_sub(right_width + 1).max(1);
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
-        SidebarWorktreeKind::Channel if group.trunk.is_none() => {
+        SidebarWorktreeKind::Channel if !group.worktree_backed => {
             format!("{} {}", theme.glyph(GlyphRole::ChannelHash), group.label)
         }
         _ => {
@@ -240,7 +240,7 @@ fn group_header(
 /// worktrees keep the numeric `⇡/⇣ +/-` stats before the marker; every other
 /// state collapses to the marker alone. Worktree-backed channels share this
 /// cluster and lead with the same fork/merge glyph as a worktree pod. Empty when
-/// no git read reached this group or the group is the trunk worktree itself.
+/// no git facts reached this group or the group is the trunk worktree itself.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
     let Some(trunk) = group.trunk.as_deref() else {
         return plain_git_spans(theme, group);

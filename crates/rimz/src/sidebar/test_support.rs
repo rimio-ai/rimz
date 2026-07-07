@@ -203,6 +203,7 @@ pub(crate) fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> Sideb
         commits_ahead: None,
         commits_behind: None,
         trunk: None,
+        worktree_backed: false,
         clean: None,
         landed: None,
         trunk_sync: None,

@@ -144,6 +144,7 @@ pub(super) fn build_worktree_groups_from_rows(
                 commits_ahead: None,
                 commits_behind: None,
                 trunk: None,
+                worktree_backed: false,
                 clean: None,
                 landed: None,
                 trunk_sync: None,

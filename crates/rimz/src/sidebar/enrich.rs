@@ -107,9 +107,15 @@ pub fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, n
 /// marker checks use checkout metadata reads only.
 pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
     for group in &mut snapshot.worktree_groups {
+        if group.kind == SidebarWorktreeKind::Channel {
+            group.worktree_backed = false;
+        }
         let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
+        if group.kind == SidebarWorktreeKind::Channel {
+            group.worktree_backed = true;
+        }
         let Some(entry) = cache.entries.get(&path).cloned() else {
             continue;
         };
