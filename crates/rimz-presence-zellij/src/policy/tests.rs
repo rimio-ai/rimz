@@ -171,16 +171,8 @@ fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
 fn published_topology_payload_carries_resolved_focus() {
     let manifest = tabs(vec![pane(1), focused(pane(2))]);
     let resolved = resolved_focused_pane_id(&manifest, Some(0), None);
-    let payload = published_topology_payload(
-        "rimz-test",
-        42,
-        None,
-        resolved,
-        Some(&manifest),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-    )
-    .expect("topology payload publishes");
+    let payload = published_topology_payload("rimz-test", 42, None, resolved, &manifest)
+        .expect("topology payload publishes");
 
     assert_eq!(payload.focused_pane, Some(2));
 }
@@ -195,9 +187,7 @@ fn published_topology_payload_carries_writer() {
             loaded_at_ms: 1000,
         }),
         None,
-        Some(&tabs(vec![pane(1)])),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
+        &tabs(vec![pane(1)]),
     )
     .expect("topology payload publishes");
 
@@ -290,7 +280,7 @@ fn apply_foreground_commands_uses_foreground_then_baseline_and_cwd() {
 fn published_topology_payload_carries_baseline_cwd() {
     let mut implicit = pane(1);
     implicit.terminal_command = None;
-    let manifest = tabs(vec![implicit]);
+    let mut manifest = tabs(vec![implicit]);
     let baseline = BTreeMap::from([(
         1,
         PaneBaseline {
@@ -298,16 +288,9 @@ fn published_topology_payload_carries_baseline_cwd() {
             cwd: Some("/repo/main".to_owned()),
         },
     )]);
-    let payload = published_topology_payload(
-        "rimz-test",
-        42,
-        None,
-        Some(1),
-        Some(&manifest),
-        &BTreeMap::new(),
-        &baseline,
-    )
-    .expect("topology payload publishes");
+    apply_foreground_commands(&mut manifest, &BTreeMap::new(), &baseline);
+    let payload = published_topology_payload("rimz-test", 42, None, Some(1), &manifest)
+        .expect("topology payload publishes");
     let encoded = serde_json::to_value(payload).expect("payload serializes");
 
     assert_eq!(encoded["panes"][0]["pane_command"], "zsh");

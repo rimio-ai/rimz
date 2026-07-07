@@ -76,7 +76,7 @@ pub struct PaneBaseline {
 /// [`PaneFields`]. This mirrors [`manifest_hash`]'s per-pane field set:
 /// title and foreground `pane_command` stay out because they churn without
 /// changing the sidebar roster.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct RawStablePaneFields<'a> {
     pub id: u32,
     pub is_plugin: bool,
@@ -134,48 +134,46 @@ pub struct TopologyWriter {
     pub loaded_at_ms: u64,
 }
 
-impl TopologyPayload {
-    pub fn from_tabs(
-        session_name: impl Into<String>,
-        produced_at_ms: u64,
-        writer: Option<TopologyWriter>,
-        focused_pane: Option<u32>,
-        tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    ) -> Self {
-        Self {
-            session_name: session_name.into(),
-            produced_at_ms,
-            writer,
-            focused_pane,
-            panes: tabs.values().flatten().cloned().collect(),
-        }
-    }
-}
-
 pub fn published_topology_payload(
     session_name: impl Into<String>,
     produced_at_ms: u64,
     writer: Option<TopologyWriter>,
     focused_pane: Option<u32>,
-    tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
-    foreground: &BTreeMap<u32, String>,
-    baseline: &BTreeMap<u32, PaneBaseline>,
+    tabs: &BTreeMap<usize, Vec<PaneFields>>,
 ) -> Option<TopologyPayload> {
-    let mut tabs = tabs?.clone();
     if tabs.is_empty() {
         return None;
     }
-    apply_foreground_commands(&mut tabs, foreground, baseline);
-    Some(TopologyPayload::from_tabs(
-        session_name,
+    Some(TopologyPayload {
+        session_name: session_name.into(),
         produced_at_ms,
         writer,
         focused_pane,
-        &tabs,
-    ))
+        panes: tabs.values().flatten().cloned().collect(),
+    })
 }
 
 impl PaneFields {
+    pub fn from_stable(stable: &RawStablePaneFields<'_>, title: String) -> Self {
+        Self {
+            id: stable.id,
+            is_plugin: stable.is_plugin,
+            is_focused: stable.is_focused,
+            is_suppressed: stable.is_suppressed,
+            is_floating: stable.is_floating,
+            exited: stable.exited,
+            is_held: stable.is_held,
+            tab_position: stable.tab_position,
+            tab_name: stable.tab_name.map(str::to_owned),
+            pane_x: stable.pane_x,
+            pane_columns: stable.pane_columns,
+            title,
+            pane_command: None,
+            pane_cwd: None,
+            terminal_command: stable.terminal_command.map(str::to_owned),
+        }
+    }
+
     fn is_live_terminal(&self) -> bool {
         !self.is_plugin && !self.is_suppressed && !self.is_floating && !self.exited && !self.is_held
     }
@@ -215,24 +213,9 @@ where
     let mut hasher = std::hash::DefaultHasher::new();
     for (tab, pane) in panes {
         tab.hash(&mut hasher);
-        hash_stable_pane_fields(&mut hasher, &pane);
+        pane.hash(&mut hasher);
     }
     hasher.finish()
-}
-
-fn hash_stable_pane_fields(hasher: &mut impl Hasher, pane: &RawStablePaneFields<'_>) {
-    pane.id.hash(hasher);
-    pane.is_plugin.hash(hasher);
-    pane.is_focused.hash(hasher);
-    pane.is_suppressed.hash(hasher);
-    pane.is_floating.hash(hasher);
-    pane.exited.hash(hasher);
-    pane.is_held.hash(hasher);
-    pane.tab_position.hash(hasher);
-    pane.tab_name.hash(hasher);
-    pane.pane_x.hash(hasher);
-    pane.pane_columns.hash(hasher);
-    pane.terminal_command.hash(hasher);
 }
 
 /// The focus transitions to publish when the only sidebar-relevant manifest
@@ -259,19 +242,13 @@ pub fn focus_shortcut_if_only_focus_changed(
             return None;
         }
         for (previous, next) in previous_panes.iter().zip(next_panes) {
-            if previous.id != next.id
-                || previous.is_plugin != next.is_plugin
-                || previous.is_suppressed != next.is_suppressed
-                || previous.is_floating != next.is_floating
-                || previous.exited != next.exited
-                || previous.is_held != next.is_held
-                || previous.tab_position != next.tab_position
-                || previous.tab_name != next.tab_name
-                || previous.pane_x != next.pane_x
-                || previous.pane_columns != next.pane_columns
+            let mut previous_stable = RawStablePaneFields::from_projected(previous);
+            let mut next_stable = RawStablePaneFields::from_projected(next);
+            previous_stable.is_focused = false;
+            next_stable.is_focused = false;
+            if previous_stable != next_stable
                 || previous.pane_command != next.pane_command
                 || previous.pane_cwd != next.pane_cwd
-                || previous.terminal_command != next.terminal_command
             {
                 return None;
             }

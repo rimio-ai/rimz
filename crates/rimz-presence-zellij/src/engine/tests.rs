@@ -1,0 +1,480 @@
+use std::collections::BTreeMap;
+
+use super::*;
+use crate::policy::{self, KEEPALIVE_MS, POKE_FLOOR_MS, SETTLE_POKE_MS, SIDEBAR_PANE_TITLE};
+
+#[derive(Clone)]
+struct FakeHost {
+    baselines: BTreeMap<u32, PaneBaseline>,
+    telemetry: PluginTelemetry,
+}
+
+impl Default for FakeHost {
+    fn default() -> Self {
+        Self {
+            baselines: BTreeMap::new(),
+            telemetry: PluginTelemetry {
+                mem_pages: 12,
+                uptime_ms: 0,
+                commands_completed: 34,
+                zellij_version: "0.44.3".to_owned(),
+            },
+        }
+    }
+}
+
+impl Host for FakeHost {
+    fn baseline(&self, pane_id: u32) -> Option<PaneBaseline> {
+        self.baselines.get(&pane_id).cloned()
+    }
+
+    fn telemetry(&self) -> PluginTelemetry {
+        self.telemetry.clone()
+    }
+}
+
+fn config() -> EngineConfig {
+    EngineConfig {
+        workspace_id: Some("workspace-1".to_owned()),
+        session_name: Some("session-1".to_owned()),
+        rimz_bin: Some("/bin/rimz".to_owned()),
+        plugin_id: Some(9),
+        focus_key: None,
+        focus_follows_mouse: None,
+        mouse_click_through: None,
+    }
+}
+
+fn reconfigure_config() -> EngineConfig {
+    EngineConfig {
+        focus_key: Some("Alt+p".to_owned()),
+        focus_follows_mouse: Some(false),
+        mouse_click_through: Some(true),
+        ..config()
+    }
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+fn pane(id: u32) -> PaneFields {
+    PaneFields {
+        id,
+        is_plugin: false,
+        is_focused: false,
+        is_suppressed: false,
+        is_floating: false,
+        exited: false,
+        is_held: false,
+        tab_position: 0,
+        tab_name: Some("main".to_owned()),
+        pane_x: Some(0),
+        pane_columns: Some(80),
+        title: format!("pane-{id}"),
+        pane_command: None,
+        pane_cwd: None,
+        terminal_command: Some("zsh".to_owned()),
+    }
+}
+
+fn pane_in_tab(id: u32, tab: usize) -> PaneFields {
+    PaneFields {
+        tab_position: tab as u64,
+        tab_name: Some(format!("tab-{tab}")),
+        ..pane(id)
+    }
+}
+
+fn sidebar_pane(id: u32) -> PaneFields {
+    PaneFields {
+        title: SIDEBAR_PANE_TITLE.to_owned(),
+        ..pane(id)
+    }
+}
+
+fn plugin_pane(id: u32) -> PaneFields {
+    PaneFields {
+        is_plugin: true,
+        ..pane(id)
+    }
+}
+
+fn focused(mut pane: PaneFields) -> PaneFields {
+    pane.is_focused = true;
+    pane
+}
+
+fn tabs(panes: Vec<PaneFields>) -> BTreeMap<usize, Vec<PaneFields>> {
+    BTreeMap::from([(0, panes)])
+}
+
+fn tabs_by_index(entries: Vec<(usize, Vec<PaneFields>)>) -> BTreeMap<usize, Vec<PaneFields>> {
+    entries.into_iter().collect()
+}
+
+fn raw_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>) -> u64 {
+    policy::manifest_hash(tabs)
+}
+
+fn grant(engine: &mut Engine, now: u64, host: &FakeHost) {
+    let _ = engine.on_permission_granted(now, host);
+}
+
+fn seed_manifest(
+    engine: &mut Engine,
+    manifest: BTreeMap<usize, Vec<PaneFields>>,
+    now: u64,
+    host: &FakeHost,
+) {
+    let hash = raw_hash(&manifest);
+    let _ = engine.on_pane_manifest(manifest, hash, now, host);
+}
+
+fn run_commands(effects: &[Effect]) -> Vec<&Vec<String>> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::RunCommand(argv) => Some(argv),
+            _ => None,
+        })
+        .collect()
+}
+
+fn reasons(effects: &[Effect]) -> Vec<&str> {
+    run_commands(effects)
+        .into_iter()
+        .filter_map(|argv| arg_after(argv, "--reason"))
+        .collect()
+}
+
+fn arg_after<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+    argv.windows(2)
+        .find(|window| window[0] == flag)
+        .map(|window| window[1].as_str())
+}
+
+fn topology_json(argv: &[String]) -> serde_json::Value {
+    serde_json::from_str(arg_after(argv, "--topology").expect("topology argv"))
+        .expect("topology JSON")
+}
+
+fn has_timeout(effects: &[Effect], delay_ms: u64) -> bool {
+    effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::SetTimeout(actual) if *actual == delay_ms))
+}
+
+#[test]
+fn pregrant_change_holds_until_grant_and_grant_without_pending_emits_alive() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, reconfigure_config());
+
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["codex"]),
+        true,
+        10,
+        &host,
+    );
+    assert!(run_commands(&effects).is_empty());
+
+    let effects = engine.on_permission_granted(20, &host);
+    assert!(effects.contains(&Effect::HideSelf));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Reconfigure(_)))
+    );
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+
+    let mut fresh = Engine::new(0, config());
+    let effects = fresh.on_permission_granted(20, &host);
+    assert_eq!(reasons(&effects), vec!["alive"]);
+}
+
+#[test]
+fn cached_grant_on_first_manifest_hides_and_first_manifest_is_baseline() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    let manifest = tabs(vec![pane(1), pane(2)]);
+
+    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 10, &host);
+
+    assert!(effects.contains(&Effect::HideSelf));
+    assert_eq!(reasons(&effects), vec!["alive"]);
+    assert!(
+        !reasons(&effects).contains(&"pane-opened"),
+        "first manifest is learned baseline, not pane opens",
+    );
+}
+
+#[test]
+fn first_manifest_after_explicit_grant_is_baseline() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let manifest = tabs(vec![pane(1), pane(2)]);
+
+    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 20, &host);
+
+    assert!(run_commands(&effects).is_empty());
+}
+
+#[test]
+fn manifest_adding_two_card_panes_emits_two_opens_without_changed() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 20, &host);
+    let manifest = tabs(vec![pane(1), pane(2), pane(3)]);
+
+    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 30, &host);
+
+    assert_eq!(reasons(&effects), vec!["pane-opened", "pane-opened"]);
+}
+
+#[test]
+fn focus_only_manifest_emits_patch_and_settle_changed() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_manifest(
+        &mut engine,
+        tabs(vec![focused(pane(1)), pane(2)]),
+        20,
+        &host,
+    );
+    let manifest = tabs(vec![pane(1), focused(pane(2))]);
+
+    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 30, &host);
+
+    assert_eq!(reasons(&effects), vec!["focus-changed"]);
+    assert!(has_timeout(&effects, SETTLE_POKE_MS));
+
+    let effects = engine.on_timer(30 + SETTLE_POKE_MS, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+}
+
+#[test]
+fn command_changed_floor_is_per_pane_and_pane_close_clears_it() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1), pane(2)]), 20, &host);
+
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["vim"]),
+        true,
+        100,
+        &host,
+    );
+    assert_eq!(reasons(&effects), vec!["command-changed"]);
+
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["vim", "README.md"]),
+        true,
+        150,
+        &host,
+    );
+    assert!(run_commands(&effects).is_empty());
+    assert!(has_timeout(&effects, POKE_FLOOR_MS - 50));
+
+    let effects = engine.on_timer(100 + POKE_FLOOR_MS, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(2),
+        strings(&["top"]),
+        true,
+        210,
+        &host,
+    );
+    assert_eq!(reasons(&effects), vec!["command-changed"]);
+
+    let _ = engine.on_pane_closed(ProjectedPaneId::Terminal(1), 220, &host);
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["python"]),
+        true,
+        230,
+        &host,
+    );
+    assert_eq!(reasons(&effects), vec!["command-changed"]);
+}
+
+#[test]
+fn pane_closed_terminal_has_identity_and_plugin_falls_back_to_changed() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1), plugin_pane(9)]), 20, &host);
+
+    let effects = engine.on_pane_closed(ProjectedPaneId::Terminal(1), 30, &host);
+    assert_eq!(reasons(&effects), vec!["pane-closed"]);
+
+    let effects = engine.on_pane_closed(ProjectedPaneId::Plugin(9), 40, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+}
+
+#[test]
+fn tab_switch_focus_correction_reports_stranded_sidebar_and_work_focus() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let names = BTreeMap::from([(0, "tab-0".to_owned()), (1, "tab-1".to_owned())]);
+    let _ = engine.on_tab_update(Some(0), names.clone(), 20, &host);
+    seed_manifest(
+        &mut engine,
+        tabs_by_index(vec![
+            (0, vec![focused(pane_in_tab(1, 0))]),
+            (1, vec![focused(sidebar_pane(10)), pane_in_tab(11, 1)]),
+        ]),
+        30,
+        &host,
+    );
+
+    let _ = engine.on_tab_update(Some(1), names.clone(), 100, &host);
+    let effects = engine.on_timer(100 + policy::FOCUS_SETTLE_MS, &host);
+    assert_eq!(reasons(&effects), vec!["focus-stranded"]);
+
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let _ = engine.on_tab_update(Some(0), names.clone(), 20, &host);
+    seed_manifest(
+        &mut engine,
+        tabs_by_index(vec![
+            (0, vec![focused(pane_in_tab(1, 0))]),
+            (1, vec![focused(sidebar_pane(10)), pane_in_tab(11, 1)]),
+        ]),
+        30,
+        &host,
+    );
+    let _ = engine.on_tab_update(Some(1), names, 100, &host);
+    let manifest = tabs_by_index(vec![
+        (0, vec![pane_in_tab(1, 0)]),
+        (1, vec![sidebar_pane(10), focused(pane_in_tab(11, 1))]),
+    ]);
+    let effects = engine.on_pane_manifest(manifest.clone(), raw_hash(&manifest), 120, &host);
+    assert!(run_commands(&effects).iter().any(|argv| {
+        arg_after(argv, "--reason") == Some("focus-changed")
+            && argv
+                .windows(2)
+                .any(|window| window[0] == "--focused-pane-id" && window[1] == "terminal_11")
+            && argv
+                .windows(2)
+                .any(|window| window[0] == "--unfocused-pane-id" && window[1] == "terminal_1")
+    }));
+}
+
+#[test]
+fn dump_topology_bypasses_floor_and_pregrant_dump_holds_signal() {
+    let host = FakeHost::default();
+    let mut pregrant = Engine::new(0, config());
+    let effects = pregrant.on_dump_topology_pipe(10, &host);
+    assert!(effects.is_empty());
+    let effects = pregrant.on_permission_granted(20, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 20, &host);
+    let _ = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["vim"]),
+        true,
+        100,
+        &host,
+    );
+
+    let effects = engine.on_dump_topology_pipe(150, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    assert!(
+        run_commands(&effects)[0].contains(&"--topology".to_owned()),
+        "dump publishes immediate topology even inside the duplicate floor",
+    );
+}
+
+#[test]
+fn retire_pipe_only_closes_for_different_canonical_bin() {
+    let engine = Engine::new(0, config());
+
+    assert_eq!(
+        engine.on_retire_pipe(Some("/other/rimz")),
+        vec![Effect::CloseSelf]
+    );
+    assert!(engine.on_retire_pipe(Some("/bin/rimz")).is_empty());
+    assert!(engine.on_retire_pipe(None).is_empty());
+}
+
+#[test]
+fn share_pipe_runs_immediately_and_replays_on_explicit_grant() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+
+    assert_eq!(engine.on_share_session_pipe(), vec![Effect::ShareSession]);
+    let effects = engine.on_permission_granted(10, &host);
+
+    assert!(effects.contains(&Effect::ShareSession));
+}
+
+#[test]
+fn timers_arm_once_supersede_earlier_deadlines_and_dispatch_due_pokes() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+
+    assert_eq!(
+        engine.on_load(0, &host),
+        vec![Effect::SetTimeout(KEEPALIVE_MS)]
+    );
+    grant(&mut engine, 10, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1)]), 20, &host);
+
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["vim"]),
+        true,
+        100,
+        &host,
+    );
+    assert!(has_timeout(&effects, SETTLE_POKE_MS));
+
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["vim", "README.md"]),
+        true,
+        150,
+        &host,
+    );
+    assert!(has_timeout(&effects, POKE_FLOOR_MS - 50));
+
+    let effects = engine.on_timer(100 + POKE_FLOOR_MS, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+}
+
+#[test]
+fn topology_after_foreground_change_carries_overlaid_command() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let mut implicit = pane(1);
+    implicit.terminal_command = None;
+    seed_manifest(&mut engine, tabs(vec![implicit]), 20, &host);
+
+    let effects = engine.on_command_changed(
+        ProjectedPaneId::Terminal(1),
+        strings(&["vim", "README.md"]),
+        true,
+        30,
+        &host,
+    );
+    let argv = run_commands(&effects)
+        .into_iter()
+        .find(|argv| arg_after(argv, "--reason") == Some("command-changed"))
+        .expect("command-changed wake");
+    let topology = topology_json(argv);
+
+    assert_eq!(topology["panes"][0]["pane_command"], "vim README.md");
+}

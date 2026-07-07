@@ -9,9 +9,10 @@ publish = false
 # The Zellij presence plugin: a headless wasm32-wasip1 plugin loaded by rimz
 # into every Zellij session it manages, poking `rimz sidebar wake` on pane
 # topology/focus changes and correcting switched-to tabs whose focus restored
-# to the sidebar. The lib (rlib) holds the pure policy core (`policy.rs`) plus
-# the host-boundary wire seam (`wire.rs`), host-tested inside the ordinary
-# workspace test run; the bin is the Zellij plugin entrypoint
+# to the sidebar. The lib (rlib) holds the host-tested decision engine
+# (`engine.rs`), pure policy helpers (`policy.rs`), and host-boundary wire seam
+# (`wire.rs`) inside the ordinary workspace test run; the bin is the Zellij
+# plugin entrypoint
 # (`register_plugin!` defines `main`), built for wasm by
 # `cargo xtask build-plugin`, vendored into `crates/rimz/presence/` by
 # `cargo xtask plugin-refresh` for crates.io installs, and a stub on host targets
