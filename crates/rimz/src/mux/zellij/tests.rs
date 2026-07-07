@@ -239,7 +239,7 @@ case " $* " in
   *" --name rimz:dump_topology "*)
     count=$(cat "$state" 2>/dev/null || printf '0')
     cols=$((150 - 5 * count))
-    now=$(date +%s%3N)
+    now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     cat > "$cache" <<JSON
 {{"session_name":"rimz-test","produced_at_ms":$now,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":$cols,"pane_command":"rimz-sidebar","terminal_command":"rimz"}}]}}
 JSON
