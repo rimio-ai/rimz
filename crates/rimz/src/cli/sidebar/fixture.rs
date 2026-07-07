@@ -1954,6 +1954,7 @@ fn agent_context(
         }),
         turn_error: None,
         turn_complete: None,
+        turn_interrupted: None,
         observed_at: now,
     }
 }

@@ -473,7 +473,7 @@ pub(crate) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
 mod tests {
     use super::*;
 
-    use crate::agents::{AgentState, TurnPhase};
+    use crate::agents::{AgentContext, AgentState, TurnPhase};
     use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
     use crate::ledger::snapshot::PaneAgent;
 
@@ -528,6 +528,21 @@ mod tests {
 
         assert_eq!(check.gate.status, Some(AgentStatus::Running));
         assert!(!check.gate.open);
+        assert!(check.pane.present);
+    }
+
+    #[test]
+    fn explain_reports_interrupted_marker_as_open_gate() {
+        let now = Timestamp::now();
+        let mut agent = agent("sess-interrupted", AgentStatus::Running);
+        agent.context = Some(settle_context(None, Some(agent.last_activity)));
+        let snapshot = snapshot(agent.clone(), true, Vec::new(), now);
+        let message = message(&agent, 1, "wait");
+
+        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
+
+        assert_eq!(check.gate.status, Some(AgentStatus::Idle));
+        assert!(check.gate.open);
         assert!(check.pane.present);
     }
 
@@ -672,6 +687,31 @@ mod tests {
             last_seen: now,
             last_activity: now,
             registered_at: Some(now),
+        }
+    }
+
+    fn settle_context(complete: Option<Timestamp>, interrupted: Option<Timestamp>) -> AgentContext {
+        AgentContext {
+            source: "codex".to_owned(),
+            session_name: None,
+            session_preview: None,
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: None,
+            pr: None,
+            account: None,
+            turn_error: None,
+            turn_complete: complete.map(|at| at + jiff::SignedDuration::from_secs(1)),
+            turn_interrupted: interrupted.map(|at| at + jiff::SignedDuration::from_secs(1)),
+            observed_at: Timestamp::now(),
         }
     }
 }

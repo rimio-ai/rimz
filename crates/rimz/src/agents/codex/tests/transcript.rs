@@ -413,6 +413,82 @@ fn turn_complete_detector_marks_clean_completion_but_skips_errored_and_supersede
 }
 
 #[test]
+fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
+    // Esc and `/clear` of a running Codex turn leave a resting
+    // `turn_aborted` tail without a Stop hook. Any abort reason counts; the
+    // "resting at the tail" filter is what keeps steer/replaced aborts from
+    // sticking once the next turn starts.
+    let interrupted = json!({
+        "timestamp": "2026-07-07T14:12:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "turn_aborted",
+            "reason": "interrupted",
+            "turn_id": "turn-1",
+            "completed_at": "2026-07-07T14:12:00.000Z"
+        }
+    });
+    assert_eq!(
+        detect_turn_interrupted(&interrupted.to_string()),
+        Some(
+            "2026-07-07T14:12:00.000Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+        )
+    );
+    assert_eq!(detect_turn_complete(&interrupted.to_string()), None);
+
+    let replaced = json!({
+        "timestamp": "2026-07-07T14:12:01.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "turn_aborted",
+            "reason": "replaced",
+            "turn_id": "turn-1"
+        }
+    });
+    assert!(
+        detect_turn_interrupted(&replaced.to_string()).is_some(),
+        "any abort reason is a marker while it rests at the tail"
+    );
+
+    for live_record in [
+        json!({
+            "timestamp": "2026-07-07T14:12:02.000Z",
+            "type": "event_msg",
+            "payload": { "type": "task_started" }
+        }),
+        json!({
+            "timestamp": "2026-07-07T14:12:02.000Z",
+            "type": "event_msg",
+            "payload": { "type": "user_message", "message": "next prompt" }
+        }),
+    ] {
+        assert!(
+            detect_turn_interrupted(&format!("{interrupted}\n{live_record}\n")).is_none(),
+            "a later live record means the abort no longer rests at the tail"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-interrupted.jsonl");
+    std::fs::write(&path, format!("{interrupted}\n")).unwrap();
+    let refresh =
+        refresh_transcript_context("sess-1", None, Some(path.to_string_lossy().as_ref()), None)
+            .expect("changed transcript refreshes");
+    assert_eq!(
+        refresh.turn_interrupted,
+        Some(
+            "2026-07-07T14:12:00.000Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+        )
+    );
+    assert_eq!(refresh.turn_error, None);
+    assert_eq!(refresh.turn_complete, None);
+}
+
+#[test]
 fn messageless_task_complete_refreshes_as_overload_death() {
     for last_agent_message in [serde_json::Value::Null, json!("")] {
         let dir = tempfile::tempdir().unwrap();
@@ -502,7 +578,7 @@ intro
 ⚠ Earlier warning
 
 ⚠ Selected model is at capacity. Please try a different model.
-› 
+›
 ";
     assert_eq!(
         death_warning_from_frame(frame).as_deref(),

@@ -239,6 +239,7 @@ pub(super) fn into_context(
         // App-server enrichment carries no turn boundary; the rollout-tail
         // refresh path stamps `turn_complete`, never this fold.
         turn_complete: None,
+        turn_interrupted: None,
         observed_at,
     }
 }

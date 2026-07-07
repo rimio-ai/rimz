@@ -452,6 +452,7 @@ impl StatuslinePayload {
             // Claude's turns end on a reliable `Stop` hook, so the success
             // marker stays a Codex-only concern (review mode fires no `Stop`).
             turn_complete: None,
+            turn_interrupted: None,
             observed_at,
         }
     }

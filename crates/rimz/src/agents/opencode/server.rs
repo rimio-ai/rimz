@@ -169,6 +169,7 @@ fn into_context(
         account: None,
         turn_error: None,
         turn_complete: None,
+        turn_interrupted: None,
         observed_at,
     }
 }

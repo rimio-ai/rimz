@@ -137,6 +137,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
             label: Some(label.to_owned()),
         }),
         turn_complete: None,
+        turn_interrupted: None,
         observed_at: ts(error_at),
     });
     agent

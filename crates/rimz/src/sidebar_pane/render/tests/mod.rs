@@ -320,6 +320,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
         account: None,
         turn_error: None,
         turn_complete: None,
+        turn_interrupted: None,
         observed_at: now,
     }
 }
@@ -363,6 +364,7 @@ fn codex_context(now: Timestamp) -> AgentContext {
         account: None,
         turn_error: None,
         turn_complete: None,
+        turn_interrupted: None,
         observed_at: now,
     }
 }

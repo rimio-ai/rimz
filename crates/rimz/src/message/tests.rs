@@ -3,7 +3,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 
 use super::*;
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::{AgentContext, AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
@@ -30,6 +30,20 @@ fn gates_open_only_on_resting_statuses() {
     ] {
         assert!(!gate_open(DeliveryGate::Resume, status));
     }
+}
+
+#[test]
+fn done_gate_opens_on_interrupted_turn_marker() {
+    let mut running = agent("sess-interrupted", None);
+    running.status = AgentStatus::Running;
+    running.phase = crate::agents::TurnPhase::Reasoning;
+    running.context = Some(settle_context(None, Some(running.last_activity)));
+    assert!(gate_open_for_agent(DeliveryGate::Done, &running, false));
+    assert!(gate_open_for_agent(DeliveryGate::Any, &running, false));
+
+    let mut stale = running.clone();
+    stale.last_activity += jiff::SignedDuration::from_secs(2);
+    assert!(!gate_open_for_agent(DeliveryGate::Done, &stale, false));
 }
 
 #[test]
@@ -763,5 +777,30 @@ fn agent(id: &str, name: Option<&str>) -> AgentState {
         last_seen: now,
         last_activity: now,
         registered_at: Some(now),
+    }
+}
+
+fn settle_context(complete: Option<Timestamp>, interrupted: Option<Timestamp>) -> AgentContext {
+    AgentContext {
+        source: "codex".to_owned(),
+        session_name: None,
+        session_preview: None,
+        model_id: None,
+        model_display_name: None,
+        effort: None,
+        thinking_enabled: None,
+        output_style: None,
+        vim_mode: None,
+        agent_version: None,
+        exceeds_200k_tokens: None,
+        cost: None,
+        tokens: None,
+        rate_limits: None,
+        pr: None,
+        account: None,
+        turn_error: None,
+        turn_complete: complete.map(|at| at + jiff::SignedDuration::from_secs(1)),
+        turn_interrupted: interrupted.map(|at| at + jiff::SignedDuration::from_secs(1)),
+        observed_at: Timestamp::now(),
     }
 }

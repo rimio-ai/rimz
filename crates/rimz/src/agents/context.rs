@@ -3,10 +3,12 @@
 //! [`AgentContext`] is the normalized shape for the rich, high-frequency
 //! per-session data an agent publishes out of band — Claude's statusline,
 //! Codex's rollout tail plus app-server metadata, and future provider surfaces.
-//! It is display-only and redactable: it never drives routing, ranking, or a
-//! decision (the no-transcript-correctness rule). Each agent integration
-//! produces it from its own transport or local refresh via [`super::AgentAdapter`];
-//! storage ([`crate::ledger::agent_context`]) and the snapshot fold-in are
+//! It is sidecar enrichment, not durable ledger truth. Most fields are
+//! render-only; turn-error and turn-settle markers also feed the shared status
+//! projection so read paths agree about hookless turn ends. Each agent
+//! integration produces it from its own transport or local refresh via
+//! [`super::AgentAdapter`]; storage ([`crate::ledger::agent_context`]) and the
+//! snapshot fold-in are
 //! transport-agnostic, so a new agent slots in with only a new producer — no
 //! change to this type, the sidecar, or the fold-in.
 
@@ -66,24 +68,33 @@ pub struct AgentContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<AgentAccount>,
     /// A turn that died on a provider API error, detected from a provider hook
-    /// or transcript/rollout tail. Display-only like every field here: the
-    /// projection reads it to refine a falsely-`running` row, or a same-turn
-    /// `failed` row, into `paused`/`failed` with the provider's reason. The
-    /// marker itself never reaches the event log or a decision. It self-clears
-    /// once a newer hook event advances `last_activity` past
-    /// [`AgentTurnError::at`], or once the rollup's `turn_started_at` proves the
-    /// marker belongs to a prior turn.
+    /// or transcript/rollout tail. Status-projection marker: the projection
+    /// reads it to refine a falsely-`running` row, or a same-turn `failed` row,
+    /// into `paused`/`failed` with the provider's reason. The marker itself
+    /// never reaches the event log. It self-clears once a newer hook event
+    /// advances `last_activity` past [`AgentTurnError::at`], or once the
+    /// rollup's `turn_started_at` proves the marker belongs to a prior turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error: Option<AgentTurnError>,
     /// A turn that completed cleanly, detected from the rollout tail when the
     /// turn fired no `Stop` hook to record its end — Codex's `/review` runs in
-    /// review mode and closes on a `task_complete` without a `Stop`. Display-only
-    /// like [`turn_error`](Self::turn_error) and self-clearing the same way: the
-    /// projection settles a falsely-`running` row to `success` while the marker
-    /// postdates `last_activity`, and a newer prompt advancing `last_activity`
-    /// past it drops the row back to its lifecycle status.
+    /// review mode and closes on a `task_complete` without a `Stop`.
+    /// Status-projection marker like [`turn_error`](Self::turn_error) and
+    /// self-clearing the same way: the projection settles a falsely-`running`
+    /// row to `success` while the marker postdates `last_activity`, and a newer
+    /// prompt advancing `last_activity` past it drops the row back to its
+    /// lifecycle status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_complete: Option<Timestamp>,
+    /// A turn that was interrupted with no `Stop` hook, detected from the
+    /// rollout tail — Codex writes `turn_aborted` for `/clear` mid-turn and
+    /// Esc. Status-projection marker like
+    /// [`turn_complete`](Self::turn_complete) and self-clearing the same way:
+    /// the projection settles a falsely-`running` row to `idle` while the
+    /// marker postdates `last_activity`, and a newer prompt advancing
+    /// `last_activity` past it drops the row back to its lifecycle status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_interrupted: Option<Timestamp>,
     /// When the producer observed this record. Snapshot liveness comes from
     /// the rollup row; a sidecar without a surviving row is not joined.
     pub observed_at: Timestamp,

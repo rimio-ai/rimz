@@ -704,6 +704,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
         account: None,
         turn_error: None,
         turn_complete: None,
+        turn_interrupted: None,
         observed_at: Timestamp::now(),
     })
 }

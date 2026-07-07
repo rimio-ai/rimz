@@ -357,6 +357,7 @@ mod tests {
                 }),
                 turn_error: None,
                 turn_complete: None,
+                turn_interrupted: None,
                 transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
                 transcript_stat: Some(TranscriptStat {
                     mtime_secs: 10,
@@ -415,6 +416,7 @@ mod tests {
             }),
             turn_error: None,
             turn_complete: None,
+            turn_interrupted: None,
             observed_at: app_at,
         }
     }

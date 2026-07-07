@@ -597,6 +597,26 @@ pub fn is_turn_complete(
             .is_some_and(|at| at > last_activity)
 }
 
+/// Whether a `running` agent's latest turn was interrupted with no `Stop` hook
+/// to record it — the rollout-tail marker (`AgentContext::turn_interrupted`,
+/// folded in via the context sidecar) postdates the agent's `last_activity`.
+/// Codex writes `turn_aborted` for Esc and `/clear` of a running turn, leaving
+/// the lifecycle row falsely `running`; this settles the row to `idle` instead
+/// of letting the stall window misread an at-rest interruption as failed.
+/// Self-clearing like [`is_turn_complete`]: any newer hook event advances
+/// `last_activity` past the marker. A Rimz-derived projection over enrichment,
+/// never a status the agent reports.
+pub fn is_turn_interrupted(
+    status: AgentStatus,
+    context: Option<&AgentContext>,
+    last_activity: Timestamp,
+) -> bool {
+    status == AgentStatus::Running
+        && context
+            .and_then(|context| context.turn_interrupted)
+            .is_some_and(|at| at > last_activity)
+}
+
 /// How long after its last compaction-start signal an agent still reads as
 /// "compacting". The session's next lifecycle signal clears
 /// [`AgentState::compacting_since`], but a crash mid-compact with no next
@@ -951,21 +971,29 @@ impl AgentState {
 
     /// Status after cheap, context-only projections that every read path can
     /// share. A live turn with an active provider park certificate reads as
-    /// `paused` even when the lifecycle rollup is still `running`; budget-aware
-    /// callers may still upgrade that paused projection to `failed`.
+    /// `paused` even when the lifecycle rollup is still `running`; hookless
+    /// rollout completion/interruption markers settle falsely-running rows to
+    /// `success`/`idle`, which opens message delivery gates. Budget-aware
+    /// callers may still upgrade a paused projection to `failed`.
     pub fn effective_status(&self) -> AgentStatus {
         if self.status != AgentStatus::Running {
             return self.status;
         }
-        let Some((class, _)) = self.displayed_turn_error() else {
-            return self.status;
-        };
-        match class {
-            TurnErrorClass::PausedRateLimit
-            | TurnErrorClass::PausedSpendLimit
-            | TurnErrorClass::PausedOverloaded => AgentStatus::Paused,
-            TurnErrorClass::Unknown | TurnErrorClass::Failed => self.status,
+        if let Some((class, _)) = self.displayed_turn_error() {
+            return match class {
+                TurnErrorClass::PausedRateLimit
+                | TurnErrorClass::PausedSpendLimit
+                | TurnErrorClass::PausedOverloaded => AgentStatus::Paused,
+                TurnErrorClass::Unknown | TurnErrorClass::Failed => self.status,
+            };
         }
+        if is_turn_complete(self.status, self.context.as_ref(), self.last_activity) {
+            return AgentStatus::Success;
+        }
+        if is_turn_interrupted(self.status, self.context.as_ref(), self.last_activity) {
+            return AgentStatus::Idle;
+        }
+        self.status
     }
 
     /// True when the current `Waiting` state still predates all observed agent
@@ -1185,6 +1213,7 @@ mod tests {
             account: None,
             turn_error: None,
             turn_complete: None,
+            turn_interrupted: None,
             observed_at: Timestamp::from_second(1_000).unwrap(),
         });
 
@@ -1341,7 +1370,33 @@ mod tests {
                 label: Some("provider parked".to_owned()),
             }),
             turn_complete: None,
+            turn_interrupted: None,
             observed_at: Timestamp::from_second(at).unwrap(),
+        }
+    }
+
+    fn context_settle(complete: Option<i64>, interrupted: Option<i64>) -> AgentContext {
+        AgentContext {
+            source: "codex".to_owned(),
+            session_name: None,
+            session_preview: None,
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: None,
+            pr: None,
+            account: None,
+            turn_error: None,
+            turn_complete: complete.map(|at| Timestamp::from_second(at).unwrap()),
+            turn_interrupted: interrupted.map(|at| Timestamp::from_second(at).unwrap()),
+            observed_at: Timestamp::from_second(1_000).unwrap(),
         }
     }
 
@@ -1372,6 +1427,32 @@ mod tests {
         let mut unknown = test_agent(AgentStatus::Running, 1_000);
         unknown.context = Some(context_error(TurnErrorClass::Unknown, 1_010));
         assert_eq!(unknown.effective_status(), AgentStatus::Running);
+    }
+
+    #[test]
+    fn effective_status_projects_hookless_turn_settle_markers() {
+        let mut complete = test_agent(AgentStatus::Running, 1_000);
+        complete.context = Some(context_settle(Some(1_010), None));
+        assert_eq!(complete.effective_status(), AgentStatus::Success);
+
+        let mut interrupted = test_agent(AgentStatus::Running, 1_000);
+        interrupted.context = Some(context_settle(None, Some(1_010)));
+        assert_eq!(interrupted.effective_status(), AgentStatus::Idle);
+
+        let mut stale = test_agent(AgentStatus::Running, 1_000);
+        stale.context = Some(context_settle(Some(990), Some(990)));
+        assert_eq!(stale.effective_status(), AgentStatus::Running);
+
+        let mut non_running = test_agent(AgentStatus::Idle, 1_000);
+        non_running.context = Some(context_settle(Some(1_010), Some(1_010)));
+        assert_eq!(non_running.effective_status(), AgentStatus::Idle);
+
+        let mut parked = test_agent(AgentStatus::Running, 1_000);
+        let mut context = context_error(TurnErrorClass::PausedRateLimit, 1_010);
+        context.turn_complete = Some(Timestamp::from_second(1_010).unwrap());
+        context.turn_interrupted = Some(Timestamp::from_second(1_010).unwrap());
+        parked.context = Some(context);
+        assert_eq!(parked.effective_status(), AgentStatus::Paused);
     }
 
     #[test]

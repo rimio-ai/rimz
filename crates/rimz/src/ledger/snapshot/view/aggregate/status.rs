@@ -94,6 +94,12 @@ pub(super) fn project_display_status(
             // mode) settles to success instead of spinning until the stall
             // window misreads it as failed.
             AgentStatus::Success
+        } else if crate::agents::is_turn_interrupted(status, agent.context.as_ref(), last_activity)
+        {
+            // A turn interrupted without a `Stop` hook (Codex Esc or `/clear`
+            // mid-turn) is at rest with no result, so settle to idle before the
+            // stall window can misread it as failed.
+            AgentStatus::Idle
         } else {
             let stalled = crate::agents::is_stalled(status, last_activity, now, stalled_after_secs);
             if stalled && rate_limit_kinds.spent.contains(row_name.as_str()) {

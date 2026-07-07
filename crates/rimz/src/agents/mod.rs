@@ -81,8 +81,8 @@ pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spend
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
     ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS,
-    DEFAULT_STALL_AFTER_SECS, is_stalled, is_turn_complete, is_turn_dead, looks_like_control_text,
-    single_line_description, usable_description,
+    DEFAULT_STALL_AFTER_SECS, is_stalled, is_turn_complete, is_turn_dead, is_turn_interrupted,
+    looks_like_control_text, single_line_description, usable_description,
 };
 pub(crate) use state::{
     AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,
@@ -347,6 +347,11 @@ pub struct LocalContextRefresh {
     /// `task_complete` that fired no `Stop` hook (a `/review` turn). The
     /// projection reads it to settle a falsely-`running` row to `success`.
     pub turn_complete: Option<Timestamp>,
+    /// Timestamp of an interrupted turn read from the rollout tail
+    /// (`turn_aborted`), set when the session is at rest after an abort that
+    /// fired no `Stop` hook (Codex `/clear` mid-turn or Esc). The projection
+    /// reads it to settle a falsely-`running` row to `idle`.
+    pub turn_interrupted: Option<Timestamp>,
     pub transcript_path: Option<String>,
     pub transcript_stat: Option<TranscriptStat>,
 }

@@ -260,6 +260,7 @@ mod tests {
                 }),
                 turn_error: None,
                 turn_complete: None,
+                turn_interrupted: None,
                 transcript_path: Some("/tmp/opencode.db".to_owned()),
                 transcript_stat: Some(TranscriptStat {
                     mtime_secs: 10,
@@ -292,6 +293,7 @@ mod tests {
             account: None,
             turn_error: None,
             turn_complete: None,
+            turn_interrupted: None,
             observed_at,
         }
     }

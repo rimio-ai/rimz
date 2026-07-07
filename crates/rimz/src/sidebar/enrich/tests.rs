@@ -1230,6 +1230,7 @@ fn cost_row_at(
         account: None,
         turn_error: None,
         turn_complete: None,
+        turn_interrupted: None,
         observed_at: Timestamp::from_second(1_750_000_000).unwrap(),
     });
     row

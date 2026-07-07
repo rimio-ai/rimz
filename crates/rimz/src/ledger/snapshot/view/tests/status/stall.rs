@@ -59,10 +59,11 @@ fn configured_stall_window_controls_running_attention_escalation() {
 //
 // docs/internals/agents/agent.md commits to a strict order among the derived display
 // states: a human-blocked `waiting` outranks them all, then a paused-class
-// marker, then the live-subagent exemption, then a failed marker, then the
-// stalled-running fallback (paused when the kind's window is spent, failed
-// otherwise). The single-cause cases each prove one rung; this grid pins the
-// order by stacking causes.
+// marker, then the live-subagent exemption, then a failed marker, then settled
+// completion/interruption markers, then the stalled-running fallback (paused
+// when the kind's window is spent, failed otherwise). The single-cause cases
+// each prove one rung; this grid pins the error/stall order by stacking causes,
+// and the turn_complete/turn_interrupted modules pin the settle rungs.
 #[test]
 fn displayed_status_precedence_ladder_holds() {
     for rung in displayed_status_rungs() {

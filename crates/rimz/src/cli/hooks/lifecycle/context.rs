@@ -259,6 +259,7 @@ pub(super) fn supplement_realtime_cost(
         cost: None,
         turn_error: prior.and_then(|record| record.context.turn_error.clone()),
         turn_complete: prior.and_then(|record| record.context.turn_complete),
+        turn_interrupted: prior.and_then(|record| record.context.turn_interrupted),
         transcript_path: None,
         transcript_stat: None,
     });

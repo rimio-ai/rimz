@@ -50,10 +50,11 @@ pub fn refresh_transcript_context(
         .map(usage_from_transcript_tail)
         .unwrap_or_default();
     let outcome = tail.as_deref().and_then(detect_resting_turn_outcome);
-    let (turn_complete, turn_error) = match outcome {
-        Some(RestingTurnOutcome::Complete(at)) => (Some(at), None),
-        Some(RestingTurnOutcome::Died(error)) => (None, Some(error)),
-        None => (None, None),
+    let (turn_complete, turn_interrupted, turn_error) = match outcome {
+        Some(RestingTurnOutcome::Complete(at)) => (Some(at), None, None),
+        Some(RestingTurnOutcome::Interrupted(at)) => (None, Some(at), None),
+        Some(RestingTurnOutcome::Died(error)) => (None, None, Some(error)),
+        None => (None, None, None),
     };
     let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint);
     Some(LocalContextRefresh {
@@ -63,6 +64,7 @@ pub fn refresh_transcript_context(
         cost,
         turn_error,
         turn_complete,
+        turn_interrupted,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
     })
@@ -428,6 +430,7 @@ const MESSAGELESS_TASK_COMPLETE_LABEL: &str = "turn ended with no final message"
 
 enum RestingTurnOutcome {
     Complete(Timestamp),
+    Interrupted(Timestamp),
     Died(AgentTurnError),
 }
 
@@ -465,7 +468,19 @@ pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
 pub(super) fn detect_turn_complete(tail: &str) -> Option<Timestamp> {
     match detect_resting_turn_outcome(tail) {
         Some(RestingTurnOutcome::Complete(at)) => Some(at),
-        Some(RestingTurnOutcome::Died(_)) | None => None,
+        Some(RestingTurnOutcome::Interrupted(_)) | Some(RestingTurnOutcome::Died(_)) | None => None,
+    }
+}
+
+/// Detect a turn interrupted without a `Stop` hook from a resting rollout tail.
+/// Codex writes `event_msg`/`turn_aborted` for Esc and `/clear` of a running
+/// turn. Any abort reason counts; a later live record makes the session no
+/// longer "at rest" and clears the marker.
+#[cfg(test)]
+pub(super) fn detect_turn_interrupted(tail: &str) -> Option<Timestamp> {
+    match detect_resting_turn_outcome(tail) {
+        Some(RestingTurnOutcome::Interrupted(at)) => Some(at),
+        Some(RestingTurnOutcome::Complete(_)) | Some(RestingTurnOutcome::Died(_)) | None => None,
     }
 }
 
@@ -488,6 +503,9 @@ fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
             continue;
         };
         match payload.get("type").and_then(Value::as_str) {
+            Some("turn_aborted") => {
+                return Some(RestingTurnOutcome::Interrupted(record_timestamp(&value)?));
+            }
             Some("task_complete") if payload.get("error").is_none() => {
                 let at = record_timestamp(&value)?;
                 if task_complete_has_final_message(payload) {

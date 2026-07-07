@@ -105,7 +105,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
 
 A parked message delivers when all five conditions hold:
 
-1. Gate is open. `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`; hidden `DeliveryGate::Resume` opens only on `Paused` after the account-budget resume guard passes. `Running`, `Waiting`, and `Paused` keep ordinary delivery closed.
+1. Gate is open. `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`; hidden `DeliveryGate::Resume` opens only on `Paused` after the account-budget resume guard passes. A hookless settled turn counts here: rollout completion projects a falsely-`running` row to `Success`, and rollout interruption projects it to `Idle`. `Running`, `Waiting`, and `Paused` keep ordinary delivery closed.
 2. Not waiting. An agent holding an open blocking prompt ([`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs)) reserves the next input for your answer. `--force` bypasses the reservation, mirroring `message --steer --force`; without it the skip reports `is waiting on your input in its pane; answer it or pass --force`.
 3. FIFO head. The message is the oldest ready queued record for its card and lane. `msg_` id string order is FIFO order; scheduled messages whose `not_before` is still in the future are filtered out, so they never block a later ready message on the same card. Resume nudges use a control lane so a parked-turn wakeup does not wait behind ordinary user text that cannot deliver until after the wakeup.
 4. Live pane exists. The target must have a pane that can receive a paste.
