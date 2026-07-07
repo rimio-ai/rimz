@@ -9,7 +9,7 @@ Every project gets one room: a Zellij or tmux session with a sidebar where every
 
 Select a row and you land in its pane, where you answer in the agent's own UI. The column mirrors what runs: when an agent exits, its row reverts to the shell.
 
-Every glyph and meter, zone by zone: [the interface reference](../interface/sidebar.md). Why cards rank the way they do: [attention.md](./attention.md).
+Every glyph and meter, zone by zone: [the interface reference](../interface/sidebar.md). How to read the column and why cards rank the way they do: [the sidebar guide](./sidebar.md).
 
 ## The loop
 
@@ -37,7 +37,7 @@ That's the loop. Everything else in Rimz is a variation on those primitives.
 
 The everyday path has nothing extra wired: the agent asks in its own UI, the hook flips its row to waiting, the sidebar wakes, and Rimz points you at the pane. You see `claude · waiting · permission`, jump, answer, and the row clears when the agent moves on.
 
-Waiting is agent state, so everything downstream reads it the same way: ranking lifts the row ([attention.md](./attention.md)), notifications carry it off-screen, and `rimz message` holds a queued prompt until your answer lands. How blocking prompts become lifecycle signals is in [agent.md](../internals/agents/agent.md).
+Waiting is agent state, so everything downstream reads it the same way: ranking lifts the row ([the sidebar guide](./sidebar.md#attention-what-needs-you)), notifications carry it off-screen, and `rimz message` holds a queued prompt until your answer lands. How blocking prompts become lifecycle signals is in [agent.md](../internals/agents/agent.md).
 
 ## Triage a local fleet
 
@@ -59,7 +59,7 @@ rimz agents pcr.reviewer                # re-add one role, same handle and lane
 rimz agents pcr -w feat/great --resume  # reopen that exact worktree's team
 ```
 
-The room treats a team as one line of work. The sidebar keeps its members as one contiguous block in role order with one derived state, so one member asking for you marks the whole block blocked and lifts it together ([attention.md → Teams read as one](./attention.md#teams-read-as-one)). Relaunching a team into the same worktree reconciles instead of duplicating: a live team focuses its tab, a closed one with work in progress offers a resume, and a clean merged worktree offers cleanup before a fresh start ([agent-control reference](../reference/cli/agents.md#agents)).
+The room treats a team as one line of work. The sidebar keeps its members as one contiguous block in role order with one derived state, so one member asking for you marks the whole block blocked and lifts it together ([the sidebar guide → Teams read as one](./sidebar.md#teams-read-as-one)). Relaunching a team into the same worktree reconciles instead of duplicating: a live team focuses its tab, a closed one with work in progress offers a resume, and a clean merged worktree offers cleanup before a fresh start ([agent-control reference](../reference/cli/agents.md#agents)).
 
 The sidebar groups panes by worktree, so main plus two feature trees render as three groups in one room. Agents in one worktree share files and siblings keep their own: write-capable agents in sibling worktrees is the recommended pattern, and two in the same tree trigger a one-time advisory. Two `rimz agents claude "…" --worktree` launches race parallel attempts, each in its own fresh tree.
 

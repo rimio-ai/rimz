@@ -15,7 +15,7 @@ The sidebar is a presence and attention map: one row per live pane, enriched fro
 - Two symbols carry every call for attention — `?` *needs your answer*, `!` *needs a look* — by shape, so the signal survives `NO_COLOR` and color-blind eyes; color only reinforces. The fixed cockpit line (`? 2  ! 1 …`) compresses the fleet: a row of zeros means nothing needs you, skip the scan.
 - Five states cover every agent — `running`, `waiting`, `idle`, `success`, `failed` — plus a derived `paused` for provider-limit parks, with short-lived heads (thinking, compacting, delegating) riding `running`. A context meter, token totals, live dollar cost, diff stats, and last-activity age ride the rows; the provider dashboard carries the pace, its 5h/7d budget bars draining in real time.
 - Presence is live and facts are durable: a row exists because a pane runs right now and clears itself when the agent exits, while everything the agent did stays in the store. Stats enrich display; the store and explicit events decide state and correctness.
-The glyph legend and rendered frames live in [the interface reference](./docs/interface/sidebar.md), the ranking and presence mechanics in [sidebar.md](./docs/internals/sidebar/sidebar.md), and the reasoning about what deserves attention in [attention.md](./docs/guide/attention.md).
+The glyph legend and rendered frames live in [the interface reference](./docs/interface/sidebar.md), the ranking and presence mechanics in [sidebar.md](./docs/internals/sidebar/sidebar.md), and the reader's guide to the column and its ranking in [the sidebar guide](./docs/guide/sidebar.md).
 
 ## Answering in the agent's own UI
 

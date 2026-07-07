@@ -17,7 +17,7 @@ New to Rimz? Read in order: [installation](./guide/installation.md), [your first
 | Page | What it covers |
 | --- | --- |
 | [Product tour](./guide/product.md) | The working scenarios, in the order people scale: triage a local fleet, put a team on a feature, run it on a server, engineer the loop, script agents in pipelines. |
-| [Attention](./guide/attention.md) | How the sidebar decides what needs you: the cockpit line, unread rows, time windows, team state, and the git verdict. |
+| [The sidebar](./guide/sidebar.md) | How to read the sidebar: the zones, agent cards and their lifecycle, process rows, and how the ranking decides what needs you. |
 | [Security and trust](./guide/security.md) | The threat model and the guardrails: project trust, notification handlers, hook safety, and privacy settings. |
 
 ## Customization

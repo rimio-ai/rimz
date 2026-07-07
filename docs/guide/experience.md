@@ -244,5 +244,5 @@ The same honesty runs through trust and drift: an untrusted `.rimz/config.toml` 
 
 - [Set up your machine](./setup.md): the one-time pass that makes Rimz a daily driver (true color and Nerd Font glyphs, pets, the hands-off loop settings, a Zellij/tmux baseline).
 - [Product tour](./product.md): the working scenarios (teams on features in isolated worktrees, messaging agents by handle, scripting supervised runs with `-p`, engineering loops past your attention span).
-- [Attention](./attention.md): how the ranking decides what needs you.
+- [The sidebar](./sidebar.md): reading the column, the agent lifecycle, and how the ranking decides what needs you.
 - Automate the waiting state: a notification handler answers routine prompts in the agent's own pane, and anything outside its policy still routes to you ([notifications.md](../internals/sidebar/notifications.md), [security.md](./security.md)).
