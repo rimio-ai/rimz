@@ -8,11 +8,7 @@ Rimz opens a Zellij room in the browser by delegating terminal transport and aut
 
 Zellij owns the web server, browser terminal, session transport, login tokens, cookies, TLS, and the `/session-name` route. Rimz owns the workspace-to-session mapping, the Rimz sidebar birth path, URL construction, remote SSH tunneling, and fail-fast diagnostics for an explicit `--mux tmux`, a room already live under tmux, or a Zellij binary that cannot serve web clients.
 
-<<<<<<< Updated upstream
-The ledger, hooks, script-ask bridge, and sidebar wakeups work the same way whether the attached client is a terminal emulator or a browser. Rimz keeps the serving machine's login token in a plaintext 0600 state file, keeps tokens out of URLs, proxies no terminal I/O, and scrapes no browser clients.
-=======
-The ledger, hooks, run bridge, and sidebar wakeups work the same way whether the attached client is a terminal emulator or a browser. Rimz never stores Zellij login tokens, puts them in URLs, proxies terminal I/O, or scrapes browser clients.
->>>>>>> Stashed changes
+The ledger, hooks, run bridge, and sidebar wakeups work the same way whether the attached client is a terminal emulator or a browser. Rimz keeps the serving machine's login token in a plaintext 0600 state file and keeps tokens out of URLs. Browser terminal I/O stays inside Zellij, and browser-client state stays outside Rimz.
 
 ## CLI
 
