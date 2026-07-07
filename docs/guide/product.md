@@ -78,7 +78,7 @@ The [everyday loop](#the-loop) needs you at step 3. Loop engineering removes tha
 
 Built-ins first. `[resume] auto_continue = true` (off by default) resumes rate-limit and spend-limit parks the moment the provider window resets and retries overload or transient API errors on a bounded backoff; context compaction rides the same loop, so a long agent keeps its footing with no babysitter process ([configuration.md → Resume](../reference/configuration.md#resume), [provider.md → Auto-continue](../internals/agents/provider.md#auto-continue)).
 
-Then the clock. `rimz loop` drives supervised turns on a schedule (calendar, interval, cron, or poll-until), and a check-guarded task watches a command and wakes an agent on the result, so a failing test suite becomes a fix prompt instead of a red morning ([harness.md → Scheduled turns](../internals/agents/harness.md#scheduled-turns-loop)):
+Then the clock. `rimz loop` drives supervised turns on a schedule (calendar, interval, cron, or poll-until), and a check-guarded task watches a command and wakes an agent on the result, so a failing test suite becomes a fix prompt instead of a red morning ([harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop)):
 
 ```sh
 rimz loop add morning --spec claude-ping --at 07:00 --days weekdays   # prime the 5h window
