@@ -1346,7 +1346,21 @@ fn steer_failure(check: &deliver::DeliveryCheck, target: &str, message_id: &Mess
             None => format!("no live pane for {target}; cannot steer {message_id}"),
         };
     }
+    if delivery_conditions_pass(check) {
+        return format!(
+            "{message_id} has a recent delivery attempt in progress; retry in a few seconds"
+        );
+    }
     delivery_verdict(check, target, Timestamp::now())
+}
+
+fn delivery_conditions_pass(check: &deliver::DeliveryCheck) -> bool {
+    check.schedule.ready
+        && check.fifo.head
+        && check.agent.present
+        && gate_ready(check)
+        && !check.ask.waiting
+        && check.pane.present
 }
 
 fn remove_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
@@ -2189,7 +2203,7 @@ mod tests {
     use super::*;
 
     use rimz::agents::{AgentStatus, TurnPhase};
-    use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+    use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, WorkspaceId};
     use rimz::pane::PaneRef;
 
     #[test]
@@ -2281,6 +2295,43 @@ mod tests {
         assert_eq!(preview("a\nb\tc", 10), "a b c");
         assert_eq!(preview("abcdef", 4), "a...");
         assert_eq!(preview("abcdef", 3), "...");
+    }
+
+    #[test]
+    fn steer_failure_ready_check_reports_recent_attempt() {
+        let message_id = MessageId::parse("msg_0000000000000001").unwrap();
+        let check = deliver::DeliveryCheck {
+            schedule: deliver::ScheduleCheck {
+                ready: true,
+                not_before: None,
+                retry_after: None,
+            },
+            fifo: deliver::FifoCheck {
+                head: true,
+                blocker: None,
+            },
+            agent: deliver::AgentCheck { present: true },
+            gate: deliver::GateCheck {
+                gate: DeliveryGate::Done,
+                status: Some(AgentStatus::Idle),
+                open: true,
+                resume_recovered: None,
+            },
+            ask: deliver::AskCheck {
+                waiting: false,
+                force: false,
+            },
+            pane: deliver::PaneCheck {
+                present: true,
+                pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_3")),
+                pinned_pane_id: None,
+            },
+        };
+
+        let message = steer_failure(&check, "@claude", &message_id);
+
+        assert!(message.contains("recent delivery attempt"), "{message}");
+        assert!(!message.contains("ready: delivery conditions pass"));
     }
 
     #[test]
