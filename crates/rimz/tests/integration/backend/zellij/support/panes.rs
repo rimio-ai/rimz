@@ -1039,15 +1039,6 @@ pub(in crate::backend::zellij) fn wait_for_focused_non_sidebar_title_in_tab(
     }
 }
 
-/// Raw id of the focused non-plugin pane in `tab`, if any.
-pub(in crate::backend::zellij) fn focused_nonplugin_id_in_tab(
-    xdg: &Path,
-    session: &str,
-    tab: u64,
-) -> Option<u64> {
-    focused_nonplugin_id_in_tab_result(xdg, session, tab).unwrap_or_else(|err| panic!("{err}"))
-}
-
 pub(in crate::backend::zellij) fn focused_nonplugin_id_in_tab_result(
     xdg: &Path,
     session: &str,

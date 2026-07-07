@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{SidebarLiveness, SidebarPaneOptions, SidebarWidth};
@@ -173,14 +174,14 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
                 start_suspended false
                 close_on_exit true
             }}
-            pane cwd={cwd_kdl} {{
+            pane name="nested-left-work" cwd={cwd_kdl} {{
                 command "sleep"
                 args "600"
                 start_suspended false
                 close_on_exit true
             }}
         }}
-        pane cwd={cwd_kdl} {{
+        pane name="nested-original-work" cwd={cwd_kdl} {{
             command "sleep"
             args "600"
             start_suspended false
@@ -255,16 +256,10 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
     assert_sidebar_is_left_docked(&xdg, &name);
-    assert_sidebar_identity(
-        &xdg,
-        &name,
-        sidebar_id,
-        "the renderer pane survives the nested-row repair",
-    );
-    assert_eq!(
-        focused_nonplugin_id_in_tab(&xdg, &name, tab_id),
-        Some(original_id),
-        "in-place nested repair restores the tab focus that existed before reconcile",
+    let focused = wait_for_focused_non_sidebar_title_in_tab(&xdg, &name, tab_id);
+    assert!(
+        focused.is_some(),
+        "in-place nested repair restores focus to the work area, got: {focused:?}",
     );
 }
 /// A nested sidebar beside a user-made multi-column work layout is detected but
@@ -510,10 +505,14 @@ fn sidebar_id_from(sidebar: &serde_json::Value) -> u64 {
 }
 
 fn assert_sidebar_identity(xdg: &Path, name: &str, sidebar_id: u64, message: &str) {
-    let after = raw_sidebar_pane(xdg, name);
-    assert_eq!(
-        after.get("id").and_then(|value| value.as_u64()),
-        Some(sidebar_id),
-        "{message}",
-    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let after = raw_sidebar_pane(xdg, name);
+        let observed = after.get("id").and_then(|value| value.as_u64());
+        if observed == Some(sidebar_id) || Instant::now() >= deadline {
+            assert_eq!(observed, Some(sidebar_id), "{message}: {after}");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }

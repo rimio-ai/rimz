@@ -252,9 +252,9 @@ fn uninstall_removes_current_cargo_and_system_binaries() {
     let cargo_bin = fixture.cargo_home.join("bin");
     fs::create_dir_all(&cargo_bin).expect("mkdir cargo bin");
     let cargo_copy = cargo_bin.join("rimz");
-    fs::copy(&current, &cargo_copy).expect("copy cargo rimz");
+    hard_link_or_copy(&current, &cargo_copy).expect("link cargo rimz");
     let system_copy = fixture.system_bin.join("rimz");
-    fs::copy(&current, &system_copy).expect("copy system rimz");
+    hard_link_or_copy(&current, &system_copy).expect("link system rimz");
 
     let output = fixture
         .rimz_at(&current)
@@ -270,6 +270,11 @@ fn uninstall_removes_current_cargo_and_system_binaries() {
     assert!(!current.exists(), "running copy should be removed");
     assert!(!cargo_copy.exists(), "cargo bin copy should be removed");
     assert!(!system_copy.exists(), "system bin copy should be removed");
+}
+
+#[cfg(unix)]
+fn hard_link_or_copy(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::hard_link(from, to).or_else(|_| fs::copy(from, to).map(|_| ()))
 }
 
 #[test]

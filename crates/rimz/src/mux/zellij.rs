@@ -51,6 +51,21 @@ const MIN_MOUSE_HOVER_EFFECTS_VERSION: (u32, u32, u32) = (0, 44, 0);
 /// Per-attempt bound for the pre-attach health probe.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Runtime pre-attach health-probe bound. Tests may set
+/// `RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS` to shorten fake-shim wait paths.
+fn health_probe_timeout() -> Duration {
+    let Some(value) =
+        env::var_os("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS").filter(|value| !value.is_empty())
+    else {
+        return HEALTH_PROBE_TIMEOUT;
+    };
+    value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(HEALTH_PROBE_TIMEOUT)
+}
+
 /// Poll cadence while waiting for the presence plugin to publish a requested
 /// topology payload.
 const TOPOLOGY_CACHE_POLL_STEP: Duration = Duration::from_millis(50);

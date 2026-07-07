@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::parse::{SessionState, session_state_from_line};
 use super::raw_pane::{RawPaneListing, SessionCleanliness, classify_session_panes};
-use super::{HEALTH_PROBE_TIMEOUT, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend};
+use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::WorkspaceId;
 use crate::ledger::paths::{self, RuntimePaths};
@@ -186,7 +186,7 @@ impl ZellijBackend {
         name: &str,
         workspace_id: &WorkspaceId,
     ) -> Result<SessionCleanliness> {
-        self.topology_panes_for_workspace(name, workspace_id, None, HEALTH_PROBE_TIMEOUT)
+        self.topology_panes_for_workspace(name, workspace_id, None, health_probe_timeout())
             .map(|panes| classify_session_panes(&panes))
     }
 

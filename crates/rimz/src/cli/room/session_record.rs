@@ -1,7 +1,7 @@
 //! Session-record lookup, mux choice, and renamed-session retirement.
 
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use rimz::ids::MuxName;
@@ -10,6 +10,9 @@ use rimz::mux::MuxBackend;
 use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
 use super::MissingSessionReport;
+
+const LIST_SESSIONS_ATTEMPTS: u8 = 3;
+const LIST_SESSIONS_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 pub(crate) fn pick_mux_for_session(
     session: &str,
@@ -20,7 +23,8 @@ pub(crate) fn pick_mux_for_session(
         return Ok(mux);
     }
     for candidate in [MuxName::Zellij, MuxName::Tmux] {
-        match rimz::mux::backend_for(candidate).list_sessions() {
+        let backend = rimz::mux::backend_for(candidate);
+        match list_sessions_with_retry(backend.as_ref()) {
             Ok(sessions) if sessions.iter().any(|s| s == session) => return Ok(candidate),
             Ok(_) => {}
             Err(rimz::mux::MuxErr::NotInstalled { .. }) => {}
@@ -51,7 +55,8 @@ fn rival_backend_owns_room(session_name: &str, rival_sessions: &[String]) -> boo
 /// blocks — best-effort probe, hard refusal only on a positive.
 pub(crate) fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<()> {
     let rival = mux.other();
-    let sessions = match rimz::mux::backend_for(rival).list_sessions() {
+    let backend = rimz::mux::backend_for(rival);
+    let sessions = match list_sessions_with_retry(backend.as_ref()) {
         Ok(sessions) => sessions,
         Err(rimz::mux::MuxErr::NotInstalled { .. }) => return Ok(()),
         Err(err) => {
@@ -69,6 +74,31 @@ pub(crate) fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Re
         );
     }
     Ok(())
+}
+
+fn list_sessions_with_retry(backend: &dyn MuxBackend) -> rimz::mux::Result<Vec<String>> {
+    list_sessions_retrying(
+        || backend.list_sessions(),
+        LIST_SESSIONS_ATTEMPTS,
+        LIST_SESSIONS_RETRY_DELAY,
+    )
+}
+
+fn list_sessions_retrying(
+    mut list_sessions: impl FnMut() -> rimz::mux::Result<Vec<String>>,
+    attempts: u8,
+    retry_delay: Duration,
+) -> rimz::mux::Result<Vec<String>> {
+    let attempts = attempts.max(1);
+    for attempt in 0..attempts {
+        match list_sessions() {
+            Ok(sessions) => return Ok(sessions),
+            Err(err @ rimz::mux::MuxErr::NotInstalled { .. }) => return Err(err),
+            Err(err) if attempt + 1 == attempts => return Err(err),
+            Err(_) => std::thread::sleep(retry_delay),
+        }
+    }
+    Ok(Vec::new())
 }
 
 /// Decide whether a workspace's live mux session is stranded by a session-name
@@ -249,6 +279,66 @@ mod tests {
     }
 
     #[test]
+    fn list_sessions_retrying_retries_transient_failures() {
+        let mut calls = 0;
+
+        let sessions = list_sessions_retrying(
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err(transient_list_sessions_error())
+                } else {
+                    Ok(vec!["rimz-room".to_owned()])
+                }
+            },
+            3,
+            Duration::ZERO,
+        )
+        .expect("transient list-sessions recovers");
+
+        assert_eq!(sessions, vec!["rimz-room"]);
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn list_sessions_retrying_treats_clean_empty_as_definitive() {
+        let mut calls = 0;
+
+        let sessions = list_sessions_retrying(
+            || {
+                calls += 1;
+                Ok(Vec::new())
+            },
+            3,
+            Duration::ZERO,
+        )
+        .expect("empty list-sessions succeeds");
+
+        assert!(sessions.is_empty());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn list_sessions_retrying_does_not_retry_missing_backend() {
+        let mut calls = 0;
+
+        let err = list_sessions_retrying(
+            || {
+                calls += 1;
+                Err(rimz::mux::MuxErr::NotInstalled {
+                    program: "zellij".to_owned(),
+                })
+            },
+            3,
+            Duration::ZERO,
+        )
+        .expect_err("not-installed is definitive");
+
+        assert!(matches!(err, rimz::mux::MuxErr::NotInstalled { .. }));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
     fn renamed_session_retires_only_a_live_diverged_name() {
         let live = vec!["rimz-old".to_owned(), "unrelated".to_owned()];
 
@@ -322,5 +412,13 @@ mod tests {
             updated_at: jiff::Timestamp::now(),
         };
         workspace_record::write(&paths, &record).unwrap();
+    }
+
+    fn transient_list_sessions_error() -> rimz::mux::MuxErr {
+        rimz::mux::MuxErr::Command {
+            program: "zellij".to_owned(),
+            args: "list-sessions".to_owned(),
+            stderr: "transient".to_owned(),
+        }
     }
 }

@@ -480,6 +480,8 @@ fn web_open_refuses_url_when_prepared_session_is_not_addressable() {
         .env("RIMZ_TEST_ZELLIJ_LOG", &log)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
         .env("RIMZ_TEST_ZELLIJ_DISABLE_CREATED_SESSIONS", "1")
+        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
+        .env("RIMZ_TEST_WEB_ADDRESSABLE_MS", "300")
         .env(
             "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
             "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",

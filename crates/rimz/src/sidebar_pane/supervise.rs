@@ -25,6 +25,10 @@ const INSTANCE_ENV: &str = "RIMZ_SIDEBAR_INSTANCE_ID";
 #[cfg(feature = "testkit")]
 const TEST_FAULT_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_FAULT";
 #[cfg(feature = "testkit")]
+const TEST_EXIT_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_WORKER_EXIT_FILE";
+#[cfg(feature = "testkit")]
+const TEST_REAP_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS";
+#[cfg(feature = "testkit")]
 const TEST_STRAY_PID_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FILE";
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
 const REAP_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -206,7 +210,7 @@ fn wait_for_worker_and_reap_strays(worker_pid: nix::unistd::Pid) -> Result<Worke
                     "reaped stray sidebar supervisor child",
                 );
             }
-            Ok(WaitStatus::StillAlive) => thread::sleep(REAP_POLL_INTERVAL),
+            Ok(WaitStatus::StillAlive) => thread::sleep(reap_poll_interval()),
             Ok(status) => {
                 debug!(status = ?status, "observed non-terminal child status");
             }
@@ -325,6 +329,23 @@ fn render_program(exe: &std::path::Path) -> String {
 }
 
 #[cfg(feature = "testkit")]
+fn reap_poll_interval() -> Duration {
+    let Some(value) = env::var_os(TEST_REAP_POLL_MS_ENV).filter(|value| !value.is_empty()) else {
+        return REAP_POLL_INTERVAL;
+    };
+    value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(REAP_POLL_INTERVAL)
+}
+
+#[cfg(not(feature = "testkit"))]
+fn reap_poll_interval() -> Duration {
+    REAP_POLL_INTERVAL
+}
+
+#[cfg(feature = "testkit")]
 fn inject_test_fault_if_requested() {
     let Some(fault) = env::var_os(TEST_FAULT_ENV).filter(|value| !value.is_empty()) else {
         return;
@@ -334,11 +355,28 @@ fn inject_test_fault_if_requested() {
             let _ = io::stderr().write_all(b"rimz test sidebar worker abort\n");
             std::process::abort();
         }
-        "sleep_then_exit" => {
-            thread::sleep(Duration::from_secs(5));
+        "exit_on_file" => exit_when_test_file_appears(),
+        _ => {}
+    }
+}
+
+#[cfg(feature = "testkit")]
+fn exit_when_test_file_appears() {
+    let Some(path) = env::var_os(TEST_EXIT_FILE_ENV).filter(|value| !value.is_empty()) else {
+        let _ = io::stderr().write_all(b"rimz test sidebar worker exit file missing\n");
+        std::process::exit(2);
+    };
+    let path = std::path::PathBuf::from(path);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if path.exists() {
             std::process::exit(0);
         }
-        _ => {}
+        if std::time::Instant::now() >= deadline {
+            let _ = io::stderr().write_all(b"rimz test sidebar worker exit file timed out\n");
+            std::process::exit(1);
+        }
+        thread::sleep(Duration::from_millis(10));
     }
 }
 

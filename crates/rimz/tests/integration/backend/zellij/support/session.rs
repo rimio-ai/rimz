@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, ScrubSessionEnvExt};
 
-pub(in crate::backend::zellij) const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
+pub(in crate::backend::zellij) const SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
 pub(in crate::backend::zellij) const LIST_PANES_JSON_TIMEOUT: Duration =
     Duration::from_millis(1500);
 pub(in crate::backend::zellij) const LIST_PANES_JSON_ATTEMPTS: u32 = 5;
@@ -301,8 +301,8 @@ impl Drop for ScopedSessionCleanup {
 /// beat before its server accepts actions; under the parallelism this file now
 /// enables, that gap is real, so gate on a lightweight action (`query-tab-names`,
 /// which a default session always answers) succeeding rather than on the bare
-/// listing. Sessions take 300–800 ms to come up on a quiet host; we give it 30 s
-/// for slow/loaded CI machines.
+/// listing. Sessions take 300–800 ms to come up on a quiet host; starved CI can
+/// exceed 30 s, so widen the in-test window rather than burn a full retry cycle.
 pub(in crate::backend::zellij) fn wait_until_session_ready(xdg: &Path, name: &str) {
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     loop {

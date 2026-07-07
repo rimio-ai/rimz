@@ -281,9 +281,24 @@ fn write_login_token_outcome(outcome: LoginTokenOutcome) {
     }
 }
 
+const WEB_ADDRESSABLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn web_addressable_timeout() -> Duration {
+    let Some(value) =
+        std::env::var_os("RIMZ_TEST_WEB_ADDRESSABLE_MS").filter(|value| !value.is_empty())
+    else {
+        return WEB_ADDRESSABLE_TIMEOUT;
+    };
+    value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(WEB_ADDRESSABLE_TIMEOUT)
+}
+
 fn ensure_session_addressable_for_web(session: &str) -> Result<()> {
     let backend = rimz::mux::backend_for(MuxName::Zellij);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + web_addressable_timeout();
     loop {
         match backend.list_sessions() {
             Ok(sessions) if sessions.iter().any(|name| name == session) => return Ok(()),

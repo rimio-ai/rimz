@@ -81,6 +81,7 @@ fn sidebar_supervisor_records_worker_abort() {
 fn sidebar_supervisor_reaps_stray_children_while_worker_runs() {
     let env = Env::new();
     let stray_pid_path = env.home_root.join("stray.pid");
+    let worker_exit_path = env.home_root.join("worker.exit");
     let mut cmd = env.rimz();
     cmd.args([
         "sidebar",
@@ -92,7 +93,9 @@ fn sidebar_supervisor_reaps_stray_children_while_worker_runs() {
         "--session-name",
         "rimz-test",
     ])
-    .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "sleep_then_exit")
+    .env("RIMZ_TEST_SIDEBAR_WORKER_FAULT", "exit_on_file")
+    .env("RIMZ_TEST_SIDEBAR_WORKER_EXIT_FILE", &worker_exit_path)
+    .env("RIMZ_TEST_SIDEBAR_SUPERVISOR_REAP_POLL_MS", "10")
     .env(
         "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FILE",
         &stray_pid_path,
@@ -110,7 +113,8 @@ fn sidebar_supervisor_reaps_stray_children_while_worker_runs() {
         "worker should still be running when the supervisor reaps the stray child"
     );
 
-    let status = wait_child(&mut child, Duration::from_secs(8));
+    std::fs::write(&worker_exit_path, b"done").expect("release sidebar worker");
+    let status = wait_child(&mut child, Duration::from_secs(2));
     assert!(status.success(), "supervisor exited with {status}");
 }
 

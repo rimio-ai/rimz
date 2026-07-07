@@ -4,10 +4,15 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use rimz::workspace::WorkspaceResolver;
 
 use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
+
+// start/reset can hold the full 8s pre-attach topology ceiling; the default
+// 10s command bound leaves no headroom under suite load.
+const START_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[test]
 fn start_refuses_when_rival_backend_runs_room() {
@@ -18,7 +23,7 @@ fn start_refuses_when_rival_backend_runs_room() {
     let output = room
         .rimz()
         .args(["--mux", "zellij", "start"])
-        .bounded_output()
+        .bounded_output_within(START_TIMEOUT)
         .expect("run rival zellij start");
 
     assert!(
@@ -51,7 +56,7 @@ fn attach_from_cwd_uses_live_backend_over_ambient_backend() {
         .rimz()
         .arg("attach")
         .env("ZELLIJ", "1")
-        .bounded_output()
+        .bounded_output_within(START_TIMEOUT)
         .expect("run attach from cwd");
 
     assert!(
@@ -79,7 +84,7 @@ fn start_auto_attaches_to_live_zellij_room() {
     let output = room
         .rimz()
         .arg("start")
-        .bounded_output()
+        .bounded_output_within(START_TIMEOUT)
         .expect("run auto start");
 
     assert!(
@@ -109,7 +114,7 @@ fn reset_targets_live_backend_and_rebirths_on_default() {
     let output = room
         .rimz()
         .args(["reset", "--yes"])
-        .bounded_output()
+        .bounded_output_within(START_TIMEOUT)
         .expect("run auto reset");
 
     assert!(
@@ -144,7 +149,7 @@ fn reset_explicit_rival_refuses_before_teardown() {
     let output = room
         .rimz()
         .args(["--mux", "tmux", "reset", "--yes"])
-        .bounded_output()
+        .bounded_output_within(START_TIMEOUT)
         .expect("run rival reset");
 
     assert!(
@@ -198,7 +203,7 @@ impl TmuxRoom {
             let mut cmd = env.rimz();
             cmd.args(["--mux", "tmux", "start"])
                 .env("TMUX_TMPDIR", &tmux_tmpdir)
-                .bounded_output()
+                .bounded_output_within(START_TIMEOUT)
                 .expect("run tmux start")
         };
         assert!(
@@ -273,7 +278,7 @@ impl ZellijRoom {
             pin_zellij_shared_env(&env, &mut cmd);
             cmd.args(["--mux", "zellij", "start"])
                 .env("TMUX_TMPDIR", &tmux_tmpdir)
-                .bounded_output()
+                .bounded_output_within(START_TIMEOUT)
                 .expect("run zellij start")
         };
         assert!(
