@@ -5,7 +5,8 @@
 //! The dangerous step is the process sweep: it signals processes by heuristic, so
 //! it is scoped three ways — real uid, the exact (path-derived, globally unique)
 //! session name in the command line, and an explicit exclusion of this process
-//! and its ancestors — and it is Linux-gated (it needs `/proc`).
+//! and its ancestors — and it runs where the process backend can enumerate the
+//! current user's process table.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -152,7 +153,7 @@ fn remove_path(path: &Path) -> bool {
 /// corpse and sweeping it is safe; `rimz reload` infers "dead" from a best-effort
 /// probe, so it never sweeps a server (a probe that wrongly read a live session
 /// as dead would otherwise destroy it) and reaps only respawnable daemons.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(unix, test))]
 fn is_sweep_target(
     cmdline: &str,
     session_name: &str,
@@ -173,7 +174,7 @@ fn is_sweep_target(
 /// ancestors). `include_mux_server` flows through to [`is_sweep_target`]. Pure
 /// over its inputs so the scoping rules are unit-tested without touching real
 /// processes.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(unix, test))]
 pub(crate) fn select_sweep_targets(
     procs: &[ProcInfo],
     my_uid: u32,
@@ -204,7 +205,7 @@ pub(crate) fn protected_pids(procs: &[ProcInfo], self_pid: u32) -> HashSet<u32> 
     let parents: HashMap<u32, u32> = procs.iter().map(|proc| (proc.pid, proc.ppid)).collect();
     let mut protected = HashSet::new();
     let mut current = self_pid;
-    // Bounded so a `/proc` glitch (a cycle) cannot loop forever.
+    // Bounded so a process-table glitch (a cycle) cannot loop forever.
     for _ in 0..64 {
         if !protected.insert(current) {
             break;
@@ -222,20 +223,18 @@ pub(crate) fn protected_pids(procs: &[ProcInfo], self_pid: u32) -> HashSet<u32> 
 /// runs it after killing the session (`include_mux_server: true`); `rimz reload`
 /// runs it for a workspace whose session a probe read as gone, reaping only
 /// respawnable sidebar/app-server leftovers (`include_mux_server: false`) so a
-/// misread live session is never destroyed. Linux-only.
-#[cfg(target_os = "linux")]
+/// misread live session is never destroyed.
+#[cfg(unix)]
 pub(crate) fn sweep_orphan_processes(
     workspace_id: &str,
     session_name: &str,
     include_mux_server: bool,
 ) -> Vec<u32> {
-    use nix::unistd::Uid;
-
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
     let targets = select_sweep_targets(
         &procs,
-        Uid::current().as_raw(),
+        current_uid(),
         session_name,
         workspace_id,
         &protected,
@@ -244,7 +243,7 @@ pub(crate) fn sweep_orphan_processes(
     kill_pids(&targets, SWEEP_GRACE)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub(crate) fn sweep_orphan_processes(
     _workspace_id: &str,
     _session_name: &str,
@@ -256,9 +255,10 @@ pub(crate) fn sweep_orphan_processes(
 /// SIGUSR1 every `rimz stats --refresh` dashboard this user owns so each
 /// re-execs in place onto the freshly-installed binary. User-wide and unscoped:
 /// stats are account-global, so a reload refreshes the daemon-view pane and any
-/// standalone dashboard alike. Returns the pids signalled; empty off-Linux,
-/// where `/proc` is unavailable and the dashboard reloads via its own `r` key.
-#[cfg(target_os = "linux")]
+/// standalone dashboard alike. Returns the pids signalled; empty where the
+/// process backend cannot enumerate processes and the dashboard reloads via its
+/// own `r` key.
+#[cfg(unix)]
 pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
@@ -279,7 +279,7 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
     targets
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
     Vec::new()
 }
@@ -288,7 +288,7 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
 /// Token matching keeps the user-wide signal pass scoped to the Rimz stats
 /// subcommand and excludes one-shot reports and unrelated commands mentioning
 /// those words.
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, test))]
 pub(crate) fn is_stats_refresh(cmdline: &str) -> bool {
     let Some(args) = cmdline
         .strip_prefix("rimz ")
@@ -334,7 +334,7 @@ pub(crate) fn attributed_pane(pid: u32, mux: MuxName) -> Option<PaneId> {
 /// env) to exactly `pane` — the cleanup for an in-place add whose pane never
 /// mounted or could not be docked, so a failed add never leaks a paneless
 /// renderer. Same uid/ancestor scoping as the orphan sweep. Returns the number
-/// of processes signalled; empty off-Linux, where `list_processes` is empty.
+/// of processes signalled; empty where `list_processes` is empty.
 pub(crate) fn kill_sidebar_serve_for_pane(
     workspace_id: &str,
     session_name: &str,
@@ -355,22 +355,20 @@ pub(crate) fn kill_sidebar_serve_for_pane(
     kill_pids(&targets, SWEEP_GRACE).len()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn current_uid() -> u32 {
-    nix::unistd::Uid::current().as_raw()
+    nix::unistd::getuid().as_raw()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub(crate) fn current_uid() -> u32 {
-    // No `/proc`, so `list_processes` is empty and this is never compared.
     u32::MAX
 }
 
 /// SIGTERM each pid, wait `grace`, then SIGKILL any still alive; returns the pids
 /// signalled. The shared graceful-then-forceful kill path for the `rimz reset`
-/// orphan sweep and `rimz reload`'s zombie-sidebar reaping. Linux-only — callers
-/// on other platforms get an empty result and fall back to mux-level pane close.
-#[cfg(target_os = "linux")]
+/// orphan sweep and `rimz reload`'s zombie-sidebar reaping.
+#[cfg(unix)]
 pub(crate) fn kill_pids(targets: &[u32], grace: Duration) -> Vec<u32> {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
@@ -397,7 +395,7 @@ pub(crate) fn kill_pids(targets: &[u32], grace: Duration) -> Vec<u32> {
     targets.to_vec()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub(crate) fn kill_pids(_targets: &[u32], _grace: Duration) -> Vec<u32> {
     Vec::new()
 }
@@ -504,7 +502,7 @@ mod tests {
         assert_eq!(got, vec![10]);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[test]
     fn is_stats_refresh_matches_only_the_held_or_standalone_dashboard() {
         assert!(is_stats_refresh("/usr/bin/rimz stats --refresh --hold"));

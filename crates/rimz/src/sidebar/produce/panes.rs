@@ -1,5 +1,5 @@
 //! The live pane frame: the single-flight pane-roster cache, the raced-read
-//! process rotation, and the `/proc` process-start stamp — everything the
+//! process rotation, and the process-start stamp — everything the
 //! producer publishes to `snapshot.json` for consumers to fold in process.
 
 use std::collections::HashSet;
@@ -121,7 +121,7 @@ fn rotate_from_prior(frame: &mut PaneFrame, prior: Option<&PaneFrame>) {
 }
 
 /// The pane ids a fresh mux roster read left without a process start — the
-/// set the `/proc` stamp owns ([`stamp_pane_process_starts`]). Captured before
+/// set the derived process stamp owns ([`stamp_pane_process_starts`]). Captured before
 /// the frame rotates against the prior publish, so a backend-reported start is
 /// never confused with Rimz's own derived stamp and never overwritten by one.
 fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
@@ -286,12 +286,12 @@ pub fn repaired_pane_frame_for_binding(
     Ok(frame)
 }
 
-/// Fill a pane's raced-empty cwd from `/proc/<pane_pid>/cwd` once the root pid
+/// Fill a pane's raced-empty cwd from the process backend once the root pid
 /// is known. A fresh mux roster can answer a just-born pane with an empty cwd
 /// for a tick; without one the pane groups under `external` and flickers there
 /// until the mux reports the path. Only an empty cwd is ever filled — a
 /// mux-reported cwd is authoritative because it tracks OSC7/foreground chdir,
-/// which can diverge from the root's `/proc` cwd. A `/proc` cwd that no longer
+/// which can diverge from the root process cwd. A process cwd that no longer
 /// exists is also skipped, since Linux annotates deleted cwd targets with a
 /// publish-unsafe `" (deleted)"` suffix.
 fn backfill_pane_cwds(frame: &mut PaneFrame, proc_cwd: &dyn Fn(u32) -> Option<PathBuf>) {
@@ -1080,7 +1080,7 @@ fn excerpt(value: &str, max_bytes: usize) -> String {
     value[..end].to_owned()
 }
 
-/// The fast path's metrics arm: re-sample `/proc` over a topology-fresh cached
+/// The fast path's metrics arm: re-sample process metrics over a topology-fresh cached
 /// frame when some pane's sample is due, and republish. The publish keeps the
 /// frame's `produced_at_ms`, so a metrics-only refresh never masquerades as a
 /// fresh pane listing; election rides the same snapshot lock as the full

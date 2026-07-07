@@ -107,7 +107,12 @@ pub fn process_start_token(pid: u32) -> Option<String> {
     linux_process_start_from_stat(&stat).map(ToOwned::to_owned)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+pub fn process_start_token(pid: u32) -> Option<String> {
+    crate::proc::process_start_token(pid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn process_start_token(_pid: u32) -> Option<String> {
     None
 }
@@ -121,6 +126,20 @@ fn process_is_live(pid: u32, expected_start: Option<&str>) -> bool {
     linux_process_stat_is_live(&stat, expected_start)
 }
 
+#[cfg(target_os = "macos")]
+fn process_is_live(pid: u32, expected_start: Option<&str>) -> bool {
+    let Some(metrics) = crate::proc::stat_metrics(pid) else {
+        return unix_kill_probe(pid);
+    };
+    if metrics.state == 'Z' {
+        return false;
+    }
+    match expected_start {
+        Some(expected) => crate::proc::process_start_token(pid).as_deref() == Some(expected),
+        None => true,
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn linux_process_stat_is_live(stat: &str, expected_start: Option<&str>) -> bool {
     if matches!(linux_process_state_from_stat(stat), Some("Z" | "X")) {
@@ -132,8 +151,13 @@ fn linux_process_stat_is_live(stat: &str, expected_start: Option<&str>) -> bool 
     }
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn process_is_live(pid: u32, _expected_start: Option<&str>) -> bool {
+    unix_kill_probe(pid)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn unix_kill_probe(pid: u32) -> bool {
     use nix::errno::Errno;
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
@@ -235,7 +259,7 @@ mod tests {
         let missing = RuntimeOwner::new(RuntimeOwnerKind::Agent, "sess-missing", u32::MAX, None);
         assert_eq!(agent_liveness(&agent(Some(missing))), AgentLiveness::Dead);
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let wrong_start = RuntimeOwner::new(
                 RuntimeOwnerKind::Agent,

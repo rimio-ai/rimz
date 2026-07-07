@@ -54,7 +54,8 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     // An active pane anchors its primary line on the shell that owns it (its root
     // process), so the line stays put as commands come and go while the live
     // command rides the second line. An idle pane keeps its foreground program as
-    // its one label. Where `/proc` can't name the shell, fall back to the program.
+    // its one label. Where the process backend can't name the shell, fall back
+    // to the program.
     let name = if elevated.is_some() {
         program.clone()
     } else if state.is_busy() {
@@ -176,7 +177,7 @@ mod tests {
     #[test]
     fn process_row_carries_the_full_command_only_when_active() {
         // Active: line 2 shows the command; line 1 falls back to the program when
-        // `/proc` can't name the owning shell (no pid in tests).
+        // The process backend can't name the owning shell (no pid in tests).
         let active = row_from_process(
             &pane("%1", "sudo npm install -g @openai/codex", "/repo"),
             Timestamp::now(),

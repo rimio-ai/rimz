@@ -21,7 +21,7 @@ use crate::cli::render;
 
 const DEFAULT_LABEL_WIDTH: usize = 56;
 const UNAVAILABLE_NOTICE: &str =
-    "rimz remote bandwidth needs /proc on the host serving the room (Linux host).";
+    "rimz remote bandwidth needs Linux VFS write-rate counters on the host serving the room.";
 const NO_PANE_PIDS_NOTICE: &str = "rimz remote bandwidth could not resolve any pane root process.";
 const ZELLIJ_NO_PANE_PIDS_NOTICE: &str = concat!(
     "rimz remote bandwidth could not resolve any pane root process. ",

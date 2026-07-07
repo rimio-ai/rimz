@@ -184,6 +184,9 @@ tracing-subscriber.workspace = true
 nix.workspace = true
 signal-hook.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+
 # build.rs compacts the generated LiteLLM pricing snapshot into a gzipped
 # `OUT_DIR` artifact for embedding (tier 1). Network-free: release packaging
 # generates the ignored snapshot before building; `serde_json` filters fields

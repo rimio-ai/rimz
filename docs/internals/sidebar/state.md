@@ -39,11 +39,11 @@ The **pane frame** is the topology everything else enriches: `PaneFrame` carries
 
 | Lane | Writer | Readers | Carries |
 | --- | --- | --- | --- |
-| `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from `/proc` when the mux races<br>- metrics, carried panes, `viewed_panes`, `focused_pane`, and client presence<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline<br>- backend roster freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
+| `snapshot.json` | producer ([`produce::panes`](../../../crates/rimz/src/sidebar/produce/panes.rs)) | every node's fold | the typed pane frame:<br>- panes with foreground/spawn command and cwd repaired from the process backend when the mux races<br>- metrics, carried panes, `viewed_panes`, `focused_pane`, and client presence<br>- observation stamp plus producer `build` id; `observed_at_ms` is the supersession baseline<br>- backend roster freshness by default, presence-stamp event TTL while `presence.stamp` is fresh |
 | `pane-topology.json` | Zellij presence plugin via the host CLI | Zellij producer pull | Zellij's pane roster — live panes, tab names, the plugin-resolved session focused pane, raw focus candidates, foreground commands, and geometry |
 | `presence.stamp` | Zellij plugin, tmux control-mode watch | producer | an mtime liveness mark; while fresh, the pane lane relaxes to the longer event-mode TTL because typed events cover the latency |
 
-Producer **enrichment lanes** fold onto the admitted cards. The fetch worker handles `/proc` and group roots with pane production; the cache refresher handles git, PR state, spending, accounts, usage, credits, and auto-continue so the worker's fast lane projects their last published values instead of waiting behind them. The figures reach consumers through the cache (or, for metrics, restamped onto the pane frame).
+Producer **enrichment lanes** fold onto the admitted cards. The fetch worker handles process metrics and group roots with pane production; the cache refresher handles git, PR state, spending, accounts, usage, credits, and auto-continue so the worker's fast lane projects their last published values instead of waiting behind them. The figures reach consumers through the cache (or, for metrics, restamped onto the pane frame).
 
 | Lane | Scope | Carries |
 | --- | --- | --- |
@@ -93,7 +93,7 @@ Each push channel exists so a change a writer already knows about reaches every 
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live Codex session's rollout JSONL and runs the stat-gated context refresh on write, covering the mid-turn gap where Codex hooks fire only at progress events. Only the elder watches; demotion drops the watch, and a watcher that never starts costs nothing because the producer-tick refresh stays unconditional.
 - **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, refreshes heavy caches from the last published pane frame, fires due loop tasks for this room, and wakes due scheduled messages. Demotion turns it into a sleeper; a panic resets its rollup cursor and spending walker, and the next tick retries from cache truth.
 
-Focus drives a dynamic fast tick for the work the user is viewing. The producer folds `PaneFrame.viewed_panes` into `SidebarSnapshot::viewed_panes`; git edit-sensitive facts for the viewed worktree and `/proc` metrics for the viewed pane run on the focused tier, while commit-shaped git facts and every background worktree/pane stay on their cheaper cadences.
+Focus drives a dynamic fast tick for the work the user is viewing. The producer folds `PaneFrame.viewed_panes` into `SidebarSnapshot::viewed_panes`; git edit-sensitive facts for the viewed worktree and process metrics for the viewed pane run on the focused tier, while commit-shaped git facts and every background worktree/pane stay on their cheaper cadences.
 
 Client presence is sampled by the producer and classified by the reader's `now_ms`. The mux `client_view` read returns attached human clients plus the panes they view; tmux also returns the freshest `client_activity` epoch, so `SidebarPresence::classify` marks `Idle` once input is quiet for the configured `[sidebar] afk_after_secs` window (15 minutes by default) and `Detached` when no human client remains. Zellij exposes attach state but no per-client input-idle timestamp, so an attached Zellij room stays `Active` until every terminal client detaches.
 
@@ -103,7 +103,7 @@ Remote tmux honors `afk_after_secs`: host `client_activity` advances only on inp
 
 Fusion is pure over pulled truth, the event store, and `now_ms`: no IO, no subprocess, no clock read past `now`.
 
-`SidebarSnapshot::panes_observed_at_ms.or(panes_produced_at_ms)` is the supersession baseline: an event no newer than the pane observation is skipped, because the pull already saw later pane truth. A `PaneClosed` naming a *carried* pane applies at any age — the frame held that pane on `/proc` evidence rather than seeing it, so the frame proves nothing the close could be superseded by, and the close also retires the pane's carried-truth notice.
+`SidebarSnapshot::panes_observed_at_ms.or(panes_produced_at_ms)` is the supersession baseline: an event no newer than the pane observation is skipped, because the pull already saw later pane truth. A `PaneClosed` naming a *carried* pane applies at any age — the frame held that pane on process evidence rather than seeing it, so the frame proves nothing the close could be superseded by, and the close also retires the pane's carried-truth notice.
 
 The overlays apply in precedence order. `PaneClosed` runs first and deletes rows; if it names `focused_pane`, the register clears and the renderer holds its last highlight. `PaneOpened` creates nothing; it asks the producer for a verified frame. `CommandChanged` overlays the command for non-deleted, already-admitted panes. The newest `FocusChanged` lands last: row bits mirror every listed focus mark, a single focused pane sets the session register and marks the pane viewed, and a multi-pane level dump mirrors row bits only.
 
@@ -123,7 +123,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | Git diff stats | focused: `DIFF_STATS_FOCUSED_LOCAL_TTL` local/edit facts and `DIFF_STATS_FOCUSED_COMMIT_TTL` commit/PR facts; background: `DIFF_STATS_TTL` hot and `DIFF_STATS_IDLE_TTL` idle | Worktree header churn, ahead/behind counts, landed markers, trunk-sync classification |
 | PR state | `PR_STATE_HOT_TTL` for hot/focused repos, `PR_STATE_TTL` for idle repos; escalating failure backoff starts at `PR_STATE_RETRY_TTL` and caps at the repo tier; HEAD changes bypass the TTL | Worktree header PR glyphs after diverged stats; each due repo enumerates open PRs once, and failed repos keep last-known-good state |
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
-| `/proc` metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
+| process metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
 | Spending walk | `SPENDING_TTL` | Provider dashboard, fleet store, and the floor under the live cockpit spend |
 | Accounts | `ACCOUNTS_TTL` success; `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
 | Live-session context | `SESSION_REFRESH_INTERVAL` | Provider dashboard budget windows and session sidecars |
@@ -140,7 +140,7 @@ The serve loop also wakes at the renderer-local order-hold expiry to fire the re
 
 The jump scroll anchor is a display-only runtime file, TTL-gated by `FOCUS_ANCHOR_FRESH`, carried renderer-to-renderer on the existing `FocusChanged` wakeup.
 
-An attached sidebar in an unviewed tab keeps animation suspended and repaints only when its glanceable roster/status/unread projection changes, throttled by `BACKGROUND_PAINT_MIN_INTERVAL`; turn phase, gauges, `/proc` metrics, spend, git facts, and animation phase stay off the hidden paint trigger.
+An attached sidebar in an unviewed tab keeps animation suspended and repaints only when its glanceable roster/status/unread projection changes, throttled by `BACKGROUND_PAINT_MIN_INTERVAL`; turn phase, gauges, process metrics, spend, git facts, and animation phase stay off the hidden paint trigger.
 
 ## Failure modes
 

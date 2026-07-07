@@ -1,6 +1,6 @@
 use super::*;
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(super) fn walk_to_agent_ancestor(source: &str) -> Option<u32> {
     // Cap the walk so a pathologically deep tree (or a /proc parse glitch)
     // cannot loop the hook helper. 32 levels is far beyond any real agent
@@ -10,7 +10,7 @@ pub(super) fn walk_to_agent_ancestor(source: &str) -> Option<u32> {
         if pid <= 1 {
             return None;
         }
-        let (name, ppid) = read_proc_status(pid)?;
+        let (name, ppid) = rimz::proc::comm_and_ppid(pid)?;
         if matches_agent_kind(&name, source) {
             return Some(pid);
         }
@@ -19,27 +19,9 @@ pub(super) fn walk_to_agent_ancestor(source: &str) -> Option<u32> {
     None
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub(super) fn walk_to_agent_ancestor(_source: &str) -> Option<u32> {
     None
-}
-
-#[cfg(target_os = "linux")]
-fn read_proc_status(pid: u32) -> Option<(String, u32)> {
-    let raw = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    let mut name = None;
-    let mut ppid = None;
-    for line in raw.lines() {
-        if let Some(rest) = line.strip_prefix("Name:") {
-            name = Some(rest.trim().to_owned());
-        } else if let Some(rest) = line.strip_prefix("PPid:") {
-            ppid = rest.trim().parse::<u32>().ok();
-        }
-        if name.is_some() && ppid.is_some() {
-            break;
-        }
-    }
-    Some((name?, ppid?))
 }
 
 /// Whether the kernel-reported `comm` is one of the agent's declared process
@@ -63,8 +45,8 @@ pub(super) fn matches_agent_kind(comm: &str, source: &str) -> bool {
 /// keep a stray candidate degrading to the static ladder rather than
 /// misrouting. Predicates run cheap-first (`comm`, then the `cwd` readlink,
 /// then the two `environ` reads) so only this agent's processes pay the
-/// `/proc` reads; non-Linux yields nothing and the resolver falls back to
-/// the static ladder.
+/// process-private reads; unsupported hosts yield nothing and the resolver
+/// falls back to the static ladder.
 pub(super) fn sibling_agent_pins(source: &str, cwd: &Path) -> Vec<PathBuf> {
     rimz::proc::list_processes()
         .into_iter()

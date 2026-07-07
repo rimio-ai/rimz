@@ -1,4 +1,4 @@
-//! Per-pane `/proc` resource metrics on the sampling cadence's own clock: the
+//! Per-pane process resource metrics on the sampling cadence's own clock: the
 //! two-sample pane-tree CPU/IO rates, the persisted pane→root-pid bindings with
 //! their starttime pid-reuse guard, and the Zellij pid backfill walk.
 
@@ -24,7 +24,7 @@ const METRICS_SAMPLE_VERSION: u8 = 2;
 /// tick, plus the pane's root-pid binding. Two consecutive readings plus the
 /// elapsed wall time give rates; the binding lets the next tick restore a
 /// Zellij pane's root pid for one guarded stat read instead of the full
-/// `/proc` table walk that re-deriving it costs.
+/// process-table walk that re-deriving it costs.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 struct MetricsSampleEntry {
     /// Cache shape for the sampled counters. Version 1 sampled one process
@@ -42,8 +42,8 @@ struct MetricsSampleEntry {
     /// Aggregated pane-tree rchar + wchar bytes at sample time.
     io_bytes: u64,
     /// Whether `io_bytes` came from a complete tree I/O sample. A missing
-    /// `/proc/<pid>/io` read keeps the display hidden and cannot seed the next
-    /// rate calculation from zero.
+    /// process I/O read keeps the display hidden and cannot seed the next rate
+    /// calculation from zero.
     #[serde(default)]
     io_bytes_valid: bool,
     /// Unix milliseconds when this sample was taken.
@@ -66,9 +66,9 @@ struct MetricsSampleEntry {
     #[serde(default)]
     command: Option<String>,
     /// Last computed display values, persisted so a within-TTL produce copies
-    /// them onto the matching pane instead of re-reading `/proc`. `cpu_pct` /
-    /// `io_bps` are `None` on an entry's first sample (no prior reading to
-    /// rate); `rss_kb` is the last stat read.
+    /// them onto the matching pane instead of re-reading process metrics.
+    /// `cpu_pct` / `io_bps` are `None` on an entry's first sample (no prior
+    /// reading to rate); `rss_kb` is the last stat read.
     #[serde(default)]
     cpu_pct: Option<u16>,
     #[serde(default)]
@@ -80,7 +80,7 @@ struct MetricsSampleEntry {
     #[serde(default)]
     state_samples: Vec<ProcessStateSample>,
     /// Last stuck verdict, carried across fresh windows without re-reading
-    /// `/proc`.
+    /// process metrics.
     #[serde(default)]
     process_state: Option<ProcessState>,
 }
@@ -105,7 +105,7 @@ struct PaneTreeSample {
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct MetricsSampleCache {
-    /// Unix ms of the last `/proc` sample written by this cache shape. The
+    /// Unix ms of the last process sample written by this cache shape. The
     /// per-pane entry stamps own the cadence gate; this top-level stamp stays
     /// as a cheap diagnostic and a stable field for older cache readers.
     #[serde(default)]
@@ -149,7 +149,7 @@ pub(super) fn pane_root_bindings(
         .collect()
 }
 
-/// Whether any pane in `frame` needs a fresh `/proc` sample. Used by the pane
+/// Whether any pane in `frame` needs a fresh process sample. Used by the pane
 /// cache fast path so metrics can refresh from a topology-fresh frame without
 /// paying another mux roster read.
 pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths) -> bool {
@@ -167,23 +167,23 @@ pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths)
     })
 }
 
-/// Enrich each pane with process-tree resource metrics from `/proc`, on the
+/// Enrich each pane with process-tree resource metrics from the process backend, on the
 /// sampling cadence's own clock: viewed panes sample on
 /// [`METRICS_FOCUSED_SAMPLE_TTL`], background panes on
 /// [`METRICS_BACKGROUND_SAMPLE_TTL`]. Fresh
 /// entries carry their stored display values — and the pane→root-pid binding
-/// the process-row name anchors on — forward with zero `/proc` IO. Due entries
-/// read `/proc` to compute two-sample rates (CPU%, IO bytes/s) and write a
-/// fresh stamped sample for the next window. Linux-only; on other platforms
-/// every pane's metric fields stay `None`.
+/// the process-row name anchors on — forward with zero process IO. Due entries
+/// read process counters to compute two-sample rates (CPU%, IO bytes/s) and
+/// write a fresh stamped sample for the next window. Platforms without a
+/// process backend leave every pane's metric fields as `None`.
 ///
-/// The steady-state due sample is O(due pane trees) small `/proc` reads: each
+/// The steady-state due sample is O(due pane trees) small process reads: each
 /// Zellij pane's root pid restores from the prior window's guarded binding
 /// ([`restore_cached_bindings`]), then descendants come from the full
 /// process-table child map when it was already paid for, or from each sampled
-/// process's per-task `/proc/<pid>/task/<tid>/children` files. The full process-table
-/// walk runs only while some due pane's binding is unknown — pane churn or a
-/// foreground change, exactly the moments a fresh roster was already paid for.
+/// process's direct-child query. The full process-table walk runs only while
+/// some due pane's binding is unknown — pane churn or a foreground change,
+/// exactly the moments a fresh roster was already paid for.
 pub(super) fn enrich_pane_metrics(
     frame: &mut PaneFrame,
     session_name: &str,
@@ -226,7 +226,7 @@ pub(super) fn enrich_pane_metrics(
     });
 
     // The walk's ppid→children map also serves the shell→tree descent;
-    // a walk-free tick reads each process's per-task children files instead.
+    // a walk-free tick asks the process backend for direct children instead.
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     if needs_walk {
         children = backfill_zellij_pane_pids_from_proc(frame, session_name);
@@ -476,7 +476,7 @@ fn pane_sampleable(pane: &PaneState) -> bool {
     }
 }
 
-/// Whether a pane needs a fresh `/proc` sample this produce: immediately when
+/// Whether a pane needs a fresh process sample this produce: immediately when
 /// it has no entry or its foreground command changed (the warmup sample for a
 /// new tenant), otherwise on the viewed or background cadence.
 /// Saturating, so a clock that ran backwards reads fresh rather than
@@ -513,7 +513,7 @@ fn display_metrics_ready(cpu_pct: Option<u16>, io_bps: Option<u64>, rss_kb: Opti
 
 /// Carry a fresh entry's stored values onto its pane: the root-pid binding,
 /// the display figures (complete sets only), and the stuck verdict — the
-/// zero-`/proc`-IO arm of the cadence.
+/// zero-process-IO arm of the cadence.
 fn apply_cached_entry(pane: &mut PaneState, entry: &MetricsSampleEntry) {
     // The root-pid binding rides with the values: the reducer anchors an active
     // process row's name on the root's comm, so a pidless (Zellij) pane left
@@ -531,7 +531,7 @@ fn apply_cached_entry(pane: &mut PaneState, entry: &MetricsSampleEntry) {
 }
 
 /// Restore the cached pane→root-pid bindings for pidless (Zellij) panes due a
-/// fresh sample, and report whether any of them still needs the full `/proc`
+/// fresh sample, and report whether any of them still needs the full process
 /// table walk. A pane hits when its cached entry carries a binding and the
 /// root pid is alive with the same `starttime` ticks (the pid-reuse guard) —
 /// `read_start_ticks` is injected so the guard unit-tests over fixtures.

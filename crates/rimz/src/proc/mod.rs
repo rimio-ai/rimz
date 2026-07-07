@@ -1,11 +1,14 @@
-//! Minimal `/proc` reader. The `rimz reset` orphan sweep walks every process
+//! Minimal process reader. Linux uses `/proc`; macOS uses `sysinfo`. The `rimz
+//! reset` orphan sweep walks every process
 //! ([`list_processes`]); the sidebar resolves a pane's owning shell from its root
 //! pid ([`comm`]), dates an in-pane agent instance from its start
 //! ([`process_start`]), and matches a process to a pane by working directory
-//! ([`cwd`]). Linux-only; other platforms return an empty list / `None`, so
-//! callers fall back rather than guessing without `/proc`. It also owns the
-//! hot-path subprocess spawn seams the perf guards count.
+//! ([`cwd`]). Unsupported platforms return an empty list / `None`, so callers
+//! fall back rather than guessing. It also owns the hot-path subprocess spawn
+//! seams the perf guards count.
 
+#[cfg(target_os = "macos")]
+mod macos;
 mod pane_probe;
 
 use std::io::Read;
@@ -18,6 +21,12 @@ pub use pane_probe::{
     InPaneAgentProcess, elevated_in_pane_agent, hosted_agent_absent_under_root,
     in_pane_agent_process_for_root, in_pane_agent_start, in_pane_agent_start_for_root,
     in_pane_agent_starts,
+};
+
+#[cfg(target_os = "macos")]
+pub use macos::{
+    children, clk_tck, cmdline, comm, comm_and_ppid, cwd, env_var, exe_path, io_bytes,
+    list_processes, process_start, process_start_token, real_uid, stat_metrics, write_bytes,
 };
 
 fn git_binary() -> &'static Path {
@@ -180,7 +189,7 @@ pub fn list_processes() -> Vec<ProcInfo> {
     out
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn list_processes() -> Vec<ProcInfo> {
     Vec::new()
 }
@@ -195,8 +204,21 @@ pub fn comm(pid: u32) -> Option<String> {
     parse_comm(&std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn comm(_pid: u32) -> Option<String> {
+    None
+}
+
+/// The base command name and parent pid for `pid`, read in one process-status
+/// probe. Hook attribution walks parent links through this instead of carrying
+/// a private platform reader.
+#[cfg(target_os = "linux")]
+pub fn comm_and_ppid(pid: u32) -> Option<(String, u32)> {
+    parse_status_name_ppid(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn comm_and_ppid(_pid: u32) -> Option<(String, u32)> {
     None
 }
 
@@ -210,7 +232,7 @@ pub fn env_var(pid: u32, key: &str) -> Option<String> {
     parse_environ(&std::fs::read(format!("/proc/{pid}/environ")).ok()?, key)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn env_var(_pid: u32, _key: &str) -> Option<String> {
     None
 }
@@ -265,6 +287,26 @@ fn parse_status_identity(status: &str) -> Option<(u32, u32)> {
     Some((ppid?, real_uid?))
 }
 
+#[cfg(target_os = "linux")]
+fn parse_status_name_ppid(status: &str) -> Option<(String, u32)> {
+    let mut name = None;
+    let mut ppid = None;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Name:") {
+            let trimmed = rest.trim();
+            if !trimmed.is_empty() {
+                name = Some(trimmed.to_owned());
+            }
+        } else if let Some(rest) = line.strip_prefix("PPid:") {
+            ppid = rest.trim().parse::<u32>().ok();
+        }
+        if name.is_some() && ppid.is_some() {
+            break;
+        }
+    }
+    Some((name?, ppid?))
+}
+
 /// The flattened command line of `pid` — `/proc/<pid>/cmdline`'s NUL-separated
 /// argv joined by spaces for substring matching. The sidebar runs it through
 /// the agent-CLI classifiers to tell an in-pane agent from the shell hosting
@@ -281,7 +323,7 @@ pub fn cmdline(pid: u32) -> Option<String> {
     )
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn cmdline(_pid: u32) -> Option<String> {
     None
 }
@@ -296,7 +338,7 @@ pub fn real_uid(pid: u32) -> Option<u32> {
         .map(|(_, uid)| uid)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn real_uid(_pid: u32) -> Option<u32> {
     None
 }
@@ -316,8 +358,22 @@ pub fn process_start(pid: u32) -> Option<jiff::Timestamp> {
     jiff::Timestamp::from_second(seconds).ok()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn process_start(_pid: u32) -> Option<jiff::Timestamp> {
+    None
+}
+
+/// Opaque per-platform start token for pid-reuse checks. Linux returns the
+/// persisted `/proc/<pid>/stat` field 22 string unchanged; macOS tags the
+/// process start timestamp because tokens compare only on the same host.
+#[cfg(target_os = "linux")]
+pub fn process_start_token(pid: u32) -> Option<String> {
+    parse_starttime_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+        .map(|ticks| ticks.to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_start_token(_pid: u32) -> Option<String> {
     None
 }
 
@@ -356,12 +412,12 @@ pub fn exe_path(pid: u32) -> Option<(std::path::PathBuf, bool)> {
 /// sidebar's pane-pid backfill matches a session's Zellij server by uid so a
 /// same-named session of another user is never walked. `None` on a non-Linux
 /// target, so callers skip rather than guess.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub fn own_uid() -> Option<u32> {
-    read_proc(std::process::id()).map(|info| info.real_uid)
+    Some(nix::unistd::getuid().as_raw())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub fn own_uid() -> Option<u32> {
     None
 }
@@ -381,12 +437,12 @@ pub fn user_name(_uid: u32) -> Option<String> {
     None
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn exe_path(_pid: u32) -> Option<(std::path::PathBuf, bool)> {
     None
 }
@@ -448,7 +504,7 @@ pub fn stat_metrics(pid: u32) -> Option<StatMetrics> {
     )
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn stat_metrics(_pid: u32) -> Option<StatMetrics> {
     None
 }
@@ -580,7 +636,7 @@ pub fn children(pid: u32) -> Vec<u32> {
     children
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn children(_pid: u32) -> Vec<u32> {
     Vec::new()
 }
@@ -605,7 +661,7 @@ pub fn io_bytes(pid: u32) -> Option<u64> {
     parse_io_bytes(&io)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn io_bytes(_pid: u32) -> Option<u64> {
     None
 }
@@ -619,7 +675,7 @@ pub fn write_bytes(pid: u32) -> Option<u64> {
     parse_write_bytes(&io)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn write_bytes(_pid: u32) -> Option<u64> {
     None
 }
@@ -692,7 +748,7 @@ pub fn clk_tck() -> u64 {
         .unwrap_or(100)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn clk_tck() -> u64 {
     100
 }
@@ -786,6 +842,20 @@ PPid:\t42
 Uid:\t0\t0\t0\t0
 ";
         assert_eq!(parse_status_identity(status), Some((42, 0)));
+    }
+
+    #[test]
+    fn parse_status_name_ppid_reads_name_and_parent() {
+        let status = "\
+Name:\tcodex
+State:\tS (sleeping)
+PPid:\t42
+Uid:\t1000\t1000\t1000\t1000
+";
+        assert_eq!(
+            parse_status_name_ppid(status),
+            Some(("codex".to_owned(), 42))
+        );
     }
 
     #[test]

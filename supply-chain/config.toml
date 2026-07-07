@@ -710,12 +710,24 @@ criteria = "safe-to-deploy"
 version = "2.1.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.ntapi]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.num-conv]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.num_threads]]
 version = "0.1.7"
+criteria = "safe-to-deploy"
+
+[[exemptions.objc2-core-foundation]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.objc2-io-kit]]
+version = "0.3.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
@@ -1146,6 +1158,10 @@ criteria = "safe-to-deploy"
 version = "2.0.118"
 criteria = "safe-to-deploy"
 
+[[exemptions.sysinfo]]
+version = "0.39.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.termina]]
 version = "0.3.3"
 criteria = "safe-to-deploy"
@@ -1392,6 +1408,26 @@ criteria = "safe-to-deploy"
 
 [[exemptions.winapi-x86_64-pc-windows-gnu]]
 version = "0.4.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-collections]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-future]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-numerics]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-threading]]
+version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.winnow]]

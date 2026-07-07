@@ -1,4 +1,4 @@
-//! Pane-local process probes layered on the minimal `/proc` reader.
+//! Pane-local process probes layered on the minimal process reader.
 
 use std::path::{Path, PathBuf};
 
@@ -29,7 +29,7 @@ pub(crate) fn command_starts_with_elevation_wrapper(command: &str) -> bool {
 }
 
 /// A different-real-uid agent descendant under an elevation wrapper in this
-/// pane, if one is visible through `/proc`. The marker is display-only; callers
+/// pane, if one is visible through the process backend. The marker is display-only; callers
 /// must keep the pane's original command unchanged so the sidebar never binds a
 /// foreign-user agent as a local store session.
 pub fn elevated_in_pane_agent(pane_pid: u32) -> Option<ElevatedAgent> {
@@ -102,7 +102,7 @@ pub fn in_pane_agent_start(kind: &str, pane_cwd: &str) -> Option<jiff::Timestamp
     (starts.len() == 1).then_some(starts[0])
 }
 
-/// Start times for in-pane agent CLI processes whose `/proc` cwd equals
+/// Start times for in-pane agent CLI processes whose process cwd equals
 /// `pane_cwd`. Callers that know other panes' exact starts subtract those before
 /// deciding whether one unaccounted process remains.
 pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> {
