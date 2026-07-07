@@ -1,25 +1,22 @@
 # Theming
 
-> [interface/sidebar.md](../interface/sidebar.md) says what every tone and glyph *means on screen*; this page is the knobs that restyle them, and `rimz config init --print` is the full annotated key list.
+Theming restyles the sidebar: the color scheme and depth, the glyph vocabulary, the status-head animations, provider branding, and an optional animated pet. Everything lives in one per-machine file, `~/.config/rimz/theme.toml`. Every setting is a display preference: a theme changes what the sidebar paints, never what agents can do. [interface/sidebar.md](../interface/sidebar.md) says what every tone and glyph *means* on screen; this page is the knobs that restyle them.
 
-Theming restyles the sidebar — the color scheme, color depth, glyph vocabulary, status-head animations, and provider branding — from one per-machine file, `~/.config/rimz/theme.toml`. Every element carries its state by *shape* first ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so color reinforces meaning rather than carrying it, and any palette — including no color at all — stays readable. Theme settings are personal display preferences: they tune what the renderer paints, never store correctness, and stay outside the project trust hash.
+Every element carries its state by shape first ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so color reinforces meaning rather than carrying it: any palette, including no color at all, stays readable.
+
+## Changing a setting
+
+Two ways in: `rimz config set` edits one dotted key, or open `~/.config/rimz/theme.toml` and edit it directly. This page explains the model and the choices that matter; the exhaustive key list, with every default and accepted value, is one command away:
 
 ```sh
-rimz config set theme "Catppuccin Mocha"     # pick a scheme
-rimz config init --print                      # every key, its default, and accepted values
+rimz config set theme "Catppuccin Mocha"   # set one key
+rimz config set theme.pets.enabled true    # any dotted key works, however deep
+rimz config init --print                   # every key, its default, and accepted values
 ```
 
-`rimz config init --print` emits the fully-commented template — the authoritative list of every knob and default. This page explains the *model* and the choices that matter; reach for the template when you want the exhaustive key reference. `rimz config set` validates a value before it touches the file (see [Setting values](#setting-values)).
+`rimz config set` validates before it writes, so a bad value never reaches the file: an unknown scheme is rejected with the catalog count and the custom-file hint, and a malformed color, palette, glyph, or frame is rejected with the reason. Loading stays lenient, so a stale value from an older version falls back to its default at render time rather than taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).
 
-## How a tone resolves
-
-A painted tone passes through three layers, and tuning happens in the middle one.
-
-1. **The scheme** supplies the raw terminal palette — background, foreground, the six ANSI hues, and a selection accent — in [Alacritty's TOML shape](#schemes). This is the only place scheme color enters.
-2. **Thirteen semantic slots** derive from that palette in OKLab, so the steps stay perceptually even across schemes: the ANSI hues map to chromatic slots, the neutral chrome blends background toward foreground, and selection lifts into its own cool tone. **This is the layer you tune** — override a slot and every element that uses it follows.
-3. **Component tokens** are the specific UI roles — the sessions glyph and token markers. Each names its role and resolves to a semantic slot (or a slot-derived runtime ramp), so the call site states intent while hue stays one central decision.
-
-Render code always resolves a tone through a slot or a slot-derived value — never a raw terminal color — and a CI gate enforces it ([UI-color provenance](../contributing/rust-conventions.md#architectural-invariants)). The slot table is the one place hue is decided, so retuning the room means retuning slots. The derivation math lives in the renderer (`crates/rimz/src/sidebar_pane/render/theme/`); the rest of this page is the knobs.
+Edits to `theme.toml` apply on the next refresh. The one exception is a custom scheme *file* edited in place: its palette is cached while the config that points at it is unchanged, so re-pick the scheme or restart the sidebar to see the edit.
 
 ## Style preset
 
@@ -30,9 +27,9 @@ Render code always resolves a tone through a slot or a slot-derived value — ne
 style = "modern"   # truecolor + Nerd Font; or "default" for auto color + Unicode
 ```
 
-## Schemes
+## Color scheme
 
-`[theme] scheme` picks the palette source; unset uses the bundled `TokyoNight Night`. Set a bundled Alacritty theme name (`rimz list-themes` prints all of them) or a path to an Alacritty TOML file (`~` expands).
+`[theme] scheme` picks the palette; unset uses the bundled `TokyoNight Night`. Set a bundled theme name (`rimz list-themes` prints all of them; names with spaces need TOML quotes) or a path to an Alacritty TOML file (`~` expands).
 
 ```toml
 [theme]
@@ -40,7 +37,7 @@ scheme = "Catppuccin Mocha"
 # scheme = "~/themes/rimz.toml"
 ```
 
-Rimz embeds the Alacritty export from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) — the [bundled catalog](../../crates/rimz/themes/alacritty) is refreshed with `cargo xtask theme-refresh`, with provenance and license in [themes/README.md](../../crates/rimz/themes/README.md) and [themes/LICENSE](../../crates/rimz/themes/LICENSE) — so a name resolves the same across terminals and muxes. Names with spaces need TOML quotes.
+The bundled catalog is the Alacritty export of [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes), so a scheme name resolves to the same palette in every terminal and mux.
 
 Zellij web rooms use the active scheme for the browser terminal when `[web.zellij] style_client` is true; see [Web CLI](./cli/web.md).
 
@@ -60,8 +57,6 @@ magenta = "#bb9af7"
 cyan = "#7dcfff"
 ```
 
-A changed `scheme` applies on the next snapshot; an edited theme *file* applies after a sidebar restart, since loaded files are cached for the process lifetime.
-
 ## Color depth
 
 `[theme] mode` sets the palette depth: `auto` (default) emits truecolor when `COLORTERM` or the `$TERM` terminfo advertises direct color, otherwise quantizes the RGB tones to xterm 256 indexes; `truecolor` forces RGB; `256` pins indexed output. Inside a Rimz tmux room, Rimz stamps `COLORTERM=truecolor` at birth when the launcher advertises it, so `auto` resolves to truecolor despite tmux's `tmux-256color` default.
@@ -75,11 +70,13 @@ mode = "auto"        # or "truecolor", "256"
 
 ### Subtle steps and color depth
 
-Some cues are a sub-cell lightness step — a calm card name dimmed a touch, the selected band recessed below its panel, the unread wash lifted above it, a breathing pulse. These render as color only at truecolor depth. The 256-color cube spaces its levels too coarsely to carry a sub-cell shift, so at indexed depth a subtle cue falls back to the discrete signal the cube carries honestly: a weight modifier (`DIM`/`BOLD`) for motion, or the plain base tone for a static recession — the same shape `NO_COLOR` uses. Cues that already span a full cube cell — the neutral ladder, the health ramp, the one-cell selection and unread steps — stay color at every depth. Selection and unread step magnitudes live in `[theme.display.highlight_steps]`: `band`, `wash`, and `indexed`, counted in 0.01 OKLab-lightness units.
+Some cues are a sub-cell lightness step: a calm card name dimmed a touch, the selected band recessed below its panel, the unread wash lifted above it, a breathing pulse. These render as color only at truecolor depth. The 256-color cube spaces its levels too coarsely to carry a sub-cell shift, so at indexed depth a subtle cue falls back to the discrete signal the cube carries honestly: a weight modifier (`DIM`/`BOLD`) for motion, or the plain base tone for a static recession (the same shape `NO_COLOR` uses). Cues that already span a full cube cell, such as the neutral ladder, the health ramp, and the one-cell selection and unread steps, stay color at every depth. The step magnitudes are tunable in [`[theme.display.highlight_steps]`](#display).
 
-## Palette slots
+## Color slots
 
-The thirteen slots under `[theme]` cover everything the sidebar paints. Each accepts a palette role name (`background`, `foreground`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `bright_blue`), a `#rrggbb` hex, or a raw 0–255 xterm index; an omitted slot keeps the scheme's tone. Role names resolve through the active palette, so `good = "green"` tracks a pasted `[colors.normal] green` just like a bundled scheme.
+The scheme supplies the raw terminal palette: background, foreground, the six hues, and a selection accent. From it Rimz derives thirteen slots, the roles everything on screen wears, with the derived steps kept perceptually even so any scheme stays readable. The slots are the layer to tune: override one and every element that wears it follows, and the override survives a scheme switch.
+
+Each slot under `[theme]` accepts a palette role name (`background`, `foreground`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `bright_blue`), a `#rrggbb` hex, or a raw 0–255 xterm index; an omitted slot keeps the scheme's tone. Role names resolve through the active palette, so `good = "green"` tracks a pasted `[colors.normal] green` just like a bundled scheme.
 
 ```toml
 [theme]
@@ -104,7 +101,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `selection` | the selected card's bright `▌` spine and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |
 
-Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot/costly" everywhere. The four health slots form a ramp — `good → warn → caution → alarm`, green through gold and orange to red — that the live meters slide in OKLab: the context meter, remote link badge, and draining provider budget ("mana") bar ride the full ramp, while the recede-when-healthy readers (the card age clock and reset-countdown pace) rest quiet and ride only the warm tail once they leave their calm zone. RGB overrides and xterm indexes 16–255 join the ramp; flat ANSI indexes 0–15 are terminal-defined, so a flat slot wears the override while the ramp keeps the scheme's RGB. Money figures use a fixed dollar green outside the slots, as does each provider's [brand color](#provider-styling).
+Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot/costly" everywhere. The four health slots form a ramp, `good → warn → caution → alarm` (green through gold and orange to red), that the live meters slide: the context meter, remote link badge, and draining provider budget ("mana") bar ride the full ramp, while the recede-when-healthy readers (the card age clock and reset-countdown pace) rest quiet and ride only the warm tail once they leave their calm zone. RGB overrides and xterm indexes 16–255 join the ramp; flat ANSI indexes 0–15 are terminal-defined, so a flat slot wears the override while the ramp keeps the scheme's RGB. Money figures use a fixed dollar green outside the slots, as does each provider's [brand color](#provider-styling).
 
 ## Display
 
@@ -112,7 +109,7 @@ Two rules keep the palette honest: `alarm` red marks danger, and one warm `cauti
 
 | key | does |
 | --- | --- |
-| `refresh_ms` | the animation/paint grid in milliseconds (clamped internally); data polling stays on `--tick-seconds` |
+| `refresh_ms` | the animation/paint grid in milliseconds (clamped internally); data polling keeps its own cadence |
 | `max_cols` | creation-time cap on the sidebar pane width, so an ultra-wide terminal doesn't get an absurd split |
 | `scrollbar` | `auto` shows the overflow indicator only while the view moves; `always` / `never` pin it |
 | `card_density` | `auto` keeps the standard card; `expanded` shows every card's subagents; `compact` trims resting cards |
@@ -129,7 +126,7 @@ card_density = "auto"
 provider_tabs = "auto"
 ```
 
-Two nested tables set the meter color stops. The **context meter** (`[theme.display.context_meter]`) warms a card's context read from green; each stop names a fill percentage *and* an absolute token count, and severity is the worse of the two, so a large-window model calm by percentage still warms by sheer volume. The **budget bar** (`[theme.display.budget_bar]`) names the *remaining* budget percent at which the draining bar reaches each warm stop, and its nested `[theme.display.budget_bar.burn_rate]` colors the reset marker by pace (`100` = on-pace, `200` = twice as fast as the window can sustain). The shipped numbers are in the template.
+Two nested tables set the meter color stops. The **context meter** (`[theme.display.context_meter]`) warms a card's context read from green: each stop names a fill percentage *and* an absolute token count, and severity is the worse of the two, so a large-window model calm by percentage still warms by sheer volume. The **budget bar** (`[theme.display.budget_bar]`) names the *remaining* budget percent at which the draining bar reaches each warm stop, and its nested `[theme.display.budget_bar.burn_rate]` colors the reset marker by pace (`100` = on-pace, `200` = twice as fast as the window can sustain). The shipped numbers are in the template.
 
 ```toml
 [theme.display.context_meter]
@@ -141,7 +138,7 @@ amber = 25
 red = 10
 ```
 
-`[theme.display.highlight_steps]` sets the selected-band and unread-wash offsets from `selection_bg` in 0.01 OKLab-lightness units. `band` recesses the selected card at truecolor depth, `wash` lifts the unread row at truecolor depth, and `indexed` is the 256-color one-cell step used darker for the band and lighter for the wash.
+`[theme.display.highlight_steps]` sets the selected-band and unread-wash offsets from `selection_bg`, in units of 0.01 perceptual lightness. `band` recesses the selected card at truecolor depth, `wash` lifts the unread row at truecolor depth, and `indexed` is the 256-color one-cell step used darker for the band and lighter for the wash.
 
 ```toml
 [theme.display.highlight_steps]
@@ -150,70 +147,9 @@ wash = 1
 indexed = 4
 ```
 
-## Pets
-
-Pets add a small animated companion to the provider dashboard. The pet follows the selected row's state, giving the bottom panel a little motion while the cards stay steady.
-
-Enable pets in your per-machine theme:
-
-```toml
-[theme.pets]
-enabled = true
-```
-
-### Choosing a pet
-
-`pet` selects the sheet Rimz loads. Run `rimz list-pets` in a terminal to preview the built-ins and any petdex pets installed locally.
-
-Built-in catalog ids are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`.
-
-Bring-your-own sources use the same key:
-
-- `pet = "https://example.com/my-pet.webp"` fetches an HTTPS WebP sheet and caches it.
-- `pet = "~/art/my-pet.png"` reads a local WebP or PNG sheet.
-- `pet = "wall-e"` selects a petdex slug under `~/.codex/pets/wall-e/`; petdex manifests may point at WebP or PNG sheets.
-- `pet = "~/.codex/pets/wall-e/"` reads a petdex directory by path.
-
-### Crisp pixels vs cell art
-
-`glyphs` controls the render tier. Crisp pixels need a Ghostty or kitty terminal; inside tmux they also need tmux 3.6 or newer with `allow-passthrough on` or `allow-passthrough all`. Zellij renders cell art.
-
-On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while kitty pixel pets animate; Rimz emits each sprite image once to minimize that traffic, and `glyphs = "sextant"` uses the same flicker-free cell-art path as Zellij when you want it fully gone.
-
-| `glyphs` | effect |
-| --- | --- |
-| `auto` | Use pixels when the runtime is ready, then fall back to sextant cell art. |
-| `pixel` | Opt past the terminal-name allowlist for newer kitty-compatible terminals while keeping hard gates such as tmux passthrough. |
-| `sextant` | Use the most portable cell art. |
-
-| key | value |
-| --- | --- |
-| `enabled` | Turns the dashboard pet on or off. |
-| `pet` | Chooses a built-in id, HTTPS URL, local sheet path, petdex slug, or petdex directory. |
-| `glyphs` | Chooses `auto`, `pixel`, or `sextant`. |
-| `voice` | Shows canned captions on pet-action changes when true. |
-
-```toml
-[theme.pets]
-enabled = true
-pet = "rocky"
-glyphs = "auto"
-voice = true
-```
-
-`voice = false` keeps the animation and hides the captions.
-
-### Offline and privacy
-
-Built-in and URL sheets fetch once into the per-machine cache. `RIMZ_PETS_OFFLINE=1` serves the cache only. Petdex and local sheets read from disk and make no network request.
-
-Pets run no commands and stay outside the project trust hash. Asset loading sends only the configured asset request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local.
-
-The render pipeline, sheet geometry, cache layout, and pixel gates live in [pets.md](../internals/sidebar/pets.md).
-
 ## Animations
 
-`[theme.animations]` themes the status heads the sidebar paints (what each head means is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs)). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role takes four optional fields — `frames`, `color`, `effect`, `speed` — and an omitted field keeps the built-in, so a one-line override leaves the rest alone. The template lists every built-in head.
+`[theme.animations]` themes the status heads the sidebar paints (what each head means is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs)). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role takes four optional fields (`frames`, `color`, `effect`, `speed`), and an omitted field keeps the built-in, so a one-line override leaves the rest alone. The template lists every built-in head.
 
 ```toml
 [theme.animations.thinking]
@@ -228,7 +164,7 @@ effect = "breathe"
 - **`color`** accepts a semantic slot (`good`, `warn`, `caution`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, `faint`), the brand tone `clay`, a `#rrggbb` hex, or a raw index.
 - **`effect`** is `static` or `breathe`; **`speed`** is `slow`, `normal`, or `fast`, pacing both frame advance and effect.
 
-The static heads (`idle` / `success` / `paused` / `waiting`) take their shape from [`[theme.glyphs] set`](#glyphs); the animated spinners keep their Unicode frames in every preset, with the `status` glyph as the still representative the cockpit buckets show. A literal blink is just a frame sequence such as `frames = [" ", "!"]`.
+The static heads (`idle` / `success` / `paused` / `waiting`) take their shape from [`[theme.glyphs] set`](#glyphs); the animated spinners keep their Unicode frames in every preset, and the cockpit buckets show each head's still `status` glyph. A literal blink is just a frame sequence such as `frames = [" ", "!"]`.
 
 ### Unread attention
 
@@ -242,14 +178,14 @@ unread = "shimmer"   # or "bright", "blink"
 | `unread` | the lead row reads as |
 | --- | --- |
 | `shimmer` (default) | a light beam flows across the glyph, name, and description, quickening with age |
-| `bright` | a constant bright, bold crest — no motion |
+| `bright` | a constant bright, bold crest, no motion |
 | `blink` | a hard 2-pole brightness toggle, quickening with age |
 
-The continuous signal is reserved for the **one row that most needs you** — the oldest unanswered `waiting`/`failed`. Every other unread row, an unread `✓` included, settles to the steady `bright` crest, so a single pane is the only thing in motion. An unread card also grounds on a soft **wash** — the selection blue lifted a step, marking the row unseen the way a mail inbox shades an unread line — which holds still and survives across depths, dropping only under `NO_COLOR`. A per-role `effect = "static"` on `waiting`/`failed`/`success` overrides the `unread` choice and holds that row at a constant bold tone. How these cues degrade by depth is in [Subtle steps and color depth](#subtle-steps-and-color-depth).
+The continuous signal is reserved for the **one row that most needs you**, the oldest unanswered `waiting`/`failed`. Every other unread row, an unread `✓` included, settles to the steady `bright` crest, so a single pane is the only thing in motion. An unread card also grounds on a soft **wash** (the selection blue lifted a step, marking the row unseen the way a mail inbox shades an unread line), which holds still and survives across depths, dropping only under `NO_COLOR`. A per-role `effect = "static"` on `waiting`/`failed`/`success` overrides the `unread` choice and holds that row at a constant bold tone. How these cues degrade by depth is in [Subtle steps and color depth](#subtle-steps-and-color-depth).
 
 ## Glyphs
 
-`[theme.glyphs]` shapes the sidebar's glyph vocabulary; the [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table. `set` chooses the active preset — `unicode` (default) or `nerd_font` — and the matching inline tables overlay it. Glyphs are grouped by the sidebar's on-screen reading order, and `rimz config init --print` lists every role in both shipped sets, so customizing is uncomment-and-edit. Each glyph must occupy exactly one cell, or two when a trailing space pads a double-width icon.
+`[theme.glyphs]` shapes the sidebar's glyph vocabulary; the [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table. `set` chooses the active preset, `unicode` (default) or `nerd_font`, and the matching inline tables overlay it. Glyphs are grouped by the sidebar's on-screen reading order, and the template lists every role in both shipped sets, so customizing is uncomment-and-edit. Each glyph must occupy exactly one cell, or two when a trailing space pads a double-width icon.
 
 ```toml
 [theme.glyphs]
@@ -276,7 +212,7 @@ The `status` group sets head *shapes*; their color, effect, and speed stay in [`
 
 ## Provider styling
 
-`[theme.providers.<kind>]` restyles a provider's dashboard block — display name, ASCII emblem, and brand color — over the built-in defaults (Claude clay `#d97757`, Codex blue `#2fb1d1`, Pi green `#27a077`, Open Code orange `#ff8700`). Each field is optional, so a color override leaves the shipped art intact.
+`[theme.providers.<kind>]` restyles a provider's dashboard block over the built-in defaults: display name, ASCII emblem, and brand color (Claude clay `#d97757`, Codex blue `#2fb1d1`, Pi green `#27a077`, Open Code orange `#ff8700`). Each field is optional, so a color override leaves the shipped art intact.
 
 ```toml
 [theme.providers.claude]
@@ -289,19 +225,53 @@ ascii_art = """
 """
 ```
 
-`color` accepts a palette role, `#rrggbb`, or a raw index. Which blocks appear and in what order is a [Display](#display) and discovery setting (see [configuration.md → Provider dashboard](./configuration.md#provider-dashboard)); account and emblem resolution is in [provider.md](../internals/agents/provider.md).
+`color` accepts a palette role, `#rrggbb`, or a raw index. Which blocks appear and in what order is a [Display](#display) and discovery setting (see [configuration.md → Provider dashboard](./configuration.md#provider-dashboard)).
 
-## Setting values
+## Pets
 
-`rimz config set` validates before it writes, so a bad value never reaches the file:
+Pets add a small animated companion to the provider dashboard. The pet follows the selected row's state, giving the bottom panel a little motion while the cards stay steady; `voice = false` keeps the animation and hides the captions.
 
-```sh
-rimz config set theme "TokyoNight Night"
-rimz config set theme.good '#a0d0a0'
-rimz config set theme.glyphs.set nerd_font
-rimz config set theme.glyphs.unicode.tokens.total '◇'
-rimz config set theme.animations.unread shimmer
-rimz config set theme.providers.codex.color 33
+```toml
+[theme.pets]
+enabled = true
+pet = "rocky"
+glyphs = "auto"
+voice = true
 ```
 
-An unknown scheme is rejected with the catalog count and the custom-file hint; a malformed color, palette, glyph, or frame is rejected with the reason. Loading stays lenient, so a stale or older value falls back to the default `TokyoNight Night` scheme at render time rather than taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).
+| key | does |
+| --- | --- |
+| `enabled` | turns the dashboard pet on (off by default) |
+| `pet` | which pet: a built-in id, an HTTPS URL, a local sheet path, or a petdex pet |
+| `glyphs` | render tier: `auto`, `pixel`, or `sextant` |
+| `voice` | canned captions on pet-action changes |
+
+### Choosing a pet
+
+`rimz list-pets` previews the built-ins and any petdex pets installed locally. The built-in ids are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`.
+
+Bring-your-own sources use the same key:
+
+- `pet = "https://example.com/my-pet.webp"` fetches an HTTPS WebP sheet and caches it.
+- `pet = "~/art/my-pet.png"` reads a local WebP or PNG sheet.
+- `pet = "wall-e"` selects a petdex pet installed under `~/.codex/pets/wall-e/`; `pet = "~/.codex/pets/wall-e/"` reads the same directory by path. Petdex manifests may point at WebP or PNG sheets.
+
+### Crisp pixels vs cell art
+
+`glyphs` controls the render tier. Crisp pixels need a Ghostty or kitty terminal; inside tmux they also need tmux 3.6 or newer with `allow-passthrough on` or `allow-passthrough all`. Zellij renders cell art.
+
+| `glyphs` | renders |
+| --- | --- |
+| `auto` | pixels when the runtime is ready, then sextant cell art |
+| `pixel` | opts past the terminal-name allowlist for newer kitty-compatible terminals, while hard gates such as tmux passthrough still apply |
+| `sextant` | the most portable cell art |
+
+On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while kitty pixel pets animate; Rimz emits each sprite image once to minimize that traffic, and `glyphs = "sextant"` uses the same flicker-free cell-art path as Zellij when you want it fully gone.
+
+### Offline and privacy
+
+Built-in and URL sheets fetch once into the per-machine cache; `RIMZ_PETS_OFFLINE=1` serves the cache only. Petdex and local sheets read from disk and make no network request.
+
+Pets run no commands. Asset loading sends only the configured asset request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local.
+
+Sheet geometry, the cache layout, and the pixel gates live in [pets.md](../internals/sidebar/pets.md).
