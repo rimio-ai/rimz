@@ -69,6 +69,7 @@ pub use crate::ledger::snapshot::{
     lead_unread_row, triage_key,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
+pub use crate::ledger::writer::{EditOutcome, MessageEdit};
 
 /// Terminal audit-only message outcome for a target that never resolved to a
 /// durable receiver card.

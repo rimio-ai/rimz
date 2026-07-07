@@ -482,10 +482,9 @@ enum Subcmd {
     Reset(reset::ResetArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
-    /// Message an agent, now (`--steer`) or at the next turn boundary.
+    /// Message agents; list, edit, steer, requeue, remove.
     ///
-    /// The default parks for the next safe turn boundary, optionally after
-    /// `--schedule`.
+    /// Bare send routes now with `--steer`, or at the next safe turn boundary.
     Message(message::MessageArgs),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.
     #[command(hide = true)]

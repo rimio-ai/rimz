@@ -105,6 +105,7 @@ pub struct LastDeathMarker {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageEventMethod {
     Queued,
+    Edited,
     Sent,
     Delivered,
     TimedOut,
@@ -118,6 +119,7 @@ impl MessageEventMethod {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "message.queued",
+            Self::Edited => "message.edited",
             Self::Sent => "message.sent",
             Self::Delivered => "message.delivered",
             Self::TimedOut => "message.timed_out",
@@ -145,6 +147,7 @@ impl MessageEventMethod {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
             "message.queued" => Some(Self::Queued),
+            "message.edited" => Some(Self::Edited),
             "message.sent" => Some(Self::Sent),
             "message.delivered" => Some(Self::Delivered),
             "message.timed_out" => Some(Self::TimedOut),

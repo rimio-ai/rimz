@@ -6,7 +6,7 @@ use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::ledger::event_log;
-use crate::message::{DeliveryGate, MessageSender};
+use crate::message::{AutoCompact, DeliveryGate, MessageSender};
 use crate::{RuntimePaths, StatePaths};
 
 #[test]
@@ -66,6 +66,166 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     ledger
         .defer_message_wake(&MessageId::parse("msg_0000000000000000").unwrap(), until)
         .unwrap();
+}
+
+#[test]
+fn edit_message_updates_queued_record_and_appends_event() {
+    let (_dir, ledger, workspace_id) = ledger();
+    let message =
+        message(&workspace_id).with_not_before(Some(Timestamp::now() + Duration::from_secs(60)));
+    let until = Timestamp::now() + Duration::from_secs(30);
+    ledger.queue_message(&message, "session").unwrap();
+    ledger
+        .defer_message_wake(&message.message_id, until)
+        .unwrap();
+
+    let edited = ledger
+        .edit_message(
+            &message.message_id,
+            MessageEdit {
+                text: Some("edited".to_owned()),
+                gate: Some(DeliveryGate::Any),
+                not_before: Some(None),
+                force: Some(true),
+                enter: Some(false),
+                auto_compact: Some(Some(AutoCompact::Percent(70))),
+            },
+            "session",
+        )
+        .unwrap();
+
+    let EditOutcome::Edited(edited) = edited else {
+        panic!("message should edit");
+    };
+    assert_eq!(edited.text, "edited");
+    assert_eq!(edited.gate, DeliveryGate::Any);
+    assert_eq!(edited.not_before, None);
+    assert_eq!(edited.retry_after, None);
+    assert!(edited.force);
+    assert!(!edited.enter);
+    assert_eq!(edited.auto_compact, Some(AutoCompact::Percent(70)));
+
+    let live = ledger.list_messages().unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0], *edited);
+    let events = event_log::read_all(&ledger.inner.paths.events_log).unwrap();
+    let edited_event = events
+        .iter()
+        .find(|event| event.method == "message.edited")
+        .expect("edited event");
+    let params: serde_json::Value = serde_json::from_str(edited_event.params.get()).unwrap();
+    assert_eq!(
+        params["reason"],
+        "text, gate, schedule, force, enter, smart_compact"
+    );
+    assert_eq!(params["status"], "queued");
+}
+
+#[test]
+fn edit_message_refuses_claimed_terminal_and_missing_records() {
+    let (_dir, ledger, workspace_id) = ledger();
+    let claimed = message(&workspace_id);
+    ledger.queue_message(&claimed, "session").unwrap();
+    ledger
+        .claim_message_for_delivery(&claimed.message_id, Timestamp::now())
+        .unwrap()
+        .expect("claimed");
+
+    let outcome = ledger
+        .edit_message(
+            &claimed.message_id,
+            MessageEdit {
+                text: Some("edited".to_owned()),
+                ..MessageEdit::default()
+            },
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(outcome, EditOutcome::NotOpen(MessageStatus::Claimed));
+
+    let terminal = message(&workspace_id);
+    ledger.queue_message(&terminal, "session").unwrap();
+    ledger
+        .settle_message(
+            &terminal.message_id,
+            MessageStatus::Delivered,
+            "session",
+            None,
+        )
+        .unwrap();
+
+    let outcome = ledger
+        .edit_message(
+            &terminal.message_id,
+            MessageEdit {
+                text: Some("edited".to_owned()),
+                ..MessageEdit::default()
+            },
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(outcome, EditOutcome::NotOpen(MessageStatus::Delivered));
+    assert_eq!(
+        ledger
+            .edit_message(
+                &message_id(99),
+                MessageEdit {
+                    text: Some("edited".to_owned()),
+                    ..MessageEdit::default()
+                },
+                "session",
+            )
+            .unwrap(),
+        EditOutcome::NotFound
+    );
+}
+
+#[test]
+fn steer_claim_skips_fifo_and_schedule_but_keeps_claim_ttl() {
+    let (_dir, queue_ledger, workspace_id) = ledger();
+    let first = message(&workspace_id);
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let second = message(&workspace_id);
+    queue_ledger.queue_message(&first, "session").unwrap();
+    queue_ledger.queue_message(&second, "session").unwrap();
+
+    assert!(
+        queue_ledger
+            .claim_message_for_delivery(&second.message_id, Timestamp::now())
+            .unwrap()
+            .is_none()
+    );
+    let claimed = queue_ledger
+        .claim_message_for_steer(&second.message_id, Timestamp::now())
+        .unwrap()
+        .expect("steer claims non-head");
+    assert_eq!(claimed.message_id, second.message_id);
+    queue_ledger
+        .record_message_delivery_failure(&second.message_id, "pane missing", "session")
+        .unwrap();
+    assert!(
+        queue_ledger
+            .claim_message_for_steer(&second.message_id, Timestamp::now())
+            .unwrap()
+            .is_none(),
+        "fresh failed claim keeps the TTL guard"
+    );
+
+    let (_scheduled_dir, scheduled_ledger, scheduled_workspace_id) = ledger();
+    let scheduled = message(&scheduled_workspace_id)
+        .with_not_before(Some(Timestamp::now() + jiff::SignedDuration::from_secs(60)));
+    scheduled_ledger
+        .queue_message(&scheduled, "session")
+        .unwrap();
+    assert!(
+        scheduled_ledger
+            .claim_message_for_steer(&scheduled.message_id, Timestamp::now())
+            .unwrap()
+            .is_some(),
+        "steer claims scheduled messages"
+    );
 }
 
 #[test]

@@ -119,6 +119,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         &message_id,
         Duration::ZERO,
         Some(pane_id.mux()),
+        deliver::DeliveryPolicy::Boundary,
     )
     .context("delivering auto-continue resume message")?;
     if !delivered {

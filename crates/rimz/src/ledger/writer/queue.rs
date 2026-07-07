@@ -5,8 +5,8 @@ use jiff::Timestamp;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::ledger::event::{EventEnvelope, MessageEventMethod};
 use crate::message::{
-    MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus, claim_expired,
-    queue_head_for_message,
+    AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
+    claim_expired, queue_head_for_message,
 };
 
 use super::super::{Ledger, Result, UnresolvedMessage, message_store};
@@ -16,6 +16,52 @@ use super::{PublishPolicy, Txn};
 pub struct ReconcileReport {
     pub requeued: usize,
     pub timed_out: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MessageEdit {
+    pub text: Option<String>,
+    pub gate: Option<DeliveryGate>,
+    pub not_before: Option<Option<Timestamp>>,
+    pub force: Option<bool>,
+    pub enter: Option<bool>,
+    pub auto_compact: Option<Option<AutoCompact>>,
+}
+
+impl MessageEdit {
+    pub fn changed_fields(&self) -> Vec<&'static str> {
+        let mut fields = Vec::new();
+        if self.text.is_some() {
+            fields.push("text");
+        }
+        if self.gate.is_some() {
+            fields.push("gate");
+        }
+        if self.not_before.is_some() {
+            fields.push("schedule");
+        }
+        if self.force.is_some() {
+            fields.push("force");
+        }
+        if self.enter.is_some() {
+            fields.push("enter");
+        }
+        if self.auto_compact.is_some() {
+            fields.push("smart_compact");
+        }
+        fields
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.changed_fields().is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum EditOutcome {
+    Edited(Box<MessageRecord>),
+    NotOpen(MessageStatus),
+    NotFound,
 }
 
 enum MessageUpdate {
@@ -28,6 +74,22 @@ enum MessageUpdate {
         status: MessageStatus,
         reason: Option<String>,
     },
+}
+
+fn claim_message_locked(
+    txn: &mut Txn<'_>,
+    message: &MessageRecord,
+    now: Timestamp,
+) -> Result<Option<MessageRecord>> {
+    let mut claimed = message.clone();
+    claimed.status = MessageStatus::Claimed;
+    claimed.attempts = claimed.attempts.saturating_add(1);
+    claimed.last_attempt_at = Some(now);
+    claimed.last_error = None;
+    claimed.retry_after = None;
+    claimed.updated_at = now;
+    message_store::write(&txn.paths.messages_dir, &claimed)?;
+    Ok(Some(claimed))
 }
 
 impl Ledger {
@@ -160,6 +222,64 @@ impl Ledger {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn edit_message(
+        &self,
+        message_id: &MessageId,
+        edit: MessageEdit,
+        session_name: &str,
+    ) -> Result<EditOutcome> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
+                Ok(message) => message,
+                Err(message_store::MessageStoreErr::NotFound(_)) => {
+                    return Ok(message_store::list_history(&txn.paths.messages_dir)?
+                        .into_iter()
+                        .find(|message| message.message_id == *message_id)
+                        .map_or(EditOutcome::NotFound, |message| {
+                            EditOutcome::NotOpen(message.status)
+                        }));
+                }
+                Err(err) => return Err(err.into()),
+            };
+            if message.status != MessageStatus::Queued {
+                return Ok(EditOutcome::NotOpen(message.status));
+            }
+            let fields = edit.changed_fields();
+            if let Some(text) = edit.text {
+                message.text = text;
+            }
+            if let Some(gate) = edit.gate {
+                message.gate = gate;
+            }
+            if let Some(not_before) = edit.not_before {
+                message.not_before = not_before;
+            }
+            if let Some(force) = edit.force {
+                message.force = force;
+            }
+            if let Some(enter) = edit.enter {
+                message.enter = enter;
+            }
+            if let Some(auto_compact) = edit.auto_compact {
+                message.auto_compact = auto_compact;
+                message.compacted_context_tokens = None;
+            }
+            message.retry_after = None;
+            message.updated_at = Timestamp::now();
+            message_store::write(&txn.paths.messages_dir, &message)?;
+            let reason = fields.join(", ");
+            let event = EventEnvelope::message_event(
+                &message,
+                session_name,
+                MessageEventMethod::Edited,
+                Some(&reason),
+            );
+            txn.append(&event)?;
+            Ok(EditOutcome::Edited(Box::new(message)))
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn record_sent_message(
         &self,
         message: &MessageRecord,
@@ -222,15 +342,28 @@ impl Ledger {
             if head.message_id != *message_id {
                 return Ok(None);
             }
-            let mut claimed = message.clone();
-            claimed.status = MessageStatus::Claimed;
-            claimed.attempts = claimed.attempts.saturating_add(1);
-            claimed.last_attempt_at = Some(now);
-            claimed.last_error = None;
-            claimed.retry_after = None;
-            claimed.updated_at = now;
-            message_store::write(&txn.paths.messages_dir, &claimed)?;
-            Ok(Some(claimed))
+            claim_message_locked(txn, message, now)
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn claim_message_for_steer(
+        &self,
+        message_id: &MessageId,
+        now: Timestamp,
+    ) -> Result<Option<MessageRecord>> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            let queued = message_store::list_pending(&txn.paths.messages_dir)?;
+            let Some(message) = queued
+                .iter()
+                .find(|message| message.message_id == *message_id)
+            else {
+                return Ok(None);
+            };
+            if !claim_expired(message.last_attempt_at, now) {
+                return Ok(None);
+            }
+            claim_message_locked(txn, message, now)
         })
     }
 

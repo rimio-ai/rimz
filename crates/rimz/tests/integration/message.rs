@@ -330,7 +330,91 @@ fn message_show_reports_delivery_blocker_and_timeline() {
     assert!(shown.contains("is running; gate 'done' opens at next turn end"));
     assert!(shown.contains("TIMELINE"));
     assert!(shown.contains("\n  queued  "));
+    assert!(shown.contains(&format!("force now: rimz message steer {message_id}")));
     assert!(!shown.contains("message.queued"));
+}
+
+#[test]
+fn message_edit_updates_queued_record_and_show_timeline() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-edit", "edit-message", &[]);
+    let queued = env
+        .rimz()
+        .args(["message", "--schedule", "60m", "@claude", "--", "old text"])
+        .output()
+        .expect("scheduled message");
+    assert!(
+        queued.status.success(),
+        "queue failed: {}",
+        String::from_utf8_lossy(&queued.stderr)
+    );
+    let message_id = queued_id_from_stdout(&queued.stdout);
+
+    let edited = env
+        .rimz()
+        .args([
+            "message",
+            "edit",
+            &message_id,
+            "--text",
+            "new text",
+            "--no-schedule",
+            "--on",
+            "any",
+        ])
+        .output()
+        .expect("message edit");
+    assert!(
+        edited.status.success(),
+        "edit failed: {}",
+        String::from_utf8_lossy(&edited.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&edited.stdout);
+    assert!(stdout.contains(&format!("edited {message_id}")));
+    assert!(stdout.contains("text, gate, schedule"));
+
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].text, "new text");
+    assert_eq!(pending[0].gate, DeliveryGate::Any);
+    assert_eq!(pending[0].not_before, None);
+
+    let shown = env
+        .rimz()
+        .args(["message", "show", &message_id])
+        .output()
+        .expect("message show");
+    assert!(
+        shown.status.success(),
+        "show failed: {}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(shown.contains("new text"));
+    assert!(shown.contains("\n  edited  "));
+    assert!(shown.contains("text, gate, schedule"));
+}
+
+#[test]
+fn message_edit_with_no_flags_errors() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-edit-empty", "edit-empty", &[]);
+    let message_id = queue_add(&env, "@claude", "keep");
+
+    let edited = env
+        .rimz()
+        .args(["message", "edit", &message_id])
+        .output()
+        .expect("message edit");
+
+    assert!(!edited.status.success(), "edit without flags should fail");
+    let stderr = String::from_utf8_lossy(&edited.stderr);
+    assert!(
+        stderr.contains("nothing to edit"),
+        "unexpected stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -1084,6 +1168,125 @@ fn steer_refuses_waiting_agent_before_touching_pane() {
             .is_empty(),
         "a refused steer must not leave a deliverable record"
     );
+}
+
+#[test]
+fn message_steer_delivers_gate_closed_queued_record() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-steer-queued", "steer-queued", pane_env);
+    let message_id = queue_add(&env, "@claude", "push now");
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-steer-queued-trace.log");
+
+    let steered = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "steer", &message_id])
+        .output()
+        .expect("message steer");
+
+    assert!(
+        steered.status.success(),
+        "steer failed: {}",
+        String::from_utf8_lossy(&steered.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&steered.stdout);
+    assert!(stdout.contains(&format!("sent to @claude ({message_id})")));
+    assert_text_then_enter(&trace_log, "push now");
+    let sent = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("sent message");
+    assert_eq!(sent.status, MessageStatus::Sent);
+}
+
+#[test]
+fn message_steer_waiting_agent_requires_force() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-steer-waiting", "steer-waiting", &[]);
+    push_pending_agent_ask(&env, "sess-steer-waiting");
+    let message_id = queue_add(&env, "@claude", "reserved input");
+
+    let steered = env
+        .rimz()
+        .args(["message", "steer", &message_id])
+        .output()
+        .expect("message steer");
+
+    assert!(!steered.status.success(), "steer should fail while waiting");
+    let stderr = String::from_utf8_lossy(&steered.stderr);
+    assert!(
+        stderr.contains("is waiting on your input") && stderr.contains("--force"),
+        "unexpected stderr: {stderr}"
+    );
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id.as_str(), message_id);
+    assert_eq!(pending[0].attempts, 0, "waiting steer must not claim");
+}
+
+#[test]
+fn message_requeue_copies_terminal_record_and_refuses_open_record() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-requeue", "requeue", &[]);
+    let open_id = queue_direct_channel_message(&env, "requeue", "still open");
+
+    let refused = env
+        .rimz()
+        .args(["message", "requeue", &open_id])
+        .output()
+        .expect("message requeue");
+    assert!(!refused.status.success(), "open requeue should fail");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("still queued"),
+        "unexpected stderr: {stderr}"
+    );
+
+    let message = env
+        .ledger()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == open_id)
+        .expect("open message");
+    env.ledger()
+        .record_send_error(&message, "test error", "rimz-test")
+        .expect("record error");
+
+    let requeued = env
+        .rimz()
+        .args([
+            "message",
+            "requeue",
+            &open_id,
+            "--text",
+            "try again",
+            "--on",
+            "any",
+        ])
+        .output()
+        .expect("message requeue");
+    assert!(
+        requeued.status.success(),
+        "requeue failed: {}",
+        String::from_utf8_lossy(&requeued.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&requeued.stdout);
+    assert!(stdout.contains(&format!("(from {open_id})")));
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_ne!(pending[0].message_id.as_str(), open_id);
+    assert_eq!(pending[0].text, "try again");
+    assert_eq!(pending[0].gate, DeliveryGate::Any);
 }
 
 #[test]

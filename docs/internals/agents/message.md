@@ -121,6 +121,10 @@ A parked message delivers when all five conditions hold:
 
 `queue_message` upserts the record in `messages/messages.jsonl`, appends a `message.queued` audit event, and wakes sidebars. The file is created lazily so an empty workspace costs the hook path one missing-file stat. Each write holds the workspace lock and uses temp-file-plus-rename.
 
+`edit_message` is the single compare-and-swap path for queued-record mutation. It accepts only `Queued`, refuses `Claimed` as in-flight, reports terminal records from `history.jsonl`, rewrites the live record with the requested delivery deltas, clears `retry_after` so the next sweep sees the change, and appends `message.edited` with the changed field names in `reason`. Receiver identity, channel, card, sender attribution, and pane affinity stay outside edit; retargeting is remove plus send.
+
+`requeue` reads a terminal record from `history.jsonl`, builds a fresh `Queued` record with a new id from the retained text, receiver card, channel, sender, body, and delivery settings, then applies any edit-style overrides before `queue_message`. Event-only terminal rows cannot requeue because message text is intentionally absent from the event log.
+
 ### Delivery trigger
 
 Only unparked root turn ends trigger ordinary parked delivery. `Registered`, subagent stops, compaction events, and parked background turn ends (`TurnEnded { parked_on_background: true }`) do not check the queue. The lifecycle hook records the event, loads pending messages, finds the FIFO head for the agent's card, and spawns a detached `rimz message deliver --message-id <id>` helper with nulled stdio. Auto-continue is the producer-driven exception: when a persisted park reaches its reset or backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message or redelivers the prior queued resume message, then runs the same one-message delivery helper for that message id.
@@ -134,6 +138,8 @@ The helper follows a strict sequence:
 3. **Claim**: under the workspace lock, transition the record from `Queued` to `Claimed` and increment the pre-send attempt count. The claim moves the record out of the queued scan immediately before sending.
 4. **Send**: write text to the live pane through the same bracketed-paste path as `--steer`. Smart compaction prepends a fresh `Command` record at delivery time before the claimed prompt.
 5. **Record send**: a successful pane write moves the record to `Sent`, still live until the agent confirms it or the reconciler times it out.
+
+`rimz message steer <id>` uses the same helper with a steer policy. The candidate check still requires the named queued record, a receiver card, and a live pane, but it ignores `not_before`, FIFO head, ordinary gate, and resume-recovery checks. It claims only the named record with `claim_message_for_steer`, which keeps the claim TTL guard and skips the FIFO-head compare. Waiting input still defers unless the stored record or the command carries `--force`.
 
 ### Batched delivery
 
@@ -295,7 +301,7 @@ Domain types: [`chat.rs`](../../../crates/rimz/src/chat.rs) for the durable log,
 
 Every status transition appends a typed event to `events.log.jsonl`. The event methods are:
 
-`message.queued` · `message.sent` · `message.delivered` · `message.timed_out` · `message.errored` · `message.removed` · `message.abandoned` · `message.archived`
+`message.queued` · `message.edited` · `message.sent` · `message.delivered` · `message.timed_out` · `message.errored` · `message.removed` · `message.abandoned` · `message.archived`
 
 The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body` (Prompt or Command), `pane_id` (when known), `forced` flag, `sender` attribution, `text_len`, `attempts`, `unconfirmed_sends`, timestamps, compaction baseline, and `reason` (on error or abandon). For resolved records, `address` is the enqueue-time receiver handle the terminal list and show views render when no live card remains; unresolved bounces carry the raw target that failed. Message content stays in the live message record, never in the event.
 
@@ -304,6 +310,9 @@ The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `
 The user-facing surface — flags, synopses, examples, and the `message list` digest — is [cli/agents.md § Message an agent](../../reference/cli/agents.md#message-an-agent). What the commands do underneath:
 
 - `message list` and `message show <msg_id>` merge three sources: live rows come from `messages/messages.jsonl`, terminal rows with text come from `messages/history.jsonl`, and old or unresolved terminal rows fall back to `message.*` events without text because content never enters the event log. The receiver handle comes from the record's enqueue-time `address` first, then the live snapshot, then the stored `agent_name` plus channel, then `kind:agent_id`.
+- `message edit <msg_id>` updates only `Queued` records and adds a `message.edited` timeline row.
+- `message steer <msg_id>` sends a queued record now through the normal delivery sender while bypassing schedule, FIFO, and gate checks.
+- `message requeue <msg_id>` copies a terminal history record into a new queued record; open records stay with `edit` or `steer`.
 - `message remove <msg_id>...` settles each named live record to `Removed`; `message clear <target>` settles every open record for one card, and targetless `message clear` settles every open record in the scoped channel lane.
 
 Two hidden helpers are the pipeline's execution arms, spawned detached with nulled stdio, never run by humans:

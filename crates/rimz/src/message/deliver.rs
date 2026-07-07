@@ -42,21 +42,35 @@ pub enum DeliverErr {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryPolicy {
+    Boundary,
+    Steer { force: bool },
+}
+
 pub fn deliver_one(
     workspace: &ResolvedWorkspace,
     ledger: &Ledger,
     message_id: &MessageId,
     settle: Duration,
     mux: Option<MuxName>,
+    policy: DeliveryPolicy,
 ) -> Result<bool> {
     if !settle.is_zero() {
         std::thread::sleep(settle);
     }
-    let Some(candidate) = delivery_candidate(workspace, ledger, message_id, mux)? else {
+    let Some(candidate) = delivery_candidate(workspace, ledger, message_id, mux, policy)? else {
         return Ok(false);
     };
-    let Some(message) = ledger.claim_message_for_delivery(message_id, jiff::Timestamp::now())?
-    else {
+    let claimed_head = match policy {
+        DeliveryPolicy::Boundary => {
+            ledger.claim_message_for_delivery(message_id, jiff::Timestamp::now())?
+        }
+        DeliveryPolicy::Steer { .. } => {
+            ledger.claim_message_for_steer(message_id, jiff::Timestamp::now())?
+        }
+    };
+    let Some(message) = claimed_head else {
         return Ok(false);
     };
     debug_assert!(
@@ -79,7 +93,7 @@ pub fn deliver_one(
     // Hook delivery handles one claimed message; settle above owns any
     // pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {
-        force: claimed[0].force,
+        force: claimed[0].force || matches!(policy, DeliveryPolicy::Steer { force: true }),
         pacer: send::Pacer::new(message_interval_from_env()),
     };
     let send_messages: Vec<MessageRecord> = claimed
@@ -171,7 +185,14 @@ pub fn sweep(workspace: &ResolvedWorkspace, ledger: &Ledger, mux: Option<MuxName
             continue;
         };
         if heads_seen.insert(head.message_id.to_string()) {
-            let delivered = deliver_one(workspace, ledger, &head.message_id, Duration::ZERO, mux)?;
+            let delivered = deliver_one(
+                workspace,
+                ledger,
+                &head.message_id,
+                Duration::ZERO,
+                mux,
+                DeliveryPolicy::Boundary,
+            )?;
             if !delivered {
                 ledger.defer_message_wake(&head.message_id, now + delivery_window)?;
             }
@@ -360,6 +381,7 @@ fn delivery_candidate(
     ledger: &Ledger,
     message_id: &MessageId,
     mux: Option<MuxName>,
+    policy: DeliveryPolicy,
 ) -> Result<Option<DeliveryCandidate>> {
     let pending = ledger.list_pending_messages()?;
     let Some(message) = pending
@@ -370,14 +392,16 @@ fn delivery_candidate(
         return Ok(None);
     };
     let now = Timestamp::now();
-    if !message.is_ready(now) {
-        return Ok(None);
-    }
-    let Some(head) = queue_head_for_message(pending.iter(), &message, now) else {
-        return Ok(None);
-    };
-    if head.message_id != *message_id {
-        return Ok(None);
+    if matches!(policy, DeliveryPolicy::Boundary) {
+        if !message.is_ready(now) {
+            return Ok(None);
+        }
+        let Some(head) = queue_head_for_message(pending.iter(), &message, now) else {
+            return Ok(None);
+        };
+        if head.message_id != *message_id {
+            return Ok(None);
+        }
     }
     let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, ledger, mux)?;
     // The resolution snapshot carries live panes but not rich context sidecars.
@@ -394,25 +418,34 @@ fn delivery_candidate(
         return Ok(None);
     };
     let status = agent.effective_status();
-    if !gate_open_for_agent(message.gate, agent, message.force) {
-        return Ok(None);
-    }
-    if message.gate == DeliveryGate::Resume
-        && !runtime
-            .as_ref()
-            .is_some_and(|runtime| crate::agents::resume_gate_recovered(runtime, agent, now))
-    {
-        return Ok(None);
+    if matches!(policy, DeliveryPolicy::Boundary) {
+        if !gate_open_for_agent(message.gate, agent, message.force) {
+            return Ok(None);
+        }
+        if message.gate == DeliveryGate::Resume
+            && !runtime
+                .as_ref()
+                .is_some_and(|runtime| crate::agents::resume_gate_recovered(runtime, agent, now))
+        {
+            return Ok(None);
+        }
     }
     // A waiting agent reserves the next input, so it defers delivery —
     // unless the message was queued with `--force`, mirroring `message --steer --force`.
-    if !message.force && agent.is_awaiting_input() {
+    let force_waiting = match policy {
+        DeliveryPolicy::Boundary => message.force,
+        DeliveryPolicy::Steer { force } => message.force || force,
+    };
+    if !force_waiting && agent.is_awaiting_input() {
         return Ok(None);
     }
-    let batch_tail = queue_batch_tail(pending.iter(), &message, status, now)
-        .into_iter()
-        .cloned()
-        .collect();
+    let batch_tail = match policy {
+        DeliveryPolicy::Boundary => queue_batch_tail(pending.iter(), &message, status, now)
+            .into_iter()
+            .cloned()
+            .collect(),
+        DeliveryPolicy::Steer { .. } => Vec::new(),
+    };
     let Some(target) = snapshot
         .agent_panes
         .iter()

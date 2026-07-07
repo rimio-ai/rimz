@@ -536,6 +536,7 @@ fn unresolved_message_event_round_trips_raw_address() {
 fn message_event_methods_round_trip_archived() {
     for method in [
         MessageEventMethod::Queued,
+        MessageEventMethod::Edited,
         MessageEventMethod::Sent,
         MessageEventMethod::Delivered,
         MessageEventMethod::TimedOut,

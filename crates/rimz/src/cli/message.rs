@@ -1,7 +1,7 @@
 //! `rimz message` — parse command input, call message domain, and render output.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -18,6 +18,7 @@ use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use rimz::ledger::event::{EventEnvelope, EventKind, MessageEventPayload};
+use rimz::ledger::{EditOutcome, MessageEdit};
 use rimz::message::dispatch::{DispatchContext, DispatchOutcome, SendMode};
 use rimz::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
@@ -78,6 +79,25 @@ enum MessageSubcmd {
         #[arg(long)]
         json: bool,
     },
+    /// Change a queued message.
+    Edit {
+        message_id: MessageId,
+        #[command(flatten)]
+        edit: EditFlags,
+    },
+    /// Deliver a queued message now.
+    Steer {
+        message_id: MessageId,
+        /// Send even when the agent is Waiting.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Queue a new copy of a finished message.
+    Requeue {
+        message_id: MessageId,
+        #[command(flatten)]
+        edit: EditFlags,
+    },
     /// Remove queued messages.
     Remove {
         #[arg(value_name = "MESSAGE_ID", num_args = 1..)]
@@ -102,6 +122,43 @@ enum MessageSubcmd {
     Sweep,
 }
 
+#[derive(Debug, Args)]
+struct EditFlags {
+    /// Replace the message text.
+    #[arg(long, value_name = "TEXT", conflicts_with = "file")]
+    text: Option<String>,
+    /// Replace the message text from a file.
+    #[arg(long, value_name = "PATH", conflicts_with = "text")]
+    file: Option<PathBuf>,
+    /// Deliver after a successful/idle turn (`done`) or after success/idle/failure (`any`).
+    #[arg(long, value_parser = parse_gate)]
+    on: Option<DeliveryGate>,
+    /// Park the message until at least this duration or configured-zone `HH:MM`.
+    #[arg(long, value_name = "DUR|HH:MM", conflicts_with = "no_schedule")]
+    schedule: Option<String>,
+    /// Clear the earliest-delivery floor.
+    #[arg(long, conflicts_with = "schedule")]
+    no_schedule: bool,
+    /// Send even when the agent is Waiting.
+    #[arg(long, conflicts_with = "no_force")]
+    force: bool,
+    /// Restore normal Waiting deferral.
+    #[arg(long, conflicts_with = "force")]
+    no_force: bool,
+    /// Submit the message with Enter after paste.
+    #[arg(long, conflicts_with = "no_enter")]
+    enter: bool,
+    /// Paste the text but leave it unsubmitted.
+    #[arg(long, conflicts_with = "enter")]
+    no_enter: bool,
+    /// Compact first when context is at least this full.
+    #[arg(long, value_name = "PCT|TOKENS", value_parser = AutoCompact::parse, conflicts_with = "no_smart_compact")]
+    smart_compact: Option<AutoCompact>,
+    /// Clear smart compact.
+    #[arg(long, conflicts_with = "smart_compact")]
+    no_smart_compact: bool,
+}
+
 pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(MessageSubcmd::List {
@@ -113,6 +170,13 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
             target,
         }) => list_messages(json, all, status, channel, limit, target, globals),
         Some(MessageSubcmd::Show { message_id, json }) => show_message(message_id, json, globals),
+        Some(MessageSubcmd::Edit { message_id, edit }) => edit_message(message_id, edit, globals),
+        Some(MessageSubcmd::Steer { message_id, force }) => {
+            steer_queued_message(message_id, force, globals)
+        }
+        Some(MessageSubcmd::Requeue { message_id, edit }) => {
+            requeue_message(message_id, edit, globals)
+        }
         Some(MessageSubcmd::Remove { message_ids }) => remove_messages(message_ids, globals),
         Some(MessageSubcmd::Clear {
             target,
@@ -130,7 +194,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                     bail!("did you mean `rimz message show {target}`?");
                 }
                 bail!(
-                    "unknown subcommand `{target}`; expected list, show <id>, remove <id>..., clear [target], or an @agent target"
+                    "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, requeue <id>, remove <id>..., clear [target], or an @agent target"
                 );
             }
             let text = args.text.into_iter().collect();
@@ -294,6 +358,52 @@ fn steer_message(
         FanoutFlags { all, create },
         globals,
     )
+}
+
+fn edit_from_flags(flags: EditFlags) -> Result<MessageEdit> {
+    let EditFlags {
+        text,
+        file,
+        on,
+        schedule,
+        no_schedule,
+        force,
+        no_force,
+        enter,
+        no_enter,
+        smart_compact,
+        no_smart_compact,
+    } = flags;
+    let text = match (text, file) {
+        (Some(text), None) => Some(resolve_message(&[text], None)?),
+        (None, Some(path)) => Some(resolve_message(&[], Some(path.as_path()))?),
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("clap enforces --text/--file conflicts"),
+    };
+    let machine_config = super::machine_config();
+    let now = Timestamp::now().to_zoned(machine_config.time_zone());
+    let not_before = if no_schedule {
+        Some(None)
+    } else {
+        schedule
+            .as_deref()
+            .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
+            .transpose()?
+            .map(Some)
+    };
+    let force = force.then_some(true).or_else(|| no_force.then_some(false));
+    let enter = enter.then_some(true).or_else(|| no_enter.then_some(false));
+    let auto_compact = smart_compact
+        .map(Some)
+        .or_else(|| no_smart_compact.then_some(None));
+    Ok(MessageEdit {
+        text,
+        gate: on,
+        not_before,
+        force,
+        enter,
+        auto_compact,
+    })
 }
 
 /// The fan-out / create flags shared by parked message delivery.
@@ -1001,7 +1111,13 @@ fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Res
         table.render(&mut out)?;
     }
     if let Some(delivery) = delivery {
-        render_delivery_check(&mut out, &delivery.check, &delivery.verdict, now)?;
+        render_delivery_check(
+            &mut out,
+            &message.message_id,
+            &delivery.check,
+            &delivery.verdict,
+            now,
+        )?;
     }
     Ok(())
 }
@@ -1026,6 +1142,211 @@ fn message_timeline(
         });
     }
     Ok(rows)
+}
+
+fn edit_message(message_id: MessageId, flags: EditFlags, globals: &GlobalFlags) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let ledger = open_ledger(&workspace)?;
+    let edit = edit_from_flags(flags)?;
+    if edit.is_empty() {
+        bail!("nothing to edit; pass --text, --file, --on, --schedule, or another edit flag");
+    }
+    let fields = edit.changed_fields();
+    match ledger.edit_message(&message_id, edit, &workspace.session_name)? {
+        EditOutcome::Edited(_) => {
+            deliver::register_message_wake(&workspace, &ledger)?;
+            #[expect(clippy::print_stdout, reason = "command result")]
+            {
+                println!("edited {message_id} ({})", fields.join(", "));
+            }
+            Ok(())
+        }
+        EditOutcome::NotOpen(MessageStatus::Claimed) => {
+            bail!("{message_id} delivery in progress; retry in a moment")
+        }
+        EditOutcome::NotOpen(status) if status.is_terminal() => {
+            bail!("{message_id} is {status}; use `rimz message requeue {message_id}`")
+        }
+        EditOutcome::NotOpen(status) => {
+            bail!("{message_id} is {status}; only queued messages can be edited")
+        }
+        EditOutcome::NotFound => bail!("message {message_id} not found"),
+    }
+}
+
+fn steer_queued_message(message_id: MessageId, force: bool, globals: &GlobalFlags) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let ledger = open_ledger(&workspace)?;
+    let messages = ledger.list_messages()?;
+    let Some(record) = messages
+        .iter()
+        .find(|record| record.message_id == message_id)
+    else {
+        if let Some(history) = ledger
+            .list_message_history()?
+            .into_iter()
+            .find(|record| record.message_id == message_id)
+        {
+            bail!(
+                "{message_id} is {}; use `rimz message requeue {message_id}`",
+                history.status
+            );
+        }
+        bail!("message {message_id} not found");
+    };
+    match record.status {
+        MessageStatus::Queued => {}
+        MessageStatus::Claimed => bail!("{message_id} delivery in progress; retry in a moment"),
+        status if status.is_terminal() => {
+            bail!("{message_id} is {status}; use `rimz message requeue {message_id}`")
+        }
+        status => bail!("{message_id} is {status}; only queued messages can be steered"),
+    }
+    let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone()) {
+        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    }
+    let label = message_target_for_record(record, &snapshot);
+    let delivered = deliver::deliver_one(
+        &workspace,
+        &ledger,
+        &message_id,
+        Duration::ZERO,
+        globals.mux,
+        deliver::DeliveryPolicy::Steer { force },
+    )?;
+    if delivered {
+        #[expect(clippy::print_stdout, reason = "command result")]
+        {
+            println!("sent to {label} ({message_id})");
+        }
+        return Ok(());
+    }
+    let messages = ledger.list_messages()?;
+    let Some(record) = messages
+        .iter()
+        .find(|record| record.message_id == message_id)
+    else {
+        bail!("message {message_id} is no longer queued");
+    };
+    let check = deliver::explain(record, &messages, &snapshot, Timestamp::now());
+    bail!("{}", steer_failure(&check, &label, &message_id))
+}
+
+fn requeue_message(message_id: MessageId, flags: EditFlags, globals: &GlobalFlags) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let ledger = open_ledger(&workspace)?;
+    let record = if let Some(record) = ledger
+        .list_message_history()?
+        .into_iter()
+        .find(|record| record.message_id == message_id)
+    {
+        record
+    } else if let Some(record) = ledger
+        .list_messages()?
+        .into_iter()
+        .find(|record| record.message_id == message_id)
+    {
+        record
+    } else if projected_messages(&ledger)?
+        .into_iter()
+        .any(|row| row.message_id == message_id)
+    {
+        bail!("message {message_id} content is not retained; send a new message instead");
+    } else {
+        bail!("message {message_id} not found");
+    };
+    if !record.status.is_terminal() {
+        if matches!(
+            record.status,
+            MessageStatus::Queued | MessageStatus::Claimed
+        ) {
+            bail!("{message_id} is still queued; use `rimz message edit` or `rimz message steer`");
+        }
+        bail!(
+            "{message_id} is {}; wait for it to finish before requeueing",
+            record.status
+        );
+    }
+    if record.text.is_empty() {
+        bail!("message {message_id} content is not retained; send a new message instead");
+    }
+    let edit = edit_from_flags(flags)?;
+    let mut copy = MessageRecord::new_for_card(
+        record.workspace_id.clone(),
+        record.kind.clone(),
+        record.agent_id.clone(),
+        record.agent_name.clone(),
+        record.text.clone(),
+        record.enter,
+        record.gate,
+    )
+    .with_address(record.address.clone())
+    .with_channel(record.channel.clone())
+    .with_sender(record.sender.clone())
+    .with_force(record.force)
+    .with_auto_compact(record.auto_compact)
+    .with_body(record.body)
+    .with_not_before(record.not_before);
+    apply_edit_to_record(&mut copy, edit);
+    let new_id = copy.message_id.clone();
+    ledger.queue_message(&copy, &workspace.session_name)?;
+    deliver::register_message_wake(&workspace, &ledger)?;
+    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let label = message_target_for_record(&copy, &snapshot);
+    #[expect(clippy::print_stdout, reason = "command result")]
+    {
+        println!("queued for {label} ({new_id})  (from {message_id})");
+    }
+    Ok(())
+}
+
+fn apply_edit_to_record(record: &mut MessageRecord, edit: MessageEdit) {
+    if let Some(text) = edit.text {
+        record.text = text;
+    }
+    if let Some(gate) = edit.gate {
+        record.gate = gate;
+    }
+    if let Some(not_before) = edit.not_before {
+        record.not_before = not_before;
+    }
+    if let Some(force) = edit.force {
+        record.force = force;
+    }
+    if let Some(enter) = edit.enter {
+        record.enter = enter;
+    }
+    if let Some(auto_compact) = edit.auto_compact {
+        record.auto_compact = auto_compact;
+        record.compacted_context_tokens = None;
+    }
+}
+
+fn message_target_for_record(record: &MessageRecord, snapshot: &SidebarSnapshot) -> String {
+    let row = MessageListRow::from_record(record.clone());
+    let agents: Vec<&AgentState> = snapshot.root_agents().collect();
+    scoped_handle(message_target(&row, &agents), row.channel.as_deref())
+}
+
+fn steer_failure(check: &deliver::DeliveryCheck, target: &str, message_id: &MessageId) -> String {
+    if check.ask.waiting {
+        return format!(
+            "{target} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
+        );
+    }
+    if !check.agent.present {
+        return format!("receiver {target} is gone; cannot steer {message_id}");
+    }
+    if !check.pane.present {
+        return match &check.pane.pinned_pane_id {
+            Some(pane_id) => {
+                format!("pinned pane {pane_id} is not live for {target}; cannot steer {message_id}")
+            }
+            None => format!("no live pane for {target}; cannot steer {message_id}"),
+        };
+    }
+    delivery_verdict(check, target, Timestamp::now())
 }
 
 fn remove_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
@@ -1337,6 +1658,7 @@ fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
         &message_id,
         rimz::message::settle_duration_from_env(),
         globals.mux,
+        deliver::DeliveryPolicy::Boundary,
     )?;
     Ok(())
 }
@@ -1649,6 +1971,7 @@ fn textless_location(message: &MessageListRow, target: &str) -> String {
 
 fn render_delivery_check(
     out: &mut impl Write,
+    message_id: &MessageId,
     check: &deliver::DeliveryCheck,
     verdict: &str,
     now: Timestamp,
@@ -1745,6 +2068,9 @@ fn render_delivery_check(
     kv.push("pane", condition_cell(check.pane.present, pane));
     kv.render(out)?;
     writeln!(out, "  {verdict}")?;
+    if let Some(hint) = delivery_action_hint(check, message_id) {
+        writeln!(out, "  {}", render::paint(render::palette::FAINT, &hint))?;
+    }
     Ok(())
 }
 
@@ -1810,6 +2136,23 @@ fn delivery_verdict(check: &deliver::DeliveryCheck, target: &str, now: Timestamp
         };
     }
     "ready: delivery conditions pass".to_owned()
+}
+
+fn delivery_action_hint(check: &deliver::DeliveryCheck, message_id: &MessageId) -> Option<String> {
+    if !check.schedule.ready {
+        return Some(format!(
+            "force now: rimz message steer {message_id}  ·  or: rimz message edit {message_id} --no-schedule"
+        ));
+    }
+    if !check.fifo.head || !gate_ready(check) {
+        return Some(format!("force now: rimz message steer {message_id}"));
+    }
+    if check.ask.waiting {
+        return Some(format!(
+            "force now: rimz message steer {message_id} --force"
+        ));
+    }
+    None
 }
 
 fn gate_ready(check: &deliver::DeliveryCheck) -> bool {

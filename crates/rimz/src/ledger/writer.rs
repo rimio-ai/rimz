@@ -24,6 +24,8 @@ mod publish;
 mod queue;
 mod reset;
 
+pub use queue::{EditOutcome, MessageEdit};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PublishPolicy {
     Debounced,
