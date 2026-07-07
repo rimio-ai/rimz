@@ -8,9 +8,7 @@ use crate::ids::{AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwnerKind};
 use crate::remote_control;
 use crate::store::snapshot::panes::{agent_owner_pid, is_daemon_owned};
-use crate::store::snapshot::process::{
-    command_is_sidebar_chrome, pane_agent_kind, pane_worktree_path,
-};
+use crate::store::snapshot::process::command_is_sidebar_chrome;
 
 use super::SidebarSnapshot;
 
@@ -59,8 +57,8 @@ impl SidebarSnapshot {
     ///   its subagents;
     /// - anything else — keep it.
     ///
-    /// The render lanes run this before the live-pane fold, so a reaped session
-    /// can neither render a row nor attach stale stats to a live pane.
+    /// Callers run this before the live-pane fold, so a reaped session can
+    /// neither render a row nor attach stale stats to a live pane.
     pub fn reap_runtime(&mut self, inputs: RuntimeReapInputs<'_>) {
         let admitted_panes = inputs
             .frame_panes
@@ -73,9 +71,6 @@ impl SidebarSnapshot {
             inputs.loaded,
             admitted_panes.as_deref(),
         );
-        if let Some(live_panes) = admitted_panes.as_deref() {
-            self.drop_cleared_sessions(live_panes);
-        }
     }
 
     fn drop_dead_daemon_sessions(
@@ -143,23 +138,9 @@ impl SidebarSnapshot {
         });
     }
 
-    /// Reap daemon-hooked roots superseded by strictly-newer same-live-pane roots whose
-    /// carried rollout lineage proves both sessions are fresh `/clear` / `/new`
-    /// conversations. Unknown lineage keeps both sessions, so `/side` / `/btw`
-    /// forks never cause the primary to drop.
-    fn drop_cleared_sessions(&mut self, live_panes: &[PaneRef]) {
-        let live_panes = live_daemon_kind_panes_by_worktree(live_panes);
-        if live_panes.is_empty() {
-            return;
-        }
-        retain_unsuperseded(&mut self.agents, |older, newer| {
-            cleared_session_supersedes(older, newer, &live_panes)
-        });
-    }
-
     /// Reap ghost sessions from the agent rollup. This filters the *derived*
     /// rollup only; the append-only event log is untouched, so it complements
-    /// the workspace-level `rimz gc`. Two rules, both safe for the
+    /// the workspace-level `rimz gc`. Three rules, all safe for the
     /// one-pane-one-row invariant:
     ///
     /// (a) a **pidless** session past [`GHOST_SESSION_TTL_SECS`] — it never
@@ -173,13 +154,19 @@ impl SidebarSnapshot {
     ///     and shared-pid ghosts to the newest while never dropping a concurrent
     ///     agent that owns its own pane, nor an in-pane thread fork (Codex
     ///     `/side` / `/btw`) that shares the primary's live process.
+    /// (c) an older **fresh-lineage** conversation superseded by a strictly-newer
+    ///     fresh-lineage conversation of the same kind on the same stamped pane.
+    ///     Codex `/clear` / `/new` changes the session id inside one terminal
+    ///     process, so owner pids cannot prove a relaunch. A fork carries
+    ///     `Forked` lineage and survives; unknown lineage keeps both sessions.
     pub fn reap_stale_sessions(&mut self) {
         let now = self.now;
         retain_unsuperseded(&mut self.agents, |older, newer| {
             newer.kind == older.kind
                 && newer.agent_id != older.agent_id
                 && newer.last_activity > older.last_activity
-                && older_yields_pane(older, newer)
+                && (older_yields_pane(older, newer)
+                    || cleared_conversation_supersedes(older, newer))
         });
         self.agents.retain(|agent| {
             // Subagents are never reaped here — kept until their parent leaves,
@@ -307,6 +294,20 @@ fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
     }
 }
 
+/// Whether `newer` is a fresh `/clear` / `/new` conversation superseding
+/// `older` in their shared pane. Both roots carrying `Fresh` rollout lineage
+/// on one stamped pane are sequential conversations of a single terminal; the
+/// older ended when the newer began, live pane or not. A fork carries `Forked`
+/// lineage and survives; unknown lineage keeps both.
+fn cleared_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+    older.origin == Some(SessionOrigin::Fresh)
+        && newer.origin == Some(SessionOrigin::Fresh)
+        && matches!(
+            (older.pane.as_ref(), newer.pane.as_ref()),
+            (Some(older_pane), Some(newer_pane)) if older_pane.pane_id == newer_pane.pane_id
+        )
+}
+
 /// Whether the newer session is a *relaunch* of the older in their shared pane —
 /// a provably different process — rather than a same-process in-pane thread fork.
 /// A Codex `/side` / `/btw` fork registers a fresh session id in the live process
@@ -321,78 +322,6 @@ fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
 fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
     match (agent_owner_pid(older), agent_owner_pid(newer)) {
         (Some(older_pid), Some(newer_pid)) => older_pid != newer_pid,
-        _ => false,
-    }
-}
-
-fn cleared_session_supersedes(
-    older: &AgentState,
-    newer: &AgentState,
-    live_panes: &BTreeMap<&str, Vec<&PaneRef>>,
-) -> bool {
-    older.parent_agent_id.is_none()
-        && newer.parent_agent_id.is_none()
-        && older.kind == newer.kind
-        && kind_has_daemon_hooked_sessions(older.kind.as_str())
-        && newer.agent_id != older.agent_id
-        && newer.last_activity > older.last_activity
-        && older.origin == Some(SessionOrigin::Fresh)
-        && newer.origin == Some(SessionOrigin::Fresh)
-        && same_cleared_scope(older, newer)
-        && same_live_daemon_kind_pane(older, newer, live_panes)
-}
-
-fn same_cleared_scope(older: &AgentState, newer: &AgentState) -> bool {
-    let Some(older_path) = older
-        .worktree_path
-        .as_deref()
-        .filter(|path| !path.is_empty())
-    else {
-        return false;
-    };
-    if newer.worktree_path.as_deref() != Some(older_path)
-        || newer.worktree_branch != older.worktree_branch
-    {
-        return false;
-    }
-    true
-}
-
-fn live_daemon_kind_panes_by_worktree(panes: &[PaneRef]) -> BTreeMap<&str, Vec<&PaneRef>> {
-    let mut live: BTreeMap<&str, Vec<&PaneRef>> = BTreeMap::new();
-    for pane in panes {
-        if !pane_agent_kind(pane).is_some_and(kind_has_daemon_hooked_sessions) {
-            continue;
-        }
-        let Some(worktree) = pane_worktree_path(pane) else {
-            continue;
-        };
-        live.entry(worktree).or_default().push(pane);
-    }
-    live
-}
-
-fn kind_has_daemon_hooked_sessions(kind: &str) -> bool {
-    crate::agents::descriptor_by_kind(kind)
-        .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions)
-}
-
-fn same_live_daemon_kind_pane(
-    older: &AgentState,
-    newer: &AgentState,
-    live_panes: &BTreeMap<&str, Vec<&PaneRef>>,
-) -> bool {
-    let Some(worktree) = older.worktree_path.as_deref() else {
-        return false;
-    };
-    let Some(panes) = live_panes.get(worktree) else {
-        return false;
-    };
-    match (older.pane.as_ref(), newer.pane.as_ref()) {
-        (Some(older_pane), Some(newer_pane)) => {
-            older_pane.pane_id == newer_pane.pane_id
-                && panes.iter().any(|pane| pane.pane_id == older_pane.pane_id)
-        }
         _ => false,
     }
 }

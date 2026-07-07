@@ -600,112 +600,22 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
 }
 
 #[test]
-fn cleared_codex_reap_drops_only_fresh_same_pane_roots() {
-    let old_at = Timestamp::from_second(1_000).unwrap();
-    let fork_at = Timestamp::from_second(2_000).unwrap();
-    let new_at = Timestamp::from_second(3_000).unwrap();
-    let mut old = codex_root("old", "/repo/main", "terminal_1");
-    old.worktree_branch = Some("main".to_owned());
-    old.last_activity = old_at;
-    old.origin = Some(SessionOrigin::Fresh);
-    let mut fork = codex_root("fork", "/repo/main", "terminal_1");
-    fork.worktree_branch = Some("main".to_owned());
-    fork.last_activity = fork_at;
-    fork.origin = Some(SessionOrigin::Forked);
-    let mut new = codex_root("new", "/repo/main", "terminal_1");
-    new.worktree_branch = Some("main".to_owned());
-    new.last_activity = new_at;
-    new.origin = Some(SessionOrigin::Fresh);
-    let mut snapshot = SidebarSnapshot::build_with_agents(
-        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
-        Vec::new(),
-        vec![old, fork, new],
-        Timestamp::now(),
-    );
-
-    snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
-        daemon_pids: &BTreeSet::new(),
-        loaded: None,
-        frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
-        exclude_pane: None,
-    });
-
-    let ids: Vec<_> = snapshot
-        .agents
-        .iter()
-        .map(|agent| agent.agent_id.as_str())
-        .collect();
-    assert_eq!(ids, vec!["fork", "new"]);
-}
-
-#[test]
-fn cleared_codex_reap_requires_both_sessions_on_live_pane() {
-    let mut live = codex_root("live", "/repo/main", "terminal_1");
-    live.worktree_branch = Some("main".to_owned());
-    live.last_activity = Timestamp::from_second(1_000).unwrap();
-    live.origin = Some(SessionOrigin::Fresh);
-    let mut closed = root_agent("codex", "closed", None);
-    closed.worktree_path = Some("/repo/main".to_owned());
-    closed.worktree_branch = Some("main".to_owned());
-    closed.last_activity = Timestamp::from_second(2_000).unwrap();
-    closed.origin = Some(SessionOrigin::Fresh);
-    let mut snapshot = SidebarSnapshot::build_with_agents(
-        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
-        Vec::new(),
-        vec![live, closed],
-        Timestamp::now(),
-    );
-
-    snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
-        daemon_pids: &BTreeSet::new(),
-        loaded: None,
-        frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
-        exclude_pane: None,
-    });
-
-    assert_eq!(snapshot.agents.len(), 2);
-}
-
-#[test]
-fn cleared_codex_reap_keeps_unknown_lineage() {
-    let mut old = codex_root("old", "/repo/main", "terminal_1");
-    old.last_activity = Timestamp::from_second(1_000).unwrap();
-    old.origin = Some(SessionOrigin::Fresh);
-    let mut new = codex_root("new", "/repo/main", "terminal_1");
-    new.worktree_path = Some("/repo/main".to_owned());
-    new.last_activity = Timestamp::from_second(2_000).unwrap();
-    let mut snapshot = SidebarSnapshot::build_with_agents(
-        WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
-        Vec::new(),
-        vec![old, new],
-        Timestamp::now(),
-    );
-
-    snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
-        daemon_pids: &BTreeSet::new(),
-        loaded: None,
-        frame_panes: Some(&[pane("terminal_1", "codex", "/repo/main")]),
-        exclude_pane: None,
-    });
-
-    assert_eq!(snapshot.agents.len(), 2);
-}
-
-#[test]
-fn cached_enrich_reaps_codex_clear_session_before_pane_binding() {
+fn cached_enrich_binds_reaped_codex_clear_session() {
     let (_dir, runtime, _) = runtime();
+    let now = Timestamp::now();
     let mut old = codex_root("old", "/repo/main", "terminal_1");
-    old.last_activity = Timestamp::from_second(1_000).unwrap();
+    old.last_activity = now - SignedDuration::from_secs(120);
     old.origin = Some(SessionOrigin::Fresh);
     let mut new = codex_root("new", "/repo/main", "terminal_1");
-    new.last_activity = Timestamp::from_second(2_000).unwrap();
+    new.last_activity = now - SignedDuration::from_secs(60);
     new.origin = Some(SessionOrigin::Fresh);
-    let snapshot = SidebarSnapshot::build_with_agents(
+    let mut snapshot = SidebarSnapshot::build_with_agents(
         WorkspaceId::from_project_root(Path::new("/tmp/enrich")),
         Vec::new(),
         vec![old, new],
-        Timestamp::now(),
+        now,
     );
+    snapshot.reap_stale_sessions();
     let frame = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_1", "codex", "/repo/main")],
         1_000,

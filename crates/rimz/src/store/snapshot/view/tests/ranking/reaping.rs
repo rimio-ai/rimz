@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::SessionOrigin;
 
 #[test]
 fn liveness_drops_dead_runtime_owner_from_rollup() {
@@ -188,6 +189,95 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
                     222,
                     None,
                 ));
+                vec![older, newer]
+            },
+            expected: vec!["newer", "older"],
+        },
+        Case {
+            label: "fresh same-pane replacement drops the prior session but keeps forks",
+            agents: {
+                let mut older = agent("codex", "older", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(120);
+                older.origin = Some(SessionOrigin::Fresh);
+                let mut fork = agent("codex", "fork", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(90);
+                fork.origin = Some(SessionOrigin::Forked);
+                let mut newer = agent("codex", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(60);
+                newer.origin = Some(SessionOrigin::Fresh);
+                vec![older, fork, newer]
+            },
+            expected: vec!["fork", "newer"],
+        },
+        Case {
+            label: "unknown older lineage keeps both same-pane sessions",
+            agents: {
+                let older = agent("codex", "older", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(120);
+                let mut newer = agent("codex", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(60);
+                newer.origin = Some(SessionOrigin::Fresh);
+                vec![older, newer]
+            },
+            expected: vec!["newer", "older"],
+        },
+        Case {
+            label: "unknown newer lineage keeps both same-pane sessions",
+            agents: {
+                let mut older = agent("codex", "older", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(120);
+                older.origin = Some(SessionOrigin::Fresh);
+                let newer = agent("codex", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(60);
+                vec![older, newer]
+            },
+            expected: vec!["newer", "older"],
+        },
+        Case {
+            label: "fresh sessions on distinct panes are concurrent",
+            agents: {
+                let mut older = agent("codex", "older", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(120);
+                older.origin = Some(SessionOrigin::Fresh);
+                let mut newer = agent("codex", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%2")
+                    .active_ago(60);
+                newer.origin = Some(SessionOrigin::Fresh);
+                vec![older, newer]
+            },
+            expected: vec!["newer", "older"],
+        },
+        Case {
+            label: "paneless fresh root does not yield to a stamped fresh root",
+            agents: {
+                let mut older = agent("codex", "older", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .branch("main")
+                    .active_ago(120);
+                older.origin = Some(SessionOrigin::Fresh);
+                let mut newer = agent("codex", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .branch("main")
+                    .in_pane("%1")
+                    .active_ago(60);
+                newer.origin = Some(SessionOrigin::Fresh);
                 vec![older, newer]
             },
             expected: vec!["newer", "older"],

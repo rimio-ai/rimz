@@ -706,8 +706,8 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
     /// Provider-reported session lineage from the session store head (Codex
-    /// today), carried forward so the same-pane `/clear` reap can run in every
-    /// render lane.
+    /// today), carried forward so the rollup projection can collapse the
+    /// superseded same-pane `/clear` conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::agents::SessionOrigin>,
     /// Recent user prompts for this session, newest last, capped by the rollup.

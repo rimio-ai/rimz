@@ -1483,6 +1483,7 @@ mod render {
             vec![old, new, dead_daemon, host],
             jiff::Timestamp::from_second(1_020).unwrap(),
         );
+        snapshot.reap_stale_sessions();
         rimz::sidebar::refresh::write_codex_daemon_reap(
             &runtime,
             &rimz::sidebar::refresh::CodexDaemonReap {

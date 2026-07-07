@@ -213,12 +213,7 @@ fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
         replacement.origin = replacement_origin;
 
         let mut snapshot = room(Vec::new(), vec![main, replacement]);
-        snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
-            daemon_pids: &BTreeSet::new(),
-            loaded: None,
-            frame_panes: Some(&[pane("%1", "codex", "/repo/main")]),
-            exclude_pane: None,
-        });
+        snapshot.reap_stale_sessions();
         let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
         let rows = rows(&snapshot);
