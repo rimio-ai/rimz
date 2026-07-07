@@ -227,7 +227,7 @@ pub(super) struct SidebarGroup {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub(super) enum Presence {
     Event { poked_secs: u64 },
-    Poll { reason: String },
+    Poll { reason: String, expected: bool },
     Unavailable { error: String },
 }
 

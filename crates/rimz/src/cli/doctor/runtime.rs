@@ -378,7 +378,8 @@ fn heartbeat_mtime_is_fresh(path: &Path) -> bool {
 
 /// The producer's pane-discovery mode for this workspace — event when the
 /// backend's presence channel pokes. Zellij treats a missing plugin as a
-/// failed precondition; tmux still names its polling fallback.
+/// failed precondition; tmux names whether polling is expected for the current
+/// sidebar state.
 fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presence {
     use rimz::sidebar::cache::{presence_event_mode, presence_stamp_age_ms};
 
@@ -397,17 +398,10 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
         };
     }
     if mux == MuxName::Tmux {
-        let reason = match age {
-            Some(age) => format!(
-                "last control-mode watch poke {}s ago (watch idle, detached, or producer not elected)",
-                age / 1000,
-            ),
-            None => {
-                "control-mode presence watch not attached (old tmux, or producer not yet elected)"
-                    .to_owned()
-            }
-        };
-        return model::Presence::Poll { reason };
+        let sidebar_running = fresh_sidebar_heartbeats_for_doctor(&runtime)
+            .map(|heartbeats| !heartbeats.is_empty())
+            .unwrap_or(true);
+        return tmux_poll_presence(age, sidebar_running);
     }
     if zellij_mod::presence_plugin_path().is_none() {
         return model::Presence::Unavailable {
@@ -434,6 +428,34 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
             .to_owned(),
     };
     model::Presence::Unavailable { error: reason }
+}
+
+/// The tmux polling verdict once the presence stamp is not fresh: expected
+/// while no sidebar producer runs (the watch starts with the sidebar), a
+/// warning while one runs without a live watch.
+fn tmux_poll_presence(stamp_age_ms: Option<u64>, sidebar_running: bool) -> model::Presence {
+    if !sidebar_running {
+        return model::Presence::Poll {
+            reason: "no sidebar running in this workspace; the live pane watch starts with the sidebar (`rimz start`)"
+                .to_owned(),
+            expected: true,
+        };
+    }
+
+    let reason = match stamp_age_ms {
+        Some(age) => format!(
+            "live tmux watch idle — last poke {}s ago; reattach or run `rimz reload`",
+            age / 1000,
+        ),
+        None => {
+            "sidebar running but the live tmux watch is not attached; reattach or run `rimz reload`"
+                .to_owned()
+        }
+    };
+    model::Presence::Poll {
+        reason,
+        expected: false,
+    }
 }
 
 fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::TopologyWriterHealth> {
@@ -923,6 +945,47 @@ mod tests {
             budget_spawns: 32,
             since_ms,
             recovered_after_ms,
+        }
+    }
+
+    #[test]
+    fn tmux_poll_presence_is_expected_without_sidebar() {
+        for stamp_age_ms in [None, Some(61_000)] {
+            let presence = tmux_poll_presence(stamp_age_ms, false);
+            match presence {
+                model::Presence::Poll { reason, expected } => {
+                    assert!(expected, "no sidebar is the expected polling state");
+                    assert!(reason.contains("no sidebar running"), "{reason}");
+                    assert!(!reason.contains("old tmux"), "{reason}");
+                }
+                other => panic!("expected poll verdict, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn tmux_poll_presence_warns_when_sidebar_lacks_watch() {
+        let presence = tmux_poll_presence(None, true);
+        match presence {
+            model::Presence::Poll { reason, expected } => {
+                assert!(!expected, "running sidebar without a stamp is unhealthy");
+                assert!(
+                    reason.contains("live tmux watch is not attached"),
+                    "{reason}"
+                );
+                assert!(!reason.contains("old tmux"), "{reason}");
+            }
+            other => panic!("expected poll verdict, got {other:?}"),
+        }
+
+        let presence = tmux_poll_presence(Some(61_000), true);
+        match presence {
+            model::Presence::Poll { reason, expected } => {
+                assert!(!expected, "running sidebar with a stale stamp is unhealthy");
+                assert!(reason.contains("last poke 61s ago"), "{reason}");
+                assert!(!reason.contains("old tmux"), "{reason}");
+            }
+            other => panic!("expected poll verdict, got {other:?}"),
         }
     }
 

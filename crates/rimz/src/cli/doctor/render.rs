@@ -370,8 +370,9 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
                 Health::Ok,
                 format!("event mode (poked {poked_secs}s ago)"),
             ),
-            Presence::Poll { reason } => {
-                verdict(tally, Health::Warn, format!("poll mode — {reason}"))
+            Presence::Poll { reason, expected } => {
+                let health = if *expected { Health::Ok } else { Health::Warn };
+                verdict(tally, health, format!("polling — {reason}"))
             }
             Presence::Unavailable { error } => {
                 verdict(tally, Health::Alarm, format!("unavailable ({error})"))
@@ -1245,6 +1246,71 @@ mod tests {
         });
         assert!(out.contains("MULTIPLEXER"), "{out}");
         assert!(out.contains("/tmp/tmux-1001/default"), "{out}");
+    }
+
+    #[test]
+    fn mux_section_tallies_poll_presence_by_expectedness() {
+        let mux = |presence| Mux {
+            name: MuxName::Tmux,
+            version: Version::Reported {
+                version: "tmux 3.5".to_owned(),
+            },
+            capabilities: Capabilities::Tmux(Probe::Ready(TmuxCaps {
+                meets_min_version: true,
+                min_version: (3, 5, 0),
+                popup_supported: true,
+            })),
+            binaries: MuxBinaries {
+                active: Some(MuxBinaryRow {
+                    path: "/usr/bin/tmux".to_owned(),
+                    version: Some("tmux 3.5".to_owned()),
+                }),
+                duplicates: Vec::new(),
+                server_mismatches: Vec::new(),
+            },
+            log: MuxLog::Disabled {
+                hint: "server logging off".to_owned(),
+            },
+            zellij_socket: None,
+            socket: Some("/tmp/tmux-1001/default".to_owned()),
+            session_health: None,
+            duplicate_sessions: None,
+            presence: Some(presence),
+            topology_writer: None,
+        };
+
+        let out = strip(|w| {
+            let mut tally = Tally::default();
+            render_mux(
+                w,
+                &Probe::Ready(mux(Presence::Poll {
+                    reason: "no sidebar running in this workspace".to_owned(),
+                    expected: true,
+                })),
+                &mut tally,
+            )?;
+            render_tally(w, &tally)
+        });
+        assert!(out.contains("✓ polling — no sidebar running"), "{out}");
+        assert!(out.contains("✓ no problems found"), "{out}");
+
+        let out = strip(|w| {
+            let mut tally = Tally::default();
+            render_mux(
+                w,
+                &Probe::Ready(mux(Presence::Poll {
+                    reason: "sidebar running but the live tmux watch is not attached".to_owned(),
+                    expected: false,
+                })),
+                &mut tally,
+            )?;
+            render_tally(w, &tally)
+        });
+        assert!(
+            out.contains("⚠ polling — sidebar running but the live tmux watch is not attached"),
+            "{out}"
+        );
+        assert!(out.contains("⚠ 1 warning"), "{out}");
     }
 
     #[test]
