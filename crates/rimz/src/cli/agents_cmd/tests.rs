@@ -197,6 +197,13 @@ mod parse {
             Some(AgentsSubcmd::Refresh(_))
         ));
 
+        let parsed = AgentsHarness::try_parse_from(["rimz", "refresh"]).expect("parse refresh");
+        let Some(AgentsSubcmd::Refresh(refresh)) = parsed.args.command else {
+            panic!("refresh subcommand");
+        };
+        assert_eq!(refresh.reference, None);
+        assert!(!refresh.all);
+
         let parsed = AgentsHarness::try_parse_from([
             "rimz",
             "claude",
@@ -264,10 +271,6 @@ mod parse {
 
         let err = AgentsHarness::try_parse_from(["rimz", "show", "swift-otter", "--ansi"])
             .expect_err("ansi requires capture");
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-
-        let err = AgentsHarness::try_parse_from(["rimz", "refresh"])
-            .expect_err("refresh requires target");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
 
         let err = AgentsHarness::try_parse_from(["rimz", "refresh", "@codex", "--all"])
@@ -446,6 +449,39 @@ mod parse {
             "{err:#}"
         );
     }
+}
+
+#[test]
+fn refresh_targets_honor_channel_filter() {
+    let now = jiff::Timestamp::from_second(2_000).unwrap();
+    let mut auth = rimz::testkit::agent_state("claude", "auth", now);
+    auth.channel = Some("auth-refresh".to_owned());
+    auth.worktree_path = Some("/repo/worktrees/auth-refresh".to_owned());
+    let mut docs = rimz::testkit::agent_state("codex", "docs", now);
+    docs.channel = Some("docs".to_owned());
+    docs.worktree_path = Some("/repo/main".to_owned());
+    let mut child = rimz::testkit::agent_state("claude", "child", now);
+    child.channel = auth.channel.clone();
+    child.parent_agent_id = Some(AgentSessionId::from("auth"));
+    let mut unknown = rimz::testkit::agent_state("ghost", "unknown", now);
+    unknown.channel = auth.channel.clone();
+    let snapshot = rimz::SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(Path::new("/repo/main")),
+        vec![auth, docs, child, unknown],
+        now,
+    );
+
+    let scoped: Vec<&str> = super::refresh::refresh_targets(&snapshot, Some("auth-refresh"))
+        .into_iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    assert_eq!(scoped, vec!["auth"]);
+
+    let workspace: Vec<&str> = super::refresh::refresh_targets(&snapshot, None)
+        .into_iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    assert_eq!(workspace, vec!["auth", "docs"]);
 }
 
 mod placement {
@@ -1611,7 +1647,15 @@ mod render {
         let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
 
         let mut out = anstream::StripStream::new(Vec::new());
-        render_agents_table(&mut out, &snapshot, &agents, now, 120).expect("render agents table");
+        render_agents_table(
+            &mut out,
+            &snapshot,
+            &agents,
+            now,
+            120,
+            &rimz::config::ThemeConfig::default(),
+        )
+        .expect("render agents table");
         let text = String::from_utf8(out.into_inner()).expect("utf8");
 
         assert!(text.contains("DESC"), "{text}");
@@ -1643,7 +1687,15 @@ mod render {
         let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
 
         let mut out = anstream::StripStream::new(Vec::new());
-        render_agents_table(&mut out, &snapshot, &agents, now, 72).expect("render agents table");
+        render_agents_table(
+            &mut out,
+            &snapshot,
+            &agents,
+            now,
+            72,
+            &rimz::config::ThemeConfig::default(),
+        )
+        .expect("render agents table");
         let text = String::from_utf8(out.into_inner()).expect("utf8");
 
         assert!(text.contains('…'), "{text}");
@@ -1720,6 +1772,45 @@ mod render {
             !text.lines().next().unwrap_or_default().contains("CHANNEL"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn agents_table_group_headers_follow_theme_glyphs() {
+        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let mut worktree = agent_with_status(
+            "worktree-channel",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        worktree.channel = Some("auth-refresh".to_owned());
+        worktree.worktree_path = Some("/repo/worktrees/auth-refresh".to_owned());
+        let mut plain = agent_with_status(
+            "plain-channel",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        plain.channel = Some("docs".to_owned());
+        plain.worktree_path = Some("/repo/main".to_owned());
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo/main")),
+            vec![worktree, plain],
+            now,
+        )
+        .with_project_root(Some(PathBuf::from("/repo/main")));
+        let theme = rimz::config::ThemeConfig {
+            glyphs: rimz::config::ThemeGlyphsConfig {
+                set: Some("nerd_font".to_owned()),
+                ..rimz::config::ThemeGlyphsConfig::default()
+            },
+            ..rimz::config::ThemeConfig::default()
+        };
+
+        let text = render_agents_text_with_theme(&snapshot, now, 120, &theme);
+
+        assert!(text.contains("\u{f126} auth-refresh"), "{text}");
+        assert!(text.contains("\u{f292} docs"), "{text}");
     }
 
     #[test]
@@ -1971,9 +2062,24 @@ fn render_agents_text(
     now: jiff::Timestamp,
     max_width: usize,
 ) -> String {
+    render_agents_text_with_theme(
+        snapshot,
+        now,
+        max_width,
+        &rimz::config::ThemeConfig::default(),
+    )
+}
+
+fn render_agents_text_with_theme(
+    snapshot: &rimz::SidebarSnapshot,
+    now: jiff::Timestamp,
+    max_width: usize,
+    theme: &rimz::config::ThemeConfig,
+) -> String {
     let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
     let mut out = anstream::StripStream::new(Vec::new());
-    render_agents_table(&mut out, snapshot, &agents, now, max_width).expect("render agents table");
+    render_agents_table(&mut out, snapshot, &agents, now, max_width, theme)
+        .expect("render agents table");
     String::from_utf8(out.into_inner()).expect("utf8")
 }
 

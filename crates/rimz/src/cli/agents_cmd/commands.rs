@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::cli::render;
+use rimz::config::{GlyphRole, ThemeConfig};
 
 pub(super) fn list_agents(
     json: bool,
@@ -48,6 +49,7 @@ pub(super) fn list_agents(
         return Ok(());
     }
 
+    let machine_config = crate::cli::machine_config();
     let mut out = render::out();
     render_agents_table(
         &mut out,
@@ -55,6 +57,7 @@ pub(super) fn list_agents(
         &agents,
         jiff::Timestamp::now(),
         render::terminal_columns(120),
+        &machine_config.theme,
     )?;
     Ok(())
 }
@@ -75,18 +78,20 @@ pub(crate) fn render_agents_table(
     agents: &[&AgentState],
     now: jiff::Timestamp,
     max_width: usize,
+    theme: &ThemeConfig,
 ) -> std::io::Result<()> {
     let groups = rimz::store::snapshot::group_live_agents_by_worktree(agents, snapshot);
     let ordered_agents: Vec<&AgentState> = groups
         .iter()
         .flat_map(|group| group.agents.iter().copied())
         .collect();
+    let glyph = rimz::sidebar_pane::render::theme_glyphs(theme);
     let mut table =
         render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE", "DESC"])
             .right(&[3, 4, 5])
             .clip_last(max_width);
     for group in groups {
-        table.section_cells(group_header_cells(&group, snapshot));
+        table.section_cells(group_header_cells(&group, snapshot, &glyph));
         for &agent in &group.agents {
             table.row(agent_row(agent, &ordered_agents, now));
         }
@@ -97,17 +102,22 @@ pub(crate) fn render_agents_table(
 fn group_header_cells(
     group: &rimz::store::snapshot::AgentWorktreeGroup<'_>,
     snapshot: &rimz::SidebarSnapshot,
+    glyph: &impl Fn(GlyphRole) -> String,
 ) -> Vec<render::Cell> {
     if group.kind == rimz::SidebarWorktreeKind::External {
         return vec![render::cell("external").fg(render::palette::FAINT)];
     }
 
     let label = match group.kind {
-        rimz::SidebarWorktreeKind::Worktree => format!("⑂ {}", group.label),
-        rimz::SidebarWorktreeKind::Channel if channel_group_is_worktree_backed(group, snapshot) => {
-            format!("⑂ {}", group.label)
+        rimz::SidebarWorktreeKind::Worktree => {
+            format!("{} {}", glyph(GlyphRole::WorktreeBranch), group.label)
         }
-        rimz::SidebarWorktreeKind::Channel => format!("# {}", group.label),
+        rimz::SidebarWorktreeKind::Channel if channel_group_is_worktree_backed(group, snapshot) => {
+            format!("{} {}", glyph(GlyphRole::WorktreeBranch), group.label)
+        }
+        rimz::SidebarWorktreeKind::Channel => {
+            format!("{} {}", glyph(GlyphRole::ChannelHash), group.label)
+        }
         rimz::SidebarWorktreeKind::Root => group.label.clone(),
         rimz::SidebarWorktreeKind::External => unreachable!("external returned above"),
     };

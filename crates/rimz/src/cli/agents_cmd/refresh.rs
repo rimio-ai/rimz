@@ -16,12 +16,11 @@ use crate::cli::{GlobalFlags, render};
 
 #[derive(Debug, Args)]
 pub(super) struct RefreshArgs {
-    /// Agent to refresh (@handle, bare selector, or pane id).
-    #[arg(required_unless_present = "all")]
-    reference: Option<String>,
-    /// Refresh every live agent in the workspace.
+    /// Agent to refresh (@handle, bare selector, or pane id); defaults to every live agent in the current channel.
+    pub(super) reference: Option<String>,
+    /// Refresh every live agent in the workspace, ignoring channel scope.
     #[arg(long, conflicts_with = "reference")]
-    all: bool,
+    pub(super) all: bool,
 }
 
 pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()> {
@@ -33,17 +32,18 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
         .context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     let current_channel = crate::cli::current_channel(&workspace);
-    let targets = if args.all {
-        refresh_targets(&snapshot)
-    } else {
-        vec![crate::cli::resolve_agent_one(
+    let targets = match (args.reference.as_deref(), args.all) {
+        (Some(reference), _) => vec![crate::cli::resolve_agent_one(
             &snapshot,
-            args.reference.as_deref().unwrap_or_default(),
+            reference,
             None,
             current_channel.as_deref(),
-        )?]
+        )?],
+        (None, true) => refresh_targets(&snapshot, None),
+        (None, false) => refresh_targets(&snapshot, current_channel.as_deref()),
     };
     if targets.is_empty() {
+        writeln!(render::err(), "no live agents to refresh")?;
         return Ok(());
     }
 
@@ -90,12 +90,18 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
     Ok(())
 }
 
-fn refresh_targets(snapshot: &rimz::SidebarSnapshot) -> Vec<&AgentState> {
+pub(super) fn refresh_targets<'a>(
+    snapshot: &'a rimz::SidebarSnapshot,
+    channel: Option<&str>,
+) -> Vec<&'a AgentState> {
     snapshot
         .agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| rimz::agents::find_adapter(agent.kind.as_str()).is_some())
+        .filter(|agent| {
+            channel.is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
+        })
         .collect()
 }

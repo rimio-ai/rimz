@@ -133,6 +133,7 @@ pub(super) fn message_miss(
             &agents,
             Timestamp::now(),
             render::terminal_columns(120),
+            &crate::cli::machine_config().theme,
         )?;
     }
     out.flush().ok();
