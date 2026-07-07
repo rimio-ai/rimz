@@ -608,6 +608,47 @@ fn profile_resolves_as_a_profile_handle_and_renders_first() {
 }
 
 #[test]
+fn explicit_name_renders_and_round_trips_before_profile() {
+    let mut snapshot = empty_snapshot();
+    let mut named = agent("claude", "session-writer", Some("auth"), "terminal_1");
+    named.name = Some("writer".to_owned());
+    named.name_explicit = true;
+    named.profile = Some("docs".to_owned());
+    let mut profiled = agent("codex", "session-profile", Some("auth"), "terminal_2");
+    profiled.profile = Some("writer".to_owned());
+    snapshot.agents = vec![named, profiled];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+    let handle = agent_handle(peers[0], &peers, true);
+    assert_eq!(handle, "@writer#auth");
+    assert_eq!(
+        resolve_one(&snapshot, &handle, None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-writer"
+    );
+}
+
+#[test]
+fn minted_name_stays_fallback_for_solo_agent() {
+    let mut snapshot = empty_snapshot();
+    let mut minted = agent("claude", "session-claude", Some("auth"), "terminal_1");
+    minted.name = Some("lucid-atlas".to_owned());
+    snapshot.agents = vec![minted];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+    assert_eq!(agent_handle(peers[0], &peers, true), "@claude#auth");
+    assert_eq!(
+        resolve_one(&snapshot, "@claude#auth", None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-claude"
+    );
+}
+
+#[test]
 fn kind_name_profile_handle_uses_round_tripping_disambiguator() {
     let mut snapshot = empty_snapshot();
     let mut bare = agent("claude", "session-bare", Some("main"), "terminal_1");
@@ -741,6 +782,29 @@ fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
     assert_eq!(
         sender_prefix(&sender, &peers, Some("main")).unwrap(),
         "from @claude#docs: "
+    );
+}
+
+#[test]
+fn sender_prefix_uses_explicit_live_handle() {
+    let mut snapshot = empty_snapshot();
+    let mut sender = agent("claude", "session-sender", Some("docs"), "terminal_1");
+    sender.name = Some("writer".to_owned());
+    sender.name_explicit = true;
+    let target = agent("codex", "session-target", Some("docs"), "terminal_2");
+    snapshot.agents = vec![sender, target];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+    let sender = crate::message::MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("writer".to_owned()),
+        profile: None,
+        role: None,
+        channel: Some("fallback".to_owned()),
+    };
+
+    assert_eq!(
+        sender_prefix(&sender, &peers, Some("docs")).unwrap(),
+        "from @writer: "
     );
 }
 
@@ -925,6 +989,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
+        name_explicit: false,
         profile: None,
         role: None,
         channel: None,
@@ -942,6 +1007,7 @@ fn fresh_pane(kind: &str, raw_pane: &str) -> PaneAgent {
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
+        name_explicit: false,
         profile: None,
         role: None,
         channel: None,
@@ -967,6 +1033,7 @@ fn bound_pane(
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: Some(ordinal),
         name: Some(name.to_owned()),
+        name_explicit: false,
         profile: None,
         role: None,
         channel: None,

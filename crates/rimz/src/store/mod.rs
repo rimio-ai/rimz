@@ -171,6 +171,7 @@ pub struct AgentLaunchIdentity {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub name: String,
+    pub name_explicit: bool,
     pub profile: Option<String>,
     pub role: Option<String>,
     pub model: Option<String>,

@@ -608,6 +608,7 @@ pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>
             exit_on_run_completion: false,
             identity: crate::harness::launch::ExecIdentity {
                 name: agent.name.as_deref(),
+                name_explicit: agent.name_explicit,
                 profile: agent.profile.as_deref(),
                 role: agent.role.as_deref(),
                 team: agent.team.as_deref(),

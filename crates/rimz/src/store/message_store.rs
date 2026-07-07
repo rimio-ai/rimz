@@ -357,6 +357,7 @@ mod tests {
             agent_id: AgentSessionId::from("sess-1"),
             kind: AgentKind::new_unchecked("claude"),
             name: None,
+            name_explicit: false,
             kind_ordinal: None,
             profile: None,
             role: None,

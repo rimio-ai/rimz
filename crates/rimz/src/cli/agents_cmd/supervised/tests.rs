@@ -386,6 +386,7 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
         agent_id: AgentSessionId::from(id),
         kind: AgentKind::new_unchecked(kind),
         name: None,
+        name_explicit: false,
         kind_ordinal: None,
         profile: None,
         role: None,

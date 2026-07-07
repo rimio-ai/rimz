@@ -188,6 +188,7 @@ mod tests {
             agent_id: id.into(),
             kind: AgentKind::new_unchecked("claude"),
             name: None,
+            name_explicit: false,
             kind_ordinal: None,
             profile: None,
             role: None,

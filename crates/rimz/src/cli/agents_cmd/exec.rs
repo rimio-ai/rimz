@@ -59,6 +59,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         exit_on_run_completion: args.exit_on_run_completion,
         identity: rimz::harness::launch::ExecIdentity {
             name: args.agent_name.as_deref(),
+            name_explicit: args.agent_name_explicit,
             profile: args.agent_profile.as_deref(),
             role: args.agent_role.as_deref(),
             team: args.agent_team.as_deref(),
@@ -421,6 +422,7 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                 kind: AgentKind::new_unchecked(args.kind.clone()),
                 agent_id: AgentSessionId::from(launch_id),
                 name: name.to_owned(),
+                name_explicit: args.agent_name_explicit,
                 profile: args.agent_profile.clone(),
                 role: args.agent_role.clone(),
                 model: args.agent_model.clone(),

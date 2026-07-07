@@ -122,6 +122,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
         agent_id: AgentSessionId::from(id),
         kind: AgentKind::new_unchecked("claude"),
         name: None,
+        name_explicit: false,
         kind_ordinal: None,
         profile: None,
         role: None,

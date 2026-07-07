@@ -13,7 +13,7 @@ Spawning the fleet separates three independent choices, so any combination is on
 Three words name the parts:
 
 - A **channel** is one cooperation lane where a few members work together, backed by a durable bare name, a [worktree](./worktree.md), an in-place named team as `<dir>/<team>`, or the directory room. The sidebar groups the room by it, and an address narrows to it with `#<channel>`.
-- A **member** is an agent, named by a **handle**: `@claude` the kind, `@planner` the profile, `@swift-otter` the one running instance.
+- A **member** is an agent, named by a **handle**: `@claude` the kind, `@planner` the profile, `@writer` the user-chosen instance name, `@swift-otter` the minted instance petname.
 - An **address** joins them (`@handle#channel`): it is how every command names who it reaches.
 
 You reach a member through `message`. `--steer` talks to a live pane now; the default talks now when the member can receive and parks a task when the member needs a later turn boundary; `--schedule` sets an earliest delivery time before that boundary can open. Every mode names its target with the same address and rides the same pane-send primitive.
@@ -85,11 +85,11 @@ A **handle** falls into three classes, narrowing from group to instance:
 
 - A **role handle** (`@coder`) names a team role and matches every agent launched under it in the channel. Role names reserve built-in kind handles so kind addresses keep round-tripping.
 - A **type handle** names a kind (`@codex`) or a profile (`@planner`) and matches every agent of it in the channel. It carries enough to launch one, so only a type handle can create.
-- An **instance handle** names one running agent and only ever addresses what exists: a petname (`@swift-otter`), a kind ordinal (`@claude-2`), a session-id prefix, or a precise `<mux>:<pane>` pane address. `@all` is the broadcast handle for the whole channel.
+- An **instance handle** names one running agent and only ever addresses what exists: an explicit launch name (`@writer` from `--name writer`), a petname (`@swift-otter`), a kind ordinal (`@claude-2`), a session-id prefix, or a precise `<mux>:<pane>` pane address. `@all` is the broadcast handle for the whole channel.
 
-The petname is the harness's stable per-instance name: the store mints an adjective-noun pair at registration, collision-checked against the room's live names and refusing reserved command words and kind-shaped names, so a petname can never shadow `@all` or `@claude-2`. A session recorded before petnames re-derives one deterministically from its session id, so old logs still render a stable name. [petname.rs](../../../crates/rimz/src/harness/petname.rs) owns the generator.
+The petname is the harness's stable per-instance fallback name: the store mints an adjective-noun pair at registration, collision-checked against the room's live names and refusing reserved command words and kind-shaped names, so a petname can never shadow `@all` or `@claude-2`. User-chosen names are explicit launch identity and render first after a role; minted and worktree-derived soft names stay fallback instance selectors. A session recorded before petnames re-derives one deterministically from its session id, so old logs still render a stable name. [petname.rs](../../../crates/rimz/src/harness/petname.rs) owns the generator.
 
-The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it role-first — the role when unique in scope, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing; [target.rs](../../../crates/rimz/src/harness/target.rs) owns both.
+The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it role-first — the role when unique in scope, then the explicit `--name`, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing; [target.rs](../../../crates/rimz/src/harness/target.rs) owns both.
 
 An address resolves to zero, one, or many agents against a fresh snapshot, and arity decides the outcome:
 

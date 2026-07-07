@@ -395,6 +395,7 @@ fn allocate_agent_launch_identities(
         .collect::<Vec<_>>();
     let mut identities = Vec::with_capacity(requests.len());
     for request in requests {
+        let name_explicit = matches!(&request.name, AgentLaunchName::Explicit(_));
         let name = match &request.name {
             AgentLaunchName::Explicit(name) => {
                 validate_agent_launch_name(name)?;
@@ -419,6 +420,7 @@ fn allocate_agent_launch_identities(
             kind: request.kind.clone(),
             agent_id: request.agent_id.clone(),
             name,
+            name_explicit,
             profile: request.profile.clone(),
             role: request.role.clone(),
             model: request.model.clone(),
@@ -475,6 +477,7 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
         AgentLaunchPayload {
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
+            agent_name_explicit: identity.name_explicit,
             launch: LaunchParams {
                 profile: identity.profile.clone(),
                 role: identity.role.clone(),
@@ -587,6 +590,7 @@ mod tests {
                 AgentLaunchPayload {
                     agent_id: AgentSessionId::from(agent_id),
                     agent_name: name.to_owned(),
+                    agent_name_explicit: false,
                     launch: LaunchParams::default(),
                     state: crate::store::event::AgentLaunchState::Bound,
                     run_id: None,
@@ -685,6 +689,7 @@ mod tests {
                 AgentLaunchPayload {
                     agent_id: AgentSessionId::from("launch_a"),
                     agent_name: "lucid-atlas".to_owned(),
+                    agent_name_explicit: false,
                     launch: LaunchParams::default(),
                     state: crate::store::event::AgentLaunchState::Bound,
                     run_id: None,
@@ -793,12 +798,52 @@ mod tests {
         assert!(valid_agent_launch_name(&identities[0].name));
     }
 
+    #[test]
+    fn launch_identity_tracks_explicit_name_provenance() {
+        let agents = Vec::new();
+        let requests = [
+            launch_request(
+                "launch_explicit",
+                AgentLaunchName::Explicit("writer".to_owned()),
+            ),
+            launch_request("launch_soft", AgentLaunchName::Soft("docs".to_owned())),
+            launch_request("launch_mint", AgentLaunchName::Mint),
+        ];
+
+        let identities = allocate_agent_launch_identities(&requests, &agents).unwrap();
+
+        assert_eq!(identities[0].name, "writer");
+        assert!(identities[0].name_explicit);
+        assert_eq!(identities[1].name, "docs");
+        assert!(!identities[1].name_explicit);
+        assert!(valid_agent_launch_name(&identities[2].name));
+        assert!(!identities[2].name_explicit);
+    }
+
+    fn launch_request(id: &str, name: AgentLaunchName) -> AgentLaunchRequest {
+        AgentLaunchRequest {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from(id),
+            name,
+            profile: None,
+            role: None,
+            model: None,
+            effort: None,
+            team: None,
+            launch_group: None,
+            launch_ordinal: None,
+            channel: None,
+            run_id: None,
+        }
+    }
+
     fn agent_state(kind: &str, id: &str, name: Option<&str>) -> AgentState {
         let now = jiff::Timestamp::now();
         AgentState {
             agent_id: AgentSessionId::from(id),
             kind: AgentKind::new_unchecked(kind),
             name: name.map(ToOwned::to_owned),
+            name_explicit: false,
             kind_ordinal: Some(1),
             profile: None,
             role: None,

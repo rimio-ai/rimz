@@ -92,6 +92,7 @@ pub(crate) fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> Age
         agent_id: agent_id.into(),
         kind: AgentKind::new_unchecked(kind),
         name: Some(test_agent_name(agent_id)),
+        name_explicit: false,
         kind_ordinal: Some(test_agent_ordinal(agent_id)),
         profile: None,
         role: None,

@@ -735,6 +735,7 @@ mod tests {
             agent_id: AgentSessionId::from(id),
             kind: AgentKind::new_unchecked("codex"),
             name: Some(id.to_owned()),
+            name_explicit: false,
             kind_ordinal: None,
             profile: None,
             role: None,

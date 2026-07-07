@@ -109,6 +109,7 @@ fn message_agent() -> AgentState {
         agent_id: AgentSessionId::from("claude-migrate"),
         kind: AgentKind::new_unchecked("claude"),
         name: None,
+        name_explicit: false,
         kind_ordinal: None,
         profile: None,
         role: None,

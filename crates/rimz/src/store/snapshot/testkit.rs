@@ -140,6 +140,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         agent_id: id.into(),
         kind: AgentKind::new_unchecked(kind),
         name: None,
+        name_explicit: false,
         kind_ordinal: None,
         profile: None,
         role: None,

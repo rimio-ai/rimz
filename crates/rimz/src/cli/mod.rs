@@ -683,6 +683,7 @@ mod tests {
             agent_id: id.into(),
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
             name: Some(id.to_owned()),
+            name_explicit: false,
             kind_ordinal: None,
             profile: None,
             role: None,

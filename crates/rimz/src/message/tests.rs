@@ -737,6 +737,7 @@ fn agent(id: &str, name: Option<&str>) -> AgentState {
         agent_id: AgentSessionId::from(id),
         kind: AgentKind::new_unchecked("claude"),
         name: name.map(ToOwned::to_owned),
+        name_explicit: false,
         kind_ordinal: Some(1),
         profile: None,
         role: None,

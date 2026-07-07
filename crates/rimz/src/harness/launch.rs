@@ -121,6 +121,9 @@ pub fn channel_label_shell_argv(
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExecIdentity<'a> {
     pub name: Option<&'a str>,
+    /// Provenance for `name`: true only for a user-chosen `--name`, false for
+    /// minted and soft names. Rendered as a hidden CLI flag, not an env var.
+    pub name_explicit: bool,
     /// Provisional launch row id; rendered only alongside `name`
     /// (`--launch-id` requires `--agent-name` at the parse side).
     pub launch_id: Option<&'a str>,
@@ -171,6 +174,9 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
     }
     if let Some(name) = inv.identity.name {
         argv.extend(["--agent-name".to_owned(), name.to_owned()]);
+        if inv.identity.name_explicit {
+            argv.push("--agent-name-explicit".to_owned());
+        }
         if let Some(launch_id) = inv.identity.launch_id {
             argv.extend(["--launch-id".to_owned(), launch_id.to_owned()]);
         }
@@ -664,6 +670,7 @@ mod tests {
             exit_on_run_completion: true,
             identity: ExecIdentity {
                 name: Some("swift-otter"),
+                name_explicit: true,
                 launch_id: Some("launch_123"),
                 profile: Some("planner"),
                 role: Some("coder"),
@@ -687,6 +694,7 @@ mod tests {
                 "run_123",
                 "--agent-name",
                 "swift-otter",
+                "--agent-name-explicit",
                 "--launch-id",
                 "launch_123",
                 "--agent-profile",

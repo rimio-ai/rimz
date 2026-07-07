@@ -148,6 +148,7 @@ fn live_pane() -> PaneAgent {
         kind: AgentKind::new_unchecked("claude"),
         kind_ordinal: None,
         name: None,
+        name_explicit: false,
         profile: None,
         role: None,
         channel: None,

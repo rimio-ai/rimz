@@ -1096,6 +1096,7 @@ mod pane_exec {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("launch_0123456789abcdef0123456789abcdef"),
             name: "swift-otter".to_owned(),
+            name_explicit: false,
             profile: None,
             role: None,
             model: None,
@@ -1636,6 +1637,30 @@ mod render {
     }
 
     #[test]
+    fn agents_table_renders_explicit_name_as_handle() {
+        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let mut agent = agent_with_status(
+            "named-agent",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        agent.name = Some("writer".to_owned());
+        agent.name_explicit = true;
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
+            Vec::new(),
+            vec![agent],
+            now,
+        );
+
+        let text = render_agents_text(&snapshot, now, 120);
+
+        assert!(text.contains("@writer"), "{text}");
+        assert!(!text.contains("@claude"), "{text}");
+    }
+
+    #[test]
     fn agents_table_groups_by_channel_with_isolation_glyphs() {
         let now = jiff::Timestamp::from_second(2_000).unwrap();
         let mut worktree = agent_with_status(
@@ -1940,6 +1965,7 @@ fn bare_exec_args() -> ExecArgs {
         resume: None,
         run_id: None,
         agent_name: Some("lucid-atlas".to_owned()),
+        agent_name_explicit: false,
         agent_profile: None,
         agent_role: None,
         agent_team: None,
@@ -2032,6 +2058,7 @@ fn agent_with_status(
         agent_id: AgentSessionId::from(id),
         kind: AgentKind::new_unchecked("claude"),
         name: None,
+        name_explicit: false,
         kind_ordinal: None,
         profile: None,
         role: None,

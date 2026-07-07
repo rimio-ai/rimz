@@ -280,6 +280,7 @@ fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
         AgentLaunchPayload {
             agent_id: AgentSessionId::from(launch_id),
             agent_name: agent_name.to_owned(),
+            agent_name_explicit: false,
             launch: LaunchParams {
                 profile: None,
                 role: Some("pruner".to_owned()),

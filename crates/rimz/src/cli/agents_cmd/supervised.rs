@@ -78,6 +78,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
     pub(super) adapter: &'a dyn AgentAdapter,
     pub(super) run_id: &'a rimz::RunId,
     pub(super) agent_name: Option<&'a str>,
+    pub(super) agent_name_explicit: bool,
     pub(super) agent_profile: Option<&'a str>,
     pub(super) agent_role: Option<&'a str>,
     pub(super) agent_channel: Option<&'a str>,
@@ -107,6 +108,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
             exit_on_run_completion: args.self_cleanup_on_completion,
             identity: rimz::harness::launch::ExecIdentity {
                 name: args.agent_name,
+                name_explicit: args.agent_name_explicit,
                 launch_id: args.launch_id.map(rimz::ids::AgentSessionId::as_str),
                 profile: args.agent_profile,
                 role: args.agent_role,

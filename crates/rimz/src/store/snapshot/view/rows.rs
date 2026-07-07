@@ -34,7 +34,11 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             description: agent.description.clone(),
             model: agent.model.clone(),
             effort: agent.effort.clone(),
-            handle: agent.role.clone().or_else(|| agent.profile.clone()),
+            handle: agent
+                .role
+                .clone()
+                .or_else(|| agent.name_explicit.then(|| agent.name.clone()).flatten())
+                .or_else(|| agent.profile.clone()),
             team: agent.team.clone(),
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,

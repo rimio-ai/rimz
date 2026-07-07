@@ -10,6 +10,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
         AgentLaunchPayload {
             agent_id: "sess-1".into(),
             agent_name: "lucid-atlas".to_owned(),
+            agent_name_explicit: false,
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
 

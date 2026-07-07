@@ -1240,6 +1240,7 @@ pub(super) fn append_launch_event(
         rimz::store::event::AgentLaunchPayload {
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
+            agent_name_explicit: identity.name_explicit,
             launch: rimz::agents::LaunchParams {
                 profile: identity.profile.clone(),
                 role: identity.role.clone(),
@@ -1403,6 +1404,7 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
                     exit_on_run_completion: false,
                     identity: rimz::harness::launch::ExecIdentity {
                         name: options.launch.map(|launch| launch.name.as_str()),
+                        name_explicit: options.launch.is_some_and(|launch| launch.name_explicit),
                         launch_id: options.launch.map(|launch| launch.agent_id.as_str()),
                         profile: profile.as_deref(),
                         role: role.as_deref(),
@@ -1522,6 +1524,7 @@ mod tests {
             agent_id: AgentSessionId::from(id),
             kind: AgentKind::new_unchecked("codex"),
             name: None,
+            name_explicit: false,
             kind_ordinal: None,
             profile: None,
             role: None,

@@ -460,6 +460,7 @@ mod tests {
             agent_id: rimz::ids::AgentSessionId::from("sess-1"),
             kind: rimz::ids::AgentKind::new_unchecked("claude"),
             name: None,
+            name_explicit: false,
             kind_ordinal: None,
             profile: None,
             role: None,

@@ -439,6 +439,7 @@ mod tests {
             agent_id: AgentSessionId::from("sess-a"),
             kind: AgentKind::new_unchecked("claude"),
             name: Some("lucid-atlas".to_owned()),
+            name_explicit: false,
             kind_ordinal: Some(1),
             profile: None,
             role: None,

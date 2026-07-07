@@ -39,6 +39,8 @@ pub enum AgentLaunchState {
 pub struct AgentLaunchPayload {
     pub agent_id: AgentSessionId,
     pub agent_name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_name_explicit: bool,
     #[serde(flatten)]
     pub launch: LaunchParams,
     #[serde(default)]

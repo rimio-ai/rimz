@@ -46,3 +46,34 @@ fn paneless_codex(id: &str, worktree: &str, rank: i64) -> AgentState {
     // agent carries its worktree but never stamps a pane.
     agent("codex", id, AgentStatus::Running, rank).worktree(worktree)
 }
+
+#[test]
+fn row_handle_prefers_role_then_explicit_name_then_profile() {
+    let mut named = agent("claude", "named", AgentStatus::Idle, 0);
+    named.name = Some("writer".to_owned());
+    named.name_explicit = true;
+    named.profile = Some("docs".to_owned());
+    assert_eq!(
+        row_from_agent(&named, epoch())
+            .as_agent()
+            .and_then(|card| card.handle.as_deref()),
+        Some("writer")
+    );
+
+    named.role = Some("coder".to_owned());
+    assert_eq!(
+        row_from_agent(&named, epoch())
+            .as_agent()
+            .and_then(|card| card.handle.as_deref()),
+        Some("coder")
+    );
+
+    let mut minted = agent("claude", "minted", AgentStatus::Idle, 0);
+    minted.name = Some("lucid-atlas".to_owned());
+    assert_eq!(
+        row_from_agent(&minted, epoch())
+            .as_agent()
+            .and_then(|card| card.handle.as_deref()),
+        None
+    );
+}

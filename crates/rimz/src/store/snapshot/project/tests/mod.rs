@@ -45,6 +45,7 @@ fn launch_payload(agent_id: &str, agent_name: &str) -> AgentLaunchPayload {
     AgentLaunchPayload {
         agent_id: agent_id.into(),
         agent_name: agent_name.to_owned(),
+        agent_name_explicit: false,
         launch: LaunchParams::default(),
         state: AgentLaunchState::Bound,
         run_id: None,
@@ -308,6 +309,66 @@ fn launch_description_reduces_and_survives_provisional_adoption() {
     assert_eq!(adopted.len(), 1);
     assert_eq!(adopted[0].agent_id.as_str(), "real-session");
     assert_eq!(adopted[0].description.as_deref(), Some("port auth"));
+}
+
+#[test]
+fn explicit_launch_name_survives_session_adoption() {
+    let launch = launch_event(
+        "claude",
+        AgentLaunchPayload {
+            agent_name_explicit: true,
+            ..launch_payload("launch_a", "writer")
+        },
+    );
+    let lifecycle = raw_lifecycle_at(
+        "claude",
+        2,
+        json!({
+            "agent_id": "real-session",
+            "agent_name": "writer",
+            "signal": { "signal": "registered" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[launch, lifecycle]);
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id.as_str(), "real-session");
+    assert_eq!(agents[0].name.as_deref(), Some("writer"));
+    assert!(agents[0].name_explicit);
+}
+
+#[test]
+fn explicit_name_collision_remint_clears_explicit_bit() {
+    let first = launch_event(
+        "claude",
+        AgentLaunchPayload {
+            agent_name_explicit: true,
+            ..launch_payload("launch_a", "writer")
+        },
+    );
+    let second = launch_event(
+        "claude",
+        AgentLaunchPayload {
+            agent_name_explicit: true,
+            ..launch_payload("session-b", "writer")
+        },
+    );
+
+    let agents = reduce_agent_states(&[first, second]);
+
+    let original = agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "launch_a")
+        .expect("original");
+    let reminted = agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "session-b")
+        .expect("reminted");
+    assert_eq!(original.name.as_deref(), Some("writer"));
+    assert!(original.name_explicit);
+    assert_ne!(reminted.name.as_deref(), Some("writer"));
+    assert!(!reminted.name_explicit);
 }
 
 #[test]

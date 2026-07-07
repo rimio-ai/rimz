@@ -96,8 +96,8 @@ impl SidebarRow {
     }
 
     /// The name to display on the card and in notifications: the agent's handle
-    /// (role/profile) when set, else `name` — the kind for an agent row, the
-    /// command for a process row.
+    /// (role, explicit name, or profile) when set, else `name` — the kind for
+    /// an agent row, the command for a process row.
     pub fn display_name(&self) -> &str {
         self.as_agent()
             .and_then(|card| card.handle.as_deref())
@@ -180,6 +180,11 @@ pub struct PaneAgent {
     pub kind_ordinal: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Whether `name` is a user-chosen launch handle rather than a minted
+    /// petname. Bound panes use it to keep delivery resolution aligned with
+    /// rendered handles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub name_explicit: bool,
     /// The `[agents.profiles]` profile the bound session launched as, copied from the
     /// rollup so a bound agent answers to `@<profile>` through its pane. `None`
     /// for a sessionless pane or a bare-kind launch.
@@ -209,10 +214,16 @@ pub struct PaneAgent {
 }
 
 impl PaneAgent {
-    /// A human handle: role, profile, pet name, `kind-ordinal`, else kind.
+    /// A human handle: role, explicit name, profile, pet name, `kind-ordinal`,
+    /// else kind.
     pub fn label(&self) -> String {
         if let Some(role) = self.role.as_deref().filter(|role| !role.is_empty()) {
             return role.to_owned();
+        }
+        if self.name_explicit
+            && let Some(name) = self.name.as_deref().filter(|name| !name.is_empty())
+        {
+            return name.to_owned();
         }
         if let Some(profile) = self
             .profile
@@ -281,11 +292,11 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// The agent's display handle — the team role it launched as (`planner`,
-    /// `coder`), else its profile, copied from the rollup. The card and
-    /// notification labels render this in the provider brand color instead of
-    /// the bare kind; `None` (a bare-kind launch) falls back to the kind. The
-    /// kind stays on `SidebarRow::name` for brand lookup, spend attribution, and
-    /// subagent nesting.
+    /// `coder`), else its explicit name, else its profile, copied from the
+    /// rollup. The card and notification labels render this in the provider
+    /// brand color instead of the bare kind; `None` (a bare-kind launch) falls
+    /// back to the kind. The kind stays on `SidebarRow::name` for brand lookup,
+    /// spend attribution, and subagent nesting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
     /// The launch team copied from the rollup. Rendering does not use it yet;

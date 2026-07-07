@@ -5,12 +5,12 @@
 //! *type handle* names a profile to fill — `@<kind>` (`@codex`) or `@<profile>`
 //! (`@planner`) — and matches every such agent in the channel; the same handles
 //! can also create one (see [`create_mention`]). An
-//! *instance handle* names exactly one running agent — `@<kind>-<n>`,
-//! `@<petname>`, or a session-id prefix. `@all` is the broadcast handle, and a
-//! pane id (`tmux:%1`, `zellij:terminal_3`) is a precise, sigil-free,
-//! channel-agnostic address. The renderer prefers a unique role, then a non-kind
-//! profile, then the kind, then an ordinal, then the petname, so a handle always round-trips to its
-//! agent.
+//! *instance handle* names exactly one running agent — an explicit `--name`,
+//! `@<kind>-<n>`, `@<petname>`, or a session-id prefix. `@all` is the broadcast
+//! handle, and a pane id (`tmux:%1`, `zellij:terminal_3`) is a precise,
+//! sigil-free, channel-agnostic address. The renderer prefers a unique role,
+//! then an explicit name, then a non-kind profile, then the kind, then an
+//! ordinal, then the petname, so a handle always round-trips to its agent.
 //!
 //! The channel is the workspace segment the room groups by — an explicit named
 //! lane, else a worktree name, else an in-place named team stamped at launch as
@@ -92,6 +92,7 @@ trait Candidate<'a>: Copy {
     fn kind(self) -> &'a str;
     fn kind_ordinal(self) -> Option<u32>;
     fn name(self) -> Option<&'a str>;
+    fn name_explicit(self) -> bool;
     /// The `[agents.profiles]` profile this agent launched as, when it has one. A
     /// profile is a *type* handle — `@planner` may name several agents — so the
     /// name/profile matcher returns every profile match and lets arity decide.
@@ -147,6 +148,9 @@ impl<'a> Candidate<'a> for &'a AgentState {
     fn name(self) -> Option<&'a str> {
         self.name.as_deref()
     }
+    fn name_explicit(self) -> bool {
+        self.name_explicit
+    }
     fn profile(self) -> Option<&'a str> {
         self.profile.as_deref()
     }
@@ -176,6 +180,9 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     }
     fn name(self) -> Option<&'a str> {
         self.name.as_deref()
+    }
+    fn name_explicit(self) -> bool {
+        self.name_explicit
     }
     fn profile(self) -> Option<&'a str> {
         self.profile.as_deref()
@@ -469,13 +476,24 @@ fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> V
             })
             .collect(),
         AgentSelector::NameOrSession(selector) => {
-            // A role is the most specific team handle. A profile is a type
-            // handle: either can name several agents, and arity is decided
-            // downstream. Role/profile come before the globally-unique pet
-            // name, then a session-id prefix.
+            // A role is the most specific team handle. A user-chosen explicit
+            // name is a unique instance handle and must resolve before a
+            // profile with the same text. A profile is a type handle: it can
+            // name several agents, and arity is decided downstream. Minted pet
+            // names stay below profile, then a session-id prefix.
             let by_role = role_matches(selector.as_str());
             if !by_role.is_empty() {
                 return by_role;
+            }
+            let by_explicit_name: Vec<C> = candidates
+                .iter()
+                .copied()
+                .filter(|candidate| {
+                    candidate.name_explicit() && candidate.name() == Some(selector.as_str())
+                })
+                .collect();
+            if !by_explicit_name.is_empty() {
+                return by_explicit_name;
             }
             let by_profile: Vec<C> = candidates
                 .iter()
@@ -678,11 +696,12 @@ pub fn recipient_channel(
 
 /// The canonical rendered address of an agent — the inverse of [`parse_target`].
 ///
-/// Returns the shortest mention that names exactly this agent among `peers`:
-/// `@<kind>` when it is the only one of its kind in scope, else a disambiguator.
-/// With `include_channel`, a channelled agent appends `#<channel>` for ungrouped
-/// output and disambiguates within that channel (an `@<kind>-<ordinal>`, with the
-/// petname as the fallback when no ordinal is set). A grouped handle
+/// Returns the shortest mention that names exactly this agent among `peers`: a
+/// role first, then an explicit name, then `@<kind>` when it is the only one of
+/// its kind in scope, else a disambiguator. With `include_channel`, a channelled
+/// agent appends `#<channel>` for ungrouped output and disambiguates within that
+/// channel (an `@<kind>-<ordinal>`, with the petname as the fallback when no
+/// ordinal is set). A grouped handle
 /// (`include_channel = false`) reads under its channel's section header, so it
 /// scopes the same way.
 ///
@@ -795,6 +814,13 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         if role_rivals <= 1 {
             return format!("@{role}");
         }
+    }
+    // Launch allocation guarantees an explicit name is unique among live
+    // agents, so no rival count is needed here.
+    if agent.name_explicit
+        && let Some(name) = agent.name.as_deref()
+    {
+        return format!("@{name}");
     }
     // A unique profile is next. A shared profile (two `planner`s in one channel)
     // is not unique, and a profile named like a built-in kind resolves through

@@ -877,6 +877,7 @@ fn codex_origin_overrides_read_transcript_and_worktree_from_snapshot() {
         agent_id: "codex-1".into(),
         kind: AgentKind::new_unchecked("codex"),
         name: None,
+        name_explicit: false,
         kind_ordinal: None,
         profile: None,
         role: None,

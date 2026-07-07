@@ -632,6 +632,11 @@ pub struct AgentState {
     pub kind: AgentKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Whether `name` is the launch-stamped user-chosen name. Explicit names
+    /// render as the handle after a team role; minted and soft names remain
+    /// last-resort instance selectors.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub name_explicit: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
     /// The `[agents.profiles]` profile this agent launched as (`planner`,
@@ -816,6 +821,8 @@ struct AgentStateWire {
     agent_id: AgentSessionId,
     kind: AgentKind,
     name: Option<String>,
+    #[serde(default)]
+    name_explicit: bool,
     kind_ordinal: Option<u32>,
     profile: Option<String>,
     role: Option<String>,
@@ -882,6 +889,7 @@ impl From<AgentStateWire> for AgentState {
             agent_id: wire.agent_id,
             kind: wire.kind,
             name: wire.name,
+            name_explicit: wire.name_explicit,
             kind_ordinal: wire.kind_ordinal,
             profile: wire.profile,
             role: wire.role,
@@ -1303,6 +1311,7 @@ mod tests {
             agent_id: "sess".into(),
             kind: AgentKind::new_unchecked("claude"),
             name: None,
+            name_explicit: false,
             kind_ordinal: None,
             profile: None,
             role: None,

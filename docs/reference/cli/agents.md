@@ -19,6 +19,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 **Handles that name one agent:**
 
+- `@writer` — an explicit name from a single-agent launch such as `rimz agents claude --name writer`.
 - `@swift-otter` — a pet name.
 - `@claude-2` — a kind plus ordinal (the ordinal appears only when two of a kind share one worktree).
 - `@<session-prefix>` — a leading slice of the session id.
@@ -81,6 +82,8 @@ Permission-mode cells exist where the adapter supports them: `-auto`, `-ask`, `-
 
 These broadcast to every agent cell, and each adapter renders them into its own native flags. `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` carry the same meaning and resolution rules as the [profile fields](../configuration.md#profiles) of the same names — a command-line flag renders after any profile and wins. `--effort` levels are provider-specific: Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`. `--description <TEXT>` is a card label only: it seeds the card's second line, never enters the agent's argv or environment, and the agent's own session preview replaces it.
 
+`--name <HANDLE>` applies to a single-agent launch and makes that user-chosen name the rendered handle after any team role, so `rimz agents claude --name writer` appears as `@writer` in lists, sidebar cards, and peer message prefixes. Bare launches still get an internal pet name for stable instance addressing, but they render as `@<kind>` when that is unambiguous.
+
 ### Channel, worktree, and placement
 
 `-w`/`--worktree` reuses or creates a named worktree (`--worktree=docs` or `--worktree docs`); bare `--worktree` creates a fresh generated one. Branch-style spelling is accepted: `--worktree=feat/great` creates branch `feat/great` and worktree/channel/tab `feat-great`. `--from-pr <number|url>` creates the worktree from a pull request head and implies a worktree launch — pair it with `--worktree <NAME>` to name the local worktree, or accept `pr-<N>`. A worktree launch names its backend tab `#<NAME>`, matching the channel in agent addresses.
@@ -126,7 +129,7 @@ rimz agents stop run_0123…               # cancel a run or close a pane
 rimz agents stop @claude --all           # stop every matching Claude in scope
 ```
 
-Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. Rows group under channel section headers: `⑂` marks a worktree-backed or isolated lane, `#` marks a plain lane, a bare label marks the room root, and a dim `external` tail holds agents outside the project. A shared team appears in the header as `· <team> team`. The `AGENT` column is the shortest handle you can type back under that header — its role (`@coder`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one lane. `STATUS` is the plain status label, with provider-limit and API-error turns projected to `paused` or `failed`; `show` carries the turn phase when you need it. `DESC` is the same activity description the sidebar shows: session preview, session name, launch description, task, then latest prompt, clipped to the terminal width. `ps` is an alias for `list`.
+Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. Rows group under channel section headers: `⑂` marks a worktree-backed or isolated lane, `#` marks a plain lane, a bare label marks the room root, and a dim `external` tail holds agents outside the project. A shared team appears in the header as `· <team> team`. The `AGENT` column is the shortest handle you can type back under that header — its role (`@coder`), else its explicit `--name` (`@writer`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one lane. `STATUS` is the plain status label, with provider-limit and API-error turns projected to `paused` or `failed`; `show` carries the turn phase when you need it. `DESC` is the same activity description the sidebar shows: session preview, session name, launch description, task, then latest prompt, clipped to the terminal width. `ps` is an alias for `list`.
 
 `show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section includes transcript-priced session cost when a transcript path and cached price book can price it. `--capture` appends the bound pane's visible area as plain text, `--ansi` keeps colors, and `--json` includes the same live agent fields plus additive `cost`, `messages`, and optional `capture` data. Capture errors when the agent has no bound pane. `--json` selects JSON for `list` and bare `agents` (supervised `-p` uses `--output-format` instead).
 

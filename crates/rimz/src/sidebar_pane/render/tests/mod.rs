@@ -198,6 +198,7 @@ fn agent(
         agent_id: id.into(),
         kind: crate::ids::AgentKind::new_unchecked(kind),
         name: None,
+        name_explicit: false,
         kind_ordinal: None,
         profile: None,
         role: None,

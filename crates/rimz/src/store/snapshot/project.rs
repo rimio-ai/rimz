@@ -118,6 +118,7 @@ pub(super) fn backfill_agent_identities(
         }
         let key = (kind.clone(), agent_id.clone());
         let identity = allocator.assign_existing(&kind, &agent_id, map.get(&key));
+        agents[index].name_explicit = identity.name_explicit;
         agents[index].name = Some(identity.name);
         agents[index].kind_ordinal = Some(identity.kind_ordinal);
         map.insert(key, agents[index].clone());
@@ -343,6 +344,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
 #[derive(Clone, Debug)]
 struct CardIdentity {
     name: String,
+    name_explicit: bool,
     kind_ordinal: u32,
 }
 
@@ -559,8 +561,18 @@ impl CardIdentityAllocator {
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
         let name = self.assign_name(&key, observation, prior);
+        let name_explicit =
+            prior
+                .and_then(|state| state.name.as_deref())
+                .is_some_and(|prior_name| {
+                    prior.is_some_and(|state| state.name_explicit) && name == prior_name
+                });
         let kind_ordinal = self.assign_ordinal(kind, agent_id, observation, prior);
-        CardIdentity { name, kind_ordinal }
+        CardIdentity {
+            name,
+            name_explicit,
+            kind_ordinal,
+        }
     }
 
     fn assign_launch(
@@ -573,12 +585,17 @@ impl CardIdentityAllocator {
         let key = (kind.clone(), agent_id.clone());
         let name =
             self.assign_name_candidate(&key, Some(payload.agent_name.as_str()), prior, agent_id);
+        let name_explicit = payload.agent_name_explicit && name == payload.agent_name;
         let candidate = payload
             .launch
             .kind_ordinal
             .or_else(|| prior.and_then(|state| state.kind_ordinal));
         let kind_ordinal = self.assign_ordinal_candidate(kind, agent_id, candidate, prior);
-        CardIdentity { name, kind_ordinal }
+        CardIdentity {
+            name,
+            name_explicit,
+            kind_ordinal,
+        }
     }
 
     fn assign_existing(
@@ -589,9 +606,19 @@ impl CardIdentityAllocator {
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
         let name = self.assign_name_candidate(&key, None, prior, agent_id);
+        let name_explicit =
+            prior
+                .and_then(|state| state.name.as_deref())
+                .is_some_and(|prior_name| {
+                    prior.is_some_and(|state| state.name_explicit) && name == prior_name
+                });
         let candidate = prior.and_then(|state| state.kind_ordinal);
         let kind_ordinal = self.assign_ordinal_candidate(kind, agent_id, candidate, prior);
-        CardIdentity { name, kind_ordinal }
+        CardIdentity {
+            name,
+            name_explicit,
+            kind_ordinal,
+        }
     }
 
     fn assign_name(
@@ -825,6 +852,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         agent_id: input.agent_id.clone(),
         kind: input.kind.clone(),
         name: Some(input.card_identity.name),
+        name_explicit: input.card_identity.name_explicit,
         kind_ordinal: Some(input.card_identity.kind_ordinal),
         profile: input.observation.launch.profile.clone().or(carried.profile),
         role: input.observation.launch.role.clone().or(carried.role),
@@ -921,6 +949,7 @@ fn assemble_launch_state(
         agent_id: payload.agent_id.clone(),
         kind: kind.clone(),
         name: Some(card_identity.name),
+        name_explicit: card_identity.name_explicit,
         kind_ordinal: Some(card_identity.kind_ordinal),
         profile: payload.launch.profile.clone().or(carried.profile),
         role: payload.launch.role.clone().or(carried.role),

@@ -293,6 +293,7 @@ fn agent_launch_payload_round_trips_channel_identity() {
     assert_eq!(payload.launch.launch_ordinal, Some(2));
     assert_eq!(payload.launch.channel.as_deref(), Some("design"));
     assert_eq!(payload.launch.kind_ordinal, Some(1));
+    assert!(!payload.agent_name_explicit);
     let encoded = serde_json::to_value(&payload).unwrap();
     assert_eq!(encoded["profile"], "codex-coder");
     assert_eq!(encoded["role"], "coder");
@@ -303,7 +304,20 @@ fn agent_launch_payload_round_trips_channel_identity() {
     assert_eq!(encoded["launch_ordinal"], 2);
     assert_eq!(encoded["channel"], "design");
     assert_eq!(encoded["kind_ordinal"], 1);
+    assert!(encoded.get("agent_name_explicit").is_none());
     assert!(encoded.get("launch").is_none());
+
+    let explicit: AgentLaunchPayload = serde_json::from_value(json!({
+        "agent_id": "launch-2",
+        "agent_name": "writer",
+        "agent_name_explicit": true,
+    }))
+    .unwrap();
+    assert!(explicit.agent_name_explicit);
+    assert_eq!(
+        serde_json::to_value(&explicit).unwrap()["agent_name_explicit"],
+        true
+    );
 }
 
 #[test]
@@ -327,6 +341,7 @@ fn shared_launch_params_stay_top_level_in_launch_and_lifecycle_events() {
         AgentLaunchPayload {
             agent_id: AgentSessionId::from("launch-1"),
             agent_name: "swift-otter".to_owned(),
+            agent_name_explicit: false,
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 role: Some("coder".to_owned()),

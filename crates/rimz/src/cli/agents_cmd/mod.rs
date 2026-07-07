@@ -286,6 +286,8 @@ struct ExecArgs {
     run_id: Option<rimz::RunId>,
     #[arg(long)]
     agent_name: Option<String>,
+    #[arg(long, hide = true)]
+    agent_name_explicit: bool,
     /// The `[agents.profiles]` profile this agent launched as. The launch
     /// event makes the rollup answer to `@<profile>`; `RIMZ_AGENT_PROFILE`
     /// remains the pane's sender-attribution identity.
