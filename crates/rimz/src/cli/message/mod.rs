@@ -105,9 +105,12 @@ enum MessageSubcmd {
     },
     /// Remove queued messages for an agent, or in the scoped channel.
     Clear {
+        /// Optional agent address whose queued messages are removed.
         target: Option<String>,
+        /// Remove queued messages in this worktree or lane.
         #[arg(long, conflicts_with = "channel")]
         worktree: Option<String>,
+        /// Remove queued messages in this channel.
         #[arg(long, value_name = "NAME", conflicts_with = "worktree")]
         channel: Option<String>,
     },
