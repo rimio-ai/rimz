@@ -19,8 +19,8 @@ mod width;
 pub mod zellij;
 
 pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_osc_passthrough};
-pub(crate) use command::COMMAND_TIMEOUT;
 pub use command::CommandSpec;
+pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use focus_key::{FocusChord, FocusKeyBinding};
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub(crate) use reconcile::{
@@ -568,7 +568,10 @@ pub trait MuxBackend: Send + Sync {
     /// state is "no session by that name", so callers can retire a stale or
     /// renamed session idempotently.
     fn kill_session(&self, name: &str) -> Result<()>;
-    fn list_sessions(&self) -> Result<Vec<String>>;
+    fn list_sessions(&self) -> Result<Vec<String>> {
+        self.list_sessions_within(LIST_SESSIONS_TIMEOUT)
+    }
+    fn list_sessions_within(&self, timeout: Duration) -> Result<Vec<String>>;
     fn list_panes(&self, opts: PaneListOptions) -> Result<PaneListing>;
     fn client_view(&self, opts: ClientFocusOptions) -> Result<ClientView> {
         let _ = opts;

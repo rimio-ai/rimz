@@ -20,6 +20,10 @@ use super::{MuxErr, Result};
 /// against a dead server), bounding the hang instead of letting it run forever.
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Tight bound for `list-sessions`: a read-only local query that runs on hot
+/// paths such as room start and liveness checks.
+pub(crate) const LIST_SESSIONS_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// A built-up command we can run or hand back to `exec(3)`.
 #[derive(Clone, Debug, Default)]
 pub struct CommandSpec {
@@ -84,14 +88,19 @@ impl CommandSpec {
         command
     }
 
-    /// Run the command with raw exit status and captured output. Use this for
-    /// probes that need stdout even on nonzero exit (version probes, session
-    /// listing, the Zellij birth client); control verbs should use the bounded
-    /// runner.
+    /// Run the command with raw exit status and captured output. Use this only
+    /// where the caller deliberately accepts an unbounded process. Anything
+    /// that can wedge on a server should use [`Self::output_raw_with_timeout`].
     pub fn output_raw(&self) -> Result<Output> {
         self.to_command()
             .output()
             .map_err(|err| self.spawn_error(err))
+    }
+
+    /// Run the command with raw exit status and captured output, bounded by
+    /// `timeout`. Callers inspect nonzero status themselves.
+    pub fn output_raw_with_timeout(&self, timeout: Duration) -> Result<Output> {
+        self.run_bounded(timeout)
     }
 
     /// Run the command to completion and capture its output, bounded by

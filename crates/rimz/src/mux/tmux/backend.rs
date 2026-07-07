@@ -1,6 +1,7 @@
 //! tmux [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
 use std::path::Path;
+use std::time::Duration;
 
 use super::TmuxBackend;
 use super::options::{
@@ -117,13 +118,13 @@ impl MuxBackend for TmuxBackend {
         }
     }
 
-    fn list_sessions(&self) -> Result<Vec<String>> {
+    fn list_sessions_within(&self, timeout: Duration) -> Result<Vec<String>> {
         // tmux exits 1 with `error connecting to ...` (or `no server
         // running`) on stderr when no server has been started yet. That is
         // an empty list of sessions, not an error condition; the Zellij
         // backend normalizes its equivalent banner the same way.
         let spec = self.cmd().args(["list-sessions", "-F", "#{session_name}"]);
-        let output = spec.output_raw()?;
+        let output = spec.output_raw_with_timeout(timeout)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("no server running") || stderr.contains("error connecting") {

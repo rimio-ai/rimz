@@ -5,6 +5,8 @@ use std::io::Write;
 use anyhow::Result;
 use rimz::ids::MuxName;
 
+use super::session_record::session_probe_timeout;
+
 fn root_class_notice(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
     use rimz::workspace::RootClass;
     match workspace.root_class {
@@ -42,7 +44,9 @@ fn overlapping_known<'a>(
 pub(crate) fn live_session_names() -> std::collections::BTreeSet<String> {
     let mut live = std::collections::BTreeSet::new();
     for mux in [MuxName::Zellij, MuxName::Tmux] {
-        if let Ok(sessions) = rimz::mux::backend_for(mux).list_sessions() {
+        if let Ok(sessions) =
+            rimz::mux::backend_for(mux).list_sessions_within(session_probe_timeout())
+        {
             live.extend(sessions);
         }
     }

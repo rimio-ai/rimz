@@ -385,8 +385,8 @@ impl MuxBackend for ZellijBackend {
         self.delete_session(name)
     }
 
-    fn list_sessions(&self) -> Result<Vec<String>> {
-        let output = match self.cmd().arg("list-sessions").run() {
+    fn list_sessions_within(&self, timeout: std::time::Duration) -> Result<Vec<String>> {
+        let output = match self.cmd().arg("list-sessions").run_with_timeout(timeout) {
             Ok(output) => output,
             Err(MuxErr::Command { ref stderr, .. }) if is_no_active_sessions(stderr.as_bytes()) => {
                 return Ok(Vec::new());

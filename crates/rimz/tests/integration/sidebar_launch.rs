@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{
@@ -193,7 +194,7 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn list_sessions(&self) -> rimz::mux::Result<Vec<String>> {
+    fn list_sessions_within(&self, _timeout: Duration) -> rimz::mux::Result<Vec<String>> {
         Ok(Vec::new())
     }
 

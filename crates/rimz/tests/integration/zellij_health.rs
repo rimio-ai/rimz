@@ -3,7 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
@@ -88,6 +88,83 @@ fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback()
     );
 }
 
+#[test]
+fn tmux_start_skips_wedged_rival_zellij_session_probe() {
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let shim = FakeZellij::new().with_tmux();
+
+    let started = Instant::now();
+    let output = env
+        .rimz()
+        .args(["--tmux", "start", "--no-attach"])
+        .env("PATH", shim.bin_dir.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+        .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "10")
+        .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
+        .bounded_output_within(Duration::from_secs(10))
+        .expect("run rimz start");
+    let elapsed = started.elapsed();
+
+    assert!(
+        output.status.success(),
+        "tmux start should proceed around wedged rival zellij: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("skipping the cross-backend room check"),
+        "stderr should explain skipped rival probe, got: {stderr}",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("tmux attach"),
+        "start --no-attach should print tmux attach command, got: {stdout}",
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "wedged rival probe should be bounded, elapsed: {elapsed:?}",
+    );
+}
+
+#[test]
+fn zellij_start_fails_fast_when_selected_session_probe_wedges() {
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let shim = FakeZellij::new().with_tmux();
+
+    let started = Instant::now();
+    let output = env
+        .rimz()
+        .args(["--zellij", "start", "--no-attach"])
+        .env("PATH", shim.bin_dir.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+        .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "10")
+        .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
+        .bounded_output_within(Duration::from_secs(10))
+        .expect("run rimz start");
+    let elapsed = started.elapsed();
+
+    assert!(
+        !output.status.success(),
+        "zellij start should refuse a wedged selected backend",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("zellij is not responding") && stderr.contains("rimz --tmux"),
+        "stderr should explain recovery, got: {stderr}",
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "selected probe failure should be bounded, elapsed: {elapsed:?}",
+    );
+}
+
 struct FakeZellij {
     _home: TempDir,
     bin_dir: TempDir,
@@ -141,6 +218,9 @@ if [ "$1" = "--version" ]; then
 fi
 
 if [ "$1" = "list-sessions" ]; then
+  if [ -n "$RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP" ]; then
+    exec /bin/sleep "$RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP"
+  fi
   if [ -n "$RIMZ_TEST_ZELLIJ_LIST_SESSIONS_FAIL_ONCE" ] && [ ! -e "$RIMZ_TEST_ZELLIJ_LIST_SESSIONS_FAIL_ONCE" ]; then
     : > "$RIMZ_TEST_ZELLIJ_LIST_SESSIONS_FAIL_ONCE"
     printf 'transient list-sessions failure\n' >&2

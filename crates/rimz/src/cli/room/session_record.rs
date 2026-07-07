@@ -1,5 +1,6 @@
 //! Session-record lookup, mux choice, and renamed-session retirement.
 
+use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
@@ -9,10 +10,31 @@ use rimz::mux::MuxBackend;
 use rimz::store::workspace_record;
 use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
+use crate::cli::render;
+
 use super::MissingSessionReport;
 
 const LIST_SESSIONS_ATTEMPTS: u8 = 3;
 const LIST_SESSIONS_RETRY_DELAY: Duration = Duration::from_millis(250);
+pub(crate) const SESSION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+pub(crate) const SESSION_PROBE_RETRY_TIMEOUT: Duration = Duration::from_secs(3);
+const TEST_SESSION_PROBE_MS: &str = "RIMZ_TEST_SESSION_PROBE_MS";
+
+pub(crate) fn session_probe_timeout() -> Duration {
+    test_session_probe_timeout().unwrap_or(SESSION_PROBE_TIMEOUT)
+}
+
+pub(crate) fn session_probe_retry_timeout() -> Duration {
+    test_session_probe_timeout()
+        .map(|duration| duration.saturating_mul(3))
+        .unwrap_or(SESSION_PROBE_RETRY_TIMEOUT)
+}
+
+fn test_session_probe_timeout() -> Option<Duration> {
+    let value = std::env::var_os(TEST_SESSION_PROBE_MS)?;
+    let value = value.to_str()?.parse::<u64>().ok()?;
+    Some(Duration::from_millis(value))
+}
 
 pub(crate) fn pick_mux_for_session(
     session: &str,
@@ -28,6 +50,10 @@ pub(crate) fn pick_mux_for_session(
             Ok(sessions) if sessions.iter().any(|s| s == session) => return Ok(candidate),
             Ok(_) => {}
             Err(rimz::mux::MuxErr::NotInstalled { .. }) => {}
+            Err(err @ rimz::mux::MuxErr::Timeout { .. }) => {
+                let mut out = render::err();
+                writeln!(out, "note: {err}; skipping {candidate} session lookup.")?;
+            }
             Err(err) => tracing::warn!(mux = %candidate, error = %err, "list_sessions failed"),
         }
     }
@@ -59,6 +85,11 @@ pub(crate) fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Re
     let sessions = match list_sessions_with_retry(backend.as_ref()) {
         Ok(sessions) => sessions,
         Err(rimz::mux::MuxErr::NotInstalled { .. }) => return Ok(()),
+        Err(err @ rimz::mux::MuxErr::Timeout { .. }) => {
+            let mut out = render::err();
+            writeln!(out, "note: {err}; skipping the cross-backend room check.")?;
+            return Ok(());
+        }
         Err(err) => {
             tracing::warn!(mux = %rival, error = %err, "rival list_sessions failed; allowing start");
             return Ok(());
@@ -78,7 +109,7 @@ pub(crate) fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Re
 
 fn list_sessions_with_retry(backend: &dyn MuxBackend) -> rimz::mux::Result<Vec<String>> {
     list_sessions_retrying(
-        || backend.list_sessions(),
+        || backend.list_sessions_within(session_probe_timeout()),
         LIST_SESSIONS_ATTEMPTS,
         LIST_SESSIONS_RETRY_DELAY,
     )
@@ -94,6 +125,7 @@ fn list_sessions_retrying(
         match list_sessions() {
             Ok(sessions) => return Ok(sessions),
             Err(err @ rimz::mux::MuxErr::NotInstalled { .. }) => return Err(err),
+            Err(err @ rimz::mux::MuxErr::Timeout { .. }) => return Err(err),
             Err(err) if attempt + 1 == attempts => return Err(err),
             Err(_) => std::thread::sleep(retry_delay),
         }
@@ -335,6 +367,28 @@ mod tests {
         .expect_err("not-installed is definitive");
 
         assert!(matches!(err, rimz::mux::MuxErr::NotInstalled { .. }));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn list_sessions_retrying_treats_timeout_as_definitive() {
+        let mut calls = 0;
+
+        let err = list_sessions_retrying(
+            || {
+                calls += 1;
+                Err(rimz::mux::MuxErr::Timeout {
+                    program: "zellij".to_owned(),
+                    args: "list-sessions".to_owned(),
+                    seconds: 1,
+                })
+            },
+            3,
+            Duration::ZERO,
+        )
+        .expect_err("timeout is definitive");
+
+        assert!(matches!(err, rimz::mux::MuxErr::Timeout { .. }));
         assert_eq!(calls, 1);
     }
 

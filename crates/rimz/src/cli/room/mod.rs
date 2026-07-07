@@ -38,7 +38,7 @@ pub(crate) use hook_install::{
 };
 use resume::{materialize_room_resume, plan_room_resume, record_rebirth_boundary, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;
-use session_record::retire_renamed_session;
+use session_record::{retire_renamed_session, session_probe_retry_timeout, session_probe_timeout};
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
@@ -610,13 +610,61 @@ fn mux_environment_preflight(mux: MuxName, session_name: &str) -> Result<()> {
     match mux {
         MuxName::Zellij => {
             rimz::mux::zellij::socket_preflight(session_name)?;
+            mux_responsive_preflight(mux)?;
             zellij_version_preflight()?;
         }
         // tmux sockets live under its own short per-user socket directory; the
         // Rimz session name does not participate in an AF_UNIX path budget.
-        MuxName::Tmux => {}
+        MuxName::Tmux => mux_responsive_preflight(mux)?,
     }
     Ok(())
+}
+
+fn mux_responsive_preflight(mux: MuxName) -> Result<()> {
+    let backend = rimz::mux::backend_for(mux);
+    if let Err(err @ rimz::mux::MuxErr::Timeout { .. }) =
+        backend.list_sessions_within(session_probe_timeout())
+    {
+        let retry = session_probe_retry_timeout();
+        let mut out = render::err();
+        writeln!(
+            out,
+            "note: {err}; retrying once ({}).",
+            duration_label(retry)
+        )?;
+        if let Err(err @ rimz::mux::MuxErr::Timeout { .. }) = backend.list_sessions_within(retry) {
+            bail!("{}", mux_not_responding_message(mux, retry, &err));
+        }
+    }
+    Ok(())
+}
+
+fn mux_not_responding_message(
+    mux: MuxName,
+    timeout: std::time::Duration,
+    err: &rimz::mux::MuxErr,
+) -> String {
+    let (reset, fallback) = match mux {
+        MuxName::Zellij => ("zellij kill-all-sessions", "rimz --tmux"),
+        MuxName::Tmux => ("tmux kill-server", "rimz --zellij"),
+    };
+    format!(
+        "{mux} is not responding: `{mux} list-sessions` hung for {} and was killed.\n\
+         Recover with:\n    {reset}\n\
+         Or run this room under {}:\n    {fallback}\n\n\
+         detail: {err}",
+        duration_label(timeout),
+        mux.other(),
+    )
+}
+
+fn duration_label(duration: std::time::Duration) -> String {
+    let millis = duration.as_millis();
+    if millis.is_multiple_of(1000) {
+        format!("{}s", millis / 1000)
+    } else {
+        format!("{millis}ms")
+    }
 }
 
 fn zellij_version_preflight() -> Result<()> {
