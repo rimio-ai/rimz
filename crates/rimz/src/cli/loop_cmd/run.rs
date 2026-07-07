@@ -48,8 +48,9 @@ pub(super) fn run_one(
     keep: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (entry, source) = instances::load_entry(name)
+    let (entry, source) = load_task(name, globals)?
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
+    block_untrusted_project_task(name, &entry, source)?;
     let started = Instant::now();
     let _run_lock = match acquire_run_lock(name, &entry) {
         Ok(Some(guard)) => guard,
@@ -127,7 +128,7 @@ fn execute_task(
     let action = task_action(name, entry)?;
     if deadline_expired(entry) {
         if mode == LoopRunMode::Scheduled {
-            let _ = remove_task(name, source)?;
+            let _ = remove_loaded_task(name, entry, source)?;
         } else {
             writeln!(
                 ui::out(),
@@ -169,7 +170,7 @@ fn execute_task(
             match action {
                 TaskAction::CheckOnly => {
                     if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
-                        let _ = remove_task(name, source)?;
+                        let _ = remove_loaded_task(name, entry, source)?;
                     }
                     let mut run = RunOutcome::new(check_only_result(&outcome));
                     run.check = Some(record);
@@ -252,7 +253,7 @@ fn execute_task(
     if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
         // One-shot cleanup happens before the terminal run. A one-shot removed
         // pre-fire that then fails to launch is not retried.
-        let _ = remove_task(name, source)?;
+        let _ = remove_loaded_task(name, entry, source)?;
     }
     let effort = entry
         .effort
@@ -305,7 +306,7 @@ fn execute_delivery_task(
                 "loop `{name}`: target {} not alive; removing schedule",
                 target.handle
             )?;
-            let _ = remove_task(name, disposition.source)?;
+            let _ = remove_loaded_task(name, entry, disposition.source)?;
         } else {
             writeln!(
                 ui::out(),
@@ -323,7 +324,7 @@ fn execute_delivery_task(
         None => resolve_task_prompt(entry)?,
     };
     if disposition.mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
-        let _ = remove_task(name, disposition.source)?;
+        let _ = remove_loaded_task(name, entry, disposition.source)?;
     }
     let root = entry.resolved_root();
     match crate::cli::message::to_session(
@@ -347,7 +348,7 @@ fn execute_delivery_task(
                     "loop `{name}`: target {} not alive; removing schedule",
                     target.handle
                 )?;
-                let _ = remove_task(name, disposition.source)?;
+                let _ = remove_loaded_task(name, entry, disposition.source)?;
             } else {
                 writeln!(
                     ui::out(),

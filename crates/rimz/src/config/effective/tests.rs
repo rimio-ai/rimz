@@ -93,6 +93,13 @@ fn block_untrusted_profile_reference(
     launch.block_untrusted_reference(spec, commands)
 }
 
+fn load_project_tasks(
+    project_root: &std::path::Path,
+    config_root: &std::path::Path,
+) -> Result<ProjectTasks> {
+    project_tasks(project_root, config_root).map(|tasks| tasks.expect("project tasks"))
+}
+
 #[test]
 fn trusted_repo_profile_overlays_machine_profile() {
     let project = tempdir().expect("project");
@@ -110,6 +117,94 @@ fn trusted_repo_profile_overlays_machine_profile() {
         effective.0.get("planner").and_then(|p| p.args.as_deref()),
         Some("--repo")
     );
+}
+
+#[test]
+fn trusted_project_tasks_load_with_project_root_and_prompt_paths() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[tasks.wake]\nspec = \"codex\"\nprompt-file = \"prompts/wake.md\"\nsystem-prompt-file = \"prompts/system.md\"\nat = \"08:00\"\n",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
+
+    let loaded = load_project_tasks(project.path(), config.path()).expect("project tasks");
+    let wake = loaded.tasks.0.get("wake").expect("wake task");
+
+    assert_eq!(loaded.state, TrustState::Trusted);
+    assert_eq!(loaded.config_path, project.path().join(".rimz/config.toml"));
+    assert_eq!(wake.root, project.path());
+    assert_eq!(
+        wake.prompt_file.as_ref(),
+        Some(&project.path().join(".rimz/prompts/wake.md"))
+    );
+    assert_eq!(
+        wake.system_prompt_file.as_ref(),
+        Some(&project.path().join(".rimz/prompts/system.md"))
+    );
+}
+
+#[test]
+fn untrusted_project_tasks_stay_visible_with_state() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(&project, "[tasks.wake]\nspec = \"codex\"\nat = \"08:00\"\n");
+
+    let loaded = load_project_tasks(project.path(), config.path()).expect("project tasks");
+
+    assert_eq!(loaded.state, TrustState::Untrusted);
+    assert!(loaded.tasks.0.contains_key("wake"));
+}
+
+#[test]
+fn project_tasks_reject_machine_local_fields() {
+    let cases = [
+        (
+            "[tasks.wake]\nspec = \"codex\"\nroot = \"/tmp/other\"\nat = \"08:00\"\n",
+            "root",
+        ),
+        (
+            "[tasks.wake]\nspec = \"codex\"\nbind = { kind = \"codex\", session = \"sess\", handle = \"@codex\" }\nat = \"08:00\"\n",
+            "bind",
+        ),
+        (
+            "[tasks.wake]\nspec = \"codex\"\ndeadline = \"2026-07-01T12:00:00Z\"\nat = \"08:00\"\n",
+            "deadline",
+        ),
+    ];
+    for (text, field) in cases {
+        let project = tempdir().expect("project");
+        let config = tempdir().expect("config");
+        write_project_config(&project, text);
+
+        let err = project_tasks(project.path(), config.path()).expect_err("invalid field");
+
+        assert!(matches!(
+            err,
+            EffectiveConfigErr::Tasks {
+                source: ProjectTasksErr::UnsupportedField { field: found, .. },
+                ..
+            } if found == field
+        ));
+    }
+}
+
+#[test]
+fn project_tasks_validate_schedule_shape() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(&project, "[tasks.wake]\nspec = \"codex\"\n");
+
+    let err = project_tasks(project.path(), config.path()).expect_err("invalid schedule");
+
+    assert!(matches!(
+        err,
+        EffectiveConfigErr::Tasks {
+            source: ProjectTasksErr::Schedule(crate::harness::schedule::ScheduleErr::NoTime { name }),
+            ..
+        } if name == "wake"
+    ));
 }
 
 #[test]

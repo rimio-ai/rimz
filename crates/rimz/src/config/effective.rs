@@ -4,7 +4,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::config::{AgentsConfig, CommandsConfig, ProfilesConfig, TeamsConfig};
+use crate::config::{AgentsConfig, CommandsConfig, ProfilesConfig, TaskEntry, Tasks, TeamsConfig};
+use crate::harness::schedule::{self, ScheduleErr};
 use crate::harness::spec::{self as agents_spec, LayoutErr};
 use crate::trust::{self, TrustState};
 
@@ -32,6 +33,12 @@ pub enum EffectiveConfigErr {
         #[source]
         source: LayoutErr,
     },
+    #[error("invalid project tasks config at {path}: {source}")]
+    Tasks {
+        path: PathBuf,
+        #[source]
+        source: ProjectTasksErr,
+    },
     #[error("profiles are configured in {path} but the project is {state}; {fix}")]
     Blocked {
         path: PathBuf,
@@ -42,10 +49,29 @@ pub enum EffectiveConfigErr {
 
 pub type Result<T> = std::result::Result<T, EffectiveConfigErr>;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ProjectTasksErr {
+    #[error("task `{task}` sets `{field}`; {fix}")]
+    UnsupportedField {
+        task: String,
+        field: &'static str,
+        fix: &'static str,
+    },
+    #[error(transparent)]
+    Schedule(#[from] ScheduleErr),
+}
+
 #[derive(Default)]
 struct RepoConfig {
     profiles: ProfilesConfig,
     teams: TeamsConfig,
+}
+
+#[derive(Debug)]
+pub struct ProjectTasks {
+    pub tasks: Tasks,
+    pub state: TrustState,
+    pub config_path: PathBuf,
 }
 
 /// Effective launch config: machine profiles/teams overlaid by trusted repo
@@ -135,6 +161,56 @@ pub fn load(
     })
 }
 
+pub fn project_tasks(project_root: &Path, config_root: &Path) -> Result<Option<ProjectTasks>> {
+    let report = trust::status_with_roots(project_root, config_root)?;
+    let config_path = project_root.join(PROJECT_CONFIG_REL);
+    let Some(repo_value) = read_repo_value(&config_path)? else {
+        return Ok(None);
+    };
+    project_tasks_from_value(project_root, &config_path, report.state, &repo_value)
+}
+
+pub fn project_tasks_from_value(
+    project_root: &Path,
+    config_path: &Path,
+    state: TrustState,
+    value: &toml::Value,
+) -> Result<Option<ProjectTasks>> {
+    let Some(tasks_value) = value.get("tasks") else {
+        return Ok(None);
+    };
+    reject_project_task_state_fields(tasks_value).map_err(|source| EffectiveConfigErr::Tasks {
+        path: config_path.to_path_buf(),
+        source,
+    })?;
+    let mut tasks: Tasks =
+        tasks_value
+            .clone()
+            .try_into()
+            .map_err(|source| EffectiveConfigErr::Parse {
+                path: config_path.to_path_buf(),
+                source,
+            })?;
+    let config_dir = config_path.parent().unwrap_or(project_root);
+    for (name, entry) in &mut tasks.0 {
+        schedule::validate_name(name).map_err(|source| EffectiveConfigErr::Tasks {
+            path: config_path.to_path_buf(),
+            source: source.into(),
+        })?;
+        entry.root = project_root.to_path_buf();
+        resolve_task_prompt_paths(entry, config_dir);
+        schedule::parse_schedule(name, entry).map_err(|source| EffectiveConfigErr::Tasks {
+            path: config_path.to_path_buf(),
+            source: source.into(),
+        })?;
+    }
+    Ok(Some(ProjectTasks {
+        tasks,
+        state,
+        config_path: config_path.to_path_buf(),
+    }))
+}
+
 impl LaunchAgents {
     /// Return a trust error only when a requested launch spec would consume a
     /// repo profile or team while the project is not trusted. Repo entries are
@@ -197,6 +273,54 @@ fn read_repo_value(path: &Path) -> Result<Option<toml::Value>> {
             path: path.to_path_buf(),
             source,
         }),
+    }
+}
+
+fn reject_project_task_state_fields(
+    tasks_value: &toml::Value,
+) -> std::result::Result<(), ProjectTasksErr> {
+    let Some(tasks) = tasks_value.as_table() else {
+        return Ok(());
+    };
+    for (task, value) in tasks {
+        let Some(table) = value.as_table() else {
+            continue;
+        };
+        for field in ["root", "bind", "deadline"] {
+            if table.contains_key(field) {
+                return Err(ProjectTasksErr::UnsupportedField {
+                    task: task.clone(),
+                    field,
+                    fix: match field {
+                        "root" => "project tasks run at the project root; remove `root`",
+                        "bind" => "project tasks cannot pin a machine-local session; use `spec`",
+                        "deadline" => {
+                            "poll-until deadlines are machine state; create them with `rimz loop add --until`"
+                        }
+                        _ => unreachable!("field list is fixed"),
+                    },
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_task_prompt_paths(entry: &mut TaskEntry, config_dir: &Path) {
+    if let Some(path) = entry.prompt_file.as_mut() {
+        *path = resolve_project_prompt_path(path, config_dir);
+    }
+    if let Some(path) = entry.system_prompt_file.as_mut() {
+        *path = resolve_project_prompt_path(path, config_dir);
+    }
+}
+
+fn resolve_project_prompt_path(path: &Path, config_dir: &Path) -> PathBuf {
+    let expanded = crate::agents::transcript_fs::expand_tilde(&path.to_string_lossy());
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        config_dir.join(expanded)
     }
 }
 

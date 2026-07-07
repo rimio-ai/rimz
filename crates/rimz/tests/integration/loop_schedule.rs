@@ -64,7 +64,7 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
             && stdout.contains("NEXT")
             && stdout.contains("LAST")
             && stdout.contains("STATUS")
-            && !stdout.contains("SOURCE")
+            && stdout.contains("SOURCE")
             && !stdout.contains("RUNS")
             && !stdout.contains("RESULT"),
         "loop list should show grouped compact columns: {stdout}"
@@ -82,6 +82,44 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
                 && line.contains("✓ delivered")
         }),
         "loop list should fold run history for wake: {stdout}"
+    );
+}
+
+#[test]
+fn loop_project_tasks_list_and_refuse_until_trusted() {
+    let env = Env::new();
+    write_project_config(
+        &env,
+        "[tasks.repo-check]\ncheck = \"true\"\nevery = \"15m\"\n",
+    );
+
+    let stdout = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        stdout.contains("repo-check") && stdout.contains("project · untrusted"),
+        "project task should stay visible with trust state: {stdout}"
+    );
+
+    let (_stdout, stderr) = loop_fail(&env, &["loop", "run", "repo-check"]);
+    assert!(
+        stderr.contains("project is untrusted") && stderr.contains("rimz trust grant"),
+        "project task should refuse before trust grant: {stderr}"
+    );
+
+    let grant = env
+        .rimz()
+        .args(["trust", "grant"])
+        .output()
+        .expect("trust grant");
+    assert!(
+        grant.status.success(),
+        "trust grant failed: {}",
+        String::from_utf8_lossy(&grant.stderr)
+    );
+
+    let stdout = loop_ok(&env, &["loop", "run", "repo-check"]);
+    assert!(
+        stdout.contains("loop `repo-check`: completed"),
+        "trusted project task should run: {stdout}"
     );
 }
 
@@ -1202,6 +1240,13 @@ fn write_loop_config(env: &Env, text: &str) {
     let path = loop_config_path(env);
     std::fs::create_dir_all(path.parent().expect("config dir")).expect("mkdir config");
     std::fs::write(path, text).expect("write loop config");
+}
+
+fn write_project_config(env: &Env, text: &str) {
+    let path = env.project_root.join(".rimz/config.toml");
+    std::fs::create_dir_all(path.parent().expect("project config dir"))
+        .expect("mkdir project config");
+    std::fs::write(path, text).expect("write project config");
 }
 
 fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {

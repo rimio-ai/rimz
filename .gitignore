@@ -37,6 +37,7 @@ lcov.info
 
 # Agent Harness
 plan.md
+result.md
 status.md
 .claude/worktrees/
 .claude/scheduled_tasks.lock

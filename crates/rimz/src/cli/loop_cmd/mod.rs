@@ -48,6 +48,7 @@ use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::atomic::write_bytes_atomically;
 use rimz::store::paths::{RuntimePaths, StatePaths, agents_home, config_home, state_home};
+use rimz::trust::TrustState;
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
@@ -59,6 +60,8 @@ mod render;
 mod run_tasks;
 
 pub(crate) use run_tasks::reap_dead_delivery_schedules;
+
+const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
 
 #[derive(Debug, Args)]
 pub struct LoopArgs {
@@ -134,6 +137,9 @@ struct AddArgs {
     /// Project root whose room hosts the task; resolved to an absolute root.
     #[arg(long, default_value = ".")]
     root: PathBuf,
+    /// Write the task to the project's `.rimz/config.toml` instead of per-machine loop.toml.
+    #[arg(long)]
+    project: bool,
     /// Optional channel/worktree to host the transient task pane.
     #[arg(long)]
     worktree: Option<String>,
@@ -180,11 +186,11 @@ struct ShowArgs {
 
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        LoopSubcmd::Add(args) => add::add(*args),
-        LoopSubcmd::Remove(args) => add::remove(&args.name),
-        LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name),
-        LoopSubcmd::List => render::list(),
-        LoopSubcmd::Show(args) => render::show(args),
+        LoopSubcmd::Add(args) => add::add(*args, globals),
+        LoopSubcmd::Remove(args) => add::remove(&args.name, globals),
+        LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name, globals),
+        LoopSubcmd::List => render::list(globals),
+        LoopSubcmd::Show(args) => render::show(args, globals),
         LoopSubcmd::Fire(args) => {
             run_tasks::run_one(&args.name, LoopRunMode::Manual, args.keep, globals)
         }
@@ -340,7 +346,93 @@ fn remove_task(name: &str, source: TaskSource) -> Result<bool> {
     match source {
         TaskSource::Config => config_remove(name),
         TaskSource::Instance => instances::remove(name).map_err(Into::into),
+        TaskSource::Project { .. } => {
+            bail!("internal error: project task `{name}` removal needs its project root")
+        }
     }
+}
+
+fn remove_loaded_task(name: &str, entry: &TaskEntry, source: TaskSource) -> Result<bool> {
+    match source {
+        TaskSource::Config => config_remove(name),
+        TaskSource::Instance => instances::remove(name).map_err(Into::into),
+        TaskSource::Project { .. } => project_config_remove(&entry.root, name),
+    }
+}
+
+fn project_config_path(project_root: &Path) -> PathBuf {
+    project_root.join(PROJECT_CONFIG_REL)
+}
+
+fn project_tasks_for_root(
+    project_root: &Path,
+) -> Result<Option<rimz::config::effective::ProjectTasks>> {
+    rimz::config::effective::project_tasks(project_root, &config_home())
+        .with_context(|| format!("reading project loop tasks in {}", project_root.display()))
+}
+
+fn project_merge(
+    project: Option<rimz::config::effective::ProjectTasks>,
+) -> Option<(rimz::config::Tasks, TrustState)> {
+    project.map(|project| (project.tasks, project.state))
+}
+
+fn project_tasks_for_globals(
+    globals: &GlobalFlags,
+) -> Result<Option<rimz::config::effective::ProjectTasks>> {
+    let workspace = match WorkspaceResolver::resolve(".", globals.root.clone()) {
+        Ok(workspace) => workspace,
+        Err(err) => {
+            tracing::debug!(error = %err, "loop command using machine-only tasks");
+            return Ok(None);
+        }
+    };
+    project_tasks_for_root(&workspace.project_root)
+}
+
+fn load_all_tasks(globals: &GlobalFlags) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
+    let project = project_tasks_for_globals(globals)?;
+    Ok(instances::load_all_with_project(project_merge(project)))
+}
+
+fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<(TaskEntry, TaskSource)>> {
+    let project = project_tasks_for_globals(globals)?;
+    Ok(instances::load_entry_with_project(
+        name,
+        project_merge(project),
+    ))
+}
+
+fn project_trust_fix(state: TrustState) -> &'static str {
+    match state {
+        TrustState::Stale => {
+            "the executable surface changed since the grant; review it and rerun `rimz trust grant`"
+        }
+        _ => "run `rimz trust grant` to apply it",
+    }
+}
+
+fn write_project_trust_note(out: &mut impl Write, project_root: &Path) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "project config changed: review {} and run `rimz trust grant` to apply project tasks",
+        project_config_path(project_root).display()
+    )
+}
+
+fn block_untrusted_project_task(name: &str, entry: &TaskEntry, source: TaskSource) -> Result<()> {
+    let TaskSource::Project { state } = source else {
+        return Ok(());
+    };
+    if state == TrustState::Trusted {
+        return Ok(());
+    }
+    bail!(
+        "loop task `{name}` is configured in {path} but the project is {state}; {fix}",
+        path = project_config_path(&entry.root).display(),
+        state = state.as_str(),
+        fix = project_trust_fix(state),
+    )
 }
 
 fn parse_mode(raw: &str) -> Result<String> {
@@ -445,6 +537,37 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
 
+    root_tasks_table(&mut doc)?.insert(name, Item::Table(task_entry_table(entry, true)));
+
+    let rendered = doc.to_string();
+    MachineConfig::parse_text(&path, &rendered, &agents_home())
+        .with_context(|| format!("validating `loop.tasks.{name}`"))?;
+    write_bytes_atomically(&path, rendered.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn project_config_set_entry(project_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
+    let path = project_config_path(project_root);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+    };
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+
+    root_tasks_table(&mut doc)?.insert(name, Item::Table(task_entry_table(entry, false)));
+
+    let rendered = doc.to_string();
+    validate_project_config_tasks(project_root, &path, &rendered, name)?;
+    write_bytes_atomically(&path, rendered.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
     let mut table = Table::new();
     if let Some(spec) = &entry.spec {
         table["spec"] = value(spec);
@@ -467,7 +590,9 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
             CheckOn::Success => "success",
         });
     }
-    table["root"] = value(entry.root.to_string_lossy().into_owned());
+    if include_root {
+        table["root"] = value(entry.root.to_string_lossy().into_owned());
+    }
     if let Some(worktree) = &entry.worktree {
         table["worktree"] = value(worktree);
     }
@@ -504,14 +629,7 @@ fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     if entry.once {
         table["once"] = value(true);
     }
-    root_tasks_table(&mut doc)?.insert(name, Item::Table(table));
-
-    let rendered = doc.to_string();
-    MachineConfig::parse_text(&path, &rendered, &agents_home())
-        .with_context(|| format!("validating `loop.tasks.{name}`"))?;
-    write_bytes_atomically(&path, rendered.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    table
 }
 
 fn task_target_table(target: &TaskTarget) -> Table {
@@ -554,6 +672,28 @@ fn config_remove(name: &str) -> Result<bool> {
     Ok(removed)
 }
 
+fn project_config_remove(project_root: &Path, name: &str) -> Result<bool> {
+    let path = project_config_path(project_root);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let removed = doc
+        .get_mut("tasks")
+        .and_then(Item::as_table_mut)
+        .map(|tasks| tasks.remove(name).is_some())
+        .unwrap_or(false);
+    if removed {
+        let rendered = doc.to_string();
+        validate_project_config_tasks(project_root, &path, &rendered, name)?;
+        write_bytes_atomically(&path, rendered.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(removed)
+}
+
 fn config_rename(name: &str, new_name: &str) -> Result<bool> {
     let path = MachineConfig::loop_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -579,4 +719,48 @@ fn config_rename(name: &str, new_name: &str) -> Result<bool> {
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(true)
+}
+
+fn project_config_rename(project_root: &Path, name: &str, new_name: &str) -> Result<bool> {
+    let path = project_config_path(project_root);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let Some(tasks) = doc.get_mut("tasks").and_then(Item::as_table_mut) else {
+        return Ok(false);
+    };
+    if tasks.contains_key(new_name) {
+        bail!("loop task `{new_name}` already exists");
+    }
+    let Some(entry) = tasks.remove(name) else {
+        return Ok(false);
+    };
+    tasks.insert(new_name, entry);
+
+    let rendered = doc.to_string();
+    validate_project_config_tasks(project_root, &path, &rendered, new_name)?;
+    write_bytes_atomically(&path, rendered.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+fn validate_project_config_tasks(
+    project_root: &Path,
+    path: &Path,
+    rendered: &str,
+    name: &str,
+) -> Result<()> {
+    let value = toml::from_str::<toml::Value>(rendered)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    rimz::config::effective::project_tasks_from_value(
+        project_root,
+        path,
+        TrustState::Untrusted,
+        &value,
+    )
+    .with_context(|| format!("validating project `tasks.{name}`"))?;
+    Ok(())
 }

@@ -127,7 +127,7 @@ A `spec` task names exactly one agent cell: a built-in kind, a profile, or an ad
 
 ### Schedule forms
 
-`rimz loop add` validates the task, runs hook preflight when it carries an agent action, and makes it live immediately while a room for its project is open. Durable recurring definitions live in per-machine `loop.toml`; Rimz-generated ephemerals live in state (below). A task carries one firing shape:
+`rimz loop add` validates the task, runs hook preflight when it carries an agent action, and makes it live immediately while a room for its project is open. Durable recurring definitions live in per-machine `loop.toml`; `rimz loop add --project` writes shared trusted definitions to `<root>/.rimz/config.toml`; Rimz-generated ephemerals live in state (below). A task carries one firing shape:
 
 - **Calendar** — `at = "07:00"` with an optional `days` mask (`daily`, `weekdays`, `weekends`, a range like `mon-fri`, or a list `mon,wed,fri`). Wall-clock evaluation uses the configured `timezone`, falling back to the system zone when unset.
 - **Interval** — `every = "15m"`, `2h`, or `1d`. The elder fires at the exact interval measured from the last arm or fire.
@@ -144,7 +144,7 @@ The elder keeps a per-room `loop-fire.json` map of task name to last-fire `Times
 
 Arming stamps the first-sight time, and that stamp sets the firing edge each schedule reads. A calendar task fires at the first tick at or after its wall-clock time on a matching day, at most once that day — so a tick a few seconds late still fires it, but a task first seen *after* its time today waits for the next matching day. A cron task fires only on a tick whose minute matches, so a room opened past a matching minute waits for the next match. An interval task fires once the measured elapsed time crosses the interval.
 
-Each room fires only tasks whose normalized `root` maps to its `WorkspaceId`. `rimz loop add` writes a canonical absolute root; a hand-edited `~` or relative root is expanded and canonicalized before the ownership check, display, and execution.
+Each room fires only tasks whose normalized `root` maps to its `WorkspaceId`. `rimz loop add` writes a canonical absolute root for machine tasks; a hand-edited `~` or relative root is expanded and canonicalized before the ownership check, display, and execution. Project tasks inject the project root at load time and reject `root`, `bind`, and `deadline` because a committed task cannot choose another workspace, pin a local session, or carry a poll-until timestamp from one machine.
 
 The elder spawns `rimz loop run <name>` with fresh null stdio. That hidden runner resolves the recorded root, takes a per-task advisory lock in the room runtime dir, runs any `check` first, applies agent hook preflight only when the guard fires, and then launches the supervised pane or messages the pinned session. Once a task is loaded, the runner appends exactly one history record: mode, duration, terminal result, check exit/timeout/output tail, error chain, delivery target, and supervised run id/last message when present.
 
@@ -162,7 +162,7 @@ A check-only task is a scheduled command with no agent action: it logs `complete
 
 Two patterns fall out of the guard. The watchdog runs a command on a schedule and wakes an agent on failure (`every = "15m"`, `check = "cargo test"`, `on = "fail"`, `spec = "codex"`). The trigger-when-green polls until a command succeeds, then delivers (`every = "2m"`, `check = "gh run watch --exit-status"`, `on = "success"`, `bind = ...`, `deadline = ...`). A poll-until instance stops in one of two cases: the first matching check result fires the agent action, or the `deadline` passes and the run logs `expired`.
 
-Script checks are per-machine user automation, like a personal crontab. `loop.toml` lives outside the repository and outside the project trust hash, so a clone cannot supply a check command; project trust hashes only the executable fields of `.rimz/config.toml` ([trust.md](../harness/trust.md)).
+Script checks in per-machine `loop.toml` are personal automation, like a crontab. Script checks in project `[tasks]` are shared automation: they are part of `.rimz/config.toml`, enter the project trust hash, show as `project · untrusted` or `project · stale` before grant, and are skipped by the elder until trusted. `rimz loop run` refuses an untrusted project-only task with the trust-grant fix, while a same-named machine task keeps running during the untrusted window.
 
 ### Delivering to a live instance
 
@@ -178,12 +178,12 @@ A task whose `spec` is a `<kind>-ping` virtual cell starts a provider's budget w
 
 ### State and code
 
-Durable definitions live in `~/.config/rimz/loop.toml` under `[tasks.*]`. Machine-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` with the same task shape; `is_ephemeral = once || deadline.is_some()` routes a task between the two on add and drives removal-on-fire. Per-room arm/fire stamps live in runtime `loop-fire.json`; per-task run locks live beside it. `Schedule::next_after` combines those stamps with the configured timezone so `rimz loop list` and `rimz loop show` render the NEXT column as `due`, `in 12m`, or `-`. User-global run history lives in state `loop-runs.log.jsonl`, and `rimz loop show <name>` reads it for recent runs plus the newest stored check output, error chain, delivery target, run id, last message, pane output tail, and transcript path when the run store still has it.
+Durable definitions live in `~/.config/rimz/loop.toml` and trusted `<root>/.rimz/config.toml` under `[tasks.*]`. The merged read order is project, then machine config, then state instance, so a repository task shadows a same-named personal task without double-firing. Machine-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` with the same task shape; `is_ephemeral = once || deadline.is_some()` routes a task between the machine stores on add and drives removal-on-fire. Per-room arm/fire stamps live in runtime `loop-fire.json`; per-task run locks live beside it. `Schedule::next_after` combines those stamps with the configured timezone so `rimz loop list` and `rimz loop show` render the NEXT column as `due`, `in 12m`, or `-`. User-global run history lives in state `loop-runs.log.jsonl`, and `rimz loop show <name>` reads it for recent runs plus the newest stored check output, error chain, delivery target, run id, last message, pane output tail, and transcript path when the run store still has it.
 
 - [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs) — pure parsing, descriptions, due evaluation, and next-occurrence calculation.
 - [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) — check execution, prompt augmentation, per-task run locks, and the window-priming ping gate.
 - [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd/) — config and state editing, the `list`/`show` surfaces, and hidden `run` orchestration.
-- [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs) — the ephemeral state store and merged config/state read path; `load_all`/`load_entry` give config definitions precedence.
+- [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs) — the ephemeral state store and merged project/config/state read path; project definitions take precedence when supplied.
 - [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) — elder firing and the `loop-fire.json` state.
 - [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) — result history, including mode, duration, check forensics, errors, run links, `check_skipped`, and `expired`.
 

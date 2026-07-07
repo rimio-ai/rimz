@@ -17,7 +17,7 @@ Configuration comes in two tiers. **Per-machine** config under `~/.config/rimz/`
 | `~/.agents/agents/<name>/agent.toml`, `~/.agents/teams/<name>/team.toml` | per-machine | drop-in profile and team fragments merged under `agents.toml` |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases (`rimz remote`) |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant (`rimz trust`) |
-| `<root>/.rimz/config.toml` | committed | declared workspace shape, trust-tracked |
+| `<root>/.rimz/config.toml` | committed | declared workspace shape and shared loop tasks, trust-tracked |
 | `<root>/.worktreeinclude` | committed | globs for untracked files to seed into new worktrees |
 | `<root>/.worktreelink` | committed | directories to symlink-share into new worktrees |
 
@@ -62,7 +62,7 @@ Later layers win:
 3. per-machine config (`~/.config/rimz/{config,theme,agents,loop}.toml`),
 4. CLI flags and `RIMZ_*` environment variables.
 
-Today the per-machine layer is live, CLI/env overrides apply where the commands define them, and the project layer is read for trust. **Launch names invert this on purpose:** trusted project `[profiles]` and `[agents.teams]` overlay machine config and win on a name collision, so a repository can pin the launch surface it hashes (see [Project config](#project-config)).
+Today the per-machine layer is live, CLI/env overrides apply where the commands define them, and the project layer is read for trust. **Launch names and loop task names invert this on purpose:** trusted project `[profiles]`, `[agents.teams]`, and `[tasks]` overlay machine config and win on a name collision, so a repository can pin the executable surface it hashes (see [Project config](#project-config)).
 
 Rimz also discovers drop-in fragments under `~/.agents/agents/<name>/agent.toml` and `~/.agents/teams/<name>/team.toml`, in the same `[agents.profiles]` / `[agents.teams]` shape as `agents.toml`; an entry in `agents.toml` overrides a fragment of the same name. Validation runs on the merged view, so `agents.toml` teams can reference profiles defined in fragments. Set `RIMZ_AGENTS_HOME` to relocate the fragment root.
 
@@ -198,9 +198,9 @@ session = "sess-abc123"
 handle = "@planner"
 ```
 
-Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`. Each task chooses `spec`, `bind`, `check`, or `check` plus one agent action. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. Bind-mode pins delivery to one live agent session and sends the prompt through the message path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, and `on = "success"` wakes on zero exit. Check output is appended to the agent prompt when the guard fires. `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
+Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`. Shared project tasks use the same `[tasks.<name>]` shape in `<root>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. Each task chooses `spec`, `bind`, `check`, or `check` plus one agent action. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. Bind-mode pins delivery to one live agent session and sends the prompt through the message path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, and `on = "success"` wakes on zero exit. Check output is appended to the agent prompt when the guard fires. `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
 
-Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Each task carries a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file. The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
+Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. Machine tasks carry a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, and reject `root`, `bind`, `deadline`, and one-shots because those are machine-local state or would rewrite committed config on fire. Trusted project tasks win over same-named machine tasks and state instances; untrusted or stale project tasks stay visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up. Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file. The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
 
 ## Behavior settings
 
@@ -406,7 +406,7 @@ Which providers appear, their order, and their brand styling are theme and disco
 
 ## Project config
 
-The committed `<root>/.rimz/config.toml` declares the workspace shape a team shares. Rimz computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch and applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches. Use one `agents` shape per project config — `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behaviour. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`.
+The committed `<root>/.rimz/config.toml` declares the workspace shape a team shares. Rimz computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches, and loads `[tasks]` for `rimz loop`. Use one `agents` shape per project config — `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behaviour. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`. Rimz's own [`.rimz/config.toml`](../../.rimz/config.toml) is a living project-task example; its repository sync task assumes push rights on the remote.
 
 ```toml
 [[agents]]
@@ -417,9 +417,14 @@ env = { CLAUDE_CODE_DISABLE_AGENT_VIEW = "1" }
 [[hooks]]
 event = "PreToolUse"
 command = "notify-send rimz"
+
+[tasks.morning-codex-ping]
+spec = "codex-ping"
+at = "08:00"
+days = "daily"
 ```
 
-Command-running fields enter the trust hash, so a clone with project config reads `untrusted` until `rimz trust grant` pins the current surface on this machine. A trusted repo profile or team overlays machine config and wins on a name collision; a repo profile may inherit only another repo profile or a built-in kind, and a repo team role may bind only a repo profile, keeping the hashed surface closed and machine-independent. An `untrusted` or `stale` workspace refuses a launch that would consume a repo profile, team, or `[[agents]]` env, with the `rimz trust grant` fix; a `stale` report shows a field-level diff of what changed since the grant, so the re-grant is informed. The hash contract, stored surface, and launch-time enforcement are in [trust.md](../internals/harness/trust.md); the threat model is in [security.md](../guide/security.md).
+Command-running fields enter the trust hash, so a clone with project config reads `untrusted` until `rimz trust grant` pins the current surface on this machine. A trusted repo profile, team, or task overlays machine config and wins on a name collision; a repo profile may inherit only another repo profile or a built-in kind, and a repo team role may bind only a repo profile, keeping the hashed surface closed and machine-independent. An `untrusted` or `stale` workspace refuses a launch or project-only task run that would consume project config, with the `rimz trust grant` fix; a same-named machine task continues to run, `rimz loop list` and `rimz loop show` still display project tasks with their trust state, and a `stale` report shows a field-level diff of what changed since the grant, so the re-grant is informed. The hash contract, stored surface, and launch-time enforcement are in [trust.md](../internals/harness/trust.md); the threat model is in [security.md](../guide/security.md).
 
 ## Sidecars and privacy
 

@@ -6,8 +6,8 @@ const NOTE_MAX: usize = 60;
 
 // ---- list -------------------------------------------------------------------
 
-pub(super) fn list() -> Result<()> {
-    let tasks = instances::load_all();
+pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
+    let tasks = load_all_tasks(globals)?;
     let mut out = ui::out();
     if tasks.is_empty() {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
@@ -16,10 +16,10 @@ pub(super) fn list() -> Result<()> {
     let stats = run_log::stats(&state_home());
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let mut groups: BTreeMap<PathBuf, Vec<(&String, &TaskEntry)>> = BTreeMap::new();
-    for (name, (entry, _source)) in &tasks {
+    let mut groups: BTreeMap<PathBuf, Vec<(&String, &TaskEntry, TaskSource)>> = BTreeMap::new();
+    for (name, (entry, source)) in &tasks {
         let root = entry.resolved_root();
-        groups.entry(root).or_default().push((name, entry));
+        groups.entry(root).or_default().push((name, entry, *source));
     }
     for (idx, (root, entries)) in groups.into_iter().enumerate() {
         let runtime = runtime_for_root(&root);
@@ -32,9 +32,11 @@ pub(super) fn list() -> Result<()> {
             writeln!(out)?;
         }
         write_root_heading(&mut out, &root, room_is_open)?;
-        let mut table =
-            ui::Table::new(["NAME", "TASK", "SCHEDULE", "LAST", "STATUS", "NEXT"]).indent(2);
-        for (name, entry) in entries {
+        let mut table = ui::Table::new([
+            "NAME", "TASK", "SOURCE", "SCHEDULE", "LAST", "STATUS", "NEXT",
+        ])
+        .indent(2);
+        for (name, entry, source) in entries {
             let parsed = schedule::parse_schedule(name, entry);
             let when = match &parsed {
                 Ok(schedule) => schedule.describe(),
@@ -62,6 +64,7 @@ pub(super) fn list() -> Result<()> {
             table.row([
                 ui::cell(name.as_str()).fg(ui::palette::ACCENT),
                 ui::cell(task_subject(entry)),
+                ui::cell(source_label(source)),
                 ui::cell(when),
                 last,
                 status,
@@ -136,6 +139,15 @@ fn check_summary(entry: &TaskEntry) -> Option<String> {
     }
 }
 
+fn source_label(source: TaskSource) -> String {
+    match source {
+        TaskSource::Project { state } if state != TrustState::Trusted => {
+            format!("project · {}", state.as_str())
+        }
+        _ => source.label().to_owned(),
+    }
+}
+
 fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
     RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
 }
@@ -163,8 +175,8 @@ fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
     window_reset_at(entry, kind).ok().flatten()
 }
 
-pub(super) fn show(args: ShowArgs) -> Result<()> {
-    let (entry, source) = instances::load_entry(&args.name).ok_or_else(|| {
+pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
+    let (entry, source) = load_task(&args.name, globals)?.ok_or_else(|| {
         anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
     })?;
     let root = entry.resolved_root();
@@ -211,7 +223,7 @@ pub(super) fn show(args: ShowArgs) -> Result<()> {
         kv.push("check", ui::cell(check));
     }
     kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
-    kv.push("source", ui::cell(source.label()));
+    kv.push("source", ui::cell(source_label(source)));
     kv.render(&mut out)?;
 
     if records.is_empty() {

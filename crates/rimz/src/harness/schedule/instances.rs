@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{MachineConfig, TaskEntry, Tasks};
 use crate::store::atomic::{Result, write_temp_then_rename_cache};
 use crate::store::paths::state_home;
+use crate::trust::TrustState;
 
 const NAME: &str = "loop-instances.json";
 
@@ -24,11 +25,28 @@ pub fn load() -> Tasks {
 }
 
 pub fn load_all() -> BTreeMap<String, (TaskEntry, TaskSource)> {
-    load_all_from(load(), MachineConfig::load_lenient().r#loop.tasks.clone())
+    load_all_with_project(None)
 }
 
 pub fn load_entry(name: &str) -> Option<(TaskEntry, TaskSource)> {
     load_all().remove(name)
+}
+
+pub fn load_all_with_project(
+    project: Option<(Tasks, TrustState)>,
+) -> BTreeMap<String, (TaskEntry, TaskSource)> {
+    load_all_from_layers(
+        load(),
+        MachineConfig::load_lenient().r#loop.tasks.clone(),
+        project,
+    )
+}
+
+pub fn load_entry_with_project(
+    name: &str,
+    project: Option<(Tasks, TrustState)>,
+) -> Option<(TaskEntry, TaskSource)> {
+    load_all_with_project(project).remove(name)
 }
 
 pub fn is_ephemeral(entry: &TaskEntry) -> bool {
@@ -51,6 +69,7 @@ pub fn rename(old: &str, new: &str) -> Result<bool> {
 pub enum TaskSource {
     Config,
     Instance,
+    Project { state: TrustState },
 }
 
 impl TaskSource {
@@ -58,6 +77,7 @@ impl TaskSource {
         match self {
             Self::Config => "config",
             Self::Instance => "state",
+            Self::Project { .. } => "project",
         }
     }
 }
@@ -69,7 +89,16 @@ fn load_from(state_root: &Path) -> Tasks {
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
+#[cfg(test)]
 fn load_all_from(instances: Tasks, config: Tasks) -> BTreeMap<String, (TaskEntry, TaskSource)> {
+    load_all_from_layers(instances, config, None)
+}
+
+fn load_all_from_layers(
+    instances: Tasks,
+    config: Tasks,
+    project: Option<(Tasks, TrustState)>,
+) -> BTreeMap<String, (TaskEntry, TaskSource)> {
     let mut tasks: BTreeMap<_, _> = instances
         .0
         .into_iter()
@@ -81,6 +110,14 @@ fn load_all_from(instances: Tasks, config: Tasks) -> BTreeMap<String, (TaskEntry
             .into_iter()
             .map(|(name, entry)| (name, (entry, TaskSource::Config))),
     );
+    if let Some((project, state)) = project {
+        tasks.extend(
+            project
+                .0
+                .into_iter()
+                .map(|(name, entry)| (name, (entry, TaskSource::Project { state }))),
+        );
+    }
     tasks
 }
 
@@ -179,6 +216,34 @@ mod tests {
         let (entry, source) = tasks.get("wake").expect("wake task");
         assert_eq!(source, &TaskSource::Config);
         assert_eq!(entry.prompt.as_deref(), Some("config"));
+    }
+
+    #[test]
+    fn merged_reads_prefer_project_over_config_over_instance() {
+        let mut instance = task();
+        instance.prompt = Some("state".to_owned());
+        let mut config = task();
+        config.prompt = Some("config".to_owned());
+        let mut project = task();
+        project.prompt = Some("project".to_owned());
+
+        let tasks = load_all_from_layers(
+            Tasks(BTreeMap::from([("wake".to_owned(), instance)])),
+            Tasks(BTreeMap::from([("wake".to_owned(), config)])),
+            Some((
+                Tasks(BTreeMap::from([("wake".to_owned(), project)])),
+                TrustState::Trusted,
+            )),
+        );
+
+        let (entry, source) = tasks.get("wake").expect("wake task");
+        assert_eq!(
+            source,
+            &TaskSource::Project {
+                state: TrustState::Trusted
+            }
+        );
+        assert_eq!(entry.prompt.as_deref(), Some("project"));
     }
 
     #[test]

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::config::Team;
+use crate::config::{CheckOn, TaskTarget, Team};
 use crate::harness::run::PermissionMode;
 use crate::ids::WorkspaceId;
 use crate::store::atomic::{self, write_bytes_atomically};
@@ -420,6 +420,7 @@ struct TrustRecord {
 pub struct ProjectConfig {
     pub agents: ProjectAgents,
     pub profiles: BTreeMap<String, ProjectProfile>,
+    pub tasks: BTreeMap<String, ProjectTask>,
     pub hooks: Vec<HookConfig>,
     pub env: BTreeMap<String, String>,
 }
@@ -483,6 +484,33 @@ pub struct ProjectProfile {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
+pub struct ProjectTask {
+    pub spec: Option<String>,
+    pub bind: Option<TaskTarget>,
+    pub prompt: Option<String>,
+    #[serde(rename = "prompt-file")]
+    pub prompt_file: Option<PathBuf>,
+    pub check: Option<String>,
+    pub on: Option<CheckOn>,
+    pub root: Option<PathBuf>,
+    pub worktree: Option<String>,
+    pub mode: Option<String>,
+    pub effort: Option<String>,
+    #[serde(rename = "system-prompt-file")]
+    pub system_prompt_file: Option<PathBuf>,
+    pub timeout: Option<String>,
+    pub at: Option<String>,
+    #[serde(rename = "at-reset")]
+    pub at_reset: bool,
+    pub days: Option<String>,
+    pub every: Option<String>,
+    pub cron: Option<String>,
+    pub deadline: Option<Timestamp>,
+    pub once: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
 pub struct HookConfig {
     pub event: String,
     pub command: String,
@@ -497,6 +525,7 @@ struct ExecutableSurface<'a> {
     agents: Vec<ExecutableAgent<'a>>,
     profiles: Vec<ExecutableProfile<'a>>,
     teams: Vec<ExecutableTeam<'a>>,
+    tasks: Vec<ExecutableTask<'a>>,
     hooks: Vec<ExecutableHook<'a>>,
     env: &'a BTreeMap<String, String>,
 }
@@ -543,6 +572,27 @@ struct ExecutableRole<'a> {
 struct ExecutableHook<'a> {
     event: &'a str,
     command: &'a str,
+}
+
+#[derive(Serialize)]
+struct ExecutableTask<'a> {
+    name: &'a str,
+    spec: Option<&'a str>,
+    prompt: Option<&'a str>,
+    prompt_file: Option<String>,
+    check: Option<&'a str>,
+    on: Option<CheckOn>,
+    worktree: Option<&'a str>,
+    mode: Option<&'a str>,
+    effort: Option<&'a str>,
+    system_prompt_file: Option<String>,
+    timeout: Option<&'a str>,
+    at: Option<&'a str>,
+    at_reset: bool,
+    days: Option<&'a str>,
+    every: Option<&'a str>,
+    cron: Option<&'a str>,
+    once: bool,
 }
 
 fn permission_mode_name(mode: PermissionMode) -> &'static str {
@@ -606,6 +656,35 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                             args: role.args.as_deref(),
                         })
                         .collect(),
+                })
+                .collect(),
+            tasks: config
+                .tasks
+                .iter()
+                .map(|(name, task)| ExecutableTask {
+                    name: name.as_str(),
+                    spec: task.spec.as_deref(),
+                    prompt: task.prompt.as_deref(),
+                    prompt_file: task
+                        .prompt_file
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                    check: task.check.as_deref(),
+                    on: task.on,
+                    worktree: task.worktree.as_deref(),
+                    mode: task.mode.as_deref(),
+                    effort: task.effort.as_deref(),
+                    system_prompt_file: task
+                        .system_prompt_file
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                    timeout: task.timeout.as_deref(),
+                    at: task.at.as_deref(),
+                    at_reset: task.at_reset,
+                    days: task.days.as_deref(),
+                    every: task.every.as_deref(),
+                    cron: task.cron.as_deref(),
+                    once: task.once,
                 })
                 .collect(),
             hooks: config
@@ -1021,6 +1100,23 @@ mod tests {
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nappend-system-prompt-file = \"prompts/planner-extra.md\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
+            "[tasks.x]\nspec = \"codex\"\n",
+            "[tasks.y]\nspec = \"codex\"\n",
+            "[tasks.x]\nprompt = \"repair CI\"\n",
+            "[tasks.x]\nprompt-file = \"prompts/ci.md\"\n",
+            "[tasks.x]\ncheck = \"cargo test\"\n",
+            "[tasks.x]\non = \"success\"\n",
+            "[tasks.x]\nworktree = \"sync\"\n",
+            "[tasks.x]\nmode = \"yolo\"\n",
+            "[tasks.x]\neffort = \"low\"\n",
+            "[tasks.x]\nsystem-prompt-file = \"prompts/system.md\"\n",
+            "[tasks.x]\ntimeout = \"2h\"\n",
+            "[tasks.x]\nat = \"08:00\"\n",
+            "[tasks.x]\nat-reset = true\n",
+            "[tasks.x]\ndays = \"weekdays\"\n",
+            "[tasks.x]\nevery = \"15m\"\n",
+            "[tasks.x]\ncron = \"0 8 * * 1\"\n",
+            "[tasks.x]\nonce = true\n",
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
             "[env]\nPATH_PREPEND = \"/opt/rimz/bin\"\n",
         ];

@@ -23,8 +23,16 @@ enum AddTaskAction {
 
 // ---- add / remove -----------------------------------------------------------
 
-pub(super) fn add(args: AddArgs) -> Result<()> {
+pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     schedule::validate_name(&args.name)?;
+    if args.project && args.bind.is_some() {
+        bail!(
+            "--project tasks cannot use --bind; project config cannot pin a machine-local session"
+        );
+    }
+    if args.project && args.until.is_some() {
+        bail!("--project tasks cannot use --until; poll-until deadlines are machine state");
+    }
     let agent_action_requested = args.spec.is_some() || args.bind.is_some();
     if !agent_action_requested && args.check.is_none() {
         bail!("loop task `{}` needs --spec, --bind, or --check", args.name);
@@ -49,8 +57,22 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
             bail!("--until conflicts with --in");
         }
     }
-    let workspace = WorkspaceResolver::resolve(&args.root, None)
+    let task_workspace = WorkspaceResolver::resolve(&args.root, None)
         .with_context(|| format!("resolving project root at {}", args.root.display()))?;
+    let workspace = if args.project {
+        let current =
+            WorkspaceResolver::resolve(".", None).context("resolving current project root")?;
+        if task_workspace.project_root != current.project_root {
+            bail!(
+                "--project writes tasks for {}; choose a --root inside that project or run from the target project",
+                current.project_root.display()
+            );
+        }
+        current
+    } else {
+        task_workspace
+    };
+    let project_root = workspace.project_root.clone();
     let target = match args.bind.as_deref() {
         Some(address) => Some(resolve_delivery_target(&workspace, &args, address)?),
         None => None,
@@ -120,7 +142,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
                 prompt_file: args.prompt_file,
                 check,
                 on,
-                root: workspace.project_root,
+                root: project_root.clone(),
                 worktree: args.worktree,
                 mode,
                 effort: args.effort,
@@ -144,7 +166,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
                 prompt_file: args.prompt_file,
                 check,
                 on,
-                root: workspace.project_root,
+                root: project_root.clone(),
                 worktree: None,
                 mode: None,
                 effort: None,
@@ -166,7 +188,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
             prompt_file: args.prompt_file,
             check,
             on,
-            root: workspace.project_root,
+            root: project_root.clone(),
             worktree: None,
             mode: None,
             effort: None,
@@ -186,7 +208,21 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     if entry.spec.is_some() || entry.bind.is_some() {
         preflight_entry(&args.name, &entry, resolved_for_preflight.as_ref())?;
     }
-    if instances::is_ephemeral(&entry) {
+    if args.project {
+        project_config_set_entry(&project_root, &args.name, &entry)?;
+    } else if matches!(
+        instances::load_entry_with_project(
+            &args.name,
+            project_merge(project_tasks_for_root(&project_root)?)
+        ),
+        Some((_, TaskSource::Project { .. }))
+    ) {
+        bail!(
+            "loop task `{}` is project-owned in {}; use `rimz loop add --project` or choose another name",
+            args.name,
+            project_config_path(&project_root).display()
+        );
+    } else if instances::is_ephemeral(&entry) {
         config_remove(&args.name)?;
         instances::insert(&args.name, &entry)?;
     } else {
@@ -211,11 +247,27 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
     if !render::room_open(&entry.root) {
         writeln!(out, "no room is open there; start one with `rimz start`")?;
     }
+    if args.project {
+        write_project_trust_note(&mut out, &project_root)?;
+    }
     Ok(())
 }
 
-pub(super) fn remove(name: &str) -> Result<()> {
-    let removed = instances::remove(name)? | config_remove(name)?;
+pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
+    let loaded = load_task(name, globals)?;
+    let removed = match loaded {
+        Some((entry, source)) => {
+            let removed = remove_loaded_task(name, &entry, source)?;
+            if removed && matches!(source, TaskSource::Project { .. }) {
+                let mut out = ui::out();
+                writeln!(out, "removed loop task `{name}`")?;
+                write_project_trust_note(&mut out, &entry.root)?;
+                return Ok(());
+            }
+            removed
+        }
+        None => false,
+    };
     let mut out = ui::out();
     if removed {
         writeln!(out, "removed loop task `{name}`")?;
@@ -225,16 +277,33 @@ pub(super) fn remove(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn rename(name: &str, new_name: &str) -> Result<()> {
+pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Result<()> {
     schedule::validate_name(new_name)?;
     if name == new_name {
         bail!("new loop task name must differ from `{name}`");
     }
-    if instances::load_all().contains_key(new_name) {
+    if load_all_tasks(globals)?.contains_key(new_name) {
         bail!("loop task `{new_name}` already exists");
     }
 
-    let renamed = instances::rename(name, new_name)? | config_rename(name, new_name)?;
+    let loaded = load_task(name, globals)?;
+    let renamed = match loaded {
+        Some((entry, source)) => match source {
+            TaskSource::Config => config_rename(name, new_name)?,
+            TaskSource::Instance => instances::rename(name, new_name)?,
+            TaskSource::Project { .. } => {
+                let renamed = project_config_rename(&entry.root, name, new_name)?;
+                if renamed {
+                    let mut out = ui::out();
+                    writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
+                    write_project_trust_note(&mut out, &entry.root)?;
+                    return Ok(());
+                }
+                false
+            }
+        },
+        None => false,
+    };
     let mut out = ui::out();
     if renamed {
         writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
