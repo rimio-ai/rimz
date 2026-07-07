@@ -154,7 +154,7 @@ impl ZellijBackend {
     }
 
     fn request_topology_dump(&self, known: &KnownWorkspace) {
-        let Some(wasm) = super::presence_plugin_path() else {
+        let Some(wasm) = self.presence_plugin_path() else {
             tracing::debug!(
                 session = %known.session_name,
                 "Zellij topology refresh skipped because the presence plugin artifact is unavailable",

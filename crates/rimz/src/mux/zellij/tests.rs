@@ -105,7 +105,8 @@ exit 0
     )
     .expect("write topology cache");
 
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
     let listing = backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
@@ -185,7 +186,8 @@ exit 1
     )
     .expect("write enrichment cache");
 
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
     let listing = backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
@@ -261,7 +263,8 @@ exit 1
     )
     .expect("write topology cache");
 
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
     let listing = backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
@@ -300,7 +303,8 @@ exit 0
     let project_root = temp.path().join("project");
     std::fs::create_dir_all(&project_root).expect("mkdir project");
     let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
 
     let started = Instant::now();
     let err = backend
@@ -408,7 +412,8 @@ exit 0
         cache = runtime.root.join("pane-topology.json").display(),
     );
     let (temp, shim) = zellij_shim(&script);
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
 
     let floor =
         backend.resize_sidebar_toward("rimz-test", &workspace_id, 1, "terminal_8", 72, None);
@@ -537,7 +542,8 @@ esac
         refresh_ms: None,
     };
 
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
     assert_eq!(
         backend
             .new_sidebar_pane(&opts, 1)
@@ -666,7 +672,8 @@ exit 0
         refresh_ms: None,
     };
 
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
     backend
         .new_sidebar_pane(&opts, 1)
         .expect("spawn sidebar in positioned tab");
