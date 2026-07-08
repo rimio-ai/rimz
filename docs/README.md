@@ -35,7 +35,7 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 ## Help
 
 - [Troubleshooting](./guide/troubleshooting.md): start with `rimz doctor`, then the fixes for a room that will not start, agents not reporting, degraded banners, version drift, and resetting state.
-- [Security and trust](./guide/security.md): the threat model and the guardrails, covering project trust, notification handlers, hook safety, and privacy settings.
+- [Security and trust](./guide/security.md): what Rimz changes on your machine and how to undo it, the two places config can run a command (project trust and notification handlers), and what leaves the box.
 
 ## Reference
 
