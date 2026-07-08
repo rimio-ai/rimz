@@ -64,6 +64,15 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
         .map(|(key, value)| format!("set-window-option {key} '{}'", value))
         .collect();
     hook_commands.push(split);
+    // A plain default-shell tab has an empty `pane_start_command`: tmux births
+    // it full width, then the sidebar split above shrinks it after zsh can draw
+    // a prompt and surface PROMPT_SP's `%` marker. Respawn only that plain work
+    // pane as a fresh shell at the post-split width. Explicit-command windows
+    // keep their process and layout.
+    let shell = crate::harness::launch::user_shell_program();
+    hook_commands.push(format!(
+        "if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'"
+    ));
     vec![
         "set-hook".to_owned(),
         "-t".to_owned(),
@@ -359,6 +368,7 @@ mod tests {
         let opts = sidebar_opts(Some(75));
         let command = after_new_window_hook_set_cmd(&opts);
         let serve = sidebar_serve_command(&opts).join(" ");
+        let shell = crate::harness::launch::user_shell_program();
 
         assert_eq!(
             command,
@@ -370,7 +380,8 @@ mod tests {
                 format!(
                     "set-window-option allow-passthrough 'on' ; \
                      set-window-option aggressive-resize 'on' ; \
-                     split-window -h -b -d -l {} '{serve}'",
+                     split-window -h -b -d -l {} '{serve}' ; \
+                     if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'",
                     opts.birth_size.cols
                 ),
             ],
@@ -395,7 +406,8 @@ mod tests {
                      set-window-option pane-border-status 'top' ; \
                      set-window-option pane-border-format '{}' ; \
                      set-window-option pane-border-lines 'heavy' ; \
-                     split-window -h -b -d -l {} '{serve}'",
+                     split-window -h -b -d -l {} '{serve}' ; \
+                     if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'",
                     sidebar_blanking_border_format(),
                     opts.birth_size.cols
                 ),

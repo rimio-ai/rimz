@@ -462,6 +462,31 @@ fn wait_for_sidebar_pane(server: &TmuxServer, session: &str, window_id: Option<&
     }
 }
 
+fn wait_for_hook_docked_window_panes(
+    server: &TmuxServer,
+    session: &str,
+    window_id: &str,
+) -> Vec<PaneRef> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let panes: Vec<PaneRef> = list_session_panes(server, session)
+            .into_iter()
+            .filter(|pane| pane.view_id.as_deref() == Some(window_id))
+            .collect();
+        if panes.len() >= 2
+            && panes
+                .iter()
+                .any(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+        {
+            return panes;
+        }
+        if Instant::now() >= deadline {
+            panic!("window `{window_id}` was not hook-docked within the deadline: {panes:?}");
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 impl Drop for TmuxServer {
     fn drop(&mut self) {
         // `.output()` captures stderr so the "no server" message from
@@ -803,6 +828,145 @@ fn open_sidebar_pristine_birth_keeps_work_shell_focused_at_final_width() {
         server.display(session, "#{pane_id}"),
         work.pane_id.raw(),
         "session focus lands on the work shell",
+    );
+}
+
+#[test]
+fn after_new_window_hook_respawns_plain_shell_at_final_width_only() {
+    require_tmux!();
+
+    let session = "rimz-hook-plain-shell";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((100, 30)));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = sidebar_opts(session, stub, Some(100));
+    let sidebar_cols = u64::from(opts.birth_size.cols.get());
+
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    server.wait_for_pane_command(session, "rimz-sidebar");
+
+    server.tmux(&["new-window", "-d", "-t", session, "-n", "plain"]);
+    let plain_target = format!("{session}:plain");
+    let plain_window = server.display(&plain_target, "#{window_id}");
+    let plain_width = server
+        .display(&plain_target, "#{window_width}")
+        .parse::<u64>()
+        .expect("plain window width");
+    let plain_geoms = server.wait_for_panes(&plain_target, 2);
+    let plain_panes = wait_for_hook_docked_window_panes(&server, session, &plain_window);
+    assert_eq!(
+        plain_panes.len(),
+        2,
+        "plain window should hold sidebar and work shell: {plain_panes:?}",
+    );
+    let plain_sidebar = plain_panes
+        .iter()
+        .find(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+        .expect("plain sidebar pane");
+    let plain_work = plain_panes
+        .iter()
+        .find(|pane| pane.pane_id != plain_sidebar.pane_id)
+        .expect("plain work pane");
+    assert!(
+        plain_work.is_focused,
+        "hook keeps focus on the work pane after docking: {plain_panes:?}",
+    );
+
+    let plain_sidebar_geom = plain_geoms
+        .iter()
+        .find(|pane| pane.id == plain_sidebar.pane_id.raw())
+        .expect("plain sidebar geometry");
+    let plain_work_geom = plain_geoms
+        .iter()
+        .find(|pane| pane.id == plain_work.pane_id.raw())
+        .expect("plain work geometry");
+    assert_eq!(plain_sidebar_geom.left, 0, "sidebar is leftmost");
+    assert_eq!(
+        plain_sidebar_geom.width, sidebar_cols,
+        "sidebar keeps the hook's birth width",
+    );
+    assert_eq!(
+        plain_work_geom.left,
+        sidebar_cols + 1,
+        "work shell starts right of the sidebar border",
+    );
+    assert_eq!(
+        plain_work_geom.width,
+        plain_width - sidebar_cols - 1,
+        "plain work shell is born at final width",
+    );
+    assert_eq!(
+        server.display(&plain_target, "#{pane_id}"),
+        plain_work.pane_id.raw(),
+        "plain window focus lands on the work shell",
+    );
+    assert_eq!(
+        server.display(plain_work.pane_id.raw(), "#{pane_start_command}"),
+        rimz::harness::launch::user_shell_program(),
+        "empty-start-command tabs are respawned as the user's shell",
+    );
+
+    let explicit_command = "cat";
+    server.tmux(&[
+        "new-window",
+        "-d",
+        "-t",
+        session,
+        "-n",
+        "explicit",
+        explicit_command,
+    ]);
+    let explicit_target = format!("{session}:explicit");
+    let explicit_window = server.display(&explicit_target, "#{window_id}");
+    let explicit_width = server
+        .display(&explicit_target, "#{window_width}")
+        .parse::<u64>()
+        .expect("explicit window width");
+    let explicit_geoms = server.wait_for_panes(&explicit_target, 2);
+    let explicit_panes = wait_for_hook_docked_window_panes(&server, session, &explicit_window);
+    assert_eq!(
+        explicit_panes.len(),
+        2,
+        "explicit-command window should hold sidebar and work pane: {explicit_panes:?}",
+    );
+    let explicit_sidebar = explicit_panes
+        .iter()
+        .find(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+        .expect("explicit sidebar pane");
+    let explicit_work = explicit_panes
+        .iter()
+        .find(|pane| pane.pane_id != explicit_sidebar.pane_id)
+        .expect("explicit work pane");
+    let explicit_sidebar_geom = explicit_geoms
+        .iter()
+        .find(|pane| pane.id == explicit_sidebar.pane_id.raw())
+        .expect("explicit sidebar geometry");
+    let explicit_work_geom = explicit_geoms
+        .iter()
+        .find(|pane| pane.id == explicit_work.pane_id.raw())
+        .expect("explicit work geometry");
+    assert_eq!(explicit_sidebar_geom.left, 0, "sidebar is leftmost");
+    assert_eq!(
+        explicit_sidebar_geom.width, sidebar_cols,
+        "explicit-command sidebar keeps the hook's birth width",
+    );
+    assert_eq!(
+        explicit_work_geom.left,
+        sidebar_cols + 1,
+        "explicit command starts right of the sidebar border",
+    );
+    assert_eq!(
+        explicit_work_geom.width,
+        explicit_width - sidebar_cols - 1,
+        "explicit-command work pane keeps final width",
+    );
+    assert_eq!(
+        server.display(explicit_work.pane_id.raw(), "#{pane_start_command}"),
+        explicit_command,
+        "explicit-command tabs keep their original process",
     );
 }
 
