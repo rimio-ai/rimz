@@ -18,7 +18,7 @@ New to Rimz? Read in order: [installation](./guide/installation.md), [the quicks
 | --- | --- |
 | [Agents, worktrees, and teams](./guide/agents.md) | Launch agents by name, compose layouts, isolate work in Rimz-owned worktrees, and put a team on a feature. |
 | [Messaging](./guide/messaging.md) | Steer and queue agents by handle, deliver at the turn boundary or on a schedule, and let agents talk to each other in channels. |
-| [The sidebar](./guide/sidebar.md) | Reading the sidebar: the zones, agent cards and their lifecycle, process rows, and how the ranking decides what needs you. |
+| [The sidebar](./guide/sidebar.md) | Reading the sidebar: the zones, agent cards and their lifecycle, process rows, and how Rimz decides which agent needs you. |
 | [Remote and web](./guide/remote.md) | Reattach locally, connect to a room on an SSH server over a self-healing link, and open a room in the browser. |
 
 ## Automation
@@ -34,7 +34,7 @@ New to Rimz? Read in order: [installation](./guide/installation.md), [the quicks
 | --- | --- |
 | [Configuration](./reference/configuration.md) | Every setting: the config files, agent profiles and teams, loop tasks, behavior toggles, and project config. |
 | [Theming and pets](./guide/theme.md) | Schemes, palettes, color depth, glyphs, animations, provider styling, and the sidebar pets. |
-| [Zellij and tmux baselines](./guide/setup.md#configure-your-multiplexer) | Recommended multiplexer settings, shipped ready to adopt under [examples/](../examples/README.md). |
+| [Zellij and tmux baselines](./guide/multiplexer.md) | Recommended multiplexer settings, parity keybindings, and a themed status bar, shipped ready to adopt under [examples/](../examples/README.md). |
 
 ## Help
 

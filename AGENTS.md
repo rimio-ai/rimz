@@ -98,12 +98,13 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 **Guide** — `docs/guide/`
 - [installation.md](./docs/guide/installation.md) — prerequisites and every install path: Homebrew, prebuilt binaries, Cargo, source.
 - [quickstart.md](./docs/guide/quickstart.md) — the first session walked step by step: install, consent gate, first agent, first fleet, reattach.
-- [setup.md](./docs/guide/setup.md) — first-pass machine setup: config init, hooks, true color, pets, loop knobs, Zellij/tmux baselines.
+- [setup.md](./docs/guide/setup.md) — first-pass machine setup: config init, hooks, true color, pets, loop knobs, multiplexer essentials.
+- [multiplexer.md](./docs/guide/multiplexer.md) — Zellij and tmux baselines: recommended options, parity Alt chords, themed status bar, shipped under `examples/`.
 - [agents.md](./docs/guide/agents.md) — launching agents by name, the layout grammar, Rimz-owned worktrees and their lifecycle, and teams.
 - [messaging.md](./docs/guide/messaging.md) — addresses, park/steer/schedule delivery, smart compaction, agent-to-agent chat, and channels.
 - [sidebar.md](./docs/guide/sidebar.md) — reading the sidebar: zones, agent cards and process rows, the agent lifecycle, attention routing and card ranking.
 - [remote.md](./docs/guide/remote.md) — local reattach, SSH remote rooms with self-healing reconnect, and browser access.
-- [scripting.md](./docs/guide/scripting.md) — supervised `-p` runs: exit codes, JSON and streaming output, detach and wait, and the orchestration primitives.
+- [scripting.md](./docs/guide/scripting.md) — supervised `-p` runs: exit codes, JSON and streaming output, background runs and wait, and the orchestration primitives.
 - [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, notification handlers, budget priming, and the unattended permission posture.
 - [theme.md](./docs/guide/theme.md) — sidebar theming: palettes, color depth and slot overrides, custom themes, animations, provider branding, pets.
 - [troubleshooting.md](./docs/guide/troubleshooting.md) — `rimz doctor` first, then room-start refusals, hooks not reporting, degraded banners, version drift, reset and GC.

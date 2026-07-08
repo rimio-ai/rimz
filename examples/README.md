@@ -1,6 +1,6 @@
 # Examples
 
-Copy-ready configuration and integration samples. The multiplexer configs are the full versions of the baselines walked through in [the setup guide](../docs/guide/setup.md#configure-your-multiplexer).
+Copy-ready configuration and integration samples. The multiplexer configs are the full versions of the baselines walked through in [Zellij and tmux baselines](../docs/guide/multiplexer.md).
 
 ## tmux — `tmux/`
 

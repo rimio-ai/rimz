@@ -4,46 +4,14 @@ Rimz is a single binary for macOS and Linux. Pick one install path: [Homebrew](#
 
 ## Prerequisites
 
-Rimz runs inside a terminal multiplexer and drives the agent CLIs you already use. It needs:
-
 - **macOS or Linux.**
-- **Zellij 0.44 or newer, or tmux 3.5 or newer.** Both are first-class; one is enough. On tmux, 3.6 or newer gives the best experience: it keeps multiline paste clean alongside the extended keys Rimz enables. Rimz refuses to start against a build below the floor, and `rimz doctor` reports the installed version and whether it clears it.
+- **A terminal multiplexer** — Zellij 0.44 or newer, or tmux 3.5 or newer. One is enough; both are first-class. Distribution packages are often too old; [get a current Zellij or tmux](#get-a-current-zellij-or-tmux) has install recipes for current builds.
 - **The agent CLIs you plan to run** — Claude Code, Codex, Pi, or OpenCode, installed per their own docs. Rimz drives the stock CLIs and bundles none of them.
 - **Git** — agent worktrees and the sidebar's git status use it.
 
-Mind the versions when you reach for a package manager: a distribution's packaged tmux is usually behind (Debian 12 ships 3.3a, Debian 13 ships 3.5a), and most distributions do not package Zellij at all.
+Rimz refuses to start against a multiplexer below the minimum supported version, and `rimz doctor` reports the installed version and whether it clears that floor. On tmux, 3.6 or newer gives the best experience ([why](#rimz-doctor-flags-the-multiplexer-as-unsupported)).
 
-On macOS, Homebrew's builds of both are current:
-
-```sh
-brew install zellij
-brew install tmux         # one is enough; keep both to choose per project
-```
-
-On Linux, Zellij ships a prebuilt binary on its releases page; drop it into your `PATH` (swap `x86_64` for `aarch64` on ARM):
-
-```sh
-curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
-  | sudo tar -xz -C /usr/local/bin zellij
-zellij --version
-```
-
-For tmux, the distribution package works when `tmux -V` clears the version you want:
-
-```sh
-sudo apt install tmux     # Debian/Ubuntu; dnf and pacman ship it too
-```
-
-tmux publishes no prebuilt binaries, so when the packaged one is too old, install a current one through Homebrew on Linux or build the release tarball (the first line installs the build deps):
-
-```sh
-sudo apt install -y build-essential pkg-config libevent-dev libncurses-dev bison
-curl -fsSLO https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz
-tar -xzf tmux-3.7.tar.gz && cd tmux-3.7
-./configure && make -j"$(nproc)" && sudo make install
-```
-
-The multiplexer needs no configuration for Rimz: every room sets its own options on session start and reattach, and your existing Zellij or tmux config keeps owning your theme, shell, and keybinds. Tuning the room and building a multiplexer baseline are covered in [set up your machine](./setup.md#configure-your-multiplexer).
+The multiplexer needs no configuration for Rimz: every room sets its own options on session start and reattach, and your existing Zellij or tmux config keeps owning your theme, shell, and keybinds. The room's essential settings are in [set up your machine](./setup.md#configure-your-multiplexer), and a full baseline for your own sessions is [Zellij and tmux baselines](./multiplexer.md).
 
 ## Install with Homebrew (macOS)
 
@@ -97,6 +65,40 @@ rimz doctor
 
 `rimz doctor` reports the multiplexer it selected, its version and whether it clears the floor, hook status, and room health — the fastest read on whether a fresh machine is ready. From here, walk [the quickstart](./quickstart.md), then make the machine comfortable with [set up your machine](./setup.md).
 
+## Get a current Zellij or tmux
+
+A distribution's packaged tmux is usually behind (Debian 12 ships 3.3a, Debian 13 ships 3.5a), and most distributions do not package Zellij at all. When `tmux -V` or `zellij --version` reads below the floor, install a current build.
+
+On macOS, Homebrew's builds of both are current:
+
+```sh
+brew install zellij
+brew install tmux         # one is enough; keep both to choose per project
+```
+
+On Linux, Zellij ships a prebuilt binary on its releases page; drop it into your `PATH` (swap `x86_64` for `aarch64` on ARM):
+
+```sh
+curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
+  | sudo tar -xz -C /usr/local/bin zellij
+zellij --version
+```
+
+For tmux, the distribution package works when `tmux -V` clears the version you want:
+
+```sh
+sudo apt install tmux     # Debian/Ubuntu; dnf and pacman ship it too
+```
+
+tmux publishes no prebuilt binaries, so when the packaged one is too old, install a current one through Homebrew on Linux or build the release tarball (the first line installs the build deps):
+
+```sh
+sudo apt install -y build-essential pkg-config libevent-dev libncurses-dev bison
+curl -fsSLO https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz
+tar -xzf tmux-3.7.tar.gz && cd tmux-3.7
+./configure && make -j"$(nproc)" && sudo make install
+```
+
 ## Build from source
 
 The source build is for contributing to Rimz or installing on a platform the prebuilt paths miss. Beyond the [prerequisites](#prerequisites) above it needs a C toolchain, Git, and Rust through `rustup`:
@@ -133,7 +135,7 @@ Run `rimz uninstall --all` from outside a Rimz room. It removes installed hooks,
 
 ### `rimz doctor` flags the multiplexer as unsupported
 
-Rimz refuses to start against a multiplexer too old to carry the room options it sets: tmux below 3.5, or Zellij below 0.44. Check the installed version, then install a current build from the [prerequisites](#prerequisites).
+Rimz refuses to start against a multiplexer too old to carry the room options it sets: tmux below 3.5, or Zellij below 0.44. Check the installed version, then [install a current build](#get-a-current-zellij-or-tmux).
 
 ```sh
 tmux -V
