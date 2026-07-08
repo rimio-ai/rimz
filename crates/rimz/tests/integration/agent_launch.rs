@@ -199,7 +199,7 @@ fn resume_with_empty_store_refuses_before_mux_probe() {
 
 #[cfg(unix)]
 #[test]
-fn prompt_with_shell_metacharacters_stays_one_argument() {
+fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
     let env = Env::new();
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let shim_dir = write_env_dump_shim(&env, "codex");
@@ -215,13 +215,17 @@ fn prompt_with_shell_metacharacters_stays_one_argument() {
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
-        dumped.lines().any(|line| line == "ARGC=1"),
-        "prompt was split into multiple argv elements:\n{dumped}"
+        dumped.lines().any(|line| line == "ARGC=2"),
+        "launch argv did not contain only the terminator and prompt:\n{dumped}"
+    );
+    assert!(
+        dumped.lines().any(|line| line == "ARGV_1=--"),
+        "launch argv did not protect the prompt with --:\n{dumped}"
     );
     assert!(
         dumped
             .lines()
-            .any(|line| line == format!("ARGV_1={prompt}")),
+            .any(|line| line == format!("ARGV_2={prompt}")),
         "prompt argv element was changed by the shell wrapper:\n{dumped}"
     );
 }

@@ -39,6 +39,7 @@ fn pi_activity_filter_excludes_the_blocking_gate_and_launch_commands_build() {
             "pi".to_owned(),
             "--model".to_owned(),
             "large".to_owned(),
+            "--".to_owned(),
             "review this".to_owned(),
         ])
     );

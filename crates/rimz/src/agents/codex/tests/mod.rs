@@ -22,7 +22,11 @@ fn codex_commands_and_permission_args_match_run_posture() {
     );
     assert_eq!(
         CodexAdapter.launch_command(&[], Some("review this")),
-        Some(vec!["codex".to_owned(), "review this".to_owned()])
+        Some(vec![
+            "codex".to_owned(),
+            "--".to_owned(),
+            "review this".to_owned()
+        ])
     );
     assert_eq!(
         CodexAdapter.launch_command(
@@ -40,6 +44,7 @@ fn codex_commands_and_permission_args_match_run_posture() {
             "gpt-5-codex".to_owned(),
             "-c".to_owned(),
             "model_reasoning_effort=high".to_owned(),
+            "--".to_owned(),
             "review this".to_owned()
         ])
     );

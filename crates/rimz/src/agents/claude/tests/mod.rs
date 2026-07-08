@@ -22,7 +22,11 @@ fn claude_commands_and_permission_args_match_run_posture() {
     );
     assert_eq!(
         ClaudeAdapter.launch_command(&[], Some("review this")),
-        Some(vec!["claude".to_owned(), "review this".to_owned()])
+        Some(vec![
+            "claude".to_owned(),
+            "--".to_owned(),
+            "review this".to_owned()
+        ])
     );
     assert_eq!(
         ClaudeAdapter.launch_command(
@@ -33,6 +37,7 @@ fn claude_commands_and_permission_args_match_run_posture() {
             "claude".to_owned(),
             "--permission-mode".to_owned(),
             "plan".to_owned(),
+            "--".to_owned(),
             "review this".to_owned()
         ])
     );

@@ -379,6 +379,23 @@ pub struct RemoteControlStatus {
     pub pane_auto: bool,
 }
 
+/// Assemble a fresh-launch argv with the startup prompt protected as the
+/// agent's positional argument. The `--` terminator keeps a trailing variadic
+/// or optional-value profile flag from consuming the prompt.
+pub(crate) fn positional_prompt_argv(
+    bin: &str,
+    extra_args: &[String],
+    prompt: Option<&str>,
+) -> Vec<String> {
+    let mut argv = vec![bin.to_owned()];
+    argv.extend(extra_args.iter().cloned());
+    if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
+        argv.push("--".to_owned());
+        argv.push(prompt.to_owned());
+    }
+    argv
+}
+
 pub trait AgentAdapter: Send + Sync {
     /// The adapter's static identity, branding, capabilities, and
     /// classification tables. Everything `const` about an agent lives here;
@@ -779,7 +796,8 @@ pub trait AgentAdapter: Send + Sync {
     /// The argv that launches a fresh interactive session of this agent in the
     /// pane's cwd. `extra_args` are direct agent CLI arguments from the chosen
     /// tab layout; `prompt`, when present, is passed as the agent's positional
-    /// startup prompt after them. An agent with no launch CLI returns `None`.
+    /// startup prompt after a `--` terminator. An agent with no launch CLI
+    /// returns `None`.
     fn launch_command(&self, _extra_args: &[String], _prompt: Option<&str>) -> Option<Vec<String>> {
         None
     }

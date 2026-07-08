@@ -603,12 +603,7 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        let mut argv = vec!["pi".to_owned()];
-        argv.extend(extra_args.iter().cloned());
-        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
-            argv.push(prompt.to_owned());
-        }
-        Some(argv)
+        Some(super::positional_prompt_argv("pi", extra_args, prompt))
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
