@@ -166,3 +166,12 @@ The six-row cap trims only a worktree's idle and process tail. Anything active, 
 ## Tuning
 
 Three `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent escalates to `!`, 30 minutes), `inactive_after_secs` (hot work ends, one hour), and `archive_after_secs` (a card sleeps, 24 hours). Details in [configuration.md](../reference/configuration.md#sidebar-rendering).
+
+## See also
+
+- [The sidebar on screen](../interface/sidebar.md) — every glyph, meter, and frame drawn exactly, with the key table.
+- [Messaging](./messaging.md) — the other half of the loop: reach the agent the sidebar surfaced.
+- [Theming and pets](./theme.md) — restyle the column, its palette, and the companion.
+- [Remote](./remote.md) — the link-health badge and the column rebuilt over SSH.
+- [Configuration → sidebar rendering](../reference/configuration.md#sidebar-rendering) — the render cadence and attention knobs.
+- [Sidebar internals](../internals/sidebar/sidebar.md) — presence, the ranking contract, and reload.
