@@ -255,6 +255,7 @@ fn stamp_hosted_agent_processes_ignores_foreground_command() {
     stamp_hosted_agent_processes(&mut frame, &|kind, pid| {
         assert_eq!(pid, 777);
         (kind == "codex").then_some(crate::proc::InPaneAgentProcess {
+            pid: 777,
             started_at: start,
             cwd: None,
         })
@@ -285,6 +286,7 @@ fn hosted_agent_process_fills_empty_cwd_for_wrapped_shell_pane() {
     stamp_hosted_agent_processes(&mut frame, &|kind, pid| {
         assert_eq!(pid, 3153567);
         (kind == "codex").then_some(crate::proc::InPaneAgentProcess {
+            pid: 3153567,
             started_at: start,
             cwd: Some(cwd.path().to_path_buf()),
         })

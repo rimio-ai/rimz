@@ -132,7 +132,7 @@ pub(super) fn recover_focused_pane_binding(
             pane = %pane_id,
             "lifecycle: recovered daemon-routed pane binding from live focus",
         );
-        apply_recovered_pane_binding(observation, &agent_id, pane);
+        apply_recovered_pane_binding(kind, observation, &agent_id, pane);
     } else {
         warn!(
             target: "rimz::agent::binding",
@@ -146,15 +146,32 @@ pub(super) fn recover_focused_pane_binding(
 }
 
 pub(super) fn apply_recovered_pane_binding(
+    kind: &str,
     observation: &mut AgentLifecycleObservation,
     agent_id: &str,
     pane: PaneRef,
 ) {
-    if let Some(pane_pid) = pane.pane_pid {
+    apply_recovered_pane_binding_with(observation, agent_id, pane, |root_pid| {
+        rimz::proc::in_pane_agent_process_for_root(kind, root_pid).map(|process| process.pid)
+    });
+}
+
+/// Anchor liveness to the in-pane agent CLI, not the pane root. A shell-hosted
+/// Codex pane's root pid is the host shell, which outlives the CLI and would pin
+/// the card as a ghost after the agent exits. When the single-child walk can't
+/// prove the CLI, leave the owner `attach_agent_owner` already set (the shared
+/// daemon, reaped by the daemon-session reaper) rather than inventing one.
+pub(super) fn apply_recovered_pane_binding_with(
+    observation: &mut AgentLifecycleObservation,
+    agent_id: &str,
+    pane: PaneRef,
+    resolve_owner_pid: impl Fn(u32) -> Option<u32>,
+) {
+    if let Some(owner_pid) = pane.pane_pid.and_then(resolve_owner_pid) {
         observation.runtime_owner = Some(process_owner(
             RuntimeOwnerKind::Agent,
             agent_id.to_owned(),
-            pane_pid,
+            owner_pid,
         ));
     }
     observation.pane_id = Some(pane.pane_id.clone());

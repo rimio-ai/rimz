@@ -14,6 +14,7 @@ const ELEVATED_AGENT_DESCENT_DEPTH: usize = 8;
 /// A live in-pane lazy-agent CLI found below a pane root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InPaneAgentProcess {
+    pub pid: u32,
     pub started_at: jiff::Timestamp,
     pub cwd: Option<PathBuf>,
 }
@@ -183,6 +184,7 @@ fn in_pane_agent_process_for_root_with(
             .is_some_and(|cmdline| in_pane_agent_cmdline_matches(kind, cmdline))
         {
             return Some(InPaneAgentProcess {
+                pid,
                 started_at: process_start(pid)?,
                 cwd: cwd(pid),
             });
@@ -340,6 +342,7 @@ mod tests {
         assert_eq!(
             found,
             Some(InPaneAgentProcess {
+                pid: 40,
                 started_at: start,
                 cwd: Some(cwd)
             })

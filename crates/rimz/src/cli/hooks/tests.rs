@@ -14,7 +14,8 @@ use rimz::agents::lifecycle::{
 };
 use rimz::ids::AgentSessionId;
 use rimz::ids::{MuxName, PaneId};
-use rimz::pane::PaneRef;
+use rimz::pane::{PaneRef, RuntimeOwnerKind};
+use rimz::store::runtime::process_owner;
 
 struct Case {
     name: &'static str,
@@ -396,20 +397,54 @@ fn focused_pane_recovery_selects_or_rejects_by_focus_and_stamp_state() {
 }
 
 #[test]
-fn recovered_binding_stamps_full_pane_and_reowns_to_pane_process() {
+fn recovered_binding_stamps_full_pane_and_reowns_to_in_pane_agent_process() {
     let mut observation = root_observation();
     let mut pane = candidate("terminal_30", true);
     pane.view_id = Some("tab_4".to_owned());
     pane.cwd = Some("/repo/main".to_owned());
-    pane.pane_pid = Some(std::process::id());
+    pane.pane_pid = Some(1234);
+    let child_pid = 5678;
 
-    super::binding::apply_recovered_pane_binding(&mut observation, "sess-1", pane.clone());
+    super::binding::apply_recovered_pane_binding_with(
+        &mut observation,
+        "sess-1",
+        pane.clone(),
+        |root_pid| {
+            assert_eq!(root_pid, 1234);
+            Some(child_pid)
+        },
+    );
 
     assert_eq!(observation.pane_id.as_ref(), Some(&pane.pane_id));
     assert_eq!(observation.pane_stamp.as_ref(), Some(&pane));
     let owner = observation.runtime_owner.as_ref().expect("runtime owner");
     assert_eq!(owner.kind, rimz::pane::RuntimeOwnerKind::Agent);
-    assert_eq!(owner.pid, std::process::id());
+    assert_eq!(owner.pid, child_pid);
+}
+
+#[test]
+fn recovered_binding_preserves_prior_owner_when_agent_process_is_unknown() {
+    let mut observation = root_observation();
+    let existing_owner = process_owner(RuntimeOwnerKind::Daemon, "sess-1", std::process::id());
+    observation.runtime_owner = Some(existing_owner.clone());
+    let mut pane = candidate("terminal_30", true);
+    pane.view_id = Some("tab_4".to_owned());
+    pane.cwd = Some("/repo/main".to_owned());
+    pane.pane_pid = Some(1234);
+
+    super::binding::apply_recovered_pane_binding_with(
+        &mut observation,
+        "sess-1",
+        pane.clone(),
+        |root_pid| {
+            assert_eq!(root_pid, 1234);
+            None
+        },
+    );
+
+    assert_eq!(observation.pane_id.as_ref(), Some(&pane.pane_id));
+    assert_eq!(observation.pane_stamp.as_ref(), Some(&pane));
+    assert_eq!(observation.runtime_owner.as_ref(), Some(&existing_owner));
 }
 
 fn focus_recovery_cases() -> Vec<Case> {
