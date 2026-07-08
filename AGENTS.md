@@ -105,7 +105,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [worktrees.md](./docs/guide/worktrees.md) — Rimz-owned Git worktrees: isolating a layout or team for parallel work, seeded files, and supervised cleanup.
 - [messaging.md](./docs/guide/messaging.md) — addresses, park/steer/schedule delivery, smart compaction, agent-to-agent chat, and channels.
 - [sidebar.md](./docs/guide/sidebar.md) — reading the sidebar: zones, agent cards and process rows, the agent lifecycle, attention routing and card ranking.
-- [remote.md](./docs/guide/remote.md) — local reattach, SSH remote rooms with self-healing reconnect, and continuity across reboots.
+- [remote.md](./docs/guide/remote.md) — attaching to a room on another host over SSH: a multiplexer attach, the self-healing link, and continuity across reboots.
 - [web.md](./docs/guide/web.md) — browser access: the local Zellij web server, remote `--web` tunnels, and login tokens.
 - [scripting.md](./docs/guide/scripting.md) — supervised `-p` runs: exit codes, JSON and streaming output, background runs and wait, and the orchestration primitives.
 - [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, notification handlers, budget priming, and the unattended permission posture.
