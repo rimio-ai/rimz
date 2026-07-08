@@ -24,7 +24,8 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 - [Messaging](./guide/messaging.md): steer and queue agents by handle, deliver at the turn boundary or on a schedule, and let agents talk to each other in channels.
 - [Teams](./guide/teams.md): pair models by role, launch the whole set with one name, and reopen or resume it as a single unit.
 - [Scripting agents](./guide/scripting.md): supervised one-shot `-p` turns with exit codes, JSON and streaming output, and the background-run primitives that drop agents into scripts and CI.
-- [Loops and schedules](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, wire notification handlers, and keep the fleet moving with auto-continue.
+- [Loops and schedules](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, let agents set their own alarms, and keep the fleet moving with auto-continue.
+- [Notifications](./guide/notifications.md): reach your phone or run your own command when an agent needs you, and let handlers clear routine prompts themselves.
 
 ## Customization
 

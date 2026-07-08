@@ -88,7 +88,7 @@ Where the adapter exposes a native cap, `--max-turns <N>` bounds the agentic tur
 
 The pane `-p` opens runs the stock CLI exactly as if you had launched it yourself and pasted the prompt, and the room cannot tell the difference. So everything the room does with an agent, it does with a scripted run — who started the turn stops mattering the moment it starts.
 
-**It asks, you answer.** A run that stops on a permission prompt or a real design question takes the room's normal waiting path: the row flips to `? waiting`, the cockpit counts it, a [notification handler](./loops.md#notification-handlers) fires. You answer in the agent's own UI — from the room, or over SSH from your phone — while the script stays blocked on the exit code. A failing migration at 3 a.m. becomes a push notification, a one-line answer, and a green pipeline by morning; the run never had to guess.
+**It asks, you answer.** A run that stops on a permission prompt or a real design question takes the room's normal waiting path: the row flips to `? waiting`, the cockpit counts it, a [notification handler](./notifications.md) fires. You answer in the agent's own UI — from the room, or over SSH from your phone — while the script stays blocked on the exit code. A failing migration at 3 a.m. becomes a push notification, a one-line answer, and a green pipeline by morning; the run never had to guess.
 
 **You steer it mid-turn.** The run answers to a handle like any agent, so `rimz message --steer` injects new instructions into a turn a cron job started, and `rimz agents show` or `logs -f` reads its progress from any pane. A drifting unattended run is a one-line correction, not a kill-and-retry.
 
@@ -170,7 +170,8 @@ Supervised runs need installed and trusted hooks, because hooks are the completi
 
 ## See also
 
-- [Loops and schedules](./loops.md) — put these runs on a clock: schedules, watchdogs, and notification handlers.
+- [Loops and schedules](./loops.md) — put these runs on a clock: schedules, watchdogs, and self-waking agents.
+- [Notifications](./notifications.md) — the push routes and handlers that reach you when a run needs an answer.
 - [Messaging](./messaging.md) — the `--steer` / `--on done` delivery model wrappers lean on.
 - [Agents](./agents.md) — the profile, handle, and layout vocabulary these examples use.
 - [Worktrees](./worktrees.md) — the isolated branches behind `--worktree` runs.

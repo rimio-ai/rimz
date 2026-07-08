@@ -108,7 +108,8 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [remote.md](./docs/guide/remote.md) — attaching to a room on another host over SSH: a multiplexer attach, the self-healing link, and continuity across reboots.
 - [web.md](./docs/guide/web.md) — browser access: the local Zellij web server, remote `--web` tunnels, and login tokens.
 - [scripting.md](./docs/guide/scripting.md) — supervised `-p` runs: exit codes, JSON and streaming output, background runs and wait, and the orchestration primitives.
-- [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, notification handlers, budget priming, and the unattended permission posture.
+- [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, budget-window priming, agent self-wakes, and the unattended permission posture.
+- [notifications.md](./docs/guide/notifications.md) — off-screen attention: desktop banners, unread nudges, and handlers that push to your channels or clear routine prompts.
 - [theme.md](./docs/guide/theme.md) — sidebar theming: palettes, color depth and slot overrides, custom themes, animations, provider branding, pets.
 - [troubleshooting.md](./docs/guide/troubleshooting.md) — `rimz doctor` first, then room-start refusals, hooks not reporting, degraded banners, version drift, reset and GC.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.

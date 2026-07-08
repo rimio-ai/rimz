@@ -139,7 +139,7 @@ Even from another pane or another app, the OS notification reaches you:
 
 Select the row, click the notification, or hit the triage key from the next section, and you land in Claude's pane reading the actual prompt: the real command Claude wants to run, approved or denied in Claude's own UI. You were heads-down somewhere else, and Rimz tapped you on the shoulder with exactly the right pane, one keystroke away.
 
-The store is authoritative, so notifications are best-effort polish: a missed one loses nothing, several waiting at once coalesce into one, and an agent that stays waiting earns a single nudge rather than a stream. That same waiting state is the hook automation hangs on later — a notification handler can answer a routine prompt right in the agent's pane, and anything it skips stays `? waiting` and still routes to you ([loops.md](./loops.md)).
+The store is authoritative, so notifications are best-effort polish: a missed one loses nothing, several waiting at once coalesce into one, and an agent that stays waiting earns a single nudge rather than a stream. That same waiting state is the hook automation hangs on later — a notification handler can answer a routine prompt right in the agent's pane, and anything it skips stays `? waiting` and still routes to you ([notifications.md](./notifications.md)).
 
 ## A fleet, and the two keys that tame it
 
