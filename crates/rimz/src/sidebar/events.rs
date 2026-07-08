@@ -67,9 +67,9 @@ pub enum SidebarEvent {
     PaneClosed {
         pane_id: PaneId,
     },
-    /// Latency hint that a switched-to tab restored focus to its sidebar pane.
-    /// The renderer whose own pane matches decides whether to refocus a working
-    /// sibling; other renderers ignore it.
+    /// Latency hint that a switched-to tab/window restored focus to its sidebar
+    /// pane. The renderer whose own pane matches decides whether to refocus a
+    /// working sibling; other renderers ignore it.
     FocusStranded {
         pane_id: PaneId,
     },

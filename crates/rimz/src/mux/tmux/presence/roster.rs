@@ -220,6 +220,11 @@ impl PresenceRoster {
         let Some(focused) = self.active_pane_in_window(&window) else {
             return vec![SidebarEvent::PanesChanged];
         };
+        if self.pane_is_sidebar(&focused) && self.window_has_working_pane(&window) {
+            return vec![SidebarEvent::FocusStranded {
+                pane_id: pane_id(&focused),
+            }];
+        }
         let unfocused = previous
             .as_deref()
             .and_then(|prev| self.active_pane_in_window(prev))
@@ -238,6 +243,16 @@ impl PresenceRoster {
             .iter()
             .find(|(_, entry)| entry.window == window && entry.active)
             .map(|(pane, _)| pane.clone())
+    }
+
+    fn pane_is_sidebar(&self, pane: &str) -> bool {
+        self.panes.get(pane).is_some_and(|entry| entry.is_sidebar)
+    }
+
+    fn window_has_working_pane(&self, window: &str) -> bool {
+        self.panes
+            .values()
+            .any(|entry| entry.window == window && !entry.overlay_suppressed)
     }
 
     fn prior_active_working_pane(&self, window: &str, new_active: &str) -> Option<String> {
@@ -387,11 +402,28 @@ mod tests {
         roster.apply(sub("%1", "@1", Some("zsh"), true), true);
         roster.apply(sidebar_sub("%9", "@2", true), true);
         roster.apply(swin("$1", "@1"), true);
+        // A sidebar-only window has no working sibling to refocus, so the
+        // switch remains a plain focus overlay.
         assert_eq!(
             roster.apply(swin("$1", "@2"), false),
             vec![SidebarEvent::FocusChanged {
                 focused: vec![pane_id("%9")],
                 unfocused: vec![pane_id("%1")],
+            }]
+        );
+    }
+
+    #[test]
+    fn window_switch_onto_sidebar_with_work_sibling_strands() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sub("%2", "@2", Some("claude"), false), true);
+        roster.apply(sidebar_sub("%9", "@2", true), true);
+        roster.apply(swin("$1", "@1"), true);
+        assert_eq!(
+            roster.apply(swin("$1", "@2"), false),
+            vec![SidebarEvent::FocusStranded {
+                pane_id: pane_id("%9"),
             }]
         );
     }
