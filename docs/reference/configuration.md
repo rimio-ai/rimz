@@ -199,9 +199,24 @@ session = "sess-abc123"
 handle = "@planner"
 ```
 
-Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`. Shared project tasks use the same `[tasks.<name>]` shape in `<root>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. Each task chooses `spec`, `bind`, `check`, or `check` plus one agent action. `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. Bind-mode pins delivery to one live agent session and sends the prompt through the message path; `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only. `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, and `on = "success"` wakes on zero exit. Check output is appended to the agent prompt when the guard fires. `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
+Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<root>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. The scheduling model — shapes, watchdogs, pings, self-wakes — is [loops.md](../guide/loops.md); this section is the field shape.
 
-Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer: it skips when that provider's budget window is already counting down, and it takes a short prompt like any spawn task. Machine tasks carry a `root`; `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display. Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, and reject `root`, `bind`, `deadline`, and one-shots because those are machine-local state or would rewrite committed config on fire. Trusted project tasks win over same-named machine tasks and state instances; untrusted or stale project tasks stay visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up. Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file. The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
+Each task chooses `spec`, `bind`, `check`, or `check` plus one agent action:
+
+- `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` spec is the window-primer: it skips when that provider's budget window is already counting down, and takes a short prompt like any spawn task.
+- `[tasks.<name>.bind]` pins delivery to one live agent session through the message path: `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only.
+- `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, `on = "success"` on zero exit. Check output is appended to the agent prompt when the guard fires.
+- `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
+
+Field notes:
+
+- Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset.
+- Machine tasks carry a `root`: `rimz loop add` writes an absolute path, and hand-edited `~` or relative roots are normalized before room matching, firing, and display.
+- Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, and reject `root`, `bind`, `deadline`, and one-shots — those are machine-local state, or would rewrite committed config on fire.
+- Trusted project tasks win over same-named machine tasks and state instances; untrusted or stale project tasks stay visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up.
+- Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file.
+
+The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [agents.md → Schedule turns with loop](./cli/agents.md#schedule-turns-with-loop).
 
 ## Behavior settings
 
@@ -292,7 +307,17 @@ auto_continue_max_retries = 13
 auto_continue_text = "continue"
 ```
 
-Resume covers two tenses. On a **rebirth after reboot or mux crash** (the machine rebooted since the room was last alive, or wrappers recorded positive lost-agent markers when the mux died), Rimz offers to recover prior agents from the durable rollup — the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab. Empty named channels still reopen on same-boot rebirths. `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches and defaults to 128. While the room is **live**, `auto_continue` picks any parked turn back up by typing `auto_continue_text` through the same path as `message --steer`: rate-limit and spend-limit parks fire from the fused account budget's spent-window reset, while overload and transient API-error parks (stalled streams, timeouts, and connection drops) fire on the bounded retry ramp (`auto_continue_backoff_secs`, `auto_continue_max_retries`). Rate-limit, spend-limit, and overload records all stop after `auto_continue_max_retries`. The default backoff sends the first overload/transient retry 3 minutes after the marker, then every 5 minutes until about 63 minutes, then leaves the row parked. It is off by default. The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/provider.md#auto-continue).
+Resume covers two tenses; the behavior model is [loops.md → Built-in recovery](../guide/loops.md#built-in-recovery), and these are its keys.
+
+On a **rebirth after a reboot or multiplexer crash**, Rimz offers to recover prior agents from the durable record — the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab (empty named channels also reopen on same-boot rebirths). `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches (default 128).
+
+While the room is **live**, `auto_continue` (off by default) picks a parked turn back up by typing `auto_continue_text` through the same path as `message --steer`:
+
+- Rate-limit and spend-limit parks fire when the account's budget window resets.
+- Overload and transient API-error parks (stalled streams, timeouts, connection drops) fire on the retry ramp: `auto_continue_backoff_secs = [180, 300]` sends the first retry 3 minutes after the failure, then every 5 minutes.
+- Every park type stops retrying after `auto_continue_max_retries` (default 13 — about an hour on the default ramp), leaving the row parked for you.
+
+The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/provider.md#auto-continue).
 
 ### Smart compaction
 
@@ -344,7 +369,7 @@ pane_frames = true          # an optional override; unset, your config.kdl wins
 ## pane_border_status = "top"  # optional override; unset, your ~/.tmux.conf wins
 ```
 
-To configure your *own* Zellij or tmux — the theme, true color, copy-mode, and keybindings Rimz leaves to you, and your sessions outside the room — see the [Zellij](../guide/setup.md#zellij) and [tmux](../guide/setup.md#tmux) baselines in the setup guide.
+To configure your *own* Zellij or tmux — the theme, true color, copy-mode, and keybindings Rimz leaves to you, and your sessions outside the room — see the [Zellij](../guide/multiplexer.md#zellij) and [tmux](../guide/multiplexer.md#tmux) baselines.
 
 ## Appearance and the sidebar
 

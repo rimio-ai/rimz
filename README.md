@@ -149,7 +149,7 @@ rimz message @all "summarize what changed at the next boundary"    # the whole c
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
 cat build-error.txt | rimz agents claude -p 'explain the root cause'   # stdin appends to the prompt
 
-rimz agents claude "Run the migration audit." -p --detach   # returns now, prints the run's name
+rimz agents claude "Run the migration audit." -p --bg       # returns now, prints the run's name
 rimz agents wait swift-otter --stream                       # block on it later, tail the answer
 ```
 
@@ -172,7 +172,7 @@ rimz remote connect dev --web    # the same room in your browser at 127.0.0.1
 
 ## Configuration
 
-Rimz runs with zero configuration; one pass makes it yours. `rimz setup` detects the machine and writes the per-machine defaults under `~/.config/rimz/`: `config.toml` (behavior), `theme.toml` (appearance), `agents.toml` (profiles and teams), `loop.toml` (schedules). Every key ships commented with its default and an inline note, so the files double as their own reference. For everything after that first pass, `rimz config set` edits one dotted key: it routes the key to the owning file, validates the value, and writes durably, so you see the effect without pasting TOML.
+Rimz runs with zero configuration; one pass makes it yours. `rimz setup` detects the machine and writes the per-machine defaults under `~/.config/rimz/`: `config.toml` (behavior), `theme.toml` (appearance), `agents.toml` (profiles and teams), `loop.toml` (schedules), `remote.toml` (SSH room aliases). Every key ships commented with its default and an inline note, so the files double as their own reference. For everything after that first pass, `rimz config set` edits one dotted key: it routes the key to the owning file, validates the value, and writes durably, so you see the effect without pasting TOML.
 
 ```sh
 rimz setup                                 # detect the machine, write the commented defaults

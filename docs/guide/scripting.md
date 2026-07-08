@@ -58,9 +58,11 @@ rimz agents codex "Prepare the release checklist." -p --output-format json     #
 rimz agents claude "Refactor the parser." -p --output-format stream-json        # NDJSON run events as they land
 ```
 
-- `text` (default) prints the final assistant message.
-- `json` prints the full run record — parse `run_id` for `rimz transcript <run_id>`, and `transcript_path` for the provider-native session file.
-- `stream-json` emits run events as newline-delimited JSON while the turn runs, for a pipeline that wants progress rather than a final blob.
+| Format | Prints | Use it for |
+| --- | --- | --- |
+| `text` (default) | the final assistant message | humans, and simple `grep`/`case` gates |
+| `json` | the full run record | parsing `run_id` (feeds `rimz transcript <run_id>`) and `transcript_path` (the provider-native session file) |
+| `stream-json` | run events as newline-delimited JSON while the turn runs | a pipeline that wants progress rather than a final blob |
 
 Where the adapter exposes a native cap, `--max-turns <N>` bounds the agentic turn count (Claude today); an agent without one refuses the flag rather than running unbounded.
 
@@ -74,19 +76,19 @@ The posture that decides whether a run stops to ask or runs straight through —
 
 ## Fire now, collect later
 
-For orchestration, decouple starting a run from waiting on it. `--detach` launches the supervised run and prints its agent name, returning immediately; `rimz agents wait` blocks on that name whenever you are ready.
+For orchestration, decouple starting a run from waiting on it. `--bg` launches the supervised run and prints its agent name, returning immediately; `rimz agents wait` blocks on that name whenever you are ready.
 
 ```sh
-name=$(rimz agents claude "Run the migration audit." -p --detach)   # returns now, prints e.g. swift-otter
+name=$(rimz agents claude "Run the migration audit." -p --bg)   # returns now, prints e.g. swift-otter
 # ... kick off other work ...
-rimz agents wait "$name" --stream                                    # block on it, tailing the transcript
+rimz agents wait "$name" --stream                               # block on it, tailing the transcript
 ```
 
-- `rimz agents wait <ref> --stream` tails assistant text as it lands; `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing.
-- `rimz agents show <ref>` reports the run's activity, context, placement, message queue, and recent transcript; add `--json` for the machine-readable form, `--capture` for the pane's current text.
+- `rimz agents wait <ref>` blocks on a run; `--stream` tails the answer as it lands.
+- `rimz agents show <ref>` reports a run's activity, context, and recent transcript.
 - `rimz agents stop <ref>` cancels a live run or closes its pane.
 
-A reference is the printed name, a run id, or any [agent address](./messaging.md#address-an-agent), so the same handle threads through `wait`, `show`, `stop`, and `message`.
+A reference is the printed name, a run id, or any [agent address](./messaging.md#address-an-agent), so the same handle threads through `wait`, `show`, `stop`, and `message`. Every flag on these verbs is in the [agent-control reference](../reference/cli/agents.md).
 
 ## Drive the room from a script
 
@@ -120,11 +122,11 @@ case "$verdict" in
 esac
 ```
 
-**Fan out, then join.** Start several detached runs, collect them by name.
+**Fan out, then join.** Start several background runs, collect them by name.
 
 ```sh
 for pkg in api web worker; do
-  rimz agents codex --worktree="audit-$pkg" -p --detach "Audit $pkg for the CVE and reply with the fix." >> runs.txt
+  rimz agents codex --worktree="audit-$pkg" -p --bg "Audit $pkg for the CVE and reply with the fix." >> runs.txt
 done
 while read -r name; do rimz agents wait "$name" --stream; done < runs.txt
 ```
