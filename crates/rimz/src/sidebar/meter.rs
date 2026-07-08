@@ -2,7 +2,7 @@
 //!
 //! The meter observes producer work and records diagnostics only; producer ticks
 //! proceed unchanged. The budgets live beside the detector and are maintained
-//! with the cost map in `docs/internals/health/performance.md`.
+//! with the cost map in `docs/internals/performance.md`.
 //! Counter deltas are scoped by producer lane so concurrent fetch and cache
 //! refresh work attribute their forks and store reads to the loop that caused
 //! them. The same consecutive-tick window filters both breach start and

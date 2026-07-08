@@ -7,7 +7,7 @@
 //! [`crate::store::snapshot::SidebarSnapshot::with_subagent_context`]. Like its
 //! [`crate::store::agent_context`] sibling it never touches the durable event
 //! log: this is display-only latency, not truth ("Durability first",
-//! `docs/internals/store/store.md`).
+//! `docs/internals/store.md`).
 //!
 //! Ownership: the WRITER is always a Rimz CLI producer. The
 //! sidebar renderer reads this data only through the snapshot JSON, never this

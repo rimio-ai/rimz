@@ -1,6 +1,6 @@
 # Transcript CLI
 
-`rimz transcript` reads Rimz's durable transcript log and renders the channel as a timestamped chat log, including ended agents whose native transcript files have rotated away. It targets agents and channels with the [agent-address grammar](./agents.md#addressing-agents). The log model (entry kinds, JSONL buckets, retention) is [message.md → Transcript](../../internals/harness/message.md#transcript).
+`rimz transcript` reads Rimz's durable transcript log and renders the channel as a timestamped chat log, including ended agents whose native transcript files have rotated away. It targets agents and channels with the [agent-address grammar](./agents.md#addressing-agents). The log model (entry kinds, JSONL buckets, retention) is [message.md → Transcript](../../internals/harness/messaging.md#transcript).
 
 ```sh
 rimz transcript @swift-otter            # one agent's channel messages

@@ -11,7 +11,7 @@
 //! stamped on every envelope from the in-process extension — payload-first, so
 //! the sidebar's bar and dollar line stay current with the turn-end spend walk
 //! reconciling the final total.
-//! Lifecycle maps per docs/internals/agents/adapter/pi.md: `session_start`
+//! Lifecycle maps per docs/internals/agents/pi.md: `session_start`
 //! registers, `before_agent_start` starts the
 //! turn with the prompt, `agent_end` ends it carrying the in-band error bit,
 //! `tool_execution_end` is the mutating-tool heartbeat, and
@@ -453,7 +453,7 @@ impl AgentAdapter for PiAdapter {
         let parsed = payloads::parse_payload(payload);
         // The status decision lives in the shared `lifecycle::step` table —
         // here the adapter only names the intent. The native-event → signal
-        // mapping is docs/internals/agents/adapter/pi.md.
+        // mapping is docs/internals/agents/pi.md.
         let signal = match event_name {
             "session_start" => LifecycleSignal::Registered,
             // Pi's `agent_start`/`agent_end` bracket one user prompt — pi's

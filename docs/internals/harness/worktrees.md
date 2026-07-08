@@ -1,6 +1,6 @@
 # Rimz-owned worktrees
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. [message.md § Channels](./message.md#channels) owns the room channel model, and [harness.md](./harness.md) launches agents into channels and triggers worktree cleanup; this doc owns the worktree itself — creation, the ownership marker, file seeding, and the cleanup that proves work landed before reclaiming.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. [message.md § Channels](./messaging.md#channels) owns the room channel model, and [harness.md](./harness.md) launches agents into channels and triggers worktree cleanup; this doc owns the worktree itself — creation, the ownership marker, file seeding, and the cleanup that proves work landed before reclaiming.
 
 A worktree is one checkout of the repository on its own branch, with its name and path backing a Rimz channel. Rimz runs the full lifecycle for the ones it creates: spin one up for a line of work, seed it with the untracked files an agent needs, and reclaim it once its work has landed. The feature stands on its own: `rimz worktree new`, `list`, `remove`, and `gc` work whether or not an agent ever launches into the tree.
 
@@ -27,7 +27,7 @@ A new worktree starts ready to run. Two optional, committed project files descri
 
 Both files skip blank lines and `#` comments, and both confine every source to the project root: absolute patterns and patterns reaching out with `..` are skipped, and each resolved path is checked against its canonical form, so a symlink a glob descends into cannot pull host files into the agent-readable tree. Linking additionally requires a real directory and never clobbers an existing destination, writing an absolute symlink. Each linked directory is registered in the worktree's effective `git info/exclude` as an anchored `/<path>` pattern (temp-file-plus-rename, deduped across creates); because that exclude is commonly the repo's shared one, the same build directory is also excluded in the main checkout and sibling worktrees — the intended outcome for build and dependency directories.
 
-Seeding is best-effort enrichment layered over creation: a missing file is a silent no-op, and a pattern that matches nothing or a copy that fails warns on the launch path and is skipped — the worktree and its agent still launch. A reused worktree is never re-seeded. Neither file runs a command, so both stay outside the trust hash ([trust.md](../harness/trust.md)). `rimz worktree new` reports the counts it seeded and linked.
+Seeding is best-effort enrichment layered over creation: a missing file is a silent no-op, and a pattern that matches nothing or a copy that fails warns on the launch path and is skipped — the worktree and its agent still launch. A reused worktree is never re-seeded. Neither file runs a command, so both stay outside the trust hash ([trust.md](./trust.md)). `rimz worktree new` reports the counts it seeded and linked.
 
 ## Cleanup
 

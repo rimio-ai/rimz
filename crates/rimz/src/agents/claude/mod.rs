@@ -14,7 +14,7 @@
 //! `~/.claude/settings.json` under per-matcher `_rimz_managed` markers. The
 //! `PermissionRequest` blocking hook is marked `_rimz_sync = true`; an existing
 //! async marker on it is a hard install error (see [`BLOCKING_EVENTS`] and
-//! `docs/internals/agents/adapter/claude.md`). The `PreToolUse` blocking sub-events ride the
+//! `docs/internals/agents/claude.md`). The `PreToolUse` blocking sub-events ride the
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
 pub(crate) mod account;
@@ -707,7 +707,7 @@ impl AgentAdapter for ClaudeAdapter {
     fn observe_turn_error(&self, payload: &Value) -> Option<AgentTurnError> {
         // The statusline payload names the live transcript, and its tail is the
         // only record of an API-error abort — Claude fires no `Stop` for one
-        // (docs/internals/agents/adapter/claude.md). Best-effort: an absent
+        // (docs/internals/agents/claude.md). Best-effort: an absent
         // path or unreadable file is `None`, never an error.
         let path = optional_payload_string(payload, &["transcript_path"])?;
         let tail = read_transcript_tail(Path::new(&path))?;

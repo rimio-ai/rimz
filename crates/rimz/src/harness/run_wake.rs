@@ -6,7 +6,7 @@
 //! share one source of truth.
 //!
 //! Validation is by `(workspace_id, run_id)`, per
-//! `docs/internals/store/store.md`. Frames that fail validation are logged
+//! `docs/internals/store.md`. Frames that fail validation are logged
 //! at `debug` and dropped; the waiter keeps recving until the cap.
 //!
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;

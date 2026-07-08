@@ -2,7 +2,7 @@
 //!
 //! The sidebar's consumer read folds every live session's `agent_context`
 //! and `agent_activity` sidecar on each wakeup. The contract
-//! (docs/internals/health/performance.md): an unchanged room costs one stat per
+//! (docs/internals/performance.md): an unchanged room costs one stat per
 //! file — the `(mtime, len)` parse caches serve every record without a read
 //! or a parse, so a fleet of tens of agents re-reads in microseconds.
 //!

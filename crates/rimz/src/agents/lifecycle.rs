@@ -6,7 +6,7 @@
 //! reducer (silently, on replay) and the hook ingestion path (with one-shot
 //! anomaly logging) call the one pure [`step`] function, so the transition
 //! table lives in exactly one place. See
-//! [docs/internals/agents/agent.md](../../../../docs/internals/agents/agent.md).
+//! [docs/internals/agents/model.md](../../../../docs/internals/agents/model.md).
 //!
 //! `step` is reused identically for a root agent and a subagent: the two levels
 //! differ only in which signals are legal and how the entity is keyed, never in

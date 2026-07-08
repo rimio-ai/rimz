@@ -170,4 +170,4 @@ rimz doctor --json --output rimz-doctor.json    # full environment report as JSO
 - [Security and trust](./security.md) — the trust model and the presence grant behind two of the fixes above.
 - [Remote and web](./remote.md) — reconnect behavior and link health.
 - [CLI reference → maintenance](../reference/cli/maintenance.md) — every flag for `doctor`, `reset`, `gc`, `reload`, and `uninstall`.
-- [Store internals](../internals/store/store.md) — what `reset` and `gc` touch on disk.
+- [Store internals](../internals/store.md) — what `reset` and `gc` touch on disk.

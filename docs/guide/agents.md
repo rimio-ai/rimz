@@ -67,7 +67,7 @@ rimz agents planner,coder+reviewer -w feat-b # a whole layout, isolated on its o
 rimz agents codex --from-pr 42               # a worktree checked out from pull request 42
 ```
 
-`--from-pr <number|url>` fetches a pull request head over your `origin` credentials and lands the layout in a `pr-<N>` worktree — pair it with `-w <NAME>` to choose the local name. A new worktree starts ready to run: a committed `.worktreeinclude` copies the untracked files an agent needs (`.env`, local config), and a `.worktreelink` symlinks the heavy shared directories (`node_modules`, `target`, `.venv`) so they are shared, not re-copied ([worktree.md → Seeded files](../internals/harness/worktree.md#seeded-files-and-linked-directories)).
+`--from-pr <number|url>` fetches a pull request head over your `origin` credentials and lands the layout in a `pr-<N>` worktree — pair it with `-w <NAME>` to choose the local name. A new worktree starts ready to run: a committed `.worktreeinclude` copies the untracked files an agent needs (`.env`, local config), and a `.worktreelink` symlinks the heavy shared directories (`node_modules`, `target`, `.venv`) so they are shared, not re-copied ([worktree.md → Seeded files](../internals/harness/worktrees.md#seeded-files-and-linked-directories)).
 
 **The room groups panes by worktree.** Your main checkout plus two feature trees render as three groups in one room. Agents in the same worktree share files; agents in sibling worktrees each keep their own — that is the recommended pattern for several write-capable agents at once, and two write-capable agents in the same tree trigger a one-time advisory. Two `rimz agents claude "…" -w` launches race parallel attempts, each in its own fresh tree.
 
@@ -81,7 +81,7 @@ rimz worktree remove feat-a     # remove on demand; refuses a dirty or unlanded 
 rimz gc                         # sweep clean, landed, unoccupied worktrees left behind
 ```
 
-`rimz worktree remove` refuses a dirty or unproven tree unless you pass `--force`. `rimz gc` sweeps only worktrees Rimz owns and no live pane or agent occupies, under the same landed proof. The full lifecycle, the ownership marker, and the landed-content check are in [worktree.md](../internals/harness/worktree.md#cleanup).
+`rimz worktree remove` refuses a dirty or unproven tree unless you pass `--force`. `rimz gc` sweeps only worktrees Rimz owns and no live pane or agent occupies, under the same landed proof. The full lifecycle, the ownership marker, and the landed-content check are in [worktrees.md](../internals/harness/worktrees.md#cleanup).
 
 ## Teams: models with roles
 

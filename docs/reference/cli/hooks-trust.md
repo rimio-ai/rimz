@@ -13,7 +13,7 @@ rimz hooks uninstall [AGENT]
 
 `hooks uninstall` removes only Rimz-managed hook blocks. With no `AGENT` it removes every installed set, prints `[]` when nothing is installed, and exits successfully without needing the binary on PATH.
 
-Installed hooks call Rimz's hidden hook entrypoint for lifecycle and blocking ask events. Hook stdout is the agent decision channel, so installed hooks keep diagnostics off stdout and return only the agent-native neutral no-op for blocking asks; the prompt stays in the agent UI ([the adapter boundary](../../internals/agents/agent.md#the-adapter-boundary)). Some agents add their own hook trust gate; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix.
+Installed hooks call Rimz's hidden hook entrypoint for lifecycle and blocking ask events. Hook stdout is the agent decision channel, so installed hooks keep diagnostics off stdout and return only the agent-native neutral no-op for blocking asks; the prompt stays in the agent UI ([the adapter boundary](../../internals/agents/model.md#the-adapter-boundary)). Some agents add their own hook trust gate; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix.
 
 ## Project trust
 

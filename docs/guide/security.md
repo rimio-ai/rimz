@@ -50,7 +50,7 @@ A handler that acts on the room treats pane text and transcripts as untrusted da
 
 ### The Zellij presence plugin
 
-On Zellij, Rimz loads a small presence plugin into each session so the sidebar learns pane topology by push and tab switches land back on work instead of the sidebar ([internals](../internals/mux/multiplexers.md#zellij-presence-channel)). Rimz seeds Zellij's own permission cache for this plugin before load, keyed to the canonical plugin path Rimz materializes under the user data directory, so no prompt interrupts the first attach. The seeded grant covers:
+On Zellij, Rimz loads a small presence plugin into each session so the sidebar learns pane topology by push and tab switches land back on work instead of the sidebar ([internals](../internals/multiplexers.md#zellij-presence-channel)). Rimz seeds Zellij's own permission cache for this plugin before load, keyed to the canonical plugin path Rimz materializes under the user data directory, so no prompt interrupts the first attach. The seeded grant covers:
 
 - **Access Zellij state** — the plugin watches pane and tab shape.
 - **Run commands** — it runs the Rimz-owned `rimz sidebar wake` and `rimz sidebar focus` argv.
@@ -65,7 +65,7 @@ A project workspace runs untrusted code: hooks, postinstall scripts, generated b
 
 ## Hook safety
 
-The mechanics behind these guarantees — the decision channel, the neutral no-op, fresh stdio — are in [agent.md → Hook stdout is the decision channel](../internals/agents/agent.md#hook-stdout-is-the-decision-channel).
+The mechanics behind these guarantees — the decision channel, the neutral no-op, fresh stdio — are in [agent.md → Hook stdout is the decision channel](../internals/agents/model.md#hook-stdout-is-the-decision-channel).
 
 - Hook stdout is reserved for the agent's decision channel.
 - Logs go to stderr or Rimz runtime state logs such as `binding.log.jsonl`.

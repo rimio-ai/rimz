@@ -16,7 +16,7 @@
 //! truth itself. `cargo xtask invariants` pins the boundary: no store-writer,
 //! run-wake, or broker imports under `crates/rimz/src/sidebar/`.
 //! The consumer-side read lives in [`super::consumer`]; performance model in
-//! [docs/internals/health/performance.md](../../../../../docs/internals/health/performance.md).
+//! [docs/internals/performance.md](../../../../../docs/internals/performance.md).
 
 pub(crate) mod git;
 mod metrics;

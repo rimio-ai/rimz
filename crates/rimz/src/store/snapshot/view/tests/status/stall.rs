@@ -57,7 +57,7 @@ fn configured_stall_window_controls_running_attention_escalation() {
 
 // ── The precedence ladder, pinned as an ordering ─────────────────────────────
 //
-// docs/internals/agents/agent.md commits to a strict order among the derived display
+// docs/internals/agents/model.md commits to a strict order among the derived display
 // states: a human-blocked `waiting` outranks them all, then a paused-class
 // marker, then the live-subagent exemption, then a failed marker, then settled
 // completion/interruption markers, then the stalled-running fallback (paused

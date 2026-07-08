@@ -154,7 +154,7 @@ dir = "../{repo}-worktrees"
 base = "fresh"
 ```
 
-`rimz worktree` and `rimz agents --worktree` create Rimz-owned Git worktrees here. A relative `dir` resolves from the repository root and `{repo}` expands to the root basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. A committed `<root>/.worktreeinclude` lists globs for untracked files to copy into each new worktree, and `<root>/.worktreelink` lists directories to symlink-share. The seeding, symlink, and cleanup mechanics are in [worktree.md](../internals/harness/worktree.md).
+`rimz worktree` and `rimz agents --worktree` create Rimz-owned Git worktrees here. A relative `dir` resolves from the repository root and `{repo}` expands to the root basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. A committed `<root>/.worktreeinclude` lists globs for untracked files to copy into each new worktree, and `<root>/.worktreelink` lists directories to symlink-share. The seeding, symlink, and cleanup mechanics are in [worktrees.md](../internals/harness/worktrees.md).
 
 ## Loop tasks
 
@@ -254,7 +254,7 @@ claude = false
 codex = false
 ```
 
-These opt this machine into background remote-control infrastructure shown in the `rimzd` daemon view. `claude = true` adds `claude remote-control` to the daemon column when `claude` is on PATH; `codex = true` ensures the managed standalone Codex daemon before the room opens (a `codex` CLI on PATH already adds the per-session app-server broker). `rimz start` refuses when an installed enabled host has a fixable misconfiguration, such as incompatible Claude version or settings. An enabled host whose agent is not installed is skipped so the room still starts; `rimz doctor` reports that advisory with the install fix. The mechanics are in [provider.md](../internals/agents/provider.md) and the security boundary in [security.md](../guide/security.md).
+These opt this machine into background remote-control infrastructure shown in the `rimzd` daemon view. `claude = true` adds `claude remote-control` to the daemon column when `claude` is on PATH; `codex = true` ensures the managed standalone Codex daemon before the room opens (a `codex` CLI on PATH already adds the per-session app-server broker). `rimz start` refuses when an installed enabled host has a fixable misconfiguration, such as incompatible Claude version or settings. An enabled host whose agent is not installed is skipped so the room still starts; `rimz doctor` reports that advisory with the install fix. The mechanics are in [providers.md](../internals/agents/providers.md) and the security boundary in [security.md](../guide/security.md).
 
 ### Web access
 
@@ -269,7 +269,7 @@ font = "JetBrainsMono Nerd Font Mono"
 style_client = true
 ```
 
-`[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. Rimz always seeds Zellij's permission cache for its own presence plugin's pane-topology permissions; when web is enabled it also seeds the web-sharing permission so runtime browser sharing works without a one-time prompt. When disabled, web commands fail before room changes and tell you to change the config on the machine serving the room. `[web.zellij]` tunes browser access through Zellij's web server. `base_url` is the URL prefix Rimz prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves Zellij under a public host or path. `auto_start` lets `rimz web open` run `zellij web --start --daemonize` when the server is offline; set it to `false` when another supervisor owns the server. `style_client` lets Rimz write a generated Zellij `web_client` block on server start so the browser terminal uses `[theme]`; `font` sets that browser terminal font. These keys are per-machine and outside the project trust hash because they run no command and often name private hostnames or tunnels. Command details are in [web.md](./cli/web.md), and remote browser tunnels are in [remote.md](../internals/reach/remote.md#web-access).
+`[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. Rimz always seeds Zellij's permission cache for its own presence plugin's pane-topology permissions; when web is enabled it also seeds the web-sharing permission so runtime browser sharing works without a one-time prompt. When disabled, web commands fail before room changes and tell you to change the config on the machine serving the room. `[web.zellij]` tunes browser access through Zellij's web server. `base_url` is the URL prefix Rimz prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves Zellij under a public host or path. `auto_start` lets `rimz web open` run `zellij web --start --daemonize` when the server is offline; set it to `false` when another supervisor owns the server. `style_client` lets Rimz write a generated Zellij `web_client` block on server start so the browser terminal uses `[theme]`; `font` sets that browser terminal font. These keys are per-machine and outside the project trust hash because they run no command and often name private hostnames or tunnels. Command details are in [web.md](./cli/web.md), and remote browser tunnels are in [remote.md](../internals/remote.md#web-access).
 
 ### Daemon view
 
@@ -317,7 +317,7 @@ While the room is **live**, `auto_continue` (off by default) picks a parked turn
 - Overload and transient API-error parks (stalled streams, timeouts, connection drops) fire on the retry ramp: `auto_continue_backoff_secs = [180, 300]` sends the first retry 3 minutes after the failure, then every 5 minutes.
 - Every park type stops retrying after `auto_continue_max_retries` (default 13 — about an hour on the default ramp), leaving the row parked for you.
 
-The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/provider.md#auto-continue).
+The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 
 ### Smart compaction
 
@@ -326,7 +326,7 @@ The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-re
 smart_compact = "70%"
 ```
 
-`smart_compact` sets the default threshold for compact-first `message` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [message.md](../internals/harness/message.md#smart-compaction).
+`smart_compact` sets the default threshold for compact-first `message` sends — a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
 
 ### rtk output compression
 
@@ -345,11 +345,11 @@ dsn         = "https://examplePublicKey@o0.ingest.sentry.io/0"
 environment = "production"
 ```
 
-This section applies only to Rimz builds compiled with the non-default `sentry` feature, and it is intentionally omitted from the generated per-machine config template. Set a `dsn` to report Rimz `warn!`/`error!` events and observed agent rate-limit/overload conditions to a Sentry project. With no `dsn`, reporting stays off and Rimz makes no network calls; without the feature, the block is inert. `RIMZ_SENTRY_DSN` and `RIMZ_SENTRY_ENVIRONMENT` override the config for one invocation, and `environment` defaults by build profile (an installed release reports as `production`, a dev or CI build as `development`). The DSN lives per-machine — never in committed project config — so a clone never inherits it; events carry low-cardinality tags (workspace, command, build, fault class, and agent/session when known) with the hostname and personal data withheld. The full telemetry surface is in [security.md](../guide/security.md#off-box-error-reporting) and the mechanics in [diagnostics.md](../internals/health/diagnostics.md#off-box-error-reporting).
+This section applies only to Rimz builds compiled with the non-default `sentry` feature, and it is intentionally omitted from the generated per-machine config template. Set a `dsn` to report Rimz `warn!`/`error!` events and observed agent rate-limit/overload conditions to a Sentry project. With no `dsn`, reporting stays off and Rimz makes no network calls; without the feature, the block is inert. `RIMZ_SENTRY_DSN` and `RIMZ_SENTRY_ENVIRONMENT` override the config for one invocation, and `environment` defaults by build profile (an installed release reports as `production`, a dev or CI build as `development`). The DSN lives per-machine — never in committed project config — so a clone never inherits it; events carry low-cardinality tags (workspace, command, build, fault class, and agent/session when known) with the hostname and personal data withheld. The full telemetry surface is in [security.md](../guide/security.md#off-box-error-reporting) and the mechanics in [diagnostics.md](../internals/diagnostics.md#off-box-error-reporting).
 
 ## Multiplexer room options
 
-Rimz applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without editing your global Zellij or tmux config. The `[zellij]` and `[tmux]` tables tune those settings; `rimz config init --print` lists every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/mux/multiplexers.md).
+Rimz applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without editing your global Zellij or tmux config. The `[zellij]` and `[tmux]` tables tune those settings; `rimz config init --print` lists every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/multiplexers.md).
 
 The `[mux]` table selects the default backend after the `--mux <name>` selection, its `--zellij`/`--tmux` shorthands, and active Zellij/tmux environment checks. Leave `default` unset to choose tmux when both backends are installed, or set it to `"zellij"` or `"tmux"` to require that backend. A configured backend that is not installed makes `rimz start` refuse with a fix message.
 
@@ -428,7 +428,7 @@ The agent-card context meter and the provider budget bar interpolate across colo
 
 ### Provider Dashboard
 
-Which providers appear, their order, and their brand styling are theme and discovery settings (`[theme.display] provider_tabs` / `provider_list` / `max_provider_blocks`, and `[theme.providers.<kind>]`). The layout model is in [theme.md → Display](../guide/theme.md#display) and the styling fields in [theme.md → Provider styling](../guide/theme.md#provider-styling); account and budget sourcing is in [provider.md](../internals/agents/provider.md).
+Which providers appear, their order, and their brand styling are theme and discovery settings (`[theme.display] provider_tabs` / `provider_list` / `max_provider_blocks`, and `[theme.providers.<kind>]`). The layout model is in [theme.md → Display](../guide/theme.md#display) and the styling fields in [theme.md → Provider styling](../guide/theme.md#provider-styling); account and budget sourcing is in [providers.md](../internals/agents/providers.md).
 
 ## Project config
 
@@ -457,4 +457,4 @@ Command-running fields enter the trust hash, so a clone with project config read
 
 Notification handlers, remote aliases, and trust records each have their own reference: [notifications.md](../internals/sidebar/notifications.md), `rimz remote` ([getting started](./cli/getting-started.md#remote-rooms)), and `rimz trust` ([trust.md](../internals/harness/trust.md)).
 
-Payload-fidelity and retention controls (`[privacy] payload_mode`) are a planned project surface. The design and intended keys are in [security.md](../guide/security.md), and the hook boundary they will govern is in [agent.md → The adapter boundary](../internals/agents/agent.md#the-adapter-boundary).
+Payload-fidelity and retention controls (`[privacy] payload_mode`) are a planned project surface. The design and intended keys are in [security.md](../guide/security.md), and the hook boundary they will govern is in [agent.md → The adapter boundary](../internals/agents/model.md#the-adapter-boundary).

@@ -7,7 +7,7 @@
 //!
 //! The backend covers session lifecycle, pane I/O, focus, sidebar and tab
 //! layout, presence, and recovery. Backend caveats live in
-//! `docs/internals/mux/multiplexers.md` under "Zellij backend caveats".
+//! `docs/internals/multiplexers.md` under "Zellij backend caveats".
 
 mod backend;
 mod layout;

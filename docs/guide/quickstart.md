@@ -55,7 +55,7 @@ Next → docs/guide/setup.md · rimz config for preferences
 Opening the room...
 ```
 
-The gate is designed to answer the reasonable fears before you can ask them: the change is additive and names the exact config path, the `preview` line prints the full patch before you consent, and each hook is a `rimz hooks feed` line that reports events while answering a prompt stays with you. Enter wires every listed agent; `n` or EOF installs nothing, and an unwired agent still shows up as a plain process row. Backing out is the mirror of opting in — the footer's `rimz hooks uninstall` removes exactly what the gate added and restores your statusline. The authoritative hook set and the safety model are in [security.md](./security.md) and [agent.md → Hook install](../internals/agents/agent.md#hook-install-the-visible-security-step).
+The gate is designed to answer the reasonable fears before you can ask them: the change is additive and names the exact config path, the `preview` line prints the full patch before you consent, and each hook is a `rimz hooks feed` line that reports events while answering a prompt stays with you. Enter wires every listed agent; `n` or EOF installs nothing, and an unwired agent still shows up as a plain process row. Backing out is the mirror of opting in — the footer's `rimz hooks uninstall` removes exactly what the gate added and restores your statusline. The authoritative hook set and the safety model are in [security.md](./security.md) and [agent.md → Hook install](../internals/agents/model.md#hook-install-the-visible-security-step).
 
 ## The room, empty
 

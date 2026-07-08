@@ -1,7 +1,7 @@
 //! The normalized lifecycle observation and the scaffolding the adapters share.
 //!
 //! [`AgentLifecycleObservation`] is the single event shape every downstream
-//! reducer reads (see [agent.md](../../../../docs/internals/agents/agent.md)); each
+//! reducer reads (see [model.md](../../../../docs/internals/agents/model.md)); each
 //! adapter's `observe_lifecycle` produces one. This module also owns the wiring
 //! that is identical across adapters — worktree fields and the
 //! payload-overrides-transcript pattern for the context gauge — so the

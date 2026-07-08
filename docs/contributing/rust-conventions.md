@@ -34,7 +34,7 @@ A `println!` site is legal only when annotated `#[expect(clippy::print_stdout, r
 
 - a `--json` event stream or the final user-facing message of a command;
 - a single scripting value (`message` ids, launched agent names);
-- the agent-native decision channel — `rimz hooks <agent> ...` stdout is parsed by the agent, per [agent.md → Hook stdout is the decision channel](../internals/agents/agent.md#hook-stdout-is-the-decision-channel);
+- the agent-native decision channel — `rimz hooks <agent> ...` stdout is parsed by the agent, per [agent.md → Hook stdout is the decision channel](../internals/agents/model.md#hook-stdout-is-the-decision-channel);
 - the `doctor` multi-section diagnostic, a bespoke layout migrated to `render` opportunistically.
 
 Human-facing tables, key/value blocks, and listings render through the shared `cli/render` layer, never ad-hoc `println!`. `render::out()` returns an `anstream::AutoStream` over stdout that strips ANSI when output is piped or color is disabled (`NO_COLOR`/`CLICOLOR`, or `--color never`), so `--json` and snapshot output stay byte-clean; it writes through `writeln!`, keeping the `print_stdout` lint on guard without a new `#[expect]` site. Colors come from `render::palette` (the same default `Semantic` tones the sidebar uses), and a state's tone resolves once in `render::status` — keyed on the typed status enum, not a rendered string — so every command colors a given state identically. New human output uses `render`.
@@ -105,7 +105,7 @@ Conventions:
 
 - Inner value is **never** `pub`. Use `pub(crate)` only if the same crate needs the unwrapped form for an FFI seam.
 - Identifiers minted by Rimz (`RunId`, `EventId`, `SidebarInstanceId`, and other internal correlation IDs) use **UUIDv7** for monotonic ordering — filenames named after the ID sort chronologically without an external index.
-- Identifiers derived from external truth use their natural shape: `WorkspaceId` is the SHA-256 of `project_root`; `PaneId` is `"<mux>:<raw_pane_id>"` per [multiplexers.md](../internals/mux/multiplexers.md). These types still go through a newtype and a parser — never assembled inline.
+- Identifiers derived from external truth use their natural shape: `WorkspaceId` is the SHA-256 of `project_root`; `PaneId` is `"<mux>:<raw_pane_id>"` per [multiplexers.md](../internals/multiplexers.md). These types still go through a newtype and a parser — never assembled inline.
 
 ## State machines as types
 
@@ -126,7 +126,7 @@ impl MessageStatus {
 }
 ```
 
-The lifecycle rules from [message.md](../internals/harness/message.md) — record first, claim before send, terminal is final — live at the store boundary (`store/message_store.rs`, `store/writer/queue.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
+The lifecycle rules from [messaging.md](../internals/harness/messaging.md) — record first, claim before send, terminal is final — live at the store boundary (`store/message_store.rs`, `store/writer/queue.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
 
 `AgentStatus`, `PermissionPosture`, gates, delivery outcomes — same shape.
 
@@ -171,7 +171,7 @@ Two write shapes in `store/atomic.rs` cover every disk write in the project:
 - `write_temp_then_rename(path, value)` for cold-path durable state (trust grants, workspace records, hook installs, the rotation carryover); `write_temp_then_rename_cache` — rename-atomic, no fsync — for liveness files and rebuilt-on-next-read caches.
 - `append_record_bytes(path, line) -> Result<()>` — the event-log append discipline (one `write()` per record, no fsync — appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync); the frame encoding itself lives beside its decoder in `store/event_log.rs`.
 
-Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `store/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [store.md](../internals/store/store.md) for the frame format, torn-record recovery, and rotation rules.
+Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `store/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [store.md](../internals/store.md) for the frame format, torn-record recovery, and rotation rules.
 
 ## Tests
 
@@ -228,7 +228,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 Three deserve a note:
 
 - `cargo xtask complexity [N]` ranks tracked `.rs` files by cyclomatic/cognitive complexity via `rust-code-analysis-cli` (`cargo install rust-code-analysis-cli --locked`); a local report, not part of any gate.
-- `cargo xtask install-dev` is the contributor opt-in to [off-box reporting](../internals/health/diagnostics.md#off-box-error-reporting): it installs the optimized `profiling` host profile with `--features sentry`, line tables, frame pointers, and v0 symbol names, so dogfooding sessions stay profilable and default to the `development` Sentry environment.
+- `cargo xtask install-dev` is the contributor opt-in to [off-box reporting](../internals/diagnostics.md#off-box-error-reporting): it installs the optimized `profiling` host profile with `--features sentry`, line tables, frame pointers, and v0 symbol names, so dogfooding sessions stay profilable and default to the `development` Sentry environment.
 - `cargo xtask profile-build` writes the same optimized `target/profiling/rimz` without installing it.
 
 ## Quality gates
@@ -302,4 +302,4 @@ rcodesign --version
 1. [AGENTS.md](../../AGENTS.md) — engineering principles and implementation rules.
 2. This file — module shape and idioms.
 3. [ARCHITECTURE.md](../../ARCHITECTURE.md) — where the modules live.
-4. [store.md](../internals/store/store.md) and the [quality gates](#quality-gates) — the contracts that touch every module.
+4. [store.md](../internals/store.md) and the [quality gates](#quality-gates) — the contracts that touch every module.

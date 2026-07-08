@@ -57,7 +57,7 @@ impl RuntimeProjection {
 
 /// Runtime visibility for an agent. Liveness suppresses; it never gates an
 /// agent in. An unknown pid abstains (foreground/pane corroboration carries
-/// liveness — see `docs/internals/agents/agent.md`); a known owner that is known-dead
+/// liveness — see `docs/internals/agents/model.md`); a known owner that is known-dead
 /// suppresses the stale overlay.
 fn agent_is_runtime_visible(agent: &AgentState) -> bool {
     agent.runtime_owner.as_ref().is_none_or(owner_is_live)

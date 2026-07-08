@@ -213,7 +213,7 @@ The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent
 | Pi          | beta   | extension API · session `.jsonl` · `pi --session`                 |
 | OpenCode    | alpha  | extension API · session `.jsonl`                                  |
 
-Adapters are thin layers over the same hook and transcript primitives; the agents run stock, in your terminal, with the official apps untouched. Per-agent status, integration surface, and permission-mode mapping live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/agent.md).
+Adapters are thin layers over the same hook and transcript primitives; the agents run stock, in your terminal, with the official apps untouched. Per-agent status, integration surface, and permission-mode mapping live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
 
 ## Documentation
 
@@ -224,7 +224,7 @@ The [documentation index](./docs/README.md) maps the whole set. Highlights:
 - [Using the room](./docs/guide/agents.md) — [agents & teams](./docs/guide/agents.md) · [messaging](./docs/guide/messaging.md) · [the sidebar](./docs/guide/sidebar.md) · [remote & web](./docs/guide/remote.md)
 - [Automation](./docs/guide/scripting.md) — [scripting agents](./docs/guide/scripting.md) · [loops & hands-off operation](./docs/guide/loops.md)
 - [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/reference/configuration.md) · [Theming](./docs/guide/theme.md) · [Troubleshooting](./docs/guide/troubleshooting.md)
-- [DESIGN.md](./DESIGN.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [internals](./docs/internals/) — how it works, in depth
+- [DESIGN.md](./DESIGN.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [internals](./docs/internals/README.md) — how it works, in depth
 
 ## Install
 

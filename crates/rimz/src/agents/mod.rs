@@ -168,7 +168,7 @@ pub enum PresetErr {
 pub enum AgentHookClass {
     /// Non-blocking event that may carry a status/mode/task transition for
     /// the agent rollup (`SessionStart`, `UserPromptSubmit`, `Stop`, …). Per
-    /// `docs/internals/agents/agent.md`, lifecycle is the durable state channel.
+    /// `docs/internals/agents/model.md`, lifecycle is the durable state channel.
     /// Whether a lifecycle event records anything is decided by
     /// [`AgentAdapter::observe_lifecycle`] returning `Some`.
     Lifecycle,

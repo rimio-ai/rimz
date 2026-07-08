@@ -9,7 +9,7 @@
 //! snapshot read-side folds it in through
 //! [`crate::store::snapshot::SidebarSnapshot::with_agent_context`]. It never
 //! touches the durable event log: this is display-only latency, not truth
-//! ("Durability first", `docs/internals/store/store.md`).
+//! ("Durability first", `docs/internals/store.md`).
 //!
 //! Ownership: every renderer's fetch worker reads this module through the
 //! shared enrichment fold; writes stay producer-side (CLI paths and the

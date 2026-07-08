@@ -5,7 +5,7 @@
 //! stream, and broadcasts the same typed overlays Zellij's presence plugin
 //! emits. Identity-free topology lines stay as [`PanesChanged`] nudges. Latency
 //! only, never truth: the poll remains the presence backstop
-//! (docs/internals/mux/multiplexers.md), a dead watcher degrades to the
+//! (docs/internals/multiplexers.md), a dead watcher degrades to the
 //! poll, and this thread respawns the client with backoff.
 //!
 //! One control client per workspace: only the eldest live instance (the same

@@ -114,7 +114,7 @@ auto_continue = true                       # off by default
 # auto_continue_text = "continue"          # the nudge typed into the parked pane
 ```
 
-A turn that dies mid-flight — a rate limit, a spend limit, a provider overload, or a transient API error such as a stalled stream, timeout, or dropped connection — *parks* its agent: the agent sits waiting for a nudge to continue. `auto_continue` picks those turns back up by typing `continue` into the pane through the same audited path as `rimz message`. Rate-limit and spend-limit parks resume when the provider's budget window resets; overload and transient-error parks retry on the backoff ramp until the retry cap. The model is in [provider internals → Auto-continue](../internals/agents/provider.md#auto-continue).
+A turn that dies mid-flight — a rate limit, a spend limit, a provider overload, or a transient API error such as a stalled stream, timeout, or dropped connection — *parks* its agent: the agent sits waiting for a nudge to continue. `auto_continue` picks those turns back up by typing `continue` into the pane through the same audited path as `rimz message`. Rate-limit and spend-limit parks resume when the provider's budget window resets; overload and transient-error parks retry on the backoff ramp until the retry cap. The model is in [provider internals → Auto-continue](../internals/agents/providers.md#auto-continue).
 
 ### Compact before the prompt lands
 
@@ -123,7 +123,7 @@ A turn that dies mid-flight — a rate limit, a spend limit, a provider overload
 smart_compact = "70%"    # or an occupied-token count such as "120000"
 ```
 
-`smart_compact` makes `rimz message` compact-first: when the target agent's context window has reached the threshold, Rimz submits the agent's `/compact` ahead of your text so the prompt lands against a fresh window instead of dying at the context ceiling. Unset, compaction stays opt-in per send through `rimz message --smart-compact`. The mechanics are in [message internals → Smart compaction](../internals/harness/message.md#smart-compaction).
+`smart_compact` makes `rimz message` compact-first: when the target agent's context window has reached the threshold, Rimz submits the agent's `/compact` ahead of your text so the prompt lands against a fresh window instead of dying at the context ceiling. Unset, compaction stays opt-in per send through `rimz message --smart-compact`. The mechanics are in [message internals → Smart compaction](../internals/harness/messaging.md#smart-compaction).
 
 ### Prime provider windows on a schedule
 

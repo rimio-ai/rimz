@@ -86,7 +86,7 @@ pub struct PaneRef {
     /// (Zellij `tab_15`, tmux `@3`). An opaque grouping key, never the view's
     /// on-screen label: a Zellij tab *named* "Tab #15" and the internal id
     /// `tab_15` are routinely different tabs — see
-    /// docs/internals/mux/multiplexers.md → Pane and view IDs.
+    /// docs/internals/multiplexers.md → Pane and view IDs.
     #[serde(default)]
     pub view_id: Option<String>,
     #[serde(default)]

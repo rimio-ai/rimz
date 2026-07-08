@@ -11,7 +11,7 @@
 //! read-only methods the client speaks, so it runs whenever `codex` is on PATH —
 //! no opt-in — and degrades to nothing when it isn't.
 //!
-//! Lifecycle and ownership (the risk [`docs/internals/health/performance.md`] flags):
+//! Lifecycle and ownership (the risk [`docs/internals/performance.md`] flags):
 //! - **Startup**: spawn + handshake. If `codex` is absent or won't handshake,
 //!   exit cleanly (return `Ok`) — the pane closes and enrichment cold-spawns.
 //! - **Serving**: one mutex serializes all child access, so each client request

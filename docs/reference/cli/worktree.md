@@ -15,4 +15,4 @@ rimz worktree remove experiment --force                  # remove anyway
 
 `list` shows Rimz-owned worktrees as the channels they are: name, display branch, the `@kind` handles working there, a dirty marker, the landed signal, and the path. `remove` refuses a dirty worktree or one whose content is not proven landed on its base; `--force` removes anyway.
 
-Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary checkouts. The marker, `.worktreeinclude` seeding, `.worktreelink` symlinks, and the `rimz gc` sweep are in [worktree.md](../../internals/harness/worktree.md).
+Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary checkouts. The marker, `.worktreeinclude` seeding, `.worktreelink` symlinks, and the `rimz gc` sweep are in [worktrees.md](../../internals/harness/worktrees.md).

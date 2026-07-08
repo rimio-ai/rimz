@@ -1,5 +1,5 @@
 //! Perf guard for frame composition at fleet scale (see
-//! docs/internals/health/performance.md → frame redraw). The render thread paints by
+//! docs/internals/performance.md → frame redraw). The render thread paints by
 //! recomposing the whole frame from the cached snapshot, so its cost must stay
 //! linear in the row count — an accidental per-row full-snapshot scan (O(rows²))
 //! is exactly the regression a tens-of-agents fleet would feel as a stuttering

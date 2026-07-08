@@ -2,7 +2,7 @@
 
 Local contract for `crates/rimz/src/harness/` — the spawn, address, drive, and reclaim machinery for agent sessions. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules.
 
-Topic detail lives in [harness.md](../../../../docs/internals/harness/harness.md), with the shared delivery substrate in [message.md](../../../../docs/internals/harness/message.md).
+Topic detail lives in [harness.md](../../../../docs/internals/harness/harness.md), with the shared delivery substrate in [messaging.md](../../../../docs/internals/harness/messaging.md).
 
 ## Boundaries
 

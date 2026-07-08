@@ -1,6 +1,6 @@
 # Provider accounts, balances, and spend
 
-> See [DESIGN.md → Triage at a glance](../../../DESIGN.md#triage-at-a-glance) for the account-scoped-budget invariant this doc operationalizes, [agent.md → Rich context](./agent.md#rich-context-agentcontext) for how the live-session rich context this doc interprets is stored on the rollup, and [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard) for what the provider dashboard looks like on screen.
+> See [DESIGN.md → Triage at a glance](../../../DESIGN.md#triage-at-a-glance) for the account-scoped-budget invariant this doc operationalizes, [agent.md → Rich context](./model.md#rich-context-agentcontext) for how the live-session rich context this doc interprets is stored on the rollup, and [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard) for what the provider dashboard looks like on screen.
 
 A coding agent runs against a **provider account** — a login, on a plan, that may or may not be metered — and that account has a two-tier **balance**: included subscription windows that refill on their clocks, plus paid extra/API usage the provider or the local spend store can name.
 
@@ -21,7 +21,7 @@ sources                                    shared user-scoped caches
               plan · version · budget bars · paid usage · spend headline
 ```
 
-The per-kind surfaces each provider exposes are in the adapter docs ([adapter/claude.md](./adapter/claude.md#account-and-balance), [adapter/codex.md](./adapter/codex.md#account-and-balance), [adapter/pi.md](./adapter/pi.md#account-and-balance), [adapter/opencode.md](./adapter/opencode.md#account-and-balance)); the raw auth and account-usage surfaces those read are in the per-provider upstream references ([claude-reference.md](../../externals/agent-adapter/claude-reference.md#auth-surface), [codex-reference.md](../../externals/agent-adapter/codex-reference.md#auth-file), [pi-reference.md](../../externals/agent-adapter/pi-reference.md#auth-file), [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md#auth-file)).
+The per-kind surfaces each provider exposes are in the adapter docs ([claude.md](./claude.md#account-and-balance), [codex.md](./codex.md#account-and-balance), [pi.md](./pi.md#account-and-balance), [opencode.md](./opencode.md#account-and-balance)); the raw auth and account-usage surfaces those read are in the per-provider upstream references ([claude-reference.md](../../externals/agent-adapter/claude-reference.md#auth-surface), [codex-reference.md](../../externals/agent-adapter/codex-reference.md#auth-file), [pi-reference.md](../../externals/agent-adapter/pi-reference.md#auth-file), [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md#auth-file)).
 
 Account, balance, and spend are **enrichment, never correctness** — the no-transcript-correctness rule. A missing binary, a logged-out account, an unparseable file: each degrades to an omitted plan label, a `v?` version placeholder, or an unknown budget track, never a failed snapshot or a wrong decision.
 
@@ -34,15 +34,15 @@ Three facts, all **account-scoped** — every session of one provider kind share
 - **Paid usage** — [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs): an optional provider-paid balance or local API spend projection beyond the subscription windows. It may name used USD, remaining USD, a limit, or a disabled state; missing fields stay missing, so the renderer can show an unknown or uncapped row without inventing a cap. Disabled or exhausted extra credits do not make a parked turn terminal while the subscription mana bar has a future refill.
 - **Reset credits** — [`ResetCredits`](../../../crates/rimz/src/agents/credits.rs): Codex-only redeemable resets for the 100%/7-day usage window. The cache stores the available count and the soonest expiry instant so the dashboard can show a compact header marker and color its glyph by urgency.
 
-Account identity and included balance ride [`AgentContext`](../../../crates/rimz/src/agents/context.rs), the session-scoped rich-context record (see [agent.md → Rich context](./agent.md#rich-context-agentcontext)); the producer lifts them to the account scope at aggregation time. Paid usage rides the shared credits cache when a provider reports it, or a read-time local spend projection for API-key accounts.
+Account identity and included balance ride [`AgentContext`](../../../crates/rimz/src/agents/context.rs), the session-scoped rich-context record (see [agent.md → Rich context](./model.md#rich-context-agentcontext)); the producer lifts them to the account scope at aggregation time. Paid usage rides the shared credits cache when a provider reports it, or a read-time local spend projection for API-key accounts.
 
 **Metered vs. unmetered** is the one distinction the dashboard turns on. A subscription or ChatGPT login is *metered*: it draws on the rate-limit windows, drawn as draining "mana" bars. An API-key login is *unmetered by subscription windows*: it has no included-window budget to drain, so the dashboard shows a single `api` paid-usage row sourced from transcript-derived trailing-month spend and an optional display ceiling. `metered: None` is unknown — the dashboard infers metering from whether any rate-limit window was reported.
 
 ## Two origins
 
-A kind's account and balance reach the dashboard two ways, mirroring the [two-source split](./agent.md#two-sources) of the live context read-path:
+A kind's account and balance reach the dashboard two ways, mirroring the [two-source split](./model.md#two-sources) of the live context read-path:
 
-1. **A live session's rich context.** The statusline / app-server transport already carries account and included-window balance, so any live session of a kind fills both at no extra cost. The transport is per-kind — Claude's statusline, Codex's app-server, stored on the rollup as described in [agent.md → Rich context](./agent.md#rich-context-agentcontext) — and this doc owns only what its fields *mean*.
+1. **A live session's rich context.** The statusline / app-server transport already carries account and included-window balance, so any live session of a kind fills both at no extra cost. The transport is per-kind — Claude's statusline, Codex's app-server, stored on the rollup as described in [agent.md → Rich context](./model.md#rich-context-agentcontext) — and this doc owns only what its fields *mean*.
 2. **An out-of-band probe** ([`AgentAdapter::probe_account`](../../../crates/rimz/src/agents/mod.rs), one `account.rs` per adapter behind the shared [`AccountProbe`](../../../crates/rimz/src/agents/account.rs) contract). For a provider that is logged in but has no live session this run, the producer probes the login directly, so the dashboard shows your accounts and budgets between turns — not only mid-turn.
 
 A live session always wins where both exist: its reading is richer and current.
@@ -57,10 +57,10 @@ Each provider maps its native account and balance surfaces onto the internal typ
 
 | Provider | Account identity → [`AgentAccount`](../../../crates/rimz/src/agents/context.rs) | Balance → [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs) / [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs) |
 | --- | --- | --- |
-| **Claude** | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan + metered | statusline 5h/7d windows, or the idle OAuth usage probe — [adapter/claude.md](./adapter/claude.md#account-and-balance) |
-| **Codex** | app-server `planType` / `~/.codex/auth.json` | app-server `primary`/`secondary` windows + `credits.balance`, or the OAuth usage probe; reset credits come from the Codex-only OAuth reset endpoint — [adapter/codex.md](./adapter/codex.md#account-and-balance) |
-| **Pi** | `~/.pi/agent/auth.json` (oauth → metered, api_key → unmetered) | extension response headers + the OAuth usage probe, cached under `pi` — [adapter/pi.md](./adapter/pi.md#account-and-balance) |
-| **OpenCode** | `~/.local/share/opencode/auth.json` (oauth → metered, api_key → unmetered) | the OAuth usage probe over the active backing-provider token, cached under `opencode` — [adapter/opencode.md](./adapter/opencode.md#account-and-balance) |
+| **Claude** | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan + metered | statusline 5h/7d windows, or the idle OAuth usage probe — [claude.md](./claude.md#account-and-balance) |
+| **Codex** | app-server `planType` / `~/.codex/auth.json` | app-server `primary`/`secondary` windows + `credits.balance`, or the OAuth usage probe; reset credits come from the Codex-only OAuth reset endpoint — [codex.md](./codex.md#account-and-balance) |
+| **Pi** | `~/.pi/agent/auth.json` (oauth → metered, api_key → unmetered) | extension response headers + the OAuth usage probe, cached under `pi` — [pi.md](./pi.md#account-and-balance) |
+| **OpenCode** | `~/.local/share/opencode/auth.json` (oauth → metered, api_key → unmetered) | the OAuth usage probe over the active backing-provider token, cached under `opencode` — [opencode.md](./opencode.md#account-and-balance) |
 
 Every provider meters its account through two channels feeding one per-kind fusion: a **realtime** source where the provider exposes one — Claude's statusline, Codex's app-server, Pi's extension response headers — and a **direct-OAuth API query** over the provider's own token. The producer runs the OAuth query for every metered, logged-in provider on its own cadence, even while a live session is active; OpenCode meters through the OAuth channel alone. The fusion is keyed by kind, so each account paints its own bars.
 
@@ -122,7 +122,7 @@ A row becomes `paused` only when that agent actually stopped mid-turn on a limit
 
 A `rate_limit` or `spend_limit` pause is resumable while the fused account budget has a subscription window with a future reset — including the common spend-limit case where extra credits are disabled or exhausted but the mana bar will refill. A recovered fused mana bar keeps the row parked while the persisted [auto-continue](#auto-continue) record has a chance to wake the turn, rather than turning a frozen per-agent 100% reading into a spurious `!`.
 
-Calm agents (`idle`/`success`) and actively progressing turns stay in their lifecycle status even when a budget bar reads empty. The rollup keeps each agent's true lifecycle status; the projection and glyph live in [agent.md → Displayed status](./agent.md#displayed-status) and [the interface legend](../../interface/sidebar.md#reading-the-glyphs).
+Calm agents (`idle`/`success`) and actively progressing turns stay in their lifecycle status even when a budget bar reads empty. The rollup keeps each agent's true lifecycle status; the projection and glyph live in [agent.md → Displayed status](./model.md#displayed-status) and [the interface legend](../../interface/sidebar.md#reading-the-glyphs).
 
 ### Auto-continue
 
@@ -156,7 +156,7 @@ Paid usage has a sibling `$XDG_STATE_HOME/rimz/shared/credits.json` cache with t
 
 The producer keeps every metered account's balance current between turns through one hidden helper, `rimz agents refresh-usage --kind <kind>`, spawned for each metered, logged-in panel whose OAuth-attempt marker is due. The marker uses `OAUTH_USAGE_TTL` and the helper single-flights the actual provider read with a dedicated `credits.json` `oauth_read_at_ms` stamp, so realtime/app-server writes to the display freshness stamp never suppress OAuth. `RIMZ_OAUTH_USAGE_OFFLINE=1` disables account-usage fetches for that process tree, and a provider with no local OAuth credentials records a quiet no-credentials attempt. A settled auth failure, including missing credentials or a 401-rejected token, records a quiet attempt retried on `OAUTH_USAGE_SETTLED_TTL` (1 h) and retried immediately once the provider's auth file changes or the local account key differs.
 
-The helper first folds a provider realtime account reading when the adapter exposes one, then runs the OAuth query on its independent cadence. OAuth windows are authoritative; when the producer asks for them they merge after the realtime fold, so a current OAuth token replaces a stale warm realtime process. The OAuth usage plan tier rides the credits cache and fills a provider panel only when no live session reports a plan. When window fusion persists a new reset epoch, it removes the producer marker and zeroes `oauth_read_at_ms`, forcing the next cache-refresher tick to re-probe before the five-minute cadence elapses. The per-kind account sections own the transport details — Codex's app-server plus OAuth reset-credit endpoint ([adapter/codex.md](./adapter/codex.md#account-and-balance)); Claude's statusline-stale merge rule ([adapter/claude.md](./adapter/claude.md#account-and-balance)); and Pi's and OpenCode's `auth.json` token delegation ([adapter/pi.md](./adapter/pi.md#account-and-balance), [adapter/opencode.md](./adapter/opencode.md#account-and-balance)).
+The helper first folds a provider realtime account reading when the adapter exposes one, then runs the OAuth query on its independent cadence. OAuth windows are authoritative; when the producer asks for them they merge after the realtime fold, so a current OAuth token replaces a stale warm realtime process. The OAuth usage plan tier rides the credits cache and fills a provider panel only when no live session reports a plan. When window fusion persists a new reset epoch, it removes the producer marker and zeroes `oauth_read_at_ms`, forcing the next cache-refresher tick to re-probe before the five-minute cadence elapses. The per-kind account sections own the transport details — Codex's app-server plus OAuth reset-credit endpoint ([codex.md](./codex.md#account-and-balance)); Claude's statusline-stale merge rule ([claude.md](./claude.md#account-and-balance)); and Pi's and OpenCode's `auth.json` token delegation ([pi.md](./pi.md#account-and-balance), [opencode.md](./opencode.md#account-and-balance)).
 
 ## Cost history
 
@@ -170,8 +170,8 @@ Three surfaces read the totals. The account-global fleet tally feeds the provide
 
 The walk is **read-only and sidebar-safe** — no store writes — so it sits apart from the integration adapters. The parsing is mostly shared; two concerns are provider-specific and live in the adapter docs:
 
-- **Dedup.** Claude replays a parent message into each subagent file with an inflated cost, so each parsed chunk dedups retry writes before storage and the spending walk dedups across files; Pi and Codex sessions are single-file and need no cross-file dedup, while OpenCode's SQLite rows carry `session_id` as the native thread key ([adapter/claude.md → Cost](./adapter/claude.md#cost)).
-- **Cost source.** Claude and Codex log token counts, priced through the [token pricing](#token-pricing) table; Pi logs dollars directly, used verbatim; OpenCode uses positive stored `cost` values and prices zero-cost token rows ([adapter/claude.md → Cost](./adapter/claude.md#cost), [adapter/codex.md → Cost](./adapter/codex.md#cost), [adapter/pi.md → Cost](./adapter/pi.md#cost), [adapter/opencode.md → Cost](./adapter/opencode.md#cost)).
+- **Dedup.** Claude replays a parent message into each subagent file with an inflated cost, so each parsed chunk dedups retry writes before storage and the spending walk dedups across files; Pi and Codex sessions are single-file and need no cross-file dedup, while OpenCode's SQLite rows carry `session_id` as the native thread key ([claude.md → Cost](./claude.md#cost)).
+- **Cost source.** Claude and Codex log token counts, priced through the [token pricing](#token-pricing) table; Pi logs dollars directly, used verbatim; OpenCode uses positive stored `cost` values and prices zero-cost token rows ([claude.md → Cost](./claude.md#cost), [codex.md → Cost](./codex.md#cost), [pi.md → Cost](./pi.md#cost), [opencode.md → Cost](./opencode.md#cost)).
 
 **Unknown prices.** A token-priced turn whose model misses the book still contributes tokens and sessions with zero dollars, and the file cache records the trimmed model name plus its youngest timestamp for the pricing refresh chase; sentinel names such as Claude's `<synthetic>` are filtered out because they are not API model IDs, and unknowns older than the 365-day spend window do not chase. Once an active unknown model resolves, the file cold re-parses from byte zero, so zero-dollar entries recover their spend in the same due walk.
 
@@ -194,7 +194,7 @@ The full store walk runs at most once per user per `SPENDING_TTL`, single-flight
 
 During a publishing walk, `WALK_CHECKPOINT_INTERVAL` publishes a current-stamped partial aggregate and checkpoints dirty cursor progress only when the persist gate opens, so the dashboard total climbs during init and a restart resumes from the last checkpoint instead of byte zero. The final parsed-plus-compacted cursor and aggregate remain the authority; cursor and provider write failures log warnings with their paths.
 
-A room with a missing workspace cache derives `workspace-spending.<scope_hash>.json` from the shared entry cache without taking the global walk lock ([performance.md → Per-enrichment cadences](../health/performance.md#per-enrichment-cadences)).
+A room with a missing workspace cache derives `workspace-spending.<scope_hash>.json` from the shared entry cache without taking the global walk lock ([performance.md → Per-enrichment cadences](../performance.md#per-enrichment-cadences)).
 
 ## Token pricing
 
@@ -233,7 +233,7 @@ The spending walk prices the token-only providers per turn with one shared helpe
 
 ## Adding a provider
 
-A new agent earns an account block and balance bars by filling the two internal types from its own surfaces; everything downstream — aggregation, window fusion, caching, the dashboard, the pricing table — is provider-agnostic and comes free. The work mirrors [agent.md → Adding an agent](./agent.md#adding-an-agent):
+A new agent earns an account block and balance bars by filling the two internal types from its own surfaces; everything downstream — aggregation, window fusion, caching, the dashboard, the pricing table — is provider-agnostic and comes free. The work mirrors [agent.md → Adding an agent](./model.md#adding-an-agent):
 
 1. **Fill `AgentAccount`** (plan + metered) on the session's `AgentContext` from its rich-context transport, and/or override [`AgentAdapter::probe_account`](../../../crates/rimz/src/agents/mod.rs) for the logged-in-but-idle case.
 2. **Fill `AgentRateLimits`** (the windows, each with a `used_percentage`, reset instant, and `duration_mins`) on `AgentContext` from the transport.
@@ -247,5 +247,5 @@ Golden the account mapping from a fixture probe payload and a fixture transport 
 
 - **The on-screen look** — the mana bars, the `ex`/`api` paid-usage rows, the aligned grid, the `⇅ rc` flag, the exhausted-window and longer-window-gating rendering — is [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard).
 - **The renderer's projection** of `providers` and where the dashboard sits in the sidebar is [sidebar.md → Provider dashboard](../sidebar/sidebar.md#provider-dashboard).
-- **The per-kind transport** that carries the rich context — the statusline pipe and its wrap/restore, the Codex app-server connection ladder and broker — is the adapter docs ([adapter/claude.md](./adapter/claude.md#context-and-transcript), [adapter/codex.md](./adapter/codex.md#context-and-transcript)).
-- **Storage** of `AgentContext` on the rollup and the sidecar fold-in is [agent.md → Rich context](./agent.md#rich-context-agentcontext).
+- **The per-kind transport** that carries the rich context — the statusline pipe and its wrap/restore, the Codex app-server connection ladder and broker — is the adapter docs ([claude.md](./claude.md#context-and-transcript), [codex.md](./codex.md#context-and-transcript)).
+- **Storage** of `AgentContext` on the rollup and the sidecar fold-in is [agent.md → Rich context](./model.md#rich-context-agentcontext).

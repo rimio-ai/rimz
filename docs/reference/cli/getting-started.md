@@ -85,7 +85,7 @@ The details that matter in practice:
 
 `--web-port <port>` pins the local browser origin; otherwise Rimz derives a stable port from the session name in `8300..8399`.
 
-Link health, web tunneling, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/reach/remote.md).
+Link health, web tunneling, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/remote.md).
 
 ## List rooms
 

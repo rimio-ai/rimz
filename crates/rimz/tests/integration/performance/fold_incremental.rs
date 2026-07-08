@@ -2,7 +2,7 @@
 //!
 //! Every sidebar tab folds the event log on every wakeup, and tens of agents
 //! push tens of events per second. The contract
-//! (docs/internals/health/performance.md): a warm fold reads only the bytes
+//! (docs/internals/performance.md): a warm fold reads only the bytes
 //! appended since its held base — one frame per event, never the log — so
 //! per-tab work per event stays O(frame) while the log grows without bound.
 //! Companion to `spending_incremental`, which proves the same shape for the

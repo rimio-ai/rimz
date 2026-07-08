@@ -13,7 +13,7 @@ The lobby is the entry path's behaviour outside a workspace; it carries no comma
 
 The wordmark and the pace heatmap the lobby renders also stand alone as [`rimz stats`](#rimz-stats), so you can read your pace from inside a room where the lobby never appears.
 
-The lobby is a TTY surface. When stdin and stdout are not both interactive, the dead-end keeps its printed guidance and `rimz remote connect <host>` keeps its current behaviour, so scripts and pipes see no new interactive prompt. This mirrors the opportunistic-attach invariant in [DESIGN.md](../../../DESIGN.md#invariants).
+The lobby is a TTY surface. When stdin and stdout are not both interactive, the dead-end keeps its printed guidance and `rimz remote connect <host>` keeps its current behaviour, so scripts and pipes see no new interactive prompt. This mirrors the opportunistic-attach invariant in [DESIGN.md](../../DESIGN.md#invariants).
 
 ## The local lobby
 
@@ -67,17 +67,17 @@ The lobby reads top to bottom in three zones, the way the sidebar does: the **wo
 
 **The remote section** holds two kinds of entry, and the row says which `↵` does. A **room** — a saved alias from `~/.config/rimz/remote.toml` whose target names a session or path — connects straight to that room. A **host** — a row ending in a `›` chevron — drills into the host's remote lobby instead, so you never guess whether enter connects or browses. Hosts come from the saved aliases' hosts and `+ connect a host…` for an ad-hoc one; a host carries no eager probe, so the lobby never blocks on SSH until you choose to enter it. The `⇅ reconnect` flag rides a room row when its alias saved supervision.
 
-The full glyph legend is canonical in [the sidebar interface reference](../../interface/sidebar.md#reading-the-glyphs); the lobby reuses it rather than restating it.
+The full glyph legend is canonical in [the sidebar interface reference](../interface/sidebar.md#reading-the-glyphs); the lobby reuses it rather than restating it.
 
 ### Your pace — the token heatmap
 
 The pace panel is a contribution graph of your token use, account-global, the trailing weeks of days, pinned above the footer. Each cell is one day, its shade rising with the tokens that day burned, including cache-read tokens — the GitHub heatmap read in the terminal, the README's "Know Your Pace" brought to the front door before you pick a room. It is the panel [`rimz stats`](#rimz-stats) renders on its own; here it sits as hero chrome above the room list.
 
-- **The cell ramp reserves `·` for a day with no usage and rises `░ ▒ ▓ █` through active days,** from trace activity to your heaviest, with each day drawn as one glyph followed by a space so the graph reads as discrete squares. The density carries the reading and color reinforces it: truecolor tints those same five glyphs along one cool, lightness-varying ramp from the [theme pipeline](../sidebar/sidebar.md), held distinct from the status reds and greens so a busy day reads as volume, not as "good" or "wrong"; `NO_COLOR` reads the density alone, and the single-hue lightness ramp stays legible to colorblind eyes. The scale is per-graph — the busiest day in view sets `█` — so the texture reads against your own rhythm, not an absolute ceiling.
+- **The cell ramp reserves `·` for a day with no usage and rises `░ ▒ ▓ █` through active days,** from trace activity to your heaviest, with each day drawn as one glyph followed by a space so the graph reads as discrete squares. The density carries the reading and color reinforces it: truecolor tints those same five glyphs along one cool, lightness-varying ramp from the [theme pipeline](./sidebar/sidebar.md), held distinct from the status reds and greens so a busy day reads as volume, not as "good" or "wrong"; `NO_COLOR` reads the density alone, and the single-hue lightness ramp stays legible to colorblind eyes. The scale is per-graph — the busiest day in view sets `█` — so the texture reads against your own rhythm, not an absolute ceiling.
 - **The figures speak the dashboard's vocabulary.** `◇` this month's cache-inclusive tokens pins top-right, and the legend row carries the trailing-week and trailing-month token totals and the 30-day `$`, so the texture and the hard numbers sit together. `t` toggles the cell value between tokens and dollars; the legend stays and the scale re-bases.
 - **It reads like the GitHub graph.** Month labels ride the top, weekday labels (Mon/Wed/Fri) the left, the week opening on Monday; the trailing span fits the terminal width, more weeks on a wider screen.
 
-The data is the account-global aggregate the spending producer publishes ([provider.md](../agents/provider.md)): `$XDG_STATE_HOME/rimz/shared/provider-spending.json` carries the fleet windows, the UTC-day buckets, and the model buckets. When that aggregate is missing or still on an old shape, the pace panel takes the same shared runtime spending election as the sidebar producer, refreshes the persistent transcript cursor cache, and publishes the same aggregate for the next reader.
+The data is the account-global aggregate the spending producer publishes ([providers.md](./agents/providers.md)): `$XDG_STATE_HOME/rimz/shared/provider-spending.json` carries the fleet windows, the UTC-day buckets, and the model buckets. When that aggregate is missing or still on an old shape, the pace panel takes the same shared runtime spending election as the sidebar producer, refreshes the persistent transcript cursor cache, and publishes the same aggregate for the next reader.
 
 The panel is hero chrome like the wordmark, and the room list is the job, so it yields space in two steps before the list ever loses a row: the full grid on a tall terminal, then a single-line sparkline of the trailing weeks with the same totals (`your pace ▁▂▄▆█▆▄▂▃ · M 5.2B · $8,666`) when height is tight, then gone. One read of the picture stays one keypress from the list whatever the size.
 
@@ -195,7 +195,7 @@ This keeps the lobby a thin launcher: resume-on-rebirth, room gating, the daemon
 
 ## How it is built
 
-The lobby is a foreground client, not the pane-resident producer. It owns the terminal directly through `tui::TerminalModeGuard`, reads crossterm key and mouse events on a normal event loop, and wakes on a slow tick to refresh room rollups and the remote link badge. Rendering reuses the sidebar's [theme pipeline](../sidebar/sidebar.md) — the same palette, semantic slots, and `NO_COLOR`-safe shapes — so the two surfaces read as one product.
+The lobby is a foreground client, not the pane-resident producer. It owns the terminal directly through `tui::TerminalModeGuard`, reads crossterm key and mouse events on a normal event loop, and wakes on a slow tick to refresh room rollups and the remote link badge. Rendering reuses the sidebar's [theme pipeline](./sidebar/sidebar.md) — the same palette, semantic slots, and `NO_COLOR`-safe shapes — so the two surfaces read as one product.
 
 - **One source for two renderers.** The local rows come from the same join `rimz list` uses: `workspace::known_workspaces()` paired with each backend's `list_sessions()`. That join graduates from `cli/list.rs` into a shared function returning typed rows, so `rimz list` (the `--json` scripting projection) and the lobby render one truth, the way the snapshot view-model feeds the sidebar and `rimz pane list`.
 - **Instant first paint.** The names and paths come from `known_workspaces()`, which is a cheap directory read, so the lobby draws the list on the first frame; the live signal, ages, and pace graph fill in on the next tick as the session probe and snapshot reads land. A launcher that stalls on a spinner before showing a single room has already lost — rooms first, enrichment after.

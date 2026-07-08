@@ -19,7 +19,7 @@ The glyph legend and rendered frames live in [the interface reference](./docs/in
 
 ## Answering in the agent's own UI
 
-The moment an agent asks to run a command is the moment a human can stop something destructive. Rimz keeps that moment in the agent's own UI and spends its effort getting you there fast. A blocking prompt (a permission request, a plan approval, a question) reaches Rimz through the agent's hooks and sets the agent's `waiting` state, the hook returns the agent-native neutral no-op so the prompt stays on screen exactly as the agent rendered it, and the sidebar routes you there: the row turns `?`, notifications fire, and focusing the row lands you in the pane. Your answer clears the state through the same lifecycle channel, and the transcript keeps the question and the answer. The state machine and clearing edges live in [agent.md](./docs/internals/agents/agent.md).
+The moment an agent asks to run a command is the moment a human can stop something destructive. Rimz keeps that moment in the agent's own UI and spends its effort getting you there fast. A blocking prompt (a permission request, a plan approval, a question) reaches Rimz through the agent's hooks and sets the agent's `waiting` state, the hook returns the agent-native neutral no-op so the prompt stays on screen exactly as the agent rendered it, and the sidebar routes you there: the row turns `?`, notifications fire, and focusing the row lands you in the pane. Your answer clears the state through the same lifecycle channel, and the transcript keeps the question and the answer. The state machine and clearing edges live in [model.md](./docs/internals/agents/model.md).
 
 ## A fleet run like a team
 

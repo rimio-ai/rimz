@@ -1,6 +1,6 @@
 # Sidebar state and timing
 
-This doc owns the sidebar **data plane**: the node model every renderer runs, the per-lane caches the elected producer publishes, the typed events that wake the nodes, and the timing that binds them. Product commitments live in [DESIGN.md](../../../DESIGN.md); presence, ranking, and pane binding live in [sidebar.md](./sidebar.md); render-thread budgets live in [performance.md](../health/performance.md); the live-state inspection workflow lives in [diagnostics.md](../health/diagnostics.md#inspecting-live-card-state).
+This doc owns the sidebar **data plane**: the node model every renderer runs, the per-lane caches the elected producer publishes, the typed events that wake the nodes, and the timing that binds them. Product commitments live in [DESIGN.md](../../../DESIGN.md); presence, ranking, and pane binding live in [sidebar.md](./sidebar.md); render-thread budgets live in [performance.md](../performance.md); the live-state inspection workflow lives in [diagnostics.md](../diagnostics.md#inspecting-live-card-state).
 
 ## At a glance
 
@@ -27,7 +27,7 @@ A node holds two-part runtime state. **Pulled truth** is the event-fresh store r
 
 The pane frame admits the cards; the store, sidecars, and events only enrich admitted cards. A frameless fold (CLI consumers that want rollup metadata, not a roster) sets `SidebarSnapshot::panes_produced_at_ms` to null and leaves `worktree_groups` empty.
 
-Durable truth feeds every node identically and bypasses the producer: each node reads the rollup in process (`latest.json` plus the unfolded log tail — [store.md](../store/store.md#runtime-projection)) and reads the per-session sidecars fresh from disk behind stat-gated parse caches.
+Durable truth feeds every node identically and bypasses the producer: each node reads the rollup in process (`latest.json` plus the unfolded log tail — [store.md](../store.md#runtime-projection)) and reads the per-session sidecars fresh from disk behind stat-gated parse caches.
 
 One **producer** — the eldest fresh heartbeat per workspace — owns every consistent-cadence external pull and publishes each lane as its own single-writer cache. Two producer threads split that work. The fetch worker publishes pane truth and group roots each data tick, then projects the heavy caches' last published values into its snapshot. The elder-gated cache refresher owns the TTL-gated refreshes behind those caches — git diff-stats, PR state, spending, accounts, usage, credits, and auto-continue side effects — on the same data cadence, so a status flip never waits behind a `git` fork or a provider probe. Every other node consumes the published caches in process and never pulls for freshness on its own; the producer itself consumes its own published fast lane before paying for a refresh. Realtime events never patch a published cache — pulled truth on disk is written only by producer pulls. A dead producer is a degradation like any other, handled by the heartbeat election ([Failure modes](#failure-modes)).
 
@@ -51,17 +51,17 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 | `pr-state.json` | room | producer-only `gh`/`tea` pull-request state by worktree path, plus per-repo probe stamps, path-to-repo metadata, and last-seen HEAD SHAs; absent when no PR or unsupported forge |
 | `metrics-sample.json` | room (producer-only) | per-pane resource samples and pane→root-pid bindings; figures publish on the pane frame |
 | `workspace-spending.<hash>.json` | room | the room's cockpit spend tally, headline cutoff, and live-card session keys excluded from walked headline USD |
-| `link-stats.json` | room | the latest remote-SSH probe stats for the footer link badge ([remote.md](../reach/remote.md)) |
+| `link-stats.json` | room | the latest remote-SSH probe stats for the footer link badge ([remote.md](../remote.md)) |
 | `provider-spending.json` | account-global | user-global fleet/provider spend totals and the walk stamp |
 | `spending.json` | account-global | the incremental transcript parse cache behind the spend walk |
-| `pricing-cache.json` | account-global | the remote token-price refresh over the embedded snapshot ([provider.md](../agents/provider.md#token-pricing)) |
+| `pricing-cache.json` | account-global | the remote token-price refresh over the embedded snapshot ([providers.md](../agents/providers.md#token-pricing)) |
 | `accounts.json` | account-global | per-provider login, plan, and account state |
 | `rate_limits.json` | account-global | per-account budget windows |
 | `credits.json` | account-global | provider-reported paid/extra usage |
 
 Per-session **sidecars** (`agent_context/`, `subagent_context/`, `agent-activity/`) are the exception to producer ownership: CLI hook and statusline runs write them latest-wins, and the elder's transcript watcher refreshes Codex context between hooks ([Push channels](#push-channels)). Every node reads them fresh behind stat-gated parse caches.
 
-The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (a TTL-gated jump viewport hint that every renderer reads on focus adoption), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../health/diagnostics.md)). The store's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the store write tail — [store.md](../store/store.md) owns them.
+The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (a TTL-gated jump viewport hint that every renderer reads on focus adoption), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../diagnostics.md)). The store's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the store write tail — [store.md](../store.md) owns them.
 
 ## Realtime events
 
@@ -89,7 +89,7 @@ The receive path drops an event for another workspace or session before it reach
 Each push channel exists so a change a writer already knows about reaches every node within one wakeup instead of a poll window; the producer's pull stays the structural backstop behind all of them.
 
 - **Store and sidecar writers** post a `StoreDelta` after every durable write or context-sidecar merge, so status, tokens, and cost repaint within one wakeup.
-- **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; it skips title-only manifest churn before projection, floors repeated same-pane command shortcuts to one immediate patch plus the settled producer pull, and emits `FocusChanged` when a tab switch lands on a working pane. **The tmux control-mode watcher** pushes typed pane overlays from its `refresh-client -B` subscription, emits `FocusChanged` on window switches, stamps `presence.stamp`, and falls back to `PanesChanged` for identity-free topology notices ([multiplexers.md](../mux/multiplexers.md)).
+- **The Zellij presence plugin** pushes exact pane events, stamps `presence.stamp`, and publishes `pane-topology.json` through the host CLI; it skips title-only manifest churn before projection, floors repeated same-pane command shortcuts to one immediate patch plus the settled producer pull, and emits `FocusChanged` when a tab switch lands on a working pane. **The tmux control-mode watcher** pushes typed pane overlays from its `refresh-client -B` subscription, emits `FocusChanged` on window switches, stamps `presence.stamp`, and falls back to `PanesChanged` for identity-free topology notices ([multiplexers.md](../multiplexers.md)).
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live Codex session's rollout JSONL and runs the stat-gated context refresh on write, covering the mid-turn gap where Codex hooks fire only at progress events. Only the elder watches; demotion drops the watch, and a watcher that never starts costs nothing because the producer-tick refresh stays unconditional.
 - **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, re-checks the heartbeat election each pass, refreshes heavy caches from the last published pane frame, fires due loop tasks for this room, and wakes due scheduled messages. Demotion turns it into a sleeper; a panic resets its rollup cursor and spending walker, and the next tick retries from cache truth.
 
@@ -150,4 +150,4 @@ A **dead producer** is handled by heartbeat election. Once the stale heartbeat a
 
 **Clock skew** cannot make events immortal because TTL uses receiver time. A skewed sender timestamp can briefly mis-order an overlay, and the verifying pull corrects it.
 
-Every accepted anomaly path writes a typed diagnostic before it falls back, holds, suppresses, or exits. A recurrence of flicker, duplicate rows, or a phantom external group maps to a record in `diag.log.jsonl`; `rimz doctor` shows the recent tail and [diagnostics.md](../health/diagnostics.md) names the taxonomy.
+Every accepted anomaly path writes a typed diagnostic before it falls back, holds, suppresses, or exits. A recurrence of flicker, duplicate rows, or a phantom external group maps to a record in `diag.log.jsonl`; `rimz doctor` shows the recent tail and [diagnostics.md](../diagnostics.md) names the taxonomy.

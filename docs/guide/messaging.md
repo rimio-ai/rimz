@@ -160,4 +160,4 @@ Named channels and worktrees share one namespace, so a name is a worktree channe
 - [Scripting agents](./scripting.md) — `--wait` and message records inside pipelines and CI.
 - [Loops and hands-off operation](./loops.md) — scheduled and handler-driven messages that steer the fleet unattended.
 - [cli/message.md](../reference/cli/message.md) · [cli/channel.md](../reference/cli/channel.md) — the exact flags.
-- [Message internals](../internals/harness/message.md) — the delivery engine underneath.
+- [Message internals](../internals/harness/messaging.md) — the delivery engine underneath.

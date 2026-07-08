@@ -1,6 +1,6 @@
 # Web access
 
-> See [DESIGN.md](../../../DESIGN.md) and [multiplexers.md](../mux/multiplexers.md) for the commitments this doc extends.
+> See [DESIGN.md](../../DESIGN.md) and [multiplexers.md](./multiplexers.md) for the commitments this doc extends.
 
 Rimz opens a Zellij room in the browser by delegating terminal transport and authentication to `zellij web` while keeping workspace resolution, session birth, sidebar layout, and diagnostics in Rimz.
 

@@ -797,7 +797,7 @@ struct CarriedFields {
 
 /// The carried baseline: every carry-forward and identity field cloned from
 /// `prior`, activity fields cleared, enrichment sidecars left for projection.
-/// This is the lifetime table's code home; see docs/internals/agents/agent.md
+/// This is the lifetime table's code home; see docs/internals/agents/model.md
 /// § The rollup.
 fn carried_state(prior: Option<&AgentState>) -> CarriedFields {
     CarriedFields {

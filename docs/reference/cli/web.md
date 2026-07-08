@@ -44,4 +44,4 @@ style_client = true
 
 `[web] enabled` defaults to true. Set it to false to make `rimz web open` and `rimz remote connect --web` fail before room changes or permission-cache seeding. `style_client` defaults to true, deriving Zellij's browser-terminal `web_client` font and colors from `[theme]` when Rimz starts the server; set it to false to leave your own Zellij `web_client` config in charge. `font` defaults to `JetBrainsMono Nerd Font Mono`.
 
-Remote browser access is `rimz remote connect <target> --web`; see [Getting started → Remote rooms](./getting-started.md#remote-rooms) and [web internals](../../internals/reach/web.md#remote-rooms).
+Remote browser access is `rimz remote connect <target> --web`; see [Getting started → Remote rooms](./getting-started.md#remote-rooms) and [web internals](../../internals/web.md#remote-rooms).

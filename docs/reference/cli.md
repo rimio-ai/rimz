@@ -25,7 +25,7 @@ rimz
 
 | Group | Commands | Reference |
 | --- | --- | --- |
-| **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `web`, `list`, `stats`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) · [Web](./cli/web.md) · [Stats](../internals/reach/welcome.md#rimz-stats) |
+| **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `web`, `list`, `stats`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) · [Web](./cli/web.md) · [Stats](../internals/welcome.md#rimz-stats) |
 | **Run and steer agents** | `agents`, `message`, `transcript`, `pane` | [Agents](./cli/agents.md) · [Message](./cli/message.md) · [Transcript](./cli/transcript.md) · [Pane](./cli/pane.md) |
 | **Lanes and schedules** | `channel`, `worktree`, `loop` | [Channels](./cli/channel.md) · [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
 | **Hooks and trust** | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
@@ -78,4 +78,4 @@ Hidden helper commands are the machinery behind hooks, sidebars, statuslines, an
 | `rimz web token ensure` | Login-token provisioning for the remote web relay |
 | `rimz codex …` | Codex session-enrichment helpers |
 
-The protocols behind them live in the owning internals docs: [store](../internals/store/store.md), [state](../internals/sidebar/state.md), [agent](../internals/agents/agent.md), [provider](../internals/agents/provider.md), and [harness](../internals/harness/harness.md).
+The protocols behind them live in the owning internals docs: [store](../internals/store.md), [state](../internals/sidebar/state.md), [agent](../internals/agents/model.md), [provider](../internals/agents/providers.md), and [harness](../internals/harness/harness.md).

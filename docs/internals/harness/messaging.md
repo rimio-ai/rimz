@@ -1,6 +1,6 @@
 # The message system
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [agent.md](../agents/agent.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [model.md](../agents/model.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktrees.md](./worktrees.md); the user-facing commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
 
 `rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and Rimz types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command uses.
 
@@ -20,11 +20,11 @@ Three modes place a send on the timing axis. All three resolve the target throug
 
 ## Addressing and targets
 
-The address grammar (handle classes, channel resolution, arity, fan-out, `--create`) is [harness.md § The address](./harness.md#the-address). This section covers what a target resolves to for delivery: a live pane, or the durable **card** a parked message keys on — the logical agent identity the rollup tracks, a kind plus a session id or launch placeholder ([agent.md § The rollup](../agents/agent.md#the-rollup)).
+The address grammar (handle classes, channel resolution, arity, fan-out, `--create`) is [harness.md § The address](./harness.md#the-address). This section covers what a target resolves to for delivery: a live pane, or the durable **card** a parked message keys on — the logical agent identity the rollup tracks, a kind plus a session id or launch placeholder ([agent.md § The rollup](../agents/model.md#the-rollup)).
 
 Resolution climbs from the live command snapshot to the durable audit rollup. The live snapshot supplies bound panes and lazy sessionless panes. If that view misses, Rimz resolves the same address against audit-scope registered sessions and launch placeholders, bypassing runtime liveness expel and pane-frame failures. A match there creates a pane-less queued record; the next sweep or turn-boundary delivery re-resolves a live pane.
 
-`message --steer` reaches live panes. A bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet, a lazy-registering agent (Codex) before its first turn ([agent.md § The instance lifecycle](../agents/agent.md#the-instance-lifecycle)), because the thing a paste needs is the pane, which the producer already detects. When the durable audit rollup resolves the target but no live pane is available, `--steer` parks the message instead of dropping it.
+`message --steer` reaches live panes. A bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet, a lazy-registering agent (Codex) before its first turn ([agent.md § The instance lifecycle](../agents/model.md#the-instance-lifecycle)), because the thing a paste needs is the pane, which the producer already detects. When the durable audit rollup resolves the target but no live pane is available, `--steer` parks the message instead of dropping it.
 
 The default message path uses that live pane when the target can receive now, including lazy panes with no session yet. When it must park work, it keys the durable record on the bound session or launch placeholder card so FIFO survives registration. A message queued against a provisional `launch_*` card keeps the launch id in the record; when the card registers, name-based matching ([`same_card`](../../../crates/rimz/src/message.rs)) folds it into the session's single FIFO queue: one card, one queue.
 
@@ -293,9 +293,9 @@ A delivery becomes a `Message` entry when the receiver's turn-start hook parses 
 
 The transcript reader computes the current-life boundary at read time from the live cohort in scope: the earliest `registered_at` among the matching root agents. Entries before that timestamp are prior-session archive; the default view hides them when a live cohort exists, `--all` renders them under a dated archive marker, and a scope with no live cohort renders the whole log as archive. The JSONL buckets stay append-only and unmutated.
 
-Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](../agents/agent.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
+Two nearby reads are not this log. Supervised-run streaming (`agents wait --stream`, `--output-format stream-json`) tails the provider-native transcript through each adapter's `parse_transcript_messages` ([harness.md → Supervised runs](./harness.md#supervised-runs)), and the context-fill and spend gauges read those same native files ([agent.md → Enrichment](../agents/model.md#enrichment)). The audit trail below is a third log: operational `message.*` events that carry no message content.
 
-Domain types: [`transcript.rs`](../../../crates/rimz/src/transcript.rs) for the durable log, [`cli/transcript/`](../../../crates/rimz/src/cli/transcript/) for the chat projection.
+Domain types: [`transcript.rs`](../../../crates/rimz/src/transcript.rs) for the durable log, [`cli/transcript/`](../../../crates/rimz/src/cli/transcript) for the chat projection.
 
 ## Audit trail
 

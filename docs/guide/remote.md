@@ -48,7 +48,7 @@ rimz remote connect dev --no-reconnect   # a single ssh run, no supervisor
 rimz remote connect dev --reset          # a fresh remote room (passes --no-resume through)
 ```
 
-`rimz remote reset dev` is the shorthand for that last one. The link supervisor and its reconnect policy are in [the internals](../internals/reach/remote.md).
+`rimz remote reset dev` is the shorthand for that last one. The link supervisor and its reconnect policy are in [the internals](../internals/remote.md).
 
 ## Continuity survives reboots; keeping processes alive is the host's job
 
@@ -91,7 +91,7 @@ rimz web token revoke-all        # revoke every token
 
 The token is cached as plaintext mode `0600` on the machine serving the room and stays out of URLs, logs, and store events — treat it like an SSH private key there. A read-only token is observation-only, though terminal output can still carry secrets, and any listener beyond `127.0.0.1` wants HTTPS in front (a reverse proxy with rate limiting is the supported public shape).
 
-Browser access is a Zellij feature; a tmux room reattaches over SSH and does not serve the browser tunnel. The token model and server lifecycle are in [web.md](../internals/reach/web.md).
+Browser access is a Zellij feature; a tmux room reattaches over SSH and does not serve the browser tunnel. The token model and server lifecycle are in [web.md](../internals/web.md).
 
 ## See also
 

@@ -2,7 +2,7 @@
 //!
 //! State paths live under `$XDG_STATE_HOME/rimz/workspaces/<id>/`.
 //! Runtime paths live under `$XDG_RUNTIME_DIR/rimz/<id>/`, falling back to
-//! `/tmp/rimz-<uid>/rimz/<id>/` at mode `0700` per `docs/internals/store/store.md`.
+//! `/tmp/rimz-<uid>/rimz/<id>/` at mode `0700` per `docs/internals/store.md`.
 //! Shared data caches live under `$XDG_STATE_HOME/rimz/shared/`; shared
 //! election locks live under `$XDG_RUNTIME_DIR/rimz/shared/`.
 
