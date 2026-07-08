@@ -11,11 +11,15 @@ use super::{AttachFlags, GlobalFlags};
 use crate::cli::room::{AttachAction, AttachMode, attach_action, exec_attach_command};
 use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
-use rimz::remote::{RemoteTarget, TermPlan, infocmp_program, ssh_attach_spec, term_plan_from};
+use rimz::remote::{
+    RemoteTarget, RemoteTargetError, SshDestination, TermPlan, infocmp_program,
+    parse_ssh_destination, ssh_attach_spec, term_plan_from,
+};
 
 mod bandwidth;
 mod link_stats;
 mod list;
+mod setup;
 mod supervisor;
 mod web;
 
@@ -71,6 +75,8 @@ enum RemoteSubcmd {
         #[command(flatten)]
         attach: AttachFlags,
     },
+    /// Install rimz on a remote alias, `[user@]host:<session-or-path>` target, or `[user@]host`.
+    Setup { alias_or_host: String },
     /// Connect to a remote alias or raw target with `--no-resume`.
     Reset {
         alias_or_target: String,
@@ -141,6 +147,7 @@ impl RemoteArgs {
             RemoteSubcmd::Add { .. } => "remote add",
             RemoteSubcmd::Update { .. } => "remote update",
             RemoteSubcmd::Connect { .. } => "remote connect",
+            RemoteSubcmd::Setup { .. } => "remote setup",
             RemoteSubcmd::Reset { .. } => "remote reset",
             RemoteSubcmd::Rm { .. } => "remote rm",
             RemoteSubcmd::Rename { .. } => "remote rename",
@@ -204,6 +211,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
             attach,
             globals,
         ),
+        RemoteSubcmd::Setup { alias_or_host } => setup::run(alias_or_host, globals),
         RemoteSubcmd::Reset {
             alias_or_target,
             no_reconnect,
@@ -247,6 +255,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
 
 #[derive(Debug)]
 struct RemoteConnect {
+    origin: String,
     target: RemoteTarget,
     reconnect: bool,
     no_resume: bool,
@@ -263,6 +272,7 @@ fn resolve_connect(
 ) -> Result<RemoteConnect> {
     if input.contains(':') {
         return Ok(RemoteConnect {
+            origin: input.to_owned(),
             target: RemoteTarget::parse(input)?,
             reconnect: !no_reconnect,
             no_resume: reset,
@@ -274,12 +284,24 @@ fn resolve_connect(
         bail!("no such remote alias `{input}`; run `rimz remote list`");
     };
     Ok(RemoteConnect {
+        origin: input.to_owned(),
         target: RemoteTarget::parse(&alias.target)?,
         reconnect: alias.reconnect && !no_reconnect,
         no_resume: alias.no_resume || reset,
         mux: cli_mux.or(alias.mux),
         web: web::RemoteWebOptions::default(),
     })
+}
+
+fn resolve_setup_destination(input: &str, aliases: &RemoteAliases) -> Result<SshDestination> {
+    if let Some(alias) = aliases.get(input) {
+        return Ok(RemoteTarget::parse(&alias.target)?.ssh_destination());
+    }
+    match RemoteTarget::parse(input) {
+        Ok(target) => Ok(target.ssh_destination()),
+        Err(RemoteTargetError::MissingColon(_)) => Ok(parse_ssh_destination(input)?),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn connect(
@@ -357,7 +379,13 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                     truecolor,
                     Some(&control),
                 );
-                supervisor::supervise_remote(&control_spec, &plain_spec, &remote.target, &control)
+                supervisor::supervise_remote(
+                    &control_spec,
+                    &plain_spec,
+                    &remote.target,
+                    &control,
+                    remote.origin.as_str(),
+                )
             } else {
                 supervisor::report_remote_connect(remote.target.host_display(), false);
                 exec_attach_command(&plain_spec)
@@ -463,6 +491,7 @@ mod tests {
             None,
         );
         assert_eq!(raw_spec.args[10], "prod");
+        assert_eq!(raw.origin, "prod:raw-session");
         assert!(raw.reconnect);
         assert!(!raw.no_resume);
 
@@ -476,6 +505,7 @@ mod tests {
             None,
         );
         assert_eq!(named_spec.args[10], "prod-box");
+        assert_eq!(named.origin, "prod");
         assert!(named.reconnect);
         assert!(!named.no_resume);
 
@@ -494,5 +524,30 @@ mod tests {
         let cli_mux =
             resolve_connect("tmuxed", false, false, Some(MuxName::Zellij), &aliases).unwrap();
         assert_eq!(cli_mux.mux, Some(MuxName::Zellij));
+    }
+
+    #[test]
+    fn setup_resolution_accepts_alias_target_and_bare_host() {
+        let mut aliases = RemoteAliases::default();
+        aliases
+            .add(alias("prod", "prod-box:query-engine", true, false, None))
+            .unwrap();
+
+        let named = resolve_setup_destination("prod", &aliases).unwrap();
+        assert_eq!(named.destination, "prod-box");
+        assert_eq!(named.host, "prod-box");
+
+        let target =
+            resolve_setup_destination("agent@prod-box:/srv/query-engine", &aliases).unwrap();
+        assert_eq!(target.destination, "agent@prod-box");
+        assert_eq!(target.host, "prod-box");
+
+        let bare = resolve_setup_destination("alice@new-box", &aliases).unwrap();
+        assert_eq!(bare.destination, "alice@new-box");
+        assert_eq!(bare.host, "new-box");
+
+        let ipv6 = resolve_setup_destination("user@[::1]", &aliases).unwrap();
+        assert_eq!(ipv6.destination, "user@[::1]");
+        assert_eq!(ipv6.host, "::1");
     }
 }

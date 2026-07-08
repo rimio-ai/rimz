@@ -76,6 +76,8 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
             },
         ),
         "preparing remote Zellij web",
+        remote.target.host_display(),
+        remote.origin.as_str(),
     )?;
     let payload = rimz::web::parse_web_open_payload(&prep)
         .with_context(|| remote_output_context("parsing remote `rimz web open --json`", &prep))?;
@@ -146,7 +148,12 @@ fn write_web_token_error(host: &str, detail: &str) {
     );
 }
 
-fn run_web_prep(spec: &rimz::mux::CommandSpec, label: &str) -> Result<Vec<u8>> {
+fn run_web_prep(
+    spec: &rimz::mux::CommandSpec,
+    label: &str,
+    host: &str,
+    setup_hint: &str,
+) -> Result<Vec<u8>> {
     let mut child = spec
         .to_command()
         .stdout(Stdio::piped())
@@ -167,6 +174,16 @@ fn run_web_prep(spec: &rimz::mux::CommandSpec, label: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("{label}: waiting for remote prep"))?;
     if status.success() {
         return Ok(stdout);
+    }
+    if status.code() == Some(rimz::remote::REMOTE_RIMZ_MISSING_EXIT) {
+        bail!(
+            "{}",
+            super::supervisor::fatal_session_message(
+                rimz::remote::REMOTE_RIMZ_MISSING_EXIT,
+                host,
+                setup_hint
+            )
+        );
     }
     bail!("{label} failed with {status}");
 }

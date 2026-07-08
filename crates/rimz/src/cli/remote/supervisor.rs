@@ -25,6 +25,7 @@ pub(super) fn supervise_remote(
     plain_spec: &rimz::mux::CommandSpec,
     target: &RemoteTarget,
     control_path: &Path,
+    setup_hint: &str,
 ) -> Result<()> {
     use rimz::remote::{ReconnectPolicy, ReconnectState, Verdict};
 
@@ -72,10 +73,7 @@ pub(super) fn supervise_remote(
         }
         match reconnect.settle(outcome.status.code(), outcome.established) {
             Verdict::CleanExit => return Ok(()),
-            Verdict::Fatal { code } => bail!(
-                "ssh to {host} exited with status {code}; not reconnecting \
-                 (only a dropped link on an established session is retried)"
-            ),
+            Verdict::Fatal { code } => bail!("{}", fatal_session_message(code, host, setup_hint)),
             Verdict::Retry { delay } => {
                 let consecutive_failures = reconnect.consecutive_failures();
                 let mut stderr = std::io::stderr().lock();
@@ -97,6 +95,20 @@ pub(super) fn supervise_remote(
                 std::thread::sleep(delay);
             }
         }
+    }
+}
+
+pub(super) fn fatal_session_message(code: i32, host: &str, setup_hint: &str) -> String {
+    if code == rimz::remote::REMOTE_RIMZ_MISSING_EXIT {
+        format!(
+            "rimz is not installed on {host}; install it over SSH with:\n    \
+             rimz remote setup {setup_hint}"
+        )
+    } else {
+        format!(
+            "ssh to {host} exited with status {code}; not reconnecting \
+             (only a dropped link on an established session is retried)"
+        )
     }
 }
 

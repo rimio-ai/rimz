@@ -14,6 +14,18 @@ The target is `[user@]host:<session-or-path>`. After the colon, a path opens (or
 
 Because you attach to the session the host is already running, everything you left is there: every agent in its `#channel` tab, every question still ranked exactly where it was, plus whatever finished while you were gone, already triaged.
 
+### Install rimz on the host
+
+Run setup once before the first connect when the host does not already have `rimz` on its PATH:
+
+```sh
+rimz remote setup dev-box
+rimz remote setup agent@prod-box:/srv/query-engine
+rimz remote setup dev                           # saved alias
+```
+
+`rimz remote setup <alias-or-host>` opens SSH to the saved alias, raw target, or bare `[user@]host`, detects the host OS and architecture there, verifies the matching prebuilt release archive, and installs `rimz` to `~/.local/bin/rimz`. That directory is on the PATH that `remote connect` repairs, so the next attach can run immediately.
+
 **Save an alias** once and the trip is one word. An alias carries the target and its reconnect defaults, so `rimz remote connect dev` is the whole journey:
 
 ```sh

@@ -4,7 +4,9 @@
 
 ## Attach Path
 
-Remote targets use `[user@]host:<session-or-path>`. A bare target after the colon is a session name and compiles to remote `rimz attach --attach`; a value containing `/` or starting with `~` is a path and compiles to remote `rimz start --attach`. The snippet repairs non-login-shell PATH before invoking remote `rimz`, and a missing remote binary exits with the install fix.
+Remote targets use `[user@]host:<session-or-path>`. A bare target after the colon is a session name and compiles to remote `rimz attach --attach`; a value containing `/` or starting with `~` is a path and compiles to remote `rimz start --attach`. The snippet repairs non-login-shell PATH before invoking remote `rimz`, and a missing remote binary exits `127` with a setup hint from the remote snippet; the local reconnect supervisor special-cases that sentinel and prints `rimz remote setup <original-input>` instead of the reconnect-policy tail.
+
+`rimz remote setup <alias-or-host>` is a foreground one-shot SSH command that accepts a saved alias, a raw target, or a bare `[user@]host`. The remote snippet does not depend on an existing `rimz`; it runs `uname` on the host, selects the matching prebuilt release archive, downloads it with `SHA256SUMS`, verifies with the platform checksum tool, installs `rimz` to `~/.local/bin/rimz`, and verifies with `~/.local/bin/rimz --version`.
 
 The remote PTY carries the local `$TERM`. Portable names such as `xterm-256color`, `screen-256color`, and `tmux-256color` ride through unchanged; terminal-specific names use local `infocmp -x $TERM` and remote `tic` to seed `~/.terminfo` before `exec`, with `TERM=xterm-256color` as the fallback when provisioning cannot run. When the local terminal advertises 24-bit color, the snippet also exports `COLORTERM=truecolor` because SSH does not forward `COLORTERM`.
 
@@ -15,6 +17,8 @@ The print and one-shot paths use a single `ssh -t` invocation. Every attach enab
 `rimz remote connect <target> --web` opens a remote Zellij room in the local browser and stays in the foreground supervising the browser tunnel. The local process runs remote `rimz web open --print --json` as a non-PTY prep command with stdin/stderr inherited for recovery prompts, parses the `rimz.web.v1` payload from stdout, relays the cached Zellij web token from the serving machine, chooses a stable local port from the session name, starts an SSH `-L 127.0.0.1:<local>:127.0.0.1:<remote>` tunnel, waits for the local port to accept connections, prints the bare `http://127.0.0.1:<local>/<session>` URL, opens the browser best-effort, and then waits until Ctrl-C or tunnel exit.
 
 The prep command is the fail-fast boundary. Remote Rimz without `rimz web`, Zellij without the `web` subcommand, a project whose room is already live under tmux, or a remote room error aborts before browser access opens and surfaces the remote diagnostic. Path targets birth the room; path and exact-session targets both load and grant the presence plugin before asking it to enable sharing at runtime, and the prep command writes its stderr notes directly to the local terminal.
+
+A prep exit of `127` uses the same missing-binary sentinel as terminal attach and points at `rimz remote setup <original-input>`.
 
 The tunnel is a separate SSH child with its own reconnect loop using the same gatetime and backoff as the attach supervisor. `--no-reconnect` applies to that tunnel and exits on a lost established link instead of retrying. `--web-port <port>` pins the local browser origin; without it Rimz hashes the session name into `8300..8399` and scans to the next free port on collision. Ctrl-C stops the foreground Rimz process and the tunnel child.
 

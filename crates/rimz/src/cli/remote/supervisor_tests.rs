@@ -18,6 +18,33 @@ fn disconnected_link_event_channel_keeps_poll_cadence() {
 }
 
 #[test]
+fn fatal_session_message_points_missing_remote_rimz_at_setup() {
+    let message = fatal_session_message(rimz::remote::REMOTE_RIMZ_MISSING_EXIT, "dev-box", "dev");
+
+    assert!(
+        message.contains("rimz is not installed on dev-box"),
+        "{message}"
+    );
+    assert!(message.contains("rimz remote setup dev"), "{message}");
+    assert!(
+        !message.contains("not reconnecting"),
+        "missing binary is not a reconnect-policy error: {message}"
+    );
+}
+
+#[test]
+fn fatal_session_message_keeps_reconnect_tail_for_other_codes() {
+    let message = fatal_session_message(2, "dev-box", "dev");
+
+    assert!(
+        message.contains("ssh to dev-box exited with status 2"),
+        "{message}"
+    );
+    assert!(message.contains("not reconnecting"), "{message}");
+    assert!(!message.contains("remote setup"), "{message}");
+}
+
+#[test]
 fn link_notifications_respect_command_and_terminal_gates() {
     let prefs = rimz::config::NotificationsPrefs {
         enabled: true,

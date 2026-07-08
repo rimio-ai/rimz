@@ -14,6 +14,7 @@ rimz                       # open the room and drop in
 | Start or reattach a room for a path | `rimz start [PATH]` |
 | Attach by directory or exact session name | `rimz attach [SESSION]` |
 | Connect to a remote room over SSH | `rimz remote connect <alias-or-target>` |
+| Install Rimz on a remote host over SSH | `rimz remote setup <alias-or-host>` |
 | Open a Zellij room in the browser | `rimz web open [PATH]` |
 | Save, update, rename, list, or remove remote aliases | `rimz remote add` / `update` / `rename` / `list` / `rm` |
 | Attribute render-stream bytes in the current room | `rimz remote bandwidth` |
@@ -43,6 +44,7 @@ rimz attach [SESSION] [same flags]
 
 ```sh
 rimz remote add dev-box dev-box:query-engine     # save an alias
+rimz remote setup dev-box                        # install rimz on the remote host
 rimz remote connect dev-box                      # attach the saved room over SSH
 rimz remote connect dev-box --web                # open the remote Zellij web UI locally
 rimz remote connect agent@prod-box:/srv/query-engine
@@ -56,6 +58,7 @@ A raw target is `[user@]host:<session-or-path>`. After the colon, a value contai
 | Subcommand | Effect |
 | --- | --- |
 | `remote connect <alias-or-target>` | Attach the room over SSH, reconnect-supervised |
+| `remote setup <alias-or-host>` | Install `rimz` to `~/.local/bin` on the host over SSH |
 | `remote add <name> <target>` | Save an alias in `~/.config/rimz/remote.toml` |
 | `remote update <name> <target>` | Replace a saved alias's target and flags |
 | `remote rename <old> <new>` | Rename a saved alias |
@@ -67,6 +70,7 @@ A raw target is `[user@]host:<session-or-path>`. After the colon, a value contai
 The details that matter in practice:
 
 - `remote add` treats any input with a `:` as a raw target and everything else as an alias name. On an existing name it prompts to overwrite in an interactive terminal and errors otherwise, so a saved alias is never silently replaced; use `remote update` in a script. `update` takes the same flags as `add`, errors when the alias does not exist, and resets flags you do not pass to their defaults.
+- `remote setup <alias-or-host>` accepts a saved alias, a raw `[user@]host:<session-or-path>` target, or a bare `[user@]host`, then installs the verified prebuilt release to `~/.local/bin/rimz` on that host. When `remote connect` or `remote connect --web` finds no remote binary, the local error points back to this setup command instead of describing reconnect policy.
 - Reconnect supervision is on by default. `--no-reconnect` hands the link to one SSH run; `remote add --no-reconnect` saves that as the alias default.
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`; `remote add --no-resume` saves that birth behavior on the alias.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.
