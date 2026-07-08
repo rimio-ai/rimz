@@ -162,9 +162,7 @@ pub(super) fn stamp_hosted_agent_processes(
     }
 }
 
-/// Restore a hosted lazy-agent stamp across a transient root-process scan miss.
-/// The carry is bounded by the same pane-carry TTL and anchored to the first
-/// missed scan, so a real exit demotes once the miss stops being transient.
+/// One prior hosted stamp the carry declined to restore, with its declining reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct HostedCarryDrop {
     pub(super) pane_id: PaneId,
@@ -172,6 +170,9 @@ pub(super) struct HostedCarryDrop {
     pub(super) reason: HostedCarryDropReason,
 }
 
+/// Restore a hosted lazy-agent stamp across a transient root-process scan miss.
+/// The carry is bounded by the same pane-carry TTL and anchored to the first
+/// missed scan, so a real exit demotes once the miss stops being transient.
 pub(super) fn carry_hosted_agent_stamps(
     frame: &mut PaneFrame,
     prior: Option<&PaneFrame>,
