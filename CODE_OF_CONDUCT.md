@@ -4,4 +4,4 @@ Rimz adopts the [Contributor Covenant Code of Conduct, version 2.1](https://www.
 
 Project spaces are for collaborative, respectful technical work. Maintainers enforce that standard across issues, pull requests, discussions, and project-run communication channels.
 
-Report conduct concerns to `rimio.ai@gmail.com`. Maintainers review reports privately and act under the Contributor Covenant enforcement guidelines.
+Report conduct concerns to `conduct@rimio.ai`. Maintainers review reports privately and act under the Contributor Covenant enforcement guidelines.

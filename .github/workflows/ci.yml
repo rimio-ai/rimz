@@ -12,6 +12,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+  packages: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_HTTP_TIMEOUT: "120"
@@ -22,7 +26,9 @@ env:
   # `-D warnings` is the deny-warnings gate.
   RUSTFLAGS: -D warnings
   RUST_BACKTRACE: 1
-  SCCACHE_GHA_ENABLED: "on"
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   checks:
@@ -33,13 +39,13 @@ jobs:
     # starting warm: Rust, cargo plugins, cargo-vet, tmux, Zellij, mold,
     # sccache, and the release toolchain are baked once by ci-image.yml. The
     # workspace path stays stable for cargo cache keys, concurrent jobs stay
-    # isolated, and every run skips per-job toolchain bootstrap. The private
-    # Gitea package pulls with a dedicated read:package PAT.
+    # isolated, and every run skips per-job toolchain bootstrap.
     container:
-      image: ${{ vars.RIMZ_CI_IMAGE }}
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      options: --init
       credentials:
-        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
-        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     concurrency:
       group: ci-commit-${{ github.sha }}-checks
       cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -47,11 +53,15 @@ jobs:
       - name: Assert running in the rimz-ci image
         run: |
           test -f /etc/rimz-ci || {
-            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
+            exit 1
+          }
+          command -v sccache >/dev/null || {
+            echo "::error::sccache missing from rimz-ci image - dispatch ci-image.yml to rebuild/push it"
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cargo registry cache
         # rust-cache keeps the registry and git index warm; sccache owns
@@ -63,7 +73,7 @@ jobs:
           cache-bin: false
           cache-targets: false
 
-      - name: Install sccache
+      - name: Configure sccache
         uses: mozilla-actions/sccache-action@v0.0.10
         with:
           version: "v0.16.0"
@@ -88,10 +98,11 @@ jobs:
     # `semver` fetch the crates.io index/baseline directly, bypass the mirror,
     # and retry transient egress. All three gates block the job.
     container:
-      image: ${{ vars.RIMZ_CI_IMAGE }}
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      options: --init
       credentials:
-        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
-        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     concurrency:
       group: ci-commit-${{ github.sha }}-externals
       cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -99,11 +110,15 @@ jobs:
       - name: Assert running in the rimz-ci image
         run: |
           test -f /etc/rimz-ci || {
-            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
+            exit 1
+          }
+          command -v sccache >/dev/null || {
+            echo "::error::sccache missing from rimz-ci image - dispatch ci-image.yml to rebuild/push it"
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cargo registry cache
         # A warm registry/index feeds deny local yanked data and trims vet/semver egress.
@@ -114,7 +129,7 @@ jobs:
           cache-bin: false
           cache-targets: false
 
-      - name: Install sccache
+      - name: Configure sccache
         uses: mozilla-actions/sccache-action@v0.0.10
         with:
           version: "v0.16.0"
@@ -193,10 +208,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
-      image: ${{ vars.RIMZ_CI_IMAGE }}
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      options: --init
       credentials:
-        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
-        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     concurrency:
       group: ci-commit-${{ github.sha }}-build-tests
       cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -204,11 +220,15 @@ jobs:
       - name: Assert running in the rimz-ci image
         run: |
           test -f /etc/rimz-ci || {
-            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
+            exit 1
+          }
+          command -v sccache >/dev/null || {
+            echo "::error::sccache missing from rimz-ci image - dispatch ci-image.yml to rebuild/push it"
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cargo registry cache
         uses: Swatinem/rust-cache@v2
@@ -218,7 +238,7 @@ jobs:
           cache-bin: false
           cache-targets: false
 
-      - name: Install sccache
+      - name: Configure sccache
         uses: mozilla-actions/sccache-action@v0.0.10
         with:
           version: "v0.16.0"
@@ -229,7 +249,7 @@ jobs:
           mold -run cargo xtask test-archive --archive-file target/ci/nextest-archive.tar.zst
 
       - name: Upload nextest archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextest-archive
           path: target/ci/nextest-archive.tar.zst
@@ -246,10 +266,11 @@ jobs:
     timeout-minutes: 30
     needs: build-tests
     container:
-      image: ${{ vars.RIMZ_CI_IMAGE }}
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      options: --init
       credentials:
-        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
-        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     concurrency:
       group: ci-commit-${{ github.sha }}-tests-gate
       cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -257,14 +278,14 @@ jobs:
       - name: Assert running in the rimz-ci image
         run: |
           test -f /etc/rimz-ci || {
-            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download nextest archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nextest-archive
           path: .
@@ -281,10 +302,11 @@ jobs:
     timeout-minutes: 45
     needs: build-tests
     container:
-      image: ${{ vars.RIMZ_CI_IMAGE }}
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      options: --init
       credentials:
-        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
-        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     concurrency:
       group: ci-commit-${{ github.sha }}-tests-live
       cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -292,14 +314,14 @@ jobs:
       - name: Assert running in the rimz-ci image
         run: |
           test -f /etc/rimz-ci || {
-            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download nextest archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nextest-archive
           path: .

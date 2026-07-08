@@ -62,7 +62,7 @@ jobs:
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: cargo xtask checks
         run: |
@@ -104,7 +104,7 @@ jobs:
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: cargo xtask deny
         # Blocking: policy, advisory, yanked, license, and source failures red
@@ -195,7 +195,7 @@ jobs:
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: cargo xtask test (compile)
         id: compile

@@ -11,7 +11,7 @@
 <p align="center"><strong>agent fleet · harness dashboard · loops · local & remote · tmux & zellij · token insight</strong></p>
 
 <p align="center">
-  <a href="https://github.com/rimio/rimz/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/rimio/rimz/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/rimio-ai/rimz/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/rimio-ai/rimz/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://crates.io/crates/rimz"><img alt="crates.io" src="https://img.shields.io/crates/v/rimz.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>

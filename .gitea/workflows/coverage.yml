@@ -33,7 +33,7 @@ jobs:
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cargo registry cache
         uses: Swatinem/rust-cache@v2
@@ -66,8 +66,7 @@ jobs:
           mold -run cargo xtask coverage
 
       - name: Upload lcov artifact
-        # Gitea's GHES-compatible artifact API does not support artifact v4.
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: lcov.info
           path: target/ci/coverage/lcov.info

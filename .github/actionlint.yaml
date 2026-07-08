@@ -9,4 +9,3 @@ paths:
   .gitea/workflows/**/*.yml:
     ignore:
       - 'unknown permission scope "(code|releases)"'
-      - 'the runner of "actions/(upload|download)-artifact@v3" action is too old to run on GitHub Actions'

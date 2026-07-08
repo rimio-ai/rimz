@@ -262,7 +262,7 @@ The individual gates:
 
 ## Continuous integration
 
-CI lives in two workflow trees: `.gitea/workflows/` for the Gitea origin and `.github/workflows/` for the GitHub mirror. Both run the same gates inside the `rimz-ci` image; they differ only in how the test tiers are scheduled. Each pipeline runs three job groups in parallel:
+CI lives in two workflow trees: `.gitea/workflows/` for the Gitea origin and `.github/workflows/` for the GitHub mirror. Both run the same gates inside the `rimz-ci` image; GitHub pulls `ghcr.io/<owner>/rimz-ci:latest` with the built-in `GITHUB_TOKEN`, while Gitea pulls the configured `RIMZ_CI_IMAGE` with its registry token. The pipelines differ in how the test tiers are scheduled. Each pipeline runs three job groups in parallel:
 
 - `checks` — `cargo xtask checks`.
 - `externals` — the `deny`, `vet`, and `semver` gates as separate steps (locally: `cargo xtask externals`). They sit apart from `checks` because deny reads the baked advisory DB offline while vet and semver fetch crates.io directly, bypassing the runners' nexus mirror, so transient egress retries stay out of the main jobs.
@@ -277,6 +277,8 @@ Compile jobs route through `sccache`. On Gitea PR CI the backend comes from the 
 ### CI image
 
 The `rimz-ci` image bakes Node for Actions, the pinned Rust toolchain with required components and targets, the cargo gate plugins, `cargo-vet`, `sccache`, a warm RustSec advisory database, a warm cargo registry, tmux, Zellij, mold, Python, `cargo-zigbuild`, Zig, `rcodesign`, and `gh`. Tool versions live in `ci/Dockerfile`, the single source of truth for containerized CI and release jobs.
+
+On GitHub, `ci-image.yml` builds `ci/Dockerfile` on `ubuntu-latest`, pushes both an immutable `rimz-ci:<tag>` and `rimz-ci:latest` to GHCR, and uses only the workflow `GITHUB_TOKEN` with `packages: write`. First bootstrap is a manual dispatch after the workflow lands on GitHub; when the repository opens to fork PRs, make the GHCR package public so unaffiliated forks can pull `ghcr.io/<owner>/rimz-ci:latest`.
 
 On Gitea, a weekly schedule dispatches the default `ci-image.yml` refresh automatically: it refreshes the baked RustSec advisory DB and cargo registry on the current `RIMZ_CI_IMAGE` base, pushes a new immutable `rimz-ci:<tag>`, then repoints the repository variable that consuming workflows read. Manual dispatch remains the path for immediate advisory/registry refreshes and toolchain changes; for toolchain changes, edit `ci/Dockerfile` first, then dispatch with `full=true` so the image rebuilds from the Dockerfile before repointing.
 

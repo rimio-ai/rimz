@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,13 +35,13 @@ jobs:
     # CI: Rust, gate plugins, cargo-vet, Python, tmux, Zellij, mold, zig,
     # cargo-zigbuild, rcodesign, and gh are baked once by ci-image.yml.
     # rust-cache still restores target/release-ci, but release jobs no longer
-    # spend minutes reinstalling toolchains before the gate and dist build. The
-    # private Gitea package pulls with a dedicated read:package PAT.
+    # spend minutes reinstalling toolchains before the gate and dist build.
     container:
-      image: ${{ vars.RIMZ_CI_IMAGE }}
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      options: --init
       credentials:
-        username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
-        password: ${{ secrets.REGISTRY_PULL_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     # A `workflow_run` fires for every CI conclusion; gate on success so only a
     # green default-branch build publishes. Tag pushes and manual dispatches run
     # the gate themselves (the `cargo xtask ci` step below) before publishing.
@@ -49,11 +50,11 @@ jobs:
       - name: Assert running in the rimz-ci image
         run: |
           test -f /etc/rimz-ci || {
-            echo "::error::not inside rimz-ci image — RIMZ_CI_IMAGE is unset or wrong; dispatch ci-image.yml to build/push it and set the variable"
+            echo "::error::not inside rimz-ci image - dispatch ci-image.yml to build/push ghcr.io/${GITHUB_REPOSITORY_OWNER}/rimz-ci:latest"
             exit 1
           }
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Build the exact commit CI validated; for tags/dispatch this is the
           # event's own ref.
@@ -144,7 +145,7 @@ jobs:
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "actions@rimio.ai"
           git tag -f "$RELEASE_TAG" "$RELEASE_COMMIT"
           git push origin "refs/tags/${RELEASE_TAG}" --force
 
@@ -216,7 +217,7 @@ jobs:
             cargo xtask brew-formula
 
           git -C "$tap_dir" config user.name "github-actions[bot]"
-          git -C "$tap_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$tap_dir" config user.email "actions@rimio.ai"
           git -C "$tap_dir" add Formula/rimz.rb
           if git -C "$tap_dir" diff --cached --quiet; then
             echo "formula already up to date"

@@ -24,7 +24,7 @@ brew install rimz
 
 ## Install a prebuilt binary
 
-Every [release](https://github.com/rimio/rimz/releases) ships one archive per platform plus a `SHA256SUMS` file:
+Every [release](https://github.com/rimio-ai/rimz/releases) ships one archive per platform plus a `SHA256SUMS` file:
 
 | Archive | Platform |
 | --- | --- |
@@ -35,8 +35,8 @@ Every [release](https://github.com/rimio/rimz/releases) ships one archive per pl
 Download, verify, and install (shown for Linux; swap the archive name on macOS and verify with `shasum -a 256 -c --ignore-missing`):
 
 ```sh
-curl -fsSLO https://github.com/rimio/rimz/releases/latest/download/rimz-x86_64-unknown-linux-gnu.tar.gz
-curl -fsSLO https://github.com/rimio/rimz/releases/latest/download/SHA256SUMS
+curl -fsSLO https://github.com/rimio-ai/rimz/releases/latest/download/rimz-x86_64-unknown-linux-gnu.tar.gz
+curl -fsSLO https://github.com/rimio-ai/rimz/releases/latest/download/SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 tar -xzf rimz-x86_64-unknown-linux-gnu.tar.gz
 sudo install -m 0755 rimz-x86_64-unknown-linux-gnu/rimz /usr/local/bin/rimz
@@ -118,7 +118,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 Then clone and install:
 
 ```sh
-git clone https://github.com/rimio/rimz.git
+git clone https://github.com/rimio-ai/rimz.git
 cd rimz
 cargo xtask install
 ```
