@@ -288,7 +288,7 @@ pub(crate) fn install(root: &Path) -> Result<()> {
 /// profiling build reports off-box events to the `development` environment by
 /// default, so contributor telemetry stays off the production dashboard; opt in
 /// by resolving a DSN at runtime. See
-/// [off-box error reporting](../../docs/internals/health/diagnostics.md#off-box-error-reporting).
+/// [off-box error reporting](../../docs/internals/diagnostics.md#off-box-error-reporting).
 pub(crate) fn install_dev(root: &Path) -> Result<()> {
     let stage = stage_dev_install(root)?;
     install_from_stage(&stage)?;
