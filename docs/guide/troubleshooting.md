@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> When something looks off, `rimz doctor` is the first move: it inspects the machine, names the cause, and prints the fix. This page is the symptom-to-fix catalogue for the cases doctor points at, and the recovery commands when a room needs a reset. It owns diagnosis and repair; each linked guide owns the concept behind the fix.
+> When something looks off, `rimz doctor` is the first move: it inspects the machine, names the cause, and prints the fix. This page is the symptom-to-fix catalogue for the cases doctor points at, and the recovery commands when a room needs a reset.
 
 ## Start with `rimz doctor`
 
@@ -55,7 +55,7 @@ On Zellij, Rimz loads a small presence plugin so the sidebar learns pane topolog
 
 ### "Sidebar degraded" banner
 
-A banner such as `Sidebar degraded for 8s: snapshot failed: store not found` means a render could not read a fresh snapshot — usually the binary moved on disk or the store directory vanished mid-write. The store stays authoritative, so nothing is lost: fix the underlying cause (reinstall or repoint the binary, confirm the state directory exists) and the banner clears on the next good frame. On recovery it steps down to a dim, dismissable notice (`⚠ last alert 8s ago: … · x dismiss`) so a failure that flickered past is still visible after the fact; `x` clears it and a fresh failure re-arms it.
+A banner such as `Sidebar degraded for 8s: snapshot failed: store not found` means a render could not read a fresh snapshot — usually the binary moved on disk or the store (Rimz's durable state directory) vanished mid-write. The store stays authoritative, so nothing is lost: fix the underlying cause (reinstall or repoint the binary, confirm the state directory exists) and the banner clears on the next good frame. On recovery it steps down to a dim, dismissable notice (`⚠ last alert 8s ago: … · x dismiss`) so a failure that flickered past is still visible after the fact; `x` clears it and a fresh failure re-arms it.
 
 ### Colors, glyphs, or pets don't render
 
@@ -77,6 +77,19 @@ rimz reload    # re-exec sidebars onto the current build, repair geometry, close
 ```
 
 `rimz reload` runs from anywhere and leaves stopped sessions stopped. Agent version drift and its exact effects are covered in [agent support](../reference/agent-support.md).
+
+## Notifications
+
+### Desktop notifications don't fire
+
+Rimz raises a desktop notification by writing a terminal notification escape (OSC 777) from the sidebar; your terminal turns it into the OS banner, even over SSH. When no banner appears, check in order:
+
+- **Zellij rooms.** Zellij currently drops notification escapes, so `desktop = "auto"` skips them there. For OS-level notifications on Zellij, wire a `[[notifications.handler]]` command (`notify-send`, `ntfy`, or anything else) — the shape is in [configuration → notifications](../reference/configuration.md#notifications).
+- **tmux rooms.** Rimz turns `allow-passthrough` on in its rooms by default, which is what lets the notification bytes through tmux. A personal config that forces it off blocks them.
+- **Terminal and OS.** The terminal must support notification escapes, and the OS must allow notifications from that terminal app (macOS: System Settings → Notifications).
+- **Triggers.** Only the kinds in `notifications.triggers` fire — `["waiting", "failed"]` by default. Add `"success"` if you expect completion pings.
+
+A missed notification loses nothing: the sidebar is the source of truth, so the row stays unread and ranked until you visit it, and an agent that keeps waiting earns a reminder nudge.
 
 ## Project config isn't taking effect
 
@@ -111,7 +124,7 @@ rimz --no-resume    # come up empty: skip recovering prior agents
 
 ### A room is wedged — `rimz reset`
 
-`rimz reset` is the escape hatch for a stuck or resurrected session. It tears the room down, purges the resurrection cache, archives records, sweeps orphaned processes, then rebuilds and reattaches by default.
+`rimz reset` is the escape hatch for a room that is stuck, or that came back wrong after a reboot. It tears the room down, purges the cached session state a rebuild would reuse, archives records, sweeps orphaned processes, then rebuilds and reattaches by default.
 
 ```sh
 rimz reset              # rebuild this workspace's room from clean state
@@ -133,16 +146,13 @@ rimz gc --older-than 7d    # widen the cutoff
 
 ### Where state lives, and full removal
 
-Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `agents.toml`, `loop.toml`), and durable room state lives under `~/.local/state/rimz/`. To remove Rimz from the machine, `rimz uninstall` takes out installed hooks, running rooms, runtime state, and the binaries it finds; durable stores and per-machine config stay unless you ask for them:
+Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, `remote.toml`), and durable room state lives under `~/.local/state/rimz/`. To remove Rimz from the machine, `rimz uninstall` takes out installed hooks, running rooms, runtime state, and the binaries it finds; durable stores and per-machine config stay unless you ask for them:
 
 ```sh
 rimz uninstall            # hooks, rooms, runtime state, binaries; keeps stores and config
-rimz uninstall --state    # also remove durable stores and spend history
-rimz uninstall --config   # also remove config, themes, trust grants, remote aliases
-rimz uninstall --all      # remove both state and config
 ```
 
-Project-local `.rimz/` directories and Rimz-owned worktrees stay in place, because they can hold project config and unlanded work.
+`--state`, `--config`, and `--all` widen the removal to durable stores and per-machine config; the exact scope of each flag is in the [maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall). Project-local `.rimz/` directories and Rimz-owned worktrees stay in place, because they can hold project config and unlanded work.
 
 ## Filing an issue
 
