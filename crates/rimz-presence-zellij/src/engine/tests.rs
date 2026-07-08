@@ -485,6 +485,30 @@ fn session_update_and_keepalive_request_client_sample() {
 }
 
 #[test]
+fn active_tab_switch_requests_client_sample() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let names = BTreeMap::from([(0, "tab-0".to_owned()), (1, "tab-1".to_owned())]);
+    let _ = engine.on_tab_update(Some(0), names.clone(), 20, &host);
+    seed_manifest(
+        &mut engine,
+        tabs_by_index(vec![
+            (0, vec![pane_in_tab(1, 0)]),
+            (1, vec![sidebar_pane(10), pane_in_tab(11, 1)]),
+        ]),
+        30,
+        &host,
+    );
+
+    let effects = engine.on_tab_update(Some(1), names.clone(), 100, &host);
+    assert!(effects.contains(&Effect::ListClients));
+
+    let effects = engine.on_tab_update(Some(1), names, 110, &host);
+    assert!(!effects.contains(&Effect::ListClients));
+}
+
+#[test]
 fn retire_pipe_only_closes_for_different_canonical_bin() {
     let engine = Engine::new(0, config());
 

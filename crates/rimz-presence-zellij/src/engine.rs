@@ -246,6 +246,12 @@ impl Engine {
         });
         self.tab_names = tab_names;
         self.active_tab = active;
+        if previous_active != active {
+            // A tab switch changes which panes attached clients view, but
+            // Zellij sends no client-list event for it. Re-query so the fresh
+            // sample wakes the newly viewed tab's sidebar before keepalive.
+            queue_list_clients(&mut effects);
+        }
         self.active_focused_pane = policy::resolved_focused_pane_id(
             &self.tabs,
             self.active_tab,
