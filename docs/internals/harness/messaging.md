@@ -199,7 +199,7 @@ Threshold forms:
 
 - `70%`: a percentage of the context window; fires when the fill gauge reaches 70%.
 - `120000`: an absolute occupied-token count; fires at 120 000 occupied tokens.
-- `180k` / `1m`: a token count with a `k` (×1,000) or `m` (×1,000,000) suffix; `180k` fires at 180,000 occupied tokens.
+- `180k` / `1m`: a token count with a `k` (×1,000) or `m` (×1,000,000) suffix; `180k` fires at 180 000 occupied tokens.
 
 An omitted flag falls back to the [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) default. An unknown fill never triggers: a missing reading is not a full window, so it sends untouched.
 
