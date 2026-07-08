@@ -19,8 +19,9 @@ pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
 pub const SHARE_SESSION_PIPE: &str = "rimz:share_session";
 
 /// Pipe message name the host backend sends when it needs a topology cache
-/// newer than a local mutation. The plugin publishes one immediate
-/// `panes-changed` wake carrying the current topology payload.
+/// newer than a local mutation. The plugin publishes one immediate `alive` wake
+/// carrying the current topology payload; the host writes the cache and stamp
+/// without broadcasting a sidebar event.
 pub const DUMP_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
 
 /// Pipe message name the host broadcasts after loading the canonical plugin
@@ -335,6 +336,7 @@ pub fn topology_json(
     produced_at_ms: u64,
     writer: Option<policy::TopologyWriter>,
     focused_pane: Option<u32>,
+    clients: Option<&policy::ClientSample>,
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
 ) -> Option<String> {
     let payload = policy::published_topology_payload(
@@ -342,6 +344,7 @@ pub fn topology_json(
         produced_at_ms,
         writer,
         focused_pane,
+        clients.cloned(),
         tabs,
     )?;
     serde_json::to_string(&payload).ok()
@@ -394,6 +397,7 @@ mod tests {
                 loaded_at_ms: 1_000,
             }),
             Some(7),
+            None,
             &tabs,
         )
         .expect("topology serializes");
@@ -417,12 +421,35 @@ mod tests {
             },
         )]);
         policy::apply_foreground_commands(&mut tabs, &BTreeMap::new(), &baseline);
-        let json = topology_json(Some("session-1"), 42, None, Some(7), &tabs)
+        let json = topology_json(Some("session-1"), 42, None, Some(7), None, &tabs)
             .expect("topology serializes");
         let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
 
         assert_eq!(payload["panes"][0]["pane_command"], "zsh");
         assert_eq!(payload["panes"][0]["pane_cwd"], "/repo/main");
+    }
+
+    #[test]
+    fn topology_json_carries_clients_when_sampled() {
+        let tabs = BTreeMap::from([(0, vec![pane(7)])]);
+        let clients = policy::ClientSample {
+            human_clients: 2,
+            viewed_panes: vec![7, 9],
+        };
+        let json = topology_json(Some("session-1"), 42, None, Some(7), Some(&clients), &tabs)
+            .expect("topology serializes");
+        let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
+
+        assert_eq!(payload["clients"]["human_clients"], 2);
+        assert_eq!(
+            payload["clients"]["viewed_panes"],
+            serde_json::json!([7, 9])
+        );
+
+        let json = topology_json(Some("session-1"), 42, None, Some(7), None, &tabs)
+            .expect("topology serializes");
+        let payload: serde_json::Value = serde_json::from_str(&json).expect("topology is JSON");
+        assert!(payload.get("clients").is_none());
     }
 
     #[test]

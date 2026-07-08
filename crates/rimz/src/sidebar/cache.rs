@@ -226,9 +226,10 @@ pub fn read_pane_topology_cache(
 
 /// Whether a same-session plugin topology payload is young enough to use as
 /// Zellij's roster. The window matches the presence liveness window so one
-/// normal keepalive jitter does not fail a read, and the optional floor lets
-/// lifecycle/resize events require a post-signal topology just like they
-/// require a post-signal pane frame.
+/// normal keepalive jitter does not fail a read. Normal verification pulls use
+/// no topology floor: the wake that asks for verification has already written
+/// the topology payload it carries. The optional floor is reserved for explicit
+/// structural repair after a local mux mutation.
 pub fn pane_topology_cache_is_fresh(
     cache: &PaneTopologyCache,
     now_ms: u64,

@@ -153,6 +153,7 @@ impl ZellijBackend {
             produced_at_ms: observed_at_ms,
             writer: None,
             focused_pane,
+            clients: None,
             panes: listed.into_iter().map(Into::into).collect(),
         };
         if let Some(workspace_id) = workspace_id

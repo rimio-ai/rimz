@@ -259,6 +259,7 @@ mod tests {
             produced_at_ms,
             writer,
             focused_pane: None,
+            clients: None,
             panes: Vec::new(),
         })
         .expect("topology serializes")

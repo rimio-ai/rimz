@@ -5,6 +5,7 @@
 //! permission gating, and topology publication testable on the host target.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::policy::{
     self, CorrectionAction, FocusCorrection, FocusPatch, ForegroundCommandUpdate, PaneBaseline,
@@ -33,12 +34,20 @@ pub enum Effect {
     CloseSelf,
     /// Arm one host timer, in milliseconds from now.
     SetTimeout(u64),
+    /// Ask Zellij to deliver focused client panes via `Event::ListClients`.
+    ListClients,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectedPaneId {
     Terminal(u32),
     Plugin(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectedClientFocus {
+    pub client_id: u16,
+    pub pane_id: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,6 +84,8 @@ pub struct Engine {
     share_requested: bool,
     timer_gate: TimerGate,
     loaded_at_ms: u64,
+    connected_clients: Option<usize>,
+    client_sample: Option<policy::ClientSample>,
 }
 
 impl Engine {
@@ -102,11 +113,17 @@ impl Engine {
             share_requested: false,
             timer_gate: TimerGate::default(),
             loaded_at_ms: now,
+            connected_clients: None,
+            client_sample: None,
         }
     }
 
     pub fn tab_names(&self) -> &BTreeMap<usize, String> {
         &self.tab_names
+    }
+
+    pub fn session_name(&self) -> Option<&str> {
+        self.session_name.as_deref()
     }
 
     pub fn on_load(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
@@ -319,6 +336,39 @@ impl Engine {
         self.finish_update(now, host, Vec::new())
     }
 
+    pub fn on_session_update(
+        &mut self,
+        connected_clients: Option<usize>,
+        now: u64,
+        host: &impl Host,
+    ) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        self.mark_granted(now, host, &mut effects);
+        if let Some(connected_clients) = connected_clients
+            && self.connected_clients != Some(connected_clients)
+        {
+            self.connected_clients = Some(connected_clients);
+            queue_list_clients(&mut effects);
+        }
+        self.finish_update(now, host, effects)
+    }
+
+    pub fn on_list_clients(
+        &mut self,
+        clients: Vec<ProjectedClientFocus>,
+        now: u64,
+        host: &impl Host,
+    ) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        let sample = client_sample(clients);
+        let changed = self.client_sample.as_ref() != Some(&sample);
+        self.client_sample = Some(sample);
+        if changed {
+            self.run_wake(wire::WakeRequest::Changed, now, &mut effects);
+        }
+        self.finish_update(now, host, effects)
+    }
+
     pub fn on_focus_sidebar_pipe(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
         self.run_focus_sidebar(&mut effects);
@@ -343,7 +393,7 @@ impl Engine {
         if self.probe_baselines(baseline_ids, host) {
             policy::apply_foreground_commands(&mut self.tabs, &self.foreground, &self.baseline);
         }
-        self.run_wake(wire::WakeRequest::Changed, now, &mut effects);
+        self.poke(Poke::Alive, now, host, &mut effects);
         effects
     }
 
@@ -379,6 +429,7 @@ impl Engine {
         }
         self.granted = true;
         effects.push(Effect::HideSelf);
+        queue_list_clients(effects);
         self.apply_runtime_reconfigure(effects);
         if self.pending_pregrant_change {
             self.flush_pregrant_change(now);
@@ -453,6 +504,9 @@ impl Engine {
 
     fn dispatch_due(&mut self, now: u64, host: &impl Host, effects: &mut Vec<Effect>) {
         for poke in self.policy.due(now) {
+            if poke == Poke::Alive {
+                queue_list_clients(effects);
+            }
             self.poke(poke, now, host, effects);
         }
     }
@@ -515,6 +569,7 @@ impl Engine {
             now,
             writer,
             focused,
+            self.client_sample.as_ref(),
             &self.tabs,
         );
         let Some(argv) = wire::wake_argv(&self.wake_context(), request, topology.as_deref()) else {
@@ -629,6 +684,28 @@ fn focused_patch_id(patch: &[FocusPatch]) -> Option<u32> {
         .iter()
         .find(|patch| patch.is_focused)
         .map(|patch| patch.id)
+}
+
+fn queue_list_clients(effects: &mut Vec<Effect>) {
+    if !effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::ListClients))
+    {
+        effects.push(Effect::ListClients);
+    }
+}
+
+fn client_sample(clients: Vec<ProjectedClientFocus>) -> policy::ClientSample {
+    let mut client_ids = BTreeSet::new();
+    let mut viewed_panes = BTreeSet::new();
+    for client in clients {
+        client_ids.insert(client.client_id);
+        viewed_panes.insert(client.pane_id);
+    }
+    policy::ClientSample {
+        human_clients: client_ids.len().try_into().unwrap_or(u32::MAX),
+        viewed_panes: viewed_panes.into_iter().collect(),
+    }
 }
 
 #[cfg(test)]

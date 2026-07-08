@@ -203,6 +203,9 @@ pub struct PaneListing {
     /// Focus resolved by a backend push source that already owns the full
     /// session topology. Used only when the named pane survives listing filters.
     pub authoritative_focus: Option<PaneId>,
+    /// Client focus/presence carried by the same source as `panes`. `None`
+    /// means the caller must sample the backend directly if it needs it.
+    pub client_view: Option<ClientView>,
 }
 
 #[derive(Clone, Debug, Default)]

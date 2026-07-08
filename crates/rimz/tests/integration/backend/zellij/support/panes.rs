@@ -340,6 +340,7 @@ fn write_topology_cache_from_value(
         produced_at_ms: now_ms(),
         writer: None,
         focused_pane: None,
+        clients: None,
         panes: topology_panes,
     };
     let path = xdg

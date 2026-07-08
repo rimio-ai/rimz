@@ -9,8 +9,8 @@ use std::{
 use serde::Deserialize;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-use crate::mux::{PaneListing, ViewSidebars};
+use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
+use crate::mux::{ClientPresence, ClientView, PaneListing, ViewSidebars};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
 /// Cleanliness of a live room after a successful pane inspection.
@@ -473,6 +473,7 @@ impl From<PaneTopologyPane> for RawPane {
     }
 }
 
+#[cfg(test)]
 pub(super) fn raw_panes_from_topology(cache: PaneTopologyCache) -> Vec<RawPane> {
     cache.panes.into_iter().map(Into::into).collect()
 }
@@ -482,16 +483,23 @@ pub(super) struct RawPaneListing {
     pub(super) panes: Vec<RawPane>,
     pub(super) observed_at_ms: u64,
     pub(super) authoritative_focus: Option<PaneId>,
+    pub(super) client_view: Option<ClientView>,
 }
 
 impl RawPaneListing {
     pub(super) fn from_topology(cache: PaneTopologyCache) -> Self {
-        let observed_at_ms = cache.produced_at_ms;
-        let authoritative_focus = cache.focused_pane.map(zellij_pane_id);
+        let PaneTopologyCache {
+            produced_at_ms,
+            focused_pane,
+            clients,
+            panes,
+            ..
+        } = cache;
         Self {
-            panes: raw_panes_from_topology(cache),
-            observed_at_ms,
-            authoritative_focus,
+            panes: panes.into_iter().map(Into::into).collect(),
+            observed_at_ms: produced_at_ms,
+            authoritative_focus: focused_pane.map(zellij_pane_id),
+            client_view: clients.map(client_view_from_topology),
         }
     }
 
@@ -509,7 +517,22 @@ impl RawPaneListing {
                 .collect(),
             observed_at_ms: self.observed_at_ms,
             authoritative_focus: self.authoritative_focus,
+            client_view: self.client_view,
         }
+    }
+}
+
+fn client_view_from_topology(clients: TopologyClients) -> ClientView {
+    ClientView {
+        viewed_panes: clients
+            .viewed_panes
+            .into_iter()
+            .map(zellij_pane_id)
+            .collect(),
+        presence: ClientPresence {
+            human_clients: clients.human_clients as usize,
+            last_input_ms: None,
+        },
     }
 }
 

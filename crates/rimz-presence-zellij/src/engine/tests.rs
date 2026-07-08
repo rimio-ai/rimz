@@ -186,10 +186,12 @@ fn pregrant_change_holds_until_grant_and_grant_without_pending_emits_alive() {
             .iter()
             .any(|effect| matches!(effect, Effect::Reconfigure(_)))
     );
+    assert!(effects.contains(&Effect::ListClients));
     assert_eq!(reasons(&effects), vec!["panes-changed"]);
 
     let mut fresh = Engine::new(0, config());
     let effects = fresh.on_permission_granted(20, &host);
+    assert!(effects.contains(&Effect::ListClients));
     assert_eq!(reasons(&effects), vec!["alive"]);
 }
 
@@ -202,6 +204,7 @@ fn cached_grant_on_first_manifest_hides_and_first_manifest_is_baseline() {
     let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 10, &host);
 
     assert!(effects.contains(&Effect::HideSelf));
+    assert!(effects.contains(&Effect::ListClients));
     assert_eq!(reasons(&effects), vec!["alive"]);
     assert!(
         !reasons(&effects).contains(&"pane-opened"),
@@ -411,11 +414,74 @@ fn dump_topology_bypasses_floor_and_pregrant_dump_holds_signal() {
     );
 
     let effects = engine.on_dump_topology_pipe(150, &host);
-    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    assert_eq!(reasons(&effects), vec!["alive"]);
     assert!(
         run_commands(&effects)[0].contains(&"--topology".to_owned()),
         "dump publishes immediate topology even inside the duplicate floor",
     );
+}
+
+#[test]
+fn list_clients_change_emits_changed_wake_and_unchanged_reply_is_quiet() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    seed_manifest(&mut engine, tabs(vec![pane(1), pane(2)]), 20, &host);
+
+    let sample = vec![
+        ProjectedClientFocus {
+            client_id: 2,
+            pane_id: 2,
+        },
+        ProjectedClientFocus {
+            client_id: 1,
+            pane_id: 1,
+        },
+        ProjectedClientFocus {
+            client_id: 1,
+            pane_id: 1,
+        },
+    ];
+    let effects = engine.on_list_clients(sample.clone(), 30, &host);
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["clients"]["human_clients"], 2);
+    assert_eq!(
+        topology["clients"]["viewed_panes"],
+        serde_json::json!([1, 2])
+    );
+
+    let effects = engine.on_list_clients(sample, 40, &host);
+    assert!(
+        run_commands(&effects).is_empty(),
+        "unchanged client sample should not wake"
+    );
+
+    let effects = engine.on_list_clients(
+        vec![ProjectedClientFocus {
+            client_id: 1,
+            pane_id: 1,
+        }],
+        50,
+        &host,
+    );
+    assert_eq!(reasons(&effects), vec!["panes-changed"]);
+}
+
+#[test]
+fn session_update_and_keepalive_request_client_sample() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+
+    let effects = engine.on_session_update(Some(1), 20, &host);
+    assert!(effects.contains(&Effect::ListClients));
+    let effects = engine.on_session_update(Some(1), 30, &host);
+    assert!(!effects.contains(&Effect::ListClients));
+
+    let effects = engine.on_timer(KEEPALIVE_MS, &host);
+    assert!(effects.contains(&Effect::ListClients));
+    assert_eq!(reasons(&effects), vec!["alive"]);
 }
 
 #[test]

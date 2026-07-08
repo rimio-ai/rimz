@@ -125,7 +125,15 @@ pub struct TopologyPayload {
     pub writer: Option<TopologyWriter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_pane: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clients: Option<ClientSample>,
     pub panes: Vec<PaneFields>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClientSample {
+    pub human_clients: u32,
+    pub viewed_panes: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -139,6 +147,7 @@ pub fn published_topology_payload(
     produced_at_ms: u64,
     writer: Option<TopologyWriter>,
     focused_pane: Option<u32>,
+    clients: Option<ClientSample>,
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
 ) -> Option<TopologyPayload> {
     if tabs.is_empty() {
@@ -149,6 +158,7 @@ pub fn published_topology_payload(
         produced_at_ms,
         writer,
         focused_pane,
+        clients,
         panes: tabs.values().flatten().cloned().collect(),
     })
 }

@@ -282,6 +282,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
         panes: parsed,
         observed_at_ms: 1,
         authoritative_focus: None,
+        client_view: None,
     }
     .into_pane_listing("rimz-test".to_owned(), |mut p, session_name| {
         if !p.is_listed_pane() {

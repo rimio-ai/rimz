@@ -171,7 +171,7 @@ fn raw_stable_hash_ignores_titles_but_tracks_stable_fields() {
 fn published_topology_payload_carries_resolved_focus() {
     let manifest = tabs(vec![pane(1), focused(pane(2))]);
     let resolved = resolved_focused_pane_id(&manifest, Some(0), None);
-    let payload = published_topology_payload("rimz-test", 42, None, resolved, &manifest)
+    let payload = published_topology_payload("rimz-test", 42, None, resolved, None, &manifest)
         .expect("topology payload publishes");
 
     assert_eq!(payload.focused_pane, Some(2));
@@ -186,6 +186,7 @@ fn published_topology_payload_carries_writer() {
             plugin_id: 9,
             loaded_at_ms: 1000,
         }),
+        None,
         None,
         &tabs(vec![pane(1)]),
     )
@@ -289,7 +290,7 @@ fn published_topology_payload_carries_baseline_cwd() {
         },
     )]);
     apply_foreground_commands(&mut manifest, &BTreeMap::new(), &baseline);
-    let payload = published_topology_payload("rimz-test", 42, None, Some(1), &manifest)
+    let payload = published_topology_payload("rimz-test", 42, None, Some(1), None, &manifest)
         .expect("topology payload publishes");
     let encoded = serde_json::to_value(payload).expect("payload serializes");
 

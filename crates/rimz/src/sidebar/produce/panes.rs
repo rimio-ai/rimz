@@ -66,11 +66,9 @@ fn fresh_snapshot_cache(
 /// The session's live panes from the mux — the roster read the snapshot cache
 /// amortizes across the fleet. The store rollup is read separately (fresh from
 /// `latest.json`), so this enumerates only the pane set.
-/// The per-view `is_focused` mark rides the pane list itself as a fallback
-/// focus candidate. The elected producer also samples the attached clients'
-/// viewed panes once per tick so the viewed tab anchors to the user's focused
-/// pane and focus-clearing unread is gated on the tab the user is actually
-/// viewing.
+/// The per-view `is_focused` mark rides the pane list itself as a fallback focus
+/// candidate. Zellij topology may carry client focus/presence from the plugin;
+/// other paths keep the direct backend sample fallback.
 fn list_session_panes(
     mux: MuxName,
     session: &str,
@@ -256,6 +254,7 @@ pub fn repaired_pane_frame_for_binding(
             panes: fixture,
             observed_at_ms: unix_now_ms(),
             authoritative_focus: None,
+            client_view: None,
         },
         None => list_session_panes(
             mux,
@@ -593,27 +592,36 @@ pub(super) fn cached_panes_or_produce(
                 return Err(err);
             }
         };
-        let observed_at_ms = listing.observed_at_ms;
-        let authoritative_focus = listing.authoritative_focus;
-        let panes = filter_foreign_session_panes(listing.panes, session, diag);
+        let PaneListing {
+            panes,
+            observed_at_ms,
+            authoritative_focus,
+            client_view: pushed_client_view,
+        } = listing;
+        let panes = filter_foreign_session_panes(panes, session, diag);
         let prior = read_snapshot_cache(&cache_path, session);
-        // Renderer paint gating still depends on fresh client focus. Sample
-        // `client_view` on every producer tick so a newly viewed tab can
-        // repaint immediately; a failed Zellij sample carries the last
-        // publish forward because topology is the roster source.
+        // Renderer paint gating depends on fresh client focus. Zellij's
+        // topology push carries it; backends without pushed presence fall back
+        // to a direct client sample.
         let prior_client_view = || {
             prior.as_ref().map_or_else(
                 || (Vec::new(), None),
                 |prior| (prior.viewed_panes.clone(), prior.presence),
             )
         };
-        let (viewed_panes, presence) = match client_view(mux, session) {
-            Ok(client_view) => {
+        let (viewed_panes, presence) = match pushed_client_view {
+            Some(client_view) => {
                 let presence = presence_sample_from_client_view(&client_view);
                 (client_view.viewed_panes, Some(presence))
             }
-            Err(_) if mux == MuxName::Zellij => prior_client_view(),
-            Err(_) => (Vec::new(), None),
+            None => match client_view(mux, session) {
+                Ok(client_view) => {
+                    let presence = presence_sample_from_client_view(&client_view);
+                    (client_view.viewed_panes, Some(presence))
+                }
+                Err(_) if mux == MuxName::Zellij => prior_client_view(),
+                Err(_) => (Vec::new(), None),
+            },
         };
         let (mut frame, diagnostics) =
             crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
@@ -654,7 +662,7 @@ pub(super) fn cached_panes_or_produce(
             {
                 return Ok(prior);
             }
-            let frame = produce_candidate(false, min_pane_cache_ms, false)?;
+            let frame = produce_candidate(false, None, false)?;
             let frame = confirm_and_carry(
                 frame,
                 prior.as_deref(),
@@ -678,7 +686,7 @@ pub(super) fn cached_panes_or_produce(
         // until this arm returns.
         Coalesced::Produce(_guard) => {
             let prior = read_snapshot_cache(&cache_path, session);
-            let frame = produce_candidate(true, min_pane_cache_ms, false)?;
+            let frame = produce_candidate(true, None, false)?;
             // A mid-tick mux race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, run the shared repaired-frame

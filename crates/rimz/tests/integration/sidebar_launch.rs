@@ -221,6 +221,7 @@ impl MuxBackend for FakeBackend {
             }],
             observed_at_ms: rimz::sidebar::timing::unix_now_ms(),
             authoritative_focus: None,
+            client_view: None,
         })
     }
 

@@ -55,7 +55,7 @@ exit 0
 #[test]
 fn list_panes_uses_fresh_topology_without_zellij_action() {
     use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
     use crate::mux::{MuxBackend, PaneListOptions};
     use crate::sidebar::cache::write_pane_topology_cache;
     use crate::sidebar::timing::unix_now_ms;
@@ -84,6 +84,10 @@ exit 0
             produced_at_ms: unix_now_ms(),
             writer: None,
             focused_pane: Some(7),
+            clients: Some(TopologyClients {
+                human_clients: 2,
+                viewed_panes: vec![7],
+            }),
             panes: vec![PaneTopologyPane {
                 id: 7,
                 is_plugin: false,
@@ -124,11 +128,96 @@ exit 0
         listing.panes[0].cwd.as_deref(),
         Some(project_root.to_string_lossy().as_ref()),
     );
+    let client_view = listing.client_view.expect("topology carries client view");
+    assert_eq!(client_view.presence.human_clients, 2);
+    assert_eq!(client_view.presence.last_input_ms, None);
+    assert_eq!(
+        client_view.viewed_panes,
+        vec![listing.panes[0].pane_id.clone()]
+    );
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).unwrap_or_default();
     assert!(
-        !log.contains("action list-panes") && !log.contains("rimz:dump_topology"),
+        !log.contains("action list-panes")
+            && !log.contains("action list-clients")
+            && !log.contains("rimz:dump_topology"),
         "fresh topology should avoid zellij actions:\n{log}",
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn list_panes_trusts_fresh_topology_without_structural_floor() {
+    use crate::ids::WorkspaceId;
+    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+    use crate::mux::{MuxBackend, PaneListOptions};
+    use crate::sidebar::cache::write_pane_topology_cache;
+    use crate::sidebar::timing::unix_now_ms;
+    use crate::store::paths::RuntimePaths;
+
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+exit 1
+"#,
+    );
+    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let workspace_id = WorkspaceId::from_project_root(&project_root);
+    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let floor = unix_now_ms();
+    write_pane_topology_cache(
+        &runtime,
+        &PaneTopologyCache {
+            session_name: "rimz-test".to_owned(),
+            produced_at_ms: floor.saturating_sub(1),
+            writer: None,
+            focused_pane: Some(7),
+            clients: None,
+            panes: vec![PaneTopologyPane {
+                id: 7,
+                is_plugin: false,
+                is_held: false,
+                exited: false,
+                is_suppressed: false,
+                is_floating: false,
+                is_focused: true,
+                tab_position: 0,
+                tab_name: Some("work".to_owned()),
+                pane_columns: Some(100),
+                pane_x: Some(0),
+                title: Some("zsh".to_owned()),
+                pane_command: Some("zsh".to_owned()),
+                pane_cwd: Some(project_root.to_string_lossy().into_owned()),
+                terminal_command: None,
+            }],
+        },
+    )
+    .expect("write topology cache");
+
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
+    let listing = backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-test".to_owned()),
+            workspace_id: Some(workspace_id.clone()),
+            min_topology_produced_at_ms: None,
+            ..Default::default()
+        })
+        .expect("fresh topology without structural floor is usable");
+    assert_eq!(listing.panes.len(), 1);
+
+    backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-test".to_owned()),
+            workspace_id: Some(workspace_id),
+            min_topology_produced_at_ms: Some(floor),
+            command_timeout: Some(Duration::from_millis(1)),
+            ..Default::default()
+        })
+        .expect_err("explicit repair floor rejects pre-floor topology");
 }
 
 #[cfg(unix)]
@@ -165,6 +254,7 @@ exit 1
             produced_at_ms: 1,
             writer: None,
             focused_pane: None,
+            clients: None,
             panes: vec![PaneTopologyPane {
                 id: 7,
                 is_plugin: false,
@@ -242,6 +332,7 @@ exit 1
             produced_at_ms: unix_now_ms(),
             writer: None,
             focused_pane: Some(8),
+            clients: None,
             panes: vec![PaneTopologyPane {
                 id: 8,
                 is_plugin: false,
@@ -349,6 +440,7 @@ fn resize_sidebar_toward_demands_post_step_topology() {
             produced_at_ms: unix_now_ms().saturating_sub(1_000),
             writer: None,
             focused_pane: Some(8),
+            clients: None,
             panes: vec![PaneTopologyPane {
                 id: 8,
                 is_plugin: false,
@@ -461,6 +553,7 @@ fn add_sidebar_timeout_never_closes_stdout_only_hint() {
             produced_at_ms: unix_now_ms(),
             writer: None,
             focused_pane: Some(7),
+            clients: None,
             panes: vec![PaneTopologyPane {
                 id: 7,
                 is_plugin: false,
@@ -637,6 +730,7 @@ exit 0
             produced_at_ms: unix_now_ms(),
             writer: None,
             focused_pane: Some(7),
+            clients: None,
             panes: vec![PaneTopologyPane {
                 id: 7,
                 is_plugin: false,

@@ -69,13 +69,14 @@ pub const TAB_READ_DWELL: Duration = Duration::from_millis(2500);
 pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 
 /// Pane-cache TTL while the presence push channel is alive (the presence stamp
-/// is fresh). Typed topology events force a fresh pane list, while exact
-/// command/focus overlays live in each renderer's in-memory event store until
-/// the verifying pull supersedes them. The poll is only the backstop for a
-/// *lost* event — pane truth can stale at most this long before it heals,
-/// while steady-state roster reads drop ~10× versus [`SNAPSHOT_CACHE_TTL`].
-/// Forced freshness (`min_pane_cache_ms`) overrides it, so lifecycle/resize
-/// floors still pull a fresh pane list in event mode.
+/// is fresh). Typed topology events force a fresh pane frame, trusting the
+/// event-carrying wake's own topology write; exact command/focus overlays live
+/// in each renderer's in-memory event store until the verifying pull supersedes
+/// them. The poll is only the backstop for a *lost* event — pane truth can
+/// stale at most this long before it heals, while steady-state roster reads
+/// drop ~10× versus [`SNAPSHOT_CACHE_TTL`]. Forced pane-frame freshness
+/// (`min_pane_cache_ms`) overrides it, while topology freshness floors stay
+/// reserved for explicit structural repair.
 pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
 /// How often the producer re-samples tmux client activity while an idle-capable

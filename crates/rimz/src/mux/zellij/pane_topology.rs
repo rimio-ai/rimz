@@ -2,9 +2,10 @@
 //! `rimz sidebar wake`.
 //!
 //! The cache is Zellij's authoritative pane roster: it carries the topology
-//! fields Rimz needs for pane projection, plus the plugin-retained live
-//! foreground command. `terminal_command` remains the pane's spawn command;
-//! `pane_command` is the foreground display command.
+//! fields Rimz needs for pane projection, the attached-client view when the
+//! plugin has sampled it, plus the plugin-retained live foreground command.
+//! `terminal_command` remains the pane's spawn command; `pane_command` is the
+//! foreground display command.
 //! `pane_cwd` carries the plugin's cwd baseline for implicit shell panes;
 //! `/proc` remains the fallback for process id, cwd, and resource enrichment.
 
@@ -18,8 +19,17 @@ pub struct PaneTopologyCache {
     pub writer: Option<TopologyWriter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_pane: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clients: Option<TopologyClients>,
     #[serde(default)]
     pub panes: Vec<PaneTopologyPane>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopologyClients {
+    pub human_clients: u32,
+    #[serde(default)]
+    pub viewed_panes: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +88,7 @@ mod tests {
 
         assert_eq!(cache.focused_pane, None);
         assert_eq!(cache.writer, None);
+        assert_eq!(cache.clients, None);
     }
 
     #[test]
@@ -119,6 +130,43 @@ mod tests {
         let encoded = serde_json::to_value(&cache).expect("topology serializes");
         assert_eq!(encoded["writer"]["plugin_id"], 9);
         assert_eq!(encoded["writer"]["loaded_at_ms"], 1000);
+    }
+
+    #[test]
+    fn topology_clients_round_trip_and_legacy_payloads_parse() {
+        let cache: PaneTopologyCache = serde_json::from_str(
+            r#"{
+                "session_name": "rimz-test",
+                "produced_at_ms": 42,
+                "clients": { "human_clients": 2, "viewed_panes": [7, 9] },
+                "panes": []
+            }"#,
+        )
+        .expect("topology parses");
+
+        assert_eq!(
+            cache.clients,
+            Some(TopologyClients {
+                human_clients: 2,
+                viewed_panes: vec![7, 9]
+            }),
+        );
+        let encoded = serde_json::to_value(&cache).expect("topology serializes");
+        assert_eq!(encoded["clients"]["human_clients"], 2);
+        assert_eq!(
+            encoded["clients"]["viewed_panes"],
+            serde_json::json!([7, 9])
+        );
+
+        let legacy: PaneTopologyCache = serde_json::from_str(
+            r#"{
+                "session_name": "rimz-test",
+                "produced_at_ms": 42,
+                "panes": []
+            }"#,
+        )
+        .expect("legacy topology parses");
+        assert_eq!(legacy.clients, None);
     }
 
     #[test]

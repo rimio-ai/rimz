@@ -16,6 +16,7 @@ fn pane_topology_cache_freshness_honors_requested_floor() {
         produced_at_ms: 100,
         writer: None,
         focused_pane: None,
+        clients: None,
         panes: Vec::new(),
     };
 
@@ -33,6 +34,7 @@ fn pane_topology_reap_floor_rejects_cache_older_than_fresh_pane_grace() {
         produced_at_ms: floor.saturating_sub(1),
         writer: None,
         focused_pane: None,
+        clients: None,
         panes: Vec::new(),
     };
     let fresh_cache = PaneTopologyCache {

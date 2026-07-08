@@ -9,7 +9,9 @@ mod shell {
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use rimz_presence_zellij::engine::{Effect, Engine, EngineConfig, Host, ProjectedPaneId};
+    use rimz_presence_zellij::engine::{
+        Effect, Engine, EngineConfig, Host, ProjectedClientFocus, ProjectedPaneId,
+    };
     use rimz_presence_zellij::policy::{self, PaneBaseline, PaneFields, RawStablePaneFields};
     use rimz_presence_zellij::wire::{
         self, DUMP_TOPOLOGY_PIPE, FOCUS_SIDEBAR_PIPE, RETIRE_PIPE, SHARE_SESSION_PIPE,
@@ -70,6 +72,8 @@ mod shell {
                 EventType::Timer,
                 EventType::PermissionRequestResult,
                 EventType::RunCommandResult,
+                EventType::SessionUpdate,
+                EventType::ListClients,
             ]);
             let now = now_ms();
             let config = EngineConfig {
@@ -137,6 +141,14 @@ mod shell {
                     engine.on_pane_closed(project_pane_id(pane_id), now, &host)
                 }
                 Event::Timer(_) => engine.on_timer(now, &host),
+                Event::SessionUpdate(sessions, _) => {
+                    let connected_clients =
+                        own_session_connected_clients(engine.session_name(), &sessions);
+                    engine.on_session_update(connected_clients, now, &host)
+                }
+                Event::ListClients(clients) => {
+                    engine.on_list_clients(project_clients(&clients), now, &host)
+                }
                 _ => Vec::new(),
             };
             execute(effects);
@@ -195,6 +207,7 @@ mod shell {
                 Effect::ShareSession => share_current_session(),
                 Effect::CloseSelf => close_self(),
                 Effect::SetTimeout(delay_ms) => set_timeout(delay_ms as f64 / 1_000.0),
+                Effect::ListClients => list_clients(),
             }
         }
     }
@@ -204,6 +217,38 @@ mod shell {
             PaneId::Terminal(id) => ProjectedPaneId::Terminal(id),
             PaneId::Plugin(id) => ProjectedPaneId::Plugin(id),
         }
+    }
+
+    fn own_session_connected_clients(
+        session_name: Option<&str>,
+        sessions: &[SessionInfo],
+    ) -> Option<usize> {
+        session_name
+            .and_then(|name| {
+                sessions
+                    .iter()
+                    .find(|session| session.name == name)
+                    .map(|session| session.connected_clients)
+            })
+            .or_else(|| {
+                sessions
+                    .iter()
+                    .find(|session| session.is_current_session)
+                    .map(|session| session.connected_clients)
+            })
+    }
+
+    fn project_clients(clients: &[ClientInfo]) -> Vec<ProjectedClientFocus> {
+        clients
+            .iter()
+            .filter_map(|client| match client.pane_id {
+                PaneId::Terminal(pane_id) => Some(ProjectedClientFocus {
+                    client_id: client.client_id,
+                    pane_id,
+                }),
+                PaneId::Plugin(_) => None,
+            })
+            .collect()
     }
 
     fn project(
