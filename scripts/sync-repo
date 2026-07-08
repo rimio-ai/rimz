@@ -556,13 +556,12 @@ Resolve the rebase conflicts in this repository. Preserve both upstream and loca
         remote_oid = git_output("rev-parse", remote_ref)
 
         if git_success("merge-base", "--is-ancestor", local_oid, remote_oid):
-            log(f"pulling {self.config.remote}/{self.config.branch} with fast-forward")
-            git("pull", "--ff-only", self.config.remote, self.config.branch)
+            log(f"fast-forwarding {self.config.branch} to {self.config.remote}/{self.config.branch}")
+            git("merge", "--ff-only", remote_ref)
             log(f"pushing {self.config.branch}")
             git("push", self.config.remote, self.config.branch)
         elif git_success("merge-base", "--is-ancestor", remote_oid, local_oid):
-            log(f"{self.config.branch} is ahead of {self.config.remote}/{self.config.branch}; pull verifies fast-forward state")
-            git("pull", "--ff-only", self.config.remote, self.config.branch)
+            log(f"{self.config.branch} is ahead of {self.config.remote}/{self.config.branch}")
             log(f"pushing {self.config.branch}")
             git("push", self.config.remote, self.config.branch)
         else:
