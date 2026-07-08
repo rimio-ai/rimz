@@ -761,9 +761,10 @@ fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
     };
     let runtime =
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
+    let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
     write_presence_stamp(&runtime);
     write_plugin_presence_sample(&workspace_id, &command)?;
-    write_topology_cache(&runtime, command.topology.as_deref());
+    write_topology_cache(&state, &runtime, command.topology.as_deref());
     let Some(event) = wake_event(
         command.reason,
         command.pane_id.as_deref(),

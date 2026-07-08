@@ -1,13 +1,17 @@
 use super::*;
 
-pub(super) fn write_topology_cache(runtime: &RuntimePaths, topology: Option<&str>) {
+pub(super) fn write_topology_cache(
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    topology: Option<&str>,
+) {
     let Some(topology) = topology else {
         return;
     };
     match serde_json::from_str::<rimz::mux::zellij::pane_topology::PaneTopologyCache>(topology) {
         Ok(mut cache) => {
             sanitize_topology_cache(&mut cache);
-            if !topology_write_is_accepted(runtime, &cache) {
+            if !topology_write_is_accepted(state, runtime, &cache) {
                 return;
             }
             if let Err(err) = rimz::sidebar::cache::write_pane_topology_cache(runtime, &cache) {
@@ -23,6 +27,7 @@ pub(super) fn write_topology_cache(runtime: &RuntimePaths, topology: Option<&str
 const TOPOLOGY_CONFLICT_DIAG_MS: u64 = 60_000;
 
 fn topology_write_is_accepted(
+    state: &StatePaths,
     runtime: &RuntimePaths,
     incoming: &rimz::mux::zellij::pane_topology::PaneTopologyCache,
 ) -> bool {
@@ -35,7 +40,7 @@ fn topology_write_is_accepted(
     if !rimz::sidebar::cache::pane_topology_cache_is_fresh(&existing, now_ms, None) {
         if incoming.writer != existing.writer {
             emit_topology_writer_changed(
-                runtime,
+                state,
                 &incoming.session_name,
                 existing.writer,
                 incoming.writer,
@@ -46,7 +51,7 @@ fn topology_write_is_accepted(
     if writer_generation(incoming.writer) >= writer_generation(existing.writer) {
         if incoming.writer != existing.writer {
             emit_topology_writer_changed(
-                runtime,
+                state,
                 &incoming.session_name,
                 existing.writer,
                 incoming.writer,
@@ -54,7 +59,7 @@ fn topology_write_is_accepted(
         }
         return true;
     }
-    record_topology_write_rejected(runtime, incoming, &existing, now_ms);
+    record_topology_write_rejected(state, runtime, incoming, &existing, now_ms);
     false
 }
 
@@ -65,24 +70,29 @@ fn writer_generation(
 }
 
 fn emit_topology_writer_changed(
-    runtime: &RuntimePaths,
+    state: &StatePaths,
     session_name: &str,
     prior: Option<rimz::mux::zellij::pane_topology::TopologyWriter>,
     incoming: Option<rimz::mux::zellij::pane_topology::TopologyWriter>,
 ) {
     let (prior_loaded_at_ms, prior_plugin_id) = writer_generation(prior);
     let (loaded_at_ms, plugin_id) = writer_generation(incoming);
-    rimz::diag::DiagSink::for_workspace(runtime.workspace_id.clone(), session_name, None).emit(
-        rimz::diag::record::DiagEvent::TopologyWriterChanged {
-            prior_plugin_id,
-            prior_loaded_at_ms,
-            plugin_id,
-            loaded_at_ms,
-        },
-    );
+    rimz::diag::DiagSink::under(
+        state.root.clone(),
+        state.workspace_id.clone(),
+        session_name,
+        None,
+    )
+    .emit(rimz::diag::record::DiagEvent::TopologyWriterChanged {
+        prior_plugin_id,
+        prior_loaded_at_ms,
+        plugin_id,
+        loaded_at_ms,
+    });
 }
 
 fn record_topology_write_rejected(
+    state: &StatePaths,
     runtime: &RuntimePaths,
     incoming: &rimz::mux::zellij::pane_topology::PaneTopologyCache,
     existing: &rimz::mux::zellij::pane_topology::PaneTopologyCache,
@@ -104,8 +114,9 @@ fn record_topology_write_rejected(
     if emit_diag {
         let (loaded_at_ms, plugin_id) = writer_generation(incoming.writer);
         let (accepted_loaded_at_ms, accepted_plugin_id) = writer_generation(existing.writer);
-        rimz::diag::DiagSink::for_workspace(
-            runtime.workspace_id.clone(),
+        rimz::diag::DiagSink::under(
+            state.root.clone(),
+            state.workspace_id.clone(),
             &incoming.session_name,
             None,
         )
@@ -265,18 +276,31 @@ mod tests {
         .expect("topology serializes")
     }
 
-    fn runtime() -> (tempfile::TempDir, RuntimePaths) {
+    fn state_and_runtime() -> (tempfile::TempDir, StatePaths, RuntimePaths) {
         let dir = tempfile::tempdir().expect("tempdir");
         let workspace_id = rimz::ids::WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime");
+        let state = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+        let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
         runtime.ensure_dirs().expect("runtime dirs");
-        (dir, runtime)
+        (dir, state, runtime)
+    }
+
+    fn topology_diag_path(state: &StatePaths) -> PathBuf {
+        rimz::diag::DiagSink::under(
+            state.root.clone(),
+            state.workspace_id.clone(),
+            "rimz-test",
+            None,
+        )
+        .log_path()
+        .expect("diagnostic log path")
     }
 
     #[test]
     fn topology_gate_rejects_older_writer_while_cache_is_fresh() {
-        let (_dir, runtime) = runtime();
+        let (_dir, state, runtime) = state_and_runtime();
         write_topology_cache(
+            &state,
             &runtime,
             Some(&topology_json(
                 rimz::sidebar::timing::unix_now_ms(),
@@ -285,6 +309,7 @@ mod tests {
         );
 
         write_topology_cache(
+            &state,
             &runtime,
             Some(&topology_json(
                 rimz::sidebar::timing::unix_now_ms(),
@@ -300,19 +325,22 @@ mod tests {
         assert_eq!(conflict.rejected_count, 1);
         assert_eq!(conflict.stale_writer, Some(writer(1, 100)));
         assert_eq!(conflict.accepted_writer, Some(writer(2, 200)));
+        assert!(topology_diag_path(&state).exists());
     }
 
     #[test]
     fn topology_gate_accepts_older_writer_when_cache_is_stale() {
-        let (_dir, runtime) = runtime();
+        let (_dir, state, runtime) = state_and_runtime();
         let stale_at = rimz::sidebar::timing::unix_now_ms()
             .saturating_sub(rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1);
         write_topology_cache(
+            &state,
             &runtime,
             Some(&topology_json(stale_at, Some(writer(2, 200)))),
         );
 
         write_topology_cache(
+            &state,
             &runtime,
             Some(&topology_json(stale_at + 1, Some(writer(1, 100)))),
         );
@@ -321,16 +349,19 @@ mod tests {
             .expect("topology cache");
         assert_eq!(cache.writer, Some(writer(1, 100)));
         assert!(rimz::sidebar::cache::read_topology_writer_conflict(&runtime).is_none());
+        assert!(topology_diag_path(&state).exists());
     }
 
     #[test]
     fn topology_gate_accepts_legacy_writer_over_legacy_cache() {
-        let (_dir, runtime) = runtime();
+        let (_dir, state, runtime) = state_and_runtime();
         write_topology_cache(
+            &state,
             &runtime,
             Some(&topology_json(rimz::sidebar::timing::unix_now_ms(), None)),
         );
         write_topology_cache(
+            &state,
             &runtime,
             Some(&topology_json(
                 rimz::sidebar::timing::unix_now_ms().saturating_add(1),
