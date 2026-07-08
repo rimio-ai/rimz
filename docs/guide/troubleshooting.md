@@ -110,7 +110,7 @@ Editing any executable-surface field re-hashes the project config, and `rimz tru
 
 ### The link keeps dropping
 
-A remote room is plain SSH under a supervisor that reconnects itself when the link drops, and the sidebar footer carries a `⇄ remote` badge that reads link health at a glance. A link that will not hold usually fails the underlying SSH prerequisites: confirm you can `ssh` to the target unattended (key-based auth, a reachable host), then reconnect. Saved aliases and the reconnect model are in [remote and web](./remote.md).
+A remote room is plain SSH under a supervisor that reconnects itself when the link drops, and the sidebar footer carries a `⇄ remote` badge that reads link health at a glance. A link that will not hold usually fails the underlying SSH prerequisites: confirm you can `ssh` to the target unattended (key-based auth, a reachable host), then reconnect. Saved aliases and the reconnect model are in [remote](./remote.md).
 
 ## Reset and clean up
 
@@ -168,6 +168,6 @@ rimz doctor --json --output rimz-doctor.json    # full environment report as JSO
 
 - [Set up your machine](./setup.md) — the first-pass configuration these fixes assume.
 - [Security and trust](./security.md) — the trust model and the presence grant behind two of the fixes above.
-- [Remote and web](./remote.md) — reconnect behavior and link health.
+- [Remote](./remote.md) — reconnect behavior and link health.
 - [CLI reference → maintenance](../reference/cli/maintenance.md) — every flag for `doctor`, `reset`, `gc`, `reload`, and `uninstall`.
 - [Store internals](../internals/store.md) — what `reset` and `gc` touch on disk.

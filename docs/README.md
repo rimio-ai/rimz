@@ -15,7 +15,8 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 
 - [Agents](./guide/agents.md): launch agents by name, set permission modes, and compose several into one layout.
 - [Sidebar](./guide/sidebar.md): read the zones, the agent cards and their lifecycle, and the process rows, and follow how Rimz decides which agent needs you.
-- [Remote and web](./guide/remote.md): reattach locally, connect to a room on an SSH server over a self-healing link, and open a room in the browser.
+- [Remote](./guide/remote.md): reattach locally, connect to a room on an SSH server over a self-healing link, and keep a fleet alive across reboots.
+- [Web](./guide/web.md): open a room in the browser, on the host or tunnelled from a server, gated by a login token.
 
 ## Harness
 

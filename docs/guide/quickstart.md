@@ -186,7 +186,7 @@ Detach with your multiplexer's own key (Zellij `Ctrl-O d`, tmux `prefix d`); the
 rimz remote connect dev-box:~/code/query-engine
 ```
 
-The link reconnects itself when the train wifi drops, and the sidebar comes back exactly as you left it — every agent where it was, every question still waiting, plus whatever finished while you were gone. Aliases, link health, and browser access are [remote.md](./remote.md).
+The link reconnects itself when the train wifi drops, and the sidebar comes back exactly as you left it — every agent where it was, every question still waiting, plus whatever finished while you were gone. Aliases and link health are [remote](./remote.md); opening a room in a browser is [web](./web.md).
 
 ## Where to go next
 
@@ -197,4 +197,5 @@ The link reconnects itself when the train wifi drops, and the sidebar comes back
 - [Messaging](./messaging.md) — steer and queue agents by handle, and let them talk to each other.
 - [The sidebar](./sidebar.md) — reading the column, the agent lifecycle, and how the ranking decides what needs you.
 - [Loops and schedules](./loops.md) — automate the waiting state so the fleet only needs you for real decisions.
-- [Remote and web](./remote.md) — connect to a room on a server and open it in the browser.
+- [Remote](./remote.md) — connect to a room on a server over a self-healing link.
+- [Web](./web.md) — open a room in the browser, on the host or tunnelled from a server.

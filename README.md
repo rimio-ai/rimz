@@ -221,7 +221,7 @@ The [documentation index](./docs/README.md) maps the whole set. Highlights:
 
 - [Quickstart](./docs/guide/quickstart.md) — install to a working fleet, step by step
 - [Set up your machine](./docs/guide/setup.md) — config, hooks, true color, pets, and the Zellij/tmux baselines
-- [Working with agents](./docs/guide/agents.md) — [agents](./docs/guide/agents.md) · [the sidebar](./docs/guide/sidebar.md) · [remote & web](./docs/guide/remote.md)
+- [Working with agents](./docs/guide/agents.md) — [agents](./docs/guide/agents.md) · [the sidebar](./docs/guide/sidebar.md) · [remote](./docs/guide/remote.md) · [web](./docs/guide/web.md)
 - [Harness](./docs/guide/messaging.md) — [messaging](./docs/guide/messaging.md) · [teams](./docs/guide/teams.md) · [worktrees](./docs/guide/worktrees.md) · [scripting agents](./docs/guide/scripting.md) · [loops & schedules](./docs/guide/loops.md)
 - [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/reference/configuration.md) · [Theming](./docs/guide/theme.md) · [Troubleshooting](./docs/guide/troubleshooting.md)
 - [DESIGN.md](./DESIGN.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [internals](./docs/internals/README.md) — how it works, in depth

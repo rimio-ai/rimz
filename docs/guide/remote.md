@@ -1,6 +1,6 @@
-# Remote and web
+# Remote
 
-A Rimz room is a plain Zellij or tmux session, so it travels the way any terminal session does: start it on your laptop or a server, close the lid, and pick it up from anywhere — over SSH, through a self-healing link, or tunnelled into a browser. The room keeps running headless while nobody renders, and the sidebar rebuilds from durable state the moment you reattach: every agent where you left it, every pending question still waiting.
+A Rimz room is a plain Zellij or tmux session, so it travels the way any terminal session does: start it on your laptop or a server, detach, and pick it up from anywhere. Over SSH the link heals itself when the connection drops, and the room keeps running headless while nobody renders. The sidebar rebuilds from durable state the moment you reattach: every agent where you left it, every pending question still waiting. To open a room in a browser instead of a terminal, see [Web](./web.md).
 
 ## Reattach on the same machine
 
@@ -62,41 +62,11 @@ rimz reset --hard        # rebuild without seeding prior agents
 
 Keeping the processes themselves alive across a reboot is the host's job, not Rimz's — reach for systemd, tmux-resurrect, or Zellij resurrect for that, and Rimz reattaches to whatever is still running ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
 
-## Open a room in the browser
-
-`--web` tunnels the same room into a browser on your local machine, over the SSH link, served by Zellij's own web server:
-
-```sh
-rimz remote connect dev --web             # open the remote room at 127.0.0.1
-rimz remote connect dev --web --web-port 8443
-```
-
-On the host itself, `rimz web` drives the local browser server directly:
-
-```sh
-rimz web open      # start the server and open the URL
-rimz web url       # print the URL without starting the server
-rimz web status    # is the server running, and where
-rimz web stop      # stop it
-```
-
-Access is scoped by a login token rather than left open. Manage tokens explicitly:
-
-```sh
-rimz web token create            # mint a login token (--read-only for a watcher)
-rimz web token list              # token names and creation dates
-rimz web token revoke <name>     # revoke one by name
-rimz web token revoke-all        # revoke every token
-```
-
-The token is cached as plaintext mode `0600` on the machine serving the room and stays out of URLs, logs, and store events — treat it like an SSH private key there. A read-only token is observation-only, though terminal output can still carry secrets, and any listener beyond `127.0.0.1` wants HTTPS in front (a reverse proxy with rate limiting is the supported public shape).
-
-Browser access is a Zellij feature; a tmux room reattaches over SSH and does not serve the browser tunnel. The token model and server lifecycle are in [web.md](../internals/web.md).
-
 ## See also
 
+- [Web](./web.md) — open the same room in a browser, locally or tunnelled from a server.
 - [Quickstart](./quickstart.md) — the first session, including leaving and coming back.
 - [Agents](./agents.md) — what the room holds that you are reattaching to.
 - [The sidebar](./sidebar.md) — reading the link-health badge and the recovered column.
 - [Troubleshooting](./troubleshooting.md) — a link that will not connect, a room that will not start, resetting state.
-- [CLI reference](../reference/cli/getting-started.md) · [Configuration](../reference/configuration.md) — the `remote` and `web` command surfaces, and `remote.toml`.
+- [CLI reference](../reference/cli/getting-started.md) · [Configuration](../reference/configuration.md) — the `remote` command surface and `remote.toml`.
