@@ -284,7 +284,7 @@ On Gitea, a weekly schedule dispatches the default `ci-image.yml` refresh automa
 
 ## Release packaging
 
-`cargo xtask dist` packages the host release binary and builds macOS archives for both Apple targets through `cargo-zigbuild`, then ad-hoc signs the Apple Silicon binary with `rcodesign` (the `apple-codesign` crate's CLI). arm64 macOS refuses to `exec` a Mach-O with no code signature; zig linker-signs the arm64 build and reserves the signature room, and the explicit `rcodesign` pass rewrites it to a proper ad-hoc signature — no Apple certificate or notarization — failing loudly if that room ever disappears. The x86_64 build ships as built (Intel execs unsigned binaries). `rust-toolchain.toml` provisions the Apple Rust standard libraries; on Linux the dist task supplies the SDKROOT shape current `rustc` expects while Zig supplies the Darwin linker stubs.
+`cargo xtask dist` packages the host release binary and builds macOS archives for both Apple targets through `cargo-zigbuild`, then ad-hoc signs the Apple Silicon binary with `rcodesign` (the `apple-codesign` crate's CLI). arm64 macOS refuses to `exec` a Mach-O with no code signature; zig linker-signs the arm64 build and reserves the signature room, and the explicit `rcodesign` pass rewrites it to a proper ad-hoc signature — no Apple certificate or notarization — failing loudly if that room ever disappears. The x86_64 build ships as built (Intel execs unsigned binaries). `rust-toolchain.toml` provisions the Apple Rust standard libraries; on Linux the dist task supplies the SDKROOT shape current `rustc` expects and the framework text stubs current macOS dependencies link, while Zig supplies the Darwin libc stubs.
 
 Release maintainers keep three extra tools on `PATH`:
 

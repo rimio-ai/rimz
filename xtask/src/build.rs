@@ -18,6 +18,32 @@ const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"
 const PROFILING_RUSTFLAGS: &str = "-C force-frame-pointers=yes -C symbol-mangling-version=v0";
 const BUILD_PROFILE_OVERRIDE_ENV: &str = "RIMZ_BUILD_PROFILE_OVERRIDE";
 pub(crate) const WASM_MAGIC: [u8; 4] = *b"\0asm";
+const DARWIN_COREFOUNDATION_TBD: &str = r#"--- !tapi-tbd
+tbd-version:     4
+targets:         [ x86_64-macos, arm64-macos ]
+install-name:    '/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation'
+current-version: 1
+compatibility-version: 1
+exports:
+  - targets:         [ x86_64-macos, arm64-macos ]
+    symbols:         [ _CFDataGetBytes, _CFDataGetLength, _CFDataGetTypeID, _CFGetTypeID,
+                       _CFRelease, _CFRetain, _CFStringCreateWithBytesNoCopy,
+                       _kCFAllocatorDefault, _kCFAllocatorNull ]
+...
+"#;
+const DARWIN_IOKIT_TBD: &str = r#"--- !tapi-tbd
+tbd-version:     4
+targets:         [ x86_64-macos, arm64-macos ]
+install-name:    '/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit'
+current-version: 1
+compatibility-version: 1
+exports:
+  - targets:         [ x86_64-macos, arm64-macos ]
+    symbols:         [ _IOIteratorNext, _IOObjectRelease, _IORegistryEntryCreateCFProperty,
+                       _IORegistryEntryGetName, _IOServiceGetMatchingServices,
+                       _IOServiceMatching, _kIOMasterPortDefault ]
+...
+"#;
 
 pub(crate) fn build(root: &Path) -> Result<()> {
     build_plugin(root)?;
@@ -593,14 +619,36 @@ fn darwin_zigbuild_env(root: &Path) -> Result<Vec<(&'static str, PathBuf)>> {
     }
 
     // `rustc` shells out to `xcrun` for Apple SDK discovery unless SDKROOT is
-    // an existing absolute path. Zig supplies the Darwin linker stubs here, so
-    // the placeholder only satisfies rustc's discovery precondition.
+    // an existing absolute path. This synthetic root gives rustc an SDK path
+    // and Zig a framework search tree; cargo-zigbuild supplies the Darwin libc
+    // stubs.
     let sdkroot = target_dir(root)
         .join("xtask")
         .join("darwin-zigbuild-sdkroot");
-    fs::create_dir_all(&sdkroot).with_context(|| format!("creating {}", sdkroot.display()))?;
+    prepare_darwin_zigbuild_sdkroot(&sdkroot)?;
     envs.push(("SDKROOT", sdkroot));
     Ok(envs)
+}
+
+fn prepare_darwin_zigbuild_sdkroot(sdkroot: &Path) -> Result<()> {
+    // `cargo-zigbuild` brings libSystem and libiconv stubs, while macOS crates
+    // can still ask the linker for framework load commands. These text stubs
+    // carry the public framework symbols Rimz's current macOS process reader
+    // references; the shipped binary resolves them from macOS at runtime.
+    fs::create_dir_all(sdkroot.join("usr").join("lib"))
+        .with_context(|| format!("creating {}", sdkroot.join("usr").join("lib").display()))?;
+    write_framework_tbd(sdkroot, "CoreFoundation", DARWIN_COREFOUNDATION_TBD)?;
+    write_framework_tbd(sdkroot, "IOKit", DARWIN_IOKIT_TBD)
+}
+
+fn write_framework_tbd(sdkroot: &Path, framework: &str, bytes: &str) -> Result<()> {
+    let path = sdkroot
+        .join("System")
+        .join("Library")
+        .join("Frameworks")
+        .join(format!("{framework}.framework"))
+        .join(format!("{framework}.tbd"));
+    write_atomically(&path, bytes.as_bytes())
 }
 
 fn rustc_accepts_macos_sdkroot(sdkroot: &OsStr) -> bool {

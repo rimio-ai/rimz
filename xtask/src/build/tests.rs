@@ -1,6 +1,6 @@
-use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use super::*;
 
@@ -143,4 +143,48 @@ fn macos_sdkroot_rejects_other_apple_platforms() {
     assert!(!macos_sdkroot_points_at_other_apple_platform(OsStr::new(
         "/Xcode/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
     )));
+}
+
+#[test]
+fn darwin_zigbuild_sdkroot_carries_framework_stubs() {
+    let sdkroot = temp_path("darwin-zigbuild-sdkroot");
+
+    prepare_darwin_zigbuild_sdkroot(&sdkroot).unwrap();
+
+    assert!(sdkroot.join("usr").join("lib").is_dir());
+    let core_foundation = fs::read_to_string(
+        sdkroot
+            .join("System")
+            .join("Library")
+            .join("Frameworks")
+            .join("CoreFoundation.framework")
+            .join("CoreFoundation.tbd"),
+    )
+    .unwrap();
+    assert!(core_foundation.contains("CoreFoundation.framework"));
+    assert!(core_foundation.contains("_CFDataGetBytes"));
+    assert!(core_foundation.contains("_kCFAllocatorDefault"));
+
+    let iokit = fs::read_to_string(
+        sdkroot
+            .join("System")
+            .join("Library")
+            .join("Frameworks")
+            .join("IOKit.framework")
+            .join("IOKit.tbd"),
+    )
+    .unwrap();
+    assert!(iokit.contains("IOKit.framework"));
+    assert!(iokit.contains("_IOServiceMatching"));
+    assert!(iokit.contains("_kIOMasterPortDefault"));
+
+    let _ = fs::remove_dir_all(sdkroot);
+}
+
+fn temp_path(label: &str) -> PathBuf {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after epoch")
+        .as_nanos();
+    env::temp_dir().join(format!("{label}-{}-{unique}", std::process::id()))
 }
