@@ -1,4 +1,4 @@
-# Loops and hands-off operation
+# Loops and schedules
 
 Loops keep the fleet moving while you sleep: you define the goal and the stopping condition, and agents act, observe, and recover without you at the keyboard.
 

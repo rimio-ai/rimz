@@ -1,11 +1,11 @@
-# Agents, worktrees, and teams
+# Agents & worktrees
 
-`rimz agents` is the single launcher. One command opens a stock agent CLI in its own pane, arranges several agents into a layout, drops the whole layout into an isolated Git worktree, or launches a named team on a feature. Every agent it starts gets a handle you can message, a card in the sidebar, and a place in the room grouped by the worktree it lives in.
+`rimz agents` is the single launcher. One command opens a stock agent CLI in its own pane, arranges several agents into a layout, or drops the whole layout into an isolated Git worktree. Every agent it starts gets a handle you can message, a card in the sidebar, and a place in the room grouped by the worktree it lives in. To pair models by role on one feature, a named [team](./teams.md) composes several of these launches into one unit.
 
 ```sh
 rimz agents claude                    # one agent, own pane, live card
 rimz agents claude,codex -w feat-a    # two agents, side by side, isolated worktree
-rimz agents forge -w feat-complex     # a named team: planner, coder, reviewer
+rimz agents codex --from-pr 42        # a layout checked out from a pull request
 ```
 
 ## Launch an agent by name
@@ -83,28 +83,6 @@ rimz gc                         # sweep clean, landed, unoccupied worktrees left
 
 `rimz worktree remove` refuses a dirty or unproven tree unless you pass `--force`. `rimz gc` sweeps only worktrees Rimz owns and no live pane or agent occupies, under the same landed proof. The full lifecycle, the ownership marker, and the landed-content check are in [worktrees.md](../internals/harness/worktrees.md#cleanup).
 
-## Teams: models with roles
-
-The best results come from pairing model strengths — one model plans, another codes, a third reviews — for better output at less cost. A named team makes that shape reusable. Define it in `agents.toml`: bind each role to a profile, and give the team an optional `layout` in the same grammar inline specs use. Launching the team name opens the whole team in its layout, each member answering to its role handle in the team's channel.
-
-```sh
-rimz agents forge -w feat-complex   # planner, coder, reviewer on one feature
-rimz agents forge.reviewer          # re-add one role, same handle and channel
-rimz agents forge -w feat-complex --resume   # reopen that exact worktree's team
-```
-
-Rimz builds itself this way. The `forge` team it uses ships under [`examples/teams/`](../../examples/README.md): a Fable planner, a GPT coder, and an Opus reviewer laid out as `planner,coder+reviewer`, each role a profile with its own model, effort, and system-prompt file. Copy it, rename the roles, and it is yours. The team config shape is in [configuration → agent profiles, commands, and teams](../reference/configuration.md#agent-profiles-commands-and-teams).
-
-**Relaunch reconciles instead of duplicating.** Point `rimz agents <team> -w <name>` at a worktree that already holds that team, and Rimz reads the state first: a live team focuses its tab, a closed team with work in progress offers to resume it, and a clean merged tree offers to remove it and start fresh. `--resume` (alias `--continue`) forces the resume path — reopening the newest matching set of sessions, by team name and role or by cell order for an inline spec. Resume takes identity, cwd, and channel from Rimz's durable records, so it stands alone: no prompt, model, or channel flags ride with it.
-
-```sh
-rimz agents forge --resume       # reopen the newest closed forge team
-rimz agents claude,codex --resume  # reopen the newest matching inline pair
-rimz agents claude --resume        # resume the freshest closed Claude session
-```
-
-The room treats a team as one line of work: the sidebar keeps its members as one contiguous block with one derived state, so one member asking for you lifts the whole block ([the sidebar guide → Teams read as one](./sidebar.md#teams-read-as-one)).
-
 ## Handles, in brief
 
 Every agent answers to a handle, and you have already used them: `@claude` names a kind, `@planner` a profile, `forge.reviewer` one role of a team. Rimz gives each bare launch a stable pet name too (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes the handle to one channel — every worktree gets one, and named channels and teams have their own — defaulting to the one you are standing in.
@@ -118,6 +96,7 @@ That is enough to launch, re-add, and jump to agents. Routing text to them — p
 
 ## See also
 
+- [Teams](./teams.md) — pair models by role and launch, reopen, and resume the whole set as one unit.
 - [Messaging](./messaging.md) — reach agents by handle: park, steer, schedule, and channels.
 - [The sidebar](./sidebar.md) — how the room reads the cards, worktrees, and teams you launch.
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).

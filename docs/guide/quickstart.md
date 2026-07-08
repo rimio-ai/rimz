@@ -143,7 +143,7 @@ The store is authoritative, so notifications are best-effort polish: a missed on
 
 ## A fleet, and the two keys that tame it
 
-Now the load the product was built for: two more agents in a second worktree, plus a deploy script in a pane of its own. This walk typed each agent into its own pane to show the mechanics; `rimz agents claude,codex --worktree=feature-migration` opens the pair in one command, and [agents.md](./agents.md) covers layouts, worktrees, and teams. Either way, the column stays scannable.
+Now the load the product was built for: two more agents in a second worktree, plus a deploy script in a pane of its own. This walk typed each agent into its own pane to show the mechanics; `rimz agents claude,codex --worktree=feature-migration` opens the pair in one command, and [agents.md](./agents.md) covers layouts and worktrees ([teams](./teams.md) puts models in named roles). Either way, the column stays scannable.
 
 ```
  ⌘ query-engine
@@ -191,8 +191,9 @@ The link reconnects itself when the train wifi drops, and the sidebar comes back
 ## Where to go next
 
 - [Set up your machine](./setup.md) — the one-time pass that makes Rimz a daily driver: true color and Nerd Font glyphs, pets, the hands-off loop settings, and a Zellij/tmux baseline.
-- [Agents, worktrees, and teams](./agents.md) — launch agents by name, compose layouts, and put a team on a feature in an isolated worktree.
+- [Agents & worktrees](./agents.md) — launch agents by name, compose layouts, and isolate work in a worktree.
+- [Teams](./teams.md) — pair models by role and launch the whole set on one feature.
 - [Messaging](./messaging.md) — steer and queue agents by handle, and let them talk to each other.
 - [The sidebar](./sidebar.md) — reading the column, the agent lifecycle, and how the ranking decides what needs you.
-- [Loops and hands-off operation](./loops.md) — automate the waiting state so the fleet only needs you for real decisions.
+- [Loops and schedules](./loops.md) — automate the waiting state so the fleet only needs you for real decisions.
 - [Remote and web](./remote.md) — connect to a room on a server and open it in the browser.

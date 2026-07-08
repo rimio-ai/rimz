@@ -72,7 +72,7 @@ The turn runs in a real pane, so it is never a black box. It appears in the side
 
 That is what makes unattended runs safe to leave alone. A failing migration at 3 a.m. becomes a push notification on your phone, a one-line answer typed over SSH, and a green pipeline by morning — the script never had to guess. The same shape works while you watch: a CI job that runs a review turn joins your room as a row and asks its design question in your workspace.
 
-The posture that decides whether a run stops to ask or runs straight through — the agent's own bypass flag versus keeping provider prompts — is a choice you make per run; it lives in [Loops and hands-off operation → the permission posture for unattended runs](./loops.md#the-permission-posture-for-unattended-runs) alongside the safety model in [security.md](./security.md).
+The posture that decides whether a run stops to ask or runs straight through — the agent's own bypass flag versus keeping provider prompts — is a choice you make per run; it lives in [Loops and schedules → the permission posture for unattended runs](./loops.md#the-permission-posture-for-unattended-runs) alongside the safety model in [security.md](./security.md).
 
 ## Fire now, collect later
 
@@ -137,8 +137,8 @@ Supervised runs need installed and trusted hooks, because hooks are the completi
 
 ## See also
 
-- [Loops and hands-off operation](./loops.md) — put these runs on a clock: schedules, watchdogs, and notification handlers.
+- [Loops and schedules](./loops.md) — put these runs on a clock: schedules, watchdogs, and notification handlers.
 - [Messaging](./messaging.md) — the `--steer` / `--on done` delivery model wrappers lean on.
-- [Agents, worktrees, and teams](./agents.md) — the handle and worktree vocabulary these examples use.
+- [Agents & worktrees](./agents.md) — the handle and worktree vocabulary these examples use.
 - [Agent control CLI](../reference/cli/agents.md#supervised-runs--p) — every flag on `-p`, `wait`, `show`, `stop`, and `pane`.
 - [harness.md → Supervised runs](../internals/harness/harness.md#supervised-runs) — run records, the wakeup socket, streaming, and pane cleanup.

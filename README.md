@@ -221,8 +221,8 @@ The [documentation index](./docs/README.md) maps the whole set. Highlights:
 
 - [Quickstart](./docs/guide/quickstart.md) — install to a working fleet, step by step
 - [Set up your machine](./docs/guide/setup.md) — config, hooks, true color, pets, and the Zellij/tmux baselines
-- [Using the room](./docs/guide/agents.md) — [agents & teams](./docs/guide/agents.md) · [messaging](./docs/guide/messaging.md) · [the sidebar](./docs/guide/sidebar.md) · [remote & web](./docs/guide/remote.md)
-- [Automation](./docs/guide/scripting.md) — [scripting agents](./docs/guide/scripting.md) · [loops & hands-off operation](./docs/guide/loops.md)
+- [Working with agents](./docs/guide/agents.md) — [agents & worktrees](./docs/guide/agents.md) · [the sidebar](./docs/guide/sidebar.md) · [remote & web](./docs/guide/remote.md)
+- [Harness](./docs/guide/messaging.md) — [messaging](./docs/guide/messaging.md) · [teams](./docs/guide/teams.md) · [scripting agents](./docs/guide/scripting.md) · [loops & schedules](./docs/guide/loops.md)
 - [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/reference/configuration.md) · [Theming](./docs/guide/theme.md) · [Troubleshooting](./docs/guide/troubleshooting.md)
 - [DESIGN.md](./DESIGN.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [internals](./docs/internals/README.md) — how it works, in depth
 

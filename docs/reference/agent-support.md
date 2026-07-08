@@ -84,7 +84,8 @@ An agent Rimz doesn't recognize runs fine in a pane; it renders as a plain proce
 
 ## See also
 
-- [Agents, worktrees, and teams](../guide/agents.md) — launching, profiles, and teams across every supported kind.
+- [Agents & worktrees](../guide/agents.md) — launching agents and profiles across every supported kind.
+- [Teams](../guide/teams.md) — pairing models by role across supported kinds.
 - [Messaging](../guide/messaging.md) — steering and queuing agents by handle.
 - [The agent model](../internals/agents/model.md) — the rollup, state machine, and adapter boundary in depth.
 - [Configuration](./configuration.md#agent-profiles-commands-and-teams) — profiles, effort, and per-agent launch args.

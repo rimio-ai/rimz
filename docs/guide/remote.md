@@ -96,7 +96,7 @@ Browser access is a Zellij feature; a tmux room reattaches over SSH and does not
 ## See also
 
 - [Quickstart](./quickstart.md) — the first session, including leaving and coming back.
-- [Agents, worktrees, and teams](./agents.md) — what the room holds that you are reattaching to.
+- [Agents & worktrees](./agents.md) — what the room holds that you are reattaching to.
 - [The sidebar](./sidebar.md) — reading the link-health badge and the recovered column.
 - [Troubleshooting](./troubleshooting.md) — a link that will not connect, a room that will not start, resetting state.
 - [CLI reference](../reference/cli/getting-started.md) · [Configuration](../reference/configuration.md) — the `remote` and `web` command surfaces, and `remote.toml`.
