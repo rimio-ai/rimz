@@ -110,7 +110,16 @@ Hooks install on the first `rimz` run, with your consent and a diff preview. →
 
 ## Everyday moves
 
-**Start agents by name.** A bare kind opens the stock CLI in its own pane; a `-auto` or `-yolo` suffix sets the permission mode, and a profile from `agents.toml` customizes the agent with system prompt, model, effort, and launch args.
+The commands below run from any pane in the room, and from any script or CI job that reaches it. They compose: a profile becomes a team, the team lands in a worktree, the worktree's agents take messages, and a schedule fires the whole thing while you sleep.
+
+**Start agents by name.** Type `claude` in any pane and it joins the room: the stock CLI with your flags and its own session files, no Rimz command in the path.
+
+```sh
+claude
+codex
+```
+
+[`rimz agents`](./docs/guide/agents.md) earns its keystrokes when you want more than the default. A `-auto` or `-yolo` suffix sets the permission mode, and a profile in `agents.toml` pins a model, effort, system prompt, and launch args behind one word, so a planner that reasons hard and edits nothing is a name you reuse.
 
 ```sh
 rimz agents claude          # stock agent, own pane
@@ -118,7 +127,7 @@ rimz agents codex-yolo      # permission modes: -auto, -ask, -plan, -yolo
 rimz agents planner         # your profile: model, effort, system prompt
 ```
 
-**Launch layouts into worktrees.** One spec describes the shape: `,` splits, `+` tiles, `/` stacks. Add `--worktree` (`-w`) and the whole layout lands in an isolated Rimz-owned Git worktree.
+**Launch layouts into worktrees.** One spec describes the shape: `,` splits, `+` tiles, `/` stacks. Add [`-w`](./docs/guide/worktrees.md) and the whole layout lands in an isolated Rimz-owned Git worktree, seeded with the untracked files it needs, so two lines of work run side by side without touching each other or your main checkout.
 
 ```sh
 rimz agents claude,codex -w feat-a             # two agents, side by side
@@ -127,13 +136,13 @@ rimz agents 'vim,codex+term' -w feat-c         # editor | agent stacked over a s
 rimz agents codex --from-pr 42                 # worktree checked out from a pull request
 ```
 
-**Combine models as teams.** A named team in `agents.toml` gives each role a handle and launches the whole team in its defined layout. The best results come from pairing model strengths (Fable 5 plans, GPT 5 codes, Opus 4 reviews): better output for less money. Rimz builds itself this way; `examples/teams/` ships the `forge` definition it uses.
+**Combine models as teams.** A named [team](./docs/guide/teams.md) in `agents.toml` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. Rimz is built this way; `examples/teams/` ships the `forge` team it uses.
 
 ```sh
 rimz agents forge -w feat-complex   # planner, coder, reviewer on one feature
 ```
 
-**Message agents like teammates.** Every agent answers to a handle, named by kind, profile, or team role: `@codex` reaches the one in your channel, `@codex#feat-a` reaches across the workspace. Delivery waits until the agent's turn ends; `--steer` interrupts now, `--schedule` delivers later. The same command serves you, your scripts, and the agents themselves, which use it to talk to each other.
+**Message agents like teammates.** Every agent answers to a [handle](./docs/guide/messaging.md), named by kind, profile, or team role: `@codex` reaches the one in your channel, `@codex#feat-a` reaches across the workspace. Every message becomes a durable record, so it lands: parked at the turn boundary by default, `--steer` to interrupt the live turn now, `--schedule` to deliver later. The same command serves you, your scripts, and the agents themselves, which use it to talk to each other.
 
 ```sh
 rimz message @claude "add coverage for the expiry edge cases"      # parks at the turn boundary
@@ -143,7 +152,7 @@ rimz message --schedule 60m @codex#feat-b "run the smoke test"     # lands in an
 rimz message @all "summarize what changed at the next boundary"    # the whole channel
 ```
 
-**Script an agent like any CLI.** `-p` runs one supervised turn and exits with the run's status code, so a script or CI job branches on the outcome. The turn still runs in a real pane, observable from the room while your pipeline waits on it.
+**Script an agent like any CLI.** [`rimz agents -p`](./docs/guide/scripting.md) is `claude -p` for every agent: one supervised turn, one exit code a script or CI job branches on, the same flag for Claude, Codex, Pi, and OpenCode. The turn still runs in a real pane you can watch, answer, and steer while the pipeline waits on it.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
@@ -153,7 +162,7 @@ rimz agents claude "Run the migration audit." -p --bg       # returns now, print
 rimz agents wait swift-otter --stream                       # block on it later, tail the answer
 ```
 
-**Run the fleet on a schedule.** `rimz loop` fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog: the script runs first, and the agent wakes only on its result. A `<kind>-ping` spec primes budget windows: a lowest-effort turn starts the provider's window on your clock, and skips when one is already counting down. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off.
+**Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. A `<kind>-ping` task primes budget windows: a lowest-effort turn starts the provider's window on your clock and skips when one is already counting down. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off.
 
 ```sh
 rimz loop add morning --spec claude-ping --prompt ping --at 07:00 --days weekdays   # prime the 5h window
@@ -162,7 +171,7 @@ rimz loop add watchdog --check "cargo test" --on fail \
     --spec codex --prompt "fix the failing test" --every 15m                        # watch, then wake
 ```
 
-**Work from anywhere.** A room is plain Zellij or tmux under SSH: save an alias, reconnect over a self-healing link, or tunnel the room into a local browser.
+**Work from anywhere.** A room is plain Zellij or tmux under SSH: save an alias and [reconnect over a link that heals itself](./docs/guide/remote.md), or [tunnel the room into a local browser](./docs/guide/web.md). Close the laptop mid-run, reattach from another machine, and every agent is where you left it.
 
 ```sh
 rimz remote add dev dev-box:~/code/query-engine
@@ -172,16 +181,16 @@ rimz remote connect dev --web    # the same room in your browser at 127.0.0.1
 
 ## Configuration
 
-Rimz runs with zero configuration; one pass makes it yours. `rimz setup` detects the machine and writes the per-machine defaults under `~/.config/rimz/`: `config.toml` (behavior), `theme.toml` (appearance), `agents.toml` (profiles and teams), `loop.toml` (schedules), `remote.toml` (SSH room aliases). Every key ships commented with its default and an inline note, so the files double as their own reference. For everything after that first pass, `rimz config set` edits one dotted key: it routes the key to the owning file, validates the value, and writes durably, so you see the effect without pasting TOML.
+Rimz runs with zero configuration, and everything you can tune is plain TOML in files you own: no config daemon, no bespoke language, nothing new to learn. `rimz setup` detects the machine and writes the per-machine defaults under `~/.config/rimz/` — `config.toml` (behavior), `theme.toml` (appearance), `agents.toml` (profiles and teams), `loop.toml` (schedules), `remote.toml` (SSH aliases) — every key commented with its default and an inline note, so the files are their own reference. After that first pass, [`rimz config set`](./docs/guide/configuration.md) edits one dotted key: it routes the key to the owning file, validates the value, and writes it durably, so you change behavior without hand-editing TOML.
 
 ```sh
 rimz setup                                 # detect the machine, write the commented defaults
 rimz config set theme "Catppuccin Mocha"   # edit one key; `rimz list-themes` shows the choices
 ```
 
-### True color, Nerd Font, Pets
+### True color, Nerd Font, and pets
 
-A terminal that advertises truecolor (Ghostty, WezTerm, Kitty, Alacritty all do) gets 24-bit color out of the box, inside Rimz tmux rooms and over `rimz remote` too. With a Nerd Font in the terminal, two more settings upgrade the glyphs and add a companion.
+A terminal that advertises truecolor (Ghostty, WezTerm, Kitty, and Alacritty all do) gets 24-bit color out of the box, inside Rimz tmux rooms and over `rimz remote` too. With a Nerd Font in the terminal, [`theme.style`](./docs/guide/theme.md) turns on the sharper glyphs, and one more line adds a pet.
 
 ```sh
 rimz config set theme.style modern        # truecolor + Nerd Font icons; "default" = auto color + Unicode
@@ -193,7 +202,7 @@ Pets render as crisp pixels in Ghostty and kitty terminals; inside tmux that als
 
 ### Auto-continue and smart compaction
 
-Two settings keep agents working unattended. Auto-continue picks parked turns back up: a rate-limit park resumes the moment the provider's budget window resets, and transient API errors retry on a backoff ramp. Smart compaction makes `rimz message` compact-first: past the threshold, Rimz submits `/compact` ahead of your text so the prompt lands against a fresh context window instead of dying in the middle
+Two settings keep agents working [while you are away](./docs/guide/loops.md#built-in-recovery). Auto-continue picks parked turns back up: a rate-limit park resumes the moment the provider's budget window resets, and a transient API error retries on a backoff ramp. Smart compaction makes `rimz message` compact-first: past the threshold, Rimz submits `/compact` ahead of your text, so a long turn lands against a fresh context window instead of dying at the ceiling.
 
 ```sh
 rimz config set resume.auto_continue true     # off by default; resumes rate-limit and API-error parks
