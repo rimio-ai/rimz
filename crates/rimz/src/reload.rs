@@ -488,6 +488,7 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
     // the grace that also protects just-born sidebar processes below.
     let live_panes: HashSet<PaneId> = match backend.list_panes(PaneListOptions {
         session_name: Some(ws.session_name.clone()),
+        runtime_paths: None,
         workspace_id: Some(ws.workspace_id.clone()),
         min_topology_produced_at_ms: Some(floor_ms),
         authoritative: false,

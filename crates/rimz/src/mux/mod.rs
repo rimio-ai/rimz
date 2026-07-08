@@ -177,8 +177,12 @@ pub struct PaneCapture {
 #[derive(Clone, Debug, Default)]
 pub struct PaneListOptions {
     pub session_name: Option<String>,
-    /// Workspace runtime root to consult for backend-specific latency hints.
-    /// Backends that do not have such a hint ignore it.
+    /// Exact runtime paths to consult for backend-specific latency hints.
+    /// Backends that do not have such a hint ignore it. When absent, backends
+    /// resolve paths from `workspace_id`.
+    pub runtime_paths: Option<crate::store::RuntimePaths>,
+    /// Workspace identity used when `runtime_paths` is absent or when the
+    /// backend must ask a room-owned helper to refresh a hint.
     pub workspace_id: Option<WorkspaceId>,
     /// Minimum acceptable `produced_at_ms` for backend-specific topology
     /// caches. Backends without such a cache ignore it.

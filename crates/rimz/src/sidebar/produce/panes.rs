@@ -72,6 +72,7 @@ fn fresh_snapshot_cache(
 fn list_session_panes(
     mux: MuxName,
     session: &str,
+    runtime_paths: Option<crate::RuntimePaths>,
     workspace_id: crate::WorkspaceId,
     min_topology_produced_at_ms: Option<u64>,
     command_timeout: Option<Duration>,
@@ -79,6 +80,7 @@ fn list_session_panes(
 ) -> Result<PaneListing> {
     Ok(crate::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
+        runtime_paths,
         workspace_id: Some(workspace_id),
         min_topology_produced_at_ms,
         authoritative,
@@ -259,6 +261,7 @@ pub fn repaired_pane_frame_for_binding(
         None => list_session_panes(
             mux,
             session,
+            Some(runtime.clone()),
             runtime.workspace_id.clone(),
             None,
             Some(command_timeout),
@@ -581,6 +584,7 @@ pub(super) fn cached_panes_or_produce(
         let listing = match list_session_panes(
             mux,
             session,
+            Some(runtime.clone()),
             runtime.workspace_id.clone(),
             min_topology_produced_at_ms,
             None,

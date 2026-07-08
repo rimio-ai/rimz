@@ -152,6 +152,74 @@ fn snapshot_cache_freshness_matrix() {
 }
 
 #[test]
+fn producer_verification_trusts_event_carried_topology_without_topology_floor() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
+        "/tmp/producer-topology-floor",
+    ));
+    let runtime = crate::RuntimePaths::under(workspace_id, dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let now = unix_now_ms();
+    write_snapshot_cache(
+        &runtime.pane_frame_path(),
+        "s",
+        now.saturating_sub(crate::sidebar::timing::EVENT_PANE_TTL.as_millis() as u64 + 1),
+        false,
+    );
+    crate::sidebar::cache::write_pane_topology_cache(
+        &runtime,
+        &crate::mux::zellij::pane_topology::PaneTopologyCache {
+            session_name: "s".to_owned(),
+            produced_at_ms: now.saturating_sub(1),
+            writer: None,
+            focused_pane: Some(7),
+            clients: Some(crate::mux::zellij::pane_topology::TopologyClients {
+                human_clients: 1,
+                viewed_panes: vec![7],
+            }),
+            panes: vec![crate::mux::zellij::pane_topology::PaneTopologyPane {
+                id: 7,
+                is_plugin: false,
+                is_held: false,
+                exited: false,
+                is_suppressed: false,
+                is_floating: false,
+                is_focused: true,
+                tab_position: 0,
+                tab_name: Some("main".to_owned()),
+                pane_columns: Some(80),
+                pane_x: Some(0),
+                title: Some("zsh".to_owned()),
+                pane_command: Some("zsh".to_owned()),
+                pane_cwd: Some("/repo".to_owned()),
+                terminal_command: Some("zsh".to_owned()),
+            }],
+        },
+    )
+    .expect("write topology cache");
+
+    let frame = cached_panes_or_produce(
+        &runtime,
+        MuxName::Zellij,
+        "s",
+        Some(now),
+        None,
+        &crate::diag::DiagSink::disabled(),
+    )
+    .expect("event-carried topology satisfies verification");
+
+    assert_eq!(pane_count(&frame), 1);
+    assert_eq!(
+        frame.viewed_panes,
+        vec![crate::ids::PaneId::from_parts(
+            crate::ids::MuxName::Zellij,
+            "terminal_7"
+        )]
+    );
+    assert_eq!(frame.presence.expect("pushed presence").human_clients, 1);
+}
+
+#[test]
 fn fresh_publishable_snapshot_cache_rejects_invalid_cached_frames() {
     let dir = tempfile::tempdir().unwrap();
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");

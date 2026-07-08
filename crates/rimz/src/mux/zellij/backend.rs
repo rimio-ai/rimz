@@ -28,6 +28,7 @@ use crate::mux::{
     memoized_version,
 };
 use crate::pane::PaneRef;
+use crate::store::RuntimePaths;
 use serde::Deserialize;
 
 /// Prefix `command` with an `env KEY=VALUE …` shim so a freshly split Zellij
@@ -131,6 +132,7 @@ impl ZellijBackend {
     fn authoritative_pane_listing(
         &self,
         session_name: &str,
+        runtime_paths: Option<&RuntimePaths>,
         workspace_id: Option<&WorkspaceId>,
         timeout: Duration,
     ) -> Result<RawPaneListing> {
@@ -156,8 +158,10 @@ impl ZellijBackend {
             clients: None,
             panes: listed.into_iter().map(Into::into).collect(),
         };
-        if let Some(workspace_id) = workspace_id
-            && let Some(runtime) = self.runtime_paths_for_authoritative(workspace_id)
+        let runtime = runtime_paths
+            .cloned()
+            .or_else(|| workspace_id.and_then(|id| self.runtime_paths_for_authoritative(id)));
+        if let Some(runtime) = runtime
             && let Some(prior) =
                 crate::sidebar::cache::read_pane_topology_cache(&runtime, session_name)
         {
@@ -412,6 +416,7 @@ impl MuxBackend for ZellijBackend {
         let raws = if opts.authoritative && !session_name.is_empty() {
             match self.authoritative_pane_listing(
                 &session_name,
+                opts.runtime_paths.as_ref(),
                 opts.workspace_id.as_ref(),
                 timeout,
             ) {
@@ -420,6 +425,7 @@ impl MuxBackend for ZellijBackend {
                     tracing::debug!(session = %session_name, error = %err, "authoritative Zellij pane listing failed; falling back to topology cache");
                     self.topology_listing(
                         Some(&session_name),
+                        opts.runtime_paths.as_ref(),
                         opts.workspace_id.as_ref(),
                         opts.min_topology_produced_at_ms,
                         timeout,
@@ -429,6 +435,7 @@ impl MuxBackend for ZellijBackend {
         } else {
             self.topology_listing(
                 (!session_name.is_empty()).then_some(session_name.as_str()),
+                opts.runtime_paths.as_ref(),
                 opts.workspace_id.as_ref(),
                 opts.min_topology_produced_at_ms,
                 timeout,
@@ -718,6 +725,7 @@ impl MuxBackend for ZellijBackend {
         // working panes survive.
         let listing = self.topology_listing(
             Some(&opts.session_name),
+            None,
             Some(&opts.workspace_id),
             None,
             crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,

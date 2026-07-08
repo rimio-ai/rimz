@@ -21,8 +21,14 @@ impl ZellijBackend {
         min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
     ) -> Result<Vec<super::raw_pane::RawPane>> {
-        self.topology_listing(Some(session), None, min_topology_produced_at_ms, timeout)
-            .map(|listing| listing.panes)
+        self.topology_listing(
+            Some(session),
+            None,
+            None,
+            min_topology_produced_at_ms,
+            timeout,
+        )
+        .map(|listing| listing.panes)
     }
 
     pub(super) fn topology_panes_for_workspace(
@@ -34,6 +40,7 @@ impl ZellijBackend {
     ) -> Result<Vec<super::raw_pane::RawPane>> {
         self.topology_listing(
             Some(session),
+            None,
             Some(workspace_id),
             min_topology_produced_at_ms,
             timeout,
@@ -44,15 +51,23 @@ impl ZellijBackend {
     pub(super) fn topology_listing(
         &self,
         session: Option<&str>,
+        runtime_paths: Option<&RuntimePaths>,
         workspace_id: Option<&WorkspaceId>,
         min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
     ) -> Result<RawPaneListing> {
         let session = self.resolve_topology_session(session)?;
         let known = self.resolve_topology_workspace(&session, workspace_id)?;
-        let runtime = self.runtime_paths_for_workspace(known.workspace_id.clone())?;
+        let runtime_storage;
+        let runtime = match runtime_paths {
+            Some(runtime) => runtime,
+            None => {
+                runtime_storage = self.runtime_paths_for_workspace(known.workspace_id.clone())?;
+                &runtime_storage
+            }
+        };
         let now_ms = unix_now_ms();
-        if let Some(cache) = read_pane_topology_cache(&runtime, &session)
+        if let Some(cache) = read_pane_topology_cache(runtime, &session)
             && pane_topology_cache_is_fresh(&cache, now_ms, min_topology_produced_at_ms)
         {
             return Ok(RawPaneListing::from_topology(cache));
@@ -65,7 +80,7 @@ impl ZellijBackend {
         let deadline = Instant::now() + timeout;
         loop {
             let now_ms = unix_now_ms();
-            if let Some(cache) = read_pane_topology_cache(&runtime, &session)
+            if let Some(cache) = read_pane_topology_cache(runtime, &session)
                 && pane_topology_cache_is_fresh(&cache, now_ms, Some(floor_ms))
             {
                 return Ok(RawPaneListing::from_topology(cache));
