@@ -82,9 +82,9 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
     ]
 }
 
-/// One-shot hook for pristine tmux birth. The first real client attach applies
-/// the final client size, then redraws the birth work shell cleanly at that
-/// width and removes the hook. Control-mode clients only carry presence
+/// One-shot hook for pristine tmux birth. The first real client attach respawns
+/// the birth work shell so its first prompt lands after the attach resize
+/// settles, then removes the hook. Control-mode clients only carry presence
 /// wakeups, so they leave the one-shot armed for the user's first pty attach.
 pub(super) fn birth_shell_cleanup_hook_set_cmd(session: &str, work_pane: &str) -> Vec<String> {
     let body = format!(
