@@ -63,7 +63,7 @@ rimz --version
 rimz doctor
 ```
 
-`rimz doctor` reports the multiplexer it selected, its version and whether it clears the floor, hook status, and room health — the fastest read on whether a fresh machine is ready. From here, walk [the quickstart](./quickstart.md), then make the machine comfortable with [set up your machine](./setup.md).
+`rimz doctor` reports the multiplexer it selected, its version and whether it clears the floor, hook status, and room health — the fastest read on whether a fresh machine is ready. From here, make the machine comfortable with [set up your machine](./setup.md).
 
 ## Get a current Zellij or tmux
 

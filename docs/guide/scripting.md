@@ -166,7 +166,7 @@ Because these are public CLI, a wrapper composes them freely: read a prompt with
 
 ## Prerequisites
 
-Supervised runs need installed and trusted hooks, because hooks are the completion signal — a run with no hooks has no way to know its turn ended. `rimz doctor` confirms the hook state, and [Troubleshooting](./troubleshooting.md) covers a run that never completes. Installing hooks is a one-time consent step, walked in the [Quickstart](./quickstart.md).
+Supervised runs need installed and trusted hooks, because hooks are the completion signal — a run with no hooks has no way to know its turn ended. `rimz doctor` confirms the hook state, and [Troubleshooting](./troubleshooting.md) covers a run that never completes. Installing hooks is a one-time consent step, walked in [set up your machine](./setup.md#install-agent-hooks).
 
 ## See also
 

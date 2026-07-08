@@ -18,7 +18,7 @@ You never work *in* the sidebar — it has no reply box and no approve button. I
 
 Two facts make the column trustworthy, and both are worth knowing before you lean on it.
 
-**Agents report themselves.** The reporting hooks you approved at the [consent gate](./quickstart.md#the-consent-gate) fire from inside each agent — session start, tool call, blocking question, turn end — so a card changes the moment the agent does, not when a scraper catches up, and nothing on a card is guessed from screen contents. Two derived states are Rimz's own judgment rather than an agent report; [the lifecycle](#the-agent-lifecycle) calls them out.
+**Agents report themselves.** The reporting hooks you approved when you [installed hooks](./setup.md#install-agent-hooks) fire from inside each agent — session start, tool call, blocking question, turn end — so a card changes the moment the agent does, not when a scraper catches up, and nothing on a card is guessed from screen contents. Two derived states are Rimz's own judgment rather than an agent report; [the lifecycle](#the-agent-lifecycle) calls them out.
 
 **The sidebar only reads.** It is one pane in your room running a renderer over the durable store those hooks write. Its only writes are its own display state — which cards you have read, a heartbeat — and jumping focuses a pane the same way your mux prefix would; your agents' processes, sessions, and files are untouched by anything on this page. Close the sidebar's pane and every agent keeps working; the next `rimz` attach or `rimz reload` brings it back, and nothing was missed in between, because a card that needs you stays unread and ranked in the store until you look. The column is a window, not a place where state lives.
 

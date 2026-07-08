@@ -97,7 +97,6 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 
 **Guide** — `docs/guide/`
 - [installation.md](./docs/guide/installation.md) — prerequisites and every install path: Homebrew, prebuilt binaries, Cargo, source.
-- [quickstart.md](./docs/guide/quickstart.md) — the first session walked step by step: install, consent gate, first agent, first fleet, reattach.
 - [setup.md](./docs/guide/setup.md) — first-pass machine setup: config init, hooks, true color, pets, loop knobs, multiplexer essentials.
 - [multiplexer.md](./docs/guide/multiplexer.md) — Zellij and tmux baselines: recommended options, parity Alt chords, themed status bar, shipped under `examples/`.
 - [agents.md](./docs/guide/agents.md) — launching agents by name, permission-mode suffixes, profiles, and the layout grammar.

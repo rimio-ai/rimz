@@ -11,7 +11,7 @@ claude          # the stock Claude CLI
 codex           # the stock Codex CLI
 ```
 
-The agent appears in the sidebar, reporting from its first line. No Rimz command sits in the path: the CLI runs with your flags, your config, your session files, and the reporting hooks you approved at the [consent gate](./quickstart.md#the-consent-gate) tell Rimz what it does — status, task, context health, live cost. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents Rimz drives, and what each integration reports, is [agent support](../reference/agent-support.md).
+The agent appears in the sidebar, reporting from its first line. No Rimz command sits in the path: the CLI runs with your flags, your config, your session files, and the reporting hooks you approved when you [installed hooks](./setup.md#install-agent-hooks) tell Rimz what it does — status, task, context health, live cost. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents Rimz drives, and what each integration reports, is [agent support](../reference/agent-support.md).
 
 For a single agent in the pane you are standing in, this is the whole story. Everything below is for the sessions where it isn't.
 

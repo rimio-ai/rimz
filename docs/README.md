@@ -2,13 +2,12 @@
 
 Rimz puts your coding agents in one Zellij or tmux room and routes your attention to whichever one needs you. This page maps the whole documentation set.
 
-New here? Start with the [README](../README.md) for what Rimz is and why it exists, then read [installation](./guide/installation.md), [the quickstart](./guide/quickstart.md), and [set up your machine](./guide/setup.md) in that order. Once the room is running, the guides under [working with agents](#working-with-agents) and [harness engineering](#harness-engineering) cover the daily work, and the [reference](#reference) answers a specific flag or field when you need it.
+New here? Start with the [README](../README.md) for what Rimz is and why it exists, then read [installation](./guide/installation.md) and [set up your machine](./guide/setup.md) in that order. Once the room is running, the guides under [working with agents](#working-with-agents) and [harness engineering](#harness-engineering) cover the daily work, and the [reference](#reference) answers a specific flag or field when you need it.
 
 ## Getting started
 
 - [Introduction](../README.md): what Rimz is, what it does, and the everyday moves, with a runnable get-started block.
 - [Installation](./guide/installation.md): prerequisites and every install path (Homebrew, prebuilt binary, Cargo, source), verified with `rimz doctor`.
-- [Quickstart](./guide/quickstart.md): install to a working fleet, step by step, from the consent gate to your first question routed to your keyboard.
 - [Set up your machine](./guide/setup.md): the one-time pass that makes Rimz a daily driver, covering config init, agent hooks, true color, pets, and the hands-off loop settings.
 
 ## Working with agents

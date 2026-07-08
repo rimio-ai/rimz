@@ -86,7 +86,6 @@ Keeping the agent processes alive across a reboot belongs to the host. Reach for
 ## See also
 
 - [Web](./web.md) — open the same room in a browser, locally or tunnelled from a server.
-- [Quickstart](./quickstart.md) — the first session, including leaving and coming back.
 - [Agents](./agents.md) — what the room holds that you are reattaching to.
 - [The sidebar](./sidebar.md) — reading the link-health badge and the recovered column.
 - [Troubleshooting](./troubleshooting.md) — a link that will not connect, a room that will not start, resetting state.

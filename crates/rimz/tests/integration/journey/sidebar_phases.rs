@@ -1,4 +1,4 @@
-//! The user journey, phase by phase (`docs/guide/quickstart.md`).
+//! The user journey, phase by phase (`docs/guide/sidebar.md`).
 //!
 //! Backend-neutral: each test drives the renderer once over a real store and
 //! reads the parsed pane. Renderer mechanics live in `docs/internals/sidebar/sidebar.md`;
