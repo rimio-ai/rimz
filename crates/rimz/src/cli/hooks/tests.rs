@@ -418,7 +418,7 @@ fn recovered_binding_stamps_full_pane_and_reowns_to_in_pane_agent_process() {
     assert_eq!(observation.pane_id.as_ref(), Some(&pane.pane_id));
     assert_eq!(observation.pane_stamp.as_ref(), Some(&pane));
     let owner = observation.runtime_owner.as_ref().expect("runtime owner");
-    assert_eq!(owner.kind, rimz::pane::RuntimeOwnerKind::Agent);
+    assert_eq!(owner.kind, RuntimeOwnerKind::Agent);
     assert_eq!(owner.pid, child_pid);
 }
 
