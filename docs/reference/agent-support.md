@@ -63,7 +63,8 @@ OpenCode reports through a **plugin** that maintains its context gauge from the 
 
 - **What it reports:** turn boundaries, per-tool activity, and context usage per envelope. Session end and idle have no native hook, so both are reconstructed from pane liveness, the reaper, and turn boundaries; live cost is summed from the session store (SQLite) at turn end and marked partial (`live$`).
 - **Resume:** the session `.jsonl` carries the history; see [adapter/opencode.md](../internals/agents/adapter/opencode.md) for the current resume path.
-- **Permission modes and effort:** OpenCode does not expose the launch-cell permission suffixes today; launch it bare or with a profile. Confirm current flags with `rimz agents --help`.
+- **Permission modes:** no launch-cell suffixes yet — launch OpenCode bare or through a profile (`rimz agents --help` lists the current flags).
+- **Account:** read from OpenCode's own `auth.json` — the probe reports the active provider, with OAuth as a metered subscription and an API key as unmetered. OpenCode exposes no plan tier or quota surface of its own, so usage bars come from the backing provider's endpoints, the same Anthropic and ChatGPT probes Claude and Codex use.
 
 Mapping detail: [adapter/opencode.md](../internals/agents/adapter/opencode.md); upstream protocol: [opencode-reference.md](../externals/agent-adapter/opencode-reference.md).
 

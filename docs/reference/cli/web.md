@@ -14,7 +14,16 @@ rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the Rimz room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and the serving machine's cached Zellij login token; a missing cache mints one token, stores it as plaintext mode 0600 at `$XDG_STATE_HOME/rimz/web-login-token.json`, and prints it. `--json` emits the `rimz.web.v1` payload without provisioning a token. `--session <name>` targets an existing Rimz workspace session by exact session name. `--print` skips browser launch, `--no-start` refuses when `zellij web` is offline, `--no-resume` skips rebirth recovery, and hidden `--confirm-resume` prompts over stdin/stderr for remote prep.
+`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the Rimz room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and the serving machine's cached Zellij login token; a missing cache mints one token, stores it as plaintext mode 0600 at `$XDG_STATE_HOME/rimz/web-login-token.json`, and prints it.
+
+| Flag | Effect |
+| --- | --- |
+| `--session <name>` | Target an existing Rimz workspace session by exact session name |
+| `--print` | Skip the browser launch; print the URL only |
+| `--no-start` | Refuse when `zellij web` is offline instead of starting it |
+| `--no-resume` | Skip recovering the room's prior agents |
+| `--json` | Emit the `rimz.web.v1` payload without provisioning a token |
+| `--confirm-resume` | Hidden: prompt over stdin/stderr, used by remote prep |
 
 `url` prints the route without birthing a room or starting the server. It requires an existing Rimz workspace record, so a script never receives a URL that would create a bare Zellij session without the Rimz sidebar.
 

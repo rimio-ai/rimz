@@ -74,7 +74,14 @@ rimz agents claude --worktree "Take another approach."
 
 The spec is a named [team](../configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** as a Zellij stack while tmux tiles them, and each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and stamped team lane. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/harness/harness.md#the-layout-ir).
 
-`--resume` relaunches a prior cohort matching the same spec, and `--continue` is the same visible alias: a team resumes by team name and role, an inline multi-agent spec resumes by the saved launch group and cell order, and a single kind resumes the freshest closed root session of that kind. Add `-w <NAME>` to resume that exact worktree's cohort; use bare `-w` or omit the flag while running inside a worktree to scope resume to that worktree; run from the project root to keep the room-wide newest-by-spec behavior. Cleanly closed cohort members still match when their worktree exists. Cells with no resumable prior member launch fresh in the matched cohort's cwd and channel, while a matched member that is still live refuses the command so the room does not duplicate the same address. Resume takes identity, cwd, and channel from the store, so it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--model`, `--effort`, `--ask`, `--yolo`, `-p`, system-prompt flags, and passthrough args after `--`.
+`--resume` relaunches a prior cohort matching the same spec, and `--continue` is the same visible alias: a team resumes by team name and role, an inline multi-agent spec resumes by the saved launch group and cell order, and a single kind resumes the freshest closed root session of that kind. Add `-w <NAME>` to resume that exact worktree's cohort; use bare `-w` or omit the flag while running inside a worktree to scope resume to that worktree; run from the project root to keep the room-wide newest-by-spec behavior. Cleanly closed cohort members still match when their worktree exists. Cells with no resumable prior member launch fresh in the matched cohort's cwd and channel, while a matched member that is still live refuses the command so the room does not duplicate the same address.
+
+Resume takes identity, cwd, and channel from the saved session, so it rejects the flags that would override them:
+
+- `PROMPT` (the positional) and passthrough args after `--`
+- `--from-pr`, `--channel`, `--name`, `--description`
+- `--model`, `--effort`, and the system-prompt flags
+- `--ask`, `--yolo`, `-p`
 
 Permission-mode cells exist where the adapter supports them: `-auto`, `-ask`, `-plan`, and `-yolo` (so `claude-plan` passes plan mode while `codex-plan` has none and keeps the default posture), and `-ping` opens the agent at lowest effort to keep the provider window warm. The built-in set is `claude-{auto,ask,plan,yolo,ping}`, `codex-{auto,ask,plan,yolo,ping}`, and `pi-{ask,plan}`. On the command line, `--ask` keeps native prompts and `--yolo` passes the adapter's bypass flags; with neither, each provider keeps its own prompting. A second positional that is itself a known cell is rejected with a `rimz agents a,b` hint, so the old space-separated fan-out never silently becomes a prompt.
 
@@ -92,7 +99,7 @@ Relaunching a named team into the same named worktree reconciles with existing s
 
 `--channel <NAME>` launches into a durable named channel, registering it when missing and naming the backend tab `#<NAME>`. Named channels run in the room root and are managed with [`rimz channel`](./channel.md).
 
-Placement follows intent under the default `auto` policy: a named-channel launch, a worktree launch, or a multi-cell spec opens its own tab, and a one-cell non-worktree launch, including a single team role, takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put. The per-machine [`[agents] placement`](../configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/harness/harness.md#backend-shape-and-placement).
+Placement follows intent under the default `auto` policy: a named-channel launch, a worktree launch, or a multi-cell spec opens its own tab, and a one-cell non-worktree launch, including a single team role, takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put — that is `--bg`'s placement meaning at launch; combined with `-p` it instead detaches from a supervised run, covered under [Supervised runs](#supervised-runs--p). The per-machine [`[agents] placement`](../configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/harness/harness.md#backend-shape-and-placement).
 
 ### Supervised runs (`-p`)
 
@@ -105,7 +112,7 @@ rimz agents claude "Review the diff." -p --effort high --system-prompt-file ./re
 cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
 ```
 
-- `--bg` prints the pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`.
+- `--bg` with `-p` prints the run's pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`. (Without `-p`, `--bg` is a placement flag — see [Channel, worktree, and placement](#channel-worktree-and-placement).)
 - `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--bg`). The JSON `run_id` opens the Rimz transcript log with `rimz transcript <run_id>`; the JSON `transcript_path` is the provider-native session file used for streaming, context, and spend enrichment.
 - `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it, wrapped in `<stdin>…</stdin>` tags when both are present; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt.
 - `--max-turns <N>` caps the agentic turn count where the adapter exposes a native limit (Claude today); an agent without one refuses the run.
@@ -135,15 +142,56 @@ rimz agents stop run_0123…               # cancel a run or close a pane
 rimz agents stop @claude --all           # stop every matching Claude in scope
 ```
 
-Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. Rows group under channel section headers: `⑂` marks a worktree-backed or isolated lane, `#` marks a plain lane, a bare label marks the room root, and a dim `external` tail holds agents outside the project; header glyphs follow the configured theme glyph set, including Nerd Font presets. A shared team appears in the header as `· <team> team`. The `AGENT` column is the shortest handle you can type back under that header — its role (`@coder`), else its explicit `--name` (`@writer`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one lane. `STATUS` is the plain status label, with provider-limit and API-error turns projected to `paused` or `failed`; `show` carries the turn phase when you need it. `DESC` is the same activity description the sidebar shows: session preview, session name, launch description, task, then latest prompt, clipped to the terminal width. `ps` is an alias for `list`.
+| Verb | Acts on | What it does |
+|---|---|---|
+| `list` (bare `agents`; `ps` alias) | the current channel; `--all` for the room | attention-ordered agent cards |
+| `show` (`inspect` alias) | one agent | describe-style report: activity, context, cost, messages, transcript tail |
+| `logs` | one agent | transcript tail; `-f` follows |
+| `top` | live root agents | resource-ranked fleet table |
+| `focus` | one agent | jumps to its pane |
+| `wait` | one run or agent | blocks until it lands |
+| `refresh` | one agent, the channel, or `--all` | force-refreshes card context |
+| `stop` | one run or agent; `--all` fans out | cancels a run or closes the pane |
 
-`show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section includes transcript-priced session cost when a transcript path and cached price book can price it. `--capture` appends the bound pane's visible area as plain text, `--ansi` keeps colors, and `--json` includes the same live agent fields plus additive `cost`, `messages`, and optional `capture` data. Capture errors when the agent has no bound pane. `--json` selects JSON for `list` and bare `agents` (supervised `-p` uses `--output-format` instead).
+#### `list`
+
+Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. `ps` is an alias for `list`, and `--json` selects JSON output for both.
+
+Rows group under channel section headers: `⑂` marks a worktree-backed or isolated lane, `#` marks a plain lane, a bare label marks the room root, and a dim `external` tail holds agents outside the project. Header glyphs follow the configured theme glyph set, including Nerd Font presets, and a shared team appears in the header as `· <team> team`.
+
+| Column | What it shows |
+|---|---|
+| `AGENT` | the shortest handle you can type back under that header — its role (`@coder`), else its explicit `--name` (`@writer`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one lane |
+| `STATUS` | the plain status label, with provider-limit and API-error turns projected to `paused` or `failed`; `show` carries the turn phase when you need it |
+| `DESC` | the same activity description the sidebar shows — session preview, session name, launch description, task, then latest prompt — clipped to the terminal width |
+
+#### `show` / `inspect`
+
+`show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section includes transcript-priced session cost when a transcript path and cached price book can price it. `--capture` appends the bound pane's visible area as plain text (an error when the agent has no bound pane), `--ansi` keeps colors, and `--json` includes the same live agent fields plus additive `cost`, `messages`, and optional `capture` data. (Supervised `-p` runs shape their output with `--output-format` instead.)
+
+#### `logs`
 
 `logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as `rimz transcript @ref`.
 
+#### `top`
+
 `top` ranks live root agents by pane process-tree resources: CPU, memory, I/O per second, process count, context fill, tokens, and age. It streams by default; `--once` takes two samples 500 ms apart and exits for scripts. Resource columns read `-` on platforms or panes where process metrics are unavailable, while context and token columns still render.
 
-`focus` jumps to an agent's pane. `wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate; a plain run wait prints the final assistant message at completion, `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing. `refresh` forces the transcript tail re-read past the stat gate, re-runs Codex turn-death confirmation against the live pane when one is bound, spawns the kind's detached rich-context helper when one exists, and wakes sidebars after an inline merge. With a reference, `refresh` resolves exactly one agent in scope; without a reference, it refreshes every live root agent in the current channel; with `--all`, it takes no reference and covers every live root agent in the workspace. `stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
+#### `focus`
+
+`focus` jumps to an agent's pane.
+
+#### `wait`
+
+`wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate. A plain run wait prints the final assistant message at completion; `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing.
+
+#### `refresh`
+
+`refresh` forces the transcript tail re-read past the stat gate, re-runs Codex turn-death confirmation against the live pane when one is bound, spawns the kind's detached rich-context helper when one exists, and wakes sidebars after an inline merge. With a reference it resolves exactly one agent in scope; without a reference it refreshes every live root agent in the current channel; with `--all` it takes no reference and covers every live root agent in the workspace.
+
+#### `stop`
+
+`stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
 
 ## Message an agent
 
@@ -191,7 +239,43 @@ The flags worth knowing tune delivery (run `rimz message --help` for the full su
 - `--no-from` sends the bytes exactly. By default a Rimz-launched agent's send arrives as `from @sender: text`, gaining `#channel` when it crosses channels.
 - `--wait[=DURATION]` waits after send-now delivery until the agent's next `TurnStarted` hook confirms the prompt, the delivery window elapses, or the send errors. Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default window. It conflicts with `--no-enter`, because an unsubmitted paste cannot be confirmed.
 
-A bare `@<kind>`, `@<profile>`, or `@all` in `--steer` mode also reaches an agent you just started in a fresh pane, before its first turn, because the live-pane side addresses the pane it types into. Parked records key on the bound session or launch placeholder card so FIFO survives registration. Target, channel, receiver card, and sender attribution are record identity; `message edit <id>` changes only delivery fields on a `queued` record: text, `--on`, schedule or `--no-schedule`, `--force` or `--no-force`, `--enter` or `--no-enter`, and smart-compaction settings. Retarget by removing and resending. `message requeue <id>` creates a new queued record from a terminal record whose text is still in `messages/history.jsonl`; it preserves receiver identity and delivery settings unless edit flags override them. Message statuses are `queued`, `claimed`, `sent`, `delivered`, `timed_out`, `errored`, `removed`, `abandoned`, and `archived`. `sent` means Rimz wrote the bytes to the pane; `delivered` means the agent acknowledged a prompt through `TurnStarted` or a command through `Compacting`; `archived` means the receiver or channel context ended. Bare `rimz message` renders the inbox for the current lane; in the main checkout, where there is no stamped lane, it shows only lane-less messages. `message list` hides archived records unless `--all` or `--status archived` asks for them, sorts newest first, caps at 200 rows (`--limit N`, `--limit 0` for all), renders an empty result as a faint scope-aware `no messages` line, and renders non-empty human output as a dense two-line digest: `sender → receiver  status  age  msg_id`, then an indented one-line snippet clipped to the terminal width after `$HOME` path segments collapse to `~`. `--all` widens the view to every lane, groups rows under one `#channel` or `(main)` header per lane ordered by latest activity, and keeps messages newest-first inside each indented group; `--channel <NAME>` selects one lane, `--status <STATUS>` filters exactly, and `--json` keeps the full record including attempts and the enqueue-time receiver `address`. Handles omit `#channel` when the row already sits inside that scoped lane. Terminal rows read their preserved text from `messages/history.jsonl`; older event-only rows show the terminal reason as the snippet. `message show <id>` (`status` alias) prints the full record text, a `message.*` event timeline, and a delivery check for open records that names the first blocker: schedule floor, FIFO head, receiver presence, gate, pending ask, or live pane, followed by a steer or edit hint when a command can clear the blocker. `message remove` accepts one or more ids and keeps processing after misses, then exits non-zero if any id was not open. `message clear` with a target removes that agent's open messages; without a target it removes open messages in the scoped lane from `--channel`, `--worktree`, or the ambient room channel, and prints the ids it removed.
+A bare `@<kind>`, `@<profile>`, or `@all` in `--steer` mode also reaches an agent you just started in a fresh pane, before its first turn, because the live-pane side addresses the pane it types into. Parked records key on the bound session or launch placeholder card, so FIFO order survives the agent's registration.
+
+### Message statuses
+
+Every record moves through one status at a time; `message list` and `message show` print it. The open statuses can still deliver; a terminal status is final, and the record's text stays readable through `message show` and `message list --all`.
+
+| Status | Kind | Meaning |
+|---|---|---|
+| `queued` | open | parked durably, waiting on its schedule floor, FIFO turn, and delivery gate |
+| `claimed` | open | in flight — a delivery helper claimed the record and is sending it |
+| `sent` | open | Rimz wrote the bytes to the pane and is waiting for the agent's acknowledgment |
+| `delivered` | terminal | the agent acknowledged it — a prompt through `TurnStarted`, a command through `Compacting` |
+| `timed_out` | terminal | the send was never confirmed within the retry caps |
+| `errored` | terminal | delivery failed hard, such as an address that bounced |
+| `removed` | terminal | taken out by `message remove` or `message clear` |
+| `abandoned` | terminal | given up before sending — the pre-send retry cap was exceeded |
+| `archived` | terminal | the receiver or its channel context ended before delivery |
+
+### `message list`
+
+Bare `rimz message` renders the inbox for the current lane; in the main checkout, where there is no stamped lane, it shows only lane-less messages.
+
+`message list` hides archived records unless `--all` or `--status archived` asks for them, sorts newest first, and caps at 200 rows (`--limit N`, `--limit 0` for all). An empty result renders as a faint scope-aware `no messages` line; non-empty human output is a dense two-line digest — `sender → receiver  status  age  msg_id`, then an indented one-line snippet clipped to the terminal width after `$HOME` path segments collapse to `~`.
+
+`--all` widens the view to every lane, groups rows under one `#channel` or `(main)` header per lane ordered by latest activity, and keeps messages newest-first inside each indented group. `--channel <NAME>` selects one lane, `--status <STATUS>` filters exactly, and `--json` keeps the full record including attempts and the enqueue-time receiver `address`. Handles omit `#channel` when the row already sits inside that scoped lane. Terminal rows read their preserved text from `messages/history.jsonl`; older event-only rows show the terminal reason as the snippet.
+
+### `message show`
+
+`message show <id>` (`status` alias) prints the full record text, a `message.*` event timeline, and — for open records — a delivery check that names the first blocker: schedule floor, FIFO head, receiver presence, gate, pending ask, or live pane, followed by a steer or edit hint when a command can clear the blocker.
+
+### `message edit` and `message requeue`
+
+Target, channel, receiver card, and sender attribution are record identity — retarget by removing and resending. `message edit <id>` changes only delivery fields on a `queued` record: text, `--on`, schedule or `--no-schedule`, `--force` or `--no-force`, `--enter` or `--no-enter`, and smart-compaction settings. `message requeue <id>` creates a new queued record from a terminal record whose text is still in `messages/history.jsonl`; it preserves receiver identity and delivery settings unless edit flags override them.
+
+### `message remove` and `message clear`
+
+`message remove` accepts one or more ids and keeps processing after misses, then exits non-zero if any id was not open. `message clear` with a target removes that agent's open messages; without a target it removes open messages in the scoped lane from `--channel`, `--worktree`, or the ambient room channel, and prints the ids it removed.
 
 Parked delivery needs installed and trusted hooks, because turn-end hooks trigger the hidden `message deliver` helper. Scheduled wakeups use `message-wake.json` in the runtime cache and the hidden `message sweep` helper; the wake path needs an open room so an elder is keeping time. The record layout, gates, and delivery walk are in [message.md](../../internals/harness/message.md).
 
@@ -262,7 +346,39 @@ rimz loop show pr-watch
 rimz loop remove pr-watch
 ```
 
-Schedules come in six shapes: calendar (`--at` plus optional `--days`), interval (`--every 15m`), raw cron (`--cron`), window-reset (`--at-reset` on a `<kind>-ping` spec), one-shot (`--once` or `--in 30m`), and poll-until (`--every`, `--check`, `--on`, `--until`, plus an agent action). Calendar, cron, `--in`, and `--until` resolution use the top-level `timezone`, falling back to the system zone when unset. A `<kind>-ping` spec is the window-primer — the run skips when the provider's window is already counting down. `--at-reset` fires that ping one minute after the provider's longest observed budget window resets, then uses the ping turn's own cache refresh as the next occurrence. `--bind @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the task fires, Rimz skips delivery and removes the schedule. `--check` runs at the project root; `--on fail` wakes on non-zero exit or timeout, while `--on success` wakes on zero exit. Rimz-generated `--in`, `--once`, and `--until` tasks persist as state, not `loop.toml` config. `--project` writes `[tasks.<name>]` to `.rimz/config.toml`, omits `root` because the project root is implicit, rejects `--bind`, `--until`, `--once`, and `--in`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; `loop list` source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`; project-only `loop run` refuses until trusted; during the untrusted window, a same-named machine task keeps running. `loop fire` runs the task now in the foreground with the same check guard, window skip, overlap guard, and run-log record as a scheduled fire, streams the check's live output, prints the outcome, prints the agent's final message for successful supervised runs, hints `--keep` when the transient pane closes, and keeps one-shot entries and bind schedules in place; `--keep` leaves the transient supervised pane open for inspection. A task that is already running records `overlapped` and skips instead of stacking another run. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, and next fire. `loop show <name>` opens with one task's schedule, next fire, task, check, root, and source with the defining file path, then prints recent runs plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links. The task model and config shape are in [harness.md → Scheduled turns](../../internals/harness/harness.md#scheduled-turns-loop).
+### Schedule shapes
+
+| Shape | Flags | Notes |
+|---|---|---|
+| Calendar | `--at HH:MM` plus optional `--days` | fires daily at that wall-clock time; `--days weekdays` narrows the days |
+| Interval | `--every <DUR>` | fires on the interval, e.g. `--every 15m` |
+| Cron | `--cron '<line>'` | a raw cron expression |
+| Window reset | `--at-reset` on a `<kind>-ping` spec | fires one minute after the provider's longest observed budget window resets, then uses the ping turn's own cache refresh as the next occurrence |
+| One-shot | `--once` or `--in <DUR>` | fires once, e.g. `--in 30m` |
+| Poll-until | `--every` + `--check` + `--on` + `--until`, plus an agent action | polls the check on the interval until it wakes the agent or the `--until` window ends |
+
+Calendar, cron, `--in`, and `--until` times resolve in the top-level `timezone`, falling back to the system zone when unset.
+
+### What a task does when it fires
+
+- A `<kind>-ping` spec is the window-primer: the run skips when the provider's window is already counting down.
+- `--bind @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the task fires, Rimz skips delivery and removes the schedule.
+- `--check` runs at the project root; `--on fail` wakes the agent on non-zero exit or timeout, while `--on success` wakes on zero exit.
+- A task that is already running records `overlapped` and skips instead of stacking another run.
+
+### Machine, project, and state tasks
+
+`rimz loop add` writes machine tasks to `loop.toml`; Rimz-generated `--in`, `--once`, and `--until` tasks persist as state, not config. `--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--bind`, `--until`, `--once`, and `--in`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; project-only `loop run` refuses until trusted, and during the untrusted window a same-named machine task keeps running. `loop list` source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`.
+
+### `loop fire`
+
+`loop fire <name>` runs the task now in the foreground with the same check guard, window skip, overlap guard, and run-log record as a scheduled fire. It streams the check's live output, prints the outcome, prints the agent's final message for successful supervised runs, hints `--keep` when the transient pane closes, and keeps one-shot entries and bind schedules in place. `--keep` leaves the transient supervised pane open for inspection.
+
+### `loop list`, `loop show`, and `loop rename`
+
+`loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, and next fire. `loop show <name>` opens with one task's schedule, next fire, task, check, root, and source with the defining file path, then prints recent runs plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
+
+The task model and config shape are in [harness.md → Scheduled turns](../../internals/harness/harness.md#scheduled-turns-loop).
 
 ## Manage Rimz-owned worktrees
 

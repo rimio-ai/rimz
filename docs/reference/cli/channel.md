@@ -3,9 +3,14 @@
 `rimz channel` manages durable named cooperation lanes. Use it when a room needs a `#design`, `#ops`, or `#release` lane without creating a Git worktree.
 
 ```sh
+rimz channel new <NAME>
+rimz channel list [--json]
+rimz channel rm <NAME>
+```
+
+```sh
 rimz channel new design
 rimz channel list
-rimz channel list --json
 rimz channel rm design
 rimz agents claude --channel design "Draft the API shape."
 rimz message @planner#design --create "Plan the rollout."

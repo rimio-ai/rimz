@@ -45,11 +45,13 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
                                                     ? for help  ← footer help
 ```
 
-The rest of this doc reads that frame zone by zone.
+The rest of this doc reads that frame zone by zone — what each zone shows and how it renders. Why the column ranks, groups, and routes the way it does is [the sidebar guide](../guide/sidebar.md); this page stays with what you see.
 
 ## Reading the glyphs
 
 One vocabulary runs through the whole sidebar: a shape carries the meaning, color reinforces it. This is the complete legend, and the canonical home for it — every other doc points here.
+
+The tables group glyphs by where they appear on screen: the **status cell** leading every row, the short-lived **heads** that ride over it, the **meters and stats** on cards and panels, and the **structure and chrome** around them. Find a glyph by where you saw it.
 
 The tables show the default Unicode set. `[theme.glyphs]` can select Nerd Font or override either shipped inline set without changing the meanings; see [theme.md → Glyphs](../guide/theme.md#glyphs).
 
@@ -60,12 +62,12 @@ The tables show the default Unicode set. `[theme.glyphs]` can select Nerd Font o
 | `?`   | waiting    | asked you something; answer in its pane | yes |
 | `!`   | attention  | a failed turn, a turn dead on a provider API error, or a working agent gone silent past the stall window | yes |
 | `⏸`   | paused     | stopped mid-turn on a provider rate-limit or overload; resumes when the provider recovers or the window resets | on recovery |
-| `⢿`   | working    | running and editing | no |
+| `⢿`   | working    | running and editing; the animation cycles through the braille frames (`⣾`, `⣽`, …), so any of them reads as working | no |
 | `⠁`   | thinking   | running, before the turn's first file edit | no |
-| `⠙`   | working    | an agent or process is active | work in progress |
+| `⠙`   | resolving  | a working-family spinner (the themable `resolving` animation, kin to `⠁` and `⢿`); a row wearing it is active and counts as working | no |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | a look, not the lead |
-| `○`/`⢿` | process  | a pane with no agent (shell, editor): hollow `○` when idle, `⢿` while it does real work — one soft step below the agent cards, never a cockpit tally | no |
+| `○`/`⢿` | process  | a pane with no agent (shell, editor): hollow `○` when idle, `⢿` while it does real work — the same shapes the idle and working agent rows wear, one soft step quieter, never a cockpit tally | no |
 
 Three short-lived **heads** ride over the base status on the leading cell, so they never earn a cockpit bucket of their own — every running agent, whichever head it wears, counts as **working** (`⢿`) in the make-up:
 
@@ -92,7 +94,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `▣ ━━━━╸━──── 38.2%` | context meter — how full the window is; the bar fills as used, `▢` hollow at 0%. The fill also shows *where* the window went: a wide cache-read run in the meter's health tone, with narrow `╸` caps separating cache-write and fresh-input accents |
 | `▤ 76k`           | filled context — the absolute tokens in the window, the `▣` meter's numerator |
 | `◇ ↘ ↗ ◌` / `◍`   | token markers, one stable color each: `◇` total (blue) · `↘` input incl. cache creation (deep red, the costliest read) · `↗` output (blue) · `◌` cache-read (green); the card's context line adds `◍` cache-write (violet) for the per-call split |
-| `↻ N`             | completed context compactions — the card's lifetime count, from the first; trails the context line after a `·` |
+| `↻ N`             | completed context compactions — the card's lifetime count, from the first; trails the context line after a `·` (the same glyph marks provider budget resets and Codex reset credits — the last two rows of this table) |
 | `◔ 5m`            | last-activity age — shown once it crosses five minutes, so a card stays quiet through normal churn; the face fills by the quarter hour (`◔`≤15m · `◑`≤30m · `◕`≤45m · `●`≤60m · `◉` past) and heats to red by the hour, where resuming likely re-reads the whole context uncached. On a running subagent line the same face reads the child's elapsed work as a fixed `m`/`h` label (`<1m` under a minute) |
 | `C 11%` / `M 512M` / `⇅ 3M/s` | a working process row's CPU · resident memory (RSS) · combined VFS I/O rate — one fixed-width grid (`C` sky · `M` sage · `⇅` violet) that appears only once all three have values |
 | `+127 -43`        | lines added / removed against the trunk — committed, staged, unstaged, and untracked all counted |
@@ -102,8 +104,8 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `⟳ main` / `✓ main` / `✕ main` / `⊙ main` / `≡ main` / `⑂ main` | trunk marker ladder: local rebase/merge/cherry-pick in progress, then PR merged, PR closed, PR open, then local merged, pristine, or plain branch |
 | `$1.27`           | spend — dollar green, two decimals; omitted while a session's cost rounds to zero |
 | `▰▱` / `▱▱` / `ex` / `api` | provider account bar: included-window budget (`5h`/`7d`/`30d`, fill = left), unknown budget as a dim empty track, paid extra usage as `ex`, API-key spend as `api`; `∞` means uncapped or not reported |
-| `↻ 2h06m`         | when a provider budget resets; soft at a sustainable burn pace, heating toward red as spend outruns the window |
-| `↻ N`             | a compact count: on a card context line, completed compactions; in the Codex provider header, available rate-limit reset credits, with the glyph colored by soonest expiry |
+| `↻ 2h06m`         | when a provider budget resets; soft at a sustainable burn pace, heating toward red as spend outruns the window — the duration form of `↻`, next to a budget bar (the count forms are compactions on a card and reset credits in the Codex header) |
+| `↻ N`             | the count form of `↻`: on a card context line, completed compactions; in the Codex provider header, available rate-limit reset credits, with the glyph colored by soonest expiry |
 
 **Structure and chrome.**
 

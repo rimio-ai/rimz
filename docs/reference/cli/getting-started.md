@@ -57,15 +57,37 @@ rimz remote bandwidth --secs 5                    # attribute pane write-rate in
 
 A raw target is `[user@]host:<session-or-path>`. After the colon, a value containing `/` or starting with `~` is a remote path and runs remote `rimz start`; a bare word is a remote session name and runs remote `rimz attach`. Valid targets include `dev-box:query-engine`, `dev-box:~/code/query-engine`, `agent@prod-box:/srv/query-engine`, and `user@[::1]:query-engine`. Spell another user's home as an absolute path (`/home/alice/code`), because `~user` does not expand through the guarded command.
 
-- `rimz remote add <name> <target>` saves an alias in `~/.config/rimz/remote.toml`. Any input with a `:` is treated as a raw target; everything else is an alias name.
-- `rimz remote update <name> <target>` replaces a saved alias's target and flags with the same flags as `add`; it errors if the alias does not exist. Flags not passed reset to their defaults.
-- `rimz remote add` on an existing name prompts to overwrite on an interactive terminal; non-interactively it errors so a saved alias is never silently replaced. Use `remote update` to change one in a script.
+| Subcommand | Effect |
+| --- | --- |
+| `remote connect <alias-or-target>` | Attach the room over SSH, reconnect-supervised |
+| `remote add <name> <target>` | Save an alias in `~/.config/rimz/remote.toml` |
+| `remote update <name> <target>` | Replace a saved alias's target and flags |
+| `remote rename <old> <new>` | Rename a saved alias |
+| `remote list` | Print saved aliases |
+| `remote rm <name>` | Remove a saved alias |
+| `remote reset <alias-or-target>` | Connect with recovery skipped, so the remote room comes up empty |
+| `remote bandwidth` | Attribute pane write-rate inside a served room |
+
+The details that matter in practice:
+
+- `remote add` treats any input with a `:` as a raw target and everything else as an alias name. On an existing name it prompts to overwrite in an interactive terminal and errors otherwise, so a saved alias is never silently replaced; use `remote update` in a script. `update` takes the same flags as `add`, errors when the alias does not exist, and resets flags you do not pass to their defaults.
 - Reconnect supervision is on by default. `--no-reconnect` hands the link to one SSH run; `remote add --no-reconnect` saves that as the alias default.
-- `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`, so a remote room comes up empty instead of recovering; `remote add --no-resume` saves that birth behavior.
+- `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`; `remote add --no-resume` saves that birth behavior on the alias.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.
-- `--web` runs remote `rimz web open --print --json`, asks the rebirth recovery prompt over that prep connection when the local terminal is interactive, relays the serving machine's cached Zellij web login token, starts a supervised SSH local-forward tunnel to the remote Zellij web server, prints the bare `http://127.0.0.1:<port>/<session>` URL, opens the local browser best-effort, and stays in the foreground until Ctrl-C. `--web-port <port>` pins the local browser origin; otherwise Rimz derives a stable port from the session name in `8300..8399`.
 - For `remote add` and `remote update`, `--mux`, `--zellij`, or `--tmux` given anywhere on the invocation is saved on the alias; `rimz remote connect --mux <name>` keeps `--mux` as a per-invocation override.
 - `rimz remote bandwidth [--secs N] [--json]` runs on the Linux host serving the room and samples VFS write-rate counters to attribute per-pane terminal output on both backends; tmux reports pane pids natively, and Zellij pane pids resolve through Rimz's process matcher. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
+
+### Remote rooms in the browser
+
+`rimz remote connect <target> --web` opens the remote room in your local browser instead of your terminal. The sequence:
+
+1. Runs remote `rimz web open --print --json` over a prep connection, asking the recovery prompt there when your terminal is interactive.
+2. Relays the serving machine's cached Zellij web login token.
+3. Starts a supervised SSH local-forward tunnel to the remote Zellij web server.
+4. Prints the bare `http://127.0.0.1:<port>/<session>` URL and opens your local browser best-effort.
+5. Stays in the foreground until Ctrl-C.
+
+`--web-port <port>` pins the local browser origin; otherwise Rimz derives a stable port from the session name in `8300..8399`.
 
 Link-health, web tunneling, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/reach/remote.md).
 
@@ -89,4 +111,12 @@ rimz setup [--yes]
 rimz doctor [--audit] [--json] [--output PATH]
 ```
 
-`rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. It reports the current OS user, absolute rimz binary path, resolved workspace with absolute paths, backend and version, PATH-visible backend binaries, backend server-log excerpts, backend server socket, session health, duplicate sidebars, hook status, remote-control state, storage footprint, protocol versions, trust state, live agent problem rows, message-delivery failures, recent sidebar diagnostics, and a closing verdict — each as a titled section with a status glyph, and each failing check printing the next fix where Rimz knows one. `--audit` widens the agent section to every observed session, `--json` emits the whole report as one machine-readable document, and `--output PATH` writes it atomically to a file. Static adapter coverage has its own command, [`rimz coverage`](./maintenance.md#adapter-coverage).
+`rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. Each check prints as a titled section with a status glyph, and each failing check prints the next fix where Rimz knows one. The report covers:
+
+- **Identity and paths** — current OS user, absolute rimz binary path, resolved workspace with absolute paths
+- **Backend** — backend and version, PATH-visible backend binaries, server-log excerpts, server socket, session health, duplicate sidebars
+- **Integration** — hook status, remote-control state, protocol versions, trust state
+- **State** — storage footprint, live agent problem rows, message-delivery failures, recent sidebar diagnostics
+- **Verdict** — the closing summary line
+
+`--audit` widens the agent section to every observed session, `--json` emits the whole report as one machine-readable document, and `--output PATH` writes it atomically to a file. Static adapter coverage has its own command, [`rimz coverage`](./maintenance.md#adapter-coverage).

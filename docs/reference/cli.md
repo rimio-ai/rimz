@@ -76,4 +76,19 @@ These hold across the whole CLI, so each command page assumes them rather than r
 
 Hidden helper commands are the machinery behind hooks, sidebars, statuslines, and agent wrappers. They stay out of `rimz --help` and are not part of the user-facing contract, so they can change between releases.
 
-They include `rimz sidebar …` (the sidebar's data and focus API), `rimz statusline feed` (the installed statusline datasource), `rimz hooks feed` (the hook decision entrypoint), `rimz message deliver` (the turn-boundary delivery helper), `rimz message sweep` (the scheduled-message wake helper), `rimz agents exec` and `rimz agents auto-continue` (the launch wrapper and the rate-limit-reset nudge), `rimz agents refresh-usage` (the per-provider account-usage probe), `rimz loop run` (the scheduled-turn runner), `rimz worktree cleanup`, `rimz web token ensure` (the idempotent login-token provisioner for remote web relay), and `rimz codex …` (the Codex session-enrichment helpers). The protocols behind them live in the owning internals docs: [store](../internals/store/store.md), [state](../internals/sidebar/state.md), [agent](../internals/agents/agent.md), [provider](../internals/agents/provider.md), and [harness](../internals/harness/harness.md).
+| Command | What it powers |
+| --- | --- |
+| `rimz sidebar …` | The sidebar's data and focus API |
+| `rimz statusline feed` | The installed statusline datasource |
+| `rimz hooks feed` | The hook decision entrypoint |
+| `rimz message deliver` | Turn-boundary message delivery |
+| `rimz message sweep` | The scheduled-message wake helper |
+| `rimz agents exec` | The launch wrapper around every agent process |
+| `rimz agents auto-continue` | The rate-limit-reset nudge |
+| `rimz agents refresh-usage` | The per-provider account-usage probe |
+| `rimz loop run` | The scheduled-turn runner |
+| `rimz worktree cleanup` | Supervised worktree cleanup after a pane closes |
+| `rimz web token ensure` | Login-token provisioning for the remote web relay |
+| `rimz codex …` | Codex session-enrichment helpers |
+
+The protocols behind them live in the owning internals docs: [store](../internals/store/store.md), [state](../internals/sidebar/state.md), [agent](../internals/agents/agent.md), [provider](../internals/agents/provider.md), and [harness](../internals/harness/harness.md).

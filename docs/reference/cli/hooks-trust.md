@@ -19,6 +19,15 @@ Installed hooks call Rimz's hidden hook entrypoint for lifecycle and blocking as
 rimz trust [status|grant|revoke] [--json]
 ```
 
-`trust status` (the default) re-hashes the project's executable surface and prints `no project config`, `untrusted`, `trusted`, or `stale`. `trust grant` pins the current hash and surface on this machine; `trust revoke` removes the grant. A later edit to a command-running project field makes the state `stale`, which behaves like untrusted until the grant is refreshed — and both `status` and `grant` render a field-level diff of what changed since the grant, so the refresh is informed. `--json` emits the state, ids, paths, hashes, grant timestamp, and the structured diff.
+`trust status` (the default) re-hashes the project's executable surface and prints one of four states:
+
+| State | Meaning |
+| --- | --- |
+| `no project config` | No `.rimz/config.toml` exists — the project has no executable surface |
+| `untrusted` | Project config present, no grant record on this machine |
+| `trusted` | Grant record present and the surface hash matches |
+| `stale` | A command-running field changed since the grant; behaves like untrusted until the grant is refreshed |
+
+`trust grant` pins the current hash and surface on this machine; `trust revoke` removes the grant. Both `status` and `grant` render a field-level diff of what changed since the grant, so a refresh is informed. `--json` emits the state, ids, paths, hashes, grant timestamp, and the structured diff.
 
 Project trust covers project-supplied command surfaces — hook commands, agent launch commands, profile and team definitions, env overrides, and other executable fields. The hash, stored surface, and record format are in [project trust](../../internals/harness/trust.md); the operator-facing safety model is in [security and trust](../../guide/security.md).
