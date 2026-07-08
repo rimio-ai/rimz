@@ -250,6 +250,7 @@ The complete `rimz agents` surface, every verb and flag, is the [agent-control r
 - [Teams](./teams.md) — pair profiles by role and launch, reopen, and resume the whole set as one unit.
 - [Messaging](./messaging.md) — reach agents by handle: park, steer, schedule, and channels.
 - [The sidebar](./sidebar.md) — how the room reads the cards, worktrees, and teams you launch.
+- [Spending](./spending.md) — fleet-wide token and dollar insight: the cockpit, the provider dashboard, and `rimz stats`.
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.

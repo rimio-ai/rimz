@@ -49,7 +49,7 @@ The cockpit and dashboard hold fixed positions, so the numbers you glance at nev
 The top block reads the whole room in four lines:
 
 - **Identity.** The workspace name and its path, so a glance confirms which project this room is.
-- **Sessions and tokens.** How many agent sessions have run in the configured spend window, with the room's token breakdown pinned right: total, input, output, and cache-read.
+- **Sessions and tokens.** How many agent sessions have run in the configured spend window, with the room's token breakdown pinned right: total, input, output, and cache-read. What the marks mean and how the figures add up is [Spending](./spending.md).
 - **Live agents and spend.** How many agents are alive right now, an unread count like `(2)` when results or questions await you, and the room's dollar spend rolling up live as agents work.
 - **The make-up line.** The fleet by state: `? 3  ! 1  ⏸ 0  ✓ 8` counts who asked you something, who failed, who is parked on a provider limit, and who holds a finished result, with live capacity (`⢿` working, `○` idle) on the right.
 
@@ -63,7 +63,7 @@ Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) de
 
 ### The provider dashboard
 
-Budgets are account-scoped, one account shared by every session of a provider, so they live in a pinned panel at the bottom rather than on the cards. Each provider block shows the account and plan (`Claude Max`, `ChatGPT Pro`), the CLI version, that provider's session count, token breakdown, and dollar spend, and one draining "mana" bar per budget window (5-hour, 7-day) with a countdown to its reset. API-key accounts show trailing-month spend instead of a window. Below the blocks, two totals rows sum the whole fleet across providers for the trailing week and month, so one look tells you where the week is going.
+Budgets are account-scoped, one account shared by every session of a provider, so they live in a pinned panel at the bottom rather than on the cards. Each provider block names the account and plan (`Claude Max`, `ChatGPT Pro`) and drains a "mana" bar per budget window (5-hour, 7-day) toward its reset, so a glance reads how much of the plan is left. The block also carries that provider's spend, and two totals rows below sum the fleet across the trailing week and month. Reading those figures, and how every one is calculated, is [Spending](./spending.md).
 
 With several providers the panel tabs, following whichever agent you have selected; `←`/`→` or a click picks one by hand. With [pets enabled](./theme.md#pets), the companion rides the panel's right edge.
 
@@ -191,6 +191,7 @@ Three `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a si
 ## See also
 
 - [The sidebar on screen](../interface/sidebar.md) — every glyph, meter, and frame drawn exactly, with the key table.
+- [Spending](./spending.md) — read the cockpit and provider-dashboard figures, `rimz stats`, and how the numbers are calculated.
 - [Messaging](./messaging.md) — the other half of the loop: reach the agent the sidebar surfaced.
 - [Notifications](./notifications.md) — the same cues pushed to your desktop, phone, or a handler when you are off-screen.
 - [Theming and pets](./theme.md) — restyle the column, its palette, and the companion.
