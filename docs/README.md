@@ -13,16 +13,16 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 
 ## Working with agents
 
-- [Agents](./guide/agents.md): launch agents by name, set permission modes, and compose several into one layout.
 - [Sidebar](./guide/sidebar.md): read the zones, the agent cards and their lifecycle, and the process rows, and follow how Rimz decides which agent needs you.
+- [Agents](./guide/agents.md): run the stock CLIs in the room, shape an agent for one job with a profile, and compose several into one layout.
 - [Remote](./guide/remote.md): attach to a room on another host over SSH, a multiplexer attach with a self-healing link, kept alive across reboots.
 - [Web](./guide/web.md): open a room in the browser, on the host or tunnelled from a server, gated by a login token.
 
 ## Harness
 
+- [Worktrees](./guide/worktrees.md): isolate a layout or team on its own Git branch so several run in parallel without clobbering each other.
 - [Messaging](./guide/messaging.md): steer and queue agents by handle, deliver at the turn boundary or on a schedule, and let agents talk to each other in channels.
 - [Teams](./guide/teams.md): pair models by role, launch the whole set with one name, and reopen or resume it as a single unit.
-- [Worktrees](./guide/worktrees.md): isolate a layout or team on its own Git branch so several run in parallel without clobbering each other.
 - [Scripting agents](./guide/scripting.md): supervised one-shot `-p` turns with exit codes, JSON and streaming output, and the background-run primitives that drop agents into scripts and CI.
 - [Loops and schedules](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, wire notification handlers, and keep the fleet moving with auto-continue.
 

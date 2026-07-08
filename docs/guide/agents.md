@@ -1,42 +1,51 @@
 # Agents
 
-Rimz watches the agents you already run; it never replaces their CLIs. An agent reaches the room two ways: you type its stock command into a pane, or you launch it with `rimz agents`. Typing the command is the natural way in and the whole story for many sessions. Reach for `rimz agents` when you want an agent tuned for one job, several agents at once, or a layout dropped into its own [worktree](./worktrees.md) or [team](./teams.md).
+Rimz watches the agents you already run. Type `claude` into any pane and it joins the room; `rimz agents` earns its keystrokes later, when you want an agent tuned for one job or several agents launched in one line. This page covers both ways in, and the commands that read and drive the fleet once it is working.
 
-## Run an agent directly
+## Run the CLI you already run
 
-Type the agent's own command in any pane. It appears in the sidebar, reporting from its first line:
+Type the agent's own command in any pane, exactly as you did before Rimz:
 
 ```sh
 claude          # the stock Claude CLI
 codex           # the stock Codex CLI
 ```
 
-No Rimz command sits in the path. The CLI runs exactly as it always does, and Rimz's reporting hooks — installed once at the [consent gate](./quickstart.md#the-consent-gate) — read what it does: status, task, context health, live cost. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents Rimz drives, and what each integration reports, is [agent support](../reference/agent-support.md).
+The agent appears in the sidebar, reporting from its first line. No Rimz command sits in the path: the CLI runs with your flags, your config, your session files, and the reporting hooks you approved at the [consent gate](./quickstart.md#the-consent-gate) tell Rimz what it does — status, task, context health, live cost. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents Rimz drives, and what each integration reports, is [agent support](../reference/agent-support.md).
 
-For a single agent in the pane you are standing in, this is all you need.
+For a single agent in the pane you are standing in, this is the whole story. Everything below is for the sessions where it isn't.
 
-## Launch through `rimz agents`
+## Why `rimz agents`
 
-`rimz agents` launches the same stock CLIs, and earns its keystrokes when a bare command in the current pane isn't enough:
-
-- **a customized agent** tuned for one kind of work, a [profile](#customize-an-agent-with-a-profile),
-- **several agents at once**, arranged in a [layout](#compose-a-layout),
-- **an isolated [worktree](./worktrees.md)** or a named **[team](./teams.md)**.
-
-The agent still runs stock; Rimz decides where its pane lands and what identity it carries.
+A bare `claude` is a general-purpose agent, and most work is not general: a planner should reason hard and edit nothing, a reviewer should read the diff and propose rather than commit, a test-writer should stay in the test tree. The stock CLI can already be shaped into any of these with its own flags:
 
 ```sh
-rimz agents claude            # the stock CLI, launched and placed by Rimz
-rimz agents codex             # same for Codex
-rimz agents claude,codex      # two agents, side by side
-rimz agents peer              # the built-in team: claude,codex side by side
+claude --model opus --effort high \
+       --append-system-prompt-file ~/prompts/planner.md \
+       --allowed-tools Read Grep Glob        # reasons hard, edits nothing
 ```
 
-## Customize an agent with a profile
+A shaped agent beats a general one steered by hand — fewer wrong turns, less context spent wandering, a lower bill for the same result. What doesn't scale is the typing: that flag stack, re-entered in every pane, kept in sync across sessions, remembered per provider because Codex spells the same ideas differently.
 
-A bare `claude` is a general-purpose agent. Most work is not general: a planner should reason hard and edit nothing, a test-writer should stay in the test tree, a reviewer should read the diff and propose rather than commit. A **profile** is a named preset that turns the stock CLI into an agent shaped for one job — its model, reasoning effort, system prompt, and tool surface fixed up front. A shaped agent beats a general one steered by hand: fewer wrong turns, less context spent wandering, a lower bill for the same result.
+That flag stack is what `rimz agents` bottles. A [profile](#profiles-shape-an-agent-for-one-job) gives it a name, and the launcher replays it:
 
-Define a profile in `agents.toml`, then launch it by name:
+```sh
+rimz agents planner           # the flag stack above, as one word — and a @planner handle
+rimz agents claude,codex      # two stock agents, side by side in one line
+rimz agents forge -w feat-x   # a whole team, isolated in its own worktree
+```
+
+The wrapper stays thin. `rimz agents planner` does exactly two things on your machine: it renders the profile into the stock CLI's own flags (the `claude --model opus …` line above, nothing you couldn't type yourself), and it runs that command in your Zellij or tmux — in the pane you are standing in for a single agent, in a fresh tab for a layout or worktree — under a small Rimz launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI; its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. Closing the pane or `rimz agents stop @planner` ends it the same way Ctrl+C would.
+
+Beyond the preset, the launcher carries three habits that build on it, each with its own guide:
+
+- **several agents at once**, arranged in a [layout](#compose-a-layout) from one spec,
+- **an isolated [worktree](./worktrees.md)** per line of work, one `-w` flag away,
+- **a named [team](./teams.md)** of profiles, launched, messaged, and resumed as a unit.
+
+## Profiles: shape an agent for one job
+
+A **profile** is a named preset in `agents.toml`: the base CLI plus the fields that shape it — model, reasoning effort, system prompt, permission mode, and raw flags. Define it once, launch it by name:
 
 ```toml
 [agents.profiles.planner]
@@ -51,18 +60,20 @@ args = "--allowed-tools Read Grep Glob"                    # read and search onl
 rimz agents planner           # launches Claude under the planner preset, as @planner
 ```
 
-The profile layers these fields over its base `agent`:
+Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't:
 
-| Field | What it sets |
-| --- | --- |
-| `model` | the model to run |
-| `effort` | reasoning effort, on the provider's own ladder |
-| `system-prompt-file` | replace the agent's system prompt with the role's craft and rules |
-| `append-system-prompt-file` | keep the base prompt and add rules on top |
-| `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) |
-| `args` | raw flags handed to the stock CLI |
+| Field | What it sets | Renders as (Claude) |
+| --- | --- | --- |
+| `model` | the model to run | `--model opus` |
+| `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
+| `system-prompt-file` | replace the system prompt with the role's craft and rules | `--system-prompt-file …` |
+| `append-system-prompt-file` | keep the base prompt and add rules on top | `--append-system-prompt-file …` |
+| `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
+| `args` | raw flags handed to the stock CLI | verbatim |
 
-The system prompt and `args` are what make a profile targeted. There is no Rimz-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--allowed-tools` for Claude, `--sandbox` for Codex — so a profile can pin anything the CLI can. A narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
+The system prompt and `args` are what make a profile targeted. There is no Rimz-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--allowed-tools` for Claude, `--sandbox` for Codex — and a narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
+
+When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
 
 Override any field for one launch with the matching flag, which wins over the profile:
 
@@ -74,28 +85,28 @@ Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi t
 
 ## Set a permission mode
 
-A suffix sets how much the agent may do before it stops to ask, rendered into each provider's own flags:
+A suffix sets how much the agent may do before it stops to ask. Like every profile field, it renders into the provider's own flags — the suffix is shorthand for a flag you already know:
 
-| Suffix | What it does |
-| --- | --- |
-| `-auto` | the provider's auto-accept mode for routine actions |
-| `-ask` | keep the provider's native permission prompts |
-| `-plan` | start in plan mode |
-| `-yolo` | pass the provider's bypass flag, skipping its prompts |
-
-Not every provider defines every mode: the built-in set is `claude-{auto,ask,plan,yolo}`, `codex-{auto,ask,plan,yolo}`, and `pi-{ask,plan}`, and a mode a given provider has no equivalent for keeps that provider's default behavior. On the command line the same choice is a flag, `--ask` or `--yolo`. The exact flag each mode becomes, per provider, is in [agent support](../reference/agent-support.md). It also sets a profile's `mode` field.
+| Suffix | What it does | For example |
+| --- | --- | --- |
+| `-auto` | the provider's auto-accept mode for routine actions | `claude --permission-mode auto` |
+| `-ask` | keep the provider's native permission prompts | no flag at all |
+| `-plan` | start in plan mode | `claude --permission-mode plan` |
+| `-yolo` | pass the provider's bypass flag, skipping its prompts | `claude --dangerously-skip-permissions` |
 
 ```sh
-rimz agents codex-yolo      # launch straight through provider prompts
+rimz agents codex-yolo      # codex --dangerously-bypass-approvals-and-sandbox
 rimz agents claude-plan     # start in plan mode
 rimz agents claude --yolo   # the same mode as a flag
 ```
+
+Not every provider defines every mode: the built-in set is `claude-{auto,ask,plan,yolo}`, `codex-{auto,ask,plan,yolo}`, and `pi-{ask,plan}`, and a mode a given provider has no equivalent for keeps that provider's default behavior. On the command line the same choice is a flag, `--ask` or `--yolo`, and in a profile it is the `mode` field. The exact flag each mode becomes, per provider, is in [agent support](../reference/agent-support.md).
 
 One more suffix sits outside permissions: `-ping` opens the agent at its lowest effort to warm the provider's budget window, the building block behind scheduled window-priming ([loops](./loops.md)). The built-in pings are `claude-ping` and `codex-ping`.
 
 ## Compose a layout
 
-One spec describes a whole layout of panes. **Commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell, a profile, a configured command, or `term` for a plain shell. An optional trailing prompt broadcasts to every agent cell in the layout.
+Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell, a profile, a configured command, or `term` for a plain shell. An optional trailing prompt broadcasts to every agent cell in the layout.
 
 ```sh
 rimz agents claude,codex                     # two agents, side by side
@@ -223,6 +234,8 @@ rimz agents focus @coder        # jump to its pane
 rimz agents stop @reviewer      # close the idle reviewer's pane
 rimz agents stop @claude --all  # close every Claude in scope
 ```
+
+`stop` closes the agent's pane, ending the CLI process the way Ctrl+C would; sessions stay on disk in the provider's own format, so a stopped agent is one `--resume` away.
 
 Two everyday tasks have their own guides, with the depth this page leaves out:
 
