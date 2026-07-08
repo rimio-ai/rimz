@@ -2,7 +2,7 @@
 
 Rimz puts your coding agents in one Zellij or tmux room and routes your attention to whichever one needs you. This page maps the whole documentation set.
 
-New here? Start with the [README](../README.md) for what Rimz is and why it exists, then read [installation](./guide/installation.md), [the quickstart](./guide/quickstart.md), and [set up your machine](./guide/setup.md) in that order. Once the room is running, the guides under [working with agents](#working-with-agents) and [harness](#harness) cover the daily work, and the [reference](#reference) answers a specific flag or field when you need it.
+New here? Start with the [README](../README.md) for what Rimz is and why it exists, then read [installation](./guide/installation.md), [the quickstart](./guide/quickstart.md), and [set up your machine](./guide/setup.md) in that order. Once the room is running, the guides under [working with agents](#working-with-agents) and [harness engineering](#harness-engineering) cover the daily work, and the [reference](#reference) answers a specific flag or field when you need it.
 
 ## Getting started
 
@@ -18,13 +18,13 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 - [Remote](./guide/remote.md): attach to a room on another host over SSH, a multiplexer attach with a self-healing link, kept alive across reboots.
 - [Web](./guide/web.md): open a room in the browser, on the host or tunnelled from a server, gated by a login token.
 
-## Harness
+## Harness Engineering
 
 - [Worktrees](./guide/worktrees.md): isolate a layout or team on its own Git branch so several run in parallel without clobbering each other.
 - [Messaging](./guide/messaging.md): steer and queue agents by handle, deliver at the turn boundary or on a schedule, and let agents talk to each other in channels.
 - [Teams](./guide/teams.md): pair models by role, launch the whole set with one name, and reopen or resume it as a single unit.
-- [Scripting agents](./guide/scripting.md): supervised one-shot `-p` turns with exit codes, JSON and streaming output, and the background-run primitives that drop agents into scripts and CI.
-- [Loops and schedules](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, let agents set their own alarms, and keep the fleet moving with auto-continue.
+- [Scripting](./guide/scripting.md): supervised one-shot `-p` turns with exit codes, JSON and streaming output, and the background-run primitives that drop agents into scripts and CI.
+- [Loops](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, let agents set their own alarms, and keep the fleet moving with auto-continue.
 - [Notifications](./guide/notifications.md): reach your phone or run your own command when an agent needs you, and let handlers clear routine prompts themselves.
 
 ## Customization
