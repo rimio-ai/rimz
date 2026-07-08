@@ -1,23 +1,78 @@
 # Teams
 
-A team pairs model strengths on one feature: one model plans, another codes, a third reviews, for better output at less cost. A named team makes that shape reusable. Define the roles once in `agents.toml`, then launch the whole set with one name, each member answering to its own role handle in a shared channel.
+A team launches several agents as one unit, each in a named role with its own context window, model, and instructions, cooperating over messages in a shared channel. Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
 
 ```sh
-rimz agents forge -w feat-complex   # planner, coder, reviewer on one feature
-rimz agents forge.reviewer          # re-add one role, same handle and channel
-rimz agents forge --resume          # reopen the newest closed forge team
+rimz agents forge -w feat-complex         # planner, coder, reviewer on one feature
+rimz message @planner "ship the plan"     # each member answers to its role handle
+rimz agents forge --resume                # reopen the newest closed forge team
 ```
 
-## Define a team
+## Why split the work
 
-Define a team in `agents.toml`: bind each role to a profile, and give the team an optional `layout` in the same grammar inline specs use (commas split columns, plus signs tile rows, slashes stack them). Launching the team name opens every member in that layout, and each answers to its role handle: `forge.reviewer` across the workspace, or `@reviewer` inside the team's channel.
+Every agent works inside one context window, and everything it does fills it: files read, tool output, discussion, dead ends. A filling window costs more per turn and reasons less sharply, so the window is the real budget a long task runs against.
 
-Rimz builds itself this way. The `forge` team it uses ships under [`examples/teams/`](../../examples/README.md): a Fable planner, a GPT coder, and an Opus reviewer laid out as `planner,coder+reviewer`, each role a profile with its own model, effort, and system-prompt file. Copy it, rename the roles, and it is yours. The team config shape is in [configuration → agent profiles, commands, and teams](../reference/configuration.md#agent-profiles-commands-and-teams).
+Subagents are the first tool against that, and a good one. The parent dispatches an explore subagent to locate the relevant code and folds back a summary instead of the whole search; plan subagents draft competing directions in parallel. But a subagent runs one way: the parent spawns it, collects its report, and still carries the whole task in its own window.
+
+A team splits the task itself across independent windows:
+
+- Each member keeps its own context and its own attention, the way specialists on a human team do. Each member still uses its own subagents, so a team stacks on that architecture rather than replacing it.
+- Each member can run a different provider. Model capability is jagged — brilliant at one kind of work, mediocre at the next — and every model's peaks and valleys sit in different places, so mixing providers lets one model's peak cover another's valley: better results for fewer tokens.
+- Members talk both ways, over as many rounds as the work needs: a downstream role can ask, push back, and escalate, which a subagent can never do to its parent.
+
+The split itself is yours to design: two roles or five, one provider or several, whatever shape the work divides into. The rest of this page walks one split that has proven itself.
+
+## The forge loop
+
+`forge` is the team Rimz builds itself with, shipped ready to copy under [`examples/teams/forge/`](../../examples/README.md): three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system-prompt file.
+
+- **@planner** (Claude) talks with you. It explores the code through subagents, drafts directions, confirms the design choices with you, and writes the plan. By hand-off its window holds the whole design history: the exploration, the alternatives weighed, your decisions. That context is exactly what good design calls for, and exactly what execution doesn't need; letting the same heavy window type the code would be slower, pricier, and past its sharpest.
+- **@coder** (Codex) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. Focused, unburdened, and playing to Codex's strength at executing a precise spec, it implements faster and cheaper, with a far better shot at working code in one pass. It verifies the plan against the real code as it goes rather than trusting it.
+- **@reviewer** (Claude) is a third fresh window. It reads the plan, reviews the full diff blind before opening the coder's report, so its findings form from the code rather than the coder's narrative, then reconciles that report claim by claim.
+
+The roles keep talking. The coder hits a choice the plan left open and takes it to the planner, whose full design context makes it the right desk for the call. Coder and reviewer argue findings with `file:line` evidence, fix or push back, and escalate to the planner when a dispute turns out to be a design call. Three independent windows, each with its own focus, cooperating as one team.
+
+<p align="center">
+  <img src="../rimz-team.png" alt="A Rimz room running forge teams: the coder messages the planner about a gap in the plan, and the planner takes the design call" width="100%">
+  <br/><sub>The loop mid-conversation: <code>@coder</code> finds a gap in the plan and messages <code>@planner</code> with <code>file:line</code> evidence; the planner (center pane) verifies before ruling, while the sidebar tracks each forge team as one block.</sub>
+</p>
+
+## Set up forge
+
+From a checkout of this repository, copy the fragment into the agents home and launch it into a worktree:
 
 ```sh
-rimz agents forge -w feat-complex   # open the whole team in its layout, one isolated worktree
-rimz agents forge.reviewer          # re-add a single role to the running team
+mkdir -p ~/.agents/teams
+cp -r examples/teams/forge ~/.agents/teams/
+rimz agents forge -w feat-complex     # the whole team, one isolated worktree
 ```
+
+Then hand the task to the planner and let the loop carry it: type into the planner's pane, or message it.
+
+```sh
+rimz message @planner "add rate limiting to the ingest API"
+```
+
+The planner comes back to you at its design gates; the sidebar lifts the whole team the moment any role needs you ([one team, one line of work](#one-team-one-line-of-work)). The `claude` and `codex` CLIs must be on `PATH`; models, feature flags, and the rest of the install fine print are in the [examples README](../../examples/README.md#forge-agent-team--teamsforge).
+
+## Define your own team
+
+A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a list of roles, each bound to a profile, with an optional `layout` in the same grammar inline specs use (commas split columns, plus signs tile rows, slashes stack them):
+
+```toml
+[agents.teams.forge]
+layout = "planner,coder+reviewer"
+
+[[agents.teams.forge.roles]]
+role = "planner"
+profile = "claude-planner"
+system-prompt-file = "planner.md"
+# ... coder and reviewer roles follow the same shape
+```
+
+Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team.
+
+Start from the forge directory or from scratch: rename the roles, add or drop some, swap the models and prompts — a pair, a trio, or a whole bench of specialists. The role prompts do the heavy lifting: each one states the role's craft, how the roles hand work to each other, and who owns which decision, which is what turns co-launched agents into a team instead of a row of panes. The full config shape, override fields included, is in [configuration → agent profiles, commands, and teams](../reference/configuration.md#agent-profiles-commands-and-teams).
 
 ## Relaunch reconciles instead of duplicating
 
@@ -39,5 +94,6 @@ The room treats a team as a single line of work: the sidebar keeps its members a
 
 - [Agents & worktrees](./agents.md) — launch agents by name, compose layouts, and isolate work in a Rimz-owned worktree.
 - [Messaging](./messaging.md) — reach a role by handle: park, steer, schedule, and channels.
+- [Examples → forge](../../examples/README.md) — the shipped forge fragment: install, prerequisites, and try-before-install.
 - [Configuration → profiles and teams](../reference/configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.
