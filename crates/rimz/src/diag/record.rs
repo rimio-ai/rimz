@@ -96,6 +96,26 @@ impl RendererExitCause {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedCarryDropReason {
+    ProbeReportsAbsent,
+    StartRegressed,
+    ForegroundKindMismatch,
+    CarryExpired,
+}
+
+impl HostedCarryDropReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProbeReportsAbsent => "probe_reports_absent",
+            Self::StartRegressed => "start_regressed",
+            Self::ForegroundKindMismatch => "foreground_kind_mismatch",
+            Self::CarryExpired => "carry_expired",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DiagEvent {
@@ -144,6 +164,11 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid: Option<u32>,
         carried_ms: u64,
+    },
+    HostedCarryDropped {
+        pane_id: PaneId,
+        agent_kind: AgentKind,
+        reason: HostedCarryDropReason,
     },
     GateHold {
         rule: GateRule,
@@ -307,6 +332,12 @@ impl DiagEvent {
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
+            Self::HostedCarryDropped {
+                reason:
+                    HostedCarryDropReason::StartRegressed
+                    | HostedCarryDropReason::ForegroundKindMismatch,
+                ..
+            } => DiagSeverity::Warn,
             Self::FrameAnomaly { .. } => DiagSeverity::Warn,
             Self::RendererPanic { .. } => DiagSeverity::Error,
             Self::RendererSignalDeath { .. } => DiagSeverity::Error,
@@ -319,6 +350,11 @@ impl DiagEvent {
             | Self::GateRelease { .. }
             | Self::ProducerElected { .. }
             | Self::ProducerDemoted { .. }
+            | Self::HostedCarryDropped {
+                reason:
+                    HostedCarryDropReason::ProbeReportsAbsent | HostedCarryDropReason::CarryExpired,
+                ..
+            }
             | Self::GroupMigration { .. }
             | Self::NewbornQuarantined { .. }
             | Self::MixedBuildWriters { .. }
@@ -350,6 +386,7 @@ impl DiagEvent {
             Self::PaneCarryForward { .. } => "pane_carry_forward",
             Self::PaneCarryRefuted { .. } => "pane_carry_refuted",
             Self::CarryForwardExpired { .. } => "carry_forward_expired",
+            Self::HostedCarryDropped { .. } => "hosted_carry_dropped",
             Self::GateHold { .. } => "gate_hold",
             Self::GateRelease { .. } => "gate_release",
             Self::FetchFailure { .. } => "fetch_failure",
@@ -387,6 +424,17 @@ impl DiagEvent {
             }
             Self::CarryForwardExpired { pane_id, .. } => {
                 format!("{}:{pane_id}", self.kind_name())
+            }
+            Self::HostedCarryDropped {
+                pane_id,
+                agent_kind,
+                reason,
+            } => {
+                format!(
+                    "{}:{agent_kind}:{pane_id}:{}",
+                    self.kind_name(),
+                    reason.as_str()
+                )
             }
             Self::GateHold { rule, .. } | Self::GateRelease { rule, .. } => {
                 format!("{}:{rule:?}", self.kind_name())

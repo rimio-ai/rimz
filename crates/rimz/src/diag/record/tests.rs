@@ -204,6 +204,38 @@ fn severity_table_pins_product_categories() {
             DiagSeverity::Info,
         ),
         (
+            DiagEvent::HostedCarryDropped {
+                pane_id: pane("terminal_1"),
+                agent_kind: AgentKind::new_unchecked("codex"),
+                reason: HostedCarryDropReason::ProbeReportsAbsent,
+            },
+            DiagSeverity::Info,
+        ),
+        (
+            DiagEvent::HostedCarryDropped {
+                pane_id: pane("terminal_1"),
+                agent_kind: AgentKind::new_unchecked("codex"),
+                reason: HostedCarryDropReason::CarryExpired,
+            },
+            DiagSeverity::Info,
+        ),
+        (
+            DiagEvent::HostedCarryDropped {
+                pane_id: pane("terminal_1"),
+                agent_kind: AgentKind::new_unchecked("codex"),
+                reason: HostedCarryDropReason::StartRegressed,
+            },
+            DiagSeverity::Warn,
+        ),
+        (
+            DiagEvent::HostedCarryDropped {
+                pane_id: pane("terminal_1"),
+                agent_kind: AgentKind::new_unchecked("codex"),
+                reason: HostedCarryDropReason::ForegroundKindMismatch,
+            },
+            DiagSeverity::Warn,
+        ),
+        (
             DiagEvent::NewbornQuarantined {
                 pane_id: pane("terminal_1"),
             },
@@ -343,6 +375,14 @@ fn identity_key_table_pins_phase_episode_loop_and_subjects() {
             "row_conflict:claude:sess-1:zellij:terminal_1:zellij:terminal_2",
         ),
         (
+            DiagEvent::HostedCarryDropped {
+                pane_id: pane("terminal_5"),
+                agent_kind: AgentKind::new_unchecked("codex"),
+                reason: HostedCarryDropReason::ForegroundKindMismatch,
+            },
+            "hosted_carry_dropped:codex:zellij:terminal_5:foreground_kind_mismatch",
+        ),
+        (
             DiagEvent::MixedBuildWriters {
                 prior_build: "0f3a9c21d4be".to_owned(),
                 own_build: "8e7d6c5b4a39".to_owned(),
@@ -461,6 +501,19 @@ fn representative_events_keep_json_wire_shape() {
             }),
             DiagEvent::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
+            },
+        ),
+        (
+            serde_json::json!({
+                "kind": "hosted_carry_dropped",
+                "pane_id": "zellij:terminal_5",
+                "agent_kind": "codex",
+                "reason": "foreground_kind_mismatch"
+            }),
+            DiagEvent::HostedCarryDropped {
+                pane_id: pane("terminal_5"),
+                agent_kind: AgentKind::new_unchecked("codex"),
+                reason: HostedCarryDropReason::ForegroundKindMismatch,
             },
         ),
         (

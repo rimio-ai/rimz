@@ -1,4 +1,6 @@
 use super::*;
+use crate::diag::record::HostedCarryDropReason;
+use crate::ids::AgentKind;
 use std::collections::HashMap;
 
 fn tmux_pane(command: &str) -> crate::pane::PaneRef {
@@ -315,9 +317,10 @@ fn hosted_agent_stamp_carry_anchor_does_not_advance_and_expires() {
     let ttl_ms = crate::sidebar::timing::PANE_CARRY_TTL.as_millis() as u64;
 
     let mut still_fresh = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-    carry_hosted_agent_stamps(&mut still_fresh, Some(&prior), 10 + ttl_ms, &|_, _| {
+    let drops = carry_hosted_agent_stamps(&mut still_fresh, Some(&prior), 10 + ttl_ms, &|_, _| {
         panic!("pidless scan miss must not probe absence")
     });
+    assert!(drops.is_empty());
     assert_eq!(first(&still_fresh).hosted_carry_since_ms, Some(10));
     assert_eq!(
         first(&still_fresh)
@@ -329,12 +332,59 @@ fn hosted_agent_stamp_carry_anchor_does_not_advance_and_expires() {
     );
 
     let mut expired = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
-    carry_hosted_agent_stamps(&mut expired, Some(&prior), 11 + ttl_ms, &|_, _| {
+    let drops = carry_hosted_agent_stamps(&mut expired, Some(&prior), 11 + ttl_ms, &|_, _| {
         panic!("expired carry must not probe absence")
     });
+    assert_eq!(
+        drops,
+        vec![HostedCarryDrop {
+            pane_id: first(&expired).pane_id.clone(),
+            kind: AgentKind::new_unchecked("codex"),
+            reason: HostedCarryDropReason::CarryExpired,
+        }]
+    );
     assert!(first(&expired).current.hosted_agent_kind.is_none());
     assert!(first(&expired).current.hosted_agent_process_start.is_none());
     assert_eq!(first(&expired).hosted_carry_since_ms, None);
+}
+
+#[test]
+fn hosted_agent_stamp_carry_reports_start_regression_and_ignores_stampless_prior() {
+    let prior_start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    let fresh_start: jiff::Timestamp = "2026-06-30T11:17:03Z".parse().unwrap();
+
+    let prior_without_stamp = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    let mut fresh_without_prior =
+        frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    let drops = carry_hosted_agent_stamps(
+        &mut fresh_without_prior,
+        Some(&prior_without_stamp),
+        10,
+        &|_, _| panic!("stampless prior must not probe absence"),
+    );
+    assert!(drops.is_empty());
+
+    let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    first_mut(&mut prior).current.started_at = Some(prior_start);
+    first_mut(&mut prior).current.hosted_agent_kind = Some(AgentKind::new_unchecked("codex"));
+    first_mut(&mut prior).current.hosted_agent_process_start = Some(prior_start);
+    let mut fresh = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
+    first_mut(&mut fresh).current.started_at = Some(fresh_start);
+
+    let drops = carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|_, _| {
+        panic!("start regression must not probe absence")
+    });
+
+    assert_eq!(
+        drops,
+        vec![HostedCarryDrop {
+            pane_id: first(&fresh).pane_id.clone(),
+            kind: AgentKind::new_unchecked("codex"),
+            reason: HostedCarryDropReason::StartRegressed,
+        }]
+    );
+    assert!(first(&fresh).current.hosted_agent_kind.is_none());
+    assert!(first(&fresh).current.hosted_agent_process_start.is_none());
 }
 
 #[test]
@@ -348,6 +398,7 @@ fn hosted_agent_stamp_carry_matrix() {
         expected_kind,
         expected_start,
         expected_carry_since,
+        expected_drop,
     ) in [
         (
             "carries across transient pidless scan miss",
@@ -357,6 +408,7 @@ fn hosted_agent_stamp_carry_matrix() {
             Some("codex"),
             Some(start),
             Some(10),
+            None,
         ),
         (
             "carries when absence is indeterminate",
@@ -366,6 +418,7 @@ fn hosted_agent_stamp_carry_matrix() {
             Some("codex"),
             Some(start),
             Some(10),
+            None,
         ),
         (
             "drops on authoritative absence",
@@ -375,6 +428,7 @@ fn hosted_agent_stamp_carry_matrix() {
             None,
             None,
             None,
+            Some(HostedCarryDropReason::ProbeReportsAbsent),
         ),
         (
             "respects foreground agent kind",
@@ -384,12 +438,12 @@ fn hosted_agent_stamp_carry_matrix() {
             None,
             None,
             None,
+            Some(HostedCarryDropReason::ForegroundKindMismatch),
         ),
     ] {
         let mut prior = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
         first_mut(&mut prior).current.started_at = Some(start);
-        first_mut(&mut prior).current.hosted_agent_kind =
-            Some(crate::ids::AgentKind::new_unchecked("codex"));
+        first_mut(&mut prior).current.hosted_agent_kind = Some(AgentKind::new_unchecked("codex"));
         first_mut(&mut prior).current.hosted_agent_process_start = Some(start);
         let mut fresh = frame(vec![pane(
             "terminal_30",
@@ -399,7 +453,7 @@ fn hosted_agent_stamp_carry_matrix() {
         first_mut(&mut fresh).current.pid = fresh_pid;
         let probed = std::cell::Cell::new(false);
 
-        carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|kind, pid| {
+        let drops = carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|kind, pid| {
             probed.set(true);
             assert_eq!((kind, pid), ("codex", 200), "{name}");
             absence_probe.unwrap_or_else(|| panic!("unexpected absence probe for {name}"))
@@ -420,6 +474,15 @@ fn hosted_agent_stamp_carry_matrix() {
         );
         assert_eq!(pane.hosted_carry_since_ms, expected_carry_since, "{name}");
         assert_eq!(probed.get(), absence_probe.is_some(), "{name}");
+        assert_eq!(
+            drops.iter().map(|drop| drop.reason).collect::<Vec<_>>(),
+            expected_drop.into_iter().collect::<Vec<_>>(),
+            "{name}"
+        );
+        if expected_drop.is_some() {
+            assert_eq!(drops[0].pane_id, pane.pane_id, "{name}");
+            assert_eq!(drops[0].kind, AgentKind::new_unchecked("codex"), "{name}");
+        }
     }
 }
 
@@ -437,10 +500,11 @@ fn carried_hosted_stamp_survives_tmux_scan_miss_until_ttl() {
     fresh.rotate_against_prior(&prior);
 
     stamp_hosted_agent_processes(&mut fresh, &|_, _| None);
-    carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|kind, pid| {
+    let drops = carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|kind, pid| {
         assert_eq!((kind, pid), ("codex", 100));
         false
     });
+    assert!(drops.is_empty());
     drop_reused_pid_bindings(
         &mut fresh,
         &|kind, pid| {

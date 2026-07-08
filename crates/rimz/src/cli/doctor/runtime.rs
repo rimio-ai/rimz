@@ -740,6 +740,14 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
             Some(pid) => format!("expired carried {pane_id} pid {pid} after {carried_ms}ms"),
             None => format!("expired carried {pane_id} after {carried_ms}ms"),
         },
+        DiagEvent::HostedCarryDropped {
+            pane_id,
+            agent_kind,
+            reason,
+        } => format!(
+            "dropped hosted {agent_kind} carry for {pane_id}: {}",
+            reason.as_str()
+        ),
         DiagEvent::TopologyWriterChanged {
             prior_plugin_id,
             prior_loaded_at_ms,

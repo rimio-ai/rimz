@@ -26,8 +26,8 @@ mod validate;
 
 use carry::{CarryOutcome, apply_carry_forward};
 use starts::{
-    carry_hosted_agent_stamps, drop_reused_pid_bindings, stamp_hosted_agent_processes,
-    stamp_pane_process_starts,
+    HostedCarryDrop, carry_hosted_agent_stamps, drop_reused_pid_bindings,
+    stamp_hosted_agent_processes, stamp_pane_process_starts,
 };
 use validate::{PublishVerdict, frame_publish_verdict, pane_count, shrink_needs_verification};
 
@@ -166,7 +166,7 @@ fn repair_pane_frame(
     prior: Option<&PaneFrame>,
     session: &str,
     enrich_metrics: bool,
-) {
+) -> Vec<HostedCarryDrop> {
     let unstamped = natively_unstamped(frame);
     rotate_from_prior(frame, prior);
     if enrich_metrics {
@@ -193,7 +193,7 @@ fn repair_pane_frame(
         &crate::proc::in_pane_agent_start_for_root,
         &crate::proc::in_pane_agent_starts,
     );
-    carry_hosted_agent_stamps(
+    let hosted_carry_drops = carry_hosted_agent_stamps(
         frame,
         prior,
         unix_now_ms(),
@@ -208,6 +208,7 @@ fn repair_pane_frame(
     }
     annotate_elevated_agents(frame, &crate::proc::elevated_in_pane_agent);
     stamp_first_seen(frame);
+    hosted_carry_drops
 }
 
 /// Recover a pane's spawn command from Rimz's supervised agent wrapper when the
@@ -284,7 +285,9 @@ pub fn repaired_pane_frame_for_binding(
         None,
     );
     emit_frame_diagnostics(&diag, diagnostics);
-    repair_pane_frame(&mut frame, runtime, prior.as_deref(), session, false);
+    let hosted_carry_drops =
+        repair_pane_frame(&mut frame, runtime, prior.as_deref(), session, false);
+    emit_hosted_carry_dropped(&diag, hosted_carry_drops);
     Ok(frame)
 }
 
@@ -639,13 +642,14 @@ pub(super) fn cached_panes_or_produce(
             });
         frame.presence = presence;
         emit_frame_diagnostics(diag, diagnostics);
-        repair_pane_frame(
+        let hosted_carry_drops = repair_pane_frame(
             &mut frame,
             runtime,
             prior.as_deref(),
             session,
             enrich_metrics,
         );
+        emit_hosted_carry_dropped(diag, hosted_carry_drops);
         Ok(frame)
     };
     match single_flight::coalesce(
@@ -898,6 +902,16 @@ fn emit_carry_expired(diag: &crate::diag::DiagSink, outcome: &CarryOutcome) {
             pane_id: expired.pane_id.clone(),
             pid: expired.pid,
             carried_ms: expired.carried_ms,
+        });
+    }
+}
+
+fn emit_hosted_carry_dropped(diag: &crate::diag::DiagSink, drops: Vec<HostedCarryDrop>) {
+    for dropped in drops {
+        diag.emit(DiagEvent::HostedCarryDropped {
+            pane_id: dropped.pane_id,
+            agent_kind: dropped.kind,
+            reason: dropped.reason,
         });
     }
 }

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::carry::expired_at;
+use crate::diag::record::HostedCarryDropReason;
 use crate::ids::{AgentKind, PaneId};
 use crate::proc::InPaneAgentProcess;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
@@ -164,20 +165,28 @@ pub(super) fn stamp_hosted_agent_processes(
 /// Restore a hosted lazy-agent stamp across a transient root-process scan miss.
 /// The carry is bounded by the same pane-carry TTL and anchored to the first
 /// missed scan, so a real exit demotes once the miss stops being transient.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct HostedCarryDrop {
+    pub(super) pane_id: PaneId,
+    pub(super) kind: AgentKind,
+    pub(super) reason: HostedCarryDropReason,
+}
+
 pub(super) fn carry_hosted_agent_stamps(
     frame: &mut PaneFrame,
     prior: Option<&PaneFrame>,
     now_ms: u64,
     hosted_absent: &dyn Fn(&str, u32) -> bool,
-) {
+) -> Vec<HostedCarryDrop> {
     let Some(prior) = prior else {
-        return;
+        return Vec::new();
     };
     let prior_by_pane = prior
         .pane_states()
         .map(|pane| (pane.pane_id.clone(), pane))
         .collect::<HashMap<_, _>>();
 
+    let mut drops = Vec::new();
     for fresh in frame.pane_states_mut() {
         if fresh.current.hosted_agent_kind.is_some()
             || fresh.current.hosted_agent_process_start.is_some()
@@ -195,18 +204,40 @@ pub(super) fn carry_hosted_agent_stamps(
             continue;
         };
         if !pane_state_start_allows_hosted_carry(prior, fresh) {
+            drops.push(HostedCarryDrop {
+                pane_id: fresh.pane_id.clone(),
+                kind: prior_kind.clone(),
+                reason: HostedCarryDropReason::StartRegressed,
+            });
             continue;
         }
-        if pane_process_agent_kind(&fresh.current).is_some_and(|kind| kind != prior_kind.as_str()) {
+        if let Some(foreground_kind) = pane_process_agent_kind(&fresh.current)
+            && foreground_kind != prior_kind.as_str()
+        {
+            drops.push(HostedCarryDrop {
+                pane_id: fresh.pane_id.clone(),
+                kind: prior_kind.clone(),
+                reason: HostedCarryDropReason::ForegroundKindMismatch,
+            });
             continue;
         }
         let carried_since_ms = prior.hosted_carry_since_ms.unwrap_or(now_ms);
         if expired_at(carried_since_ms, now_ms) {
+            drops.push(HostedCarryDrop {
+                pane_id: fresh.pane_id.clone(),
+                kind: prior_kind.clone(),
+                reason: HostedCarryDropReason::CarryExpired,
+            });
             continue;
         }
         if let Some(pid) = fresh.current.pid
             && hosted_absent(prior_kind.as_str(), pid)
         {
+            drops.push(HostedCarryDrop {
+                pane_id: fresh.pane_id.clone(),
+                kind: prior_kind.clone(),
+                reason: HostedCarryDropReason::ProbeReportsAbsent,
+            });
             continue;
         }
 
@@ -214,6 +245,7 @@ pub(super) fn carry_hosted_agent_stamps(
         fresh.current.hosted_agent_process_start = Some(prior_start);
         fresh.hosted_carry_since_ms = Some(carried_since_ms);
     }
+    drops
 }
 
 fn pane_state_start_allows_hosted_carry(prior: &PaneState, fresh: &PaneState) -> bool {
