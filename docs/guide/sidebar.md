@@ -6,7 +6,7 @@
   <img src="../rimz-sidebar.png" alt="The sidebar: cockpit on top, triaged agent cards by worktree, provider dashboard at the bottom" width="420">
 </p>
 
-## Why the sidebar
+## What it is
 
 Working with coding agents today means one conversation per terminal: prompt, watch it run, answer when it stops. To run more agents you open more tabs and rotate through them, and every rotation is a context switch for your head as much as for the terminal — re-read scrollback to tell *thinking* from *waiting on me*, reload what this agent was doing, then find your way back to your own work. Nothing announces a finished turn or a blocking question; you learn about them whenever you next visit the tab, and until you do, an agent stopped on a permission prompt looks exactly like an agent reasoning. With no view of the whole, the fleet lives in your working memory, and working memory tops out around six to ten threads on a good day. It is exhausting well before it is full.
 
@@ -72,6 +72,11 @@ With several providers the panel tabs, following whichever agent you have select
 The footer holds `? for help`, which opens the key and filter overlay in place. When you have been away, a quiet `zᶻ idle` badge appears; over SSH, a link-health badge shows the round-trip time. If the sidebar ever cannot read the room, a sticky alert takes the bottom line and says so, because a blank column should never masquerade as an empty room.
 
 ## The agent card
+
+<p align="center">
+  <img src="../rimz-card.png" alt="A finished agent card under its worktree header: identity and cost, description, context meter, token line, and the seven subagents it fanned out this turn" width="560">
+  <br/><sub>A finished card with the subagents it fanned out this turn; the idle agent below collapses to a single line.</sub>
+</p>
 
 Each agent is a small stacked card, four lines at rest:
 
