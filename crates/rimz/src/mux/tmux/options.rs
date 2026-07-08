@@ -82,6 +82,24 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
     ]
 }
 
+/// One-shot hook for pristine tmux birth. The first real client attach applies
+/// the final client size, then redraws the birth work shell cleanly at that
+/// width and removes the hook. Control-mode clients only carry presence
+/// wakeups, so they leave the one-shot armed for the user's first pty attach.
+pub(super) fn birth_shell_cleanup_hook_set_cmd(session: &str, work_pane: &str) -> Vec<String> {
+    let body = format!(
+        "if-shell -F '#{{client_control_mode}}' '' \
+         'respawn-pane -k -t {work_pane} ; set-hook -u client-attached'"
+    );
+    vec![
+        "set-hook".to_owned(),
+        "-t".to_owned(),
+        session.to_owned(),
+        "client-attached".to_owned(),
+        body,
+    ]
+}
+
 pub(super) fn after_new_window_hook_cols_from_value(value: &str) -> Option<NonZeroU16> {
     let words = shlex::split(value)?;
     let mut in_split = false;
@@ -425,6 +443,22 @@ mod tests {
         assert_eq!(
             after_new_window_hook_cols_from_value(command.last().expect("hook body")),
             Some(opts.birth_size.cols),
+        );
+    }
+
+    #[test]
+    fn birth_shell_cleanup_hook_builds_one_shot_guarded_respawn() {
+        assert_eq!(
+            birth_shell_cleanup_hook_set_cmd("room", "%7"),
+            vec![
+                "set-hook".to_owned(),
+                "-t".to_owned(),
+                "room".to_owned(),
+                "client-attached".to_owned(),
+                "if-shell -F '#{client_control_mode}' '' \
+                 'respawn-pane -k -t %7 ; set-hook -u client-attached'"
+                    .to_owned(),
+            ],
         );
     }
 

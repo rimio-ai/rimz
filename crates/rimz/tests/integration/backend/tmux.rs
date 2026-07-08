@@ -832,6 +832,66 @@ fn open_sidebar_pristine_birth_keeps_work_shell_focused_at_final_width() {
 }
 
 #[test]
+fn open_sidebar_pristine_birth_installs_birth_shell_cleanup_hook() {
+    require_tmux!();
+
+    let session = "rimz-pristine-cleanup";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((100, 30)));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let mut opts = sidebar_opts(session, stub, Some(100));
+    opts.pristine_birth = true;
+
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    server.wait_for_pane_command(session, "rimz-sidebar");
+
+    let panes = list_session_panes(&server, session);
+    let sidebar = panes
+        .iter()
+        .find(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+        .expect("sidebar pane");
+    let work = panes
+        .iter()
+        .find(|pane| pane.pane_id != sidebar.pane_id)
+        .expect("work pane");
+    let hooks = server.show_hooks(session);
+
+    assert!(
+        hooks.contains("client-attached"),
+        "pristine birth should install a first-attach cleanup hook: {hooks}",
+    );
+    assert!(
+        hooks.contains("#{client_control_mode}"),
+        "control-mode clients should not consume the cleanup one-shot: {hooks}",
+    );
+    assert!(
+        hooks.contains(&format!("respawn-pane -k -t {}", work.pane_id.raw())),
+        "the cleanup should target the birth work pane, not the active pane: {hooks}",
+    );
+    assert!(
+        hooks.contains("set-hook -u client-attached"),
+        "the cleanup hook should remove itself after the first real attach: {hooks}",
+    );
+
+    let _client = AttachedTmuxClient::attach(&server.socket, session, 120, 30);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let hooks = server.show_hooks(session);
+        if !hooks.contains("client-attached") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the cleanup hook should self-remove after a real attach: {hooks}",
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
 fn after_new_window_hook_respawns_plain_shell_at_final_width_only() {
     require_tmux!();
 

@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use super::TmuxBackend;
 use super::options::{
-    after_new_window_hook_set_cmd, birth_split_commands, sidebar_serve_command,
-    tmux_views_with_sidebars,
+    after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
+    sidebar_serve_command, tmux_views_with_sidebars,
 };
 use super::parse::{parse_client_view, parse_new_window_ids, parse_pane_line};
 use super::window::sanitize_window_name;
@@ -349,6 +349,27 @@ impl MuxBackend for TmuxBackend {
                 // splits the focused work shell at its final width, and
                 // installs the hook for later windows.
                 self.batch(&commands)?;
+                // The birth work shell draws its first prompt while the session
+                // is still detached. If the attaching client lands at a
+                // different width, tmux can resize during that draw and leave
+                // zsh's PROMPT_EOL_MARK visible. Respawn the work pane once
+                // after the first real attach, at the settled client width.
+                if let Some(work_pane) = self.birth_work_pane(&opts.session_name, &sidebar_pane)
+                    && let Err(err) = self
+                        .cmd()
+                        .args(birth_shell_cleanup_hook_set_cmd(
+                            &opts.session_name,
+                            &work_pane,
+                        ))
+                        .run()
+                {
+                    tracing::warn!(
+                        session = %opts.session_name,
+                        tags.operation = "tmux.birth.cleanup_hook",
+                        error = &err as &dyn std::error::Error,
+                        "installing the birth-shell cleanup hook failed; the first shell may show a stray %",
+                    );
+                }
                 self.seed_resume_windows(opts);
                 return Ok(());
             }
@@ -699,6 +720,22 @@ impl TmuxBackend {
             [pane] => Some(pane.clone()),
             _ => None,
         })
+    }
+
+    /// The pristine birth work pane is the one initial-window pane that is not
+    /// the sidebar. Called immediately after `birth_split_commands`, before
+    /// resume windows can move focus or add panes.
+    fn birth_work_pane(&self, session: &str, sidebar_pane: &str) -> Option<String> {
+        let output = self
+            .cmd()
+            .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
+            .run()
+            .ok()?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|id| !id.is_empty() && *id != sidebar_pane)
+            .map(ToOwned::to_owned)
     }
 
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
