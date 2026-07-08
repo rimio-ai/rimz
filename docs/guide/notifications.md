@@ -12,7 +12,7 @@ You also already own the last mile. ntfy or Pushover on your phone, a Slack webh
 
 An agent going `waiting` or `failed` marks its card unread in the sidebar, writes a terminal notification escape that your terminal turns into a native desktop banner — through tmux and SSH included, since Rimz rooms enable passthrough by default — and rings the bell. A row that stays waiting earns one reminder nudge rather than a stream, and several agents flipping at once coalesce into one notification. All of it is best-effort polish over the durable store: a missed banner loses nothing, because the card stays unread and ranked until you look.
 
-Two caveats are worth knowing up front. Zellij currently drops desktop notification escapes, so on Zellij the handler path below is the route to a native banner. And when no banner appears anywhere, [troubleshooting](./troubleshooting.md#desktop-notifications-dont-fire) walks the checklist from terminal support to OS permission.
+Two caveats are worth knowing up front. Zellij currently drops desktop notification escapes, so on Zellij the handler path below is the route to a native banner. And when no banner appears anywhere, [troubleshooting](./troubleshooting.md#notifications-dont-fire) walks the checklist from terminal support to OS permission.
 
 ## Handlers: your command on the room's cue
 
@@ -47,6 +47,6 @@ A handler can match the prompt against patterns your script owns and answer only
 - [Sidebar](./sidebar.md) — the unread inbox and attention ranking these notifications mirror.
 - [Loops and schedules](./loops.md) — the other half of unattended work: schedules, watchdogs, and the permission posture.
 - [Remote](./remote.md) and [web](./web.md) — answering from another machine or a phone once the push lands.
-- [Troubleshooting](./troubleshooting.md#desktop-notifications-dont-fire) — when no desktop banner appears.
+- [Troubleshooting](./troubleshooting.md#notifications-dont-fire) — when no desktop banner appears.
 - [Configuration](./configuration.md#notifications) — every `[notifications]` key: triggers, debounce, coalescing, reminders, templates.
 - [internals → notifications](../internals/sidebar/notifications.md) — the producer/renderer split, the unread model, and the trace log.
