@@ -129,5 +129,5 @@ aggressive_resize = true
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
 
 [harness]
-## smart_compact = "70%"          # default compact-first threshold for message ("70%" or a token count); unset = off
+## smart_compact = "70%"          # default compact-first threshold for message ("70%", "120000", or "180k"); unset = off
 # rtk = "auto"                    # wrap agent cargo runs (build/check/test/nextest/clippy) through `rtk`; auto = when rtk is on PATH, on = force, off = never

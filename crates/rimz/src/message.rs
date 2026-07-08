@@ -123,8 +123,8 @@ pub enum AutoCompact {
 }
 
 impl AutoCompact {
-    /// Parse a threshold: `70%` is a percentage of the window, a bare integer
-    /// (`120000`) is an absolute occupied-token count.
+    /// Parse a threshold: `70%` is a percentage of the window, while `120000`
+    /// or `180k` is an absolute occupied-token count.
     pub fn parse(raw: &str) -> Result<Self, String> {
         let raw = raw.trim();
         if let Some(pct) = raw.strip_suffix('%') {
@@ -137,9 +137,19 @@ impl AutoCompact {
             }
             Ok(Self::Percent(pct))
         } else {
-            let tokens: u64 = raw.parse().map_err(|_| {
-                format!("invalid auto-compact threshold `{raw}`; use `70%` or a token count")
+            let (mantissa, scale) = match raw.as_bytes().last() {
+                Some(b'k' | b'K') => (&raw[..raw.len() - 1], 1_000),
+                Some(b'm' | b'M') => (&raw[..raw.len() - 1], 1_000_000),
+                _ => (raw, 1),
+            };
+            let count: u64 = mantissa.trim().parse().map_err(|_| {
+                format!(
+                    "invalid auto-compact threshold `{raw}`; use `70%`, a token count, or a `k`/`m` count like `180k`"
+                )
             })?;
+            let tokens = count
+                .checked_mul(scale)
+                .ok_or_else(|| format!("auto-compact threshold `{raw}` is too large"))?;
             Ok(Self::Tokens(tokens))
         }
     }

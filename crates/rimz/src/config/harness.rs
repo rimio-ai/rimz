@@ -90,6 +90,14 @@ mod tests {
     }
 
     #[test]
+    fn smart_compact_deserializes_suffixed_token_count() {
+        let config: HarnessConfig =
+            toml::from_str("smart_compact = \"180k\"").expect("parse harness config");
+
+        assert_eq!(config.smart_compact, Some(AutoCompact::Tokens(180_000)));
+    }
+
+    #[test]
     fn smart_compact_round_trips() {
         let config = HarnessConfig {
             smart_compact: Some(AutoCompact::Percent(70)),

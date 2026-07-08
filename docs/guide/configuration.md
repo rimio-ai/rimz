@@ -152,7 +152,7 @@ The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-re
 smart_compact = "70%"
 ```
 
-`smart_compact` sets the default threshold for compact-first `message` sends, a percentage (`"70%"`) or an occupied-token count (`"120000"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
+`smart_compact` sets the default threshold for compact-first `message` sends, a percentage (`"70%"`) or an occupied-token count (`"120000"` or `"180k"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
 
 ### rtk output compression
 

@@ -501,6 +501,7 @@ fn harness_smart_compact_values_are_parsed_as_strings() {
 
     assert_eq!(parse_set_value(&key, "70%").as_str(), Some("70%"));
     assert_eq!(parse_set_value(&key, "120000").as_str(), Some("120000"));
+    assert_eq!(parse_set_value(&key, "180k").as_str(), Some("180k"));
 }
 
 #[test]
@@ -518,6 +519,7 @@ fn harness_smart_compact_validation_rejects_bad_values() {
 
     validate_set_value(&key, &Value::from("70%")).expect("percent threshold");
     validate_set_value(&key, &Value::from("120000")).expect("token threshold");
+    validate_set_value(&key, &Value::from("180k")).expect("k suffix");
 
     let err = validate_set_value(&key, &Value::from("abc"))
         .expect_err("invalid smart-compact threshold")

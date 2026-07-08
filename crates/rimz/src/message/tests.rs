@@ -127,9 +127,24 @@ fn auto_compact_parses_percent_and_token_forms() {
         AutoCompact::parse("120000").unwrap(),
         AutoCompact::Tokens(120_000)
     );
+    assert_eq!(
+        AutoCompact::parse("180k").unwrap(),
+        AutoCompact::Tokens(180_000)
+    );
+    assert_eq!(
+        AutoCompact::parse("1m").unwrap(),
+        AutoCompact::Tokens(1_000_000)
+    );
+    assert_eq!(
+        AutoCompact::parse("2M").unwrap(),
+        AutoCompact::Tokens(2_000_000)
+    );
     assert!(AutoCompact::parse("101%").is_err());
     assert!(AutoCompact::parse("abc").is_err());
     assert!(AutoCompact::parse("70.5%").is_err());
+    assert!(AutoCompact::parse("1.5m").is_err());
+    assert!(AutoCompact::parse("km").is_err());
+    assert!(AutoCompact::parse("k").is_err());
 }
 
 #[test]

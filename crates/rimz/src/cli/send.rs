@@ -36,7 +36,7 @@ pub(crate) struct SendFlags {
     pub(crate) create: bool,
     /// Use Rimz's smart compact-first send when the agent's context window is at
     /// least this full: a percentage (`70%`) or an occupied-token count
-    /// (`120000`). Defaults from `[harness] smart_compact` when omitted.
+    /// (`120000`, `180k`). Defaults from `[harness] smart_compact` when omitted.
     #[arg(long, value_name = "PCT|TOKENS", value_parser = AutoCompact::parse)]
     pub(crate) smart_compact: Option<AutoCompact>,
     /// Read the prompt verbatim from a file instead of inline argv. A file already

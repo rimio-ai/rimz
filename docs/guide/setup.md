@@ -120,7 +120,7 @@ A turn that dies mid-flight — a rate limit, a spend limit, a provider overload
 
 ```toml
 [harness]
-smart_compact = "70%"    # or an occupied-token count such as "120000"
+smart_compact = "70%"    # or an occupied-token count such as "120000" or "180k"
 ```
 
 `smart_compact` makes `rimz message` compact-first: when the target agent's context window has reached the threshold, Rimz submits the agent's `/compact` ahead of your text so the prompt lands against a fresh window instead of dying at the context ceiling. Unset, compaction stays opt-in per send through `rimz message --smart-compact`. The mechanics are in [message internals → Smart compaction](../internals/harness/messaging.md#smart-compaction).
