@@ -94,7 +94,7 @@ rimz config set resume.auto_continue true     # resume rate-limit and API-error 
 rimz config set harness.smart_compact "70%"   # compact before a message once context passes 70%
 ```
 
-**Auto-continue** picks a parked turn back up on its own. A rate-limit or spend-limit park resumes the moment the provider's budget window resets, and a transient overload or API error retries on a lengthening backoff ramp — the first retry a few minutes after the failure, then spaced further out, giving up after a bounded number of attempts. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. The backoff and retry keys are in [configuration.md → Resume](../reference/configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
+**Auto-continue** picks a parked turn back up on its own. A rate-limit or spend-limit park resumes the moment the provider's budget window resets, and a transient overload or API error retries on a lengthening backoff ramp — the first retry a few minutes after the failure, then spaced further out, giving up after a bounded number of attempts. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 
 **Smart compaction** rides the same loop: past the threshold, Rimz submits `/compact` ahead of your text so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
 
@@ -165,6 +165,6 @@ The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#
 - [Notifications](./notifications.md) — the push routes and acting handlers that catch what a loop cannot handle alone.
 - [Messaging](./messaging.md) — the delivery path `--bind` uses, and smart compaction in full.
 - [Loop CLI](../reference/cli/loop.md) — every flag on `add`, `fire`, `list`, `show`, `rename`, and `remove`.
-- [Configuration](../reference/configuration.md) — the `[resume]` and `[harness]` keys, and the `loop.toml` shape.
+- [Configuration](./configuration.md) — the `[resume]` and `[harness]` keys, and the `loop.toml` shape.
 - [Security and trust](./security.md) — the safety posture for bypass flags and project trust.
 - [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop) — the elder clock, state files, and run log underneath.

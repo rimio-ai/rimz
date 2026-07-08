@@ -263,7 +263,7 @@ The label is the program the pane runs, read past a `sudo` wrapper and through a
 
 Worktrees stack as bounded blocks under quiet neutral headings, so the names organize the column without competing with attention or the selection. The worktree **holding your selection** reads as one bracketed lane: a dim `▎` spine and dotted `┄` seal down its header and every row, then the selected card lit with the bright `▌` spine over the recessed `selection_bg` band — subagents included — so the selected block reads as one card. Every other worktree carries a blank gutter, so the lane and band are the only selection markers on screen and the pane you're in is unmistakable.
 
-The worktree header carries the worktree's git story on the right: local reconciling (`⟳`) takes the top marker, then a forge PR verdict — merged (`✓`), closed (`✕`), or open (`⊙`) — outranks the local trunk verdict: merged (`✓`), pristine (`≡`), or plain branch (`⑂`). Diverged and reconciling worktrees show the `⇡`/`⇣` commit delta against the trunk, then the total diff, then the marker; pristine, merged, and PR-clean worktrees collapse to the marker alone. The `+/-` churn counts committed, staged, unstaged, and untracked file content, so work `git diff` cannot see still reads as work. The trunk worktree itself wears no pristine/merged verdict — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#sidebar-rendering)).
+The worktree header carries the worktree's git story on the right: local reconciling (`⟳`) takes the top marker, then a forge PR verdict — merged (`✓`), closed (`✕`), or open (`⊙`) — outranks the local trunk verdict: merged (`✓`), pristine (`≡`), or plain branch (`⑂`). Diverged and reconciling worktrees show the `⇡`/`⇣` commit delta against the trunk, then the total diff, then the marker; pristine, merged, and PR-clean worktrees collapse to the marker alone. The `+/-` churn counts committed, staged, unstaged, and untracked file content, so work `git diff` cannot see still reads as work. The trunk worktree itself wears no pristine/merged verdict — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../guide/configuration.md#sidebar-rendering)).
 
 A worktree channel leads with the fork (`⑂`) or merge (`⮌`) glyph like a worktree pod and carries the same right-pinned git story: commit delta, churn, and the PR or merge glyph. A plain named or directory lane with no git story keeps the `# name` header.
 
@@ -328,7 +328,7 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 - A click anywhere in a card's block jumps to it.
 - The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.
 
-From any pane in the room, the configurable `Alt+p` ([configuration](../reference/configuration.md#sidebar-rendering)) focuses the sidebar and toggles back to your last working pane — the one key that reaches the room from inside an agent.
+From any pane in the room, the configurable `Alt+p` ([configuration](../guide/configuration.md#sidebar-rendering)) focuses the sidebar and toggles back to your last working pane — the one key that reaches the room from inside an agent.
 
 ## Zone 3 — the provider dashboard
 

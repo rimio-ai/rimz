@@ -111,6 +111,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [loops.md](./docs/guide/loops.md) — scheduled turns, watchdogs, budget-window priming, agent self-wakes, and the unattended permission posture.
 - [notifications.md](./docs/guide/notifications.md) — off-screen attention: desktop banners, unread nudges, and handlers that push to your channels or clear routine prompts.
 - [theme.md](./docs/guide/theme.md) — sidebar theming: palettes, color depth and slot overrides, custom themes, animations, provider branding, pets.
+- [configuration.md](./docs/guide/configuration.md) — the whole config model: the two tiers and merge order, `rimz config set` and safe regeneration, and a section per file (config, agents, loop, theme, project trust).
 - [troubleshooting.md](./docs/guide/troubleshooting.md) — `rimz doctor` first, then room-start refusals, hooks not reporting, degraded banners, version drift, reset and GC.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.
 
@@ -119,7 +120,6 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 
 **Reference** — `docs/reference/`
 - [cli.md](./docs/reference/cli.md) — CLI entry and command map; leaves [getting-started.md](./docs/reference/cli/getting-started.md) (start/attach/remote/web/list/setup/doctor), [web.md](./docs/reference/cli/web.md) (Zellij browser + token helpers), [agents.md](./docs/reference/cli/agents.md) (launch, `-p`, message, transcript, pane, worktree, loop, addressing), [channel.md](./docs/reference/cli/channel.md), [hooks-trust.md](./docs/reference/cli/hooks-trust.md), [maintenance.md](./docs/reference/cli/maintenance.md).
-- [configuration.md](./docs/reference/configuration.md) — config tiers, per-machine template, project trust shape, privacy.
 - [agent-support.md](./docs/reference/agent-support.md) — per-agent status, integration surface, and permission-mode mapping for Claude, Codex, Pi, OpenCode.
 
 **Internals** — `docs/internals/`; [README.md](./docs/internals/README.md) is the index. The three multi-doc subsystems keep a folder; every other subsystem is one flat file.

@@ -45,7 +45,7 @@ rimz config get                              # the whole effective config as TOM
 rimz config set theme "Catppuccin Mocha"     # edit one dotted key in the owning file
 ```
 
-A commented line keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override. `rimz config set` routes a dotted key to the file that owns it, validates the value, and writes durably. The config model — tiers, merge order, and every behavior section including notifications — is in the [configuration reference](../reference/configuration.md).
+A commented line keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override. `rimz config set` routes a dotted key to the file that owns it, validates the value, and writes durably. The config model — tiers, merge order, and every behavior section including notifications — is in the [configuration guide](./configuration.md).
 
 ## Install agent hooks
 
@@ -145,7 +145,7 @@ at = "07:00"
 days = "weekdays"
 ```
 
-The ping runs at the lowest effort, skips when the provider's window is already counting down, and fires only while a room for `root` is open. The same `[tasks]` table also schedules watchdogs and self-wakes — an agent turn on an interval, gated on a shell check such as `cargo test` or `gh run watch` — covered in [configuration → Loop tasks](../reference/configuration.md#loop-tasks) and [the loop CLI](../reference/cli/loop.md).
+The ping runs at the lowest effort, skips when the provider's window is already counting down, and fires only while a room for `root` is open. The same `[tasks]` table also schedules watchdogs and self-wakes — an agent turn on an interval, gated on a shell check such as `cargo test` or `gh run watch` — covered in [configuration → Loop tasks](./configuration.md#loop-tasks) and [the loop CLI](../reference/cli/loop.md).
 
 ## Configure your multiplexer
 

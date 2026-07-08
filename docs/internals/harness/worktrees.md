@@ -8,7 +8,7 @@ Rimz touches only worktrees it owns. A marker file inside each one records that 
 
 ## Create
 
-`rimz worktree new [NAME]` adds a Git worktree under the `[agents.worktree] dir` template (default `../{repo}-worktrees/<name>`) on a branch named `<name>`, cut from the configured base ([configuration.md](../../reference/configuration.md#worktrees)). An omitted name is generated as two words; explicit names allow letters, numbers, `_`, and `-`; a `/` names the branch directly and maps to `-` for the worktree name, directory, and channel. `--base` overrides the base ref, and `--branch` names the branch independently of the worktree.
+`rimz worktree new [NAME]` adds a Git worktree under the `[agents.worktree] dir` template (default `../{repo}-worktrees/<name>`) on a branch named `<name>`, cut from the configured base ([configuration.md](../../guide/configuration.md#worktrees)). An omitted name is generated as two words; explicit names allow letters, numbers, `_`, and `-`; a `/` names the branch directly and maps to `-` for the worktree name, directory, and channel. `--base` overrides the base ref, and `--branch` names the branch independently of the worktree.
 
 `--from-pr <number|url>` builds the same marked worktree from a pull-request head, defaulting both the name and the local branch to `pr-<N>`. It fetches over the user's `origin` credentials, with the `forge` module resolving the host-specific PR ref. `rimz agents <SPEC> --from-pr <PR>` implies a worktree launch, and a sibling `--worktree <NAME>` names the PR worktree.
 

@@ -48,5 +48,5 @@ A handler can match the prompt against patterns your script owns and answer only
 - [Loops and schedules](./loops.md) — the other half of unattended work: schedules, watchdogs, and the permission posture.
 - [Remote](./remote.md) and [web](./web.md) — answering from another machine or a phone once the push lands.
 - [Troubleshooting](./troubleshooting.md#desktop-notifications-dont-fire) — when no desktop banner appears.
-- [Configuration](../reference/configuration.md#notifications) — every `[notifications]` key: triggers, debounce, coalescing, reminders, templates.
+- [Configuration](./configuration.md#notifications) — every `[notifications]` key: triggers, debounce, coalescing, reminders, templates.
 - [internals → notifications](../internals/sidebar/notifications.md) — the producer/renderer split, the unread model, and the trace log.

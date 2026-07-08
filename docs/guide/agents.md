@@ -81,7 +81,7 @@ Override any field for one launch with the matching flag, which wins over the pr
 rimz agents claude --model opus --effort xhigh --system-prompt-file ./review.md
 ```
 
-Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi to `xhigh`. The full profile shape, inheritance between profiles, and per-field rules are in [configuration → agent profiles, commands, and teams](../reference/configuration.md#agent-profiles-commands-and-teams); pairing several profiles by role is a [team](./teams.md).
+Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi to `xhigh`. The full profile shape, inheritance between profiles, and per-field rules are in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams); pairing several profiles by role is a [team](./teams.md).
 
 ## Set a permission mode
 
@@ -251,6 +251,6 @@ The complete `rimz agents` surface, every verb and flag, is the [agent-control r
 - [Messaging](./messaging.md) — reach agents by handle: park, steer, schedule, and channels.
 - [The sidebar](./sidebar.md) — how the room reads the cards, worktrees, and teams you launch.
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
-- [Configuration → profiles and teams](../reference/configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
+- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.
 - [Agent support](../reference/agent-support.md) — which agents Rimz drives and what each integration adds.

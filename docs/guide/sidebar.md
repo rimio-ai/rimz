@@ -130,7 +130,7 @@ A session's life traces one loop through those states:
 - An **ask pulls the card to `waiting`**, and answering it in the pane returns the agent to work; the card notices the answer even before the turn formally moves on.
 - A turn ends **done** or **failed**; either way the agent is ready for its next prompt, and the state tells you whether to collect a result or unblock a problem.
 
-Two states are Rimz's own judgment rather than an agent report. **Paused** is derived: when a turn stops because the provider's budget window is spent or the API is overloaded, the card parks at `⏸` instead of pretending to fail, and with [auto-continue](../reference/configuration.md#resume) enabled it resumes by itself the moment the window resets or the backoff clears. **Stall** is the safety net: a running agent silent past the stall window (30 minutes by default) escalates to `!`, because silence that long usually means something needs a look; a parent quietly waiting on its subagents is exempt.
+Two states are Rimz's own judgment rather than an agent report. **Paused** is derived: when a turn stops because the provider's budget window is spent or the API is overloaded, the card parks at `⏸` instead of pretending to fail, and with [auto-continue](./configuration.md#resume) enabled it resumes by itself the moment the window resets or the backoff clears. **Stall** is the safety net: a running agent silent past the stall window (30 minutes by default) escalates to `!`, because silence that long usually means something needs a look; a parent quietly waiting on its subagents is exempt.
 
 ## Attention: what needs you
 
@@ -186,7 +186,7 @@ The six-row cap trims only a worktree's idle and process tail. Anything active, 
 
 ## Tuning
 
-Three `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent escalates to `!`, 30 minutes), `inactive_after_secs` (hot work ends, one hour), and `archive_after_secs` (a card sleeps, 24 hours). Details in [configuration.md](../reference/configuration.md#sidebar-rendering).
+Three `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent escalates to `!`, 30 minutes), `inactive_after_secs` (hot work ends, one hour), and `archive_after_secs` (a card sleeps, 24 hours). Details in [configuration.md](./configuration.md#sidebar-rendering).
 
 ## See also
 
@@ -195,5 +195,5 @@ Three `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a si
 - [Notifications](./notifications.md) — the same cues pushed to your desktop, phone, or a handler when you are off-screen.
 - [Theming and pets](./theme.md) — restyle the column, its palette, and the companion.
 - [Remote](./remote.md) — the link-health badge and the column rebuilt over SSH.
-- [Configuration → sidebar rendering](../reference/configuration.md#sidebar-rendering) — the render cadence and attention knobs.
+- [Configuration → sidebar rendering](./configuration.md#sidebar-rendering) — the render cadence and attention knobs.
 - [Sidebar internals](../internals/sidebar/sidebar.md) — presence, the ranking contract, and reload.

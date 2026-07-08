@@ -101,7 +101,7 @@ rimz list [-a|--all] [--json]
 rimz setup [--yes]
 ```
 
-`rimz setup` prints a first-run report: selected multiplexer, workspace root and class, trust state, config path, detected agent binaries, and hook install status. In an interactive terminal it offers to keep and refresh an existing config against the current templates (skipping incompatible keys with a warning) or to overwrite cleanly, offers hook install for detected agents with missing hooks, then asks the color-and-icon probe and pet questions. `--yes` takes the non-interactive path: merge existing files, write missing ones, and make no hook installs, trust grants, or appearance changes. For an explicit clean reset, use `rimz config init --force`; the config model is in [configuration.md](../configuration.md).
+`rimz setup` prints a first-run report: selected multiplexer, workspace root and class, trust state, config path, detected agent binaries, and hook install status. In an interactive terminal it offers to keep and refresh an existing config against the current templates (skipping incompatible keys with a warning) or to overwrite cleanly, offers hook install for detected agents with missing hooks, then asks the color-and-icon probe and pet questions. `--yes` takes the non-interactive path: merge existing files, write missing ones, and make no hook installs, trust grants, or appearance changes. For an explicit clean reset, use `rimz config init --force`; the config model is in [configuration.md](../../guide/configuration.md).
 
 ```sh
 rimz doctor [--audit] [--json] [--output PATH]

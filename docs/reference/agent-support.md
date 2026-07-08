@@ -88,5 +88,5 @@ An agent Rimz doesn't recognize runs fine in a pane; it renders as a plain proce
 - [Teams](../guide/teams.md) — pairing models by role across supported kinds.
 - [Messaging](../guide/messaging.md) — steering and queuing agents by handle.
 - [The agent model](../internals/agents/model.md) — the rollup, state machine, and adapter boundary in depth.
-- [Configuration](./configuration.md#agent-profiles-commands-and-teams) — profiles, effort, and per-agent launch args.
+- [Configuration](../guide/configuration.md#agent-profiles-commands-and-teams) — profiles, effort, and per-agent launch args.
 - [Troubleshooting](../guide/troubleshooting.md) — `rimz doctor`, hooks not reporting, and version drift.

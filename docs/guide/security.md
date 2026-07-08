@@ -54,7 +54,7 @@ On Zellij, Rimz loads a small presence plugin into each session so the sidebar l
 
 - **Access Zellij state** — the plugin watches pane and tab shape.
 - **Run commands** — it runs the Rimz-owned `rimz sidebar wake` and `rimz sidebar focus` argv.
-- **Reconfigure** — it applies Rimz's room mouse options and, when configured, binds the [focus key](../reference/configuration.md#sidebar-rendering) to a runtime-only plugin pipe, without writing your `config.kdl`.
+- **Reconfigure** — it applies Rimz's room mouse options and, when configured, binds the [focus key](./configuration.md#sidebar-rendering) to a runtime-only plugin pipe, without writing your `config.kdl`.
 - **Start web server / share session** — added only when `[web] enabled`; it lets browser access turn on when you run `rimz web open` against an already-running session.
 
 The plugin's argv, artifact, and configuration are all Rimz-owned — never your `config.kdl` — and it ships no pane content anywhere. The grant stays in Zellij's own permission store, where its plugin manager can revoke it; revoking makes pane discovery unavailable until the grant is restored, and `rimz doctor` names the fix. Setting `[web] enabled = false` stops Rimz from seeding the web grant and makes web commands fail fast before changing room sharing. The plugin also reports a switched-to tab that restored focus to the sidebar, and the renderer moves focus back through the same host command an ordinary sidebar jump uses.

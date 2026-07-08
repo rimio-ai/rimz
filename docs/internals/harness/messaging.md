@@ -200,7 +200,7 @@ Threshold forms:
 - `70%`: a percentage of the context window; fires when the fill gauge reaches 70%.
 - `120000`: an absolute occupied-token count; fires at 120 000 occupied tokens.
 
-An omitted flag falls back to the [`[harness] smart_compact`](../../reference/configuration.md#smart-compaction) default. An unknown fill never triggers: a missing reading is not a full window, so it sends untouched.
+An omitted flag falls back to the [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) default. An unknown fill never triggers: a missing reading is not a full window, so it sends untouched.
 
 A percent threshold reads the same fill gauge the sidebar card renders ([`context_fill_pct`](../../../crates/rimz/src/agents/state.rs)); a token threshold reads occupied tokens ([`occupied_context_tokens`](../../../crates/rimz/src/agents/state.rs)): the folded statusline breakdown where present, else the per-call split (cache reads plus cache writes plus fresh input), else the carried `total_tokens` gauge.
 

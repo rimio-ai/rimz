@@ -202,7 +202,7 @@ rimz config set harness.smart_compact "70%"   # compact before a message once co
 
 Add a [scheduled ping](#everyday-moves) to start each provider's budget window on your clock, and the fleet only needs you for real decisions.
 
-The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, appearance, the hands-off behaviors, and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration reference](./docs/reference/configuration.md).
+The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, appearance, the hands-off behaviors, and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration guide](./docs/guide/configuration.md).
 
 ## Agent compatibility matrix
 
@@ -223,7 +223,7 @@ The [documentation index](./docs/README.md) maps the whole set. Highlights:
 - [Set up your machine](./docs/guide/setup.md) — config, hooks, true color, pets, and the Zellij/tmux baselines
 - [Working with agents](./docs/guide/agents.md) — [agents](./docs/guide/agents.md) · [the sidebar](./docs/guide/sidebar.md) · [remote](./docs/guide/remote.md) · [web](./docs/guide/web.md)
 - [Harness](./docs/guide/messaging.md) — [messaging](./docs/guide/messaging.md) · [teams](./docs/guide/teams.md) · [worktrees](./docs/guide/worktrees.md) · [scripting agents](./docs/guide/scripting.md) · [loops & schedules](./docs/guide/loops.md)
-- [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/reference/configuration.md) · [Theming](./docs/guide/theme.md) · [Troubleshooting](./docs/guide/troubleshooting.md)
+- [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/guide/configuration.md) · [Theming](./docs/guide/theme.md) · [Troubleshooting](./docs/guide/troubleshooting.md)
 - [DESIGN.md](./DESIGN.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [internals](./docs/internals/README.md) — how it works, in depth
 
 ## Install

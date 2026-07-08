@@ -127,7 +127,7 @@ rimz config set agents.worktree.dir "../{repo}-worktrees"   # where sibling tree
 rimz config set agents.worktree.base fresh                  # branch from origin/HEAD, not local HEAD
 ```
 
-`dir` is a directory template: a relative path resolves from the repository root, and `{repo}` expands to its basename. `base` is `head` (branch from local `HEAD`, the default), `fresh` (branch from `origin/HEAD`), or any Git ref; `rimz worktree new --base <ref> --branch <name>` overrides both for a single tree. The full field reference is [configuration → worktrees](../reference/configuration.md#worktrees), and the complete mechanics live in [the worktree internals](../internals/harness/worktrees.md).
+`dir` is a directory template: a relative path resolves from the repository root, and `{repo}` expands to its basename. `base` is `head` (branch from local `HEAD`, the default), `fresh` (branch from `origin/HEAD`), or any Git ref; `rimz worktree new --base <ref> --branch <name>` overrides both for a single tree. The full field reference is [configuration → worktrees](./configuration.md#worktrees), and the complete mechanics live in [the worktree internals](../internals/harness/worktrees.md).
 
 ## See also
 

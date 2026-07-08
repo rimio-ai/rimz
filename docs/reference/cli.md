@@ -31,7 +31,7 @@ rimz
 | **Hooks and trust** | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
-One surface has its own reference outside this map: [`rimz config`](./configuration.md) edits the per-machine config; the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics.
+One surface has its own guide outside this map: the [configuration guide](../guide/configuration.md) covers the file model and `rimz config`; the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics.
 
 ## One room per root
 

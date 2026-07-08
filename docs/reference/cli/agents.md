@@ -13,7 +13,7 @@ rimz agents focus @claude#auth-refresh        # jump to the pane when it needs y
 
 Each command around `rimz agents` has its own page: [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and drives raw panes, [`rimz loop`](./loop.md) schedules turns, and [`rimz channel`](./channel.md) and [`rimz worktree`](./worktree.md) manage the lanes they work in.
 
-The launch grammar, profiles, and teams these commands consume are configured per machine; see [configuration → agent profiles, commands, and teams](../configuration.md#agent-profiles-commands-and-teams). The launch, run, and delivery machinery lives in [harness.md](../../internals/harness/harness.md).
+The launch grammar, profiles, and teams these commands consume are configured per machine; see [configuration → agent profiles, commands, and teams](../../guide/configuration.md#agent-profiles-commands-and-teams). The launch, run, and delivery machinery lives in [harness.md](../../internals/harness/harness.md).
 
 ## Addressing agents
 
@@ -29,7 +29,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 **Handles that name a type and fan out:**
 
 - `@claude` — an agent kind; every Claude in the channel.
-- `@planner` — a [profile](../configuration.md#agent-profiles-commands-and-teams) you defined; every agent launched under it.
+- `@planner` — a [profile](../../guide/configuration.md#agent-profiles-commands-and-teams) you defined; every agent launched under it.
 - `@all` — everyone in the channel.
 
 **Channels** scope the lookup to a named lane, worktree, or in-place team lane stamped at launch:
@@ -69,7 +69,7 @@ rimz agents claude --worktree "Take one approach."   # parallel attempts, each i
 rimz agents claude --worktree "Take another approach."
 ```
 
-The spec is a named [team](../configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and stamped team lane. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/harness/harness.md#the-layout-ir).
+The spec is a named [team](../../guide/configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and stamped team lane. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [harness.md → The layout IR](../../internals/harness/harness.md#the-layout-ir).
 
 Permission-mode cells exist where the adapter supports them: `-auto`, `-ask`, `-plan`, and `-yolo` set the permission posture (`claude-plan` passes plan mode while `codex-plan` has none and keeps the default posture), and `-ping` opens the agent at lowest effort to keep the provider window warm. The built-in set is `claude-{auto,ask,plan,yolo,ping}`, `codex-{auto,ask,plan,yolo,ping}`, and `pi-{ask,plan}`. On the command line, `--ask` keeps native prompts and `--yolo` passes the adapter's bypass flags; with neither, each provider keeps its own prompting.
 
@@ -98,7 +98,7 @@ Resume takes identity, cwd, and channel from the store, so it conflicts with `PR
 
 These broadcast to every agent cell, and each adapter renders them into its own native flags.
 
-- `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` carry the same meaning and resolution rules as the [profile fields](../configuration.md#profiles) of the same names; a command-line flag renders after any profile and wins. `--effort` levels are provider-specific: Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`.
+- `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` carry the same meaning and resolution rules as the [profile fields](../../guide/configuration.md#profiles) of the same names; a command-line flag renders after any profile and wins. `--effort` levels are provider-specific: Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`.
 - `--description <TEXT>` is a card label only: it seeds the card's second line, never enters the agent's argv or environment, and the agent's own session preview replaces it.
 - `--name <HANDLE>` applies to a single-agent launch and makes that user-chosen name the rendered handle after any team role, so `rimz agents claude --name writer` appears as `@writer` in lists, sidebar cards, and peer message prefixes. Bare launches still get an internal pet name for stable instance addressing, but they render as `@<kind>` when that is unambiguous.
 
@@ -110,7 +110,7 @@ Relaunching a named team into the same named worktree reconciles with existing s
 
 `--channel <NAME>` launches into a durable named channel, registering it when missing and naming the backend tab `#<NAME>`. Named channels run in the room root and are managed with [`rimz channel`](./channel.md).
 
-Placement follows intent under the default `auto` policy: a named-channel launch, a worktree launch, or a multi-cell spec opens its own tab, and a one-cell non-worktree launch, including a single team role, takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put — that is `--bg`'s placement meaning at launch; combined with `-p` it instead detaches from a supervised run, covered under [Supervised runs](#supervised-runs--p). The per-machine [`[agents] placement`](../configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/harness/harness.md#backend-shape-and-placement).
+Placement follows intent under the default `auto` policy: a named-channel launch, a worktree launch, or a multi-cell spec opens its own tab, and a one-cell non-worktree launch, including a single team role, takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put — that is `--bg`'s placement meaning at launch; combined with `-p` it instead detaches from a supervised run, covered under [Supervised runs](#supervised-runs--p). The per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/harness/harness.md#backend-shape-and-placement).
 
 ### Supervised runs (`-p`)
 

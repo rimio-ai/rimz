@@ -26,7 +26,7 @@ pane_frames = true              # optional override; unset, your config.kdl wins
 # pane_border_lines = "heavy"
 ```
 
-Optional keys left unset fall through to your own Zellij or tmux config; a key you set here wins inside the room, because Rimz reasserts room options on every attach. Setting `[tmux] pane_border_status` makes Rimz own `pane-border-format` too — it titles work panes and blanks the sidebar's border row — while unset, your `~/.tmux.conf` format applies and may title the sidebar. `rimz config init --print` lists every room option with its default, and the full model is in [configuration → Multiplexer room options](../reference/configuration.md#multiplexer-room-options).
+Optional keys left unset fall through to your own Zellij or tmux config; a key you set here wins inside the room, because Rimz reasserts room options on every attach. Setting `[tmux] pane_border_status` makes Rimz own `pane-border-format` too — it titles work panes and blanks the sidebar's border row — while unset, your `~/.tmux.conf` format applies and may title the sidebar. `rimz config init --print` lists every room option with its default, and the full model is in [configuration → Multiplexer room options](./configuration.md#multiplexer-room-options).
 
 ## Zellij
 
@@ -145,7 +145,7 @@ The root `MouseDrag1Pane` override opens copy-mode and begins the selection in o
 
 `automatic-rename off` with `allow-rename off` keeps window names where they were set — Rimz titles agent windows when it opens them, and your own windows keep the name you give them instead of tracking the foreground command. The `@smart_split_is_wide` splits mirror Rimz's Zellij rooms: a wide pane splits left/right, a tall pane splits top/bottom, comparing pixel dimensions when tmux knows the terminal cell size.
 
-`pane-border-status top` labels each pane's border with its index and running command, so a grid of agents stays legible at a glance — the closest tmux gets to Zellij's titled frames. Rimz inherits this setting when its [`[tmux] pane_border_status`](../reference/configuration.md#multiplexer-room-options) override is unset; when you set that override, Rimz titles work panes and blanks the sidebar's own border row. tmux does not draw a pane's outer window edge, so panes are not fully boxed like Zellij frames.
+`pane-border-status top` labels each pane's border with its index and running command, so a grid of agents stays legible at a glance — the closest tmux gets to Zellij's titled frames. Rimz inherits this setting when its [`[tmux] pane_border_status`](./configuration.md#multiplexer-room-options) override is unset; when you set that override, Rimz titles work panes and blanks the sidebar's own border row. tmux does not draw a pane's outer window edge, so panes are not fully boxed like Zellij frames.
 
 ### Zellij-parity Alt chords (optional)
 

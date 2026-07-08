@@ -231,7 +231,7 @@ ascii_art = """
 """
 ```
 
-`color` accepts a palette role, `#rrggbb`, or a raw index. Which blocks appear and in what order is a [Display](#display) and discovery setting (see [configuration.md → Provider dashboard](../reference/configuration.md#provider-dashboard)).
+`color` accepts a palette role, `#rrggbb`, or a raw index. Which blocks appear and in what order is a [Display](#display) and discovery setting (see [configuration.md → Provider dashboard](./configuration.md#provider-dashboard)).
 
 ## Pets
 

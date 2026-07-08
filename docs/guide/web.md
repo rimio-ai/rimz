@@ -79,7 +79,7 @@ browser  ->  HTTPS reverse proxy with rate limiting  ->  zellij web on 127.0.0.1
 
 - [Remote](./remote.md) — the SSH link the `--web` tunnel rides, saved aliases, and reconnect.
 - [Web CLI reference](../reference/cli/web.md) — every `rimz web` subcommand and flag.
-- [Configuration](../reference/configuration.md#web-access) — the `[web]` keys and reverse-proxy `base_url`.
+- [Configuration](./configuration.md#web-access) — the `[web]` keys and reverse-proxy `base_url`.
 - [Web internals](../internals/web.md) — the token model, server lifecycle, and remote-tunnel mechanics.
 - [Troubleshooting](./troubleshooting.md) — a room that will not start or serve.
 </content>
