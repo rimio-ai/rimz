@@ -1,12 +1,28 @@
 # The sidebar
 
-One person, a fleet of agents, and only so much attention to spend. The sidebar spends it for you: one narrow column beside the agents' panes that answers a single question, **which pane needs you, right now**. Everything on it serves that question or the two behind it: what is the fleet doing, and what is it costing. You never work *in* the sidebar; when it surfaces an agent, one keypress drops you into that agent's pane and you answer in the agent's own UI.
-
-This page is how to read it: the zones and what each shows, the cards and the states behind them, and the ranking that decides what sits on top. Three companions go deeper: the [interface reference](../interface/sidebar.md) draws every glyph, meter, and frame exactly; [theme.md](./theme.md) restyles all of it; [configuration.md](../reference/configuration.md#sidebar-rendering) holds the knobs.
+> The sidebar is the narrow column pinned beside your panes, and it answers one question: **which pane needs you, right now.** This page is how to read it — the zones, the cards, the states behind them, and the ranking that decides what sits on top. Every glyph, meter, and frame drawn exactly is the [interface reference](../interface/sidebar.md); the presence and ranking machinery is [internals → sidebar](../internals/sidebar/sidebar.md).
 
 <p align="center">
   <img src="../rimz-sidebar.png" alt="The sidebar: cockpit on top, triaged agent cards by worktree, provider dashboard at the bottom" width="420">
 </p>
+
+## Why the sidebar
+
+You already know how to watch one agent: sit in its pane. The pane is the whole story — the plan, the diffs scrolling past, the permission prompt when it stops. Nothing about that needs Rimz.
+
+The method breaks at two agents. Watching becomes polling: hop into a pane, read enough scrollback to tell *thinking* from *waiting on me*, hop to the next, repeat. Every check interrupts your own work, and every skipped check is a gamble, because agents do not fail loudly — an agent stopped on a permission prompt looks exactly like an agent reasoning, a still pane either way, and the tab title says `claude` in both cases. Miss the prompt and a fully loaded context sits idle for as long as you don't look: an hour of the agent's work waiting on your ten-second answer. Add worktrees and the polling compounds — five panes across three checkouts, and *who was doing what, where* becomes a memory exercise.
+
+Agents multiply; your attention doesn't. That asymmetry is the problem the sidebar exists for, and it solves it by inverting the direction: instead of you polling panes, state changes come to one column, already triaged, and one keypress drops you into the pane that needs you. You never work *in* the sidebar — it has no reply box and no approve button. It routes you to the agent's pane, and you answer in the agent's own UI, where the full prompt and its safe defaults live.
+
+## What the column is, underneath
+
+Two facts make the column trustworthy, and both are worth knowing before you lean on it.
+
+**Agents report themselves.** The reporting hooks you approved at the [consent gate](./quickstart.md#the-consent-gate) fire from inside each agent — session start, tool call, blocking question, turn end — so a card changes the moment the agent does, not when a scraper catches up, and nothing on a card is guessed from screen contents. Two derived states are Rimz's own judgment rather than an agent report; [the lifecycle](#the-agent-lifecycle) calls them out.
+
+**The sidebar only reads.** It is one pane in your room running a renderer over the durable store those hooks write. Its only writes are its own display state — which cards you have read, a heartbeat — and jumping focuses a pane the same way your mux prefix would; your agents' processes, sessions, and files are untouched by anything on this page. Close the sidebar's pane and every agent keeps working; the next `rimz` attach or `rimz reload` brings it back, and nothing was missed in between, because a card that needs you stays unread and ranked in the store until you look. The column is a window, not a place where state lives.
+
+That split — presence live, facts durable — is also what a row *is*: a row exists because a pane runs right now, and when the agent exits, its row goes with it. The history stays in the store, behind `rimz agents show`, `rimz agents logs`, and [`rimz transcript`](../reference/cli/agents.md).
 
 ## The layout
 
@@ -75,9 +91,13 @@ Selecting a card appends anything deeper without reshaping what is on screen: th
 
 How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, `expanded` shows subagents everywhere.
 
+## Process rows
+
+A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer, quieter row: the program's name, a hollow `○` when idle, a spinner while it does real work, and, for a working pane, its live command plus a CPU, memory, and I/O readout. Process rows sit below the agent cards in their worktree and never enter the cockpit tallies — they never ask for your attention. They are still jump targets, and the moment an agent starts in that pane the row becomes that agent's card.
+
 ## The agent lifecycle
 
-Every card wears one state, reported by the agent itself: Rimz hooks into each agent's own event stream, so the card changes the moment the agent starts a turn, calls a tool, asks a question, or finishes, not when something scrapes a screen. Six states cover the life of a session:
+Every card wears one state, and six cover the life of a session:
 
 | glyph | state | meaning | needs you |
 |-------|-------|---------|-----------|
@@ -107,10 +127,6 @@ A session's life traces one loop through those states:
 
 Two states are Rimz's own judgment rather than an agent report. **Paused** is derived: when a turn stops because the provider's budget window is spent or the API is overloaded, the card parks at `⏸` instead of pretending to fail, and with [auto-continue](../reference/configuration.md#resume) enabled it resumes by itself the moment the window resets or the backoff clears. **Stall** is the safety net: a running agent silent past the stall window (30 minutes by default) escalates to `!`, because silence that long usually means something needs a look; a parent quietly waiting on its subagents is exempt.
 
-## Process rows
-
-A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer, quieter row: the program's name, a hollow `○` when idle, a spinner while it does real work, and, for a working pane, its live command plus a CPU, memory, and I/O readout. Process rows sit below the agent cards in their worktree and never enter the cockpit tallies — they never ask for your attention. They are still jump targets, and the moment an agent starts in that pane the row becomes that agent's card.
-
 ## Attention: what needs you
 
 An agent earns your attention when you are its blocker or its beneficiary. Four signals carry that, in descending pull:
@@ -124,9 +140,9 @@ Only the ask, the failure, and the park call for you. Everything else is context
 
 ### From a glance to the pane
 
-The cockpit compresses the fleet into one line, and the column below arrives already triaged: the card that needs you next sits at the top of its worktree, a soft wash marks every result, ask, and recovery you have not seen, and the one card that most needs you breathes until you read it.
+The cockpit compresses the fleet into one line, and the column below arrives already triaged: the card that needs you next sits at the top of its worktree, a soft wash marks every result, ask, and recovery you have not seen, and the one card that most needs you stays in motion until you read it.
 
-You do not read where to go; you go. Press `n` (or `␣`) to jump to the next thing that needs you, oldest first, and Rimz focuses that agent's pane. The prompt and its safe defaults live in the agent's own UI, where the full context is, so you read and answer there; focusing the pane clears its unread mark, and `N` walks back. The full key table is in [the interface reference](../interface/sidebar.md#jump--the-row-is-the-link).
+You do not read where to go; you go. Press `n` (or `␣`) to jump to the next thing that needs you, oldest first, and Rimz focuses that agent's pane. The prompt and its safe defaults live in the agent's own UI, where the full context is, so you read and answer there; focusing the pane clears its unread mark, and `N` walks back. From any pane in the room, `Alt+p` focuses the sidebar and toggles back to your last working pane, so the whole loop runs without touching the mouse. The full key table is in [the interface reference](../interface/sidebar.md#jump--the-row-is-the-link).
 
 Glance, jump, answer: that loop is the product. Desktop, bell, and command notifications carry the same cues when you are off-screen, and handlers or loops you wire can clear routine cues before they reach you ([notifications](./notifications.md), [loops and schedules](./loops.md)); the ranking below spends whatever attention is left.
 
@@ -171,6 +187,7 @@ Three `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a si
 
 - [The sidebar on screen](../interface/sidebar.md) — every glyph, meter, and frame drawn exactly, with the key table.
 - [Messaging](./messaging.md) — the other half of the loop: reach the agent the sidebar surfaced.
+- [Notifications](./notifications.md) — the same cues pushed to your desktop, phone, or a handler when you are off-screen.
 - [Theming and pets](./theme.md) — restyle the column, its palette, and the companion.
 - [Remote](./remote.md) — the link-health badge and the column rebuilt over SSH.
 - [Configuration → sidebar rendering](../reference/configuration.md#sidebar-rendering) — the render cadence and attention knobs.
