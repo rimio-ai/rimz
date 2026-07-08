@@ -92,7 +92,8 @@ The room treats a team as a single line of work: the sidebar keeps its members a
 
 ## See also
 
-- [Agents & worktrees](./agents.md) — launch agents by name, compose layouts, and isolate work in a Rimz-owned worktree.
+- [Agents](./agents.md) — launch agents by name and compose the layout a team fills.
+- [Worktrees](./worktrees.md) — isolate a team on its own branch for parallel work.
 - [Messaging](./messaging.md) — reach a role by handle: park, steer, schedule, and channels.
 - [Examples → forge](../../examples/README.md) — the shipped forge fragment: install, prerequisites, and try-before-install.
 - [Configuration → profiles and teams](../reference/configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.

@@ -139,6 +139,6 @@ Supervised runs need installed and trusted hooks, because hooks are the completi
 
 - [Loops and schedules](./loops.md) — put these runs on a clock: schedules, watchdogs, and notification handlers.
 - [Messaging](./messaging.md) — the `--steer` / `--on done` delivery model wrappers lean on.
-- [Agents & worktrees](./agents.md) — the handle and worktree vocabulary these examples use.
+- [Agents](./agents.md) — the handle and layout vocabulary these examples use.
 - [Agent control CLI](../reference/cli/agents.md#supervised-runs--p) — every flag on `-p`, `wait`, `show`, `stop`, and `pane`.
 - [harness.md → Supervised runs](../internals/harness/harness.md#supervised-runs) — run records, the wakeup socket, streaming, and pane cleanup.

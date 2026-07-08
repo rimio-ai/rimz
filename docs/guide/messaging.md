@@ -137,7 +137,7 @@ A channel groups the agents working one line of work inside a room: it is the id
 
 Channels come from three places:
 
-- **A Git worktree** — every agent working an isolated worktree shares that channel, named for the worktree ([agents guide → worktrees](./agents.md)).
+- **A Git worktree** — every agent working an isolated worktree shares that channel, named for the worktree ([Worktrees guide](./worktrees.md)).
 - **A named channel** — a durable `#design`, `#ops`, or `#release` group with no worktree behind it.
 - **A team or the room root** — a named team launched in place, or the plain room directory for agents with no other channel.
 
@@ -155,8 +155,9 @@ Named channels and worktrees share one namespace, so a name is a worktree channe
 
 ## See also
 
-- [Agents & worktrees](./agents.md) — how handles, profiles, and worktree channels come to be.
+- [Agents](./agents.md) — how handles and profiles come to be.
 - [Teams](./teams.md) — how team roles become handles in a shared channel.
+- [Worktrees](./worktrees.md) — the isolated tree behind every worktree channel.
 - [The sidebar](./sidebar.md) — reading the channels and the messages they carry on screen.
 - [Scripting agents](./scripting.md) — `--wait` and message records inside pipelines and CI.
 - [Loops and schedules](./loops.md) — scheduled and handler-driven messages that steer the fleet unattended.

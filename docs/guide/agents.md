@@ -1,11 +1,11 @@
-# Agents & worktrees
+# Agents
 
-`rimz agents` is the single launcher. One command opens a stock agent CLI in its own pane, arranges several agents into a layout, or drops the whole layout into an isolated Git worktree. Every agent it starts gets a handle you can message, a card in the sidebar, and a place in the room grouped by the worktree it lives in. To pair models by role on one feature, a named [team](./teams.md) composes several of these launches into one unit.
+`rimz agents` is the single launcher: one command opens a stock agent CLI in its own pane, or arranges several agents into a layout. Every agent it starts gets a handle you can message, a card in the sidebar, and a place in the room. To run a layout in isolation, drop it into a [worktree](./worktrees.md); to pair models by role on one feature, launch a [team](./teams.md).
 
 ```sh
-rimz agents claude                    # one agent, own pane, live card
-rimz agents claude,codex -w feat-a    # two agents, side by side, isolated worktree
-rimz agents codex --from-pr 42        # a layout checked out from a pull request
+rimz agents claude            # one agent, own pane, live card
+rimz agents claude,codex      # two agents, side by side in one room
+rimz agents claude-plan       # a permission mode as a suffix
 ```
 
 ## Launch an agent by name
@@ -57,31 +57,7 @@ rimz agents claude,codex "Draft the API shape."   # one prompt to both agents
 
 Quote a spec whenever it contains a `+`, a space, or anything your shell would otherwise expand. Profiles and kinds compose the same way, so `rimz agents planner,coder+reviewer` lays out three of your presets. The full grammar and how cells compile to panes is [harness.md → The layout IR](../internals/harness/harness.md#the-layout-ir).
 
-## Work in an isolated worktree
-
-`-w`/`--worktree` puts the whole layout in a Rimz-owned Git worktree: a fresh checkout on its own branch, isolated from your main tree, with its name backing the room channel. Reuse or create a named one with `-w feat-a`, or pass a bare `-w` for a generated name. Branch-style names work too — `--worktree=feat/great` creates branch `feat/great` and worktree `feat-great`.
-
-```sh
-rimz agents claude,codex -w feat-a           # two agents in one isolated worktree
-rimz agents planner,coder+reviewer -w feat-b # a whole layout, isolated on its own branch
-rimz agents codex --from-pr 42               # a worktree checked out from pull request 42
-```
-
-`--from-pr <number|url>` fetches a pull request head over your `origin` credentials and lands the layout in a `pr-<N>` worktree — pair it with `-w <NAME>` to choose the local name. A new worktree starts ready to run: a committed `.worktreeinclude` copies the untracked files an agent needs (`.env`, local config), and a `.worktreelink` symlinks the heavy shared directories (`node_modules`, `target`, `.venv`) so they are shared, not re-copied ([worktree.md → Seeded files](../internals/harness/worktrees.md#seeded-files-and-linked-directories)).
-
-**The room groups panes by worktree.** Your main checkout plus two feature trees render as three groups in one room. Agents in the same worktree share files; agents in sibling worktrees each keep their own — that is the recommended pattern for several write-capable agents at once, and two write-capable agents in the same tree trigger a one-time advisory. Two `rimz agents claude "…" -w` launches race parallel attempts, each in its own fresh tree.
-
-### Reclaim work, once it lands
-
-Cleanup is supervised and proves work landed before removing anything. When a worktree agent finishes and its pane closes while the room stays live, Rimz runs the decision: a clean tree whose content has landed on its base branch is removed with its branch; a tree that is dirty, pending, or unproven is kept — behind a `keep / remove / shell` prompt when you are watching, kept on its own otherwise. "Landed" is measured against the trunk and recognizes merge, squash, and rebase shapes alike, so a merged feature is reclaimed and unmerged work is never lost. A clean interactive quit leaves an idle shell in the tree for `rimz gc` to sweep later.
-
-```sh
-rimz worktree list              # every Rimz-owned worktree, with its agents and dirty/landed marks
-rimz worktree remove feat-a     # remove on demand; refuses a dirty or unlanded tree
-rimz gc                         # sweep clean, landed, unoccupied worktrees left behind
-```
-
-`rimz worktree remove` refuses a dirty or unproven tree unless you pass `--force`. `rimz gc` sweeps only worktrees Rimz owns and no live pane or agent occupies, under the same landed proof. The full lifecycle, the ownership marker, and the landed-content check are in [worktrees.md](../internals/harness/worktrees.md#cleanup).
+Add `-w` and the whole layout lands in an isolated Git worktree, the pattern for running several agents in parallel without stepping on each other: see [Worktrees](./worktrees.md).
 
 ## Handles, in brief
 
@@ -96,6 +72,7 @@ That is enough to launch, re-add, and jump to agents. Routing text to them — p
 
 ## See also
 
+- [Worktrees](./worktrees.md) — isolate a layout on its own branch so several agents run in parallel.
 - [Teams](./teams.md) — pair models by role and launch, reopen, and resume the whole set as one unit.
 - [Messaging](./messaging.md) — reach agents by handle: park, steer, schedule, and channels.
 - [The sidebar](./sidebar.md) — how the room reads the cards, worktrees, and teams you launch.
