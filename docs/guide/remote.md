@@ -1,12 +1,10 @@
 # Remote and web
 
-> A Rimz room is a plain Zellij or tmux session, so it travels the way any terminal session does: over SSH, through a reconnecting link, or tunnelled into a browser. This guide covers reattaching locally, connecting to a room on another host, and opening a room in the browser. The link supervisor and reconnect policy live in [remote.md](../internals/reach/remote.md); browser access is [web.md](../internals/reach/web.md).
-
-Start a room on your laptop or on a server you reach over SSH, close the lid, and pick it up from anywhere. The room keeps running headless while nobody renders, and the sidebar rebuilds from durable state the moment you reattach — every agent where you left it, every pending question still waiting.
+A Rimz room is a plain Zellij or tmux session, so it travels the way any terminal session does: start it on your laptop or a server, close the lid, and pick it up from anywhere — over SSH, through a self-healing link, or tunnelled into a browser. The room keeps running headless while nobody renders, and the sidebar rebuilds from durable state the moment you reattach: every agent where you left it, every pending question still waiting.
 
 ## Reattach on the same machine
 
-Detach with your multiplexer's own key: Zellij `Ctrl-O d`, tmux `prefix d`. The room stays alive, agents working and hooks landing in the store while no sidebar renders.
+Detach with your multiplexer's own key: Zellij `Ctrl-O d`, tmux `prefix d`. The room stays alive, agents working and their events still recorded while no sidebar renders.
 
 Coming back is the command you already know — `rimz` in the project directory returns to that project's room. From anywhere else, name the session:
 
@@ -50,9 +48,9 @@ rimz remote connect dev --no-reconnect   # a single ssh run, no supervisor
 rimz remote connect dev --reset          # a fresh remote room (passes --no-resume through)
 ```
 
-`rimz remote reset dev` is the shorthand for that last one.
+`rimz remote reset dev` is the shorthand for that last one. The link supervisor and its reconnect policy are in [the internals](../internals/reach/remote.md).
 
-## Continuity is store-owned; process survival is the host's job
+## Continuity survives reboots; keeping processes alive is the host's job
 
 The store is a directory of flat files under `~/.local/state/rimz/`, written durably, so continuity survives a reboot or a mux crash. On the next start Rimz offers the fleet back: prior agents idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). The offer defaults yes, non-interactive starts recover automatically, and a room you closed deliberately stays closed.
 

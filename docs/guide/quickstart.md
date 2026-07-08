@@ -1,8 +1,8 @@
 # Quickstart
 
-> This page walks your first session, from install to a working fleet: what you type, what appears on screen, and why. The deep topics each have a home now, linked as they come up; the exact rendering of every glyph, meter, and zone is the [interface reference](../interface/sidebar.md). The frames below follow the renderer's real structure with illustrative values.
+Your first session, from install to a working fleet: what you type, what appears on screen, and why.
 
-Rimz runs tens or hundreds of Claude Code, Codex, and Pi sessions in parallel, on a laptop or a server you reach over SSH, inside the Zellij or tmux you already run, with your keybinds and the official apps untouched. It makes one promise, and this walk tests it end to end: it names the agent that needs you and takes you straight to its pane, where you answer in the agent's own UI. Everything else — the consent gate, the cards, the ranking, the reattach — serves that loop.
+Rimz makes one promise, and this walk tests it end to end: it names the agent that needs you and takes you straight to its pane, where you answer in the agent's own UI. Everything runs inside the Zellij or tmux you already use, with your keybinds and the official apps untouched. The frames below carry illustrative values; the [interface reference](../interface/sidebar.md) draws every glyph and meter exactly.
 
 ## Install, then one command
 
@@ -89,7 +89,7 @@ Type `claude` in the shell pane. Within a second or two the row that read `○ z
 ▌○ claude · Opus 4.8 · xhigh
 ```
 
-The session-start hook fired, the store overlaid identity onto the pane, and the row updated: your agent is in the sidebar, correctly named, with its model and effort. No config, no flag, no restart. An idle agent fills no attention bucket; it is presence, not a cue.
+The session-start hook fired, Rimz's durable on-disk record — the store — overlaid identity onto the pane, and the row updated: your agent is in the sidebar, correctly named, with its model and effort. No config, no flag, no restart. An idle agent isn't asking for anything, so it fills no attention bucket.
 
 Give Claude a task and the card fills out: the leading glyph animates (`⠁` while it reasons, `⣾` once it edits), the description line carries what it is on, and the context meter starts filling:
 
@@ -102,7 +102,7 @@ Give Claude a task and the card fills out: the leading glyph animates (`⠁` whi
 ▌  ▣ ━━━━━━━━━━━━━━──────────────────────── 41.2%
 ```
 
-A running agent is not a cue to do anything: the `?` and `!` buckets hold at zero, so you get coffee or open a second agent. A running agent that goes silent past the stall window (30 minutes by default) escalates to `!` on its own, so a wedged run cannot hide behind a spinner. How the column ranks and lives is [the sidebar guide](./sidebar.md).
+A running agent needs nothing from you: the `?` and `!` buckets hold at zero, so you get coffee or open a second agent. A running agent that goes silent past the stall window (30 minutes by default) escalates to `!` on its own, so a wedged run cannot hide behind a spinner. How the column ranks and lives is [the sidebar guide](./sidebar.md).
 
 ## A question reaches you
 
@@ -155,14 +155,7 @@ Now the load the product was built for: two more agents in a second worktree, pl
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus 4.8 · xhigh · 200k         $1.27
-▌  fix auth flow
-▌  ▣ ━━━━━━━━━━━━━━──────────────────────── 41.2%
-▎⠁ claude · Sonnet 4.6 · high · 200k        $0.31
-▎  add tests
-▎  ▣ ━━━━━━──────────────────────────────── 18.0%
-▎⣾ codex · GPT 5.5 · high                   $0.88
-▎  refactor api
-▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━─────────────── 63.4%
+▌  ⋮  the three cards from above, unchanged
 
  ⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +230 -23
  ! claude · Opus 4.8 · xhigh                $2.05
@@ -187,15 +180,13 @@ Five agents, two keys, straight to the oldest blocked one; the same two keys hol
 
 ## Leave, and come back from anywhere
 
-Detach with your multiplexer's own key (Zellij `Ctrl-O d`, tmux `prefix d`). The room keeps running headless, agents working, hooks landing in the store while nobody renders.
-
-Coming back on the same machine is the command you already know: `rimz` in the project directory. From another machine, hours later, on a laptop or a tablet:
+Detach with your multiplexer's own key (Zellij `Ctrl-O d`, tmux `prefix d`); the room keeps running headless, agents working. Reattach on the same machine with `rimz` in the project directory, or from any other machine over SSH:
 
 ```sh
 rimz remote connect dev-box:~/code/query-engine
 ```
 
-The link is plain SSH with a supervisor that reconnects itself when the train wifi drops, and a `⇄ remote 210ms` badge reads link health. The sidebar comes back exactly as you left it — every agent where it was, every question still waiting, ranked identically, plus whatever finished while you were gone. Continuity is store-owned; the whole reattach story, aliases and browser access included, is [remote.md](./remote.md).
+The link reconnects itself when the train wifi drops, and the sidebar comes back exactly as you left it — every agent where it was, every question still waiting, plus whatever finished while you were gone. Aliases, link health, and browser access are [remote.md](./remote.md).
 
 ## Where to go next
 

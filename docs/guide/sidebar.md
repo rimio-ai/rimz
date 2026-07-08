@@ -109,7 +109,7 @@ Two states are Rimz's own judgment rather than an agent report. **Paused** is de
 
 ## Process rows
 
-A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer, quieter row: the program's name, a hollow `○` when idle, a spinner while it does real work, and, for a working pane, its live command plus a CPU, memory, and I/O readout. Process rows sit below the agent cards in their worktree and never enter the cockpit tallies: they are presence, not a cue. They are still jump targets, and the moment an agent starts in that pane the row becomes that agent's card.
+A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer, quieter row: the program's name, a hollow `○` when idle, a spinner while it does real work, and, for a working pane, its live command plus a CPU, memory, and I/O readout. Process rows sit below the agent cards in their worktree and never enter the cockpit tallies — they never ask for your attention. They are still jump targets, and the moment an agent starts in that pane the row becomes that agent's card.
 
 ## Attention: what needs you
 
@@ -136,17 +136,15 @@ A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `do
 
 ## How the column is ordered
 
-Within a worktree, agent cards lead and process rows form a quiet tail. The cards themselves sort by three questions asked in order: how long has it waited, what does it offer, and, among calm work, is it landed. The exact ranking contract lives in [the internals](../internals/sidebar/sidebar.md#attention-ranking-and-the-cap).
+Within a worktree, agent cards lead and process rows form a quiet tail. In one line: asks and failures first, interleaved oldest-first, then parked agents, then calm work — done, running, idle. The exact ranking contract lives in [the internals](../internals/sidebar/sidebar.md#attention-ranking-and-the-cap).
 
-### Urgency rises through the first hour
+### Time reshapes the order
 
-Time reshapes the order, measured from each card's last activity, in three windows.
+Measured from each card's last activity, in three windows:
 
-**Inside the first hour, a blocked agent grows more urgent the longer it waits.** One hour is the boundary the agent's own prompt cache crosses: answer within it and the agent resumes warm, past it the resume recomputes what the cache held, and it matches the natural horizon of attention. So an ask, failure, or park doubles its weight as it ages toward the hour: a failure overdue fifty minutes outranks an ask from two minutes ago, and blocked work reads oldest-first, the cheapest order to clear. Calm work keeps a flat weight through the hour, so live agents hold their place while they run.
-
-**Between one hour and twenty-four, everything cools.** Past the hour the cache is gone and the resume costs the same whenever you get to it, so urgency decays steadily instead of climbing. A stale ask still leads stale calm work, but the whole window sinks beneath anything currently hot, so yesterday's unanswered question stops competing with the agent blocked right now.
-
-**Past twenty-four hours, a card sleeps.** It parks in an archive at the back, keeping only its state order, so an archived ask still reads above an archived idle agent without competing against hot or warm work.
+1. **Inside the first hour, blocked work climbs.** An ask, failure, or park grows more urgent the longer it waits, so a failure overdue fifty minutes outranks an ask from two minutes ago and blocked work reads oldest-first — the cheapest order to clear. Calm work keeps a flat weight, so live agents hold their place while they run. (The hour matches the agent's prompt-cache lifetime: answer inside it and the agent resumes warm.)
+2. **Between one hour and twenty-four, everything cools.** Urgency decays instead of climbing: a stale ask still leads stale calm work, but the whole window sinks beneath anything currently hot, so yesterday's unanswered question stops competing with the agent blocked right now.
+3. **Past twenty-four hours, a card sleeps.** It parks in an archive at the back, keeping only its state order, so an archived ask still reads above an archived idle agent.
 
 ### Teams read as one
 

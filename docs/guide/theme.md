@@ -1,6 +1,12 @@
 # Theming
 
-Theming restyles the sidebar: the color scheme and depth, the glyph vocabulary, the status-head animations, provider branding, and an optional animated pet. Everything lives in one per-machine file, `~/.config/rimz/theme.toml`. Every setting is a display preference: a theme changes what the sidebar paints, never what agents can do. [interface/sidebar.md](../interface/sidebar.md) says what every tone and glyph *means* on screen; this page is the knobs that restyle them.
+One command restyles the sidebar:
+
+```sh
+rimz config set theme "Catppuccin Mocha"   # any bundled scheme; rimz list-themes shows them all
+```
+
+Theming covers the color scheme and depth, the glyph vocabulary, the status-head animations, provider branding, and an optional animated pet — everything in one per-machine file, `~/.config/rimz/theme.toml`. Every setting is a display preference: a theme changes what the sidebar paints, never what agents can do. [interface/sidebar.md](../interface/sidebar.md) says what every tone and glyph *means* on screen; this page is the knobs that restyle them.
 
 Every element carries its state by shape first ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so color reinforces meaning rather than carrying it: any palette, including no color at all, stays readable.
 
@@ -70,7 +76,7 @@ mode = "auto"        # or "truecolor", "256"
 
 ### Subtle steps and color depth
 
-Some cues are a sub-cell lightness step: a calm card name dimmed a touch, the selected band recessed below its panel, the unread wash lifted above it, a breathing pulse. These render as color only at truecolor depth. The 256-color cube spaces its levels too coarsely to carry a sub-cell shift, so at indexed depth a subtle cue falls back to the discrete signal the cube carries honestly: a weight modifier (`DIM`/`BOLD`) for motion, or the plain base tone for a static recession (the same shape `NO_COLOR` uses). Cues that already span a full cube cell, such as the neutral ladder, the health ramp, and the one-cell selection and unread steps, stay color at every depth. The step magnitudes are tunable in [`[theme.display.highlight_steps]`](#display).
+Some cues are subtle lightness shifts — a calm card name dimmed a touch, the recessed selection band, the unread *wash* (the soft background tint an unread row wears), a breathing pulse — and they render as color only at truecolor depth. At 256-color depth each falls back to a signal indexed color carries cleanly: a `DIM`/`BOLD` weight for motion, or the plain base tone for a static shift (the same shape `NO_COLOR` uses). Cues that already span a full color step — the neutral ladder, the health ramp, the one-cell selection and unread steps — stay color at every depth. The step magnitudes are tunable in [`[theme.display.highlight_steps]`](#display).
 
 ## Color slots
 
@@ -101,7 +107,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `selection` | the selected card's bright `▌` spine and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |
 
-Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot/costly" everywhere. The four health slots form a ramp, `good → warn → caution → alarm` (green through gold and orange to red), that the live meters slide: the context meter, remote link badge, and draining provider budget ("mana") bar ride the full ramp, while the recede-when-healthy readers (the card age clock and reset-countdown pace) rest quiet and ride only the warm tail once they leave their calm zone. RGB overrides and xterm indexes 16–255 join the ramp; flat ANSI indexes 0–15 are terminal-defined, so a flat slot wears the override while the ramp keeps the scheme's RGB. Money figures use a fixed dollar green outside the slots, as does each provider's [brand color](#provider-styling).
+Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot/costly" everywhere. The four health slots form a ramp — `good → warn → caution → alarm`, green through gold and orange to red — that the live meters slide. The context meter, the remote link badge, and the draining provider budget bar ride the full ramp; readers that recede when healthy, such as the card age clock and the reset-countdown pace, rest quiet and ride only the warm tail once they leave their calm zone. An RGB override or an xterm index 16–255 joins the ramp; a flat ANSI index 0–15 is terminal-defined, so that slot wears your override while the ramp keeps the scheme's RGB. Money figures use a fixed dollar green outside the slots, as does each provider's [brand color](#provider-styling).
 
 ## Display
 
@@ -164,7 +170,7 @@ effect = "breathe"
 - **`color`** accepts a semantic slot (`good`, `warn`, `caution`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, `faint`), the brand tone `clay`, a `#rrggbb` hex, or a raw index.
 - **`effect`** is `static` or `breathe`; **`speed`** is `slow`, `normal`, or `fast`, pacing both frame advance and effect.
 
-The static heads (`idle` / `success` / `paused` / `waiting`) take their shape from [`[theme.glyphs] set`](#glyphs); the animated spinners keep their Unicode frames in every preset, and the cockpit buckets show each head's still `status` glyph. A literal blink is just a frame sequence such as `frames = [" ", "!"]`.
+The static heads (`idle` / `success` / `paused` / `waiting`) take their shape from [`[theme.glyphs] set`](#glyphs); the animated spinners keep their Unicode frames in every preset, and the cockpit buckets — the `? ! ⏸ ✓` counters at the top of the sidebar — show each head's still `status` glyph. A literal blink is just a frame sequence such as `frames = [" ", "!"]`.
 
 ### Unread attention
 
