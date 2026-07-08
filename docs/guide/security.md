@@ -1,141 +1,80 @@
 # Security and trust
 
-Rimz runs beside your agents with the permissions you already have, so its security posture is visibility and consent: every change it makes to your machine is previewable and reversible, and every place configuration can run a command is an explicit decision you make. This page answers the two questions that matter on day one — what Rimz touches, and what can execute — then states the deeper guarantees. The design commitments behind them are in [DESIGN.md](../../DESIGN.md).
+Rimz runs as you: no daemon, no elevated privileges, no account of its own. It reports on the agents you already run, inside the terminal you already use. Its security model follows from that. Rimz asks before it changes anything on your machine, every change has a matching undo, and the only places a config file can make Rimz run a command are decisions you make by hand.
 
-## What Rimz changes, and how to undo it
+This page covers three questions: what Rimz touches, what can execute, and what leaves your machine. The design commitments behind them are in [DESIGN.md](../../DESIGN.md).
 
-Rimz asks before it writes, and everything it writes has a matching undo.
+## What Rimz changes on your machine
 
-- **Reporting hooks in your agent configs.** The first run (or `rimz hooks install`) names each agent and the exact config file it will touch, and `rimz hooks install --dry-run` prints the full diff before anything is written. The install is additive — your existing hooks stay — and each hook is one `rimz hooks feed` line that reports events; answering a prompt always stays with you, in the agent's own UI. `rimz hooks uninstall` removes exactly what was added and restores your statusline.
-- **Per-machine files it owns.** Config lives under `~/.config/rimz/` and durable room state under `~/.local/state/rimz/`. `rimz uninstall` removes hooks, rooms, runtime state, and binaries, with flags to include stores and config ([maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall)).
-- **A permission grant for its own Zellij plugin.** On Zellij, Rimz seeds the permission cache for the presence plugin it ships; the scope and the revocation path are below in [The Zellij presence plugin](#the-zellij-presence-plugin). Your `config.kdl` is never edited.
+Three things, each previewable before it happens and reversible after.
 
-## What can run commands, and when you approve it
+**Reporting hooks in your agent configs.** To show an agent live in the sidebar, Rimz adds hook lines to that agent's own config (`~/.claude/settings.json`, `~/.codex/config.toml`, and the like). Run `rimz hooks install --dry-run` for the exact per-agent diff before anything is written. The install is additive, so your existing hooks stay, and each hook is one `rimz hooks feed` line that reports events. Answering a prompt always stays with you, in the agent's own UI. `rimz hooks uninstall` removes exactly what was added and restores any statusline Rimz wrapped. The whole flow is walked in [set up your machine](./setup.md#install-agent-hooks).
 
-Two configuration surfaces can cause a process to run, and each is an explicit trust decision:
+**Files under your home directory.** Configuration lives under `~/.config/rimz/`, durable room state under `~/.local/state/rimz/`, both plain files you can read and edit. `rimz uninstall` removes hooks, rooms, runtime state, and the binary, with flags to also drop the stores and config ([maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall)).
 
-1. **Project trust** — what Rimz reads from a repository's `.rimz/config.toml` and what it is allowed to execute on the project's behalf.
-2. **Notification handlers** — the per-machine commands you wire to run on the room's attention cues.
+**A permission grant for its Zellij plugin.** On Zellij, Rimz seeds a permission grant for the presence plugin it ships, so the first attach runs without an interrupting prompt. Your `config.kdl` stays untouched, and the grant is yours to revoke. Details in [The Zellij presence plugin](#the-zellij-presence-plugin).
 
-These are the only two trust decisions Rimz asks you to make. Everything else flows from them.
+## What can run commands
+
+Inside a workspace, plenty already runs as you: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves. Same-user isolation is no real boundary there, so Rimz does not lean on it. Instead it makes command execution an explicit choice in exactly two places.
 
 ### Project trust
 
-Project config is read inertly until trusted.
+A cloned repository can ship a `.rimz/config.toml` that names agents, profiles, teams, loop tasks, hooks, and environment variables, and any of those can run a command. So Rimz keeps the whole file inert until you trust the workspace: on an untrusted clone it reads only structural metadata, and nothing the file declares can launch.
 
-**Untrusted.**
-- Structural metadata only.
-- No project-declared commands run.
-- Project-declared profiles stay inert.
-- No project-declared hook installs proceed.
+`rimz trust grant` pins a single hash over every command-running field in that config. Each later read re-hashes the live file. Edit one of those fields, or let an agent in the room edit the file, and the hash drifts: the workspace flips to `stale`, command execution turns back off, and `rimz trust status` prints a field-level diff of what changed before you re-grant. There is no background sweep. `rimz trust status` and `rimz doctor` both re-hash on the spot.
 
-**Trusted.**
-- Full project config applies.
-- The executable-surface hash matches the trusted hash.
+The hashed surface is every field that can cause a process to run:
 
-**Trust stale.**
-- Executable-surface hash changed since the last grant.
-- Command-running fields are disabled until trust is granted again.
-- Auto-revoke is implicit: every `rimz trust status` and `rimz doctor` re-hashes the live `.rimz/config.toml` and reports `stale` without a separate sweep.
+- `[[agents]]`: `name`, `launch_command`, `env`
+- `[profiles.<name>]`: `agent`, `mode`, `model`, `effort`, `system-prompt-file`, `append-system-prompt-file`, `args`
+- `[agents.teams.<name>]`: `layout`, and each role's profile and launch fields
+- `[tasks.<name>]`: the loop `spec`, `prompt`, the `check` command, and the run and schedule options
+- `[[hooks]]`: `event`, `command`
+- `[env]`: every key and value
 
-The **executable surface** is every project field that can cause a process to run: agent launch commands, project profile and team definitions, project loop tasks (`spec`, `prompt`, `check`, and launch options), hook commands, PATH-affecting env overrides, and any future project command string. `rimz trust grant` pins a single hash over all of these. The grant also stores the surface itself, so a `stale` report shows a field-level diff of what changed before you re-grant. Room layout (`[layout]`, including tmux status `#(...)` and popup commands) is per-machine config; a project config carrying it is refused with the move-it fix. Adding a new project command-running field that isn't in the hash is a CI invariant violation. Implementation detail in [`docs/internals/harness/trust.md`](../internals/harness/trust.md).
+Room layout stays out of a repo's reach: a project config carrying a `[layout]` table (including tmux status `#(...)` and popup commands) is refused, with the fix to move it to your per-machine config. Any field Rimz can execute must enter this hash, and a unit test fails if one slips out. The mechanics, the grant record, and the diff are in [the trust internals](../internals/harness/trust.md); the command is in [the trust reference](../reference/cli/hooks-trust.md#project-trust).
 
-The per-machine `loop.toml` schedules live outside project trust: a `check = "<shell>"` entry there is your own scheduled command, stored under `~/.config/rimz/` or Rimz-owned state. A cloned repository can supply only project `[tasks]` in `.rimz/config.toml`. Those tasks enter the trust hash, stay visible as untrusted or stale, and refuse to run until you grant — unless a same-named machine task is the effective runnable task. The scheduled-execution surface stays visible: `rimz loop add` runs hook preflight before recording an agent action, `rimz loop list` shows source and room state, and `rimz doctor` carries the configured tasks.
+Per-machine loop schedules are separate: a `check = "<shell>"` line in your own `~/.config/rimz/loop.toml` is your command, not a repo's. A clone can supply only project `[tasks]`, and those stay inert until you grant, unless a same-named machine task is already the one that runs.
 
 ### Notification handlers
 
-Notification handlers are per-machine commands (`[[notifications.handler]]` and the legacy `[notifications].command`), entering the room only by your hand in `~/.config/rimz/config.toml`; a cloned repository can never supply them. They are personal routing on this host, often with local push credentials, and they run under your uid, spawned by the sidebar process that holds the room's refresh duty.
-
-A handler that acts on the room treats pane text and transcripts as untrusted data: match bounded prompt shapes, and stay silent on anything unknown. Wiring detail in [notifications.md](../internals/sidebar/notifications.md).
+Notification handlers run a command of your choosing when a row needs attention (`[[notifications.handler]]`, or the legacy `[notifications].command`). They live only in your per-machine `~/.config/rimz/config.toml`, so a clone can never supply one. They run under your user id, spawned by the sidebar process, and often carry local push credentials. A handler that acts back on the room should treat pane text and transcripts as untrusted data: match a bounded prompt shape, and stay silent on anything else. Wiring is in [the notifications internals](../internals/sidebar/notifications.md).
 
 ### The Zellij presence plugin
 
-On Zellij, Rimz loads a small presence plugin into each session so the sidebar learns pane topology by push and tab switches land back on work instead of the sidebar ([internals](../internals/multiplexers.md#zellij-presence-channel)). Rimz seeds Zellij's own permission cache for this plugin before load, keyed to the canonical plugin path Rimz materializes under the user data directory, so no prompt interrupts the first attach. The seeded grant covers:
+On Zellij, Rimz loads a small presence plugin into each session so the sidebar learns pane layout by push, and a tab switch lands back on your work instead of the sidebar ([internals](../internals/multiplexers.md#zellij-presence-channel)). Zellij normally prompts before a plugin gets permissions; Rimz seeds that grant ahead of load, keyed to the exact plugin path it materializes, so the first attach is not interrupted. The grant covers:
 
-- **Access Zellij state** — the plugin watches pane and tab shape.
-- **Run commands** — it runs the Rimz-owned `rimz sidebar wake` and `rimz sidebar focus` argv.
-- **Reconfigure** — it applies Rimz's room mouse options and, when configured, binds the [focus key](./configuration.md#sidebar-rendering) to a runtime-only plugin pipe, without writing your `config.kdl`.
-- **Start web server / share session** — added only when `[web] enabled`; it lets browser access turn on when you run `rimz web open` against an already-running session.
+- **Access Zellij state**: the plugin watches pane and tab shape.
+- **Run commands**: it runs the Rimz-owned `rimz sidebar wake` and `rimz sidebar focus` calls, and nothing else.
+- **Reconfigure**: it applies the room's mouse options and, if you set one, binds the [focus key](./configuration.md#sidebar-rendering), both at runtime without writing your `config.kdl`.
+- **Start web server**: added only when `[web] enabled`, so `rimz web open` can share a running session.
 
-The plugin's argv, artifact, and configuration are all Rimz-owned — never your `config.kdl` — and it ships no pane content anywhere. The grant stays in Zellij's own permission store, where its plugin manager can revoke it; revoking makes pane discovery unavailable until the grant is restored, and `rimz doctor` names the fix. Setting `[web] enabled = false` stops Rimz from seeding the web grant and makes web commands fail fast before changing room sharing. The plugin also reports a switched-to tab that restored focus to the sidebar, and the renderer moves focus back through the same host command an ordinary sidebar jump uses.
+The plugin's code, argv, and configuration are all Rimz-owned, never your `config.kdl`, and it ships no pane content anywhere. The grant lives in Zellij's own permission store, where its plugin manager can revoke it; revoking stops pane discovery until you restore it, and `rimz doctor` names the fix.
 
-## Threat model
+## What leaves your machine
 
-A project workspace runs untrusted code: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves all execute as you. Same-UID isolation is therefore not a meaningful trust boundary inside a workspace. That is why trust is explicit at the two layers above — the project's executable surface and your per-machine handlers — and why everything read back from a pane or transcript is treated as data, never as instructions ([Pane safety](#pane-safety)).
+Rimz keeps your work local. Your prompts, transcripts, pane text, file paths, and credentials stay on the box. The network calls Rimz makes reuse logins you already hold and reach only services you already use:
 
-## Hook safety
+- **Provider usage.** To fill the cost and budget meters, Rimz reads each provider's usage endpoint with the OAuth login the agent already holds, contacting only the provider you are signed in to.
+- **Pull-request status.** The sidebar's PR marker runs your own `gh` (GitHub) or `tea` (Gitea, Forgejo, Codeberg) against your forge, on your existing login. It reads no Rimz secrets and adds no config field, so it stays off the trust hash.
+- **Pets.** Enabling `[theme.pets]` fetches a sprite sheet over HTTPS from the host you name (a built-in pet reaches the public Codex pets CDN; a local-path pet fetches nothing). `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only. The request carries the asset URL and nothing else.
+- **Off-box error reporting.** Off by default and opt-in. See [Off-box error reporting](#off-box-error-reporting).
 
-The mechanics behind these guarantees — the decision channel, the neutral no-op, fresh stdio — are in [agent.md → Hook stdout is the decision channel](../internals/agents/model.md#hook-stdout-is-the-decision-channel).
+### Hook payload privacy
 
-- Hook stdout is reserved for the agent's decision channel.
-- Logs go to stderr or Rimz runtime state logs such as `binding.log.jsonl`.
-- Notification helpers do not run inside the blocking hook process.
-- Hook child processes must not inherit stdout. CI grep enforces this.
-- Every neutral and decision payload is golden-tested.
+Hook payloads can carry prompts, tool inputs, file paths, command arguments, and errors. They stay in Rimz's local state, and nothing forwards them off the box. Payload-fidelity and retention controls (a `[privacy]` block with `payload_mode` and `retention_days`) are a planned project surface, tracked in [configuration.md](./configuration.md) against the [hook adapter boundary](../internals/agents/model.md#the-adapter-boundary).
 
-## Pane safety
+### Off-box error reporting
 
-`rimz pane capture` returns untrusted terminal text. Rimz core does not parse it for correctness and does not auto-type. A script that answers prompts through pane primitives must pattern-match bounded prompt shapes and abstain when unsure. Captured text is data, never an instruction stream — feeding it into an LLM prompt as if it were a user message is the standard prompt-injection footgun.
+Release binaries ship without the reporting code, so a stock install makes no Sentry calls whatever the config. Reporting compiles in only under `--features sentry`, and even then it is off until you set `[sentry] dsn` (or `RIMZ_SENTRY_DSN`). The DSN is per-machine and never the committed project config, so a clone or pull cannot redirect a contributor's telemetry.
 
-## Privacy
+When on, it sends Rimz's own `warn!` and `error!` events and the provider conditions Rimz observes (rate limits, overload), tagged with low-cardinality facts: the release and build id, the running command, a fault class, and the agent or session id when known. The hostname is stripped, Sentry's default personal-data collection is off, and hook payloads, prompts, and transcripts never ride along. A failed account-usage probe reports the request's host, never its path or query. The full payload and the config knobs are in [the diagnostics internals](../internals/diagnostics.md#off-box-error-reporting) and [configuration.md](./configuration.md#off-box-error-reporting).
 
-Hook payloads can include prompts, tool inputs, file paths, command arguments, and errors. Project privacy config controls retention and payload fidelity:
+## Pane text is data, not instructions
 
-```toml
-[privacy]
-retention_days     = 14
-payload_mode       = "redacted"   # metadata | redacted | full
-max_payload_bytes  = 8192
-```
+`rimz pane capture` returns raw terminal text. Rimz core treats it as data: it never parses it for correctness and never types on your behalf. If you script an answer through the pane primitives, match a bounded prompt shape and abstain when unsure. Feeding captured text into an LLM prompt as if it were a user message is the classic prompt-injection footgun, so keep it as data.
 
-- `metadata` — strips inputs, prompts, args, errors. Smallest footprint.
-- `redacted` — keeps bounded payloads with built-in redaction. Default.
-- `full` — keeps hook payloads as delivered. `rimz doctor` warns.
+## Unattended runs
 
-## Optional asset fetches
-
-Enabling `[theme.pets]` lets the sidebar fetch a WebP sprite sheet over HTTPS and cache it under the per-machine cache root. A built-in `pet` reaches the public Codex pets CDN; an `https://` URL reaches the host you name (plaintext `http://` is rejected); a petdex pet (`~/.codex/pets/<name>/`) or a local-path `pet` fetches nothing and reads straight off disk. `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only. The fetch sends the asset URL request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local. Pets execute no commands, so the setting stays outside the project trust hash.
-
-## UID boundaries
-
-An agent launched through `sudo`, `su`, or `doas` as another real uid is visible as a foreign process, not as a Rimz agent. The sidebar may label the process row with the agent kind and uid marker, but hooks, hook installation, account probes, and notification handlers remain scoped to the current uid and the trusted project surface. This keeps another user's `~/.claude` or equivalent config and credentials outside the current room's trust decision.
-
-## Forge status probes
-
-The sidebar's PR marker is best-effort enrichment: the sidebar runs `gh` for GitHub remotes or `tea` for Gitea/Forgejo/Codeberg remotes, in the worktree, on a repo-tier TTL. The CLI uses your existing forge login and contacts the repository's own forge to list the repo's open PRs, then matches branch names locally; an open PR that disappears from that set gets one targeted branch lookup to resolve closed versus merged. Unsupported forges and branches without PRs publish an empty cache. The probe reads no Rimz secrets and adds no project config field, so it stays outside the project trust hash.
-
-## CI build cache
-
-CI build and test workflows run PR code on the `pull_request` trigger, so fork PRs receive an isolated Actions-cache scope: they can restore base warm entries and write only their PR scope for same-PR re-runs. Release jobs set `RIMZ_SCCACHE=off`, so published archives are built from fresh rustc outputs in the release target directory.
-
-## State safety
-
-- State directories use `0700` permissions.
-- A supervised-run wakeup counts only when its workspace ID and run ID match the waiting run's socket.
-- PID identity is cleanup metadata only — never the basis for authorization.
-- The session identity pin (`RIMZ_WORKSPACE_ID`/`RIMZ_PROJECT_ROOT`) selects which store a participant writes to; it executes nothing and enters no trust hash. The pin is hash-verified against its root, and same-UID environment access sits inside the existing trust boundary — a forged pin can redirect a write only to a store the same user already owns.
-
-## Off-box error reporting
-
-Setting `[sentry] dsn` in the per-machine config (or `RIMZ_SENTRY_DSN`) routes Rimz diagnostics to a Sentry project in builds compiled with `--features sentry`. Release binaries ship without the reporting code, so a production binary makes no Sentry calls regardless of config. In opted-in builds it is off by default: with no DSN, no client is created and Rimz makes no network calls. The DSN is a per-machine setting and never the committed project config, so a clone or pull cannot redirect a contributor's telemetry to a foreign endpoint, and the DSN stays off the project trust surface.
-
-When on, Rimz sends its own `warn!`/`error!` events and the agent turn-error warning (the rate-limit, overload, and other provider conditions Rimz observes, reported at warning level). Sidebar refresh-health warnings use the local-only `rimz::sidebar::health` target and stay in the durable diagnostics log instead of Sentry. An off-box payload carries:
-
-- Rimz error text with a stacktrace, and the file paths that appear in errors.
-- The `rimz@<build>` release, the running command, and the build id.
-- The `fault` class (`agent` for an observed provider condition, `rimz` for a Rimz fault), the agent kind, the session id, and the turn-error class.
-- The operation that failed — for a failed account-usage probe, the request's host authority, never its path or query.
-- A `workspace` tag that scopes the event to a repository.
-- A curated breadcrumb trail of the steps before the event — only `info!` lines marked for the trail, so a stray field never rides along.
-
-The hostname is stripped and Sentry's default PII is off; hook payloads, prompts, and transcripts are never forwarded. Reporting is best-effort enrichment — a malformed DSN logs the fix and stays off, and a network failure never blocks a Rimz path.
-
-## Version drift
-
-When an agent version is outside the tested range:
-
-- observability hooks may remain active,
-- blocking ask hooks keep returning the agent-native neutral output, so the prompt stays in the agent's UI either way,
-- drift degrades observability fidelity only; `rimz doctor` warns.
-
-For the two unattended-run patterns (the agent-native bypass flag vs answering in the agent's own UI) and their audit tradeoffs, see [the loops guide → the permission posture for unattended runs](./loops.md#the-permission-posture-for-unattended-runs).
+An unattended run still decides permissions the agent's own way: either you keep every native prompt (each becomes a waiting row that routes to you) or you pass the agent's own bypass flag. The tradeoffs, and what an out-of-range agent version does to the prompt path, are in [the loops permission posture](./loops.md#the-permission-posture-for-unattended-runs).
