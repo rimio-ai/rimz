@@ -1,76 +1,14 @@
 # Configuration
 
-You already have dotfiles, and Rimz does not ask you to relearn them. Every setting is plain TOML in files you own, there is no config daemon or bespoke language to memorize, and nothing here is required to start: `rimz` runs with zero configuration. Come back when you want to pin a theme, save a launch profile, or route a notification, and change the one line you care about.
+Rimz runs with zero configuration: start it and you have a working room, nothing to write first. Everything you can tune from there is plain TOML in files you own. There is no config daemon holding your settings, no separate UI, and no bespoke language between you and a value: you already edit dotfiles and keep them under version control, and Rimz asks nothing new of that habit.
 
-This page is the whole model. It starts with where config lives and how the layers combine, then the safe way to change one setting from the command line, then a section per file so you can jump to the one you are editing. For the guided first pass on a new machine, read [set up your machine](./setup.md) first; this page is the reference it links into.
+Change something when you have a reason to, one line at a time: pin a theme, save a launch profile, route a notification. This page is the whole model. It opens with the settings most people touch and exactly what changing one does to your disk, then maps where configuration lives and how the layers combine, then gives a section per file so you can jump to the one you are editing. For the guided first pass on a new machine, read [set up your machine](./setup.md) first; this page is the reference it links into.
 
 > The invariants behind this model are in [DESIGN.md](../../DESIGN.md#invariants).
 
-## How configuration works
+## Common changes
 
-Config comes in two tiers, and each answers a different question.
-
-**Per-machine** config under `~/.config/rimz/` is yours: your terminal, accounts, notifications, theme, and launch shortcuts. It stays personal, uncommitted, and outside the project trust hash, so nothing you set here follows a repository to someone else's machine.
-
-**Project** config at `<repo>/.rimz/config.toml` is the shape a team shares through the repo: the agents a clone should launch, the loop tasks it should run. Because it can name commands to execute, Rimz trust-tracks it, and a fresh clone reads `untrusted` until you review the executable surface and grant it (see [Project config](#project-config)).
-
-### The files
-
-Almost everything is one directory, `~/.config/rimz/`, split into a few files by concern, so `rimz config set` always has one clear place to write and you always know which file to open by hand. The one file outside it is the project config a repo carries.
-
-| File | What it holds |
-| --- | --- |
-| `~/.config/rimz/config.toml` | room behavior: accounts, notifications, remote control, multiplexer defaults, resume, smart compaction, optional Sentry |
-| `~/.config/rimz/theme.toml` | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
-| `~/.config/rimz/agents.toml` | agent profiles, command cells, teams, worktree defaults, attention timing |
-| `~/.config/rimz/loop.toml` | durable recurring loop task definitions and scheduled command checks |
-| `~/.config/rimz/remote.toml` | named SSH room aliases (`rimz remote`) |
-| `<repo>/.rimz/config.toml` | committed workspace shape and shared loop tasks, trust-tracked |
-
-`rimz config init` writes and manages the first four; `remote.toml` is written by `rimz remote`, and the project file is yours to commit. Rimz keeps a few of its own sidecars under `~/.config/rimz/` too (trust grants, notification state); those are machine-managed, and you reach them through their commands rather than by hand ([Sidecars and privacy](#sidecars-and-privacy)).
-
-### How the layers combine
-
-Rimz reads the layers in order and the later layer wins:
-
-1. built-in defaults,
-2. project config (`<repo>/.rimz/config.toml`),
-3. per-machine config (`~/.config/rimz/{config,theme,agents,loop}.toml`),
-4. CLI flags and `RIMZ_*` environment variables.
-
-Today the per-machine layer is live, CLI and env overrides apply where each command defines them, and the project layer is read for trust. Launch names and loop task names invert this once trusted, on purpose: a trusted project `[profiles]`, `[agents.teams]`, or `[tasks]` overlays your machine config and wins a name collision, so a repository can pin the exact executable surface it hashes (see [Project config](#project-config)).
-
-### A broken file never blocks the room
-
-Per-machine settings load leniently. A missing file is the default config, unknown keys are ignored so an older binary tolerates a newer file, and a file Rimz cannot parse falls back to built-in defaults with a startup warning. The room still opens; `rimz config` and `rimz doctor` report the precise error and the fix.
-
-## Change a setting from the command line
-
-The safest way to change one value is `rimz config set`, and it is worth being precise about what it does to your disk, because it does edit a real file.
-
-```sh
-rimz config set theme "Catppuccin Mocha"
-rimz config set theme.display.max_cols 80
-rimz config set agents.worktree.base fresh
-rimz config set notifications.triggers '["waiting", "failed"]'
-```
-
-`set` takes a dotted key, routes it to the file that owns it, and edits that file in place. It parses the existing TOML with `toml_edit`, so your comments and formatting survive, rejects an unknown key rather than writing a typo, re-validates the whole resulting file, then writes it with Rimz's temp-file-plus-rename durability so a crash mid-write never leaves a half-file. The result is the same file you would have edited by hand, so to undo a change you re-run `set` with the old value or open the file and delete the line. A bare value becomes a TOML value when it parses (`80`, `false`, arrays, inline tables) and a string otherwise (`fresh`, `always`); set a whole color band as an inline table, for example `rimz config set theme.display.context_meter.red '{ percent = 90, tokens = 400000 }'`. `theme.colors.*` keys write to root `[colors.*]` in `theme.toml`, so Alacritty palettes stay paste-compatible.
-
-To read back what is set:
-
-```sh
-rimz config path                          # the resolved config.toml path
-rimz config get                           # the whole effective config as TOML
-rimz config get theme.display.max_cols    # one value
-rimz config get sidebar --json
-```
-
-`get` shows the effective config, your overrides layered over the built-in defaults, so it answers "what is Rimz actually using" rather than "what did I write".
-
-### Common settings
-
-These are the changes most people make first. Each edits the file that owns the key, in place, exactly as above.
+Most people touch a handful of settings and leave the rest on their defaults. Each command below is the whole change: `rimz config set` writes the value into the file that owns it, in place, so you never open an editor.
 
 ```sh
 rimz config set theme "Catppuccin Mocha"       # sidebar palette; `rimz list-themes` shows the choices
@@ -83,9 +21,64 @@ rimz config set sidebar.focus_key "Alt+p"      # the chord that jumps to the sid
 rimz config set timezone "America/New_York"    # transcript times, scheduling, and the "today" cutoff
 ```
 
+### What `rimz config set` does to your disk
+
+`set` edits a real file, and it is worth knowing exactly which one and how, because that is what makes it safe to run.
+
+It takes a dotted key, routes it to the file that owns the key (`theme.*` to `theme.toml`, `agents.*` to `agents.toml`, `loop.*` to `loop.toml`, everything else to `config.toml`), and edits that file in place. It parses the existing TOML with `toml_edit`, so your comments and formatting survive untouched. It rejects an unknown key rather than writing a typo, re-validates the whole resulting file, then writes it with a temp-file-plus-rename so a crash mid-write never leaves a half-written file. The result is byte-for-byte the file you would have edited by hand, which is what makes undoing a change ordinary: re-run `set` with the old value, or open the file and delete the line to fall back to the default.
+
+A bare value becomes a TOML value when it parses (`80`, `false`, an array, an inline table) and a string otherwise (`fresh`, `always`). Set a whole color band as an inline table, for example `rimz config set theme.display.context_meter.red '{ percent = 90, tokens = 400000 }'`. Keys under `theme.colors.*` write to the root `[colors.*]` table in `theme.toml`, so an Alacritty palette pasted there stays paste-compatible.
+
+### Read a value back
+
+```sh
+rimz config path                          # the resolved config.toml path
+rimz config get                           # the whole effective config as TOML
+rimz config get theme.display.max_cols    # one value
+rimz config get sidebar --json
+```
+
+`get` shows the effective config: your overrides layered over the built-in defaults. It answers "what is Rimz actually using", not "what did I write", so a key you never set still prints the default it is following.
+
+## Where your configuration lives
+
+Configuration comes from two places, and each answers a different question.
+
+Your personal settings live in one directory, `~/.config/rimz/`: your terminal, accounts, notifications, theme, and launch shortcuts. This tier is yours, uncommitted and outside the project trust hash, so nothing you set here follows a repository to someone else's machine.
+
+A repository can also carry one shared file, `<repo>/.rimz/config.toml`: the shape a team agrees on through the repo, such as the agents a clone should launch and the loop tasks it should run. Because that file can name commands to execute, Rimz trust-tracks it, and a fresh clone reads `untrusted` until you review the executable surface and grant it. The full model is [Project config](#project-config).
+
+### The files in your home directory
+
+You rarely open these by hand: `rimz config set` writes to them for you, and `rimz config init` creates them. The directory is split into a few files by concern so every command has one clear place to write and you always know which file owns a setting.
+
+| File | What it holds |
+| --- | --- |
+| `config.toml` | room behavior: accounts, notifications, remote control, multiplexer defaults, resume, smart compaction |
+| `theme.toml` | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
+| `agents.toml` | agent profiles, command cells, teams, worktree defaults, attention timing |
+| `loop.toml` | recurring loop task definitions and scheduled command checks |
+
+Two more things share the directory but are managed for you: `remote.toml` (named SSH room aliases, written by `rimz remote`) and a handful of machine-managed sidecars (trust grants, notification state), which you reach through their own commands rather than by hand ([Sidecars and privacy](#sidecars-and-privacy)).
+
+### How the layers combine
+
+Rimz reads configuration in four layers, and a later layer wins:
+
+1. built-in defaults,
+2. project config (`<repo>/.rimz/config.toml`),
+3. per-machine config (`~/.config/rimz/`),
+4. CLI flags and `RIMZ_*` environment variables.
+
+Today the per-machine layer is live, CLI and env overrides apply where each command defines them, and the project layer is read for trust. One case inverts the order on purpose: a trusted project's launch names and loop-task names (`[profiles]`, `[agents.teams]`, `[tasks]`) overlay your machine config and win a name collision, so a repository can pin the exact executable surface it hashes (see [Project config](#project-config)).
+
+### A broken file never blocks the room
+
+Per-machine settings load leniently. A missing file is the default config, unknown keys are ignored so an older binary tolerates a newer file, and a file Rimz cannot parse falls back to built-in defaults with a startup warning. The room still opens, and `rimz config` and `rimz doctor` report the precise error and the fix.
+
 ## Generate and refresh the files
 
-You do not have to write these files from scratch. Rimz ships a commented template for each one, and generating them is safe to repeat.
+You never have to write these files from scratch. Rimz ships a commented template for each one, and generating them is safe to repeat.
 
 ```sh
 rimz                       # first start writes any missing config, then opens the room
@@ -94,11 +87,11 @@ rimz config init           # write config.toml, theme.toml, agents.toml, and loo
 rimz config init --print   # print the commented templates without writing anything
 ```
 
-Most people run `rimz` inside a project once, or `rimz setup` once, then edit the few lines they care about. First start on an interactive terminal writes missing per-machine config, offers hook install, runs the live glyph probe, and asks whether to enable a pet; a non-interactive first start writes the same defaults without prompting.
+Most people run `rimz` inside a project once, or `rimz setup` once, then edit the few lines they care about. First start on an interactive terminal writes any missing per-machine config, offers hook install, runs the live glyph probe, and asks whether to enable a pet; a non-interactive first start writes the same defaults without prompting.
 
-**Rerunning is safe: your values are kept.** `rimz setup` and `rimz setup --yes` merge, so they write the files that are missing and leave the ones you already tuned alone, skipping any key an older file no longer understands with a warning. `rimz config init` refuses to touch an existing file at all and tells you to pass `--force`; `--force` is the deliberate clean reset that overwrites with fresh templates. So the routine refresh (`rimz setup`) never overwrites your work, and the destructive path (`init --force`) is the one you have to ask for by name.
+**Rerunning is safe: your values are kept.** `rimz setup` and `rimz setup --yes` merge. They write the files that are missing and leave the ones you already tuned alone, skipping any key an older file no longer understands with a warning. `rimz config init` is stricter: it refuses to touch an existing file and tells you to pass `--force`, and `--force` is the deliberate clean reset that overwrites with fresh templates. So the routine refresh (`rimz setup`) never overwrites your work, and the destructive path (`init --force`) is the one you have to ask for by name.
 
-**The generated template is the field reference.** Every persisted section and default ships as commented TOML with an inline note, so `rimz config init --print` is the authoritative, always-current list of keys and defaults. This page explains the model and the knobs that are easy to misread, and leaves the exhaustive field list to the template. A line left commented keeps following the default that future Rimz versions ship; uncommenting it makes that value this machine's override.
+**The template is the field reference.** Every persisted section and default ships as commented TOML with an inline note, so `rimz config init --print` is the authoritative, always-current list of keys and defaults. This page explains the model and the knobs that are easy to misread, and leaves the exhaustive field list to the template. A line left commented keeps following the default that future Rimz versions ship; uncommenting it makes that value this machine's override.
 
 ## config.toml: room behavior
 

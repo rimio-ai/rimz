@@ -1,28 +1,25 @@
 # Theming
 
-One command restyles the sidebar:
+The sidebar wears a theme: the color scheme and depth, the glyph vocabulary, the status-head animations, provider branding, and an optional animated pet. All of it is display preference in one per-machine file, `~/.config/rimz/theme.toml`. A theme changes what the sidebar paints, never what an agent can do, so nothing on this page can break a run.
+
+Rimz reads color schemes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/alacritty), so a bundled name or the palette you already run in your terminal is one line away:
 
 ```sh
 rimz config set theme "Catppuccin Mocha"   # any bundled scheme; rimz list-themes shows them all
 ```
 
-Theming covers the color scheme and depth, the glyph vocabulary, the status-head animations, provider branding, and an optional animated pet — everything in one per-machine file, `~/.config/rimz/theme.toml`. Every setting is a display preference: a theme changes what the sidebar paints, never what agents can do. [interface/sidebar.md](../interface/sidebar.md) says what every tone and glyph *means* on screen; this page is the knobs that restyle them.
+Every element carries its state by shape first (the [glyph legend](../interface/sidebar.md#reading-the-glyphs) is the meaning table), so color reinforces meaning rather than carrying it, and any palette stays readable, including no color at all. This page is the knobs; [interface/sidebar.md](../interface/sidebar.md) is what every tone and glyph *means* on screen.
 
-Every element carries its state by shape first ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so color reinforces meaning rather than carrying it: any palette, including no color at all, stays readable.
+## Common changes
 
-## Changing a setting
-
-Two ways in: `rimz config set` edits one dotted key, or open `~/.config/rimz/theme.toml` and edit it directly. This page explains the model and the choices that matter; the exhaustive key list, with every default and accepted value, is one command away:
+Three settings cover what most people touch. Each is a dotted key that `rimz config set` writes straight into `theme.toml`:
 
 ```sh
-rimz config set theme "Catppuccin Mocha"   # set one key
-rimz config set theme.pets.enabled true    # any dotted key works, however deep
-rimz config init --print                   # every key, its default, and accepted values
+rimz config set theme.style modern         # truecolor + Nerd Font glyphs; "default" = auto color + Unicode
+rimz config set theme.pets.enabled true    # an animated companion on the provider dashboard
 ```
 
-`rimz config set` validates before it writes, so a bad value never reaches the file: an unknown scheme is rejected with the catalog count and the custom-file hint, and a malformed color, palette, glyph, or frame is rejected with the reason. Loading stays lenient, so a stale value from an older version falls back to its default at render time rather than taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](../reference/cli/maintenance.md).
-
-Edits to `theme.toml` apply on the next refresh. The one exception is a custom scheme *file* edited in place: its palette is cached while the config that points at it is unchanged, so re-pick the scheme or restart the sidebar to see the edit.
+A [scheme](#color-scheme) restyles the whole column, the [style preset](#style-preset) is the one-line headline that pairs a color depth with a glyph set, and a [pet](#pets) adds motion to the provider dashboard. Everything else on this page tunes a detail beneath these three.
 
 ## Style preset
 
