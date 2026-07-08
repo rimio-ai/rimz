@@ -17,40 +17,29 @@ rimz
 
 `rimz` resolves the workspace, creates or reattaches the Zellij or tmux session, opens the sidebar, and drops you in. From there you work three ways, each with its own entry point:
 
-- **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), then use [`rimz message`](./cli/agents.md#message-an-agent) to interrupt now with `--steer`, park for the next boundary, or schedule the earliest delivery time.
-- **Script the fleet.** Run one supervised agent turn with [`rimz agents … -p`](./cli/agents.md#supervised-runs--p) and branch on its exit code, or put turns on a schedule with [`rimz loop`](./cli/agents.md#schedule-turns-with-loop).
-- **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms), open Zellij rooms in the browser with [`rimz web`](./cli/web.md), then attribute render-stream bytes with `rimz remote bandwidth` from inside the served room.
+- **Drive agents live.** Launch them into panes and tabs with [`rimz agents`](./cli/agents.md#agents), then use [`rimz message`](./cli/message.md) to interrupt now with `--steer`, park for the next boundary, or schedule the earliest delivery time.
+- **Script the fleet.** Run one supervised agent turn with [`rimz agents … -p`](./cli/agents.md#supervised-runs--p) and branch on its exit code, or put turns on a schedule with [`rimz loop`](./cli/loop.md).
+- **Reach a room anywhere.** Attach over SSH with [`rimz remote`](./cli/getting-started.md#remote-rooms), or open a Zellij room in the browser with [`rimz web`](./cli/web.md).
 
 ## Find a command
 
 | Group | Commands | Reference |
 | --- | --- | --- |
 | **Open and connect rooms** | `rimz`, `start`, `attach`, `remote`, `web`, `list`, `stats`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) · [Web](./cli/web.md) · [Stats](../internals/reach/welcome.md#rimz-stats) |
-| **Work with agents** | `agents`, `message`, `transcript`, `pane`, `channel`, `worktree`, `loop` | [Agent control](./cli/agents.md) · [Channels](./cli/channel.md) |
+| **Run and steer agents** | `agents`, `message`, `transcript`, `pane` | [Agents](./cli/agents.md) · [Message](./cli/message.md) · [Transcript](./cli/transcript.md) · [Pane](./cli/pane.md) |
+| **Lanes and schedules** | `channel`, `worktree`, `loop` | [Channels](./cli/channel.md) · [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
 | **Hooks and trust** | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
 | **Configure and maintain** | `config`, `coverage`, `list-pets`, `list-themes`, `workspace`, `reload`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
 One surface has its own reference outside this map: [`rimz config`](./configuration.md) edits the per-machine config; the [maintenance page](./cli/maintenance.md#configure-the-machine) covers the command mechanics.
 
-Hook install previews use `rimz hooks install --dry-run [AGENT]`, which prints the exact config diff without writing agent files.
+## One room per root
 
-## Start and attach a workspace
+Rimz chooses the room by walking outward from the directory you run it in: an explicit `--root` wins, then the enclosing git repository, then a project marker, then the directory itself as a directory workspace. That choice is the *root class*, and it is what makes the same `query-engine` repo resolve to one room whether you run `rimz` from its top or from a nested package.
 
-```sh
-rimz [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>]
-rimz start [PATH] [same flags]
-rimz attach [SESSION] [same flags]
-```
+The session pins `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, so commands run in panes that wander through subdirectories still write to the one store. `--root <path>` overrides resolution on any command; it is the escape hatch for monorepos and deliberate directory rooms.
 
-`rimz` is `rimz start .`. `rimz start [PATH]` opens the room for a path; `rimz attach [SESSION]` attaches by exact session name, or by the current directory when you omit the name.
-
-**One room per root.** Rimz chooses the room by walking outward from the path: an explicit `--root` wins, then the enclosing git repository, then a project marker, then the directory itself as a directory workspace. That choice is the *root class*, and it is what makes the same `query-engine` repo resolve to one room whether you run `rimz` from its top or a nested package. The session pins `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, so commands run in panes that wander through subdirectories still write to the one store.
-
-**Attach or print.** An interactive terminal attaches; a non-interactive caller prints the attach command instead, which is the shape scripts and shell wrappers want. `--attach`, `--no-attach`, and `--print` force the choice (`--print` is an alias for `--no-attach`).
-
-**Resume on rebirth.** When a room comes back from a reboot or a crashed multiplexer, Rimz offers to recover the agents that were running, defaulting yes; non-interactive starts recover. `--no-resume` brings the room up empty. Live agents in a healthy room are never touched by this — the flag only governs the recovery launch.
-
-Full bootstrap, remote, list, setup, and doctor examples are in [Getting started](./cli/getting-started.md).
+The commands that open, attach, and recover rooms (`rimz`, `start`, `attach`) are covered in [Getting started](./cli/getting-started.md#start-the-room).
 
 ## Conventions
 
@@ -58,11 +47,9 @@ These hold across the whole CLI, so each command page assumes them rather than r
 
 **`--help` is the flag reference.** Every command and subcommand prints its full flags and defaults with `--help`. These pages teach the model and the forms worth knowing; they leave the exhaustive switch list to `--help`, which never drifts from the binary.
 
-**Addressing agents.** `message`, `transcript`, and the `agents` management verbs all name agents the same way — `@<handle>` for who, `#<channel>` for which named lane, worktree, or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
+**Addressing agents.** `message`, `transcript`, and the `agents` management verbs all name agents the same way: `@<handle>` for who, `#<channel>` for which named lane, worktree, or in-place team, or a raw pane id. The one canonical explanation is [Addressing agents](./cli/agents.md#addressing-agents).
 
 **Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation; `--zellij` and `--tmux` are shorthands for those forms. With one installed, Rimz uses it.
-
-**Override the room with `--root`.** `--root <path>` overrides workspace resolution — the escape hatch for monorepos and deliberate directory rooms.
 
 **Scripting output is `--json`.** Read commands that take `--json` emit a stable, machine-readable document; that is the surface scripts should parse. Human tables stay compact and may change to read better. Supervised runs use their own `--output-format` instead of `--json`.
 

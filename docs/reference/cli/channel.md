@@ -29,6 +29,6 @@ Names are bare ASCII letters, numbers, `_`, or `-`. They render and address as `
 
 ## Launching into a channel
 
-`rimz agents <SPEC> --channel <NAME>` registers the named channel when missing, launches in the room root, and opens a `#NAME` tab. [`rimz message`](./agents.md#message-an-agent) accepts `--channel <NAME>` as the flag form of an inline `#NAME` address in every send mode; `--create` uses it to launch a missing kind or profile into that lane.
+`rimz agents <SPEC> --channel <NAME>` registers the named channel when missing, launches in the room root, and opens a `#NAME` tab. [`rimz message`](./message.md) accepts `--channel <NAME>` as the flag form of an inline `#NAME` address in every send mode; `--create` uses it to launch a missing kind or profile into that lane.
 
 `--channel` is distinct from `--worktree`: named channels are durable lane records, while worktrees are Git checkouts with cleanup policy. In-place team and directory lanes stay derived from live agents' stamped launch identity.

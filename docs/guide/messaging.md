@@ -129,7 +129,7 @@ rimz message @claude --file review-notes.md
 
 `rimz message` is the same command whether you type it or an agent runs it, so a running agent hands work to a teammate exactly as you do. A delivery from another agent arrives prefixed `from @sender:` and lands as a first-class line in the receiving agent's transcript, so a channel's cross-talk reads as a conversation. `--no-from` delivers verbatim without the prefix when a script wants the raw text.
 
-Read the conversation back — every prompt, answer, and inter-agent message across a channel or one agent — with `rimz transcript` ([cli/agents.md → Inspect transcripts](../reference/cli/agents.md#inspect-transcripts)).
+Read the conversation back — every prompt, answer, and inter-agent message across a channel or one agent — with `rimz transcript` ([transcript CLI](../reference/cli/transcript.md)).
 
 ## Channels
 
@@ -159,5 +159,5 @@ Named channels and worktrees share one namespace, so a name is a worktree channe
 - [The sidebar](./sidebar.md) — reading the channels and the messages they carry on screen.
 - [Scripting agents](./scripting.md) — `--wait` and message records inside pipelines and CI.
 - [Loops and hands-off operation](./loops.md) — scheduled and handler-driven messages that steer the fleet unattended.
-- [cli/agents.md § Message an agent](../reference/cli/agents.md#message-an-agent) · [cli/channel.md](../reference/cli/channel.md) — the exact flags.
+- [cli/message.md](../reference/cli/message.md) · [cli/channel.md](../reference/cli/channel.md) — the exact flags.
 - [Message internals](../internals/harness/message.md) — the delivery engine underneath.

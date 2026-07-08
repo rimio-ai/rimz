@@ -47,7 +47,7 @@ New to Rimz? Read in order: [installation](./guide/installation.md), [the quicks
 
 | Page | What it covers |
 | --- | --- |
-| [CLI](./reference/cli.md) | The command map and conventions, with a page per group: [getting started](./reference/cli/getting-started.md), [agent control](./reference/cli/agents.md), [channels](./reference/cli/channel.md), [web](./reference/cli/web.md), [hooks and trust](./reference/cli/hooks-trust.md), [maintenance](./reference/cli/maintenance.md). |
+| [CLI](./reference/cli.md) | The command map and conventions, with a page per command: [getting started](./reference/cli/getting-started.md), [agents](./reference/cli/agents.md), [message](./reference/cli/message.md), [transcript](./reference/cli/transcript.md), [pane](./reference/cli/pane.md), [loop](./reference/cli/loop.md), [channels](./reference/cli/channel.md), [worktrees](./reference/cli/worktree.md), [web](./reference/cli/web.md), [hooks and trust](./reference/cli/hooks-trust.md), [maintenance](./reference/cli/maintenance.md). |
 | [Agent support](./reference/agent-support.md) | Per-agent status, integration surface, and permission-mode mapping for Claude Code, Codex, Pi, and OpenCode. |
 | [The sidebar on screen](./interface/sidebar.md) | Every zone, glyph, and meter of the sidebar, with rendered frames. |
 

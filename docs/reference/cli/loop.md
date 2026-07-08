@@ -1,0 +1,46 @@
+# Loop CLI
+
+`rimz loop` schedules work from the room's sidebar elder while a room for the task's project is open. A task uses `--spec` to spawn one supervised transient pane, `--bind` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action.
+
+```sh
+rimz loop add morning --spec claude-ping --prompt ping --at 07:00 --days weekdays
+rimz loop add weekly-prime --spec claude-ping --prompt ping --at-reset
+rimz loop add pr-watch --spec codex --prompt "check CI on the release PR" --every 15m --mode auto --root .
+rimz loop add self-wake --bind @planner --prompt "resume the review and fix the next blocking comment" --in 30m --root .
+rimz loop add watchdog --check "cargo test" --on fail --spec codex --prompt "fix the failing test" --every 15m
+rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --bind @planner --prompt "CI is green; merge"
+rimz loop add repo-prime --project --spec codex-ping --prompt ping --at 08:00 --days daily
+rimz loop fire pr-watch
+rimz loop rename pr-watch ci-watch
+rimz loop list
+rimz loop show pr-watch
+rimz loop remove pr-watch
+```
+
+## Schedule shapes
+
+Schedules come in six shapes: calendar (`--at` plus optional `--days`), interval (`--every 15m`), raw cron (`--cron`), window-reset (`--at-reset` on a `<kind>-ping` spec), one-shot (`--once` or `--in 30m`), and poll-until (`--every`, `--check`, `--on`, `--until`, plus an agent action). Calendar, cron, `--in`, and `--until` resolution use the top-level `timezone`, falling back to the system zone when unset.
+
+A `<kind>-ping` spec is the window-primer: the run skips when the provider's window is already counting down. `--at-reset` fires that ping one minute after the provider's longest observed budget window resets, then uses the ping turn's own cache refresh as the next occurrence.
+
+## Binds and checks
+
+`--bind @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the task fires, Rimz skips delivery and removes the schedule.
+
+`--check` runs at the project root; `--on fail` wakes on non-zero exit or timeout, while `--on success` wakes on zero exit.
+
+## Machine, project, and state tasks
+
+`rimz loop add` writes to the per-machine `loop.toml` by default. Rimz-generated `--in`, `--once`, and `--until` tasks persist as state, not `loop.toml` config.
+
+`--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--bind`, `--until`, `--once`, and `--in`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; project-only `loop run` refuses until trusted, and during the untrusted window a same-named machine task keeps running.
+
+## Fire, list, show, rename
+
+`loop fire <name>` runs the task now in the foreground with the same check guard, window skip, overlap guard, and run-log record as a scheduled fire. It streams the check's live output, prints the outcome and the agent's final message for successful supervised runs, hints `--keep` when the transient pane closes, and keeps one-shot entries and bind schedules in place; `--keep` leaves the transient supervised pane open for inspection.
+
+A task that is already running records `overlapped` and skips instead of stacking another run. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
+
+`loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, and next fire. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, next fire, task, check, root, and source with the defining file path, then prints recent runs plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links.
+
+The task model and config shape are in [harness.md → Scheduled turns](../../internals/harness/harness.md#scheduled-turns-loop).

@@ -145,7 +145,7 @@ at = "07:00"
 days = "weekdays"
 ```
 
-The ping runs at the lowest effort, skips when the provider's window is already counting down, and fires only while a room for `root` is open. The same `[tasks]` table also schedules watchdogs and self-wakes — an agent turn on an interval, gated on a shell check such as `cargo test` or `gh run watch` — covered in [configuration → Loop tasks](../reference/configuration.md#loop-tasks) and [the loop CLI](../reference/cli/agents.md#schedule-turns-with-loop).
+The ping runs at the lowest effort, skips when the provider's window is already counting down, and fires only while a room for `root` is open. The same `[tasks]` table also schedules watchdogs and self-wakes — an agent turn on an interval, gated on a shell check such as `cargo test` or `gh run watch` — covered in [configuration → Loop tasks](../reference/configuration.md#loop-tasks) and [the loop CLI](../reference/cli/loop.md).
 
 ## Configure your multiplexer
 

@@ -103,7 +103,7 @@ An address resolves to zero, one, or many agents against a fresh snapshot, and a
 
 ## Talk and queue
 
-The message system — send modes, the durable message record, delivery gates and FIFO ordering, the hook-triggered delivery pipeline, scheduling, smart compaction, wait confirmation, retries, and the audit trail — lives in [message.md](./message.md). The user-facing command surface is in [cli/agents.md § Message an agent](../../reference/cli/agents.md#message-an-agent).
+The message system — send modes, the durable message record, delivery gates and FIFO ordering, the hook-triggered delivery pipeline, scheduling, smart compaction, wait confirmation, retries, and the audit trail — lives in [message.md](./message.md). The user-facing command surface is in [cli/message.md](../../reference/cli/message.md).
 
 ## Supervised runs
 
@@ -121,7 +121,7 @@ When a cron job, CI gate, PR hook, or script needs to drive one member and read 
 
 ## Scheduled turns (loop)
 
-`rimz loop` runs a turn on a clock. The room's elected sidebar elder — the producer node ([state.md → The node model](../sidebar/state.md#the-node-model)) — keeps time while a room for the task's project is open, and on its data tick fires `rimz loop run <name>` for every task that has come due. A task drives one of three actions: `spec` spawns one transient supervised pane down the [supervised-run](#supervised-runs) path, `bind` delivers a prompt to one live agent through the [message](./message.md) path, and `check` runs a shell command that either stands alone or guards one of the other two. Everything below is what the elder and the hidden `rimz loop run` do underneath; the command surface — flags, synopses, examples — is [cli/agents.md → Schedule turns with loop](../../reference/cli/agents.md#schedule-turns-with-loop).
+`rimz loop` runs a turn on a clock. The room's elected sidebar elder — the producer node ([state.md → The node model](../sidebar/state.md#the-node-model)) — keeps time while a room for the task's project is open, and on its data tick fires `rimz loop run <name>` for every task that has come due. A task drives one of three actions: `spec` spawns one transient supervised pane down the [supervised-run](#supervised-runs) path, `bind` delivers a prompt to one live agent through the [message](./message.md) path, and `check` runs a shell command that either stands alone or guards one of the other two. Everything below is what the elder and the hidden `rimz loop run` do underneath; the command surface — flags, synopses, examples — is [cli/loop.md](../../reference/cli/loop.md).
 
 A `spec` task names exactly one agent cell: a built-in kind, a profile, or an adapter-supported virtual cell such as `claude-auto`, `codex-yolo`, or `claude-ping`. Teams, multi-cell layouts, and command cells are rejected at add time, because a scheduled task owns one supervised pane.
 

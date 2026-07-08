@@ -1,6 +1,6 @@
 # The message system
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [agent.md](../agents/agent.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md) and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [agent.md](../agents/agent.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktree.md](./worktree.md); the user-facing commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
 
 `rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and Rimz types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command uses.
 
@@ -289,7 +289,7 @@ Hook and delivery paths append entries to fixed 7-day buckets at `transcript/<bu
 
 A delivery becomes a `Message` entry when the receiver's turn-start hook parses the `from @sender` prefix ([Sender prefix](#sender-prefix)); the delivery queue record stays bookkeeping, never a transcript source. A batched delivery splits on the blank-line boundaries that introduce another sender prefix, so each section becomes its own transcript entry. A peer-opened turn also records the receiver's reply, because that reply is its own `Assistant` entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh). Statusline-only detections stay card/sidebar enrichment, because that path is lock-free and does not write the transcript log.
 
-`rimz transcript` projects these entries into one timestamp-ordered chat log. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) shows every agent in the lane; a single-agent target filters to that agent's sent and received lines. Supervised-run ids resolve through their stored root agent session, exact session ids resolve across channels, and handle targets prefer live sessions in the current room, then the most recent transcript activity. The command surface, flags, and rendered appearance are [cli/agents.md → Inspect transcripts](../../reference/cli/agents.md#inspect-transcripts).
+`rimz transcript` projects these entries into one timestamp-ordered chat log. A channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) shows every agent in the lane; a single-agent target filters to that agent's sent and received lines. Supervised-run ids resolve through their stored root agent session, exact session ids resolve across channels, and handle targets prefer live sessions in the current room, then the most recent transcript activity. The command surface, flags, and rendered appearance are [cli/transcript.md](../../reference/cli/transcript.md).
 
 The transcript reader computes the current-life boundary at read time from the live cohort in scope: the earliest `registered_at` among the matching root agents. Entries before that timestamp are prior-session archive; the default view hides them when a live cohort exists, `--all` renders them under a dated archive marker, and a scope with no live cohort renders the whole log as archive. The JSONL buckets stay append-only and unmutated.
 
@@ -307,7 +307,7 @@ The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `
 
 ## Subcommands
 
-The user-facing surface — flags, synopses, examples, and the `message list` digest — is [cli/agents.md § Message an agent](../../reference/cli/agents.md#message-an-agent). What the commands do underneath:
+The user-facing surface — flags, synopses, examples, and the `message list` digest — is [cli/message.md](../../reference/cli/message.md). What the commands do underneath:
 
 - `message list` and `message show <msg_id>` merge three sources: live rows come from `messages/messages.jsonl`, terminal rows with text come from `messages/history.jsonl`, and old or unresolved terminal rows fall back to `message.*` events without text because content never enters the event log. The receiver handle comes from the record's enqueue-time `address` first, then the live snapshot, then the stored `agent_name` plus channel, then `kind:agent_id`.
 - `message edit <msg_id>` updates only `Queued` records and adds a `message.edited` timeline row.

@@ -289,7 +289,7 @@ A worktree channel leads with the fork (`⑂`) or merge (`⮌`) glyph like a wor
 
 The `external` block is the catch-all for panes outside the project — untethered scripts, CI, stray shells. It renders as a dim divider rather than a worktree header, always sorts last, and keeps an attention-only `? n` / `! n` tally so an out-of-project ask still surfaces from the tail.
 
-A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups git-backed agents by the worktree root their hooks resolve, at any depth in the room: each active checkout keeps the full `⑂` header with its own git story, while the panes the room root itself holds sit under a **name-only header** — the directory's basename in bold, no fork glyph, no git cluster, because a plain directory has neither a fork nor a trunk to measure against. It is still a jump target and still wears the selection lane.
+A [directory room](../reference/cli.md#one-room-per-root) groups git-backed agents by the worktree root their hooks resolve, at any depth in the room: each active checkout keeps the full `⑂` header with its own git story, while the panes the room root itself holds sit under a **name-only header** — the directory's basename in bold, no fork glyph, no git cluster, because a plain directory has neither a fork nor a trunk to measure against. It is still a jump target and still wears the selection lane.
 
 ```
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3            ← a git-backed row: full pod header, per-checkout stats

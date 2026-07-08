@@ -14,7 +14,7 @@ rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the Rimz room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and the serving machine's cached Zellij login token; a missing cache mints one token, stores it as plaintext mode 0600 at `$XDG_STATE_HOME/rimz/web-login-token.json`, and prints it.
+`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the Rimz room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and the serving machine's cached Zellij login token; a missing cache mints one token, stores it as plaintext mode 0600 at `$XDG_STATE_HOME/rimz/web-login-token.json`, and prints it. Login tokens stay out of URLs.
 
 | Flag | Effect |
 | --- | --- |
@@ -27,7 +27,7 @@ rimz web token revoke-all
 
 `url` prints the route without birthing a room or starting the server. It requires an existing Rimz workspace record, so a script never receives a URL that would create a bare Zellij session without the Rimz sidebar.
 
-`status`, `start`, `stop`, and most `token` commands delegate to Zellij's web CLI. Hidden `token ensure` prints the cached token value on stdout, minting and caching one when absent. Successful `token revoke` and `token revoke-all` clear the plaintext cache, so the next `open` or `token ensure` mints fresh. Login tokens stay out of URLs.
+`status`, `start`, `stop`, and most `token` commands delegate to Zellij's web CLI. Hidden `token ensure` prints the cached token value on stdout, minting and caching one when absent. Successful `token revoke` and `token revoke-all` clear the plaintext cache, so the next `open` or `token ensure` mints fresh.
 
 Configure reverse-proxy URLs under per-machine config:
 
