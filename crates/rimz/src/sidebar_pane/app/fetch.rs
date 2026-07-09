@@ -289,6 +289,17 @@ fn run_fetch_cycle(
         });
         match produced {
             Ok(mut snapshot) => {
+                if is_producer {
+                    let roster = crate::sidebar::produce::live_roster_from_snapshot(&snapshot);
+                    if let Err(err) = crate::store::live_roster::publish(&state.live_roster, roster)
+                    {
+                        tracing::debug!(
+                            path = %state.live_roster.display(),
+                            error = %err,
+                            "live roster publish failed",
+                        );
+                    }
+                }
                 let deliveries = if is_producer {
                     evaluate_notifications(
                         runtime,

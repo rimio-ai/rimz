@@ -31,12 +31,14 @@ use crate::cli::{
 use attach_exec::{
     inside_selected_mux, report_already_inside, run_attach_action, should_report_already_inside,
 };
-use coroner::{inspect_previous_incarnation, report_previous_session_death};
+use coroner::{BirthRecovery, inspect_previous_incarnation, report_previous_session_death};
 use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 pub(crate) use hook_install::{
     detected_installable_adapters, ensure_detected_agent_hooks, render_dry_run,
 };
-use resume::{materialize_room_resume, plan_room_resume, report_resume};
+use resume::{
+    AgentRecovery, materialize_room_resume, plan_room_resume, report_resume,
+};
 pub(crate) use room_recovery::gate_room_before_attach;
 use session_record::{retire_renamed_session, session_probe_retry_timeout, session_probe_timeout};
 use start_notice::report_start_notices;
@@ -912,8 +914,7 @@ pub(crate) fn register_focus_key(
 
 fn resume_plan_for_birth(
     was_live: bool,
-    recover_agents: bool,
-    death: Option<&rimz::store::event::LastDeathMarker>,
+    recovery: &BirthRecovery,
     room: &RoomTarget<'_>,
     machine_config: &rimz::config::MachineConfig,
     no_resume: bool,
@@ -945,13 +946,16 @@ fn resume_plan_for_birth(
         room.workspace_id,
         &machine_config.resume,
         no_resume,
-        recover_agents,
+        AgentRecovery {
+            enabled: recovery.recover_agents,
+            roster: &recovery.roster,
+        },
         teams,
         profiles,
         &machine_config.agents.commands,
     );
     let plan = if plan.pane_count() > 0 {
-        if let Some(death) = death {
+        if let Some(death) = recovery.death.as_ref() {
             report_previous_session_death(death);
         }
         prompt_recover_or_fresh(plan, prompt_mode)?
@@ -963,9 +967,14 @@ fn resume_plan_for_birth(
             let paths = StatePaths::for_workspace(room.workspace_id.clone());
             let runtime = RuntimePaths::for_workspace(room.workspace_id.clone());
             match (paths, runtime) {
-                (Ok(paths), Ok(runtime)) => {
-                    materialize_room_resume(plan, &paths, &runtime, room.session_name, teams)
-                }
+                (Ok(paths), Ok(runtime)) => materialize_room_resume(
+                    plan,
+                    &paths,
+                    &runtime,
+                    room.session_name,
+                    teams,
+                    &recovery.roster,
+                ),
                 (Err(err), _) | (_, Err(err)) => {
                     tracing::warn!(
                         workspace = %room.workspace_id,
@@ -978,7 +987,7 @@ fn resume_plan_for_birth(
         }
         None => rimz::harness::resume::ResumePlan::default(),
     };
-    if let Some(death) = death {
+    if let Some(death) = recovery.death.as_ref() {
         let recovered = plan.tabs.iter().map(rimz::mux::ResumeTab::pane_count).sum();
         coroner::record_recovery_outcome(room.workspace_id, death, recovered);
     }
@@ -1068,8 +1077,7 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     // exactly today's bare working room.
     let resume_plan = resume_plan_for_birth(
         birth.was_live,
-        recovery.recover_agents,
-        recovery.death.as_ref(),
+        &recovery,
         room,
         machine_config,
         birth.no_resume,

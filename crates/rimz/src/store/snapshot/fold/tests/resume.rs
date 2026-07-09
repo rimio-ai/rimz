@@ -249,7 +249,6 @@ fn carryover_resume_outcomes_merge_after_rotation_reseed() {
                 enqueued_at: recent(60),
                 updated_at: recent(30),
             }],
-            lost: Vec::new(),
         },
     )
     .unwrap();

@@ -69,6 +69,7 @@ pub struct StatePaths {
     pub workspace_record: PathBuf,
     pub channels_record: PathBuf,
     pub boot_marker: PathBuf,
+    pub live_roster: PathBuf,
     pub last_death_marker: PathBuf,
     pub crashes_dir: PathBuf,
 }
@@ -107,6 +108,7 @@ impl StatePaths {
             workspace_record: root.join("workspace.json"),
             channels_record: root.join("channels.json"),
             boot_marker: root.join("boot.json"),
+            live_roster: root.join("live-roster.json"),
             last_death_marker: root.join("last-death.json"),
             crashes_dir: root.join("crashes"),
             locks_dir,
@@ -646,6 +648,7 @@ mod tests {
             paths.workspace_record.file_name().unwrap(),
             "workspace.json"
         );
+        assert_eq!(paths.live_roster.file_name().unwrap(), "live-roster.json");
         assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
     }
 

@@ -89,6 +89,44 @@ fn carryover_session_end_tombstones_older_agent_state() {
 }
 
 #[test]
+fn legacy_lost_markers_replay_as_state_noops() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let registered = lifecycle_at(
+        &workspace,
+        "claude",
+        "SessionStart",
+        "agent-1",
+        lifecycle::LifecycleSignal::Registered,
+    );
+    let lost = lifecycle_at(
+        &workspace,
+        "claude",
+        "rimz.agent-lost",
+        "agent-1",
+        lifecycle::LifecycleSignal::Lost,
+    );
+
+    let merged = agent_rollup_with_carryover(&[registered, lost], Vec::new());
+
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].agent_id.as_str(), "agent-1");
+    assert!(
+        agent_rollup_with_carryover(
+            &[lifecycle_at(
+                &workspace,
+                "claude",
+                "rimz.agent-lost",
+                "unknown",
+                lifecycle::LifecycleSignal::Lost,
+            )],
+            Vec::new(),
+        )
+        .is_empty(),
+        "lost-only legacy markers stay parseable without creating agent rows"
+    );
+}
+
+#[test]
 fn legacy_carryover_agents_get_card_identity() {
     let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
     carried.name = None;
@@ -150,7 +188,6 @@ fn carryover_round_trips_on_disk() {
         }],
         agent_identity: AgentIdentityState::default(),
         resume_outcomes: Vec::new(),
-        lost: Vec::new(),
     };
     write_carryover(&path, &carryover).unwrap();
     let loaded = read_carryover(&path).unwrap();

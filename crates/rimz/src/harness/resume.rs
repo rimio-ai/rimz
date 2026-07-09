@@ -3,10 +3,10 @@
 //!
 //! When the CLI admits agent recovery for a reborn room — a machine reboot or
 //! mux crash — the agents' processes are gone, but the store remembers them.
-//! This module reads that memory (the audit rollup, which keeps the
-//! dead-process agents the runtime projection would expel) and plans one
-//! `#channel` tab per worktree, with one resume pane per prior root agent, so
-//! the next birth can recover where the user left off instead of empty.
+//! The caller scopes the audit rollup to the producer's persisted live roster,
+//! then this module plans one `#channel` tab per worktree, with one resume pane
+//! per prior root agent, so the next birth can recover where the user left off
+//! instead of empty.
 //!
 //! Pure over its inputs: the caller supplies the rollup and a worktree-exists
 //! predicate, and the flat rebirth planner also supplies the set of cleanly
@@ -127,13 +127,14 @@ impl ResumePlan {
 /// `rimz` executable each pane's wrapper argv names (production passes
 /// `std::env::current_exe()`).
 ///
-/// A candidate qualifies when it is a root agent (subagents ride their parent),
-/// was bound to a pane in the incarnation that died, still carries a session id
-/// and a worktree, and was not cleanly ended. The rollup is workspace-scoped and
-/// a `session.rebirth` boundary clears every pane stamp recorded before it, so a
-/// surviving (non-`None`) pane stamp means the agent was live in the incarnation
-/// the rebirth replaces — exactly the set to bring back. One pane hosts one
-/// agent: a relaunch that re-used a pane id collapses to its newest stamp —
+/// A candidate qualifies when it is in the caller-supplied live-roster scope, is
+/// a root agent (subagents ride their parent), was bound to a pane in the
+/// incarnation that died, still carries a session id and a worktree, and was not
+/// cleanly ended. A `session.rebirth` boundary clears every pane stamp recorded
+/// before it, so a surviving (non-`None`) pane stamp identifies the incarnation
+/// being replaced, while the live roster identifies which stamped agents were
+/// alive when that incarnation died. One pane hosts one agent: a relaunch that
+/// re-used a pane id collapses to its newest stamp —
 /// the same rule the live sidebar binds by (`stamped_agent_for_pane`, in
 /// `store::snapshot::panes`) — so resume never doubles a pane, while two
 /// concurrent agents in one worktree (distinct panes) share one `#channel` tab.

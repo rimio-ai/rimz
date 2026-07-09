@@ -1,10 +1,13 @@
 //! Resume planning and reboot detection for room rebirth.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use jiff::Timestamp;
+use rimz::agents::AgentState;
+use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::mux::{MuxBackend, SessionHealth};
 use rimz::{RuntimePaths, StatePaths, Store};
 
@@ -158,7 +161,7 @@ pub(super) fn plan_room_resume(
     workspace_id: &rimz::WorkspaceId,
     resume_cfg: &rimz::config::ResumeConfig,
     disabled: bool,
-    recover_agents: bool,
+    recovery: AgentRecovery<'_>,
     teams: &rimz::config::TeamsConfig,
     profiles: &rimz::config::ProfilesConfig,
     commands: &rimz::config::CommandsConfig,
@@ -170,19 +173,19 @@ pub(super) fn plan_room_resume(
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
         plan_room_resume_at(
-            &paths,
-            &runtime,
-            resume_cfg,
-            recover_agents,
-            teams,
-            profiles,
-            commands,
+            &paths, &runtime, resume_cfg, recovery, teams, profiles, commands,
         )
     })();
     planned.unwrap_or_else(|err| {
         tracing::warn!(workspace = %workspace_id, error = %err, "resume planning skipped");
         RoomResumePlan::default()
     })
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct AgentRecovery<'a> {
+    pub(super) enabled: bool,
+    pub(super) roster: &'a BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -214,14 +217,22 @@ fn plan_room_resume_at(
     paths: &StatePaths,
     runtime: &RuntimePaths,
     resume_cfg: &rimz::config::ResumeConfig,
-    recover_agents: bool,
+    recovery: AgentRecovery<'_>,
     teams: &rimz::config::TeamsConfig,
     profiles: &rimz::config::ProfilesConfig,
     commands: &rimz::config::CommandsConfig,
 ) -> Result<RoomResumePlan> {
     let mut plan = RoomResumePlan::default();
-    if recover_agents {
-        match plan_agent_resume_at(paths, runtime, resume_cfg, teams, profiles, commands) {
+    if recovery.enabled {
+        match plan_agent_resume_at(
+            paths,
+            runtime,
+            resume_cfg,
+            recovery.roster,
+            teams,
+            profiles,
+            commands,
+        ) {
             Ok(agent_plan) => plan = agent_plan,
             Err(err) => {
                 tracing::warn!(
@@ -239,19 +250,21 @@ fn plan_agent_resume_at(
     paths: &StatePaths,
     runtime: &RuntimePaths,
     resume_cfg: &rimz::config::ResumeConfig,
+    roster: &BTreeSet<(AgentKind, AgentSessionId)>,
     teams: &rimz::config::TeamsConfig,
     profiles: &rimz::config::ProfilesConfig,
     commands: &rimz::config::CommandsConfig,
 ) -> Result<RoomResumePlan> {
     let store = Store::open(paths.clone(), runtime.clone())?;
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let agents = scope_to_roster(projection.agents, roster);
     let rimz_bin = rimz::proc::rimz_exe();
     let workspace_record = rimz::store::workspace_record::read(&paths.workspace_record).ok();
     let project_root = workspace_record
         .as_ref()
         .map(|record| record.project_root.as_path());
     let team = plan_team_restore_tabs(
-        &projection.agents,
+        &agents,
         teams,
         profiles,
         commands,
@@ -259,8 +272,7 @@ fn plan_agent_resume_at(
         |path| path.is_dir(),
         resume_session_present,
     );
-    let flat_agents = projection
-        .agents
+    let flat_agents = agents
         .iter()
         .filter(|agent| {
             !team
@@ -288,6 +300,7 @@ pub(super) fn materialize_room_resume(
     runtime: &RuntimePaths,
     session_name: &str,
     teams: &rimz::config::TeamsConfig,
+    roster: &BTreeSet<(AgentKind, AgentSessionId)>,
 ) -> rimz::harness::resume::ResumePlan {
     let mut final_plan = rimz::harness::resume::ResumePlan {
         tabs: Vec::new(),
@@ -312,7 +325,7 @@ pub(super) fn materialize_room_resume(
             store
                 .runtime_projection(rimz::RuntimeScope::Audit)
                 .ok()
-                .map(|projection| projection.agents)
+                .map(|projection| scope_to_roster(projection.agents, roster))
         })
         .unwrap_or_default();
     let mut tabs = Vec::new();
@@ -438,14 +451,41 @@ pub(crate) fn record_rebirth_boundary(workspace_id: &rimz::WorkspaceId, session_
     let appended = (|| -> Result<()> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
-        let store = Store::open(paths, runtime)?;
-        let event = rimz::EventEnvelope::session_rebirth(workspace_id.clone(), session_name);
-        store.append_event(&event)?;
-        Ok(())
+        let live_roster = paths.live_roster.clone();
+        let result = (|| -> Result<()> {
+            let store = Store::open(paths, runtime)?;
+            let event = rimz::EventEnvelope::session_rebirth(workspace_id.clone(), session_name);
+            store.append_event(&event)?;
+            Ok(())
+        })();
+        clear_live_roster(&live_roster);
+        result
     })();
     if let Err(err) = appended {
         tracing::warn!(workspace = %workspace_id, error = %err, "rebirth boundary skipped");
     }
+}
+
+fn clear_live_roster(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => tracing::debug!(
+            path = %path.display(),
+            error = %err,
+            "live roster clear skipped",
+        ),
+    }
+}
+
+fn scope_to_roster(
+    agents: Vec<AgentState>,
+    roster: &BTreeSet<(AgentKind, AgentSessionId)>,
+) -> Vec<AgentState> {
+    agents
+        .into_iter()
+        .filter(|agent| roster.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+        .collect()
 }
 
 /// Tell the user which prior agents the reborn room brought back, and which it
@@ -604,12 +644,36 @@ processes 2915
                 &observation,
             ))
             .expect("append registered agent");
+        let mut ghost =
+            AgentLifecycleObservation::new(Some("sess-ghost".into()), LifecycleSignal::Registered);
+        ghost.agent_name = Some("ghost".to_owned());
+        ghost.worktree_path = Some(worktree.display().to_string());
+        ghost.worktree_branch = Some("feature".to_owned());
+        ghost.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%98"));
+        store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                paths.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &ghost,
+            ))
+            .expect("append ghost agent");
+        let roster = [(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-claude"),
+        )]
+        .into_iter()
+        .collect();
 
         let blocked = plan_room_resume_at(
             &paths,
             &runtime,
             &rimz::config::ResumeConfig::default(),
-            false,
+            AgentRecovery {
+                enabled: false,
+                roster: &roster,
+            },
             &rimz::config::TeamsConfig::default(),
             &rimz::config::ProfilesConfig::default(),
             &rimz::config::CommandsConfig::default(),
@@ -621,7 +685,10 @@ processes 2915
             &paths,
             &runtime,
             &rimz::config::ResumeConfig::default(),
-            true,
+            AgentRecovery {
+                enabled: true,
+                roster: &roster,
+            },
             &rimz::config::TeamsConfig::default(),
             &rimz::config::ProfilesConfig::default(),
             &rimz::config::CommandsConfig::default(),

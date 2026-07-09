@@ -138,9 +138,8 @@ pub enum LifecycleSignal {
     /// the reducer's tombstone path, so it is never routed through [`step`];
     /// the variant exists only so an adapter can name the event.
     Ended,
-    /// The agent's pane disappeared because its mux session died, not because
-    /// the user closed the agent. Rimz synthesizes this marker from the exec
-    /// wrapper (`rimz.agent-lost`) so crash recovery has positive evidence.
+    /// The agent's pane disappeared because its mux session died. Retained so
+    /// old `rimz.agent-lost` records remain parseable during log replay.
     Lost,
 }
 
@@ -275,8 +274,9 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     let was_compacting = prev.is_some_and(|p| p.compacting);
     let mut kind = TransitionKind::Normal;
 
-    // `Ended` and `Lost` are handled by rollup side channels. If either reaches
-    // the state machine, keep prior state intact and flag the no-op.
+    // `Ended` is handled by the tombstone reducer and `Lost` is kept for
+    // backward-compatible log replay. If either reaches the state machine, keep
+    // prior state intact and flag the no-op.
     if matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost) {
         return Transition {
             next: LifecycleState {
@@ -287,7 +287,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
             kind: TransitionKind::Ignored {
                 reason: match signal {
                     LifecycleSignal::Ended => "session ended (handled as removal)",
-                    LifecycleSignal::Lost => "session lost (handled as recovery marker)",
+                    LifecycleSignal::Lost => "session lost (legacy replay marker)",
                     _ => unreachable!("guarded above"),
                 },
             },

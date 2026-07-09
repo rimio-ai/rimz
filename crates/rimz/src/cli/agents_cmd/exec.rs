@@ -131,8 +131,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let deliberate = close_is_deliberate(abrupt, session_accepts_close);
     if deliberate && should_record_end_trace(&args) {
         record_own_agent_end_trace(&workspace, &args);
-    } else if !deliberate && should_record_end_trace(&args) {
-        record_own_agent_lost_trace(&workspace, &args);
     }
     if should_drop_to_shell(&args, abrupt) {
         // The trace above tombstones the agent; gc reclaims any worktree later.
@@ -210,7 +208,7 @@ fn drop_to_shell_after_agent_exit(_args: &ExecArgs, _status: &ExitStatus, _start
 
 /// Non-abrupt exits are deliberate. Abrupt exits are deliberate only while the
 /// mux session still accepts live pane closes; if the mux is gone or wedged,
-/// keep the agent recoverable.
+/// skip cleanup so the prior live-roster snapshot can recover the agent.
 pub(super) fn close_is_deliberate(abrupt: bool, session_accepts_close: bool) -> bool {
     !abrupt || session_accepts_close
 }
@@ -533,24 +531,6 @@ fn record_own_agent_end_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecAr
         Err(err) => tracing::debug!(
             error = %err,
             "could not resolve agent exit tombstone",
-        ),
-    }
-}
-
-fn record_own_agent_lost_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecArgs) {
-    match resolve_own_agent_end_trace(workspace, args) {
-        Ok(Some((kind, agent_id))) => append_agent_lifecycle_trace(
-            workspace,
-            kind,
-            agent_id,
-            rimz::agents::LifecycleSignal::Lost,
-            "rimz.agent-lost",
-            "agent lost marker",
-        ),
-        Ok(None) => tracing::debug!("agent loss produced no pane binding to mark"),
-        Err(err) => tracing::debug!(
-            error = %err,
-            "could not resolve agent loss marker",
         ),
     }
 }

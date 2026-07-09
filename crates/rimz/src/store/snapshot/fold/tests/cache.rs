@@ -34,7 +34,6 @@ fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
             tombstones: Vec::new(),
-            lost: Vec::new(),
         },
     )
     .unwrap();
@@ -82,7 +81,6 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
         tombstones: Vec::new(),
-        lost: Vec::new(),
     };
     let assert_cold = |label: &str| {
         let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
@@ -136,7 +134,6 @@ fn rollup_parse_cache_hits_on_identity_and_misses_on_republish() {
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
         tombstones: Vec::new(),
-        lost: Vec::new(),
     };
     write_rollup_cache(&path, &cache_with("aaaa")).unwrap();
     let first = read_rollup_cache(&path).unwrap();
@@ -209,7 +206,6 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
             tombstones: Vec::new(),
-            lost: Vec::new(),
         },
     )
     .unwrap();
@@ -239,7 +235,6 @@ fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
             agents: vec![carried],
             agent_identity: AgentIdentityState::default(),
             resume_outcomes: Vec::new(),
-            lost: Vec::new(),
         },
     )
     .unwrap();

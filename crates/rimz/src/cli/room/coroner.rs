@@ -20,6 +20,7 @@ const CRASH_ARCHIVE_RETENTION: usize = 5;
 pub(super) struct BirthRecovery {
     pub(super) recover_agents: bool,
     pub(super) death: Option<LastDeathMarker>,
+    pub(super) roster: BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 struct AuditState {
@@ -35,11 +36,8 @@ pub(super) fn inspect_previous_incarnation(
 ) -> BirthRecovery {
     let reboot = reboot_since_last_birth(workspace_id);
     let audit = read_audit_state(workspace_id);
-    let lost_now = audit
-        .as_ref()
-        .map(|audit| current_lost_agents(&audit.projection))
-        .unwrap_or_default();
-    let recover_agents = reboot || !lost_now.is_empty();
+    let recovery_roster = audit.as_ref().map(recovery_roster).unwrap_or_default();
+    let recover_agents = reboot || !recovery_roster.is_empty();
     if !recover_agents {
         return BirthRecovery::default();
     }
@@ -48,6 +46,7 @@ pub(super) fn inspect_previous_incarnation(
         return BirthRecovery {
             recover_agents,
             death: None,
+            roster: recovery_roster,
         };
     };
     let cause = if reboot {
@@ -55,7 +54,7 @@ pub(super) fn inspect_previous_incarnation(
     } else {
         SessionDeathCause::Crash
     };
-    let lost_agents = lost_agent_summaries(&audit.projection.agents, &lost_now);
+    let lost_agents = lost_agent_summaries(&audit.projection.agents, &recovery_roster);
     let marker = LastDeathMarker {
         cause,
         lost_agents: lost_agents.clone(),
@@ -65,7 +64,7 @@ pub(super) fn inspect_previous_incarnation(
     append_session_death(&audit.store, workspace_id, session_name, &marker);
     write_last_death_marker(&audit.paths, &marker);
     if cause == SessionDeathCause::Crash {
-        let roster = lost_agent_roster(&audit.projection.agents, &lost_now);
+        let roster = lost_agent_roster(&audit.projection.agents, &recovery_roster);
         if let Err(err) = archive_crash(backend, &audit.paths, session_name, &roster, marker.at) {
             tracing::debug!(
                 workspace = %workspace_id,
@@ -78,6 +77,7 @@ pub(super) fn inspect_previous_incarnation(
     BirthRecovery {
         recover_agents,
         death: Some(marker),
+        roster: recovery_roster,
     }
 }
 
@@ -122,14 +122,17 @@ fn read_audit_state(workspace_id: &WorkspaceId) -> Option<AuditState> {
     })
 }
 
-fn current_lost_agents(
-    projection: &rimz::RuntimeProjection,
-) -> BTreeSet<(AgentKind, AgentSessionId)> {
-    projection
-        .lost
-        .difference(&projection.ended)
-        .cloned()
-        .collect()
+fn recovery_roster(audit: &AuditState) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    let Some(roster) = rimz::store::live_roster::read(&audit.paths.live_roster) else {
+        return BTreeSet::new();
+    };
+    let audited = audit
+        .projection
+        .agents
+        .iter()
+        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        .collect::<BTreeSet<_>>();
+    roster.agents.intersection(&audited).cloned().collect()
 }
 
 fn lost_agent_summaries(
@@ -270,16 +273,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_lost_agents_excludes_clean_ends() {
-        let mut projection = rimz::RuntimeProjection::default();
+    fn recovery_roster_intersects_persisted_live_agents_with_rollup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).expect("paths");
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime paths");
+        let store = Store::open(paths.clone(), runtime).expect("store");
         let claude = AgentKind::new_unchecked("claude");
-        projection.lost.insert((claude.clone(), "lost".into()));
-        projection.lost.insert((claude.clone(), "ended".into()));
-        projection.ended.insert((claude.clone(), "ended".into()));
+        let mut ghost = rimz::testkit::agent_state("claude", "ghost", Timestamp::UNIX_EPOCH);
+        ghost.name = Some("ghost".to_owned());
+        let mut live = rimz::testkit::agent_state("claude", "live", Timestamp::UNIX_EPOCH);
+        live.name = Some("live".to_owned());
+        let projection = rimz::RuntimeProjection {
+            ended: BTreeSet::new(),
+            agents: vec![ghost, live],
+        };
+        rimz::store::live_roster::publish(
+            &paths.live_roster,
+            [
+                (claude.clone(), "live".into()),
+                (claude.clone(), "missing".into()),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .expect("publish roster");
+        let audit = AuditState {
+            paths,
+            store,
+            projection,
+        };
 
-        let lost = current_lost_agents(&projection);
+        let roster = recovery_roster(&audit);
 
-        assert_eq!(lost, [(claude, "lost".into())].into_iter().collect());
+        assert_eq!(roster, [(claude, "live".into())].into_iter().collect());
     }
 
     #[test]

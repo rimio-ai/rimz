@@ -37,6 +37,7 @@ pub mod atomic;
 pub mod event;
 pub mod event_log;
 pub mod gc;
+pub mod live_roster;
 pub mod lock;
 pub mod message_store;
 pub(crate) mod parse_cache;
@@ -238,10 +239,7 @@ impl Store {
     ) -> Result<runtime::RuntimeProjection> {
         let (cache, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
         let ended = cache.tombstones.into_iter().collect();
-        let lost = cache.lost.into_iter().collect();
-        Ok(runtime::RuntimeProjection::from_parts(
-            ended, lost, agents, scope,
-        ))
+        Ok(runtime::RuntimeProjection::from_parts(ended, agents, scope))
     }
 
     /// Build a fresh snapshot in memory (no disk write). Lock-free and

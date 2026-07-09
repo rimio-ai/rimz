@@ -71,7 +71,6 @@ fn assemble_snapshot(
     // never resurrecting a dead-pid agent.
     let projection = RuntimeProjection::from_parts(
         std::collections::BTreeSet::new(),
-        std::collections::BTreeSet::new(),
         agents,
         RuntimeScope::Runtime,
     );

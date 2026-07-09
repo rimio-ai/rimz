@@ -26,26 +26,19 @@ pub enum AgentLiveness {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RuntimeProjection {
     pub ended: BTreeSet<(AgentKind, AgentSessionId)>,
-    pub lost: BTreeSet<(AgentKind, AgentSessionId)>,
     pub agents: Vec<AgentState>,
 }
 
 impl RuntimeProjection {
     pub fn from_parts(
         ended: BTreeSet<(AgentKind, AgentSessionId)>,
-        lost: BTreeSet<(AgentKind, AgentSessionId)>,
         agents: Vec<AgentState>,
         scope: RuntimeScope,
     ) -> Self {
         match scope {
-            RuntimeScope::Audit => Self {
-                ended,
-                lost,
-                agents,
-            },
+            RuntimeScope::Audit => Self { ended, agents },
             RuntimeScope::Runtime => Self {
                 ended,
-                lost,
                 agents: agents
                     .into_iter()
                     .filter(agent_is_runtime_visible)
@@ -217,12 +210,8 @@ mod tests {
             agents
         };
 
-        let projection = RuntimeProjection::from_parts(
-            BTreeSet::new(),
-            BTreeSet::new(),
-            agents,
-            RuntimeScope::Runtime,
-        );
+        let projection =
+            RuntimeProjection::from_parts(BTreeSet::new(), agents, RuntimeScope::Runtime);
 
         assert_eq!(
             projection.agents.len(),

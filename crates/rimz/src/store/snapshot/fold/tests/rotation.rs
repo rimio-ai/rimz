@@ -35,7 +35,6 @@ fn cursor_reloads_across_a_rotation() {
             agents: cache.raw_agents.clone(),
             agent_identity: cache.agent_identity.clone(),
             resume_outcomes: Vec::new(),
-            lost: Vec::new(),
         },
     )
     .unwrap();
@@ -137,7 +136,6 @@ fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
             agents: cache.raw_agents.clone(),
             agent_identity: cache.agent_identity.clone(),
             resume_outcomes: Vec::new(),
-            lost: Vec::new(),
         },
     )
     .unwrap();

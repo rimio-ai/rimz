@@ -15,6 +15,7 @@ workspace.json                                  project root, root class, sessio
 events.log.jsonl                                the framed event log — crash-recoverable truth
 events.log.archive/events.<uuidv7>.jsonl        rotated logs, chronologically sortable
 agents.carryover.json                           agent rollup carried across rotation
+live-roster.json                                producer-written live agent roster for rebirth recovery
 snapshots/latest.json                           published view-model checkpoint (cache)
 snapshots/rollup.json                           resumable agent-rollup fold base (cache)
 messages/messages.jsonl                         the live message queue ([messaging.md](./harness/messaging.md))
@@ -43,7 +44,7 @@ Every disk write belongs to one of four classes. The classification rule is one 
 | --- | --- | --- | --- |
 | Event log | `events.log.jsonl` | one CRC-framed `write()` per record; the off-lock tail issues a group `fdatasync` (~1/s), and rotation syncs before the rename | intact through the last group sync. The trailing window can be lost; the frame CRC turns any torn suffix into deterministic corruption that repair truncates |
 | Audit appends | `messages/history.jsonl`, `transcript/*.jsonl` | `O_APPEND` under the workspace lock, no per-record fsync | trailing records can be lost; the cost is history completeness, never queue correctness |
-| Cache | `snapshots/*.json`, heartbeats, sidecars | temp file + atomic rename, no fsync | rebuilt from the log on the next read |
+| Cache | `snapshots/*.json`, `live-roster.json`, heartbeats, sidecars | temp file + atomic rename, no fsync | rebuilt or refreshed from live producers on the next read |
 | Durable records | `messages/messages.jsonl`, `runs/<run_id>.json`, `workspace.json`, `agents.carryover.json`, trust grants, notification handlers, hook installs | temp file, fsync, rename, parent-dir sync | survives |
 
 Crash recovery rests on the framing and the flock. Each record is framed `<len> <crc32> <json>`, the CRC over the payload, and pre-CRC frames still decode ([`event_log/frame.rs`](../../crates/rimz/src/store/event_log/frame.rs)). The workspace flock makes the log single-writer-at-a-time, so only the *trailing* frame can be in flight at a crash: a torn suffix is truncated and logged, while a bad frame *behind* a good one is real corruption that fails the read loudly rather than silently dropping the events behind it ([`event_log/recovery.rs`](../../crates/rimz/src/store/event_log/recovery.rs)). Lock-free `O_APPEND` would let writeback reorder and tear a *middle* frame; [performance.md](./performance.md#bottlenecks-and-deferred-work) records why that trade is rejected.
@@ -76,9 +77,9 @@ History and runtime are separate views over the one durable store ([`runtime.rs`
 
 ## Session death records
 
-`session.death` records the previous room incarnation's death before a genuine birth replaces it. The event carries `cause` (`reboot` or `crash`) and `lost_agents`; reboot wins when the boot marker changed, while same-boot crash recovery requires positive `agent-lost` markers from the exec wrappers. The fold keeps the `lost` set only until the next `session.rebirth`, so a later incarnation never sees stale crash evidence.
+`session.death` records the previous room incarnation's death before a genuine birth replaces it. The event carries `cause` (`reboot` or `crash`) and `lost_agents`; reboot wins when the boot marker changed, while same-boot crash recovery requires the producer's persisted `live-roster.json` to contain recoverable agents. The roster is the sidebar's last live root-agent set, written through cache-class temp-file-plus-rename and intersected with the audit rollup at birth, so cleanly ended agents and older ghosts stay out of recovery.
 
-The coroner also writes `last-death.json` beside the workspace store for cheap `rimz list --all` display. The reborn room writes back `recovered` after the recovery plan is finalized, so the marker records how many lost agents were seeded again. Crash births archive mux forensics under `crashes/<utc-ts>/mux-cache/` and write `roster.json` with the lost agents' rollup rows; retention keeps the newest five archives. The archive is best-effort and never blocks launch. `rimz doctor` surfaces the last incident with cause, time, lost agents, recovered count, and the crash archive path when one exists.
+The coroner also writes `last-death.json` beside the workspace store for cheap `rimz list --all` display. The reborn room writes back `recovered` after the recovery plan is finalized, so the marker records how many lost agents were seeded again. Crash births archive mux forensics under `crashes/<utc-ts>/mux-cache/` and write `roster.json` with the recovered agents' rollup rows; retention keeps the newest five archives. The archive is best-effort and never blocks launch. `session.rebirth` clears `live-roster.json` after planning so a fast second birth cannot reuse stale evidence before the new producer publishes. `rimz doctor` surfaces the last incident with cause, time, lost agents, recovered count, and the crash archive path when one exists.
 
 ## Wakeups
 

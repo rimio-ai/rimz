@@ -9,9 +9,9 @@
 //! lanes between two folds over one produced pane frame.
 //!
 //! The module is read-only on store truth: the rollup arrives through the
-//! cursor fold, and every write is a cache-class runtime file
+//! cursor fold, and every write is cache-class
 //! (`snapshot.json`, `diff-stats.json`, `metrics-sample.json`,
-//! shared provider/account/spending caches) via
+//! shared provider/account/spending caches, or the persistent live roster) via
 //! `write_temp_then_rename_cache` — rebuilt from truth on the next read, never
 //! truth itself. `cargo xtask invariants` pins the boundary: no store-writer,
 //! run-wake, or broker imports under `crates/rimz/src/sidebar/`.
@@ -23,17 +23,18 @@ mod metrics;
 mod panes;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use crate::ids::{MuxName, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
 use crate::sidebar::enrich::{FoldOpts, enrich, wired_default_models, wired_kinds};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::{RefreshedLanes, refresh_heavy_lanes};
 use crate::sidebar::timing::unix_now_ms;
+use crate::store::runtime::{AgentLiveness, agent_liveness};
 use crate::{ResolvedWorkspace, RuntimePaths, SidebarSnapshot, StatePaths, Store};
 
 #[derive(Debug, thiserror::Error)]
@@ -117,6 +118,18 @@ pub fn produce_snapshot(
             diag: &opts.diag,
         },
     ))
+}
+
+pub fn live_roster_from_snapshot(
+    snapshot: &SidebarSnapshot,
+) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    snapshot
+        .root_agents()
+        .filter(|agent| !agent.agent_id.is_provisional())
+        .filter(|agent| !agent.agent_id.as_str().is_empty())
+        .filter(|agent| !matches!(agent_liveness(agent), AgentLiveness::Dead))
+        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        .collect()
 }
 
 /// Produce a one-shot inspection snapshot with freshly refreshed heavy lanes:
@@ -476,6 +489,7 @@ mod tests {
     use super::*;
     use crate::agents::{AgentState, AgentStatus};
     use crate::ids::WorkspaceId;
+    use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
     use jiff::Timestamp;
 
     #[test]
@@ -522,6 +536,45 @@ mod tests {
         assert!(snapshot.workspace_value_tally.is_none());
         assert!(snapshot.today_spend_live_usd.is_none());
         assert!(snapshot.worktree_roots.is_empty());
+    }
+
+    #[test]
+    fn live_roster_keeps_visible_root_agents_only() {
+        let now = Timestamp::now();
+        let mut live = agent("claude", "live", now);
+        live.runtime_owner = Some(crate::store::runtime::current_process_owner(
+            RuntimeOwnerKind::Agent,
+            "live",
+        ));
+        let unknown = agent("codex", "unknown", now);
+        let mut dead = agent("claude", "dead", now);
+        dead.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "dead",
+            u32::MAX,
+            None,
+        ));
+        let mut child = agent("claude", "child", now);
+        child.parent_agent_id = Some("live".into());
+        let provisional = agent("codex", "launch_abc", now);
+        let empty = agent("codex", "", now);
+        let snapshot = SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            vec![live, unknown, dead, child, provisional, empty],
+            now,
+        );
+
+        let roster = live_roster_from_snapshot(&snapshot);
+
+        assert_eq!(
+            roster,
+            [
+                (AgentKind::new_unchecked("claude"), "live".into()),
+                (AgentKind::new_unchecked("codex"), "unknown".into()),
+            ]
+            .into_iter()
+            .collect()
+        );
     }
 
     fn agent(kind: &str, id: &str, now: Timestamp) -> AgentState {

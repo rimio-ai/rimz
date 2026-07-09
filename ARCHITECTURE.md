@@ -63,7 +63,7 @@ State is three tiers of plain files. The path constants and their exact filename
 workspace store   ~/.local/state/rimz/workspaces/<id>/
   events.log.jsonl · snapshots/latest.json
   runs/<run_id>.json · messages/messages.jsonl · transcript/<date>.jsonl · locks/workspace.lock
-  workspace.json · channels.json
+  workspace.json · channels.json · live-roster.json
   diag.log.jsonl · diag-frames/                      durable truth
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<id>/   (or /tmp/rimz-<uid>/… )
@@ -82,7 +82,7 @@ shared runtime      $XDG_RUNTIME_DIR/rimz/shared/
   accounts.lock · rate_limits.lock · credits.lock · spending.lock
 ```
 
-The store tier is durable truth, written with temp-file-plus-rename and a framed event log (the durability contract is [store.md](./docs/internals/store.md)). Shared persistent caches survive reboot so the dashboard and pace views open warm, while runtime tiers are disposable: locks, sockets, sidecars, and per-room best-effort caches that speed the next read and die with the session.
+The store tier is durable truth plus reboot-surviving producer caches, written with temp-file-plus-rename and a framed event log (the durability contract is [store.md](./docs/internals/store.md)). `live-roster.json` is the sidebar producer's last live root-agent set; rebirth recovery intersects it with the audit rollup before a new session starts. Shared persistent caches survive reboot so the dashboard and pace views open warm, while runtime tiers are disposable: locks, sockets, sidecars, and per-room best-effort caches that speed the next read and die with the session.
 
 ## Code and crate structure
 
