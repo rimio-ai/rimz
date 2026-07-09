@@ -262,13 +262,13 @@ The individual gates:
 
 ## Continuous integration
 
-CI lives in two workflow trees: `.gitea/workflows/` for the Gitea origin and `.github/workflows/` for the GitHub mirror. Both run the same gates inside the `rimz-ci` image; GitHub pulls `ghcr.io/<owner>/rimz-ci:latest` with the built-in `GITHUB_TOKEN`, while Gitea pulls the configured `RIMZ_CI_IMAGE` with its registry token. The pipelines differ in how the test tiers are scheduled. Each pipeline runs three job groups in parallel:
+CI lives in two workflow trees: `.gitea/workflows/` for the Gitea origin and `.github/workflows/` for the GitHub mirror. Both run the same gates inside the `rimz-ci` image; GitHub pulls `ghcr.io/<owner>/rimz-ci:latest` with the built-in `GITHUB_TOKEN`, while Gitea pulls the configured `RIMZ_CI_IMAGE` with its registry token. Both pipelines run three job groups in parallel:
 
 - `checks` — `cargo xtask checks`.
 - `externals` — the `deny`, `vet`, and `semver` gates as separate steps (locally: `cargo xtask externals`). They sit apart from `checks` because deny reads the baked advisory DB offline while vet and semver fetch crates.io directly, bypassing the runners' nexus mirror, so transient egress retries stay out of the main jobs.
-- the test pipeline — compile the suite once, then run the `gate`, `live`, and `journey` nextest profiles from that one build so each tier's timing reflects test execution, not the shared compile.
+- `tests` — compile the suite once, then run the `gate`, `live`, and `journey` nextest profiles from that one build so each tier's timing reflects test execution, not the shared compile.
 
-On Gitea a single `tests` job compiles the suite (`cargo xtask test --no-run`) and runs the three profile steps in the same container, each guarded by `if: ${{ !cancelled() }}` plus a compile-success check so one failing tier still reports the others. On GitHub, `build-tests` packages a nextest archive (`cargo xtask test-archive`), `tests-gate` and `tests-live` run their profile slices from it (`tests-live` runs journey after live under `!cancelled()`), and `tests-complete` is the single branch-protection check: it fails unless every tier succeeded, so a skipped or cancelled tier cannot pass as green.
+The `tests` job compiles the suite (`cargo xtask test --no-run`) and runs the three profile steps in the same container, each guarded by `if: ${{ !cancelled() }}` plus a compile-success check so one failing tier still reports the others. The `tests` job is the branch-protection check on both forges.
 
 The `live` profile runs both mux backends in one nextest process so tmux and Zellij co-schedule, while the per-backend `[test-groups]` in `.config/nextest.toml` bound concurrency. Runners are 64-core, so workflows leave nextest's global thread count uncapped. Every tier runs against a checkout at the same container path the suite was compiled from, so fixtures referenced through `env!("CARGO_MANIFEST_DIR")` resolve.
 
