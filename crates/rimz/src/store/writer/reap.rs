@@ -38,6 +38,10 @@ fn reap_session_name(paths: &StatePaths) -> String {
 
 impl Store {
     pub(crate) fn reap_dead_agents(&self) -> Result<usize> {
+        // Lock-free by design: a same-id resume between this scan and the
+        // tombstone append can be hidden briefly, and the session's next
+        // lifecycle event re-inserts it because tombstones only suppress older
+        // rollup state.
         let projection = self.runtime_projection(RuntimeScope::Audit)?;
         let dead = projection
             .agents

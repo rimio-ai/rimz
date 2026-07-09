@@ -567,7 +567,6 @@ fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
         ".with_agent_context(",
         ".with_subagent_context(",
         ".with_agent_activity(",
-        ".drop_dead_agents_with(",
         ".drop_dead_daemon_sessions(",
         ".reap_stale_sessions(",
     ] {
