@@ -480,8 +480,8 @@ mod tests {
     #[test]
     fn extracts_remote_repo_slug() {
         for (remote, slug) in [
-            ("git@gitea-ssh.***REMOVED***:rimio/rimz.git", "rimio/rimz"),
-            ("https://gitea.***REMOVED***/rimio/rimz.git", "rimio/rimz"),
+            ("git@gitea-ssh.example.test:owner/repo.git", "owner/repo"),
+            ("https://gitea.example.test/owner/repo.git", "owner/repo"),
             ("ssh://git@host:2222/owner/repo.git", "owner/repo"),
             ("git@host:owner/repo", "owner/repo"),
             ("https://host/owner/repo/", "owner/repo"),
@@ -494,7 +494,7 @@ mod tests {
     fn rejects_remote_repo_slug_without_owner_repo_path() {
         for remote in [
             "",
-            "git@gitea-ssh.***REMOVED***",
+            "git@gitea-ssh.example.test",
             "not-a-remote",
             "/tmp/repo",
             "https://host/repo.git",
