@@ -1,6 +1,6 @@
 # Transcript CLI
 
-`rimz transcript` reads Rimz's durable transcript log and renders the channel as a timestamped chat log, including ended agents whose native transcript files have rotated away. It targets agents and channels with the [agent-address grammar](./agents.md#addressing-agents). The log model (entry kinds, JSONL buckets, retention) is [message.md → Transcript](../../internals/harness/messaging.md#transcript).
+`rimz transcript` reads Rimz's durable transcript log and renders a channel or one agent as a timestamped chat log. It reads only — nothing is sent, nothing changes — and it reaches back past what the agents keep: because Rimz records every prompt, answer, and inter-agent message itself, the log survives ended agents whose native transcript files have rotated away. It targets agents and channels with the [agent-address grammar](./agents.md#addressing-agents). Reading the conversation back as an everyday move is the [messaging guide](../../guide/messaging.md); the log model (entry kinds, JSONL buckets, retention) is [message.md → Transcript](../../internals/harness/messaging.md#transcript).
 
 ```sh
 rimz transcript @swift-otter            # one agent's channel messages
@@ -20,4 +20,4 @@ Rendering: headers put the sender first, add the receiver with `→` when one ex
 
 `--last <N>` keeps the last N chat lines. `--json` emits `{channel, focus, entries}` for both channel and agent targets, with `archived_count` when prior-session lines are hidden.
 
-For an agent-centric tail that follows new lines as they land, `rimz agents logs <ref>` uses this same transcript scope and rendering; see [agents.md → List and manage agents](./agents.md#list-and-manage-agents).
+For an agent-centric tail that follows new lines as they land, [`rimz agents logs <ref>`](./agents.md#logs) uses this same transcript scope and rendering.

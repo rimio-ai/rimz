@@ -1,6 +1,6 @@
 # Getting started CLI
 
-Rimz opens one room for the project you are in and keeps that room attachable, locally or over SSH. This page covers the commands that bootstrap and reach a room: `start`, `attach`, `remote`, `list`, `setup`, and `doctor`. How Rimz picks the room in the first place is [cli.md → One room per root](../cli.md#one-room-per-root).
+`rimz` opens one room for the project you are in and keeps it attachable. The room is a plain Zellij or tmux session with the sidebar added — your keybinds, layout, and scrollback stay yours — so leaving is a normal multiplexer detach and [`rimz reset`](./maintenance.md#reload-reset-gc-and-uninstall) is the escape hatch if one ever wedges. This page covers the commands that open, reach, and diagnose a local room: `start`, `attach`, `list`, `setup`, and `doctor`. Reaching a room on another host is [`rimz remote`](./remote.md); how Rimz picks the room from your directory is [the root model in ARCHITECTURE.md](../../../ARCHITECTURE.md).
 
 ```sh
 rimz setup                 # one-time: detect the machine, write config, choose hooks and appearance
@@ -13,14 +13,10 @@ rimz                       # open the room and drop in
 | Open the current project's room | `rimz` |
 | Start or reattach a room for a path | `rimz start [PATH]` |
 | Attach by directory or exact session name | `rimz attach [SESSION]` |
-| Connect to a remote room over SSH | `rimz remote connect <alias-or-target>` |
-| Install Rimz on a remote host over SSH | `rimz remote setup <alias-or-host>` |
-| Open a Zellij room in the browser | `rimz web open [PATH]` |
-| Save, update, rename, list, or remove remote aliases | `rimz remote add` / `update` / `rename` / `list` / `rm` |
-| Attribute render-stream bytes in the current room | `rimz remote bandwidth` |
 | Find known rooms and their live backend | `rimz list` |
 | Bootstrap this machine's config | `rimz setup` |
 | Diagnose backend, hook, trust, and room health | `rimz doctor` |
+| Connect to a room on another host | `rimz remote connect <alias-or-target>` |
 
 ## Start the room
 
@@ -30,7 +26,7 @@ rimz start [PATH] [same flags]
 rimz attach [SESSION] [same flags]
 ```
 
-`rimz` is `rimz start .`. `rimz start [PATH]` resolves the workspace root, creates or reattaches the Zellij or tmux session, launches the sidebar, and enters the room; `PATH` defaults to `.`.
+`rimz` is `rimz start .`. `rimz start [PATH]` resolves the workspace root, creates or reattaches the Zellij or tmux session, launches the sidebar, and enters the room; `PATH` defaults to `.`. Nothing is destroyed on the way in — an existing session is reattached, not replaced.
 
 `rimz attach` with no `SESSION` uses the current directory's room. `rimz attach <SESSION>` targets an exact session name; when Rimz has a workspace record for it, it restores the room's sidebar and recovery state before attaching.
 
@@ -40,64 +36,13 @@ rimz attach [SESSION] [same flags]
 
 `--refresh-ms <MS>` overrides the sidebar render cadence for sidebars born by this launch; the persistent cadence lives in machine config.
 
-## Remote rooms
-
-```sh
-rimz remote add dev-box dev-box:query-engine     # save an alias
-rimz remote setup dev-box                        # install rimz on the remote host
-rimz remote connect dev-box                      # attach the saved room over SSH
-rimz remote connect dev-box --web                # open the remote Zellij web UI locally
-rimz remote connect agent@prod-box:/srv/query-engine
-rimz remote bandwidth --secs 5                   # attribute pane write-rate in this room
-```
-
-`rimz remote connect` builds a guarded `ssh -t` command locally and runs the remote host's own `rimz`, so your SSH config, keys, ports, and jump hosts all apply through normal `ssh` resolution.
-
-A raw target is `[user@]host:<session-or-path>`. After the colon, a value containing `/` or starting with `~` is a remote path and runs remote `rimz start`; a bare word is a remote session name and runs remote `rimz attach`. Valid targets include `dev-box:query-engine`, `dev-box:~/code/query-engine`, `agent@prod-box:/srv/query-engine`, and `user@[::1]:query-engine`. Spell another user's home as an absolute path (`/home/alice/code`), because `~user` does not expand through the guarded command.
-
-| Subcommand | Effect |
-| --- | --- |
-| `remote connect <alias-or-target>` | Attach the room over SSH, reconnect-supervised |
-| `remote setup <alias-or-host>` | Install `rimz` to `~/.local/bin` on the host over SSH |
-| `remote add <name> <target>` | Save an alias in `~/.config/rimz/remote.toml` |
-| `remote update <name> <target>` | Replace a saved alias's target and flags |
-| `remote rename <old> <new>` | Rename a saved alias |
-| `remote list` | Print saved aliases |
-| `remote rm <name>` | Remove a saved alias |
-| `remote reset <alias-or-target>` | Connect with recovery skipped, so the remote room comes up empty |
-| `remote bandwidth` | Attribute pane write-rate inside a served room |
-
-The details that matter in practice:
-
-- `remote add` treats any input with a `:` as a raw target and everything else as an alias name. On an existing name it prompts to overwrite in an interactive terminal and errors otherwise, so a saved alias is never silently replaced; use `remote update` in a script. `update` takes the same flags as `add`, errors when the alias does not exist, and resets flags you do not pass to their defaults.
-- `remote setup <alias-or-host>` accepts a saved alias, a raw `[user@]host:<session-or-path>` target, or a bare `[user@]host`, then installs the verified prebuilt release to `~/.local/bin/rimz` on that host. When `remote connect` or `remote connect --web` finds no remote binary, the local error points back to this setup command instead of describing reconnect policy.
-- Reconnect supervision is on by default. `--no-reconnect` hands the link to one SSH run; `remote add --no-reconnect` saves that as the alias default.
-- `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`; `remote add --no-resume` saves that birth behavior on the alias.
-- `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it.
-- For `remote add` and `remote update`, `--mux`, `--zellij`, or `--tmux` given anywhere on the invocation is saved on the alias; `rimz remote connect --mux <name>` keeps `--mux` as a per-invocation override.
-- `rimz remote bandwidth [--secs N] [--json]` runs on the Linux host serving the room and samples VFS write-rate counters to attribute per-pane terminal output on both backends; tmux reports pane pids natively, and Zellij pane pids resolve through Rimz's process matcher. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
-
-### Remote rooms in the browser
-
-`rimz remote connect <target> --web` opens the remote room in your local browser instead of your terminal. The sequence:
-
-1. Runs remote `rimz web open --print --json` over a prep connection, asking the recovery prompt there when your terminal is interactive.
-2. Relays the serving machine's cached Zellij web login token.
-3. Starts a supervised SSH local-forward tunnel to the remote Zellij web server.
-4. Prints the bare `http://127.0.0.1:<port>/<session>` URL and opens your local browser best-effort.
-5. Stays in the foreground until Ctrl-C.
-
-`--web-port <port>` pins the local browser origin; otherwise Rimz derives a stable port from the session name in `8300..8399`.
-
-Link health, web tunneling, reconnect mechanics, and bandwidth attribution are in [remote.md](../../internals/remote.md).
-
 ## List rooms
 
 ```sh
 rimz list [-a|--all] [--json]
 ```
 
-`rimz list` joins known Rimz workspace records with live Zellij and tmux sessions. The default view shows running rooms and rooms active in the last 24 hours with a `LAST_SEEN` column; `--all` includes dormant ones and renders a recorded death as `crashed · 16 agents · 2026-07-02 17:37`. `--json` emits `workspace_id`, `project_root`, `session_name`, `running_on`, `last_activity`, and `last_death` for scripts.
+`rimz list` joins known Rimz workspace records with live Zellij and tmux sessions. The default view shows running rooms and rooms active in the last 24 hours with a `LAST_SEEN` column; `--all` includes dormant ones and renders a recorded death as `crashed · 16 agents · 2026-07-02 17:37`. `--json` emits `workspace_id`, `project_root`, `session_name`, `running_on`, `last_activity`, and `last_death` for scripts. It reads records only and changes no room.
 
 ## Setup and doctor
 
@@ -105,13 +50,13 @@ rimz list [-a|--all] [--json]
 rimz setup [--yes]
 ```
 
-`rimz setup` prints a first-run report: selected multiplexer, workspace root and class, trust state, config path, detected agent binaries, and hook install status. In an interactive terminal it offers to keep and refresh an existing config against the current templates (skipping incompatible keys with a warning) or to overwrite cleanly, offers hook install for detected agents with missing hooks, then asks the color-and-icon probe and pet questions. `--yes` takes the non-interactive path: merge existing files, write missing ones, and make no hook installs, trust grants, or appearance changes. For an explicit clean reset, use `rimz config init --force`; the config model is in [configuration.md](../../guide/configuration.md).
+`rimz setup` prints a first-run report — selected multiplexer, workspace root and class, trust state, config path, detected agent binaries, and hook install status — and makes changes only with your consent. In an interactive terminal it offers to keep and refresh an existing config against the current templates (skipping incompatible keys with a warning) or to overwrite cleanly, offers hook install for detected agents with missing hooks, then asks the color-and-icon probe and pet questions. `--yes` takes the non-interactive path: merge existing files, write missing ones, and make no hook installs, trust grants, or appearance changes. For an explicit clean reset of config, use [`rimz config init --force`](./config.md#read-and-edit-config); the config model is the [configuration guide](../../guide/configuration.md).
 
 ```sh
 rimz doctor [--audit] [--json] [--output PATH]
 ```
 
-`rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. Each check prints as a titled section with a status glyph, and each failing check prints the next fix where Rimz knows one. The report covers:
+`rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. It reads and reports only; it changes nothing. Each check prints as a titled section with a status glyph, and each failing check prints the next fix where Rimz knows one. The report covers:
 
 - **Identity and paths** — current OS user, absolute rimz binary path, resolved workspace with absolute paths
 - **Backend** — backend and version, PATH-visible backend binaries, server-log excerpts, server socket, session health, duplicate sidebars

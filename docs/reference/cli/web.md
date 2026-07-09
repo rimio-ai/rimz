@@ -1,6 +1,6 @@
 # Web CLI
 
-`rimz web` opens a Zellij-backed Rimz room in the browser. Zellij serves the terminal and owns authentication; Rimz resolves the workspace, ensures the normal sidebar room exists, constructs the URL, and reports unsupported backend or version problems before returning a route.
+`rimz web` opens a Zellij-backed Rimz room in the browser. Zellij serves the terminal and owns authentication; Rimz only resolves the workspace, ensures the normal sidebar room exists, constructs the URL, and reports unsupported backend or version problems before returning a route — the web server itself is `zellij web`, which `web start`/`web stop` drive. The login token is Zellij's; Rimz caches it as a plaintext mode-0600 file and keeps it out of URLs, and `web token revoke` clears it. This is a local browser onto your own machine; reaching a room on another host in the browser is [`rimz remote connect --web`](./remote.md#remote-rooms-in-the-browser). Why and when to use browser access is the [web guide](../../guide/web.md).
 
 ```sh
 rimz web open [PATH] [--session <name>] [--print] [--no-start] [--no-resume] [--json]
@@ -23,11 +23,10 @@ rimz web token revoke-all
 | `--no-start` | Refuse when `zellij web` is offline instead of starting it |
 | `--no-resume` | Skip recovering the room's prior agents |
 | `--json` | Emit the `rimz.web.v1` payload without provisioning a token |
-| `--confirm-resume` | Hidden: prompt over stdin/stderr, used by remote prep |
 
-`url` prints the route without birthing a room or starting the server. It requires an existing Rimz workspace record, so a script never receives a URL that would create a bare Zellij session without the Rimz sidebar.
+`url` reads only: it prints the route without birthing a room or starting the server. It requires an existing Rimz workspace record, so a script never receives a URL that would create a bare Zellij session without the Rimz sidebar.
 
-`status`, `start`, `stop`, and most `token` commands delegate to Zellij's web CLI. Hidden `token ensure` prints the cached token value on stdout, minting and caching one when absent. Successful `token revoke` and `token revoke-all` clear the plaintext cache, so the next `open` or `token ensure` mints fresh.
+`status`, `start`, `stop`, and the `token` commands delegate to Zellij's web CLI. `web stop` stops the server; successful `token revoke` and `token revoke-all` clear the plaintext cache, so the next `open` mints fresh.
 
 Configure reverse-proxy URLs under per-machine config:
 
@@ -44,4 +43,4 @@ style_client = true
 
 `[web] enabled` defaults to true. Set it to false to make `rimz web open` and `rimz remote connect --web` fail before room changes or permission-cache seeding. `style_client` defaults to true, deriving Zellij's browser-terminal `web_client` font and colors from `[theme]` when Rimz starts the server; set it to false to leave your own Zellij `web_client` config in charge. `font` defaults to `JetBrainsMono Nerd Font Mono`.
 
-Remote browser access is `rimz remote connect <target> --web`; see [Getting started → Remote rooms](./getting-started.md#remote-rooms) and [web internals](../../internals/web.md#remote-rooms).
+Remote browser access is [`rimz remote connect <target> --web`](./remote.md#remote-rooms-in-the-browser); the tunnel and token relay are in [web internals](../../internals/web.md#remote-rooms).

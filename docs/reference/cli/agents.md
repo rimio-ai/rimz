@@ -1,6 +1,8 @@
 # Agent control CLI
 
-`rimz agents` runs the fleet from one command: list the room's agents, launch laid-out panes and teams, drive supervised script turns, then focus, wait on, or stop what you started. This page also defines the [address grammar](#addressing-agents) that every agent-facing command shares. Run these from inside the room or anywhere that resolves to the same workspace.
+`rimz agents` is the single launcher and card surface for the fleet: list the room's agents, launch laid-out panes and teams, drive supervised script turns, then focus, wait on, or stop what you started. What it does on your machine is thin — it renders a profile into the stock CLI's own flags (`claude --model … --allowed-tools …`, nothing you couldn't type) and runs that command in your Zellij or tmux, in the pane you stand in for one agent or a fresh tab for a layout or worktree. The agent process is the official CLI; its session files land where that CLI always puts them, so `claude --resume` and the provider's own apps keep working. `agents stop` ends a pane the way Ctrl+C would, and `--resume` reopens a closed cohort. Why you reach for a profile or a team instead of a bare CLI is the [agents guide](../../guide/agents.md).
+
+This page also defines the [address grammar](#addressing-agents) that every agent-facing command shares. Run these from inside the room or anywhere that resolves to the same workspace.
 
 A typical session threads several commands together:
 
@@ -11,9 +13,7 @@ rimz message @codex#auth-refresh "After your turn, add coverage for the expiry e
 rimz agents focus @claude#auth-refresh        # jump to the pane when it needs you
 ```
 
-Each command around `rimz agents` has its own page: [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and drives raw panes, [`rimz loop`](./loop.md) schedules turns, and [`rimz channel`](./channel.md) and [`rimz worktree`](./worktree.md) manage the lanes they work in.
-
-The launch grammar, profiles, and teams these commands consume are configured per machine; see [configuration → agent profiles, commands, and teams](../../guide/configuration.md#agent-profiles-commands-and-teams). The launch, run, and delivery machinery lives in [harness.md](../../internals/harness/harness.md).
+Each command around `rimz agents` has its own page: [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and drives raw panes, [`rimz loop`](./loop.md) schedules turns, and [`rimz channel`](./channel.md) and [`rimz worktree`](./worktree.md) manage the lanes they work in. The profiles, teams, and launch grammar these commands consume are configured per machine in the [configuration guide](../../guide/configuration.md#agent-profiles-commands-and-teams); the launch, run, and delivery machinery lives in [harness.md](../../internals/harness/harness.md).
 
 ## Addressing agents
 
@@ -50,7 +50,7 @@ The `@` sigil is required for `message`, where it also keeps a target from being
 
 ## Agents
 
-`rimz agents` is the card surface and the single launcher: list the room, launch a layout, run a supervised turn, then focus, wait on, or stop what you started. The subsections below cover the forms worth knowing; run `rimz agents --help` (and `--help` on each subcommand) for the full flag list.
+`rimz agents` is the card surface and the single launcher. The subsections below cover the forms worth knowing; run `rimz agents --help` (and `--help` on each subcommand) for the full flag list.
 
 ### Launch a layout
 
@@ -77,7 +77,7 @@ A second positional that is itself a known cell is rejected with a `rimz agents 
 
 ### Resume a cohort
 
-`--resume` relaunches a prior cohort matching the same spec; `--continue` is the same visible alias.
+`--resume` relaunches a prior cohort matching the same spec; `--continue` is the same visible alias. It reads identity, cwd, and channel from the store, so a closed cohort comes back where it was.
 
 ```sh
 rimz agents forge --resume                           # reopen the newest closed forge cohort
@@ -92,7 +92,7 @@ What matches what:
 - Add `-w <NAME>` to resume that exact worktree's cohort. Use bare `-w`, or omit the flag while running inside a worktree, to scope resume to that worktree; run from the project root to keep the room-wide newest-by-spec behavior.
 - Cleanly closed cohort members still match when their worktree exists. Cells with no resumable prior member launch fresh in the matched cohort's cwd and channel. A matched member that is still live refuses the command, so the room does not duplicate the same address.
 
-Resume takes identity, cwd, and channel from the store, so it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--model`, `--effort`, `--ask`, `--yolo`, `-p`, system-prompt flags, and passthrough args after `--`.
+Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--model`, `--effort`, `--ask`, `--yolo`, `-p`, system-prompt flags, and passthrough args after `--`.
 
 ### Shared launch params
 
@@ -104,7 +104,7 @@ These broadcast to every agent cell, and each adapter renders them into its own 
 
 ### Channel, worktree, and placement
 
-`-w`/`--worktree` reuses or creates a named worktree (`--worktree=docs` or `--worktree docs`); bare `--worktree` creates a fresh generated one. Branch-style spelling is accepted: `--worktree=feat/great` creates branch `feat/great` and worktree/channel/tab `feat-great`. `--from-pr <number|url>` creates the worktree from a pull request head and implies a worktree launch; pair it with `--worktree <NAME>` to name the local worktree, or accept `pr-<N>`. A worktree launch names its backend tab `#<NAME>`, matching the channel in agent addresses.
+`-w`/`--worktree` reuses or creates a named worktree (`--worktree=docs` or `--worktree docs`); bare `--worktree` creates a fresh generated one. Branch-style spelling is accepted: `--worktree=feat/great` creates branch `feat/great` and worktree/channel/tab `feat-great`. `--from-pr <number|url>` creates the worktree from a pull request head and implies a worktree launch; pair it with `--worktree <NAME>` to name the local worktree, or accept `pr-<N>`. A worktree launch names its backend tab `#<NAME>`, matching the channel in agent addresses. Worktrees Rimz creates are marked and cleaned up with [`rimz worktree remove`](./worktree.md) or the `rimz gc` sweep, so a launch never strands a checkout.
 
 Relaunching a named team into the same named worktree reconciles with existing state before it creates anything: a live team focuses its current tab, a closed tab with work in progress offers to resume that team in the worktree, and a closed clean merged worktree offers to remove it and launch fresh. Add `--resume` or `--continue` to force a resume of the named worktree's prior cohort even when the worktree is clean or merged.
 
@@ -114,7 +114,7 @@ Placement follows intent under the default `auto` policy: a named-channel launch
 
 ### Supervised runs (`-p`)
 
-`-p` launches exactly one supervised agent pane, waits for the root turn, prints the result, and exits with the run's status code (`0` completed, `1` failed, `124` timed out, `130` canceled), so a script branches on the outcome. Text mode keeps stdout as the final assistant answer; failed, timed-out, or canceled runs print status, captured pane tail when present, and transcript path on stderr.
+`-p` launches exactly one supervised agent pane, waits for the root turn, prints the result, and exits with the run's status code (`0` completed, `1` failed, `124` timed out, `130` canceled), so a script branches on the outcome. The turn still runs in a real pane you can watch and steer while the pipeline waits. Text mode keeps stdout as the final assistant answer; failed, timed-out, or canceled runs print status, captured pane tail when present, and transcript path on stderr.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
@@ -164,6 +164,8 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 | `refresh` | one agent, the channel, or `--all` | force-refreshes card context |
 | `stop` | one run or agent; `--all` fans out | cancels a run or closes the pane |
 
+`list`, `show`, `logs`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. Only `stop` ends anything, and it does so the way closing the pane would.
+
 #### `list`
 
 Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. `ps` is an alias for `list`, and `--json` selects JSON output for both.
@@ -182,7 +184,7 @@ Rows group under channel section headers: `⑂` marks a worktree-backed or isola
 
 #### `logs`
 
-`logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as `rimz transcript @ref`.
+`logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as [`rimz transcript @ref`](./transcript.md).
 
 #### `top`
 
@@ -202,4 +204,4 @@ Rows group under channel section headers: `⑂` marks a worktree-backed or isola
 
 #### `stop`
 
-`stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
+`stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. It ends the CLI process the way Ctrl+C would; the provider's session files stay on disk, so a stopped agent is one `--resume` away. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.

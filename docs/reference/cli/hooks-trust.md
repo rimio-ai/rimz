@@ -1,6 +1,6 @@
 # Hooks and trust
 
-These commands wire agent hooks and grant project trust. Hooks give Rimz its live view of every agent, from lifecycle transitions to blocking prompts, and trust gates the command surfaces a project can supply. The safety model is [security and trust](../../guide/security.md).
+These commands wire agent hooks and grant project trust — the two edits Rimz makes to give itself a live view of your agents and to gate what a project may execute. Both are explicit and reversible: `hooks install` is additive and previews its diff with `--dry-run`, `hooks uninstall` removes only Rimz's own blocks, and `trust grant`/`trust revoke` are one grant record on this machine. The safety model behind them is [security and trust](../../guide/security.md).
 
 ## Agent hooks
 
@@ -9,11 +9,11 @@ rimz hooks install [--dry-run] [AGENT]
 rimz hooks uninstall [AGENT]
 ```
 
-`hooks install` writes Rimz-managed hook entries into the agent's per-user config. With no `AGENT` it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit kind (`claude`, `codex`, `pi`, …) it prints the single report. `--dry-run` prints the same per-agent summary plus a unified diff to stderr and writes no files.
+`hooks install` writes Rimz-managed hook entries into the agent's per-user config so the agent reports its lifecycle and blocking prompts back to Rimz. With no `AGENT` it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit kind (`claude`, `codex`, `pi`, …) it prints the single report. The install is additive — your existing hooks stay — and `--dry-run` prints the same per-agent summary plus a unified diff to stderr and writes no files, so you see the exact edit before it happens.
 
-`hooks uninstall` removes only Rimz-managed hook blocks. With no `AGENT` it removes every installed set, prints `[]` when nothing is installed, and exits successfully without needing the binary on PATH.
+`hooks uninstall` removes only Rimz-managed hook blocks, leaving everything else in the file untouched. With no `AGENT` it removes every installed set, prints `[]` when nothing is installed, and exits successfully without needing the binary on PATH. This is the clean undo for `hooks install`.
 
-Installed hooks call Rimz's hidden hook entrypoint for lifecycle and blocking ask events. Hook stdout is the agent decision channel, so installed hooks keep diagnostics off stdout and return only the agent-native neutral no-op for blocking asks; the prompt stays in the agent UI ([the adapter boundary](../../internals/agents/model.md#the-adapter-boundary)). Some agents add their own hook trust gate; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix.
+Installed hooks call back into Rimz for lifecycle and blocking-ask events. Hook stdout is the agent's decision channel, so installed hooks keep diagnostics off stdout and return only the agent-native neutral no-op for blocking asks; the prompt stays in the agent UI ([the adapter boundary](../../internals/agents/model.md#the-adapter-boundary)). Some agents add their own hook trust gate; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix.
 
 ## Project trust
 
@@ -21,7 +21,7 @@ Installed hooks call Rimz's hidden hook entrypoint for lifecycle and blocking as
 rimz trust [status|grant|revoke] [--json]
 ```
 
-`trust status` (the default) re-hashes the project's executable surface and prints one of four states:
+`trust status` reads only. It re-hashes the project's executable surface and prints one of four states:
 
 | State | Meaning |
 | --- | --- |
@@ -30,8 +30,8 @@ rimz trust [status|grant|revoke] [--json]
 | `trusted` | Grant record present and the surface hash matches |
 | `stale` | A command-running field changed since the grant; behaves like untrusted until the grant is refreshed |
 
-`trust grant` pins the current hash and surface on this machine; `trust revoke` removes the grant. Both `status` and `grant` render a field-level diff of what changed since the grant, so a refresh is informed. `--json` emits the state, ids, paths, hashes, grant timestamp, and the structured diff.
+`trust grant` pins the current hash and surface on this machine; `trust revoke` removes the grant, reverting the workspace to `untrusted`. Both `status` and `grant` render a field-level diff of what changed since the grant, so a refresh is informed. `--json` emits the state, ids, paths, hashes, grant timestamp, and the structured diff.
 
 A fresh interactive `rimz start` on an untrusted project offers the same grant once; declining it remembers the current surface until `.rimz/config.toml` changes.
 
-Project trust covers project-supplied command surfaces: hook commands, agent launch commands, profile and team definitions, env overrides, and other executable fields. The hash, stored surface, and record format are in [project trust](../../internals/harness/trust.md); the operator-facing safety model is in [security and trust](../../guide/security.md).
+Project trust covers project-supplied command surfaces: hook commands, agent launch commands, profile and team definitions, env overrides, and other executable fields. Until you grant trust, none of these run. The hash, stored surface, and record format are in [project trust](../../internals/harness/trust.md); the operator-facing safety model is in [security and trust](../../guide/security.md).

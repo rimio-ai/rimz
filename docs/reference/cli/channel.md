@@ -1,6 +1,6 @@
 # Channel CLI
 
-`rimz channel` manages durable named cooperation lanes. Use it when a room needs a `#design`, `#ops`, or `#release` lane without creating a Git worktree.
+`rimz channel` manages durable named cooperation lanes — a `#design`, `#ops`, or `#release` a room needs without creating a Git worktree. A channel is a lightweight record in the room store plus a best-effort `#NAME` tab; it checks out no branch and touches no files, so `channel new` and `channel rm` are cheap and reversible. Use it when you want a lane for addressing and grouping, not an isolated working tree. How channels render on screen and scope addresses is the [messaging guide](../../guide/messaging.md#channels).
 
 ```sh
 rimz channel new <NAME>
@@ -23,9 +23,9 @@ Names are bare ASCII letters, numbers, `_`, or `-`. They render and address as `
 
 `new <NAME>` validates and records the channel in the current room store, then best-effort opens a `#NAME` tab with `RIMZ_CHANNEL` stamped into the shell. The command works in repo, marker, and directory rooms.
 
-`list` prints named channels, Rimz-owned worktree channels, and live derived channels in one table. The `BACKING` column is `named`, `worktree`, or `directory`; explicitly stamped named lanes stay `named`, and in-place team lanes appear as live directory lanes such as `#project/forge`. The `AGENTS` column lists live handles. `--json` emits the same entries as objects with `channel`, `backing`, and `agents`.
+`list` reads only and prints named channels, Rimz-owned worktree channels, and live derived channels in one table. The `BACKING` column is `named`, `worktree`, or `directory`; explicitly stamped named lanes stay `named`, and in-place team lanes appear as live directory lanes such as `#project/forge`. The `AGENTS` column lists live handles. `--json` emits the same entries as objects with `channel`, `backing`, and `agents`.
 
-`rm <NAME>` (alias `remove`) removes a named-channel record. If the same name is backed by a worktree, use `rimz worktree remove <NAME>` so Git cleanup and landed-work checks run.
+`rm <NAME>` (alias `remove`) removes a named-channel record and nothing else. If the same name is backed by a worktree, use [`rimz worktree remove <NAME>`](./worktree.md) instead, so Git cleanup and landed-work checks run.
 
 ## Launching into a channel
 

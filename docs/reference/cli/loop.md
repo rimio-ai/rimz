@@ -1,6 +1,6 @@
 # Loop CLI
 
-`rimz loop` schedules work from the room's sidebar elder while a room for the task's project is open. A task uses `--spec` to spawn one supervised transient pane, `--bind` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action.
+`rimz loop` puts agent turns on a clock. A task is a durable schedule: `rimz loop add` writes it to your per-machine `loop.toml` (or, with `--project`, to the repo's `.rimz/config.toml`), and the room's sidebar elder fires it while a room for the task's project is open. Nothing fires when no room is open, and `loop remove` deletes the schedule — a task never outlives the file it lives in. A task uses `--spec` to spawn one supervised transient pane, `--bind` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, prime budget windows, and guard with watchdogs is the [loops guide](../../guide/loops.md).
 
 ```sh
 rimz loop add morning --spec claude-ping --prompt ping --at 07:00 --days weekdays
@@ -31,9 +31,9 @@ A `<kind>-ping` spec is the window-primer: the run skips when the provider's win
 
 ## Machine, project, and state tasks
 
-`rimz loop add` writes to the per-machine `loop.toml` by default. Rimz-generated `--in`, `--once`, and `--until` tasks persist as state, not `loop.toml` config.
+`rimz loop add` writes to the per-machine `loop.toml` by default. Rimz-generated `--in`, `--once`, and `--until` tasks persist as state, not `loop.toml` config, so they clear themselves when they retire.
 
-`--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--bind`, `--until`, `--once`, and `--in`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; project-only `loop run` refuses until trusted, and during the untrusted window a same-named machine task keeps running.
+`--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--bind`, `--until`, `--once`, and `--in`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; an untrusted project task does not fire, and during the untrusted window a same-named machine task keeps running. Project tasks ship in the repo, so they run only on a machine that has [granted trust](./hooks-trust.md#project-trust).
 
 ## Fire, list, show, rename
 
@@ -41,6 +41,6 @@ A `<kind>-ping` spec is the window-primer: the run skips when the provider's win
 
 A task that is already running records `overlapped` and skips instead of stacking another run. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
 
-`loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, and next fire. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, next fire, task, check, root, and source with the defining file path, then prints recent runs plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links.
+`loop list` and `loop show` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, and next fire. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, next fire, task, check, root, and source with the defining file path, then prints recent runs plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links.
 
 The task model and config shape are in [harness.md → Scheduled turns](../../internals/harness/harness.md#scheduled-turns-loop).

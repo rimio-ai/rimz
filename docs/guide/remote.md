@@ -89,4 +89,4 @@ Keeping the agent processes alive across a reboot belongs to the host. Reach for
 - [Agents](./agents.md) — what the room holds that you are reattaching to.
 - [The sidebar](./sidebar.md) — reading the link-health badge and the recovered column.
 - [Troubleshooting](./troubleshooting.md) — a link that will not connect, a room that will not start, resetting state.
-- [CLI reference](../reference/cli/getting-started.md) · [Configuration](./configuration.md) — the `remote` command surface and `remote.toml`.
+- [CLI reference](../reference/cli/remote.md) · [Configuration](./configuration.md) — the `remote` command surface and `remote.toml`.
