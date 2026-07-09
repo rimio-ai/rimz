@@ -348,7 +348,7 @@ fn duplicate_sidebar_session_groups(
         .collect()
 }
 
-fn fresh_sidebar_heartbeats_for_doctor(
+pub(super) fn fresh_sidebar_heartbeats_for_doctor(
     runtime: &RuntimePaths,
 ) -> std::io::Result<Vec<rimz::sidebar::heartbeat::SidebarHeartbeat>> {
     let current = rimz::sidebar::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir)?;

@@ -4,7 +4,7 @@
 
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
-use rimz::ids::{MuxName, SidebarInstanceId};
+use rimz::ids::{MuxName, PaneId, SidebarInstanceId};
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::event::{EventEnvelope, MessageEventMethod};
@@ -716,5 +716,64 @@ fn doctor_json_reports_protocol_version_mismatches() {
             "sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v5)"
         ),
         "{warnings}"
+    );
+}
+
+#[test]
+fn doctor_reports_mixed_build_writers() {
+    let env = Env::new();
+    let rt = env.runtime_paths();
+    rt.ensure_dirs().expect("runtime dirs");
+
+    for (name, build, pane) in [("a", "0f3a9c21d4be", "%31"), ("b", "8e7d6c5b4a39", "%32")] {
+        let mut sidebar = SidebarHeartbeat::new(
+            env.workspace_id.clone(),
+            SidebarInstanceId::new(),
+            MuxName::Tmux,
+            "rimz-test",
+            rt.sock_dir.join(format!("sidebar.{name}.sock")),
+            Some(PaneId::from_parts(MuxName::Tmux, pane)),
+        );
+        sidebar.build = Some(build.to_owned());
+        rimz::store::atomic::write_temp_then_rename(
+            &rt.heartbeat_dir.join(format!("sidebar.{name}.json")),
+            &sidebar,
+        )
+        .expect("write sidebar heartbeat");
+    }
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn"),
+    );
+    let writers = report["protocols"]["build_drift"]["writers"]
+        .as_array()
+        .expect("build drift writers");
+    assert!(writers.len() >= 2, "{writers:?}");
+    for (build, pane) in [("0f3a9c21d4be", "tmux:%31"), ("8e7d6c5b4a39", "tmux:%32")] {
+        let writer = writers
+            .iter()
+            .find(|writer| writer["build"] == build)
+            .unwrap_or_else(|| panic!("writer for {build}: {writers:?}"));
+        assert_eq!(writer["sidebar_count"], 1);
+        assert_eq!(
+            writer["pane_ids"].as_array().expect("pane ids"),
+            &[Value::String(pane.to_owned())]
+        );
+    }
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    assert!(
+        stdout.contains("mixed rimz builds writing this workspace")
+            && stdout.contains("rimz reload"),
+        "human report names mixed builds and remedy:\n{stdout}"
     );
 }

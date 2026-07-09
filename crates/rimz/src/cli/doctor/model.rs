@@ -351,6 +351,24 @@ pub(super) struct Protocols {
     pub(super) event: &'static str,
     pub(super) sidebar: &'static str,
     pub(super) warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) build_drift: Option<BuildDrift>,
+}
+
+/// More than one rimz build is writing this workspace: the distinct builds seen
+/// among fresh sidebar heartbeats plus the binary that produced this report.
+#[derive(Debug, Serialize)]
+pub(super) struct BuildDrift {
+    pub(super) writers: Vec<BuildWriter>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct BuildWriter {
+    pub(super) build: String,
+    /// This is the build id of the binary running `rimz doctor`.
+    pub(super) is_running: bool,
+    pub(super) sidebar_count: usize,
+    pub(super) pane_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

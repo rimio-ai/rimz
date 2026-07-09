@@ -139,6 +139,8 @@ When the running Rimz build drifts from an agent's tested version range, reporti
 rimz reload    # re-exec sidebars onto the current build, repair geometry, close duplicates
 ```
 
+`rimz doctor` also warns when more than one Rimz build is writing the workspace at the same time; `rimz reload` is the fix for that mixed-build state too.
+
 `rimz reload` runs from anywhere and leaves stopped sessions stopped. Agent version drift and its exact effects are in [agent support](../reference/agent-support.md).
 
 ## Notifications don't fire

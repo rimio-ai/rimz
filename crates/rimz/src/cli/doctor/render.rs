@@ -108,6 +108,40 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
         for warning in &protocols.warnings {
             note(&mut tally, w, Health::Warn, warning)?;
         }
+        if let Some(drift) = &protocols.build_drift {
+            note(
+                &mut tally,
+                w,
+                Health::Warn,
+                &format!(
+                    "mixed rimz builds writing this workspace: {} distinct builds; run `rimz reload` to converge",
+                    drift.writers.len(),
+                ),
+            )?;
+            for writer in &drift.writers {
+                let tag = if writer.is_running {
+                    " (this binary)"
+                } else {
+                    ""
+                };
+                let location = if writer.sidebar_count == 0 {
+                    "no live sidebar".to_owned()
+                } else if writer.pane_ids.is_empty() {
+                    format!("{} sidebars: unlocated", writer.sidebar_count)
+                } else {
+                    format!(
+                        "{} sidebars: {}",
+                        writer.sidebar_count,
+                        writer.pane_ids.join(", ")
+                    )
+                };
+                writeln!(
+                    w,
+                    "      {}",
+                    paint(palette::BODY, &format!("{}{tag}: {location}", writer.build))
+                )?;
+            }
+        }
     }
 
     if let Some(trust) = &report.trust {
