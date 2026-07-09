@@ -896,6 +896,60 @@ fn input_browse_arms_order_hold_before_next_fold() {
 }
 
 #[test]
+fn answering_focused_agent_holds_the_pre_answer_order() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (_dir, mut state) = loop_state(&ws);
+    let mut before = agent_snapshot(&ws);
+    let selected = before.worktree_groups[0].rows[0]
+        .pane
+        .as_ref()
+        .expect("agent pane")
+        .pane_id
+        .clone();
+    let mut other = before.worktree_groups[0].rows[0].clone();
+    other.id = "agent-2".to_owned();
+    other.pane = Some(pane("terminal_1", "tab_0", false));
+    other.attention_score = 200;
+    before.worktree_groups[0].rows[0].attention_score = 600;
+    set_agent_status(&mut before, crate::agents::AgentStatus::Waiting);
+    other.as_agent_mut().expect("agent row").status = crate::agents::AgentStatus::Running;
+    before.worktree_groups[0].rows.push(other);
+    before.focused_pane = Some(selected.clone());
+    // Keep this fold independent of the existing focus-read hold trigger.
+    before.viewed_panes.clear();
+    before.sort_groups_for_presentation();
+    state.current = before.clone();
+    state.ui.selected_pane = Some(selected.clone());
+    state.ui.baseline_pane = Some(selected);
+    state.ui.last_order = super::super::order_hold::capture_order(&state.current, &state.ui);
+
+    let mut after = before;
+    after.panes_produced_at_ms = Some(2);
+    after.worktree_groups[0].rows[0].attention_score = 200;
+    set_agent_status(&mut after, crate::agents::AgentStatus::Running);
+    let mut ranked = after.clone();
+    ranked.sort_groups_for_presentation();
+    assert_eq!(
+        ranked.worktree_groups[0].rows[0].id, "agent-2",
+        "the live rank moves the answered row down"
+    );
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    fold_snapshot(&mut state, &config, &mut fetch, after, true);
+
+    assert!(state.ui.order_hold.is_some());
+    assert_eq!(
+        state.current.worktree_groups[0]
+            .rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["agent-1", "agent-2"]
+    );
+}
+
+#[test]
 fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
     let ws = workspace();
     let config = serve_config(&ws);

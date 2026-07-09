@@ -291,6 +291,13 @@ pub(super) fn row_id_of_pane(
     snapshot: &SidebarSnapshot,
     pane_id: &crate::ids::PaneId,
 ) -> Option<String> {
+    row_of_pane(snapshot, pane_id).map(|row| row.id.clone())
+}
+
+pub(super) fn row_of_pane<'a>(
+    snapshot: &'a SidebarSnapshot,
+    pane_id: &crate::ids::PaneId,
+) -> Option<&'a crate::SidebarRow> {
     snapshot
         .worktree_groups
         .iter()
@@ -300,7 +307,6 @@ pub(super) fn row_id_of_pane(
                 .as_ref()
                 .is_some_and(|pane| pane.pane_id == *pane_id)
         })
-        .map(|row| row.id.clone())
 }
 
 #[derive(Clone, Debug, Default)]

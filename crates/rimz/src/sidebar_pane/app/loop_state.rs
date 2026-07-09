@@ -1182,7 +1182,9 @@ impl LoopState {
         if derived_focus_pane && ui.selected_pane.is_some() && ui.selected_pane != prev_selected {
             ui.focus_group_reveal = true;
         }
-        let interacted = !clear.ids.is_empty() || ui.selected_pane != prev_selected;
+        let answered =
+            order_hold::focused_attention_dropped(&prev_good, current, ui.selected_pane.as_ref());
+        let interacted = !clear.ids.is_empty() || ui.selected_pane != prev_selected || answered;
         order_hold::apply_order_hold(ui, current, interacted, now.as_millisecond());
         let last_order = order_hold::capture_order(current, ui);
         ui.last_order = last_order;

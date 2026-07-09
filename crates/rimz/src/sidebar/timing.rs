@@ -33,10 +33,11 @@ pub const BACKGROUND_PAINT_MIN_INTERVAL: Duration = Duration::from_secs(1);
 pub const UNWATCHED_FOLD_CLAMP: Duration = Duration::from_secs(1);
 
 /// How long the interactive sidebar keeps its last row/group order after a
-/// jump, tab-switch, or browse before re-sorting to live rank. Long enough to
-/// read the card you landed on, not just glance at it, so a watched row holds
-/// still while you take it in; each interaction re-arms it, so a rapid triage
-/// burst holds one stable list and it tidies once you settle.
+/// jump, tab-switch, browse, or the focused agent's ask being answered before
+/// re-sorting to live rank. Long enough to read the card you landed on, not just
+/// glance at it, so a watched row holds still while you take it in; each
+/// interaction re-arms it, so a rapid triage burst holds one stable list and it
+/// tidies once you settle.
 pub const REORDER_HOLD: Duration = Duration::from_secs(5);
 
 /// How long a never-seen-sibling sidebar must report zero working siblings

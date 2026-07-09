@@ -64,7 +64,7 @@ Within a worktree, agent cards lead and process rows form the command tail. Agen
 
 **The cap protects visible work.** The snapshot carries every row, and each renderer caps only a worktree's idle and process tail in the resting body, showing up to `WORKTREE_ROW_CAP` rows with a dim `+K more` for the remainder. Active, blocked, paused, finished, unread, and focused rows are exempt and always shown, so a row that may need a look or a jump never hides behind the count. Clicking `+K more` expands that group in place, and `− less` collapses it; the state is renderer-local and clears when the group no longer hides a tail.
 
-Producer rank is truth, while the interactive renderer holds the last painted row and group order plus the rows visible in that frame for `REORDER_HOLD` after a jump or browse, so a just-read card does not slide under your eyes. Read state clears immediately; only presentation order and cap exemptions hold.
+Producer rank is truth, while the interactive renderer holds the last painted row and group order plus the rows visible in that frame for `REORDER_HOLD` after a jump or browse, or when the focused agent's ask is answered, so the glance back finds the cards where you left them. Read state clears immediately; only presentation order and cap exemptions hold.
 
 **Auto-continue** is producer-owned enrichment for `paused` rows: the producer waits for the reset or backoff condition and queues a hidden `Resume` through the durable message pipeline, promoting the row to actionable `failed` when evidenced attempts exhaust rather than spinning silently.
 

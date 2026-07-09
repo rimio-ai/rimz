@@ -8,8 +8,27 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::SidebarSnapshot;
+use crate::agents::AgentStatus;
+use crate::ids::PaneId;
 use crate::sidebar::timing::REORDER_HOLD;
 use crate::sidebar_pane::render::{FrozenOrder, OrderHold, UiState, group_visible_rows};
+
+/// The focused row leaving the attention class is the user answering that
+/// agent in its own pane -- the moment their eyes return to the sidebar.
+/// It arms the same hold a sidebar interaction does.
+pub(super) fn focused_attention_dropped(
+    prev: &SidebarSnapshot,
+    current: &SidebarSnapshot,
+    selected: Option<&PaneId>,
+) -> bool {
+    let Some(selected) = selected else {
+        return false;
+    };
+    let prev_status = super::state::row_of_pane(prev, selected).and_then(|row| row.status());
+    let next_status = super::state::row_of_pane(current, selected).and_then(|row| row.status());
+    prev_status.is_some_and(AgentStatus::is_attention)
+        && !next_status.is_some_and(AgentStatus::is_attention)
+}
 
 pub(super) fn arm_order_hold(ui: &mut UiState, now_ms: i64) {
     ui.order_hold = Some(OrderHold {
@@ -116,8 +135,8 @@ mod tests {
     use super::*;
     use crate::sidebar_pane::app::fixtures::{pane, snapshot, workspace};
     use crate::{
-        ProcessCard, RowCard, SidebarRow, SidebarStatusCount, SidebarWorktreeGroup,
-        SidebarWorktreeKind,
+        AgentCard, ProcessCard, RowCard, SidebarRow, SidebarStatusCount, SidebarWorktreeGroup,
+        SidebarWorktreeKind, agents::AgentStatus,
     };
 
     fn row(id: &str, raw_pane: &str) -> SidebarRow {
@@ -157,6 +176,16 @@ mod tests {
         }
     }
 
+    fn agent_row(id: &str, raw_pane: &str, status: AgentStatus) -> SidebarRow {
+        SidebarRow {
+            card: RowCard::Agent(Box::new(AgentCard {
+                status,
+                ..AgentCard::default()
+            })),
+            ..row(id, raw_pane)
+        }
+    }
+
     fn snapshot_with_groups(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {
         let ws = workspace();
         let mut current = snapshot(&ws);
@@ -182,6 +211,80 @@ mod tests {
             .iter()
             .map(|row| row.id.as_str())
             .collect()
+    }
+
+    #[test]
+    fn focused_waiting_row_becoming_running_drops_attention() {
+        let selected = pane("terminal_1", "tab_0", false).pane_id;
+        let prev = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Waiting)],
+        )]);
+        let current = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
+        )]);
+
+        assert!(focused_attention_dropped(&prev, &current, Some(&selected)));
+    }
+
+    #[test]
+    fn focused_running_row_staying_running_does_not_drop_attention() {
+        let selected = pane("terminal_1", "tab_0", false).pane_id;
+        let prev = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
+        )]);
+        let current = prev.clone();
+
+        assert!(!focused_attention_dropped(&prev, &current, Some(&selected)));
+    }
+
+    #[test]
+    fn attention_drop_on_an_unselected_row_is_ignored() {
+        let selected = pane("terminal_1", "tab_0", false).pane_id;
+        let prev = snapshot_with_groups(vec![group(
+            "a",
+            vec![
+                agent_row("selected", "terminal_1", AgentStatus::Running),
+                agent_row("other", "terminal_2", AgentStatus::Waiting),
+            ],
+        )]);
+        let current = snapshot_with_groups(vec![group(
+            "a",
+            vec![
+                agent_row("selected", "terminal_1", AgentStatus::Running),
+                agent_row("other", "terminal_2", AgentStatus::Running),
+            ],
+        )]);
+
+        assert!(!focused_attention_dropped(&prev, &current, Some(&selected)));
+    }
+
+    #[test]
+    fn attention_drop_without_a_selection_is_ignored() {
+        let prev = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Waiting)],
+        )]);
+        let current = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
+        )]);
+
+        assert!(!focused_attention_dropped(&prev, &current, None));
+    }
+
+    #[test]
+    fn focused_attention_row_leaving_the_snapshot_drops_attention() {
+        let selected = pane("terminal_1", "tab_0", false).pane_id;
+        let prev = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Waiting)],
+        )]);
+        let current = snapshot_with_groups(vec![group("a", Vec::new())]);
+
+        assert!(focused_attention_dropped(&prev, &current, Some(&selected)));
     }
 
     #[test]
