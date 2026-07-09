@@ -5,7 +5,7 @@
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::store::event::AgentLaunchState;
+use rimz::store::event::{AgentLaunchState, EventKind};
 use rimz::store::{AgentLaunchAppend, AgentLaunchName, AgentLaunchRequest, snapshot};
 use rimz::{EventEnvelope, RuntimeScope};
 use serde_json::json;
@@ -52,6 +52,25 @@ fn named_codex_lifecycle(
     )
 }
 
+fn dead_owner_lifecycle(
+    h: &crate::common::Harness,
+    event_name: &str,
+    agent_id: &str,
+) -> EventEnvelope {
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(agent_id)),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_pid = Some(u32::MAX);
+    EventEnvelope::agent_lifecycle(
+        h.workspace_id.clone(),
+        "rimz-test",
+        "codex",
+        event_name,
+        &observation,
+    )
+}
+
 fn log_len(h: &crate::common::Harness) -> u64 {
     std::fs::metadata(&h.store.paths().events_log)
         .map(|meta| meta.len())
@@ -63,6 +82,45 @@ fn log_len(h: &crate::common::Harness) -> u64 {
 /// way tests age `abandon-sweep.stamp` to force the sweep.
 fn force_next_publish(h: &crate::common::Harness) {
     let _ = std::fs::remove_file(h.store.paths().locks_dir.join("publish.stamp"));
+}
+
+#[cfg(unix)]
+#[test]
+fn publishing_commit_reaps_dead_owner_agent_into_tombstone() {
+    let h = crate::common::Harness::new();
+
+    h.store
+        .append_event(&dead_owner_lifecycle(&h, "SessionStart", "ghost"))
+        .expect("append dead-owner lifecycle");
+
+    let projection = h
+        .store
+        .runtime_projection(RuntimeScope::Audit)
+        .expect("audit projection");
+    let ids: Vec<&str> = projection
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    assert!(
+        !ids.contains(&"ghost"),
+        "dead-owner agent should be tombstoned from audit projection: {ids:?}"
+    );
+
+    let events = h.store.read_events().expect("events");
+    assert!(
+        events.iter().any(|event| {
+            if let EventKind::AgentLifecycle(payload) = event.kind() {
+                event.source == "codex"
+                    && payload.event_name.as_deref() == Some("ReapedDead")
+                    && payload.observation.agent_id.as_deref() == Some("ghost")
+                    && matches!(payload.observation.signal, LifecycleSignal::Ended)
+            } else {
+                false
+            }
+        }),
+        "publishing commit should append the reconstructed SessionEnd tombstone"
+    );
 }
 
 #[test]

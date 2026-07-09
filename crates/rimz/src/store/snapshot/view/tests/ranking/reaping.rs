@@ -1,30 +1,6 @@
 use super::*;
 use crate::agents::SessionOrigin;
 
-#[test]
-fn liveness_drops_dead_runtime_owner_from_rollup() {
-    let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).branch("main");
-    codex.runtime_owner = Some(RuntimeOwner::new(
-        RuntimeOwnerKind::Agent,
-        "sess-1",
-        424_242,
-        Some("12345".to_owned()),
-    ));
-
-    let mut snapshot = room(vec![codex]);
-    assert_eq!(snapshot.agents.len(), 1);
-    assert!(snapshot.worktree_groups.is_empty());
-
-    snapshot.drop_dead_agents_with(|pid, start| {
-        assert_eq!(pid, 424_242);
-        assert_eq!(start, Some("12345"));
-        false
-    });
-
-    assert!(snapshot.agents.is_empty());
-    assert!(snapshot.worktree_groups.is_empty());
-}
-
 /// Build a single-agent rollup at the epoch, run the reap, and return the
 /// surviving agent ids. Fixture timestamps are epoch offsets, so the TTL
 /// rules are exercised deterministically.

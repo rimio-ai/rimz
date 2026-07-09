@@ -23,6 +23,7 @@ use super::{
 mod debounce;
 mod publish;
 mod queue;
+mod reap;
 mod reset;
 
 pub use queue::{EditOutcome, MessageEdit};
@@ -166,6 +167,9 @@ impl Store {
                 debounce::sync_log_debounced(&self.inner.paths);
             }
             PublishPolicy::Skip => {}
+        }
+        if txn.publish != PublishPolicy::Skip {
+            self.reap_dead_agents_if_due();
         }
         Ok(out)
     }

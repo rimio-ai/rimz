@@ -325,51 +325,25 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
     assert_eq!(parsed["run"]["workspace_id"], env.workspace_id.as_str());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
+fn agents_show_falls_back_to_audit_rollup_for_pidless_stale_card() {
     let env = Env::new();
     let store = env.store();
-    let observation = rimz::agents::AgentLifecycleObservation {
-        agent_id: Some("sess-stale".into()),
-        agent_name: Some("lucid-atlas".to_owned()),
-        launch: rimz::agents::LaunchParams::default(),
-        signal: rimz::agents::LifecycleSignal::Registered,
-        agent_pid: Some(u32::MAX),
-        agent_process_start: None,
-        runtime_owner: Some(rimz::RuntimeOwner::new(
-            rimz::RuntimeOwnerKind::Agent,
-            "sess-stale",
-            u32::MAX,
-            None,
-        )),
-        worktree_path: None,
-        worktree_branch: Some("pets".to_owned()),
-        task: None,
-        prompt: None,
-        transcript_path: None,
-        origin: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        turn_error: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        pane_id: None,
-        pane_stamp: None,
-        parent_agent_id: None,
-    };
-    store
-        .append_event(&rimz::EventEnvelope::agent_lifecycle(
-            env.workspace_id.clone(),
-            "session",
-            "claude",
-            "SessionStart",
-            &observation,
-        ))
-        .expect("append stale lifecycle");
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some("sess-stale".into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("lucid-atlas".to_owned());
+    observation.worktree_branch = Some("pets".to_owned());
+    let mut event = rimz::EventEnvelope::agent_lifecycle(
+        env.workspace_id.clone(),
+        "session",
+        "claude",
+        "SessionStart",
+        &observation,
+    );
+    event.timestamp = jiff::Timestamp::now() - Duration::from_secs(4 * 60 * 60);
+    store.append_event(&event).expect("append stale lifecycle");
 
     // A rich statusline sidecar for the same session: `show --json` must fold it
     // onto the resolved card (even via the audit fallback) so the real token

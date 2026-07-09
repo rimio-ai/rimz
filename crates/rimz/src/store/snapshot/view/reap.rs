@@ -22,25 +22,12 @@ pub struct RuntimeReapInputs<'a> {
 }
 
 impl SidebarSnapshot {
-    /// Apply best-effort process liveness to agent overlays that published a
-    /// PID. Hook protocols do not all expose a session-exit event; when a hook
-    /// command can record the agent process identity, the sidebar uses it to
-    /// suppress stale store overlays without scraping pane contents.
-    pub fn drop_dead_agents_with(&mut self, mut is_alive: impl FnMut(u32, Option<&str>) -> bool) {
-        self.agents.retain(|agent| {
-            if let Some(owner) = &agent.runtime_owner {
-                return is_alive(owner.pid, owner.process_start.as_deref());
-            }
-            true
-        });
-    }
-
     /// Reap daemon-mode sessions the per-user app-server daemon no longer
     /// holds in memory. A daemon-backed session records the shared daemon's pid,
-    /// not its own CLI's, so process liveness — which keeps it while the daemon
-    /// lives ([`drop_dead_agents_with`]) — can never reap it. Without this a closed
-    /// remote-control conversation lingers as a ghost and binds its stale
-    /// status, model, and tokens onto a live `codex` pane by cwd
+    /// not its own CLI's, so process liveness keeps it while the daemon lives
+    /// and can never reap it. Without this a closed remote-control conversation
+    /// lingers as a ghost and binds its stale status, model, and tokens onto a
+    /// live `codex` pane by cwd
     /// ([`agent_pane_for_pane`]).
     ///
     /// Tri-state, and fail-safe by construction (the loaded-thread set and live

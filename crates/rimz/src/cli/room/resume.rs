@@ -153,8 +153,8 @@ pub(super) fn reboot_since_last_birth(workspace_id: &rimz::WorkspaceId) -> bool 
 }
 
 /// Plan a reborn session. Prior agents are re-seeded only when the caller's
-/// recovery gate is open, using the durable *audit* rollup — the one that keeps
-/// the dead-process agents a runtime read would expel. Empty named channel tabs
+/// recovery gate is open, using the durable *audit* rollup — the
+/// non-tombstoned history rather than the live runtime projection. Empty named channel tabs
 /// restore on every ordinary rebirth. Best-effort: disabled recovery,
 /// `--no-resume`, or any planning read error never blocks the launch.
 pub(super) fn plan_room_resume(

@@ -1034,7 +1034,7 @@ fn queue_add_for_bound_agent_does_not_enumerate_panes() {
 }
 
 #[test]
-fn message_add_uses_audit_resolution_for_runtime_filtered_agent() {
+fn message_add_does_not_resolve_reaped_dead_owner_agent() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     append_lifecycle(
@@ -1063,6 +1063,15 @@ fn message_add_uses_audit_resolution_for_runtime_filtered_agent() {
             .is_empty(),
         "runtime projection should expel the dead-owner agent"
     );
+    assert!(
+        env.store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("audit projection")
+            .agents
+            .iter()
+            .all(|agent| agent.agent_id != "sess-audit-reviewer"),
+        "write-path reap should tombstone the dead-owner agent before audit fallback"
+    );
 
     let out = env
         .rimz()
@@ -1070,17 +1079,13 @@ fn message_add_uses_audit_resolution_for_runtime_filtered_agent() {
         .output()
         .expect("message");
     assert!(
-        out.status.success(),
-        "message should queue through audit fallback\nstdout={}\nstderr={}",
+        !out.status.success(),
+        "dead-owner ghost should not queue through audit fallback\nstdout={}\nstderr={}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let message_id = queued_id_from_stdout(&out.stdout);
     let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message_id.as_str(), message_id);
-    assert_eq!(pending[0].agent_id.as_str(), "sess-audit-reviewer");
-    assert_eq!(pending[0].agent_name.as_deref(), Some("quiet-reviewer"));
+    assert!(pending.is_empty());
 }
 
 /// Eligibility runs before the claim: an ineligible delivery pass (running
@@ -1301,12 +1306,6 @@ fn steer_queues_when_durable_agent_has_no_live_pane() {
             observation.agent_name = Some("steady-reviewer".to_owned());
             observation.launch.role = Some("reviewer".to_owned());
             observation.worktree_branch = Some("audit-steer".to_owned());
-            observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
-                rimz::pane::RuntimeOwnerKind::Agent,
-                "sess-steer-audit",
-                u32::MAX,
-                Some("dead-process".to_owned()),
-            ));
         },
     );
 

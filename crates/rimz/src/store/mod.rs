@@ -13,7 +13,7 @@
 //!   message_store.rs live message queue JSONL store
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
-//!   writer/         debounce, publish, queue, reset
+//!   writer/         debounce, publish, queue, reap, reset
 //!   gc.rs           maintenance façade
 //!   gc/             runtime collection and dead-workspace pruning
 //!   snapshot/       reduced snapshot rebuild
