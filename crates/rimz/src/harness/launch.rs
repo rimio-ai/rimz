@@ -226,10 +226,10 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
             path.to_string_lossy().into_owned(),
         ]);
     }
-    if let ExecAction::Launch { prompt, .. } = inv.action {
-        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
-            argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
-        }
+    if let ExecAction::Launch { prompt, .. } = inv.action
+        && let Some(prompt) = prompt.filter(|value| !value.is_empty())
+    {
+        argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
     }
     let extra_args = match inv.action {
         ExecAction::Launch { extra_args, .. } | ExecAction::Resume { extra_args, .. } => extra_args,
