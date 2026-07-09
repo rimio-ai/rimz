@@ -11,10 +11,10 @@ pub(crate) use roster::PresenceRoster;
 
 const SUBSCRIPTION_COMMAND: &str = concat!(
     "refresh-client -B \"rimz-presence:%*:#{pane_id}",
-    "\t#{window_id}",
-    "\t#{pane_current_command}",
-    "\t#{pane_active}",
-    "\t#{pane_title}\"\n",
+    ",#{window_id}",
+    ",#{s/,/_/g:pane_current_command}",
+    ",#{pane_active}",
+    ",#{s/,/_/g:pane_title}\"\n",
 );
 
 /// A tmux control-mode line carrying pane-presence information.
@@ -181,7 +181,7 @@ pub(super) fn classify_control_line(line: &str) -> ControlLine {
 
 fn parse_subscription(line: &str) -> Option<ControlLine> {
     let (_, value) = line.split_once(" : ")?;
-    let mut fields = value.splitn(5, '\t');
+    let mut fields = value.splitn(5, ',');
     let pane = nonempty(fields.next()?)?;
     let window = nonempty(fields.next()?)?;
     let command = nonempty(fields.next()?);
@@ -338,7 +338,7 @@ mod tests {
     fn control_line_classifies_tmux_events_and_skips_noise() {
         let cases = vec![
             (
-                "%subscription-changed rimz-presence $0 @1 1 %2 : %2\t@1\tclaude\t1\trimz",
+                "%subscription-changed rimz-presence $0 @1 1 %2 : %2,@1,claude,1,rimz",
                 ControlLine::Subscription {
                     pane: "%2".to_owned(),
                     window: "@1".to_owned(),
@@ -348,7 +348,7 @@ mod tests {
                 },
             ),
             (
-                "%subscription-changed rimz-presence $0 @1 1 %2 : %2\t@1\t\t0\t",
+                "%subscription-changed rimz-presence $0 @1 1 %2 : %2,@1,,0,",
                 ControlLine::Subscription {
                     pane: "%2".to_owned(),
                     window: "@1".to_owned(),

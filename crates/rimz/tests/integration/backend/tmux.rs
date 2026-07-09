@@ -175,7 +175,7 @@ impl TmuxServer {
         // Use `sh` as the pane process so send-keys/capture-pane have a
         // shell to talk to; the default `new-session` shell varies by host.
         // `.output()` captures stderr so test logs stay clean.
-        Command::new("tmux")
+        let output = Command::new("tmux")
             .scrub_session_env()
             .args([
                 "-S",
@@ -188,6 +188,16 @@ impl TmuxServer {
             ])
             .output()
             .expect("spawn tmux new-session");
+        assert!(
+            output.status.success(),
+            "tmux new-session failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let panes = self.wait_for_panes(session, 1);
+        assert!(
+            !panes.is_empty(),
+            "new-session should create an initial shell pane"
+        );
     }
 
     fn pane_current_path(&self, session: &str) -> String {
@@ -233,11 +243,12 @@ impl TmuxServer {
         );
     }
 
-    /// Block briefly until some pane in `session` reports `command` as its current
+    /// Wait until some pane in `session` reports `command` as its current
     /// command — an `exec`'d pane needs a tick before `pane_current_command`
     /// settles off the launching shell.
     fn wait_for_pane_command(&self, session: &str, command: &str) {
-        for _ in 0..40 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
             let listed = list_session_panes(self, session);
             if listed
                 .iter()
@@ -245,9 +256,11 @@ impl TmuxServer {
             {
                 return;
             }
-            std::thread::sleep(std::time::Duration::from_millis(25));
+            if Instant::now() >= deadline {
+                panic!("no pane in `{session}` ran `{command}` within the deadline: {listed:?}");
+            }
+            thread::sleep(Duration::from_millis(25));
         }
-        panic!("no pane in `{session}` ran `{command}` within the deadline");
     }
 
     fn window_names(&self, session: &str) -> Vec<String> {
@@ -340,14 +353,14 @@ impl TmuxServer {
                     "-t",
                     target,
                     "-F",
-                    "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{pane_current_path}",
+                    "#{pane_id},#{pane_left},#{pane_top},#{pane_width},#{pane_height},#{s/,/_/g:pane_current_path}",
                 ])
                 .output()
                 .expect("spawn tmux list-panes");
             let panes: Vec<PaneGeom> = String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .filter_map(|line| {
-                    let mut cols = line.split('\t');
+                    let mut cols = line.split(',');
                     Some(PaneGeom {
                         id: cols.next()?.to_owned(),
                         left: cols.next()?.parse().ok()?,

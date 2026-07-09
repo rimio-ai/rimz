@@ -196,14 +196,14 @@ impl TmuxBackend {
                 "-t",
                 window_id,
                 "-F",
-                "#{pane_id}\t#{pane_left}",
+                "#{pane_id} #{pane_left}",
             ])
             .run()
             .ok()?;
         let mut first_left = None;
         let mut leftmost: Option<(u64, String)> = None;
         for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let (pane_id, left) = line.split_once('\t')?;
+            let (pane_id, left) = line.split_once(' ')?;
             let left: u64 = left.parse().ok()?;
             if pane_id == first_pane {
                 first_left = Some(left);
@@ -438,7 +438,7 @@ impl TmuxBackend {
                     "-d".to_owned(),
                     "-P".to_owned(),
                     "-F".to_owned(),
-                    "#{window_id}\t#{pane_id}".to_owned(),
+                    "#{window_id} #{pane_id}".to_owned(),
                     "-t".to_owned(),
                     opts.session_name.clone(),
                     "-n".to_owned(),

@@ -4,7 +4,7 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::{ClientPresence, ClientView, MuxErr, Result};
 use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
 
-/// Parse one tab-separated `list-panes -F` row into a [`PaneRef`]. Returns
+/// Parse one comma-separated `list-panes -F` row into a [`PaneRef`]. Returns
 /// `None` for a row missing the three load-bearing leading columns (session,
 /// window, pane id) — a degraded answer the caller skips rather than surfaces.
 ///
@@ -12,7 +12,7 @@ use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
 /// mid-tick race that truncated the line) yields `None`/default for the missing
 /// field rather than erroring the whole read.
 pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
-    let cols: Vec<_> = line.split('\t').collect();
+    let cols: Vec<_> = line.split(',').collect();
     if cols.len() < 3 {
         return None;
     }
@@ -63,7 +63,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     let mut human_clients = 0;
     let mut last_input_ms: Option<u64> = None;
     for line in String::from_utf8_lossy(stdout).lines() {
-        let mut cols = line.split('\t');
+        let mut cols = line.split_whitespace();
         let Some(raw_pane) = cols.next().map(str::trim) else {
             continue;
         };
@@ -104,7 +104,7 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
 
 pub(super) fn parse_new_window_ids(stdout: &[u8]) -> Result<(String, String)> {
     let raw = String::from_utf8_lossy(stdout);
-    let mut cols = raw.trim().split('\t');
+    let mut cols = raw.split_whitespace();
     let window = cols.next().unwrap_or_default().trim();
     let pane = cols.next().unwrap_or_default().trim();
     if window.is_empty() || pane.is_empty() {
@@ -125,7 +125,7 @@ mod tests {
     fn parse_pane_line_handles_full_short_and_invalid_rows() {
         // session, window_id, pane_id, command, cwd, pid, pane_active,
         // window_name.
-        let row = "rimz-qe\t@1\t%3\tnvim\t/home/u/qe\t4242\t1\tqe";
+        let row = "rimz-qe,@1,%3,nvim,/home/u/qe,4242,1,qe";
         let pane = parse_pane_line(row).expect("full row parses");
         assert_eq!(pane.pane_id.raw(), "%3");
         assert_eq!(pane.session_name, "rimz-qe");
@@ -140,7 +140,7 @@ mod tests {
             "tmux has no per-pane process-start variable; the /proc stamp owns it",
         );
 
-        let inactive = "rimz-qe\t@1\t%4\tzsh\t/home/u/qe\t4243\t0\tqe";
+        let inactive = "rimz-qe,@1,%4,zsh,/home/u/qe,4243,0,qe";
         assert!(
             !parse_pane_line(inactive)
                 .expect("inactive row parses")
@@ -149,13 +149,13 @@ mod tests {
 
         // A truncated row that still carries the three load-bearing columns
         // parses; the absent optional fields read as `None`/default.
-        let short = parse_pane_line("rimz-qe\t@1\t%3").expect("leading columns parse");
+        let short = parse_pane_line("rimz-qe,@1,%3").expect("leading columns parse");
         assert_eq!(short.pane_id.raw(), "%3");
         assert_eq!(short.command, None);
         assert_eq!(short.view_name, None);
         assert!(!short.is_focused);
 
-        for malformed in ["rimz-qe\t@1", ""] {
+        for malformed in ["rimz-qe,@1", ""] {
             assert!(
                 parse_pane_line(malformed).is_none(),
                 "needs session+window+pane: {malformed:?}",
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn parse_client_view_reads_panes_activity_and_human_clients() {
-        let panes = parse_client_view(b"%10\t100\t\n%10\t100\t\n%11\t100\t\n").viewed_panes;
+        let panes = parse_client_view(b"%10 100 \n%10 100 \n%11 100 \n").viewed_panes;
         assert_eq!(
             panes,
             vec![
@@ -175,17 +175,17 @@ mod tests {
         );
 
         assert!(
-            parse_client_view(b"\nno-pane\t100\t\n@1\t100\t\n")
+            parse_client_view(b"\nno-pane 100 \n@1 100 \n")
                 .viewed_panes
                 .is_empty()
         );
 
         let view = parse_client_view(
-            b"%10\t1700000000\t\n\
-              %10\t1700000001\tattached\n\
-              %11\t1699999999\tignore-size,no-output\n\
-              %12\tbad\tattached\n\
-              no-pane\t1700000002\tattached\n",
+            b"%10 1700000000 \n\
+              %10 1700000001 attached\n\
+              %11 1699999999 ignore-size,no-output\n\
+              %12 bad attached\n\
+              no-pane 1700000002 attached\n",
         );
 
         assert_eq!(
@@ -198,10 +198,22 @@ mod tests {
         assert_eq!(view.presence.human_clients, 3);
         assert_eq!(view.presence.last_input_ms, Some(1_700_000_001_000));
 
-        let view = parse_client_view(b"\nno-pane\t1700000000\t\n");
+        let view = parse_client_view(b"\nno-pane 1700000000 \n");
 
         assert!(view.viewed_panes.is_empty());
         assert_eq!(view.presence.human_clients, 0);
         assert_eq!(view.presence.last_input_ms, None);
+    }
+
+    #[test]
+    fn parse_new_window_ids_reads_whitespace_fields() {
+        assert_eq!(
+            parse_new_window_ids(b"@3 %9\n").expect("ids parse"),
+            ("@3".to_owned(), "%9".to_owned()),
+        );
+        assert!(
+            parse_new_window_ids(b"@3\n").is_err(),
+            "both window and pane ids are required",
+        );
     }
 }

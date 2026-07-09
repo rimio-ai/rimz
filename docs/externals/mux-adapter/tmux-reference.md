@@ -104,7 +104,7 @@ Index: `has-session -t` (pure exit code), `rename-session`, `lock-client`/`lock-
 
 ### Windows and panes
 
-**`new-window [-abdkPS] [-c dir] [-e VAR=val]… [-F fmt] [-n name] [-t window] [cmd…]`** — `-d` keeps the current window current; `-P -F '#{window_id}\t#{pane_id}'` prints the ids for follow-up targeting; `-n` names the window **and disables `automatic-rename` for it**, making the name a stable idempotency key (Rimz's resume/daemon windows probe `list-windows -F '#{window_name}'`); `-S` selects an existing window of that name instead of erroring (3.2); `-a`/`-b` insert after/before an index, shifting others; `-k` replaces an existing target. The window closes when its command exits unless `remain-on-exit` holds the corpse.
+**`new-window [-abdkPS] [-c dir] [-e VAR=val]… [-F fmt] [-n name] [-t window] [cmd…]`** — `-d` keeps the current window current; `-P -F '#{window_id} #{pane_id}'` prints the ids for follow-up targeting; `-n` names the window **and disables `automatic-rename` for it**, making the name a stable idempotency key (Rimz's resume/daemon windows probe `list-windows -F '#{window_name}'`); `-S` selects an existing window of that name instead of erroring (3.2); `-a`/`-b` insert after/before an index, shifting others; `-k` replaces an existing target. The window closes when its command exits unless `remain-on-exit` holds the corpse.
 
 **`split-window [-bdfhIvPZ] [-c dir] [-e VAR=val]… [-l size] [-t pane] [cmd…] [-F fmt]`** — `-h` splits left-right, `-v` top-bottom (default); `-b` puts the new pane before (left of / above) the target — the sidebar-on-the-left shape; `-l <n>` fixes columns/lines, `-l <n>%` a percentage; `-f` spans the full window edge; `-d` leaves focus alone; `-P [-F]` prints the new pane (ask for `#{pane_id}` explicitly — the default format is index-shaped); an empty command `''` births a command-less pane writable via `display-message -I`. Splits mount fine on a detached session — no client required (the asymmetry with Zellij's detached-mount drop).
 
@@ -116,7 +116,7 @@ Index: `has-session -t` (pure exit code), `rename-session`, `lock-client`/`lock-
 
 **`kill-pane [-a] [-t pane]`** — kills the pane and its process; the last pane's death closes the window. `-a` kills every *other* pane. `kill-window [-a]` likewise.
 
-**`list-panes [-as] [-F fmt] [-f filter] [-t target]`** — default one window; `-s` a whole session; `-a` every pane on the server (target ignored). One line per pane; a tab-separated multi-variable format is the stable cross-version read because missing variables empty their column rather than shifting it ([formats](#formats)).
+**`list-panes [-as] [-F fmt] [-f filter] [-t target]`** — default one window; `-s` a whole session; `-a` every pane on the server (target ignored). One line per pane; tmux sanitizes non-printable format output such as tabs on modern versions, so parsed multi-variable formats use printable separators and sanitize free-form fields that may contain the chosen separator ([formats](#formats)).
 
 **`capture-pane [-aAepPqCJNT] [-b buffer] [-E end] [-S start] [-t pane]`** — `-p` writes stdout (else into a paste buffer); `-S`/`-E` bound lines where 0 is the top of the visible screen, negatives reach into history, and `-` means history start / visible end; `-e` includes SGR colour/attribute escapes; `-C` octal-escapes non-printables; `-J` joins wrapped lines and preserves trailing spaces; `-N` preserves trailing spaces only; `-a` reads the alternate screen (`-q` to tolerate its absence).
 
@@ -144,7 +144,7 @@ Index: `respawn-pane`/`respawn-window [-k] [-c] [-e]` (restart in place — the 
 
 ## Formats
 
-The format language is tmux's read surface: every `-F` flag, filter, hook command, and `#()` goes through it. **An unknown or inapplicable variable expands to the empty string, never an error** — a tab-separated `-F` row degrades by emptying columns rather than shifting them, and a misspelled variable is silent (the `pane_start_time` lesson below). `display-message -p` evaluates, `-a` dumps the catalog, `-v` traces.
+The format language is tmux's read surface: every `-F` flag, filter, hook command, and `#()` goes through it. **An unknown or inapplicable variable expands to the empty string, never an error** — a multi-variable `-F` row with a printable separator degrades by emptying columns rather than shifting them, and a misspelled variable is silent (the `pane_start_time` lesson below). `display-message -p` evaluates, `-a` dumps the catalog, `-v` traces.
 
 ### Language
 

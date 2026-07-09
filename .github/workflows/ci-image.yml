@@ -9,6 +9,15 @@ on:
   schedule:
     # Weekly refresh keeps the baked RustSec DB and Cargo registry warm.
     - cron: "0 4 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - ci/Dockerfile
+      - .github/workflows/ci-image.yml
+  pull_request:
+    paths:
+      - ci/Dockerfile
+      - .github/workflows/ci-image.yml
 
 permissions:
   contents: read
@@ -20,8 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
-      group: ci-image-publish
-      cancel-in-progress: false
+      # Publishes serialize on one non-cancelling lane; PR validation builds key
+      # per-ref and cancel stale runs.
+      group: ci-image-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'publish' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -44,23 +55,39 @@ jobs:
       - name: Build and push image
         env:
           TOKEN: ${{ github.token }}
+          # Push on dispatch/schedule/push-to-main; pull_request only validates the build.
+          PUSH: ${{ github.event_name != 'pull_request' }}
         run: |
           set -euo pipefail
-          auth_dir="${RUNNER_TEMP:-/tmp}/registry-auth"
-          mkdir -p "$auth_dir/docker"
-          export DOCKER_CONFIG="$auth_dir/docker"
-          export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
-          echo "$TOKEN" | docker login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
+          if [ "$PUSH" = "true" ]; then
+            auth_dir="${RUNNER_TEMP:-/tmp}/registry-auth"
+            mkdir -p "$auth_dir/docker"
+            export DOCKER_CONFIG="$auth_dir/docker"
+            export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
+            echo "$TOKEN" | docker login "$REGISTRY_HOST" -u "$GITHUB_ACTOR" --password-stdin
+          fi
           docker build --pull -f ci/Dockerfile -t "$IMAGE" -t "$LATEST_IMAGE" .
-          docker push "$IMAGE"
-          docker push "$LATEST_IMAGE"
+          if [ "$PUSH" = "true" ]; then
+            docker push "$IMAGE"
+            docker push "$LATEST_IMAGE"
+          fi
 
       - name: Publish summary
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
         run: |
           set -euo pipefail
-          {
-            echo "### Published CI image"
-            echo
-            echo "- \`${IMAGE}\`"
-            echo "- \`${LATEST_IMAGE}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$IS_PR" = "true" ]; then
+            {
+              echo "### Validated CI image build (not pushed)"
+              echo
+              echo "- \`${IMAGE}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Published CI image"
+              echo
+              echo "- \`${IMAGE}\`"
+              echo "- \`${LATEST_IMAGE}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

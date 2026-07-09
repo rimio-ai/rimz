@@ -170,7 +170,7 @@ impl MuxBackend for TmuxBackend {
         let mut spec = self.cmd().args([
             "list-clients",
             "-F",
-            "#{pane_id}\t#{client_activity}\t#{client_flags}",
+            "#{pane_id} #{client_activity} #{client_flags}",
         ]);
         if let Some(session) = opts.session_name {
             spec = spec.args(["-t".to_owned(), session]);
@@ -503,7 +503,7 @@ impl MuxBackend for TmuxBackend {
                 "-d".to_owned(),
                 "-P".to_owned(),
                 "-F".to_owned(),
-                "#{window_id}\t#{pane_id}".to_owned(),
+                "#{window_id} #{pane_id}".to_owned(),
                 "-t".to_owned(),
                 session.clone(),
                 "-n".to_owned(),
@@ -605,7 +605,7 @@ impl MuxBackend for TmuxBackend {
                 "-d".to_owned(),
                 "-P".to_owned(),
                 "-F".to_owned(),
-                "#{window_id}\t#{pane_id}".to_owned(),
+                "#{window_id} #{pane_id}".to_owned(),
                 "-t".to_owned(),
                 opts.session_name.clone(),
                 "-n".to_owned(),
@@ -739,7 +739,7 @@ impl TmuxBackend {
     }
 
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
-        let format = "#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_active}\t#{window_name}\t#{pane_title}";
+        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{pane_active},#{s/,/_/g:window_name},#{s/,/_/g:pane_title}";
         match session_name {
             Some(session) => self
                 .cmd()
