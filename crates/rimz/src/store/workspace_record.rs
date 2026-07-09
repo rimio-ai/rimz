@@ -21,7 +21,7 @@ use crate::workspace::{ResolvedWorkspace, RootClass};
 pub enum WorkspaceRecordErr {
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

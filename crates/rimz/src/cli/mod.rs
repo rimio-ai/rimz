@@ -50,6 +50,12 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rimz::agents::AgentState;
 use rimz::ids::MuxName;
 use rimz::{RuntimePaths, StatePaths, Store};
+
+/// Render a command failure at the binary boundary.
+pub fn report(error: &anyhow::Error) {
+    render::report(error);
+}
+
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
     reject_removed_top_level_tokens()?;

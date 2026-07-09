@@ -128,7 +128,7 @@ struct LoadMemo {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigErr {
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

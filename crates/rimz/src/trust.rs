@@ -32,7 +32,7 @@ const HASH_PREFIX: &str = "sha256:";
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrustErr {
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

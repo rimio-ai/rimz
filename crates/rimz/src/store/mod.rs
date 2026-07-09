@@ -123,7 +123,7 @@ pub enum StoreErr {
     WorkspaceRecord(#[from] workspace_record::WorkspaceRecordErr),
     #[error("{0}")]
     AgentLaunchIdentity(String),
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

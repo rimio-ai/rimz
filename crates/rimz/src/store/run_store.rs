@@ -21,7 +21,7 @@ pub enum RunStoreErr {
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
     Lock(#[from] crate::store::lock::LockErr),
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

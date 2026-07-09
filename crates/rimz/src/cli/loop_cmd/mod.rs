@@ -358,8 +358,7 @@ fn project_config_path(project_root: &Path) -> PathBuf {
 fn project_tasks_for_root(
     project_root: &Path,
 ) -> Result<Option<rimz::config::effective::ProjectTasks>> {
-    rimz::config::effective::project_tasks(project_root, &config_home())
-        .with_context(|| format!("reading project loop tasks in {}", project_root.display()))
+    rimz::config::effective::project_tasks(project_root, &config_home()).map_err(Into::into)
 }
 
 fn project_effective_merge(

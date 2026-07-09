@@ -29,7 +29,7 @@ pub(crate) enum AssetErr {
     Decode(#[from] frames::FrameErr),
     #[error("pet manifest error at {path}: {detail}")]
     Manifest { path: PathBuf, detail: String },
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

@@ -36,7 +36,7 @@ pub enum GcErr {
         #[source]
         source: io::Error,
     },
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

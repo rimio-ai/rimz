@@ -21,7 +21,7 @@ pub enum MessageStoreErr {
     NotFound(MessageId),
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

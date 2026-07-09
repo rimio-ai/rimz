@@ -30,7 +30,7 @@ pub const ZELLIJ_BIN_ENV: &str = "RIMZ_ZELLIJ_BIN";
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebLoginTokenCacheErr {
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

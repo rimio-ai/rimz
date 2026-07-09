@@ -1,15 +1,15 @@
 //! Rimz CLI entry point.
 //!
-//! `main.rs` is the only place in the workspace allowed to use `anyhow` and
-//! to install the `tracing_subscriber`. Library modules return typed errors
-//! and emit `tracing` events; this wrapper turns them into a process exit.
+//! The private CLI tree is the Rimz binary's `anyhow` boundary, and `main.rs`
+//! installs the `tracing_subscriber`. Library modules return typed errors and
+//! emit `tracing` events; this wrapper renders failures and selects an exit
+//! code.
 
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
 
 mod cli;
 
-use anyhow::Result;
 use rimz::observability;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -18,7 +18,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 const DEFAULT_LOG_FILTER: &str = "warn";
 const SIDEBAR_SERVE_LOG_FILTER: &str = "off";
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
     // Start reading the executable identity off-thread so the build-id Sentry
     // tag is usually ready by the time `dispatch` sets the command scope.
     rimz::build_id::warm();
@@ -27,7 +27,13 @@ fn main() -> Result<()> {
     let reporting = observability::init();
     install_tracing(reporting.enabled());
     reporting.report();
-    cli::dispatch()
+    match cli::dispatch() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            cli::report(&error);
+            std::process::ExitCode::FAILURE
+        }
+    }
 }
 
 fn install_tracing(report_to_sentry: bool) {

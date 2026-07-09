@@ -25,7 +25,7 @@ pub enum SendErr {
     EventLog(#[from] crate::store::event_log::EventLogErr),
     #[error("{0}")]
     Mux(#[from] crate::mux::MuxErr),
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

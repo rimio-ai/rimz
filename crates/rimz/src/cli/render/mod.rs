@@ -30,6 +30,44 @@ pub(crate) fn err() -> anstream::AutoStream<std::io::StderrLock<'static>> {
     anstream::AutoStream::auto(std::io::stderr().lock())
 }
 
+/// Render a command failure for a human, suppressing source messages already
+/// embedded in their parent error. A stderr write failure cannot replace the
+/// command failure that brought us here.
+pub(crate) fn report(error: &anyhow::Error) {
+    let _ = write_report(&mut err(), error);
+}
+
+fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()> {
+    let mut chain = error.chain();
+    let Some(error) = chain.next() else {
+        return Ok(());
+    };
+    let message = error.to_string();
+    let message = message.trim();
+    let mut lines = message.lines();
+    match lines.next() {
+        Some(line) => writeln!(w, "{} {line}", paint(palette::ALARM.bold(), "error:"))?,
+        None => writeln!(w, "{}", paint(palette::ALARM.bold(), "error:"))?,
+    }
+    for line in lines {
+        writeln!(w, "  {line}")?;
+    }
+
+    let mut last_printed = message.to_owned();
+    for source in chain {
+        let message = source.to_string();
+        let message = message.trim();
+        if last_printed.contains(message) {
+            continue;
+        }
+        for line in message.lines() {
+            writeln!(w, "  {line}")?;
+        }
+        last_printed = message.to_owned();
+    }
+    Ok(())
+}
+
 /// Finish a stdout emission, treating a consumer that stopped reading as a
 /// clean end rather than a fault. Any other write error propagates.
 pub(crate) fn finish(write: std::io::Result<()>) -> anyhow::Result<()> {
@@ -464,6 +502,52 @@ mod tests {
     fn finish_propagates_a_non_broken_pipe_error() {
         let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         assert!(finish(Err(err)).is_err());
+    }
+
+    #[test]
+    fn report_prints_an_embedded_source_once() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("opening config: {source}")]
+        struct EmbeddedSource {
+            #[source]
+            source: std::io::Error,
+        }
+
+        let error = anyhow::Error::new(EmbeddedSource {
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied"),
+        });
+
+        assert_eq!(
+            strip(|w| write_report(w, &error)),
+            "error: opening config: permission denied\n"
+        );
+    }
+
+    #[test]
+    fn report_indents_distinct_causes() {
+        let error = anyhow::anyhow!("leaf").context("middle").context("top");
+
+        assert_eq!(
+            strip(|w| write_report(w, &error)),
+            "error: top\n  middle\n  leaf\n"
+        );
+    }
+
+    #[test]
+    fn report_indents_every_multiline_cause_line() {
+        let error = anyhow::anyhow!("first detail\nsecond detail").context("top");
+
+        assert_eq!(
+            strip(|w| write_report(w, &error)),
+            "error: top\n  first detail\n  second detail\n"
+        );
+    }
+
+    #[test]
+    fn report_prints_a_bare_error_on_one_line() {
+        let error = anyhow::anyhow!("plain failure");
+
+        assert_eq!(strip(|w| write_report(w, &error)), "error: plain failure\n");
     }
 
     #[test]

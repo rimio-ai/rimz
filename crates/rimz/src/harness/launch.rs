@@ -43,7 +43,7 @@ pub enum ProgramLookupErr {
     },
     #[error("launch environment probe timed out after {0:?}")]
     ProbeTimeout(Duration),
-    #[error("io error on launch environment probe output {path}: {source}")]
+    #[error("cannot access launch environment probe output {path}: {source}")]
     ProbeIo {
         path: PathBuf,
         #[source]

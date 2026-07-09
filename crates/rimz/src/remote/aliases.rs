@@ -27,7 +27,7 @@ const ALIAS_NAME_MAX_LEN: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AliasErr {
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

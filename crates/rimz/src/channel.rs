@@ -24,7 +24,7 @@ pub enum ChannelErr {
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
     Lock(#[from] lock::LockErr),
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

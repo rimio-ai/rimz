@@ -25,7 +25,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AtomicErr {
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

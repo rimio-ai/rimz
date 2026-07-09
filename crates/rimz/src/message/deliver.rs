@@ -34,7 +34,7 @@ pub enum DeliverErr {
     Produce(#[from] crate::sidebar::produce::ProduceErr),
     #[error(transparent)]
     Send(#[from] send::SendErr),
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]

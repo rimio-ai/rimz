@@ -15,7 +15,7 @@ const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
 pub enum EffectiveConfigErr {
     #[error(transparent)]
     Trust(#[from] trust::TrustErr),
-    #[error("io error on {path}: {source}")]
+    #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]
