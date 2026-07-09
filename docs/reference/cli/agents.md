@@ -64,7 +64,7 @@ rimz agents claude,codex --channel=design "Draft the API shape."
 rimz agents claude,codex --worktree=cli-docs "Review the CLI docs."
 rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
-rimz agents forge.planner                              # re-add one role of team forge
+rimz agents forge.planner                            # re-add one role of team forge
 rimz agents claude --worktree "Take one approach."   # parallel attempts, each in its own fresh worktree
 rimz agents claude --worktree "Take another approach."
 ```
@@ -80,8 +80,8 @@ A second positional that is itself a known cell is rejected with a `rimz agents 
 `--resume` relaunches a prior cohort matching the same spec; `--continue` is the same visible alias.
 
 ```sh
-rimz agents forge --resume                             # reopen the newest closed forge cohort
-rimz agents forge -w restore-living-team --resume      # reopen that exact team instance
+rimz agents forge --resume                           # reopen the newest closed forge cohort
+rimz agents forge -w restore-living-team --resume    # reopen that exact team instance
 rimz agents claude,codex --resume                    # reopen the newest matching inline cohort
 rimz agents claude --resume                          # resume the freshest closed Claude session
 ```
