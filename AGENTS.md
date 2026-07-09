@@ -41,6 +41,9 @@ rimz agents                          # agent cards, current channel
 rimz agents '#auth'                  # one lane's cards
 rimz agents show @coder              # card: activity, context, messages, transcript
 rimz agents logs @coder -n 20        # transcript tail (-f follows)
+rimz agents history @coder -n 10     # per-turn tokens, cost, and outcome
+rimz agents restart @coder           # bounce in place and resume the session
+rimz message @coder "rebase first"   # park for the next turn boundary
 rimz message @coder --wait "did the migration land? one line" # ask and print the reply
 rimz message --steer @coder "stop"   # interrupt the live turn now
 rimz message show msg_<id>           # why a message hasn't landed

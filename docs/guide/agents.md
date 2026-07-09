@@ -221,6 +221,17 @@ coder  15:41
 $ rimz agents logs @coder -f    # follow new lines as they land
 ```
 
+**Read what each turn cost.** `rimz agents history` joins the conversation's user turns to the provider's token and price records, so you can see which request consumed the session without leaving the agent view. `-n` keeps the newest rows and `--json` returns the same records to a script:
+
+```console
+$ rimz agents history @coder -n 3
+START             DUR  TOKENS       COST     OUTCOME  PROMPT
+2026-07-08 15:12   8m  ↘4k ↗510     $0.4210  done     implement refresh-token rotation
+2026-07-08 15:38   3m  ↘1k ↗284     $0.2870  done     add coverage for expiry edge cases
+2026-07-08 15:44  12s  ↘320 ↗0      $0.0310  open     run the focused integration tests
+3 turns · 54k tokens · $0.7390
+```
+
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 
 ```console
@@ -242,6 +253,8 @@ rimz agents stop @claude --all  # close every Claude in scope
 ```
 
 `stop` closes the agent's pane, ending the CLI process the way Ctrl+C would; sessions stay on disk in the provider's own format, so a stopped agent is one `--resume` away.
+
+**Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current `agents.toml`, so edits take effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the allocated replacement handle instead of hiding a possible rename.
 
 Two everyday tasks have their own guides, with the depth this page leaves out:
 

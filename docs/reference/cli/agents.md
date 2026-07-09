@@ -17,7 +17,7 @@ Each command around `rimz agents` has its own page: [`rimz message`](./message.m
 
 ## Addressing agents
 
-`message`, `transcript`, `pane capture`/`send`/`focus`, and the `agents show`/`logs`/`focus`/`wait`/`stop`/`refresh` verbs share one address grammar: `@<handle>` names who, an optional `#<channel>` names the stamped lane, and a raw pane id is the precise fallback. This is the one place it is spelled out; every agent-facing command assumes it.
+`message`, `transcript`, `pane capture`/`send`/`focus`, and the `agents show`/`logs`/`history`/`focus`/`wait`/`stop`/`restart`/`refresh` verbs share one address grammar: `@<handle>` names who, an optional `#<channel>` names the stamped lane, and a raw pane id is the precise fallback. This is the one place it is spelled out; every agent-facing command assumes it.
 
 **Handles that name one agent:**
 
@@ -43,10 +43,10 @@ Each command around `rimz agents` has its own page: [`rimz message`](./message.m
 
 **One agent or many:**
 
-- The management verbs (`show`, `logs`, `focus`, and `stop`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `wait` accepts one or more independently resolved references. `stop --all` fans out to every match for the reference. `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
+- The management verbs (`show`, `logs`, `history`, `focus`, `stop`, and `restart`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `wait` accepts one or more independently resolved references. `stop --all` fans out to every match for the reference. `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
 - `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`. A fan-out delivers to every match with no confirmation and prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
-The `@` sigil is required for `message`, where it also keeps a target from being read as a launch spec. `show`, `logs`, `wait`, `stop`, and `refresh` also accept a bare selector (`swift-otter`), and `transcript`, `wait`, and `stop` also accept a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
+The `@` sigil is required for `message`, where it also keeps a target from being read as a launch spec. `show`, `logs`, `history`, `wait`, `stop`, `restart`, and `refresh` also accept a bare selector (`swift-otter`), and `transcript`, `wait`, and `stop` also accept a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
 
 ## Agents
 
@@ -147,8 +147,10 @@ rimz agents inspect swift-otter          # describe-style card, cost, messages, 
 rimz agents show swift-otter --capture   # report plus the pane's visible text
 rimz agents logs swift-otter -n 20       # one agent's transcript tail
 rimz agents logs swift-otter -f          # follow new transcript lines
+rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
 rimz agents top --once                   # one resource-ranked fleet table
 rimz agents focus @claude-2#cli-docs     # jump to the pane
+rimz agents restart @claude-2#cli-docs   # replace its pane and resume it
 rimz agents wait swift-otter --stream    # block until it lands, tailing the transcript
 rimz agents wait otter fox --any         # race agents; print the first finisher
 rimz agents refresh                      # force-refresh the channel's live agent cards
@@ -163,13 +165,15 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 | `list` (bare `agents`; `ps` alias) | the current channel; `--all` for the room | attention-ordered agent cards |
 | `show` (`inspect` alias) | one agent | describe-style report: activity, context, cost, messages, transcript tail |
 | `logs` | one agent | transcript tail; `-f` follows |
+| `history` | one live or stopped agent | per-turn duration, tokens, cost, and outcome |
 | `top` | live root agents | resource-ranked fleet table |
 | `focus` | one agent | jumps to its pane |
 | `wait` | one or more runs or agents | blocks until all land; `--any` returns on the first |
 | `refresh` | one agent, the channel, or `--all` | force-refreshes card context |
 | `stop` | one run or agent; `--all` fans out | cancels a run or closes the pane |
+| `restart` | one live agent | replaces its pane and resumes its provider session |
 
-`list`, `show`, `logs`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. Only `stop` ends anything, and it does so the way closing the pane would.
+`list`, `show`, `logs`, `history`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `stop` ends an agent; `restart` deliberately ends and replaces one.
 
 #### `list`
 
@@ -190,6 +194,10 @@ Rows group under channel section headers: `⑂` marks a worktree-backed or isola
 #### `logs`
 
 `logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as [`rimz transcript @ref`](./transcript.md).
+
+#### `history`
+
+`history <ref>` groups the provider transcript at each user message and assigns the session's API-call spend rows to those time spans. The table reports local start time, duration, fresh-input and output tokens, price, best-effort outcome, and prompt preview; `-n/--tail N` keeps the newest turns and `--json` emits the full records including cache-read tokens, cache-write tokens, and API-call count. `done` means an assistant reply closed the turn, `open` is the live in-flight final turn, and `cut` means the turn or session ended without an assistant reply. Live resolution falls back to the audit rollup, so stopped sessions remain readable while their provider transcript exists.
 
 #### `top`
 
@@ -214,3 +222,7 @@ Several references form a join. Text mode prints `<name> <status>` in completion
 #### `stop`
 
 `stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. It ends the CLI process the way Ctrl+C would; the provider's session files stay on disk, so a stopped agent is one `--resume` away. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
+
+#### `restart`
+
+`restart <ref>` acts on one live pane. It focuses that pane, opens its replacement in the same layout position, then closes the old pane; focus follows the replacement on both Zellij and tmux. The replacement re-renders the stamped profile from current configuration, preserves role, team, channel, and permission mode, and uses the provider's native session resume. One-off model and passthrough flags are not durable and are not replayed. When no resume command or recorded conversation exists, it launches fresh and prints `restarted fresh as @<allocated-name> — <reason>`; the allocator may choose a new name while the old live card still owns its handle, so the output makes that degraded rename explicit.
