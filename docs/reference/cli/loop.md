@@ -12,6 +12,8 @@ rimz loop add ci-green --check "gh run watch --exit-status" --on success --until
 rimz loop add repo-prime --project --agent codex-ping --prompt ping --every day --at 08:00
 rimz loop fire pr-watch
 rimz loop rename pr-watch ci-watch
+rimz loop pause pr-watch --for 2h
+rimz loop resume pr-watch
 rimz loop list
 rimz loop show pr-watch
 rimz loop remove pr-watch
@@ -35,12 +37,18 @@ A `<kind>-ping` agent is the window-primer: the run skips when the provider's wi
 
 `--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--wake` and `--until`, requires `--every` or `--cron`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; an untrusted project task does not fire, and during the untrusted window a same-named machine task keeps running. Project tasks ship in the repo, so they run only on a machine that has [granted trust](./hooks-trust.md#project-trust).
 
+## Pause and resume
+
+`loop pause <name>` holds a task until `loop resume <name>` lifts the pause. `--for <duration>` uses the `s`, `m`, `h`, and `d` duration units and resumes automatically; a pause without `--for` is indefinite. Resumed schedules continue from the resume moment, so interval, calendar, and cron tasks do not replay fires missed during the pause.
+
+Pause is per-machine state. Pausing a project task affects only this machine and does not edit the trust-hashed project config. `loop fire <name>` remains the manual testing hatch: it reports the pause, then runs the task anyway.
+
 ## Fire, list, show, rename
 
 `loop fire <name>` runs the task now in the foreground with the same check guard, window skip, overlap guard, and run-log record as a scheduled fire. It streams the check's live output, prints the outcome and the agent's final message for successful supervised runs, hints `--keep` when the transient pane closes, and keeps one-shot entries and wake schedules in place; `--keep` leaves the transient supervised pane open for inspection.
 
 A task that is already running records `overlapped` and skips instead of stacking another run. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
 
-`loop list` and `loop show` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, and next fire. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, next fire, task, check, root, and source with the defining file path, then prints recent runs plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links.
+`loop list` and `loop show` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, and next fire; paused tasks show `paused` and an automatic resume time when present. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, pause state or next fire, task, check, root, and source with the defining file path, then prints recent runs plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links.
 
 The task model and config shape are in [harness.md → Scheduled turns](../../internals/harness/harness.md#scheduled-turns-loop).

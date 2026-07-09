@@ -11,7 +11,8 @@ use std::process::{Command, Stdio};
 
 use jiff::{Timestamp, Zoned};
 
-use super::instances;
+use super::pauses::PauseEntry;
+use super::{instances, pauses};
 use crate::RuntimePaths;
 use crate::agents::longest_window_reset_at;
 use crate::config::effective;
@@ -43,8 +44,9 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     );
     let path = state_path(runtime);
     let state = read_state(&path);
+    let pauses = pauses::load();
     let resets = reset_occurrences(runtime, &tasks);
-    let (actions, next_state) = plan(&tasks, &state, now, &resets);
+    let (actions, next_state) = plan(&tasks, &state, &pauses, now, &resets);
     if next_state != state
         && let Err(err) = write_temp_then_rename_cache(&path, &next_state)
     {
@@ -106,6 +108,7 @@ fn trusted_project_tasks(project_root: &Path, runtime: &RuntimePaths) -> Option<
 fn plan(
     tasks: &BTreeMap<String, TaskEntry>,
     state: &BTreeMap<String, Timestamp>,
+    pauses: &BTreeMap<String, PauseEntry>,
     now: &Zoned,
     resets: &BTreeMap<String, Timestamp>,
 ) -> (Vec<(String, Action)>, BTreeMap<String, Timestamp>) {
@@ -123,15 +126,23 @@ fn plan(
                 continue;
             }
         };
+        let pause = pauses.get(name);
         match state.get(name).copied() {
             None => {
                 actions.push((name.clone(), Action::Arm));
                 next_state.insert(name.clone(), now.timestamp());
             }
             Some(last_fire)
-                if parsed
-                    .schedule
-                    .due(last_fire, now, resets.get(name).copied()) =>
+                if pause.is_some_and(|entry| pauses::is_active(entry, now.timestamp())) =>
+            {
+                next_state.insert(name.clone(), last_fire);
+            }
+            Some(last_fire)
+                if parsed.schedule.due(
+                    pauses::effective_last_fire(last_fire, pause, now.timestamp()),
+                    now,
+                    resets.get(name).copied(),
+                ) =>
             {
                 actions.push((name.clone(), Action::Fire));
                 next_state.insert(name.clone(), now.timestamp());
@@ -257,7 +268,13 @@ mod tests {
     fn first_seen_task_arms_without_firing() {
         let now = zdt(2026, 6, 24, 8, 0, 0);
         let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
-        let (actions, next) = plan(&tasks, &BTreeMap::new(), &now, &BTreeMap::new());
+        let (actions, next) = plan(
+            &tasks,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &now,
+            &BTreeMap::new(),
+        );
         assert_eq!(actions, vec![("daily".to_owned(), Action::Arm)]);
         assert_eq!(next.get("daily"), Some(&now.timestamp()));
     }
@@ -267,7 +284,7 @@ mod tests {
         let now = zdt(2026, 6, 24, 8, 5, 0);
         let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
         let state = BTreeMap::from([("daily".to_owned(), seconds_before(now.timestamp(), 300))]);
-        let (actions, next) = plan(&tasks, &state, &now, &BTreeMap::new());
+        let (actions, next) = plan(&tasks, &state, &BTreeMap::new(), &now, &BTreeMap::new());
         assert_eq!(actions, vec![("daily".to_owned(), Action::Fire)]);
         assert_eq!(next.get("daily"), Some(&now.timestamp()));
     }
@@ -278,7 +295,7 @@ mod tests {
         let prior = seconds_before(now.timestamp(), 240);
         let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
         let state = BTreeMap::from([("daily".to_owned(), prior)]);
-        let (actions, next) = plan(&tasks, &state, &now, &BTreeMap::new());
+        let (actions, next) = plan(&tasks, &state, &BTreeMap::new(), &now, &BTreeMap::new());
         assert!(actions.is_empty());
         assert_eq!(next.get("daily"), Some(&prior));
     }
@@ -287,7 +304,13 @@ mod tests {
     fn stale_state_entry_is_pruned() {
         let now = zdt(2026, 6, 24, 8, 0, 0);
         let state = BTreeMap::from([("gone".to_owned(), seconds_before(now.timestamp(), 300))]);
-        let (actions, next) = plan(&BTreeMap::new(), &state, &now, &BTreeMap::new());
+        let (actions, next) = plan(
+            &BTreeMap::new(),
+            &state,
+            &BTreeMap::new(),
+            &now,
+            &BTreeMap::new(),
+        );
         assert!(actions.is_empty());
         assert!(next.is_empty());
     }
@@ -302,17 +325,17 @@ mod tests {
         let tasks = BTreeMap::from([("w7".to_owned(), reset_task("/repo"))]);
         let resets = BTreeMap::from([("w7".to_owned(), reset)]);
 
-        let (actions, next) = plan(&tasks, &BTreeMap::new(), &now, &resets);
+        let (actions, next) = plan(&tasks, &BTreeMap::new(), &BTreeMap::new(), &now, &resets);
         assert_eq!(actions, vec![("w7".to_owned(), Action::Arm)]);
         assert_eq!(next.get("w7"), Some(&occurrence));
 
         let state = BTreeMap::from([("w7".to_owned(), seconds_before(occurrence, 1))]);
-        let (actions, next) = plan(&tasks, &state, &now, &resets);
+        let (actions, next) = plan(&tasks, &state, &BTreeMap::new(), &now, &resets);
         assert_eq!(actions, vec![("w7".to_owned(), Action::Fire)]);
         assert_eq!(next.get("w7"), Some(&occurrence));
 
         let state = BTreeMap::from([("w7".to_owned(), occurrence)]);
-        let (actions, next) = plan(&tasks, &state, &now, &resets);
+        let (actions, next) = plan(&tasks, &state, &BTreeMap::new(), &now, &resets);
         assert!(actions.is_empty());
         assert_eq!(next.get("w7"), Some(&occurrence));
     }
@@ -323,10 +346,93 @@ mod tests {
         let tasks = BTreeMap::from([("w7".to_owned(), reset_task("/repo"))]);
         let state = BTreeMap::from([("w7".to_owned(), seconds_before(now.timestamp(), 120))]);
 
-        let (actions, next) = plan(&tasks, &state, &now, &BTreeMap::new());
+        let (actions, next) = plan(&tasks, &state, &BTreeMap::new(), &now, &BTreeMap::new());
 
         assert!(actions.is_empty());
         assert_eq!(next.get("w7"), state.get("w7"));
+    }
+
+    #[test]
+    fn active_pause_holds_existing_stamp() {
+        let now = zdt(2026, 6, 24, 8, 0, 0);
+        let prior = seconds_before(now.timestamp(), 600);
+        let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
+        let state = BTreeMap::from([("daily".to_owned(), prior)]);
+        let pauses = BTreeMap::from([("daily".to_owned(), PauseEntry::default())]);
+
+        let (actions, next) = plan(&tasks, &state, &pauses, &now, &BTreeMap::new());
+
+        assert!(actions.is_empty());
+        assert_eq!(next.get("daily"), Some(&prior));
+    }
+
+    #[test]
+    fn first_seen_task_arms_while_paused() {
+        let now = zdt(2026, 6, 24, 8, 0, 0);
+        let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
+        let pauses = BTreeMap::from([("daily".to_owned(), PauseEntry::default())]);
+
+        let (actions, next) = plan(&tasks, &BTreeMap::new(), &pauses, &now, &BTreeMap::new());
+
+        assert_eq!(actions, vec![("daily".to_owned(), Action::Arm)]);
+        assert_eq!(next.get("daily"), Some(&now.timestamp()));
+    }
+
+    #[test]
+    fn ended_pause_sets_interval_edge() {
+        let now = zdt(2026, 6, 24, 8, 0, 0);
+        let pause_end = seconds_before(now.timestamp(), 240);
+        let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
+        let state = BTreeMap::from([("daily".to_owned(), seconds_before(pause_end, 600))]);
+        let pauses = BTreeMap::from([(
+            "daily".to_owned(),
+            PauseEntry {
+                until: Some(pause_end),
+            },
+        )]);
+
+        let (actions, next) = plan(&tasks, &state, &pauses, &now, &BTreeMap::new());
+        assert!(actions.is_empty());
+        assert_eq!(next.get("daily"), state.get("daily"));
+
+        let due = zdt(2026, 6, 24, 8, 1, 0);
+        let (actions, next) = plan(&tasks, &state, &pauses, &due, &BTreeMap::new());
+        assert_eq!(actions, vec![("daily".to_owned(), Action::Fire)]);
+        assert_eq!(next.get("daily"), Some(&due.timestamp()));
+    }
+
+    #[test]
+    fn ended_pause_skips_crossed_calendar_occurrence() {
+        let task = TaskEntry {
+            agent: Some("claude".to_owned()),
+            prompt: Some("do it".to_owned()),
+            root: PathBuf::from("/repo"),
+            every: Some("day".to_owned()),
+            at: Some("07:00".to_owned()),
+            ..TaskEntry::default()
+        };
+        let tasks = BTreeMap::from([("daily".to_owned(), task)]);
+        let state = BTreeMap::from([("daily".to_owned(), zdt(2026, 6, 23, 6, 0, 0).timestamp())]);
+        let pauses = BTreeMap::from([(
+            "daily".to_owned(),
+            PauseEntry {
+                until: Some(zdt(2026, 6, 24, 7, 30, 0).timestamp()),
+            },
+        )]);
+
+        let after_crossed_occurrence = zdt(2026, 6, 24, 8, 0, 0);
+        let (actions, _) = plan(
+            &tasks,
+            &state,
+            &pauses,
+            &after_crossed_occurrence,
+            &BTreeMap::new(),
+        );
+        assert!(actions.is_empty());
+
+        let next_occurrence = zdt(2026, 6, 25, 7, 0, 0);
+        let (actions, _) = plan(&tasks, &state, &pauses, &next_occurrence, &BTreeMap::new());
+        assert_eq!(actions, vec![("daily".to_owned(), Action::Fire)]);
     }
 
     #[test]

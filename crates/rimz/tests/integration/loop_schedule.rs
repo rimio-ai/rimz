@@ -10,6 +10,7 @@ use serde_json::json;
 use rimz::config::{CheckOn, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::schedule::instances;
+use rimz::harness::schedule::pauses::{self, PauseEntry};
 use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::ids::AgentKind;
 use rimz::message::MessageStatus;
@@ -326,6 +327,145 @@ fn loop_fire_keeps_ephemeral_task() {
         records
             .iter()
             .all(|record| record.task == "probe" && record.result == LoopRunResult::Completed)
+    );
+}
+
+#[test]
+fn loop_pause_renders_and_persists_indefinite_and_timed_state() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &[
+            "loop", "add", "nightly", "--check", "true", "--every", "15m",
+        ],
+    );
+
+    let stdout = loop_ok(&env, &["loop", "pause", "nightly"]);
+    assert!(
+        stdout.contains("loop `nightly`: paused; resume with `rimz loop resume nightly`"),
+        "pause should explain manual resume: {stdout}"
+    );
+    assert_eq!(
+        read_loop_pauses(&env).get("nightly"),
+        Some(&PauseEntry { until: None })
+    );
+    let stdout = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("nightly") && line.contains("paused")),
+        "list should replace NEXT with paused: {stdout}"
+    );
+    let stdout = loop_ok(&env, &["loop", "show", "nightly"]);
+    assert!(
+        stdout.contains("· paused") && stdout.contains("resume with `rimz loop resume nightly`"),
+        "show should render pause state and hint: {stdout}"
+    );
+
+    let stdout = loop_ok(&env, &["loop", "pause", "nightly", "--for", "2h"]);
+    assert!(
+        stdout.contains("loop `nightly`: paused; resumes in 2h (")
+            && read_loop_pauses(&env)
+                .get("nightly")
+                .is_some_and(|entry| entry.until.is_some()),
+        "timed pause should overwrite the entry and render its end: {stdout}"
+    );
+    let stdout = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        stdout.lines().any(|line| {
+            line.trim_start().starts_with("nightly") && line.contains("paused · in")
+        }),
+        "list should render the timed resume: {stdout}"
+    );
+}
+
+#[test]
+fn loop_fire_runs_paused_task_and_resume_is_idempotent() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "probe", "--check", "true", "--every", "15m"],
+    );
+    loop_ok(&env, &["loop", "pause", "probe"]);
+
+    let stdout = loop_ok(&env, &["loop", "fire", "probe"]);
+    assert!(
+        stdout.contains("loop `probe`: task is paused; firing anyway")
+            && stdout.contains("loop `probe`: completed (exit 0)"),
+        "manual fire should explain and bypass the pause: {stdout}"
+    );
+
+    let stdout = loop_ok(&env, &["loop", "resume", "probe"]);
+    assert!(
+        stdout.contains("loop `probe`: resumed"),
+        "resume should lift the pause: {stdout}"
+    );
+    assert!(
+        !loop_ok(&env, &["loop", "list"])
+            .lines()
+            .any(|line| line.trim_start().starts_with("probe") && line.contains("paused")),
+        "resumed task should leave paused rendering"
+    );
+    let stdout = loop_ok(&env, &["loop", "resume", "probe"]);
+    assert!(
+        stdout.contains("loop `probe`: not paused"),
+        "repeated resume should be a successful no-op: {stdout}"
+    );
+}
+
+#[test]
+fn loop_task_edits_keep_pause_overlay_consistent() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "old", "--check", "true", "--every", "15m"],
+    );
+    loop_ok(&env, &["loop", "pause", "old"]);
+    loop_ok(&env, &["loop", "rename", "old", "new"]);
+    let pauses = read_loop_pauses(&env);
+    assert!(!pauses.contains_key("old") && pauses.contains_key("new"));
+
+    loop_ok(&env, &["loop", "remove", "new"]);
+    assert!(read_loop_pauses(&env).is_empty());
+
+    loop_ok(
+        &env,
+        &["loop", "add", "swap", "--check", "true", "--every", "15m"],
+    );
+    loop_ok(&env, &["loop", "pause", "swap"]);
+    let stdout = loop_ok(
+        &env,
+        &["loop", "add", "swap", "--check", "true", "--every", "30m"],
+    );
+    assert!(
+        stdout.contains("pause: cleared") && !read_loop_pauses(&env).contains_key("swap"),
+        "replacing a task should clear and report its old pause: {stdout}"
+    );
+}
+
+#[test]
+fn loop_pause_accepts_untrusted_project_task_as_local_state() {
+    let env = Env::new();
+    write_project_config(
+        &env,
+        "[tasks.repo-check]\ncheck = \"true\"\nevery = \"15m\"\n",
+    );
+
+    let stdout = loop_ok(&env, &["loop", "pause", "repo-check"]);
+    assert!(
+        stdout.contains("loop `repo-check`: paused")
+            && !stdout.contains("trust grant")
+            && read_loop_pauses(&env).contains_key("repo-check"),
+        "pause should be a local overlay without changing project trust: {stdout}"
+    );
+    let stdout = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        stdout.lines().any(|line| {
+            line.trim_start().starts_with("repo-check")
+                && line.contains("project · untrusted")
+                && line.contains("paused")
+        }),
+        "untrusted project task should stay visible and paused: {stdout}"
     );
 }
 
@@ -1465,6 +1605,14 @@ fn read_loop_instances(env: &Env) -> Tasks {
         return Tasks::default();
     };
     serde_json::from_str(&text).expect("loop instances")
+}
+
+fn read_loop_pauses(env: &Env) -> BTreeMap<String, PauseEntry> {
+    let path = pauses::path(&env.state_root());
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_str(&text).expect("loop pauses")
 }
 
 fn write_loop_instances(env: &Env, tasks: Tasks) {

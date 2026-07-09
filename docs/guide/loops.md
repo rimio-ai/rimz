@@ -142,8 +142,12 @@ rimz loop list                 # every task, grouped by project, with next-fire 
 rimz loop show pr-watch        # one task's schedule, next fire, and recent run forensics
 rimz loop fire pr-watch        # fire now in the foreground for testing; the schedule stays put
 rimz loop fire pr-watch --keep # leave the transient pane open to inspect
+rimz loop pause pr-watch --for 2h
+rimz loop resume pr-watch
 rimz loop remove pr-watch
 ```
+
+Pause holds the elder's clock without deleting the task, and `--for` resumes it automatically. The schedule continues from the resume moment instead of replaying missed fires. Pause state belongs to one machine, so pausing a project task affects only your machine; `rimz loop fire` still runs a paused task for testing.
 
 Run mechanics (exit codes, output formats, `wait --stream`) are in [scripting.md](./scripting.md), and every flag is in the [loop CLI reference](../reference/cli/loop.md).
 

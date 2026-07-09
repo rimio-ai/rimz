@@ -51,6 +51,13 @@ pub(super) fn run_one(
     let (entry, source) = load_runnable_task(name, globals)?
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     block_untrusted_project_task(name, &entry, source)?;
+    if mode == LoopRunMode::Manual
+        && pauses::load()
+            .get(name)
+            .is_some_and(|entry| pauses::is_active(entry, Timestamp::now()))
+    {
+        writeln!(ui::out(), "loop `{name}`: task is paused; firing anyway")?;
+    }
     let started = Instant::now();
     let _run_lock = match acquire_run_lock(name, &entry) {
         Ok(Some(guard)) => guard,

@@ -16,7 +16,7 @@
 //! delivery mode reuses the shared message seam, and ephemeral self-wakes live
 //! in [`rimz::harness::schedule::instances`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -41,6 +41,7 @@ use rimz::harness::schedule::runner::{
 use rimz::harness::schedule::{
     self,
     instances::{self, TaskSource},
+    pauses::{self, PauseEntry},
 };
 use rimz::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use rimz::ids::WorkspaceId;
@@ -77,6 +78,10 @@ enum LoopSubcmd {
     Remove(NameArgs),
     /// Rename a task in the store that owns it.
     Rename(RenameArgs),
+    /// Pause a task until it is resumed or the optional duration elapses.
+    Pause(PauseArgs),
+    /// Resume a paused task without replaying missed fires.
+    Resume(NameArgs),
     /// List configured tasks and whether their room is open.
     List,
     /// Show one task's schedule, next fire, and recent run forensics.
@@ -154,6 +159,14 @@ struct NameArgs {
 }
 
 #[derive(Debug, Args)]
+struct PauseArgs {
+    name: String,
+    /// Resume automatically after a duration such as `2h`.
+    #[arg(long = "for", value_name = "DUR")]
+    pause_for: Option<String>,
+}
+
+#[derive(Debug, Args)]
 struct FireArgs {
     name: String,
     /// Leave the transient run pane open for inspection.
@@ -180,6 +193,8 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Add(args) => add::add(*args, globals),
         LoopSubcmd::Remove(args) => add::remove(&args.name, globals),
         LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name, globals),
+        LoopSubcmd::Pause(args) => add::pause(args, globals),
+        LoopSubcmd::Resume(args) => add::resume(&args.name, globals),
         LoopSubcmd::List => render::list(globals),
         LoopSubcmd::Show(args) => render::show(args, globals),
         LoopSubcmd::Fire(args) => {
@@ -397,6 +412,11 @@ fn load_all_tasks(globals: &GlobalFlags) -> Result<BTreeMap<String, (TaskEntry, 
     ))
 }
 
+pub(crate) fn prune_orphan_pauses(globals: &GlobalFlags) -> Result<usize> {
+    let known: BTreeSet<_> = load_all_tasks(globals)?.into_keys().collect();
+    pauses::prune_orphans(&known).map_err(Into::into)
+}
+
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<(TaskEntry, TaskSource)>> {
     validate_machine_loop_stores()?;
     let project = project_tasks_for_globals(globals)?;
@@ -513,6 +533,15 @@ fn mode_name(mode: PermissionMode) -> &'static str {
 
 fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
     super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
+}
+
+fn pause_until_text(until: Timestamp, now: Timestamp) -> String {
+    let local = until.to_zoned(MachineConfig::load_lenient().time_zone());
+    format!(
+        "{} ({})",
+        ui::rel_until(until, now),
+        local.strftime("%a %H:%M")
+    )
 }
 
 fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {

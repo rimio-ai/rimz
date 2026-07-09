@@ -17,6 +17,7 @@ use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub(crate) mod fire;
 pub mod instances;
+pub mod pauses;
 pub mod run_log;
 pub mod runner;
 

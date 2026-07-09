@@ -8,6 +8,7 @@ const NOTE_MAX: usize = 60;
 
 pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let tasks = load_all_tasks(globals)?;
+    let pause_entries = pauses::load();
     let mut out = ui::out();
     if tasks.is_empty() {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
@@ -43,20 +44,29 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
                 Err(err) => format!("invalid: {err}"),
             };
             let window_reset = window_reset_for(entry);
-            let next = parsed
-                .ok()
-                .and_then(|parsed| {
-                    next_fire_text(
-                        name,
-                        &parsed.schedule,
-                        &stamps,
-                        &now_zoned,
-                        now,
-                        window_reset,
-                    )
-                })
-                .map(ui::cell)
-                .unwrap_or_else(|| ui::cell("-").dash());
+            let pause = pause_entries.get(name);
+            let next = match pause.filter(|entry| pauses::is_active(entry, now)) {
+                Some(PauseEntry { until: None }) => ui::cell("paused").fg(ui::palette::MUTED),
+                Some(PauseEntry { until: Some(until) }) => {
+                    ui::cell(format!("paused · {}", ui::rel_until(*until, now)))
+                        .fg(ui::palette::MUTED)
+                }
+                None => parsed
+                    .ok()
+                    .and_then(|parsed| {
+                        next_fire_text(
+                            name,
+                            &parsed.schedule,
+                            &stamps,
+                            pause,
+                            &now_zoned,
+                            now,
+                            window_reset,
+                        )
+                    })
+                    .map(ui::cell)
+                    .unwrap_or_else(|| ui::cell("-").dash()),
+            };
             let (last, status) = stats
                 .get(name)
                 .map(|stats| last_run_cells(stats, now))
@@ -176,12 +186,36 @@ fn next_fire_text(
     name: &str,
     schedule: &schedule::Schedule,
     stamps: &BTreeMap<String, Timestamp>,
+    pause: Option<&PauseEntry>,
     now_zoned: &jiff::Zoned,
     now: Timestamp,
     window_reset: Option<Timestamp>,
 ) -> Option<String> {
-    let next = schedule.next_after(*stamps.get(name)?, now_zoned, window_reset)?;
+    let stamp = pauses::effective_last_fire(*stamps.get(name)?, pause, now);
+    let next = schedule.next_after(stamp, now_zoned, window_reset)?;
     Some(ui::rel_until(next, now))
+}
+
+pub(super) fn task_next_fire_text(
+    name: &str,
+    entry: &TaskEntry,
+    pause: Option<&PauseEntry>,
+    now: Timestamp,
+) -> Option<String> {
+    let root = entry.resolved_root();
+    let runtime = runtime_for_root(&root)?;
+    let stamps = rimz::harness::schedule::last_stamps(&runtime);
+    let parsed = schedule::parse_schedule(name, entry).ok()?;
+    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    next_fire_text(
+        name,
+        &parsed.schedule,
+        &stamps,
+        pause,
+        &now_zoned,
+        now,
+        window_reset_for(entry),
+    )
 }
 
 fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
@@ -212,6 +246,8 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         Err(err) => format!("invalid: {err}"),
     };
     let now = Timestamp::now();
+    let pause = pauses::load().remove(&args.name);
+    let active_pause = pause.as_ref().filter(|entry| pauses::is_active(entry, now));
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let window_reset = window_reset_for(&entry);
     let next = parsed.as_ref().ok().and_then(|parsed| {
@@ -219,6 +255,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             &args.name,
             &parsed.schedule,
             &stamps,
+            pause.as_ref(),
             &now_zoned,
             now,
             window_reset,
@@ -233,10 +270,21 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         ui::paint(ui::palette::ACCENT.bold(), &args.name),
         ui::paint(schedule_style(parsed.as_ref()), &schedule_text)
     )?;
-    if let Some(next) = next {
-        write!(out, " · next {next}")?;
+    match active_pause {
+        Some(PauseEntry { until: None }) => write!(out, " · paused")?,
+        Some(PauseEntry { until: Some(until) }) => {
+            write!(out, " · paused, resumes {}", pause_until_text(*until, now))?
+        }
+        None => {
+            if let Some(next) = next {
+                write!(out, " · next {next}")?;
+            }
+        }
     }
     writeln!(out)?;
+    if matches!(active_pause, Some(PauseEntry { until: None })) {
+        writeln!(out, "  resume with `rimz loop resume {}`", args.name)?;
+    }
     let mut kv = ui::KeyVals::new().indent(2);
     kv.push("task", ui::cell(task_subject(&entry)));
     if let Some(check) = check_summary(&entry) {

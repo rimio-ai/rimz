@@ -88,7 +88,10 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     let schedules_reaped = if args.dry_run {
         0
     } else {
-        super::loop_cmd::reap_dead_delivery_schedules().context("reaping dead loop schedules")?
+        let reaped = super::loop_cmd::reap_dead_delivery_schedules()
+            .context("reaping dead loop schedules")?;
+        super::loop_cmd::prune_orphan_pauses(globals).context("pruning orphan loop pauses")?;
+        reaped
     };
     spinner.set("pruning dead workspaces…");
     let prune = gc::prune_dead_workspaces(args.dry_run).context("pruning dead workspaces")?;

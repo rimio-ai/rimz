@@ -216,9 +216,13 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         instances::remove(&args.name)?;
         config_set_entry(&args.name, &entry)?;
     }
+    let cleared_pause = pauses::remove(&args.name)?;
 
     let mut out = ui::out();
     writeln!(out, "added loop task `{}`", args.name)?;
+    if cleared_pause {
+        writeln!(out, "pause: cleared")?;
+    }
     write_add_feedback(&mut out, &args.name, &entry, &parsed)?;
     writeln!(
         out,
@@ -240,6 +244,7 @@ pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
         Some((entry, source)) => {
             let removed = remove_loaded_task(name, &entry, source)?;
             if removed && matches!(source, TaskSource::Project { .. }) {
+                pauses::remove(name)?;
                 let mut out = ui::out();
                 writeln!(out, "removed loop task `{name}`")?;
                 write_project_trust_note(&mut out, &entry.root)?;
@@ -251,6 +256,7 @@ pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
     };
     let mut out = ui::out();
     if removed {
+        pauses::remove(name)?;
         writeln!(out, "removed loop task `{name}`")?;
     } else {
         writeln!(out, "no loop task named `{name}`")?;
@@ -275,6 +281,7 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
             TaskSource::Project { .. } => {
                 let renamed = project_config_rename(&entry.root, name, new_name)?;
                 if renamed {
+                    pauses::rename(name, new_name)?;
                     let mut out = ui::out();
                     writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
                     write_project_trust_note(&mut out, &entry.root)?;
@@ -287,10 +294,71 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
     };
     let mut out = ui::out();
     if renamed {
+        pauses::rename(name, new_name)?;
         writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
     } else {
         writeln!(out, "no loop task named `{name}`")?;
     }
+    Ok(())
+}
+
+pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
+    load_task(&args.name, globals)?.ok_or_else(|| {
+        anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
+    })?;
+    let now = Timestamp::now();
+    let until = args
+        .pause_for
+        .as_deref()
+        .map(|raw| {
+            let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!(err))?;
+            if duration.is_zero() {
+                bail!("--for must be greater than zero");
+            }
+            now.checked_add(duration)
+                .context("resolving --for against the current clock")
+        })
+        .transpose()?;
+    pauses::set(&args.name, PauseEntry { until })?;
+
+    let mut out = ui::out();
+    match until {
+        Some(until) => writeln!(
+            out,
+            "loop `{}`: paused; resumes {}",
+            args.name,
+            pause_until_text(until, now)
+        )?,
+        None => writeln!(
+            out,
+            "loop `{}`: paused; resume with `rimz loop resume {}`",
+            args.name, args.name
+        )?,
+    }
+    Ok(())
+}
+
+pub(super) fn resume(name: &str, globals: &GlobalFlags) -> Result<()> {
+    let (entry, _) = load_task(name, globals)?
+        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
+    let now = Timestamp::now();
+    let pause = pauses::load().remove(name);
+    if !pause
+        .as_ref()
+        .is_some_and(|entry| pauses::is_active(entry, now))
+    {
+        writeln!(ui::out(), "loop `{name}`: not paused")?;
+        return Ok(());
+    }
+
+    let resumed = PauseEntry { until: Some(now) };
+    pauses::set(name, resumed)?;
+    let mut out = ui::out();
+    write!(out, "loop `{name}`: resumed")?;
+    if let Some(next) = render::task_next_fire_text(name, &entry, Some(&resumed), now) {
+        write!(out, " · next {next}")?;
+    }
+    writeln!(out)?;
     Ok(())
 }
 
