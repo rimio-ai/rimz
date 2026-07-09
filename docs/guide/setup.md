@@ -130,7 +130,7 @@ smart_compact = "70%"    # or an occupied-token count such as "120000" or "180k"
 A provider's budget window starts counting on first use, so a window that starts when you sit down ends mid-afternoon. A scheduled `<kind>-ping` loop task starts the window on your clock instead — one cheap ping per provider primes the whole account:
 
 ```sh
-rimz loop add morning --agent claude-ping --prompt ping --every weekdays --at 07:00
+rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
 rimz loop add follow-reset --agent claude-ping --prompt ping --every reset   # re-prime when the window resets
 ```
 
@@ -142,7 +142,7 @@ agent = "claude-ping"
 prompt = "ping"
 root = "/home/you/code/app"
 at = "07:00"
-every = "weekdays"
+every = "weekday"
 ```
 
 The ping runs at the lowest effort, skips when the provider's window is already counting down, and fires only while a room for `root` is open. The same `[tasks]` table also schedules watchdogs and self-wakes — an agent turn on an interval, gated on a shell check such as `cargo test` or `gh run watch` — covered in [configuration → Loop tasks](./configuration.md#loop-tasks) and [the loop CLI](../reference/cli/loop.md).

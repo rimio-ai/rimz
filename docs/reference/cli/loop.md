@@ -1,15 +1,15 @@
 # Loop CLI
 
-`rimz loop` puts agent turns on a clock. A task is a durable schedule: `rimz loop add` writes it to your per-machine `loop.toml` (or, with `--project`, to the repo's `.rimz/config.toml`), and the room's sidebar elder fires it while a room for the task's project is open. Nothing fires when no room is open, and `loop remove` deletes the schedule — a task never outlives the file it lives in. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, prime budget windows, and guard with watchdogs is the [loops guide](../../guide/loops.md).
+`rimz loop` puts agent turns on a clock. A task is a durable schedule: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires tasks while a room for the task's project is open. Nothing fires when no room is open, and `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, prime budget windows, and guard with watchdogs is the [loops guide](../../guide/loops.md).
 
 ```sh
-rimz loop add morning --agent claude-ping --prompt ping --at 07:00 --every weekdays
+rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
 rimz loop add weekly-prime --agent claude-ping --prompt ping --every reset
 rimz loop add pr-watch --agent codex --prompt "check CI on the release PR" --every 15m --mode auto --root .
 rimz loop add self-wake --wake @planner --prompt "resume the review and fix the next blocking comment" --in 30m --root .
 rimz loop add watchdog --check "cargo test" --on fail --agent codex --prompt "fix the failing test" --every 15m
 rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --wake @planner --prompt "CI is green; merge"
-rimz loop add repo-prime --project --agent codex-ping --prompt ping --at 08:00 --every daily
+rimz loop add repo-prime --project --agent codex-ping --prompt ping --every day --at 08:00
 rimz loop fire pr-watch
 rimz loop rename pr-watch ci-watch
 rimz loop list

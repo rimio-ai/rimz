@@ -165,7 +165,7 @@ rimz agents wait swift-otter --stream                       # block on it later,
 **Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. A `<kind>-ping` task primes budget windows: a lowest-effort turn starts the provider's window on your clock and skips when one is already counting down. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off.
 
 ```sh
-rimz loop add morning --agent claude-ping --prompt ping --every weekdays --at 07:00 # prime the 5h window
+rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00  # prime the 5h window
 rimz loop add nudge --wake @planner --prompt "resume the review" --in 30m           # one-shot wake
 rimz loop add watchdog --check "cargo test" --on fail \
     --agent codex --prompt "fix the failing test" --every 15m                       # watch, then wake

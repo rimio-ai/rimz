@@ -14,7 +14,7 @@
 ## prompt = "ping"
 ## root = "/home/you/code/app"         # absolute project root whose room hosts the turn
 ## at = "07:00"                        # 24h firing time in the configured timezone
-## every = "weekdays"                  # "day", "weekday", "weekend", or "mon,wed,fri"
+## every = "weekday"                   # "day", "weekday", "weekend", or "mon,wed,fri"
 ## worktree = "main"                   # optional channel to host the transient pane
 ##
 ## [tasks.pr_watch]

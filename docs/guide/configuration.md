@@ -389,7 +389,7 @@ agent = "claude-ping"     # `<kind>-ping` primes a provider window
 prompt = "ping"
 root = "/home/you/code/app"
 at = "07:00"             # 24h time in the configured timezone
-every = "weekdays"       # day | weekday | weekend | mon,wed,fri
+every = "weekday"        # day | weekday | weekend | mon,wed,fri
 
 [tasks.pr_watch]
 agent = "codex"
@@ -485,7 +485,7 @@ command = "notify-send rimz"
 agent = "codex-ping"
 prompt = "ping"
 at = "08:00"
-every = "daily"
+every = "day"
 ```
 
 Command-running fields enter the trust hash, so a clone with project config reads `untrusted` until `rimz trust grant` pins the current surface on this machine. A trusted repo profile, team, or task overlays machine config and wins on a name collision; a repo profile may inherit only another repo profile or a built-in kind, and a repo team role may bind only a repo profile, keeping the hashed surface closed and machine-independent. An `untrusted` or `stale` workspace refuses a launch or project-only task run that would consume project config, with the `rimz trust grant` fix; a same-named machine task continues to run, `rimz loop list` and `rimz loop show` still display project tasks with their trust state, and a `stale` report shows a field-level diff of what changed since the grant, so the re-grant is informed. The hash contract, stored surface, and launch-time enforcement are in [trust.md](../internals/harness/trust.md); the threat model is in [security.md](./security.md).
