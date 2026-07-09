@@ -62,6 +62,8 @@ pub enum ProjectTasksErr {
     #[error("task `{task}` must repeat; set `every` or `cron` for project tasks")]
     MustRepeat { task: String },
     #[error(transparent)]
+    Budget(#[from] crate::config::TaskBudgetError),
+    #[error(transparent)]
     Schedule(#[from] ScheduleErr),
 }
 
@@ -214,6 +216,12 @@ pub fn project_tasks_from_value(
                 source: ProjectTasksErr::MustRepeat { task: name.clone() },
             });
         }
+        entry
+            .validate_budget(name)
+            .map_err(|source| EffectiveConfigErr::Tasks {
+                path: config_path.to_path_buf(),
+                source: source.into(),
+            })?;
         resolve_task_prompt_paths(entry, config_dir);
         schedule::parse_schedule(name, entry).map_err(|source| EffectiveConfigErr::Tasks {
             path: config_path.to_path_buf(),

@@ -308,7 +308,7 @@ pub(super) fn show_agent(
     let mut out = render::out();
     render_agent_section(&mut out, agent, &peers)?;
     render_activity_section(&mut out, agent, ask.as_ref(), stale, now)?;
-    render_context_section(&mut out, agent, cost.as_ref())?;
+    render_context_section(&mut out, agent, cost.as_ref(), &runtime)?;
     render_placement_section(&mut out, agent)?;
     if let Some(run) = run.or_else(|| newest_run_for_agent(&store, agent).ok().flatten()) {
         render_run_section(&mut out, &run, now)?;
@@ -468,6 +468,7 @@ fn render_context_section(
     w: &mut impl Write,
     agent: &AgentState,
     cost: Option<&rimz::agents::AgentCost>,
+    runtime: &rimz::RuntimePaths,
 ) -> std::io::Result<()> {
     section(w, "Context")?;
     let mut kv = render::KeyVals::new().indent(2);
@@ -519,24 +520,38 @@ fn render_context_section(
     let budget = agent
         .budget_park
         .as_ref()
-        .map(|park| park.label())
+        .map(|park| {
+            park.label()
+                .strip_prefix("budget: ")
+                .unwrap_or_else(|| unreachable!("budget labels have a fixed prefix"))
+                .to_owned()
+        })
         .or_else(|| {
-            agent.budget.as_deref().and_then(|raw| {
-                raw.parse::<rimz::harness::budget::BudgetSpec>()
-                    .ok()
-                    .map(|spec| {
-                        let spend = cost.and_then(|cost| cost.total_cost_usd).unwrap_or(0.0);
-                        format!(
-                            "${spend:.2} of ${:.2}{}",
-                            spec.cap_usd,
-                            if spec.window == rimz::harness::budget::BudgetWindow::Day {
-                                "/day"
-                            } else {
-                                ""
-                            }
-                        )
-                    })
-            })
+            let ledger = rimz::harness::budget::read_ledger(runtime, &agent.kind, &agent.agent_id);
+            let launched = agent
+                .budget
+                .as_deref()
+                .and_then(|raw| raw.parse::<rimz::harness::budget::BudgetSpec>().ok());
+            let spec = ledger.as_ref().map(|ledger| ledger.spec).or(launched)?;
+            let cap = match ledger.as_ref() {
+                Some(ledger) => ledger.effective_cap_usd(),
+                None => Some(spec.cap_usd),
+            }?;
+            let total = rimz::harness::budget::total_cost_usd(agent)
+                .or_else(|| cost.and_then(|cost| cost.total_cost_usd))
+                .unwrap_or(0.0);
+            let spend = ledger.as_ref().map_or_else(
+                || rimz::harness::budget::BudgetLedger::new(spec).spend_usd(total),
+                |ledger| ledger.spend_usd(total),
+            );
+            Some(format!(
+                "${spend:.2} of ${cap:.2}{}",
+                if spec.window == rimz::harness::budget::BudgetWindow::Day {
+                    "/day"
+                } else {
+                    ""
+                }
+            ))
         });
     kv.push(
         "budget",

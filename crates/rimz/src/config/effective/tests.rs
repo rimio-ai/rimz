@@ -257,6 +257,26 @@ fn project_tasks_validate_schedule_shape() {
 }
 
 #[test]
+fn project_tasks_validate_budget_fields() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nevery = \"day\"\nbudget-per-day = \"$20.00\"\n",
+    );
+
+    let err = project_tasks(project.path(), config.path()).expect_err("invalid budget");
+
+    assert!(matches!(
+        err,
+        EffectiveConfigErr::Tasks {
+            source: ProjectTasksErr::Budget(crate::config::TaskBudgetError::MissingRunBudget { ref task }),
+            ..
+        } if task == "wake"
+    ));
+}
+
+#[test]
 fn project_tasks_must_repeat() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");

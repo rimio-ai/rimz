@@ -74,7 +74,7 @@ pub use glyphs::{
     validate_glyph_source,
 };
 pub use harness::{HarnessConfig, RtkMode};
-pub use loop_::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
+pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks};
 pub use mux::{
     MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,
@@ -151,6 +151,12 @@ pub enum ConfigErr {
         path: PathBuf,
         #[source]
         source: NotificationsConfigErr,
+    },
+    #[error("invalid per-machine loop config at {path}: {source}")]
+    Loop {
+        path: PathBuf,
+        #[source]
+        source: TaskBudgetError,
     },
     #[error(
         "removed config table in {path}: {detail} (run `rimz config init --print` for the current shape)"
@@ -699,10 +705,15 @@ fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsConfig> {
 }
 
 fn parse_loop_text(path: &Path, text: &str) -> Result<LoopConfig> {
-    toml::from_str(text).map_err(|source| ConfigErr::Parse {
+    let loop_: LoopConfig = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    loop_.validate_budgets().map_err(|source| ConfigErr::Loop {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(loop_)
 }
 
 /// Tables the `[agents]` redesign removed. Serde tolerates unknown keys so a

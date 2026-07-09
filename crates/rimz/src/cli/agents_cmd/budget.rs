@@ -134,16 +134,22 @@ fn render_budget(
         "agent",
         crate::cli::render::cell(format!("@{}", agent.agent_id)),
     );
+    let spec = ledger.map(|ledger| ledger.spec).or(launched);
+    let spend = total_cost_usd(agent).map(|total| {
+        ledger
+            .cloned()
+            .or_else(|| spec.map(BudgetLedger::new))
+            .map_or(total, |ledger| ledger.spend_usd(total))
+    });
     kv.push(
         "spend",
         crate::cli::render::cell(
-            total_cost_usd(agent)
+            spend
                 .map(|cost| format!("${cost:.2}"))
                 .unwrap_or_else(|| "-".to_owned()),
         )
         .dash(),
     );
-    let spec = ledger.map(|ledger| ledger.spec).or(launched);
     let cap = match ledger {
         Some(ledger) => ledger.effective_cap_usd(),
         None => launched.map(|spec| spec.cap_usd),

@@ -8,6 +8,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
 use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
+use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::schedule::instances;
 use rimz::harness::schedule::pauses::{self, PauseEntry};
@@ -159,6 +160,48 @@ fn agent_budget_command_persists_absolute_relative_and_clear_edits() {
             .expect("budget ledger");
         assert_eq!(ledger.effective_cap_usd(), expected_cap);
         assert_eq!(ledger.disabled, disabled);
+    }
+}
+
+#[test]
+fn agent_budget_views_render_local_day_spend() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-budget-view", "feature-budget");
+    let agent_id = AgentSessionId::from("sess-budget-view");
+    let kind = AgentKind::new_unchecked("claude");
+
+    let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
+    context.cost = Some(rimz::agents::AgentCost {
+        total_cost_usd: Some(50.0),
+        ..rimz::agents::AgentCost::default()
+    });
+    let record = rimz::store::agent_context::new_record("claude", agent_id.as_str(), context);
+    rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
+        .expect("write cost sidecar");
+
+    let mut ledger = BudgetLedger::new("20/day".parse().expect("budget"));
+    ledger.day_baseline = Some(DayBaseline {
+        date: jiff::civil::date(2026, 6, 1),
+        cost_usd: 40.0,
+    });
+    write_ledger(&env.runtime_paths(), &kind, &agent_id, &ledger).expect("write budget ledger");
+
+    for args in [
+        vec!["agents", "budget", "@claude"],
+        vec!["agents", "show", "@claude"],
+    ] {
+        let output = env.rimz().args(&args).output().expect("rimz budget view");
+        assert!(
+            output.status.success(),
+            "rimz {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("stdout");
+        assert!(
+            stdout.contains("$10.00"),
+            "rimz {args:?} should render day-relative spend: {stdout}"
+        );
     }
 }
 

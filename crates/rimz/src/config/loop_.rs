@@ -15,6 +15,13 @@ impl LoopConfig {
     pub fn is_empty(&self) -> bool {
         self.tasks.0.is_empty()
     }
+
+    pub fn validate_budgets(&self) -> Result<(), TaskBudgetError> {
+        for (name, entry) in &self.tasks.0 {
+            entry.validate_budget(name)?;
+        }
+        Ok(())
+    }
 }
 
 /// Named loop tasks, ordered by name. A map keeps `rimz loop add/remove/run`
@@ -73,6 +80,44 @@ impl TaskEntry {
     pub fn resolved_root(&self) -> PathBuf {
         resolve_root_with(&self.root, home_dir())
     }
+
+    pub fn validate_budget(&self, task: &str) -> Result<(), TaskBudgetError> {
+        if let Some(raw) = self.budget.as_deref() {
+            raw.parse::<crate::harness::budget::BudgetSpec>()
+                .map_err(|source| TaskBudgetError::Invalid {
+                    task: task.to_owned(),
+                    field: "budget",
+                    source,
+                })?;
+        }
+        if let Some(raw) = self.budget_per_day.as_deref() {
+            raw.parse::<crate::harness::budget::BudgetSpec>()
+                .map_err(|source| TaskBudgetError::Invalid {
+                    task: task.to_owned(),
+                    field: "budget-per-day",
+                    source,
+                })?;
+            if self.budget.is_none() {
+                return Err(TaskBudgetError::MissingRunBudget {
+                    task: task.to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum TaskBudgetError {
+    #[error("task `{task}` has invalid `{field}`: {source}")]
+    Invalid {
+        task: String,
+        field: &'static str,
+        #[source]
+        source: crate::harness::budget::BudgetParseError,
+    },
+    #[error("task `{task}` sets `budget-per-day` without `budget`; set a per-run budget")]
+    MissingRunBudget { task: String },
 }
 
 /// A loop delivery target pinned to the exact live agent session that scheduled
@@ -214,5 +259,29 @@ mod tests {
             err.to_string().contains("unknown field `spec`"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn task_budgets_validate_as_one_config_unit() {
+        let invalid = TaskEntry {
+            budget_per_day: Some("$20.00".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert!(matches!(
+            invalid.validate_budget("nightly"),
+            Err(TaskBudgetError::MissingRunBudget { task }) if task == "nightly"
+        ));
+
+        let malformed = TaskEntry {
+            budget: Some("many dollars".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert!(matches!(
+            malformed.validate_budget("nightly"),
+            Err(TaskBudgetError::Invalid {
+                field: "budget",
+                ..
+            })
+        ));
     }
 }

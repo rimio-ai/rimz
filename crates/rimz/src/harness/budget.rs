@@ -164,6 +164,18 @@ impl BudgetLedger {
     pub fn effective_cap_usd(&self) -> Option<f64> {
         (!self.disabled).then_some(self.raised_cap_usd.unwrap_or(self.spec.cap_usd))
     }
+
+    pub fn spend_usd(&self, total_cost_usd: f64) -> f64 {
+        match self.spec.window {
+            BudgetWindow::Session => total_cost_usd,
+            BudgetWindow::Day => (total_cost_usd
+                - self
+                    .day_baseline
+                    .as_ref()
+                    .map_or(total_cost_usd, |baseline| baseline.cost_usd))
+            .max(0.0),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -212,17 +224,12 @@ pub fn evaluate(
                 None => {
                     ledger.day_baseline = Some(DayBaseline {
                         date,
-                        cost_usd: 0.0,
+                        cost_usd: total,
                     });
                 }
                 Some(_) => {}
             }
-            (total
-                - ledger
-                    .day_baseline
-                    .as_ref()
-                    .map_or(0.0, |baseline| baseline.cost_usd))
-            .max(0.0)
+            ledger.spend_usd(total)
         }
     };
     if spend_usd < cap_usd {
@@ -295,15 +302,7 @@ pub fn project_parks(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, zon
             continue;
         }
         let total = total_cost_usd(agent).unwrap_or(parked.at_cost);
-        let spend_usd = match ledger.spec.window {
-            BudgetWindow::Session => total,
-            BudgetWindow::Day => (total
-                - ledger
-                    .day_baseline
-                    .as_ref()
-                    .map_or(0.0, |baseline| baseline.cost_usd))
-            .max(0.0),
-        };
+        let spend_usd = ledger.spend_usd(total);
         agent.budget_park = Some(BudgetPark {
             cap_usd,
             spend_usd,
@@ -608,17 +607,22 @@ mod tests {
     }
 
     #[test]
-    fn day_budget_rebases_when_local_date_advances() {
+    fn day_budget_rebases_on_first_sight_and_when_local_date_advances() {
         let zone = TimeZone::UTC;
         let first = "2026-06-01T23:59:00Z".parse().expect("timestamp");
         let next = "2026-06-02T00:01:00Z".parse().expect("timestamp");
         let mut ledger = BudgetLedger::new("5/day".parse().expect("spec"));
-        let over = agent(6.0, AgentStatus::Running, Some(first));
+        let resumed = agent(6.0, AgentStatus::Running, Some(first));
+        assert!(matches!(
+            evaluate(&resumed, &mut ledger, first, &zone, None),
+            BudgetVerdict::Under { spend_usd, .. } if spend_usd == 0.0
+        ));
+        let over = agent(12.0, AgentStatus::Running, Some(first));
         assert!(matches!(
             evaluate(&over, &mut ledger, first, &zone, None),
             BudgetVerdict::Park { .. }
         ));
-        let reset = agent(6.5, AgentStatus::Idle, Some(next));
+        let reset = agent(12.5, AgentStatus::Idle, Some(next));
         assert!(matches!(
             evaluate(&reset, &mut ledger, next, &zone, None),
             BudgetVerdict::Under { spend_usd, .. } if spend_usd == 0.0

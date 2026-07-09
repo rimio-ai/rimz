@@ -67,6 +67,7 @@ enum ExpectedErr {
     Parse,
     Agents,
     Notifications,
+    Loop,
 }
 
 fn expect_err(file: &str, text: &str) -> ConfigErr {
@@ -79,6 +80,7 @@ fn assert_config_err(err: ConfigErr, expected: ExpectedErr) {
         (ConfigErr::Parse { .. }, ExpectedErr::Parse)
         | (ConfigErr::Agents { .. }, ExpectedErr::Agents)
         | (ConfigErr::Notifications { .. }, ExpectedErr::Notifications) => {}
+        (ConfigErr::Loop { .. }, ExpectedErr::Loop) => {}
         _ => panic!("expected {expected:?}, got {err:?}"),
     }
 }
@@ -809,6 +811,21 @@ fn loop_tasks_parse_and_default_empty() {
     assert_eq!(target.kind, "claude");
     assert_eq!(target.session, "sess-1");
     assert_eq!(target.handle, "@planner");
+}
+
+#[test]
+fn loop_task_budgets_validate_during_config_load() {
+    let err = expect_err(
+        "loop.toml",
+        "[tasks.nightly]\nagent = \"codex\"\nprompt = \"work\"\nroot = \"/repo\"\nevery = \"day\"\nbudget-per-day = \"$20.00\"\n",
+    );
+    assert_config_err(err, ExpectedErr::Loop);
+
+    let err = expect_err(
+        "loop.toml",
+        "[tasks.nightly]\nagent = \"codex\"\nprompt = \"work\"\nroot = \"/repo\"\nevery = \"day\"\nbudget = \"many dollars\"\n",
+    );
+    assert_config_err(err, ExpectedErr::Loop);
 }
 
 #[test]
