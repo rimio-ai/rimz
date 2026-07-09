@@ -36,9 +36,7 @@ use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 pub(crate) use hook_install::{
     detected_installable_adapters, ensure_detected_agent_hooks, render_dry_run,
 };
-use resume::{
-    AgentRecovery, materialize_room_resume, plan_room_resume, report_resume,
-};
+use resume::{AgentRecovery, materialize_room_resume, plan_room_resume, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;
 use session_record::{retire_renamed_session, session_probe_retry_timeout, session_probe_timeout};
 use start_notice::report_start_notices;
