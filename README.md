@@ -149,6 +149,7 @@ rimz message @claude "add coverage for the expiry edge cases"      # parks at th
 rimz message @planner "draft the implementation plan"              # by profile or team role
 rimz message --steer @claude "stop: the parser test comes first"   # lands now
 rimz message --schedule 60m @codex#feat-b "run the smoke test"     # lands in an hour
+git diff main | rimz message @reviewer "review this"               # instruction plus piped context
 rimz message @all "summarize what changed at the next boundary"    # the whole channel
 ```
 

@@ -30,47 +30,6 @@ fn stream_json_prompt_rejects_malformed_lines() {
 }
 
 #[test]
-fn text_prompt_combines_instruction_before_piped_content() {
-    let prompt = combine_text_prompt(Some("explain"), Some("boom")).expect("combine prompt");
-    assert_eq!(prompt, "explain\n\n<stdin>\nboom\n</stdin>");
-}
-
-#[test]
-fn text_prompt_accepts_positional_only() {
-    let prompt = combine_text_prompt(Some("explain"), None).expect("combine prompt");
-    assert_eq!(prompt, "explain");
-}
-
-#[test]
-fn text_prompt_accepts_piped_only() {
-    let prompt = combine_text_prompt(None, Some("boom")).expect("combine prompt");
-    assert_eq!(prompt, "boom");
-}
-
-#[test]
-fn text_prompt_rejects_empty_inputs() {
-    let err = combine_text_prompt(Some("  "), Some("\n\t"))
-        .expect_err("whitespace-only prompt should fail");
-    assert!(err.to_string().contains("positional PROMPT or piped stdin"));
-}
-
-#[test]
-fn text_prompt_ignores_empty_piped_input() {
-    let prompt = combine_text_prompt(Some("ping"), Some("")).expect("combine prompt");
-    assert_eq!(prompt, "ping");
-
-    let prompt = combine_text_prompt(Some("ping"), Some("\n\t")).expect("combine prompt");
-    assert_eq!(prompt, "ping");
-}
-
-#[test]
-fn text_prompt_trims_surrounding_whitespace() {
-    let prompt =
-        combine_text_prompt(Some("  explain  "), Some("\nboom\t")).expect("combine prompt");
-    assert_eq!(prompt, "explain\n\n<stdin>\nboom\n</stdin>");
-}
-
-#[test]
 fn terminal_run_is_not_sendable() {
     let mut record = run_record("codex");
     record.status = RunStatus::Canceled;

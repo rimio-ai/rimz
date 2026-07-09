@@ -125,6 +125,12 @@ Deliver a file's contents verbatim — a prompt with real newlines, no escaping 
 rimz message @claude --file review-notes.md
 ```
 
+Piped stdin is also verbatim and becomes the whole message when no inline text is present. Combine both to put an instruction first and wrap the piped content in `<stdin>` tags; `--file` and piped stdin are mutually exclusive.
+
+```sh
+git diff main | rimz message @reviewer "review this"
+```
+
 ## Agents message each other
 
 `rimz message` is the same command whether you type it or an agent runs it, so a running agent hands work to a teammate exactly as you do. A delivery from another agent arrives prefixed `from @sender:` and lands as a first-class line in the receiving agent's transcript, so a channel's cross-talk reads as a conversation. `--no-from` delivers verbatim without the prefix when a script wants the raw text.

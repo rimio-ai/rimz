@@ -9,6 +9,7 @@ pub(super) fn message_add(
     schedule: Option<String>,
     send: SendFlags,
     text: Vec<String>,
+    piped: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let SendFlags {
@@ -30,7 +31,7 @@ pub(super) fn message_add(
     send::validate_wait(!no_enter, wait)?;
     let machine_config = crate::cli::machine_config();
     let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
-    let text = resolve_message(&text, file.as_deref())?;
+    let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
     let now = Timestamp::now().to_zoned(machine_config.time_zone());
     let not_before = schedule
         .as_deref()
@@ -60,6 +61,7 @@ pub(super) fn steer_message(
     target: String,
     send: SendFlags,
     text: Vec<String>,
+    piped: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let SendFlags {
@@ -77,7 +79,7 @@ pub(super) fn steer_message(
     let wait = send::wait_duration(wait);
     send::validate_wait(!no_enter, wait)?;
     let auto_compact = smart_compact.or_else(|| crate::cli::machine_config().harness.smart_compact);
-    let text = resolve_message(&text, file.as_deref())?;
+    let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
     dispatch_message(
         target,
         worktree,

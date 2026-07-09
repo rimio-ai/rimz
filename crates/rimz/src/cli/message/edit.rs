@@ -15,8 +15,8 @@ pub(super) fn edit_from_flags(flags: EditFlags) -> Result<MessageEdit> {
         no_smart_compact,
     } = flags;
     let text = match (text, file) {
-        (Some(text), None) => Some(resolve_message(&[text], None)?),
-        (None, Some(path)) => Some(resolve_message(&[], Some(path.as_path()))?),
+        (Some(text), None) => Some(resolve_message(&[text], None, None)?),
+        (None, Some(path)) => Some(resolve_message(&[], Some(path.as_path()), None)?),
         (None, None) => None,
         (Some(_), Some(_)) => unreachable!("clap enforces --text/--file conflicts"),
     };

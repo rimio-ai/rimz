@@ -33,8 +33,8 @@ pub struct MessageArgs {
     command: Option<MessageSubcmd>,
     /// Agent mention for the bare message form.
     target: Option<String>,
-    /// The message, as one quoted argument. Omit it and pass `--file` to deliver
-    /// a file's contents verbatim.
+    /// The message, as one quoted argument. Omit it to pipe stdin or pass
+    /// `--file` to deliver external contents verbatim.
     text: Option<String>,
     /// Deliver after a successful/idle turn (`done`) or after success/idle/failure (`any`).
     #[arg(long, value_parser = parse_gate, default_value = "done", conflicts_with = "steer")]
@@ -200,11 +200,20 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                     "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, requeue <id>, remove <id>..., clear [target], or an @agent target"
                 );
             }
+            let piped = send::read_piped_text_prompt()?;
             let text = args.text.into_iter().collect();
             if args.steer {
-                steer_message(target, args.send, text, globals)
+                steer_message(target, args.send, text, piped, globals)
             } else {
-                message_add(target, args.on, args.schedule, args.send, text, globals)
+                message_add(
+                    target,
+                    args.on,
+                    args.schedule,
+                    args.send,
+                    text,
+                    piped,
+                    globals,
+                )
             }
         }
     }

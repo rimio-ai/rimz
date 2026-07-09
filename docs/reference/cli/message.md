@@ -11,6 +11,7 @@ rimz message --steer @claude "Inspect the failing test now."
 rimz message --steer @codex --no-enter "Use the docs branch only."              # paste, don't submit
 rimz message --steer @planner --create "Draft the new endpoint."                # launch if missing
 rimz message @all "When you reach a boundary, summarize what changed."
+git diff main | rimz message @reviewer "Review this change."
 rimz message                                                                  # inbox for the current lane
 rimz message list --json
 rimz message list --channel cli-docs --status queued
@@ -47,6 +48,7 @@ The flags worth knowing tune delivery (run `rimz message --help` for the full su
 - `--on done|any` chooses which turn-boundary statuses release parked records; `done` is the default.
 - `--no-enter` pastes the text without submitting; otherwise the text rides as a bracketed paste and Enter lands as a discrete keystroke, so a `\n` in the text stays a soft composer newline and a multi-line prompt lands multi-line (write `\\` for a literal backslash).
 - `--file <PATH>` reads the prompt from a file and sends it byte-for-byte: real newlines stay soft breaks and backslashes stay literal, so code and regex paste unchanged. It conflicts with inline text.
+- Piped stdin supplies the prompt verbatim. With inline text, Rimz puts that instruction first and wraps the piped content in `<stdin>` tags; piped stdin conflicts with `--file`.
 - `--channel <NAME>` scopes the target to a named channel; inline `#NAME` is the address form. `--worktree <NAME>` scopes to a worktree name or path.
 - `--create` launches a missing agent from a kind or profile address with the text as its first prompt; inline `#NAME` or `--channel NAME` registers a named channel, while `--worktree NAME` creates or reuses Git backing.
 - `--force` sends over a pending native ask; without it the ask keeps the next input reserved.

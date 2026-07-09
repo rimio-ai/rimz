@@ -1568,6 +1568,70 @@ fn steer_sends_a_file_as_the_prompt() {
     assert_text_then_enter(&trace_log, "keep \\n literal\nand a real break");
 }
 
+/// Piped stdin follows an inline instruction inside explicit tags, preserving
+/// real newlines without applying inline escape interpretation.
+#[test]
+fn steer_combines_inline_text_with_piped_stdin() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-stdin",
+        "feature-stdin",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let trace_log = env.project_root.join("zellij-stdin-trace.log");
+    let mut cmd = env.rimz();
+    cmd.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "--steer", "@claude", "review this"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = env
+        .spawn_payload(cmd, "diff --git a/file b/file\n-old\n+new\n")
+        .wait_with_output()
+        .expect("wait for piped message");
+    assert!(
+        out.status.success(),
+        "piped steer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_text_then_enter(
+        &trace_log,
+        "review this\n\n<stdin>\ndiff --git a/file b/file\n-old\n+new\n</stdin>",
+    );
+}
+
+#[test]
+fn message_rejects_piped_stdin_with_file() {
+    let env = Env::new();
+    let prompt_file = env.project_root.join("prompt.txt");
+    std::fs::write(&prompt_file, "file body\n").expect("write prompt file");
+
+    let mut cmd = env.rimz();
+    cmd.args([
+        "message",
+        "@claude",
+        "--file",
+        prompt_file.to_str().expect("utf-8 path"),
+    ])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    let out = env
+        .spawn_payload(cmd, "piped body\n")
+        .wait_with_output()
+        .expect("wait for conflicting prompt sources");
+    assert!(!out.status.success(), "conflicting sources should fail");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("pipe stdin or pass `--file`, not both"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
     let env = Env::new();

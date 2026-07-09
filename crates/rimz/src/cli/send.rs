@@ -1,4 +1,5 @@
-//! Command-side `rimz message` flags, prompt parsing, and sender attribution.
+//! Command-side send flags, prompt sources shared by `rimz message` and
+//! supervised runs, and sender attribution.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -41,7 +42,7 @@ pub(crate) struct SendFlags {
     pub(crate) smart_compact: Option<AutoCompact>,
     /// Read the prompt verbatim from a file instead of inline argv. A file already
     /// carries real newlines and literal backslashes, so it is sent as-is with no
-    /// `\n`/`\\` interpretation. Conflicts with inline text.
+    /// `\n`/`\\` interpretation. Conflicts with inline text and piped stdin.
     #[arg(long, value_name = "PATH")]
     pub(crate) file: Option<PathBuf>,
     /// Deliver the text verbatim with no `from @sender:` prefix, even for an agent
@@ -54,11 +55,19 @@ pub(crate) struct SendFlags {
     pub(crate) wait: Option<Option<Duration>>,
 }
 
-/// Resolve the prompt a send-style invocation carries from its two sources:
-/// inline argv, or a `--file` path. Exactly one applies — a file is read verbatim
-/// (it already holds real newlines and literal backslashes), while inline argv
-/// goes through `\n`/`\\` interpretation.
-pub(crate) fn resolve_message(parts: &[String], file: Option<&Path>) -> Result<String> {
+/// Resolve the prompt a send-style invocation carries from inline argv, piped
+/// stdin, or a `--file` path. A file is read verbatim (it already holds real
+/// newlines and literal backslashes), while inline argv goes through `\n`/`\\`
+/// interpretation. Piped stdin is also verbatim and follows an inline
+/// instruction inside `<stdin>` tags when both are present.
+pub(crate) fn resolve_message(
+    parts: &[String],
+    file: Option<&Path>,
+    piped: Option<&str>,
+) -> Result<String> {
+    if file.is_some() && piped.is_some_and(|text| !text.trim().is_empty()) {
+        bail!("pipe stdin or pass `--file`, not both");
+    }
     match file {
         Some(path) => {
             if !parts.is_empty() {
@@ -66,8 +75,47 @@ pub(crate) fn resolve_message(parts: &[String], file: Option<&Path>) -> Result<S
             }
             read_prompt_file(path)
         }
-        None => message_text(parts),
+        None => {
+            let inline = message_text(parts);
+            combine_text_prompt(inline.as_deref(), piped).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "expected non-empty text inline, from piped stdin, or with `--file`"
+                )
+            })
+        }
     }
+}
+
+/// Build a text-mode prompt with the positional instruction first; when both
+/// positional text and piped stdin are present, wrap stdin in `<stdin>` tags.
+pub(crate) fn combine_text_prompt(positional: Option<&str>, piped: Option<&str>) -> Option<String> {
+    let positional = positional
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty());
+    let piped = piped.map(str::trim).filter(|prompt| !prompt.is_empty());
+    match (positional, piped) {
+        (Some(positional), Some(piped)) => {
+            Some(format!("{positional}\n\n<stdin>\n{piped}\n</stdin>"))
+        }
+        (Some(positional), None) => Some(positional.to_owned()),
+        (None, Some(piped)) => Some(piped.to_owned()),
+        (None, None) => None,
+    }
+}
+
+pub(crate) fn read_piped_text_prompt() -> Result<Option<String>> {
+    use std::io::{IsTerminal as _, Read as _};
+
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return Ok(None);
+    }
+    let mut buf = String::new();
+    stdin
+        .lock()
+        .read_to_string(&mut buf)
+        .context("reading stdin")?;
+    Ok(Some(buf))
 }
 
 /// The caller identity for `message`. Rimz-launched agents carry
@@ -125,12 +173,9 @@ fn read_prompt_file(path: &Path) -> Result<String> {
 /// bracketed-paste send path delivers each `\n` as a composer line break rather
 /// than a submit. Every other escape keeps its backslash, so a regex or a
 /// Windows path in a prompt (`\d+`, `C:\tmp`) survives untouched.
-fn message_text(parts: &[String]) -> Result<String> {
+fn message_text(parts: &[String]) -> Option<String> {
     let text = unescape(&parts.join(" "));
-    if text.is_empty() {
-        bail!("expected non-empty text");
-    }
-    Ok(text)
+    (!text.is_empty()).then_some(text)
 }
 
 fn unescape(raw: &str) -> String {
@@ -188,26 +233,89 @@ mod tests {
 
     #[test]
     fn rejects_empty_text() {
-        assert!(message_text(&[]).is_err());
-        assert!(message_text(&[String::new()]).is_err());
+        assert!(message_text(&[]).is_none());
+        assert!(message_text(&[String::new()]).is_none());
     }
 
     #[test]
     fn resolve_takes_inline_text_when_no_file() {
         let parts = ["fix".to_owned(), "the".to_owned(), "parser".to_owned()];
-        assert_eq!(resolve_message(&parts, None).unwrap(), "fix the parser");
+        assert_eq!(
+            resolve_message(&parts, None, None).unwrap(),
+            "fix the parser"
+        );
     }
 
     #[test]
     fn resolve_rejects_text_and_file_together() {
         // A conflict fails before the path is touched, so the bogus path is safe.
-        let err = resolve_message(&["hi".to_owned()], Some(Path::new("/nope")))
+        let err = resolve_message(&["hi".to_owned()], Some(Path::new("/nope")), None)
             .expect_err("text and file conflict");
         assert!(err.to_string().contains("not both"), "{err}");
     }
 
     #[test]
     fn resolve_rejects_no_source() {
-        assert!(resolve_message(&[], None).is_err());
+        let err = resolve_message(&[], None, None).expect_err("missing prompt source");
+        let message = err.to_string();
+        assert!(message.contains("inline"), "{message}");
+        assert!(message.contains("piped stdin"), "{message}");
+        assert!(message.contains("--file"), "{message}");
+    }
+
+    #[test]
+    fn resolve_accepts_piped_text() {
+        assert_eq!(
+            resolve_message(&[], None, Some("piped body\n")).unwrap(),
+            "piped body"
+        );
+        assert_eq!(
+            resolve_message(&[String::new()], None, Some("piped body\n")).unwrap(),
+            "piped body"
+        );
+    }
+
+    #[test]
+    fn resolve_wraps_piped_text_after_inline_instruction() {
+        assert_eq!(
+            resolve_message(&["review this".to_owned()], None, Some("diff body\n")).unwrap(),
+            "review this\n\n<stdin>\ndiff body\n</stdin>"
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_file_and_piped_text() {
+        let err = resolve_message(&[], Some(Path::new("/nope")), Some("diff body"))
+            .expect_err("piped stdin and file conflict");
+        assert_eq!(err.to_string(), "pipe stdin or pass `--file`, not both");
+    }
+
+    #[test]
+    fn text_prompt_accepts_positional_only() {
+        assert_eq!(
+            combine_text_prompt(Some("explain"), None).as_deref(),
+            Some("explain")
+        );
+    }
+
+    #[test]
+    fn text_prompt_ignores_empty_piped_input() {
+        assert_eq!(
+            combine_text_prompt(Some("ping"), Some("\n\t")).as_deref(),
+            Some("ping")
+        );
+    }
+
+    #[test]
+    fn text_prompt_trims_surrounding_whitespace() {
+        assert_eq!(
+            combine_text_prompt(Some("  explain  "), Some("\nboom\t")).as_deref(),
+            Some("explain\n\n<stdin>\nboom\n</stdin>")
+        );
+    }
+
+    #[test]
+    fn text_prompt_rejects_empty_inputs() {
+        assert_eq!(combine_text_prompt(Some("  "), Some("\n\t")), None);
     }
 }

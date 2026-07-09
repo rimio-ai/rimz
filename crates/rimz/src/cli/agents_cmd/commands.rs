@@ -1446,8 +1446,13 @@ fn record_failure_tail_before_cleanup(
 fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<String> {
     match input_format {
         InputFormat::Text => {
-            let piped = supervised::read_piped_text_prompt()?;
-            supervised::combine_text_prompt(args.prompt.as_deref(), piped.as_deref())
+            let piped = crate::cli::send::read_piped_text_prompt()?;
+            crate::cli::send::combine_text_prompt(args.prompt.as_deref(), piped.as_deref())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "expected a prompt for `rimz agents <spec> -p` (positional PROMPT or piped stdin)"
+                    )
+                })
         }
         InputFormat::StreamJson => {
             if args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()) {

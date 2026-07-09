@@ -276,39 +276,5 @@ pub(super) fn read_stream_json_prompt<R: std::io::BufRead>(reader: R) -> Result<
     Ok(parts.join("\n"))
 }
 
-/// Build a text-mode prompt with the positional instruction first; when both
-/// positional text and piped stdin are present, wrap stdin in `<stdin>` tags.
-pub(super) fn combine_text_prompt(positional: Option<&str>, piped: Option<&str>) -> Result<String> {
-    let positional = positional
-        .map(str::trim)
-        .filter(|prompt| !prompt.is_empty());
-    let piped = piped.map(str::trim).filter(|prompt| !prompt.is_empty());
-    match (positional, piped) {
-        (Some(positional), Some(piped)) => {
-            Ok(format!("{positional}\n\n<stdin>\n{piped}\n</stdin>"))
-        }
-        (Some(positional), None) => Ok(positional.to_owned()),
-        (None, Some(piped)) => Ok(piped.to_owned()),
-        (None, None) => bail!(
-            "expected a prompt for `rimz agents <spec> -p` (positional PROMPT or piped stdin)"
-        ),
-    }
-}
-
-pub(super) fn read_piped_text_prompt() -> Result<Option<String>> {
-    use std::io::{IsTerminal as _, Read as _};
-
-    let stdin = std::io::stdin();
-    if stdin.is_terminal() {
-        return Ok(None);
-    }
-    let mut buf = String::new();
-    stdin
-        .lock()
-        .read_to_string(&mut buf)
-        .context("reading stdin")?;
-    Ok(Some(buf))
-}
-
 #[cfg(test)]
 mod tests;
