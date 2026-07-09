@@ -42,9 +42,9 @@ use self::install::{
 };
 use self::payloads::{
     ClaudeCommon, ClaudePostCompact, ClaudeSessionStart, ClaudeStop, ClaudeSubagentStart,
-    ClaudeSubagentStop, ClaudeUserPromptSubmit, parse_post_compact, parse_post_tool_use,
-    parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start,
-    parse_subagent_stop, parse_user_prompt_submit,
+    ClaudeSubagentStop, ClaudeUserPromptSubmit, parse_permission_request, parse_post_compact,
+    parse_post_tool_use, parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure,
+    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::AskKind;
 use super::RemoteControlStatus;
@@ -169,7 +169,7 @@ const CLAUDE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::Answer,
         ConcernCoverage::Wired {
-            via: "pane-native ask controls",
+            via: "pane-native AskUserQuestion controls",
         },
     ),
     (
@@ -349,6 +349,7 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "Stop",
     "StopFailure",
     "Notification",
+    "PermissionRequest",
     "PreToolUse",
     "PostToolUse",
     "SubagentStart",
@@ -503,7 +504,11 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let ask_kind = match event_name {
-            "PermissionRequest" => Some(AskKind::Permission),
+            "PermissionRequest" => self
+                .descriptor()
+                .blocking_tool_kind(parse_permission_request(payload).tool_name.as_deref())
+                .is_none()
+                .then_some(AskKind::Permission),
             // ExitPlanMode / AskUserQuestion self-classify off the tool name on
             // the broad PreToolUse hook; every other tool call is plain lifecycle.
             "PreToolUse" => self
@@ -530,6 +535,18 @@ impl AgentAdapter for ClaudeAdapter {
                 serde_json::json!({ "session_id": "sess-1", "tool_name": "Bash" }),
                 AgentHookClass::AwaitingUser,
                 Some(AskKind::Permission),
+            ),
+            ClassificationSample::new(
+                "PermissionRequest",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PermissionRequest",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
+                AgentHookClass::Lifecycle,
+                None,
             ),
             ClassificationSample::new(
                 "PreToolUse",
@@ -986,11 +1003,14 @@ fn map_claude_lifecycle_signal(
             errored: stop_payload_errored(payload),
             parked_on_background: !parts.pending_background.is_empty(),
         }),
-        "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
-            kind: AskKind::Permission,
-            ask_id: None,
-            detail: None,
-        }),
+        "PermissionRequest" => descriptor
+            .blocking_tool_kind(parse_permission_request(payload).tool_name.as_deref())
+            .is_none()
+            .then_some(LifecycleSignal::AwaitingInput {
+                kind: AskKind::Permission,
+                ask_id: None,
+                detail: None,
+            }),
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: descriptor.tool_mutates(payload),
             edits: descriptor.tool_edits_files(payload),

@@ -276,7 +276,7 @@ A blocking hook mints an `ask_` id at ingestion and writes it on the `AwaitingIn
 
 Question and plan hooks append a transcript `Ask` entry carrying the same id and their parsed questions. Permission hooks keep their short tool summary on `open_ask` and synthesize the adapter's safe semantic options at read time, avoiding a transcript ask that has no native closing answer event. `rimz asks` treats `is_awaiting_input` plus `open_ask` as truth and joins transcript detail by id only.
 
-`rimz answer` validates every selector before pane input, then re-reads the rollup and requires the target id to remain the agent's current open ask. This compare-and-swap check prevents a stale bridge response from reaching a newer prompt. The adapter maps semantic answers to native keys and paste actions; unsupported agent kinds and unstable menu actions fail before delivery.
+`rimz answer` validates every selector before pane input, then re-reads the rollup and requires the target id to remain the agent's current open ask. This compare-and-swap check prevents a stale bridge response from reaching a newer prompt. The Claude adapter maps user-question answers to native keys and paste actions. Permission and plan-approval asks fail read-only before delivery: their Escape paths visibly reject in Claude Code 2.1.205 but emit neither `PostToolUse` nor `Stop`, so they cannot satisfy durable confirmation.
 
 Confirmation polls until the current ask leaves the rollup or a matching transcript `Answer` appears. A confirmed command appends the structured answer only when the native PostToolUse path has not already recorded that id. `--no-wait` skips both confirmation and this synthetic answer record rather than claiming the pane accepted bytes it has not acknowledged.
 

@@ -73,10 +73,12 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_else(|err| answer_exit(2, &err.to_string()));
     let adapter = rimz::agents::adapter_by_kind(kind.as_str())
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
-    if let Err(AnswerPlanErr::Unsupported(kind)) =
-        adapter.answer_plan(open.kind, &view.questions, &[])
-    {
-        answer_exit(3, &format!("{kind} does not support structured answers"));
+    match adapter.answer_plan(open.kind, &view.questions, &[]) {
+        Err(AnswerPlanErr::Unsupported(kind)) => {
+            answer_exit(3, &format!("{kind} does not support structured answers"));
+        }
+        Err(AnswerPlanErr::ReadOnly(message)) => answer_exit(3, message),
+        _ => {}
     }
     let replies = parse_replies(&args, &view).unwrap_or_else(|message| answer_exit(3, &message));
     let steps = adapter

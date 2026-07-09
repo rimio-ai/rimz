@@ -86,7 +86,7 @@ Handlers are per-machine and outside project trust. They are personal routing, o
 
 ## Building on handlers
 
-A handler is a wakeup you can script against: it fires with the agent, kind, pane, root, and current ask id in hand, and everything it might do next is a public command. A `waiting`-triggered handler can fetch `rimz asks show "$RIMZ_NOTIFY_ASK" --json`, publish its safe options as chat buttons, and pass the human's choice back through `rimz answer "$RIMZ_NOTIFY_ASK" <choice>`. Pane capture and send remain the fallback for prompt shapes the structured adapter does not support. Handlers run from the elected sidebar producer with fresh stdio, so their output never touches a hook decision channel.
+A handler is a wakeup you can script against: it fires with the agent, kind, pane, root, and current ask id in hand, and everything it might do next is a public command. A `waiting`-triggered handler can fetch `rimz asks show "$RIMZ_NOTIFY_ASK" --json`, publish a user question as chat buttons, and pass the human's choice back through `rimz answer "$RIMZ_NOTIFY_ASK" <choice>`. Permission and plan-approval payloads are read-only and route the human to the pane because Claude emits no lifecycle confirmation for their Escape rejection paths. Handlers run from the elected sidebar producer with fresh stdio, so their output never touches a hook decision channel.
 
 ```toml
 [[notifications.handler]]

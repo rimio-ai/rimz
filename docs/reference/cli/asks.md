@@ -1,6 +1,6 @@
 # Asks and answers
 
-`rimz asks` reads the blocking prompt that currently owns an agent's input, and `rimz answer` answers that prompt through the agent's native terminal interface.
+`rimz asks` reads the blocking prompt that currently owns an agent's input, and `rimz answer` answers a supported question through the agent's native terminal interface.
 
 ## List open asks
 
@@ -36,7 +36,7 @@ JSON rows have this shape:
 }
 ```
 
-Permission asks expose the stable semantic choices `allow` and `deny`; persistent grants remain available in the agent pane. Plan approvals expose `approve`, whose caution reports that it enables auto-accept for subsequent edits, and `keep-planning`; manual-review approval remains pane-only.
+Permission asks expose the semantic choices `allow` and `deny` for presentation, and plan approvals expose `approve` and `keep-planning` with the auto-accept caution. Both kinds are read-only in Rimz and stay answerable in the Claude pane; their Escape rejection paths release the TUI but emit no lifecycle confirmation, so a remote answer could not meet the durable confirmation contract.
 
 ## Answer an ask
 
@@ -61,8 +61,8 @@ Structured input is one object per question:
 ]
 ```
 
-Rimz validates every answer before sending a keystroke. An ask-id target also acts as a compare-and-swap token: a prompt answered or superseded in the pane is stale and receives no input.
+Rimz validates every question answer before sending a keystroke. An ask-id target also acts as a compare-and-swap token: a prompt answered or superseded in the pane is stale and receives no input. Claude permission and plan-approval targets exit `3` before pane delivery and direct you to the Claude pane.
 
 Confirmation waits 30 seconds by default. `--wait 5m` changes the deadline; `--no-wait` returns after the pane write. Exit `0` means confirmed or intentionally not waited, `2` means the ask was stale or its pane unavailable, `3` means validation or adapter capability failed, and `4` means the agent did not confirm before the deadline.
 
-Claude permission answers are semantic: `allow` accepts once through the stable first menu action, and `deny` uses the native Escape rejection path. Persistent grants stay in the Claude pane because their menu positions vary by Claude Code version. To deny with instructions, answer `deny` and then send the instructions with `rimz message`; the message stays parked until the prompt releases. Plan feedback uses the same `keep-planning` then `rimz message` sequence.
+Claude questions support single picks, multi-select picks, and free text. Permission and plan-approval menus remain pane-only, including one-time approval, rejection, persistent grants, auto-accept approval, and refinement feedback.

@@ -72,6 +72,39 @@ fn asks_lists_and_shows_structured_question_json() {
 }
 
 #[test]
+fn permission_request_does_not_replace_its_native_question_ask() {
+    let env = Env::new();
+    let question = env.run_hook("claude", &question_payload());
+    assert!(question.status.success());
+    let before = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("list question ask");
+    let before: serde_json::Value = serde_json::from_slice(&before.stdout).expect("asks json");
+    let ask_id = before[0]["ask_id"].clone();
+
+    let duplicate = serde_json::to_string(&json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": "sess-question",
+        "tool_name": "AskUserQuestion",
+        "tool_input": { "questions": [] }
+    }))
+    .expect("duplicate payload");
+    let duplicate = env.run_hook("claude", &duplicate);
+    assert!(duplicate.status.success());
+
+    let after = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("list question after duplicate");
+    let after: serde_json::Value = serde_json::from_slice(&after.stdout).expect("asks json");
+    assert_eq!(after[0]["kind"], "question");
+    assert_eq!(after[0]["ask_id"], ask_id);
+}
+
+#[test]
 fn asks_synthesizes_safe_permission_options() {
     let env = Env::new();
     let hook = env.run_hook("claude", &permission_payload("Bash"));
@@ -188,6 +221,40 @@ fn answer_refuses_an_unwired_agent_before_pane_delivery() {
     );
 }
 
+#[test]
+fn answer_refuses_unconfirmed_claude_menu_kinds_before_pane_delivery() {
+    for (payload, selector, expected) in [
+        (
+            permission_payload("Bash"),
+            "allow",
+            "permission asks are read-only",
+        ),
+        (
+            serde_json::to_string(&json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "sess-plan-read-only",
+                "tool_name": "ExitPlanMode",
+                "tool_input": { "plan": "1. Make the change" }
+            }))
+            .expect("plan payload"),
+            "approve",
+            "plan approvals are read-only",
+        ),
+    ] {
+        let env = Env::new();
+        let hook = env.run_hook("claude", &payload);
+        assert!(hook.status.success());
+
+        let output = env
+            .rimz()
+            .args(["answer", "@claude", selector])
+            .bounded_output()
+            .expect("answer read-only ask");
+        assert_eq!(output.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+    }
+}
+
 #[cfg(unix)]
 fn fake_tmux(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
     use std::os::unix::fs::PermissionsExt;
@@ -208,13 +275,10 @@ fn fake_tmux(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
 
 #[cfg(unix)]
 #[test]
-fn answer_sends_to_bound_pane_and_timeout_has_distinct_exit() {
+fn answer_question_sends_to_bound_pane_and_timeout_has_distinct_exit() {
     let env = Env::new();
-    let hook = env.run_installed_hook_in_pane(
-        "claude",
-        &permission_payload("Bash"),
-        &[("TMUX_PANE", "%7")],
-    );
+    let hook =
+        env.run_installed_hook_in_pane("claude", &question_payload(), &[("TMUX_PANE", "%7")]);
     assert!(
         hook.status.success(),
         "{}",
@@ -225,12 +289,12 @@ fn answer_sends_to_bound_pane_and_timeout_has_distinct_exit() {
 
     let output = env
         .rimz()
-        .args(["answer", "@claude", "allow", "--no-wait", "--mux", "tmux"])
+        .args(["answer", "@claude", "safe", "--no-wait", "--mux", "tmux"])
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
         .env("RIMZ_TEST_MUX_LOG", &log)
         .env("PATH", path_with_front(&bin))
         .bounded_output()
-        .expect("answer permission");
+        .expect("answer question");
     assert!(
         output.status.success(),
         "{}",
@@ -240,12 +304,12 @@ fn answer_sends_to_bound_pane_and_timeout_has_distinct_exit() {
 
     let output = env
         .rimz()
-        .args(["answer", "@claude", "deny", "--wait", "1s", "--mux", "tmux"])
+        .args(["answer", "@claude", "fast", "--wait", "1s", "--mux", "tmux"])
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
         .env("RIMZ_TEST_MUX_LOG", &log)
         .env("PATH", path_with_front(&bin))
         .bounded_output()
-        .expect("timeout permission answer");
+        .expect("timeout question answer");
     assert_eq!(output.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&output.stderr).contains("did not confirm"));
 }

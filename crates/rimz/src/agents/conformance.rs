@@ -9,11 +9,12 @@ use std::path::{Path, PathBuf};
 
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::{
-    ADAPTERS, AgentAdapter, AgentHookClass, ClassificationSample, ConcernCoverage, HookCoverage,
-    IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
+    ADAPTERS, AgentAdapter, AgentHookClass, AskReply, ClassificationSample, ConcernCoverage,
+    HookCoverage, IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
+use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
 fn classify_matches_corpus() {
@@ -327,10 +328,7 @@ fn assert_coverage_honest(
         ),
         IntegrationConcern::Answer => assert_eq!(
             wired,
-            !matches!(
-                adapter.answer_plan(AskKind::Permission, &[], &[]),
-                Err(super::AnswerPlanErr::Unsupported(_))
-            ),
+            has_answer_plan(adapter),
             "{kind} Answer coverage must match the adapter answer planner"
         ),
         IntegrationConcern::Compaction => assert_eq!(
@@ -394,6 +392,28 @@ fn assert_coverage_honest(
             "{kind} AccountSpend coverage must match the account_spend capability"
         ),
     }
+}
+
+fn has_answer_plan(adapter: &dyn AgentAdapter) -> bool {
+    let reply = AskReply {
+        picks: vec![0],
+        text: None,
+    };
+    let question = AskQuestion {
+        question: "Choose?".to_owned(),
+        options: vec![AskOption::from("yes".to_owned())],
+        multi_select: false,
+        has_option_previews: false,
+    };
+    adapter
+        .answer_plan(AskKind::Question, &[question], std::slice::from_ref(&reply))
+        .is_ok()
+        || adapter
+            .answer_plan(AskKind::Permission, &[], std::slice::from_ref(&reply))
+            .is_ok()
+        || adapter
+            .answer_plan(AskKind::PlanApproval, &[], &[reply])
+            .is_ok()
 }
 
 fn coverage_for(adapter: &dyn AgentAdapter, concern: IntegrationConcern) -> ConcernCoverage {

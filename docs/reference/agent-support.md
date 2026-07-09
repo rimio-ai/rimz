@@ -40,7 +40,7 @@ Every tier delivers the core promise: the agent appears in the sidebar, its bloc
 | `perm` | ✓ | ✓ | ✓ | ✓ | permission prompts routed to your keyboard |
 | `plan` | ✓ | ✗ | ✗ | ✗ | a plan-approval gate raises a waiting row |
 | `ask` | ✓ | ✓ | ✗ | ✗ | the agent's ask-the-user tool raises a waiting row |
-| `answer` | ✓ | ✗ | ✗ | ✗ | structured answers drive the current native prompt |
+| `answer` | ✓ | ✗ | ✗ | ✗ | structured answers drive supported user-question prompts |
 | `compact` | ✓ | ✓ | ✓ | ✓ | context compaction shows on the card |
 | `sub` | ✓ | ✓ | ✗ | ✓ | the subagent tree renders as nested rows |
 | `bg` | ✓ | ✗ | ✗ | ✗ | a turn parked on background work stays tracked |
@@ -64,6 +64,7 @@ The columns thin out from left to right for a reason: Claude Code is the referen
 Claude is the reference integration and the fullest one, wired on all sixteen concerns. Its hooks run **standalone** — in the agent's own pane — so every event stamps the pane directly and identity binding is exact and free ([the instance lifecycle](../internals/agents/model.md#the-instance-lifecycle)).
 
 - **Reports:** session start and end, every turn boundary, per-tool activity, subagents (the `Task` tool tree, each child as its own nested row), plan approvals, and permission prompts. `SessionEnd` tombstones the row the moment the session closes.
+- **Structured answers:** `rimz answer` drives `AskUserQuestion` picks, multi-select, and free text. Permission and plan-approval asks are structured reads only; answer them in the Claude pane because their Escape rejection paths carry no confirming lifecycle event.
 - **Live context:** Claude's statusline is wrapped to push rich per-session data — context window, usage, cost, model display name — on its own cadence, so the card's context meter and dollar figure stay live rather than turn-grained. The context window is read from the model id, and a `[1m]` capability tag widens it.
 - **Resume:** `claude --resume`; `rimz agents claude --resume` reopens the freshest closed session.
 - **Permission modes:** `claude-{auto,ask,plan,yolo,ping}` as launch cells; on the command line `--ask` keeps Claude's own prompts and `--yolo` passes `--dangerously-skip-permissions`. Effort levels: `low|medium|high|xhigh|max`.

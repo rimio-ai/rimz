@@ -125,7 +125,7 @@ pub(super) fn plan_options() -> Vec<AskOption> {
     vec![
         AskOption {
             label: "approve".to_owned(),
-            description: Some("Exit plan mode with Claude's Shift-Tab approval action".to_owned()),
+            description: Some("Approve in Claude with auto-accept edits".to_owned()),
             caution: Some("enables auto-accept for subsequent edits".to_owned()),
         },
         AskOption::from("keep-planning".to_owned()),
@@ -154,47 +154,13 @@ pub(super) fn answer_plan(
     answers: &[AskReply],
 ) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
     match kind {
-        AskKind::Permission => permission_answer_plan(answers),
-        AskKind::PlanApproval => plan_approval_answer_plan(answers),
+        AskKind::Permission => Err(AnswerPlanErr::ReadOnly(
+            "Claude permission asks are read-only in Rimz; answer in the Claude pane",
+        )),
+        AskKind::PlanApproval => Err(AnswerPlanErr::ReadOnly(
+            "Claude plan approvals are read-only in Rimz; answer in the Claude pane",
+        )),
         AskKind::Question => question_answer_plan(questions, answers),
-    }
-}
-
-fn plan_approval_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
-    let [answer] = answers else {
-        return Err(AnswerPlanErr::Invalid(
-            "plan approvals require exactly one answer".to_owned(),
-        ));
-    };
-    match answer.picks.as_slice() {
-        [0] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::ShiftTab)]),
-        [1] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::Escape)]),
-        [1] => Err(AnswerPlanErr::Invalid(
-            "Claude closes plan approval immediately on Escape; open the pane to keep planning with instructions"
-                .to_owned(),
-        )),
-        _ => Err(AnswerPlanErr::Invalid(
-            "plan approvals accept exactly one of `approve` or `keep-planning`".to_owned(),
-        )),
-    }
-}
-
-fn permission_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
-    let [answer] = answers else {
-        return Err(AnswerPlanErr::Invalid(
-            "permission asks require exactly one answer".to_owned(),
-        ));
-    };
-    match answer.picks.as_slice() {
-        [0] if answer.text.is_none() => Ok(vec![AnswerStep::Text("1".to_owned())]),
-        [1] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::Escape)]),
-        [1] => Err(AnswerPlanErr::Invalid(
-            "Claude closes the permission prompt immediately on Escape; open the pane to deny with instructions"
-                .to_owned(),
-        )),
-        _ => Err(AnswerPlanErr::Invalid(
-            "permission answers accept exactly one of `allow` or `deny`".to_owned(),
-        )),
     }
 }
 
@@ -619,59 +585,13 @@ mod tests {
     }
 
     #[test]
-    fn permission_answer_plan_uses_menu_independent_controls() {
-        assert_eq!(
-            answer_plan(
-                AskKind::Permission,
-                &[],
-                &[AskReply {
-                    picks: vec![0],
-                    ..AskReply::default()
-                }],
-            )
-            .unwrap(),
-            vec![AnswerStep::Text("1".to_owned())]
-        );
-        assert_eq!(
-            answer_plan(
-                AskKind::Permission,
-                &[],
-                &[AskReply {
-                    picks: vec![1],
-                    ..AskReply::default()
-                }],
-            )
-            .unwrap(),
-            vec![AnswerStep::Key(NamedKey::Escape)]
-        );
-    }
-
-    #[test]
-    fn plan_answer_plan_uses_menu_independent_controls() {
-        assert_eq!(
-            answer_plan(
-                AskKind::PlanApproval,
-                &[],
-                &[AskReply {
-                    picks: vec![0],
-                    ..AskReply::default()
-                }],
-            )
-            .unwrap(),
-            vec![AnswerStep::Key(NamedKey::ShiftTab)]
-        );
-        assert_eq!(
-            answer_plan(
-                AskKind::PlanApproval,
-                &[],
-                &[AskReply {
-                    picks: vec![1],
-                    ..AskReply::default()
-                }],
-            )
-            .unwrap(),
-            vec![AnswerStep::Key(NamedKey::Escape)]
-        );
+    fn permission_and_plan_answers_are_read_only() {
+        for kind in [AskKind::Permission, AskKind::PlanApproval] {
+            assert!(matches!(
+                answer_plan(kind, &[], &[]),
+                Err(AnswerPlanErr::ReadOnly(_))
+            ));
+        }
     }
 
     #[test]

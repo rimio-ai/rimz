@@ -36,7 +36,7 @@ Handlers live in per-machine config and stay outside project trust, because they
 A handler fires with the pane and root in hand, and everything it might do next is a public Rimz command. That makes a handler a place to clear the routine prompt you have already approved eight times today, composed from the room's own primitives:
 
 - `rimz asks show "$RIMZ_NOTIFY_ASK" --json` reads the structured prompt and safe choices.
-- `rimz answer "$RIMZ_NOTIFY_ASK" <choice>` validates and types one atomic answer into the agent's own UI.
+- For a supported user question, `rimz answer "$RIMZ_NOTIFY_ASK" <choice>` validates and types one atomic answer into the agent's own UI. Permission and plan-approval notifications remain read-only and route the human to the pane.
 - `rimz pane capture @<handle>` and `rimz pane send @<handle>` remain the escape hatch for an unsupported prompt shape.
 - `rimz message @<other>` hands the situation to a different agent.
 - `rimz agents <kind> -p` runs a one-shot [supervised turn](./scripting.md) to decide.

@@ -1,4 +1,35 @@
 use super::*;
+use crate::agents::AgentHookClass;
+
+#[test]
+fn permission_request_does_not_duplicate_native_ask_tools() {
+    for tool in ["AskUserQuestion", "ExitPlanMode"] {
+        let payload = json!({ "session_id": "sess-1", "tool_name": tool });
+        let classified = ClaudeAdapter.classify_hook("PermissionRequest", &payload);
+        assert_eq!(classified.class, AgentHookClass::Lifecycle, "{tool}");
+        assert_eq!(classified.ask_kind, None, "{tool}");
+        assert!(
+            ClaudeAdapter
+                .observe_lifecycle("PermissionRequest", &payload)
+                .is_none(),
+            "{tool}"
+        );
+    }
+
+    let payload = json!({ "session_id": "sess-1", "tool_name": "Bash" });
+    let classified = ClaudeAdapter.classify_hook("PermissionRequest", &payload);
+    assert_eq!(classified.class, AgentHookClass::AwaitingUser);
+    assert_eq!(classified.ask_kind, Some(AskKind::Permission));
+    assert!(matches!(
+        ClaudeAdapter
+            .observe_lifecycle("PermissionRequest", &payload)
+            .map(|observation| observation.signal),
+        Some(LifecycleSignal::AwaitingInput {
+            kind: AskKind::Permission,
+            ..
+        })
+    ));
+}
 
 #[test]
 fn compaction_events_map_trigger_to_lifecycle_signals() {
