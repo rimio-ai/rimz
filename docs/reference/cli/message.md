@@ -8,6 +8,7 @@ rimz message --on any @codex#cli-docs "If the run failed, capture the error firs
 rimz message --schedule 60m @claude "Run the smoke test after lunch."
 rimz message --schedule 14:30 --on any @planner "Restart the review."
 rimz message --steer @claude "Inspect the failing test now."
+rimz message @coder --wait "did the migration land? one line"
 rimz message --steer @codex --no-enter "Use the docs branch only."              # paste, don't submit
 rimz message --steer @planner --create "Draft the new endpoint."                # launch if missing
 rimz message @all "When you reach a boundary, summarize what changed."
@@ -25,7 +26,7 @@ rimz message clear                                                            # 
 rimz message clear @claude-2#cli-docs
 ```
 
-The message is one bare quoted argument, so no `--` separates ordinary prose from flags. A message that starts with `-` still uses clap's universal terminator (`--`) before the text. Value-optional flags such as bare `--wait` belong after the message, or use `--wait=<duration>`, so the flag does not capture the next token.
+The message is one bare quoted argument, so no `--` separates ordinary prose from flags. A message that starts with `-` still uses clap's universal terminator (`--`) before the text. A wait duration uses the attached form `--wait=<duration>`; bare `--wait` has no value and can precede the message.
 
 Address the target with the [agent-address grammar](./agents.md#addressing-agents). A fan-out tags each delivery with the addressed handle, and an unmatched address prints the live-agent list.
 
@@ -54,7 +55,7 @@ The flags worth knowing tune delivery (run `rimz message --help` for the full su
 - `--force` sends over a pending native ask; without it the ask keeps the next input reserved.
 - `--smart-compact <PCT|TOKENS>` sends a tracked `/compact` command first when the agent's context window has reached the threshold (a percentage like `70%` or an occupied-token count like `120000` or `180k`), then sends the prompt one message interval later so it lands against a fresh window. Unset, [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) supplies the threshold; a window below it sends untouched.
 - `--no-from` sends the bytes exactly. By default a Rimz-launched agent's send arrives as `from @sender: text`, gaining `#channel` when it crosses channels.
-- `--wait[=DURATION]` waits after send-now delivery until the agent's next `TurnStarted` hook confirms the prompt, the delivery window elapses, or the send errors. Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default window. It conflicts with `--no-enter`, because an unsubmitted paste cannot be confirmed.
+- `--wait[=DURATION]` sends or parks one prompt, waits through an existing agent's reply turn, prints its final assistant message on stdout, and maps success/idle to exit 0, failure to exit 1, and the total delivery-plus-turn deadline to exit 124. The agent needs installed and trusted lifecycle hooks. Bare `--wait` has no deadline. `Waiting` and `Paused` keep blocking; `--steer --wait` treats the remainder of the live turn as the reply. It conflicts with `--all`, broadcast targets, `--create`, `--schedule`, and `--no-enter`.
 
 ## The message record
 

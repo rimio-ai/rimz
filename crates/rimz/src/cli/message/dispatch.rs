@@ -27,8 +27,8 @@ pub(super) fn message_add(
     if schedule.is_some() && create {
         bail!("--schedule needs an existing agent; remove --create");
     }
-    let wait = send::wait_duration(wait);
-    send::validate_wait(!no_enter, wait)?;
+    let wait = send::reply_wait(wait);
+    send::validate_reply_wait(wait, !no_enter, all, create, schedule.is_some(), &target)?;
     let machine_config = crate::cli::machine_config();
     let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
@@ -76,8 +76,8 @@ pub(super) fn steer_message(
         no_from,
         wait,
     } = send;
-    let wait = send::wait_duration(wait);
-    send::validate_wait(!no_enter, wait)?;
+    let wait = send::reply_wait(wait);
+    send::validate_reply_wait(wait, !no_enter, all, create, false, &target)?;
     let auto_compact = smart_compact.or_else(|| crate::cli::machine_config().harness.smart_compact);
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
     dispatch_message(
@@ -187,7 +187,7 @@ pub(super) struct MessageSpec {
     pub(super) force: bool,
     pub(super) auto_compact: Option<AutoCompact>,
     pub(super) no_from: bool,
-    pub(super) wait: Option<Duration>,
+    pub(super) wait: ReplyWait,
     pub(super) not_before: Option<Timestamp>,
 }
 
@@ -356,12 +356,63 @@ pub(super) fn dispatch_resolved_message(
         };
         return Err(crate::cli::ambiguous_fanout(verb, &target, &labels));
     }
+    let reply_target = if spec.wait.is_on() {
+        let [resolved] = targets.as_slice() else {
+            bail!("--wait requires exactly one agent target");
+        };
+        let label = resolved.label(snapshot);
+        let identity = resolved.agent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--wait requires an agent with lifecycle state; `{label}` is only a pane target"
+            )
+        })?;
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| {
+                rimz::message::card_matches(
+                    &identity.kind,
+                    &identity.agent_id,
+                    identity.name.as_deref(),
+                    &agent.kind,
+                    &agent.agent_id,
+                    agent.name.as_deref(),
+                )
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--wait requires a live agent with lifecycle state; `{label}` is not running"
+                )
+            })?;
+        let adapter = rimz::agents::find_adapter(agent.kind.as_str())
+            .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
+        if !adapter.hooks_installed() {
+            bail!(
+                "--wait requires {} hooks so the reply turn can report its boundaries; run `rimz hooks install {}`",
+                agent.kind,
+                agent.kind
+            );
+        }
+        let untrusted = adapter.untrusted_installed_hooks();
+        if !untrusted.is_empty() {
+            bail!(
+                "{} hooks are installed but not trusted ({}); {}",
+                agent.kind,
+                untrusted.join(", "),
+                rimz::agents::hook_trust_fix(agent.kind.as_str())
+            );
+        }
+        Some(reply::ReplyTarget::new(agent, label))
+    } else {
+        None
+    };
     let text = if targets.len() > 1 || rimz::harness::target::is_broadcast(&target) {
         rimz::harness::target::group_prefixed(&target, &text)
     } else {
         text
     };
-    let wait_base = if spec.wait.is_some() {
+    let wait_started = std::time::Instant::now();
+    let wait_base = if spec.wait.is_on() {
         Some(store.wait_fold_base()?)
     } else {
         None
@@ -392,37 +443,27 @@ pub(super) fn dispatch_resolved_message(
             },
         },
     )?;
-    let wait = spec.wait.map(|timeout| (timeout, wait_base.unwrap_or(0)));
+    if let Some(reply_target) = reply_target {
+        return reply::wait_for_reply(
+            store,
+            &workspace.session_name,
+            reply_target,
+            matches!(mode, MessageDispatchMode::Steer),
+            &result.outcomes,
+            wait_base.unwrap_or(0),
+            spec.wait.deadline_from(wait_started),
+        );
+    }
     report_dispatch(
         match mode {
             MessageDispatchMode::Steer => ReportMode::Steer,
             MessageDispatchMode::Boundary => ReportMode::Boundary,
         },
-        store,
-        &workspace.session_name,
-        wait,
         &target,
         targets.len(),
         &result.outcomes,
         &result.compacted,
     )
-}
-
-pub(super) fn wait_and_print_message(
-    store: &rimz::Store,
-    session_name: &str,
-    label: &str,
-    message_id: &MessageId,
-    wait_base: u64,
-    deadline: std::time::Instant,
-) -> Result<bool> {
-    let status =
-        send::wait_for_message_until(store, message_id, session_name, wait_base, deadline)?;
-    #[expect(clippy::print_stdout, reason = "wait status")]
-    {
-        println!("{} {label} ({message_id})", wait_status_label(status));
-    }
-    Ok(status == MessageStatus::Delivered)
 }
 
 #[derive(Clone, Copy)]
@@ -448,9 +489,6 @@ pub(super) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<Strin
 #[allow(clippy::too_many_arguments)]
 pub(super) fn report_dispatch(
     mode: ReportMode,
-    store: &rimz::Store,
-    session_name: &str,
-    wait: Option<(Duration, u64)>,
     target: &str,
     total: usize,
     outcomes: &[DispatchOutcome],
@@ -462,12 +500,6 @@ pub(super) fn report_dispatch(
             {
                 println!("compacted {label}");
             }
-        }
-        if let Some((timeout, wait_base)) = wait {
-            if !wait_for_outcomes(store, session_name, outcomes, timeout, wait_base, None)? {
-                std::process::exit(1);
-            }
-            return Ok(());
         }
         for outcome in outcomes {
             if let Some(line) = render_dispatch_outcome(outcome) {
@@ -512,19 +544,6 @@ pub(super) fn report_dispatch(
             _ => None,
         })
         .collect::<Vec<_>>();
-    if let Some((timeout, wait_base)) = wait {
-        if !wait_for_outcomes(
-            store,
-            session_name,
-            outcomes,
-            timeout,
-            wait_base,
-            Some(compacted),
-        )? {
-            std::process::exit(1);
-        }
-        return Ok(());
-    }
     if total == 1 {
         if !sent.is_empty() {
             let label = sent_labels[0];
@@ -571,49 +590,11 @@ pub(super) fn report_dispatch(
     Ok(())
 }
 
-pub(super) fn wait_for_outcomes(
-    store: &rimz::Store,
-    session_name: &str,
-    outcomes: &[DispatchOutcome],
-    timeout: Duration,
-    wait_base: u64,
-    compacted: Option<&[String]>,
-) -> Result<bool> {
-    let mut all_delivered = true;
-    let deadline = std::time::Instant::now() + timeout;
-    for outcome in outcomes {
-        let (label, message_id) = match outcome {
-            DispatchOutcome::Sent { label, message_id }
-            | DispatchOutcome::Queued { label, message_id } => (label, message_id),
-            DispatchOutcome::SkippedWaiting { .. } => continue,
-        };
-        if let Some(compacted) = compacted {
-            print_compacted_if_needed(label, compacted);
-        }
-        if !wait_and_print_message(store, session_name, label, message_id, wait_base, deadline)? {
-            all_delivered = false;
-        }
-    }
-    Ok(all_delivered)
-}
-
 pub(super) fn print_compacted_if_needed(label: &str, compacted: &[String]) {
     if compacted.iter().any(|compacted| compacted == label) {
         #[expect(clippy::print_stdout, reason = "message compact confirmation")]
         {
             println!("compacted {label}");
         }
-    }
-}
-
-pub(super) fn wait_status_label(status: MessageStatus) -> &'static str {
-    match status {
-        MessageStatus::Delivered => "delivered",
-        MessageStatus::Errored => "errored",
-        MessageStatus::TimedOut => "timed out",
-        MessageStatus::Removed => "removed",
-        MessageStatus::Abandoned => "abandoned",
-        MessageStatus::Archived => "archived",
-        MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent => "timed out",
     }
 }

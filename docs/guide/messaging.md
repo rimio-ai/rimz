@@ -93,16 +93,19 @@ rimz message --smart-compact 70% @claude "now write the migration guide"   # com
 
 Give a percentage of the window (`70%`) or an occupied-token count (`120000` or `180k`). Omit the flag and Rimz uses the `[harness] smart_compact` default from your config — set it once and every message inherits the behavior ([configuration → smart compaction](./configuration.md#smart-compaction), [setup guide](./setup.md)).
 
-## Confirm, inspect, and fix delivery
+## Ask and wait for the reply
 
-Sending returns immediately. To block until the agent acknowledges the text, add `--wait`:
+Add `--wait` to turn a message into a synchronous question against the agent's existing context. Rimz parks or sends the durable prompt normally, waits through the reply turn, prints that turn's final assistant message on stdout, and exits with the turn's status:
 
 ```sh
-rimz message --steer @claude --wait "run the smoke test"      # returns when Claude confirms, nonzero on timeout
-rimz message @codex --wait=5m "open the PR"                   # give it up to five minutes
+rimz message @coder --wait "did the migration land? one line"  # no deadline
+rimz message @codex --wait=5m "open the PR"                     # total delivery + turn deadline
+rimz message --steer @claude --wait "answer from this turn"    # the live turn's remainder is the reply
 ```
 
-`--wait` exits nonzero on anything but a confirmed delivery, which is what a script branches on ([scripting guide](./scripting.md)).
+Success or idle exits 0, a failed turn or delivery exits 1, and the deadline exits 124. `Waiting` and `Paused` remain inside the reply turn, so use `--wait=<duration>` when a script needs a bound. Reply text is the agent's own transcript output, like `agents -p`; a turn with no assistant message leaves stdout empty and explains that on stderr.
+
+`--wait` addresses one existing agent with installed and trusted lifecycle hooks, and conflicts with `--all`, `@all`, `--create`, `--schedule`, and `--no-enter`. Steering mid-turn treats the rest of that interrupted turn as the reply.
 
 Every message is a record you can read back and steer after the fact:
 
@@ -117,7 +120,7 @@ rimz message remove msg_01k…            # drop a queued message
 rimz message clear @codex               # drop every open message for one agent; targetless clears the channel
 ```
 
-Statuses read straight across: `queued` and `claimed` are still live, `sent` means the bytes reached the pane, `delivered` means the agent acknowledged them, and `archived` means the receiver or its channel ended. A durable file is the source of truth, so a missed notification or a crash between claim and send loses nothing.
+Statuses read straight across: `queued` and `claimed` are still live, `sent` means the bytes reached the pane, `delivered` means the prompt's turn started, and `archived` means the receiver or its channel ended. Use `message show` to diagnose a record that has not delivered. A durable file is the source of truth, so a missed notification or a crash between claim and send loses nothing.
 
 Deliver a file's contents verbatim — a prompt with real newlines, no escaping — with `--file`:
 

@@ -48,6 +48,7 @@ use exec::run_exec;
 use launch::*;
 use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
+pub(crate) use supervised::stream::TranscriptCursor;
 use top::{TopArgs, run_top};
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);

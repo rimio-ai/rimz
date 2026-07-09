@@ -158,6 +158,10 @@ impl QueueTarget<'_> {
         self.pane.and_then(|pane| send::bound_agent(snapshot, pane))
     }
 
+    pub fn agent(&self) -> Option<&AgentState> {
+        self.agent
+    }
+
     fn receivable_now(
         &self,
         snapshot: &SidebarSnapshot,

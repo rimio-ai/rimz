@@ -213,14 +213,11 @@ Parked records store the threshold in `auto_compact` and re-read fill at the del
 
 ## Wait
 
-`--wait[=DURATION]` upgrades `message --steer` and send-now default messages from fire-and-return to synchronous confirmation. The command waits until the prompt record reaches `Delivered`, `TimedOut`, `Errored`, `Removed`, `Abandoned`, or `Archived`, prints the matching terminal status with handle and message id, and exits nonzero unless delivered. Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default delivery window (30 s). It conflicts with `--no-enter`, because an unsubmitted paste cannot be confirmed.
+`--wait[=DURATION]` upgrades one prompt to a synchronous reply wait against an existing agent card. The dispatch captures a frame-aligned event-log base before enqueue/send. A `Sent` observation anchors a skip-existing transcript cursor; `Delivered`, stamped by the prompt's `TurnStarted` lifecycle hook, opens the reply-boundary phase. Steering into an already-running turn also opens that phase from `Sent + Running`, because the interrupted turn does not emit another `TurnStarted`.
 
-Broadcast waits share one deadline across all prompt records, and a smart-compact wait tracks both records of its pair ([Delivery confirmation](#delivery-confirmation)).
+The boundary phase polls the cached agent snapshot every 500 ms and retains the newest assistant message parsed from the provider-native transcript. `Idle` or `Success` prints that message and exits 0; `Failed` prints it with stderr forensics and exits 1; `Waiting` and `Paused` stay open. A changed `turn_started_at` while the card is still `Running` proves the reply turn ended and another began between polls. A duration is one deadline across delivery and turn; bare `--wait` has none. Delivery terminal failures exit 1, and a deadline on a still-`Sent` record preserves the timed-out message stamp before exit 124.
 
-Edge cases:
-
-- `--force` sent mid-turn can time out because a resumed turn emits no fresh `TurnStarted` for that paste.
-- A sessionless lazy pane confirms only after a real session or name can match its pane-derived placeholder record, so the first prompt can time out even when the paste succeeds.
+Reply wait requires one lifecycle-bound card with installed and trusted hooks. It rejects broadcasts, fan-out, create-on-miss, schedules, bare pane targets, and unsubmitted pastes before dispatch. A steer mid-turn defines the remainder of that turn as the reply. An agent that emits no assistant transcript message yields empty stdout plus a stderr note.
 
 ## Channels
 

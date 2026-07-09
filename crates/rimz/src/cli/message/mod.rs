@@ -11,7 +11,7 @@ use serde::Serialize;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::address;
-use super::send::{self, SendFlags, resolve_message};
+use super::send::{self, ReplyWait, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::SidebarSnapshot;
@@ -224,6 +224,7 @@ const DEFAULT_MESSAGE_LIST_LIMIT: usize = 200;
 mod dispatch;
 mod edit;
 mod list;
+mod reply;
 mod show;
 
 use dispatch::*;
@@ -254,7 +255,7 @@ pub(crate) fn to_session(
             force: false,
             auto_compact: None,
             no_from: false,
-            wait: None,
+            wait: ReplyWait::Off,
             not_before: None,
         },
         FanoutFlags {

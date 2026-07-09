@@ -361,7 +361,7 @@ pub fn wait_for_message_until(
     message_id: &MessageId,
     session_name: &str,
     mut base: u64,
-    deadline: Instant,
+    deadline: Option<Instant>,
 ) -> Result<MessageStatus> {
     const POLL: Duration = Duration::from_millis(500);
 
@@ -371,7 +371,9 @@ pub fn wait_for_message_until(
             .into_iter()
             .find(|message| message.message_id == *message_id)
         {
-            if message.status == MessageStatus::Sent && Instant::now() >= deadline {
+            if message.status == MessageStatus::Sent
+                && deadline.is_some_and(|deadline| Instant::now() >= deadline)
+            {
                 let timed_out =
                     store.mark_message_timed_out(message_id, session_name, Some("wait"))?;
                 return Ok(timed_out
@@ -381,11 +383,13 @@ pub fn wait_for_message_until(
         } else if let Some(status) = latest_terminal_message_status(store, message_id, &mut base)? {
             return Ok(status);
         }
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Ok(MessageStatus::TimedOut);
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        std::thread::sleep(remaining.min(POLL));
+        let sleep = deadline.map_or(POLL, |deadline| {
+            deadline.saturating_duration_since(Instant::now()).min(POLL)
+        });
+        std::thread::sleep(sleep);
     }
 }
 

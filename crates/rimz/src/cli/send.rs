@@ -2,14 +2,13 @@
 //! supervised runs, and sender attribution.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use rimz::ids::AgentKind;
-pub(crate) use rimz::message::send::wait_for_message_until;
-use rimz::message::{AutoCompact, MessageSender, delivery_window_from_env};
+use rimz::message::{AutoCompact, MessageSender};
 
 /// The flags shared by immediate and parked message delivery.
 #[derive(Debug, Args)]
@@ -49,10 +48,30 @@ pub(crate) struct SendFlags {
     /// caller. No effect for a human caller, which is already verbatim.
     #[arg(long)]
     pub(crate) no_from: bool,
-    /// Wait until the agent confirms the submitted message (`30s`, `5m`, `1h`).
-    /// Bare `--wait` uses `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` or the default window.
-    #[arg(long, value_name = "DURATION", num_args = 0..=1, value_parser = parse_wait_duration)]
+    /// Wait for the agent's reply and print its final assistant message.
+    /// Bare `--wait` has no deadline; use `--wait=5m` to bound the whole wait.
+    #[arg(long, value_name = "DURATION", num_args = 0..=1, require_equals = true, value_parser = parse_wait_duration)]
     pub(crate) wait: Option<Option<Duration>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplyWait {
+    Off,
+    Indefinite,
+    Deadline(Duration),
+}
+
+impl ReplyWait {
+    pub(crate) fn is_on(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    pub(crate) fn deadline_from(self, started: Instant) -> Option<Instant> {
+        match self {
+            Self::Off | Self::Indefinite => None,
+            Self::Deadline(duration) => Some(started + duration),
+        }
+    }
 }
 
 /// Resolve the prompt a send-style invocation carries from inline argv, piped
@@ -137,13 +156,39 @@ pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSe
     }
 }
 
-pub(crate) fn wait_duration(wait: Option<Option<Duration>>) -> Option<Duration> {
-    wait.map(|duration| duration.unwrap_or_else(delivery_window_from_env))
+pub(crate) fn reply_wait(wait: Option<Option<Duration>>) -> ReplyWait {
+    match wait {
+        None => ReplyWait::Off,
+        Some(None) => ReplyWait::Indefinite,
+        Some(Some(duration)) => ReplyWait::Deadline(duration),
+    }
 }
 
-pub(crate) fn validate_wait(enter: bool, wait: Option<Duration>) -> Result<()> {
-    if wait.is_some() && !enter {
+pub(crate) fn validate_reply_wait(
+    wait: ReplyWait,
+    enter: bool,
+    all: bool,
+    create: bool,
+    scheduled: bool,
+    target: &str,
+) -> Result<()> {
+    if !wait.is_on() {
+        return Ok(());
+    }
+    if !enter {
         bail!("--wait requires submitting the message; remove --no-enter");
+    }
+    if all {
+        bail!("--wait requires one agent; remove --all");
+    }
+    if create {
+        bail!("--wait requires an existing agent; remove --create");
+    }
+    if scheduled {
+        bail!("--wait sends now or parks for a turn boundary; remove --schedule");
+    }
+    if rimz::harness::target::is_broadcast(target) {
+        bail!("--wait requires one agent; replace `{target}` with a single handle");
     }
     Ok(())
 }
@@ -204,6 +249,17 @@ fn unescape(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolves_reply_wait_modes() {
+        assert_eq!(reply_wait(None), ReplyWait::Off);
+        assert_eq!(reply_wait(Some(None)), ReplyWait::Indefinite);
+        assert_eq!(
+            reply_wait(Some(Some(Duration::from_secs(5)))),
+            ReplyWait::Deadline(Duration::from_secs(5))
+        );
+    }
+
     #[test]
     fn joins_argv_with_spaces() {
         let parts = ["fix".to_owned(), "the".to_owned(), "parser".to_owned()];

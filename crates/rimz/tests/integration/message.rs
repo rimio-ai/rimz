@@ -1,5 +1,6 @@
 use serde_json::json;
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -1413,6 +1414,7 @@ fn steer_wait_conflicts_with_no_enter() {
 #[test]
 fn steer_wait_times_out_without_turn_started_ack() {
     let env = Env::new();
+    env.install_agent_hooks("claude");
     register_running_agent(
         &env,
         "sess-wait-timeout",
@@ -1433,10 +1435,16 @@ fn steer_wait_times_out_without_turn_started_ack() {
         !out.status.success(),
         "--wait should exit nonzero on timeout"
     );
+    assert_eq!(out.status.code(), Some(124));
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("timed out"),
-        "stdout reports timeout: {}",
-        String::from_utf8_lossy(&out.stdout)
+        out.stdout.is_empty(),
+        "timeout keeps stdout reserved for a final reply: {}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("wait timed out"),
+        "stderr reports timeout: {}",
+        String::from_utf8_lossy(&out.stderr),
     );
     assert!(env.store().list_messages().unwrap().is_empty());
     assert!(
@@ -1448,53 +1456,231 @@ fn steer_wait_times_out_without_turn_started_ack() {
 }
 
 #[test]
-fn steer_wait_returns_delivered_after_terminal_record_self_cleans() {
+fn message_wait_prints_the_reply_after_the_turn_ends() {
     let env = Env::new();
-    register_running_agent(
+    env.install_agent_hooks("claude");
+    let transcript = env.runtime_root.join("message-wait-reply.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"old answer\"}]}}\n",
+    )
+    .expect("seed transcript");
+    register_idle_agent_with_transcript(
         &env,
-        "sess-wait-delivered",
-        "feature-wait-delivered",
+        "sess-wait-reply",
+        "feature-wait-reply",
+        &transcript,
         &[("ZELLIJ_PANE_ID", "3")],
     );
 
-    let trace_log = env.project_root.join("zellij-wait-delivered-trace.log");
+    let trace_log = env.project_root.join("zellij-wait-reply-trace.log");
     let child = env
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--wait=5s", "--", "ack me"])
+        .args(["message", "@claude", "--wait", "did it land?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn steer --wait");
+        .expect("spawn message --wait");
 
     wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
     run_hook(
         &env,
         json!({
             "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-wait-delivered",
-            "prompt": "ack me",
-            "worktree_branch": "feature-wait-delivered",
+            "session_id": "sess-wait-reply",
+            "prompt": "did it land?",
+            "worktree_branch": "feature-wait-reply",
+            "transcript_path": transcript.to_string_lossy(),
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    append_claude_assistant(&transcript, "migration landed");
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-wait-reply",
+            "last_assistant_message": "migration landed",
+            "worktree_branch": "feature-wait-reply",
+            "transcript_path": transcript.to_string_lossy(),
         }),
         &[("ZELLIJ_PANE_ID", "3")],
     );
 
-    let out = child.wait_with_output().expect("wait steer --wait");
+    let out = child.wait_with_output().expect("wait message --wait");
     assert!(
         out.status.success(),
-        "--wait should succeed after delivery: stdout={} stderr={}",
+        "--wait should succeed after the reply turn: stdout={} stderr={}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "migration landed\n");
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("delivered"),
-        "stdout reports delivery: {}",
-        String::from_utf8_lossy(&out.stdout)
+        out.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
     assert!(
         env.store().list_messages().unwrap().is_empty(),
         "delivered record self-cleans while wait still succeeds"
+    );
+}
+
+#[test]
+fn message_wait_maps_failed_reply_turn_to_exit_one() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let transcript = env.runtime_root.join("message-wait-failed.jsonl");
+    std::fs::write(&transcript, "").expect("seed transcript");
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-failed",
+        "feature-wait-failed",
+        &transcript,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace_log = env.project_root.join("zellij-wait-failed-trace.log");
+    let child = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@claude", "--wait=5s", "try it"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn message --wait");
+    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-wait-failed",
+            "prompt": "try it",
+            "worktree_branch": "feature-wait-failed",
+            "transcript_path": transcript.to_string_lossy(),
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    append_claude_assistant(&transcript, "partial answer");
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-wait-failed",
+            "is_error": true,
+            "last_assistant_message": "partial answer",
+            "worktree_branch": "feature-wait-failed",
+            "transcript_path": transcript.to_string_lossy(),
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let out = child.wait_with_output().expect("wait failed reply");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "partial answer\n");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("turn failed (exit 1)"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn steer_wait_treats_the_remainder_of_the_live_turn_as_reply() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let transcript = env.runtime_root.join("message-wait-steer.jsonl");
+    std::fs::write(&transcript, "").expect("seed transcript");
+    register_running_agent_with_transcript(
+        &env,
+        "sess-wait-steer",
+        "feature-wait-steer",
+        &transcript,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace_log = env.project_root.join("zellij-wait-steer-trace.log");
+    let child = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "--steer", "@claude", "--wait=5s", "answer now"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn steer --wait");
+    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
+    append_claude_assistant(&transcript, "steered answer");
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-wait-steer",
+            "last_assistant_message": "steered answer",
+            "worktree_branch": "feature-wait-steer",
+            "transcript_path": transcript.to_string_lossy(),
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let out = child.wait_with_output().expect("wait steer reply");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "steered answer\n");
+}
+
+#[test]
+fn message_wait_rejects_multi_target_create_schedule_pane_and_missing_hooks() {
+    let env = Env::new();
+    for args in [
+        vec!["message", "@claude", "--all", "--wait=1s", "x"],
+        vec!["message", "@claude", "--create", "--wait=1s", "x"],
+        vec!["message", "@claude", "--schedule", "1m", "--wait=1s", "x"],
+        vec!["message", "@all", "--wait=1s", "x"],
+    ] {
+        let out = env.rimz().args(args).output().expect("wait conflict");
+        assert!(!out.status.success());
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("--wait"),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "bash")]);
+    let pane = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "zellij:terminal_3", "--wait=1s", "x"])
+        .output()
+        .expect("pane wait");
+    assert!(!pane.status.success());
+    assert!(
+        String::from_utf8_lossy(&pane.stderr).contains("not bound to a known agent"),
+        "stderr: {}",
+        String::from_utf8_lossy(&pane.stderr)
+    );
+
+    register_running_agent(
+        &env,
+        "sess-wait-no-hooks",
+        "feature-wait-no-hooks",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let missing = env
+        .rimz()
+        .args(["message", "@claude", "--wait=1s", "x"])
+        .output()
+        .expect("hooks missing wait");
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("rimz hooks install claude"),
+        "stderr: {}",
+        String::from_utf8_lossy(&missing.stderr)
     );
 }
 
@@ -3037,6 +3223,62 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &
         }),
         pane_env,
     );
+}
+
+fn register_idle_agent_with_transcript(
+    env: &Env,
+    session_id: &str,
+    branch: &str,
+    transcript: &Path,
+    pane_env: &[(&str, &str)],
+) {
+    let worktree_path = env.home_root.join(branch).display().to_string();
+    run_hook(
+        env,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": session_id,
+            "worktree_branch": branch,
+            "worktree_path": worktree_path,
+            "transcript_path": transcript.to_string_lossy(),
+        }),
+        pane_env,
+    );
+}
+
+fn register_running_agent_with_transcript(
+    env: &Env,
+    session_id: &str,
+    branch: &str,
+    transcript: &Path,
+    pane_env: &[(&str, &str)],
+) {
+    register_idle_agent_with_transcript(env, session_id, branch, transcript, pane_env);
+    run_hook(
+        env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": "work",
+            "worktree_branch": branch,
+            "transcript_path": transcript.to_string_lossy(),
+        }),
+        pane_env,
+    );
+}
+
+fn append_claude_assistant(transcript: &Path, text: &str) {
+    let line = json!({
+        "type": "assistant",
+        "message": {
+            "content": [{ "type": "text", "text": text }]
+        }
+    });
+    let mut transcript = std::fs::OpenOptions::new()
+        .append(true)
+        .open(transcript)
+        .expect("open transcript");
+    writeln!(transcript, "{line}").expect("append assistant message");
 }
 
 /// Seed a context sidecar so `--smart-compact` reads `used_pct` as the agent's

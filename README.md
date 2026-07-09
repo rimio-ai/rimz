@@ -147,6 +147,7 @@ rimz agents forge -w feat-complex   # planner, coder, reviewer on one feature
 ```sh
 rimz message @claude "add coverage for the expiry edge cases"      # parks at the turn boundary
 rimz message @planner "draft the implementation plan"              # by profile or team role
+rimz message @coder --wait "did the migration land? one line"       # print the reply from this agent's context
 rimz message --steer @claude "stop: the parser test comes first"   # lands now
 rimz message --schedule 60m @codex#feat-b "run the smoke test"     # lands in an hour
 git diff main | rimz message @reviewer "review this"               # instruction plus piped context
