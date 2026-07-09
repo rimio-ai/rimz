@@ -9,6 +9,7 @@
 mod common;
 
 mod agent_launch;
+mod asks;
 mod backend;
 mod channel;
 mod codex_broker;

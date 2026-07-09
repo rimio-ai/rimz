@@ -278,22 +278,11 @@ pub struct InvalidMessageId(String);
 const MESSAGE_ID_PREFIX: &str = "msg_";
 const MESSAGE_ID_LEN: usize = 16;
 const BASE32HEX: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
-static LAST_MESSAGE_ID: std::sync::Mutex<(u64, u32)> = std::sync::Mutex::new((0, 0));
+static LAST_SHORT_ID: std::sync::Mutex<(u64, u32)> = std::sync::Mutex::new((0, 0));
 
 impl MessageId {
     pub fn new() -> Self {
-        let uuid = Uuid::now_v7().as_u128();
-        let timestamp_ms = (uuid >> 80) as u64;
-        let random_suffix = uuid as u32;
-        let (timestamp_ms, suffix) = next_message_id_parts(timestamp_ms, random_suffix);
-        let sortable = ((timestamp_ms as u128) << 32) | u128::from(suffix);
-        let mut token = String::with_capacity(MESSAGE_ID_PREFIX.len() + MESSAGE_ID_LEN);
-        token.push_str(MESSAGE_ID_PREFIX);
-        for shift in (0..80).step_by(5).rev() {
-            let index = ((sortable >> shift) & 0x1f) as usize;
-            token.push(BASE32HEX[index] as char);
-        }
-        Self(token)
+        Self(new_short_id(MESSAGE_ID_PREFIX))
     }
 
     pub fn parse(value: &str) -> Result<Self, InvalidMessageId> {
@@ -315,8 +304,100 @@ impl MessageId {
     }
 }
 
-fn next_message_id_parts(timestamp_ms: u64, random_suffix: u32) -> (u64, u32) {
-    let mut last = LAST_MESSAGE_ID
+/// Per-blocking-prompt identifier.
+///
+/// `ask_<16 base32hex chars>` has the same compact, time-sortable shape as a
+/// [`MessageId`]. It is minted when hook ingestion observes a blocking prompt
+/// and remains attached to that prompt until the lifecycle reducer clears it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AskId(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid AskId `{0}`; expected `ask_` followed by 16 lowercase base32hex characters")]
+pub struct InvalidAskId(String);
+
+const ASK_ID_PREFIX: &str = "ask_";
+
+impl AskId {
+    pub fn new() -> Self {
+        Self(new_short_id(ASK_ID_PREFIX))
+    }
+
+    pub fn parse(value: &str) -> Result<Self, InvalidAskId> {
+        let Some(token) = value.strip_prefix(ASK_ID_PREFIX) else {
+            return Err(InvalidAskId(value.to_owned()));
+        };
+        if token.len() != MESSAGE_ID_LEN
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'v'))
+        {
+            return Err(InvalidAskId(value.to_owned()));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for AskId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for AskId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for AskId {
+    type Err = InvalidAskId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl Serialize for AskId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for AskId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+fn new_short_id(prefix: &str) -> String {
+    let uuid = Uuid::now_v7().as_u128();
+    let timestamp_ms = (uuid >> 80) as u64;
+    let random_suffix = uuid as u32;
+    let (timestamp_ms, suffix) = next_short_id_parts(timestamp_ms, random_suffix);
+    let sortable = ((timestamp_ms as u128) << 32) | u128::from(suffix);
+    let mut token = String::with_capacity(prefix.len() + MESSAGE_ID_LEN);
+    token.push_str(prefix);
+    for shift in (0..80).step_by(5).rev() {
+        let index = ((sortable >> shift) & 0x1f) as usize;
+        token.push(BASE32HEX[index] as char);
+    }
+    token
+}
+
+fn next_short_id_parts(timestamp_ms: u64, random_suffix: u32) -> (u64, u32) {
+    let mut last = LAST_SHORT_ID
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (mut next_ms, mut next_suffix) = (timestamp_ms, random_suffix);
@@ -682,6 +763,21 @@ mod tests {
         assert!(MessageId::parse("msg_0123456789abcde").is_err());
         assert!(MessageId::parse("msg_0123456789abcdew").is_err());
         assert!(MessageId::parse("msg_0123456789ABCDEF").is_err());
+    }
+
+    #[test]
+    fn ask_ids_are_short_time_sortable_tokens() {
+        let first = AskId::new();
+        let second = AskId::new();
+
+        assert_eq!(first.as_str().len(), 20);
+        assert!(first.as_str().starts_with("ask_"));
+        assert!(second.as_str() >= first.as_str());
+        assert!(AskId::parse(first.as_str()).is_ok());
+        assert!(AskId::parse("ask_0123456789abcdef").is_ok());
+        assert!(AskId::parse("ask_0123456789abcde").is_err());
+        assert!(AskId::parse("ask_0123456789abcdew").is_err());
+        assert!(AskId::parse("ask_0123456789ABCDEF").is_err());
     }
 
     #[test]

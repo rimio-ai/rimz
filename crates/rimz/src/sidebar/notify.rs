@@ -13,7 +13,7 @@ use crate::agents::AgentStatus;
 use crate::config::{
     NotificationsPrefs, NotifyConditionAgent, RenderMode, TemplateVars, render_template,
 };
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, AskId, PaneId};
 use crate::remote::link::LinkTier;
 use crate::sidebar::unread::OpenedUnread;
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot, child_process};
@@ -64,6 +64,7 @@ pub struct NotificationAgent {
     pub task: Option<String>,
     pub pane_id: Option<PaneId>,
     pub root: Option<String>,
+    pub ask_id: Option<AskId>,
     /// The status reached by an agent notification; `None` for link/reminder
     /// notifications that name no agent.
     pub new_status: Option<AgentStatus>,
@@ -324,8 +325,14 @@ impl NotificationState {
             if self.pending.iter().any(|pending| pending.key == key) {
                 continue;
             }
-            self.pending
-                .push(pending_notification(opened, notification_kind));
+            let mut pending = pending_notification(opened, notification_kind);
+            pending.agent.ask_id = snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.kind == opened.agent_kind && agent.agent_id == opened.agent_id)
+                .and_then(|agent| agent.open_ask.as_ref())
+                .map(|ask| ask.id.clone());
+            self.pending.push(pending);
         }
 
         if pending_was_empty && !self.pending.is_empty() {
@@ -418,7 +425,8 @@ fn spawn_notify_command(command: &str, notification: &Notification) -> std::io::
         .env("RIMZ_NOTIFY_TITLE", &notification.title)
         .env("RIMZ_NOTIFY_BODY", &notification.body)
         .env("RIMZ_NOTIFY_AGENT", notification.agent_env())
-        .env("RIMZ_NOTIFY_KIND", notification.kind_env());
+        .env("RIMZ_NOTIFY_KIND", notification.kind_env())
+        .env("RIMZ_NOTIFY_ASK", notify_ask_env(notification));
     let (pane, root) = notify_pane_env(notification);
     cmd.env("RIMZ_NOTIFY_PANE", pane)
         .env("RIMZ_NOTIFY_ROOT", root);
@@ -542,6 +550,7 @@ fn pending_notification(
         task: opened.task.clone(),
         pane_id: opened.pane_id.clone(),
         root: opened.root.clone(),
+        ask_id: None,
         new_status: Some(opened.status),
     };
     PendingNotification {
@@ -566,6 +575,20 @@ fn notify_pane_env(notification: &Notification) -> (String, String) {
         );
     }
     (String::new(), String::new())
+}
+
+fn notify_ask_env(notification: &Notification) -> String {
+    if notification.notification_kind != NotificationKind::Waiting {
+        return String::new();
+    }
+    let [agent] = notification.agents.as_slice() else {
+        return String::new();
+    };
+    agent
+        .ask_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default()
 }
 
 fn coalesced_notification(pending: Vec<PendingNotification>) -> Notification {

@@ -21,6 +21,12 @@ pub(super) fn record_native_answer(
         return;
     };
 
+    let open_ask = latest_open_native_ask(store, agent.descriptor().kind, agent_id);
+    // `rimz answer` can append its confirmation before Claude's PostToolUse
+    // hook reaches this writer. Keep the newest ask identity even when that
+    // confirmation already closed it, so the idempotent append suppresses the
+    // native duplicate rather than emitting a legacy id-less answer.
+    let ask_id = latest_native_ask_id(store, agent.descriptor().kind, agent_id);
     let awaiting = recorded.is_some_and(|recorded| recorded.waiting_cleared)
         || store
             .snapshot_cached()
@@ -31,7 +37,7 @@ pub(super) fn record_native_answer(
                 })
             })
             .is_some_and(|state| state.is_awaiting_input())
-        || has_open_native_ask(store, agent.descriptor().kind, agent_id);
+        || open_ask.is_some();
     if !awaiting {
         return;
     }
@@ -57,7 +63,8 @@ pub(super) fn record_native_answer(
     entry.channel = channel;
     entry.from = Some("you".to_owned());
     entry.answers = answers;
-    if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
+    entry.id = ask_id;
+    if let Err(err) = rimz::transcript::append_answer_if_missing(store.paths(), &entry) {
         warn!(
             agent = agent.descriptor().kind,
             event = %event_name,
@@ -68,12 +75,38 @@ pub(super) fn record_native_answer(
     }
 }
 
+#[cfg(test)]
 pub(super) fn has_open_native_ask(store: &Store, kind: &str, agent_id: &str) -> bool {
+    latest_open_native_ask(store, kind, agent_id).is_some()
+}
+
+fn latest_open_native_ask(
+    store: &Store,
+    kind: &str,
+    agent_id: &str,
+) -> Option<rimz::transcript::TranscriptEntry> {
     let kind = rimz::ids::AgentKind::new_unchecked(kind);
     let agent_id = rimz::ids::AgentSessionId::from(agent_id);
     rimz::transcript::latest_open_ask(store.paths(), &kind, &agent_id)
-        .map(|ask| ask.is_some())
-        .unwrap_or(false)
+        .ok()
+        .flatten()
+}
+
+pub(super) fn latest_native_ask_id(
+    store: &Store,
+    kind: &str,
+    agent_id: &str,
+) -> Option<rimz::ids::AskId> {
+    rimz::transcript::read_all(store.paths())
+        .ok()?
+        .into_iter()
+        .rev()
+        .find(|entry| {
+            entry.entry == rimz::transcript::TranscriptKind::Ask
+                && entry.kind == kind
+                && entry.agent_id == agent_id
+        })
+        .and_then(|entry| entry.id)
 }
 
 pub(super) fn record_conversation(
@@ -117,7 +150,7 @@ pub(super) fn record_conversation(
         entry
     };
 
-    match observation.signal {
+    match &observation.signal {
         LifecycleSignal::TurnStarted => {
             if let Some(prompt) = observation
                 .prompt
@@ -155,7 +188,7 @@ pub(super) fn record_conversation(
                 )?;
             }
         }
-        LifecycleSignal::AwaitingInput { .. } => {
+        LifecycleSignal::AwaitingInput { ask_id, .. } => {
             let questions = agent
                 .ask_question_detail(event_name, payload)
                 .unwrap_or_default();
@@ -168,6 +201,7 @@ pub(super) fn record_conversation(
                 .filter(|message| !message.is_empty())
                 .unwrap_or_default();
             let mut entry = entry_base(rimz::transcript::TranscriptKind::Ask, last);
+            entry.id = ask_id.clone();
             entry.questions = questions;
             rimz::transcript::append(store.paths(), &entry)?;
         }

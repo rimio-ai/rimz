@@ -250,20 +250,28 @@ mod tests {
     #[test]
     fn native_ask_log_detects_answered_ask() {
         let (_dir, store) = test_store();
-        let ask = transcript_entry(
+        let mut ask = transcript_entry(
             rimz::transcript::TranscriptKind::Ask,
             "approve?",
             "2026-06-01T00:00:00Z",
         );
-        let answer = transcript_entry(
+        ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
+        let mut answer = transcript_entry(
             rimz::transcript::TranscriptKind::Answer,
             "yes",
             "2026-06-01T00:00:01Z",
         );
+        answer.id = ask.id.clone();
         rimz::transcript::append(store.paths(), &ask).expect("append ask");
         rimz::transcript::append(store.paths(), &answer).expect("append answer");
 
         assert!(!has_open_native_ask(&store, "claude", "sess-1"));
+        assert_eq!(
+            latest_native_ask_id(&store, "claude", "sess-1")
+                .as_ref()
+                .map(rimz::ids::AskId::as_str),
+            Some("ask_0123456789abcdef")
+        );
     }
 
     #[test]

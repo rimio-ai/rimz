@@ -21,7 +21,11 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
         AskKind::PlanApproval,
         AskKind::Question,
     ] {
-        signals.push(LifecycleSignal::AwaitingInput { kind });
+        signals.push(LifecycleSignal::AwaitingInput {
+            kind,
+            ask_id: None,
+            detail: None,
+        });
     }
     for auto in [None, Some(false), Some(true)] {
         signals.push(LifecycleSignal::CompactionEnded { auto });

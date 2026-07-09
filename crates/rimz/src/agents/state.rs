@@ -10,13 +10,25 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::ids::{AgentKind, AgentSessionId, AskId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 use super::context::{
     AgentContext, AgentRateLimits, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
-use super::lifecycle::{LifecycleState, TurnPhase};
+use super::lifecycle::{AskKind, LifecycleState, TurnPhase};
+
+/// Durable identity and summary for the blocking prompt currently owning an
+/// agent's input. Structured question detail stays in the transcript and joins
+/// by `id`; this projection is the authoritative openness record.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenAsk {
+    pub id: AskId,
+    pub kind: AskKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub since: Timestamp,
+}
 
 /// One hour: the shared ceiling for attention heat and breath tempo, and the
 /// default inactive window below which a card sinks beneath live work.
@@ -794,6 +806,10 @@ pub struct AgentState {
     /// the next lifecycle boundary arrives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_since: Option<Timestamp>,
+    /// The prompt associated with `waiting_since`. Old lifecycle records have
+    /// no identity and therefore replay with this field absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_ask: Option<OpenAsk>,
     /// When this agent last began compacting its context window — the timestamp
     /// of its most-recent compaction-start signal (`PreCompact` or Pi
     /// `session_before_compact`). Set by the rollup, cleared by the session's
@@ -878,6 +894,8 @@ struct AgentStateWire {
     turn_started_at: Option<Timestamp>,
     #[serde(default)]
     waiting_since: Option<Timestamp>,
+    #[serde(default)]
+    open_ask: Option<OpenAsk>,
     compacting_since: Option<Timestamp>,
     #[serde(default)]
     compaction_count: u32,
@@ -940,6 +958,7 @@ impl From<AgentStateWire> for AgentState {
             subagent_started_at: wire.subagent_started_at,
             turn_started_at: wire.turn_started_at,
             waiting_since: wire.waiting_since,
+            open_ask: wire.open_ask,
             compacting_since: wire.compacting_since,
             compaction_count: wire.compaction_count,
             last_compact_command_tokens: wire.last_compact_command_tokens,
@@ -1003,6 +1022,7 @@ impl AgentState {
             subagent_started_at: None,
             turn_started_at: None,
             waiting_since: None,
+            open_ask: None,
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,

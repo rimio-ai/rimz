@@ -11,6 +11,12 @@ pub(super) fn record_lifecycle_observation(
     globals: &GlobalFlags,
 ) -> Option<RecordedLifecycle> {
     if let Some(mut observation) = agent.observe_lifecycle(event_name, payload) {
+        if let LifecycleSignal::AwaitingInput { ask_id, detail, .. } = &mut observation.signal {
+            ask_id.get_or_insert_with(rimz::ids::AskId::new);
+            if detail.is_none() {
+                *detail = agent.ask_detail(event_name, payload);
+            }
+        }
         attach_agent_owner(agent.descriptor().kind, &mut observation);
         attach_agent_pane(&mut observation);
         if observation.agent_name.is_none() {

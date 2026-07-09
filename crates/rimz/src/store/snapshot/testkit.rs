@@ -138,6 +138,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
     AgentState {
         status,
         waiting_since: (status == AgentStatus::Waiting).then_some(timestamp),
+        open_ask: None,
         ..crate::testkit::agent_state(kind, id, timestamp)
     }
 }

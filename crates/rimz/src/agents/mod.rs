@@ -47,7 +47,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::harness::run::PermissionMode;
-use crate::transcript::{AskAnswer, AskQuestion};
+use crate::mux::NamedKey;
+use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
@@ -81,8 +82,8 @@ pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spend
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
     ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS,
-    DEFAULT_STALL_AFTER_SECS, is_stalled, is_turn_complete, is_turn_dead, is_turn_interrupted,
-    looks_like_control_text, single_line_description, usable_description,
+    DEFAULT_STALL_AFTER_SECS, OpenAsk, is_stalled, is_turn_complete, is_turn_dead,
+    is_turn_interrupted, looks_like_control_text, single_line_description, usable_description,
 };
 pub(crate) use state::{
     AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,
@@ -382,6 +383,30 @@ pub struct RemoteControlStatus {
     pub pane_auto: bool,
 }
 
+/// One validated answer to one native question. `picks` are zero-based option
+/// positions after the CLI resolves numeric and label selectors.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AskReply {
+    pub picks: Vec<usize>,
+    pub text: Option<String>,
+}
+
+/// Backend-neutral pane action emitted by an adapter's answer planner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AnswerStep {
+    Text(String),
+    Key(NamedKey),
+    Paste(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AnswerPlanErr {
+    #[error("{0} does not support structured answers")]
+    Unsupported(&'static str),
+    #[error("{0}")]
+    Invalid(String),
+}
+
 /// Assemble a fresh-launch argv with the startup prompt protected as the
 /// agent's positional argument. The `--` terminator keeps a trailing variadic
 /// or optional-value profile flag from consuming the prompt.
@@ -567,6 +592,39 @@ pub trait AgentAdapter: Send + Sync {
     /// text.
     fn ask_question_detail(&self, _event_name: &str, _payload: &Value) -> Option<Vec<AskQuestion>> {
         None
+    }
+
+    /// Short summary carried directly on an open ask. Structured questions
+    /// remain in the transcript; this covers prompts such as permissions that
+    /// intentionally do not create transcript ask entries.
+    fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
+        self.ask_question_detail(event_name, payload)
+            .and_then(|questions| questions.into_iter().next())
+            .map(|question| {
+                question
+                    .question
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .filter(|detail| !detail.is_empty())
+    }
+
+    /// Canonical options for an ask whose native event does not carry a
+    /// structured question list.
+    fn ask_options(&self, _kind: AskKind) -> Option<Vec<AskOption>> {
+        None
+    }
+
+    /// Map validated semantic answers to this agent's native TUI choreography.
+    fn answer_plan(
+        &self,
+        _kind: AskKind,
+        _questions: &[AskQuestion],
+        _answers: &[AskReply],
+    ) -> std::result::Result<Vec<AnswerStep>, AnswerPlanErr> {
+        Err(AnswerPlanErr::Unsupported(self.descriptor().kind))
     }
 
     /// Structured answer choices reported when a native ask completes in the

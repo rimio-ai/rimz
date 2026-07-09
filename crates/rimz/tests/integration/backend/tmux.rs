@@ -2663,6 +2663,45 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
         "expected marker in capture, got: {capture:?}",
     );
 
+    let key_bytes = server._tempdir.path().join("named-key-bytes");
+    server
+        .backend
+        .send_keys(
+            &pane_id,
+            &format!(
+                "stty raw -echo; dd bs=1 count=4 of={} 2>/dev/null; stty sane",
+                key_bytes.display()
+            ),
+        )
+        .expect("type raw key reader");
+    server
+        .backend
+        .send_key(&pane_id, NamedKey::Enter)
+        .expect("start raw key reader");
+    thread::sleep(Duration::from_millis(100));
+    server
+        .backend
+        .send_key(&pane_id, NamedKey::Escape)
+        .expect("send escape");
+    server
+        .backend
+        .send_key(&pane_id, NamedKey::ShiftTab)
+        .expect("send shift-tab");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let bytes = loop {
+        if let Ok(bytes) = std::fs::read(&key_bytes)
+            && bytes.len() == 4
+        {
+            break bytes;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "named keys did not reach tmux pane"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(bytes, b"\x1b\x1b[Z");
+
     // Leading dash guards the `send-keys -l --` spelling: payload bytes must not
     // be re-read as tmux flags or key names.
     let payload = "-rf rimz-paste-marker";

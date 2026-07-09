@@ -335,6 +335,7 @@ fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
         task: None,
         pane_id,
         root: None,
+        ask_id: None,
         new_status: None,
     }
 }

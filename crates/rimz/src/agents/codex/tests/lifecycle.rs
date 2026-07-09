@@ -184,7 +184,9 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     assert_eq!(
         permission.signal,
         LifecycleSignal::AwaitingInput {
-            kind: AskKind::Permission
+            kind: AskKind::Permission,
+            ask_id: None,
+            detail: None,
         }
     );
     assert_eq!(permission.task.as_deref(), Some("review"));
@@ -205,7 +207,9 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     assert_eq!(
         question.signal,
         LifecycleSignal::AwaitingInput {
-            kind: AskKind::Question
+            kind: AskKind::Question,
+            ask_id: None,
+            detail: None,
         }
     );
     assert_eq!(question.task.as_deref(), Some("review"));

@@ -25,7 +25,7 @@ command = "ntfy publish --title {{title}} rimz {{body}}"
 when = { kind = ["waiting", "failed"] }
 ```
 
-That is the whole feature: `waiting` and `failed` are the default triggers (add `paused` or `success` via `notifications.triggers`), and the command is anything — a push CLI, a webhook `curl`, a script. The event arrives twice over: as template variables (`{{title}}`, `{{body}}`, `{{agent}}`, `{{kind}}`, `{{worktree}}`, `{{pane}}`, `{{root}}`), each substituted as one shell-quoted token so you write them bare, and as environment variables (`RIMZ_NOTIFY_AGENT`, `RIMZ_NOTIFY_KIND`, `RIMZ_NOTIFY_PANE`, `RIMZ_NOTIFY_ROOT`, plus `RIMZ_NOTIFY_UNREAD` on reminders) for scripts that prefer reading the environment.
+That is the whole feature: `waiting` and `failed` are the default triggers (add `paused` or `success` via `notifications.triggers`), and the command is anything — a push CLI, a webhook `curl`, a script. The event arrives twice over: as template variables (`{{title}}`, `{{body}}`, `{{agent}}`, `{{kind}}`, `{{worktree}}`, `{{pane}}`, `{{root}}`), each substituted as one shell-quoted token so you write them bare, and as environment variables (`RIMZ_NOTIFY_AGENT`, `RIMZ_NOTIFY_KIND`, `RIMZ_NOTIFY_PANE`, `RIMZ_NOTIFY_ROOT`, plus `RIMZ_NOTIFY_ASK` on a single-agent waiting notification and `RIMZ_NOTIFY_UNREAD` on reminders) for scripts that prefer reading the environment.
 
 A `when` clause narrows a handler; its present conditions all have to match, and an empty `when` matches everything. `kind` names the notification kinds — the agent statuses plus `coalesced`, `reminder`, and the `link_lost`/`link_restored` pair that [`rimz remote connect`](./remote.md) fires when an SSH link drops or recovers. `worktree` glob-matches the agent's branch, and `handle` glob-matches its handle or role, so the noisy experiment stays quiet while `@planner` on `release/*` reaches your phone.
 
@@ -35,8 +35,9 @@ Handlers live in per-machine config and stay outside project trust, because they
 
 A handler fires with the pane and root in hand, and everything it might do next is a public Rimz command. That makes a handler a place to clear the routine prompt you have already approved eight times today, composed from the room's own primitives:
 
-- `rimz pane capture @<handle>` reads what the agent is asking.
-- `rimz pane send @<handle>` types the answer into the agent's own UI.
+- `rimz asks show "$RIMZ_NOTIFY_ASK" --json` reads the structured prompt and safe choices.
+- `rimz answer "$RIMZ_NOTIFY_ASK" <choice>` validates and types one atomic answer into the agent's own UI.
+- `rimz pane capture @<handle>` and `rimz pane send @<handle>` remain the escape hatch for an unsupported prompt shape.
 - `rimz message @<other>` hands the situation to a different agent.
 - `rimz agents <kind> -p` runs a one-shot [supervised turn](./scripting.md) to decide.
 

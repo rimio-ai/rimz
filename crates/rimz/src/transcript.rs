@@ -12,6 +12,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::ids::AskId;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::{StatePaths, atomic, lock};
 
@@ -52,6 +53,8 @@ pub struct TranscriptEntry {
     pub at: Timestamp,
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<AskId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,6 +85,7 @@ impl TranscriptEntry {
             at,
             kind,
             agent_id,
+            id: None,
             channel: None,
             name: None,
             profile: None,
@@ -109,6 +113,13 @@ pub struct AskQuestion {
     pub question: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<AskOption>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_select: bool,
+    /// Claude uses a different keyboard contract when any option carries a
+    /// rich preview: digits move focus and Enter selects. Persist the bit so a
+    /// later `rimz answer` does not guess from lossy option labels.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_option_previews: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +127,8 @@ pub struct AskQuestion {
 pub struct AskOption {
     pub label: String,
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caution: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,6 +139,8 @@ enum AskOptionWire {
         label: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caution: Option<String>,
     },
 }
 
@@ -135,20 +150,35 @@ impl From<AskOptionWire> for AskOption {
             AskOptionWire::Label(label) => Self {
                 label,
                 description: None,
+                caution: None,
             },
-            AskOptionWire::Detailed { label, description } => Self { label, description },
+            AskOptionWire::Detailed {
+                label,
+                description,
+                caution,
+            } => Self {
+                label,
+                description,
+                caution,
+            },
         }
     }
 }
 
 impl From<AskOption> for AskOptionWire {
     fn from(value: AskOption) -> Self {
-        match value.description {
-            Some(description) => AskOptionWire::Detailed {
+        match (value.description, value.caution) {
+            (Some(description), caution) => AskOptionWire::Detailed {
                 label: value.label,
                 description: Some(description),
+                caution,
             },
-            None => AskOptionWire::Label(value.label),
+            (None, Some(caution)) => AskOptionWire::Detailed {
+                label: value.label,
+                description: None,
+                caution: Some(caution),
+            },
+            (None, None) => AskOptionWire::Label(value.label),
         }
     }
 }
@@ -158,6 +188,7 @@ impl From<String> for AskOption {
         Self {
             label,
             description: None,
+            caution: None,
         }
     }
 }
@@ -206,6 +237,29 @@ fn non_empty(text: &str) -> Option<&str> {
 #[must_use = "durability barrier; check the result"]
 pub fn append(paths: &StatePaths, entry: &TranscriptEntry) -> Result<()> {
     let _guard = lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    append_locked(paths, entry)
+}
+
+/// Append an id-stamped answer exactly once across the native hook and CLI
+/// confirmation writers. The workspace lock covers both the duplicate check
+/// and append, so a PostToolUse racing `rimz answer` still yields one record.
+pub fn append_answer_if_missing(paths: &StatePaths, entry: &TranscriptEntry) -> Result<bool> {
+    debug_assert_eq!(entry.entry, TranscriptKind::Answer);
+    let Some(id) = entry.id.as_ref() else {
+        append(paths, entry)?;
+        return Ok(true);
+    };
+    let _guard = lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    if read_all(paths)?.into_iter().any(|existing| {
+        existing.entry == TranscriptKind::Answer && existing.id.as_ref() == Some(id)
+    }) {
+        return Ok(false);
+    }
+    append_locked(paths, entry)?;
+    Ok(true)
+}
+
+fn append_locked(paths: &StatePaths, entry: &TranscriptEntry) -> Result<()> {
     fs::create_dir_all(&paths.transcript_dir).map_err(|source| TranscriptLogErr::Io {
         path: paths.transcript_dir.clone(),
         source,
@@ -248,6 +302,7 @@ pub fn latest_open_ask(
 ) -> Result<Option<TranscriptEntry>> {
     let mut files = transcript_files(&paths.transcript_dir)?;
     files.sort_by(|left, right| right.cmp(left));
+    let mut closed = std::collections::BTreeSet::new();
 
     for path in files {
         let text = fs::read_to_string(&path).map_err(|source| TranscriptLogErr::Io {
@@ -264,8 +319,16 @@ pub fn latest_open_ask(
                 continue;
             }
             match entry.entry {
-                TranscriptKind::Ask => return Ok(Some(entry)),
-                TranscriptKind::Answer => return Ok(None),
+                TranscriptKind::Ask => match entry.id.as_ref() {
+                    Some(id) if closed.contains(id.as_str()) => {}
+                    _ => return Ok(Some(entry)),
+                },
+                TranscriptKind::Answer => match entry.id.as_ref() {
+                    Some(id) => {
+                        closed.insert(id.as_str().to_owned());
+                    }
+                    None => return Ok(None),
+                },
                 _ => {}
             }
         }
@@ -423,6 +486,8 @@ mod tests {
                 AskOption::from("safe".to_owned()),
                 AskOption::from("fast".to_owned()),
             ],
+            multi_select: false,
+            has_option_previews: false,
         }];
         entry.answers = vec![AskAnswer {
             question: Some("Choose deployment path?".to_owned()),
@@ -474,6 +539,7 @@ mod tests {
                 AskOption {
                     label: "safe".to_owned(),
                     description: Some("Use staged rollout.".to_owned()),
+                    caution: None,
                 },
                 AskOption::from("fast".to_owned()),
             ]
@@ -536,6 +602,34 @@ mod tests {
     }
 
     #[test]
+    fn latest_open_ask_pairs_answers_by_id() {
+        let (_dir, paths) = paths();
+        let mut old_ask = entry(TranscriptKind::Ask, "old?", "2026-06-01T00:00:00Z");
+        old_ask.id = Some(AskId::parse("ask_0123456789abcdea").unwrap());
+        let mut new_ask = entry(TranscriptKind::Ask, "new?", "2026-06-01T00:00:01Z");
+        new_ask.id = Some(AskId::parse("ask_0123456789abcdeb").unwrap());
+        let mut unrelated = entry(TranscriptKind::Answer, "old answer", "2026-06-01T00:00:02Z");
+        unrelated.id = old_ask.id.clone();
+        append(&paths, &old_ask).expect("append old ask");
+        append(&paths, &new_ask).expect("append new ask");
+        append(&paths, &unrelated).expect("append unrelated answer");
+
+        let open = latest_open_ask(&paths, &new_ask.kind, &new_ask.agent_id)
+            .expect("read ask")
+            .expect("new ask stays open");
+        assert_eq!(open.id, new_ask.id);
+
+        let mut matching = entry(TranscriptKind::Answer, "new answer", "2026-06-01T00:00:03Z");
+        matching.id = new_ask.id.clone();
+        append(&paths, &matching).expect("append matching answer");
+        assert!(
+            latest_open_ask(&paths, &new_ask.kind, &new_ask.agent_id)
+                .expect("read closed ask")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn latest_open_ask_newest_bucket_decides() {
         let (_dir, paths) = paths();
         let older_answer = entry(TranscriptKind::Answer, "yes", "2026-06-01T00:00:00Z");
@@ -577,6 +671,17 @@ mod tests {
     }
 
     #[test]
+    fn answer_append_is_idempotent_by_ask_id() {
+        let (_dir, paths) = paths();
+        let mut answer = entry(TranscriptKind::Answer, "safe", "2026-06-01T00:00:00Z");
+        answer.id = Some(AskId::parse("ask_0123456789abcdef").unwrap());
+
+        assert!(append_answer_if_missing(&paths, &answer).expect("first append"));
+        assert!(!append_answer_if_missing(&paths, &answer).expect("duplicate append"));
+        assert_eq!(read_all(&paths).expect("read").len(), 1);
+    }
+
+    #[test]
     fn answer_text_prefers_choice_then_typed_fields_then_json() {
         assert_eq!(
             answer_text(&serde_json::json!({"choice": "allow"})),
@@ -606,6 +711,7 @@ mod tests {
             AskOption {
                 label: "safe".to_owned(),
                 description: None,
+                caution: None,
             }
         );
     }
@@ -621,6 +727,7 @@ mod tests {
             AskOption {
                 label: "safe".to_owned(),
                 description: Some("Use staged rollout".to_owned()),
+                caution: None,
             }
         );
     }
@@ -643,6 +750,7 @@ mod tests {
             serde_json::to_value(AskOption {
                 label: "safe".to_owned(),
                 description: Some("Use staged rollout".to_owned()),
+                caution: None,
             })
             .expect("serialize option"),
             json!({"label": "safe", "description": "Use staged rollout"})

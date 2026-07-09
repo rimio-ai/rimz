@@ -4,6 +4,8 @@
 mod address;
 mod agents_cmd;
 mod agents_launch;
+mod answer;
+mod asks;
 mod channel;
 mod codex;
 mod config;
@@ -77,6 +79,8 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Channel(args)) => channel::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
+        Some(Subcmd::Asks(args)) => asks::run(args, &globals),
+        Some(Subcmd::Answer(args)) => answer::run(args, &globals),
         Some(Subcmd::Loop(args)) => loop_cmd::run(args, &globals),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
@@ -181,6 +185,8 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Channel(_)) => ("channel", None, None),
         Some(Subcmd::Worktree(_)) => ("worktree", None, None),
         Some(Subcmd::Agents(_)) => ("agents", None, None),
+        Some(Subcmd::Asks(_)) => ("asks", None, None),
+        Some(Subcmd::Answer(_)) => ("answer", None, None),
         Some(Subcmd::Loop(_)) => ("loop", None, None),
         Some(Subcmd::Reload(_)) => ("reload", None, None),
         Some(Subcmd::Reset(_)) => ("reset", None, None),
@@ -472,6 +478,10 @@ enum Subcmd {
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in Rimz-owned worktrees.
     Agents(Box<agents_cmd::AgentsArgs>),
+    /// Inspect the blocking prompts agents currently have open.
+    Asks(asks::AsksArgs),
+    /// Answer one current blocking prompt in its agent pane.
+    Answer(answer::AnswerArgs),
     /// Schedule supervised agent turns.
     ///
     /// Runs from the room's sidebar elder.

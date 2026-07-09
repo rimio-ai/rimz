@@ -244,7 +244,11 @@ fn awaiting_input_projects_to_waiting() {
             };
             let transition = step(
                 Some(&prior),
-                &LifecycleSignal::AwaitingInput { kind: ask_kind },
+                &LifecycleSignal::AwaitingInput {
+                    kind: ask_kind,
+                    ask_id: None,
+                    detail: None,
+                },
             );
 
             assert_eq!(
@@ -320,6 +324,14 @@ fn assert_coverage_honest(
             has_ask_kind(samples, AskKind::Question)
                 || has_blocking_tool_kind(descriptor, AskKind::Question),
             "{kind} UserQuestion coverage must match blocking question ask/tool classification"
+        ),
+        IntegrationConcern::Answer => assert_eq!(
+            wired,
+            !matches!(
+                adapter.answer_plan(AskKind::Permission, &[], &[]),
+                Err(super::AnswerPlanErr::Unsupported(_))
+            ),
+            "{kind} Answer coverage must match the adapter answer planner"
         ),
         IntegrationConcern::Compaction => assert_eq!(
             wired,

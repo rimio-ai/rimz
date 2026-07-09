@@ -1,6 +1,8 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
+use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
+use crate::mux::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 #[derive(Debug, Default, Deserialize)]
@@ -14,6 +16,8 @@ struct AskUserQuestionInput {
 struct ClaudeAskQuestion {
     question: Option<String>,
     options: Vec<ClaudeAskOption>,
+    #[serde(rename = "multiSelect")]
+    multi_select: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -21,6 +25,7 @@ struct ClaudeAskQuestion {
 struct ClaudeAskOption {
     label: Option<String>,
     description: Option<String>,
+    preview: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -72,6 +77,10 @@ fn ask_user_question_detail(tool_input: &Value) -> Option<Vec<AskQuestion>> {
 
 fn structured_question(question: ClaudeAskQuestion) -> Option<AskQuestion> {
     let question_text = non_empty(question.question.as_deref())?;
+    let has_option_previews = question
+        .options
+        .iter()
+        .any(|option| option.preview.is_some());
     let options = question
         .options
         .into_iter()
@@ -82,12 +91,15 @@ fn structured_question(question: ClaudeAskQuestion) -> Option<AskQuestion> {
                     .description
                     .as_deref()
                     .and_then(|description| non_empty(Some(description))),
+                caution: None,
             })
         })
         .collect::<Vec<_>>();
     Some(AskQuestion {
         question: question_text,
         options,
+        multi_select: question.multi_select,
+        has_option_previews,
     })
 }
 
@@ -96,8 +108,144 @@ fn exit_plan_mode_detail(tool_input: &Value) -> Option<Vec<AskQuestion>> {
     let plan = non_empty(parsed.plan.as_deref())?;
     Some(vec![AskQuestion {
         question: format!("Requesting plan approval:\n\n{plan}"),
-        options: Vec::new(),
+        options: plan_options(),
+        multi_select: false,
+        has_option_previews: false,
     }])
+}
+
+pub(super) fn permission_options() -> Vec<AskOption> {
+    vec![
+        AskOption::from("allow".to_owned()),
+        AskOption::from("deny".to_owned()),
+    ]
+}
+
+pub(super) fn plan_options() -> Vec<AskOption> {
+    vec![
+        AskOption {
+            label: "approve".to_owned(),
+            description: Some("Exit plan mode with Claude's Shift-Tab approval action".to_owned()),
+            caution: Some("enables auto-accept for subsequent edits".to_owned()),
+        },
+        AskOption::from("keep-planning".to_owned()),
+    ]
+}
+
+pub(super) fn permission_detail(payload: &Value) -> Option<String> {
+    let tool = payload.get("tool_name")?.as_str()?.trim();
+    if tool.is_empty() {
+        return None;
+    }
+    let summary = payload
+        .get("tool_input")
+        .and_then(|input| serde_json::to_string(input).ok())
+        .map(|input| input.chars().take(160).collect::<String>())
+        .filter(|input| input != "{}" && input != "null");
+    Some(match summary {
+        Some(summary) => format!("{tool}: {summary}"),
+        None => tool.to_owned(),
+    })
+}
+
+pub(super) fn answer_plan(
+    kind: AskKind,
+    questions: &[AskQuestion],
+    answers: &[AskReply],
+) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
+    match kind {
+        AskKind::Permission => permission_answer_plan(answers),
+        AskKind::PlanApproval => plan_approval_answer_plan(answers),
+        AskKind::Question => question_answer_plan(questions, answers),
+    }
+}
+
+fn plan_approval_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
+    let [answer] = answers else {
+        return Err(AnswerPlanErr::Invalid(
+            "plan approvals require exactly one answer".to_owned(),
+        ));
+    };
+    match answer.picks.as_slice() {
+        [0] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::ShiftTab)]),
+        [1] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::Escape)]),
+        [1] => Err(AnswerPlanErr::Invalid(
+            "Claude closes plan approval immediately on Escape; open the pane to keep planning with instructions"
+                .to_owned(),
+        )),
+        _ => Err(AnswerPlanErr::Invalid(
+            "plan approvals accept exactly one of `approve` or `keep-planning`".to_owned(),
+        )),
+    }
+}
+
+fn permission_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
+    let [answer] = answers else {
+        return Err(AnswerPlanErr::Invalid(
+            "permission asks require exactly one answer".to_owned(),
+        ));
+    };
+    match answer.picks.as_slice() {
+        [0] if answer.text.is_none() => Ok(vec![AnswerStep::Text("1".to_owned())]),
+        [1] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::Escape)]),
+        [1] => Err(AnswerPlanErr::Invalid(
+            "Claude closes the permission prompt immediately on Escape; open the pane to deny with instructions"
+                .to_owned(),
+        )),
+        _ => Err(AnswerPlanErr::Invalid(
+            "permission answers accept exactly one of `allow` or `deny`".to_owned(),
+        )),
+    }
+}
+
+fn question_answer_plan(
+    questions: &[AskQuestion],
+    answers: &[AskReply],
+) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
+    if questions.len() != answers.len() {
+        return Err(AnswerPlanErr::Invalid(format!(
+            "expected {} answers, got {}",
+            questions.len(),
+            answers.len()
+        )));
+    }
+    let mut steps = Vec::new();
+    let mut needs_review = questions.len() > 1;
+    for (question, answer) in questions.iter().zip(answers) {
+        if answer.text.is_some() && !answer.picks.is_empty() && !question.multi_select {
+            return Err(AnswerPlanErr::Invalid(
+                "picks and text can be combined only on a multi-select question".to_owned(),
+            ));
+        }
+        if let Some(text) = answer.text.as_ref() {
+            steps.push(AnswerStep::Text((question.options.len() + 1).to_string()));
+            steps.push(AnswerStep::Paste(text.clone()));
+            steps.push(AnswerStep::Key(NamedKey::Enter));
+        }
+        for pick in &answer.picks {
+            steps.push(AnswerStep::Text((pick + 1).to_string()));
+            if question.has_option_previews {
+                steps.push(AnswerStep::Key(NamedKey::Enter));
+            }
+        }
+        if question.multi_select {
+            needs_review = true;
+            let down_count = if answer.text.is_some() {
+                1
+            } else {
+                question.options.len() + 1
+            };
+            steps.extend(std::iter::repeat_n(
+                AnswerStep::Key(NamedKey::Down),
+                down_count,
+            ));
+            steps.push(AnswerStep::Key(NamedKey::Enter));
+        }
+    }
+    if needs_review {
+        steps.push(AnswerStep::Key(NamedKey::Enter));
+    }
+    Ok(steps)
 }
 
 fn ask_user_question_answer(tool_response: &Value) -> Option<Vec<AskAnswer>> {
@@ -243,6 +391,7 @@ mod tests {
                 "questions": [
                     {
                         "question": "Choose deployment path?",
+                        "multiSelect": true,
                         "options": [
                             {
                                 "label": "safe",
@@ -269,16 +418,22 @@ mod tests {
                         AskOption {
                             label: "safe".to_owned(),
                             description: Some("Use staged rollout".to_owned()),
+                            caution: None,
                         },
                         AskOption {
                             label: "fast".to_owned(),
                             description: None,
+                            caution: None,
                         },
                     ],
+                    multi_select: true,
+                    has_option_previews: false,
                 },
                 AskQuestion {
                     question: "Notify team?".to_owned(),
                     options: Vec::new(),
+                    multi_select: false,
+                    has_option_previews: false,
                 },
             ])
         );
@@ -295,7 +450,9 @@ mod tests {
             questions,
             Some(vec![AskQuestion {
                 question: "Requesting plan approval:\n\n1. Edit parser\n2. Run tests".to_owned(),
-                options: Vec::new(),
+                options: plan_options(),
+                multi_select: false,
+                has_option_previews: false,
             }])
         );
     }
@@ -459,5 +616,171 @@ mod tests {
             }])
         );
         assert!(answer_detail("Bash", &json!("ok")).is_none());
+    }
+
+    #[test]
+    fn permission_answer_plan_uses_menu_independent_controls() {
+        assert_eq!(
+            answer_plan(
+                AskKind::Permission,
+                &[],
+                &[AskReply {
+                    picks: vec![0],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![AnswerStep::Text("1".to_owned())]
+        );
+        assert_eq!(
+            answer_plan(
+                AskKind::Permission,
+                &[],
+                &[AskReply {
+                    picks: vec![1],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![AnswerStep::Key(NamedKey::Escape)]
+        );
+    }
+
+    #[test]
+    fn plan_answer_plan_uses_menu_independent_controls() {
+        assert_eq!(
+            answer_plan(
+                AskKind::PlanApproval,
+                &[],
+                &[AskReply {
+                    picks: vec![0],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![AnswerStep::Key(NamedKey::ShiftTab)]
+        );
+        assert_eq!(
+            answer_plan(
+                AskKind::PlanApproval,
+                &[],
+                &[AskReply {
+                    picks: vec![1],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![AnswerStep::Key(NamedKey::Escape)]
+        );
+    }
+
+    #[test]
+    fn question_answer_plan_selects_and_confirms() {
+        let questions = vec![
+            AskQuestion {
+                question: "Path?".to_owned(),
+                options: vec![
+                    AskOption::from("safe".to_owned()),
+                    AskOption::from("fast".to_owned()),
+                ],
+                multi_select: false,
+                has_option_previews: false,
+            },
+            AskQuestion {
+                question: "Scopes?".to_owned(),
+                options: vec![
+                    AskOption::from("read".to_owned()),
+                    AskOption::from("write".to_owned()),
+                ],
+                multi_select: true,
+                has_option_previews: false,
+            },
+        ];
+        let answers = vec![
+            AskReply {
+                picks: vec![1],
+                ..AskReply::default()
+            },
+            AskReply {
+                picks: vec![0, 1],
+                ..AskReply::default()
+            },
+        ];
+
+        assert_eq!(
+            answer_plan(AskKind::Question, &questions, &answers).unwrap(),
+            vec![
+                AnswerStep::Text("2".to_owned()),
+                AnswerStep::Text("1".to_owned()),
+                AnswerStep::Text("2".to_owned()),
+                AnswerStep::Key(NamedKey::Down),
+                AnswerStep::Key(NamedKey::Down),
+                AnswerStep::Key(NamedKey::Down),
+                AnswerStep::Key(NamedKey::Enter),
+                AnswerStep::Key(NamedKey::Enter),
+            ]
+        );
+    }
+
+    #[test]
+    fn question_answer_plan_respects_preview_and_other_input_contracts() {
+        let ordinary = AskQuestion {
+            question: "Path?".to_owned(),
+            options: vec![
+                AskOption::from("safe".to_owned()),
+                AskOption::from("fast".to_owned()),
+            ],
+            multi_select: false,
+            has_option_previews: false,
+        };
+        assert_eq!(
+            answer_plan(
+                AskKind::Question,
+                std::slice::from_ref(&ordinary),
+                &[AskReply {
+                    picks: vec![1],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![AnswerStep::Text("2".to_owned())]
+        );
+
+        let preview = AskQuestion {
+            has_option_previews: true,
+            ..ordinary.clone()
+        };
+        assert_eq!(
+            answer_plan(
+                AskKind::Question,
+                &[preview],
+                &[AskReply {
+                    picks: vec![0],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![
+                AnswerStep::Text("1".to_owned()),
+                AnswerStep::Key(NamedKey::Enter),
+            ]
+        );
+
+        assert_eq!(
+            answer_plan(
+                AskKind::Question,
+                &[ordinary],
+                &[AskReply {
+                    text: Some("stage it".to_owned()),
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![
+                AnswerStep::Text("3".to_owned()),
+                AnswerStep::Paste("stage it".to_owned()),
+                AnswerStep::Key(NamedKey::Enter),
+            ]
+        );
     }
 }

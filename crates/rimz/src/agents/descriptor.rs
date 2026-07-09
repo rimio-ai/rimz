@@ -207,6 +207,7 @@ integration_concerns! {
     Permission => "perm",
     PlanApproval => "plan",
     UserQuestion => "ask",
+    Answer => "answer",
     Compaction => "compact",
     Subagents => "sub",
     BackgroundParking => "bg",

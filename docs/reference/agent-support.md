@@ -17,10 +17,10 @@ This page is the annotated read of that command.
 
 | Agent | Status | Coverage | Integration surface |
 | --- | :---: | --- | --- |
-| Claude Code | ✅ stable | 15 wired | hooks · statusline · `.jsonl` transcripts · `claude --resume` |
-| Codex | ✅ stable | 11 wired · 2 derived · 2 unsupported | hooks + `notify` · app-server · rollout `.jsonl` · `codex resume` |
-| Pi | beta | 7 wired · 3 derived · 5 unsupported | extension API · session `.jsonl` · `pi --session` |
-| OpenCode | alpha | 8 wired · 3 derived · 4 unsupported | plugin API · session `.jsonl` + SQLite |
+| Claude Code | ✅ stable | 16 wired | hooks · statusline · `.jsonl` transcripts · `claude --resume` |
+| Codex | ✅ stable | 11 wired · 2 derived · 3 unsupported | hooks + `notify` · app-server · rollout `.jsonl` · `codex resume` |
+| Pi | beta | 7 wired · 3 derived · 6 unsupported | extension API · session `.jsonl` · `pi --session` |
+| OpenCode | alpha | 8 wired · 3 derived · 5 unsupported | plugin API · session `.jsonl` + SQLite |
 
 What the tiers promise:
 
@@ -32,7 +32,7 @@ Every tier delivers the core promise: the agent appears in the sidebar, its bloc
 
 ## The coverage matrix
 
-`rimz coverage` scores each agent against fifteen product concerns. A cell reads **wired** (✓, a native signal carries it directly), **partial** (◐, no native signal, so Rimz reconstructs the behaviour from other state), or **unsupported** (✗, unreachable from the agent's current protocol). A partial cell still shows you a live figure — it trades a native push for a derivation, and the command names the exact gap that derivation leaves.
+`rimz coverage` scores each agent against sixteen product concerns. A cell reads **wired** (✓, a native signal carries it directly), **partial** (◐, no native signal, so Rimz reconstructs the behaviour from other state), or **unsupported** (✗, unreachable from the agent's current protocol). A partial cell still shows you a live figure — it trades a native push for a derivation, and the command names the exact gap that derivation leaves.
 
 | Concern | Claude | Codex | Pi | OpenCode | What it drives |
 | --- | :--: | :--: | :--: | :--: | --- |
@@ -40,6 +40,7 @@ Every tier delivers the core promise: the agent appears in the sidebar, its bloc
 | `perm` | ✓ | ✓ | ✓ | ✓ | permission prompts routed to your keyboard |
 | `plan` | ✓ | ✗ | ✗ | ✗ | a plan-approval gate raises a waiting row |
 | `ask` | ✓ | ✓ | ✗ | ✗ | the agent's ask-the-user tool raises a waiting row |
+| `answer` | ✓ | ✗ | ✗ | ✗ | structured answers drive the current native prompt |
 | `compact` | ✓ | ✓ | ✓ | ✓ | context compaction shows on the card |
 | `sub` | ✓ | ✓ | ✗ | ✓ | the subagent tree renders as nested rows |
 | `bg` | ✓ | ✗ | ✗ | ✗ | a turn parked on background work stays tracked |
@@ -60,7 +61,7 @@ The columns thin out from left to right for a reason: Claude Code is the referen
 
 ### Claude Code
 
-Claude is the reference integration and the fullest one, wired on all fifteen concerns. Its hooks run **standalone** — in the agent's own pane — so every event stamps the pane directly and identity binding is exact and free ([the instance lifecycle](../internals/agents/model.md#the-instance-lifecycle)).
+Claude is the reference integration and the fullest one, wired on all sixteen concerns. Its hooks run **standalone** — in the agent's own pane — so every event stamps the pane directly and identity binding is exact and free ([the instance lifecycle](../internals/agents/model.md#the-instance-lifecycle)).
 
 - **Reports:** session start and end, every turn boundary, per-tool activity, subagents (the `Task` tool tree, each child as its own nested row), plan approvals, and permission prompts. `SessionEnd` tombstones the row the moment the session closes.
 - **Live context:** Claude's statusline is wrapped to push rich per-session data — context window, usage, cost, model display name — on its own cadence, so the card's context meter and dollar figure stay live rather than turn-grained. The context window is read from the model id, and a `[1m]` capability tag widens it.
@@ -77,7 +78,7 @@ Codex is a full integration with one structural difference: since 0.137 its hook
 
 - **Reports:** turn boundaries, per-tool activity, subagents (thread-spawned children since 0.134), plan approvals, permission prompts, and the `notify` channel.
 - **Two derived cells (◐):** `end` — Codex has no per-session end hook, so a closed session leaves by pane liveness and the rollup reaper on the next snapshot tick rather than at the instant of exit; `idle` — reconstructed from turn-end, `request_user_input`, and the stall window, without a native idle-timeout nudge.
-- **Two unsupported cells (✗):** `plan` — no plan-approval gate, since `update_plan` is non-blocking (`codex-plan` keeps the default posture); `bg` — no background-task parking.
+- **Three unsupported cells (✗):** `plan` — no plan-approval gate, since `update_plan` is non-blocking (`codex-plan` keeps the default posture); `answer` — no mapped prompt choreography; `bg` — no background-task parking.
 - **Live context:** the rollout `.jsonl` tail is the native live source for tokens, cost, and effort, read under a stat gate so an unchanged file costs nothing; the read-only app-server methods supply account and rate-limit context. The context window comes from the rollout's `model_context_window`.
 - **Turn-death handling:** Codex can end a turn on a provider limit with no error record and no `Stop` hook. Rimz confirms these from a bounded pane capture plus the account budget, so a paused Codex reads as `⏸` rather than a false success or a stall ([turn-completion and turn-death markers](../internals/agents/codex.md#turn-completion-marker)); `rimz agents refresh @codex` re-runs the check on demand.
 - **Resume:** `codex resume`; `rimz agents codex --resume` reopens the freshest closed session.
@@ -92,7 +93,7 @@ Pi runs in-process in its pane and reports through a Rimz-authored **extension**
 
 - **Reports:** turn boundaries, per-tool activity, and context usage on every envelope.
 - **Three derived cells (◐):** `idle` — turn-end plus the stall window, without a native idle-timeout nudge; `live$` — the extension pushes a cumulative-cost figure and a turn-end walk sums the session transcript spend, so the in-process accumulator is best-effort and resets on resume while the turn-end walk reconciles to the authoritative session total; `rich` — the extension envelope carries model, effort, cost, and account windows, but rides the lifecycle channel with no out-of-band transport refreshing it between turns, unlike a statusline or app-server poll.
-- **Five unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (no native question tool), `sub` (no subagent hook surface), `bg` (no background-task parking), and `remote` (no remote-control surface).
+- **Six unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (no native question tool), `answer` (no mapped prompt choreography), `sub` (no subagent hook surface), `bg` (no background-task parking), and `remote` (no remote-control surface).
 - **Blocking asks:** Pi has no native prompt UI, so its adapter declares `native_ask_ui` off. A blocking hook returns the neutral no-op — which for Pi *is* the allow — and Rimz records no waiting row, because there is no native prompt a `?` row could route you to. Pi's neutral semantics differ from Claude's and Codex's, so verify this per agent.
 - **Resume:** `pi --session`.
 - **Permission modes:** `pi-{ask,plan}` as launch cells. Effort levels: `off|minimal|low|medium|high|xhigh`.
@@ -107,7 +108,7 @@ OpenCode reports through a Rimz-authored **plugin** that maintains its context g
 
 - **Reports:** turn boundaries, per-tool activity, subagents, and context usage per envelope.
 - **Three derived cells (◐):** `end` — `dispose` is server-scoped and carries no session id, so the card leaves on pane liveness and the reaper rather than at exit; `idle` — turn-end, `permission.ask`, and the stall window, without a native idle-timeout nudge; `live$` — summed from the session store (SQLite) at turn end, a reconstructed figure rather than a provider-pushed realtime one.
-- **Four unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (the question tool has no contracted bus event in 1.15.13), `bg` (no background-task parking), and `remote` (no remote-control surface).
+- **Five unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (the question tool has no contracted bus event in 1.15.13), `answer` (no mapped prompt choreography), `bg` (no background-task parking), and `remote` (no remote-control surface).
 - **Rich context:** the embedded server's `/config/providers` and `/session` endpoints, reached over the plugin's `serverUrl`, supply official model labels and account windows.
 - **Resume:** the session `.jsonl` carries the history; see [opencode.md](../internals/agents/opencode.md) for the current resume path.
 - **Permission modes:** no launch-cell suffixes yet — launch OpenCode bare or through a profile (`rimz agents --help` lists the current flags).

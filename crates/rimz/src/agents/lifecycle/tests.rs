@@ -403,7 +403,7 @@ fn state_machine_is_total_and_keeps_phase_axis_valid() {
 #[test]
 fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
     for signal in all_signals() {
-        let wire = serde_json::to_value(signal).unwrap();
+        let wire = serde_json::to_value(&signal).unwrap();
         assert_eq!(wire["signal"], signal.tag(), "{signal:?}");
         let back: LifecycleSignal = serde_json::from_value(wire).unwrap();
         assert_eq!(signal, back);

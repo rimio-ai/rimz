@@ -216,7 +216,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
         // illegal jump can't slip through unvalidated. Replay is silent here;
         // the ingestion path logs anomalies once per fresh event.
         let observation = &payload.observation;
-        let signal = observation.signal;
+        let signal = observation.signal.clone();
         // Identity is required: a session-less event is quarantined (folded
         // to nothing), mirroring the malformed-subagent-identity rule —
         // never silently merged into a shared per-kind bucket where two
@@ -258,13 +258,13 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
         let event_parent_agent_id =
             non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
         let event_task = non_empty_string(observation.task.as_deref());
-        if matches!(signal, lifecycle::LifecycleSignal::Ended) {
+        if matches!(&signal, lifecycle::LifecycleSignal::Ended) {
             identity.release_key(&key);
             map.remove(&key);
             continue;
         }
         let prior = map.get(&key).or(provisional_prior.as_ref());
-        if matches!(signal, lifecycle::LifecycleSignal::Lost) && prior.is_none() {
+        if matches!(&signal, lifecycle::LifecycleSignal::Lost) && prior.is_none() {
             debug!(
                 target: "rimz::agent::lifecycle",
                 event_id = %envelope.event_id,
@@ -276,7 +276,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             continue;
         }
         if matches!(
-            signal,
+            &signal,
             lifecycle::LifecycleSignal::Compacting
                 | lifecycle::LifecycleSignal::CompactionEnded { .. }
         ) && prior.is_none()
@@ -291,7 +291,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             );
             continue;
         }
-        if matches!(signal, lifecycle::LifecycleSignal::SubagentStopped { .. })
+        if matches!(&signal, lifecycle::LifecycleSignal::SubagentStopped { .. })
             && prior.is_none()
             && event_parent_agent_id.is_some()
             && event_task.is_none()
@@ -900,6 +900,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         subagent_started_at: None,
         turn_started_at: lifecycle.turn_started_at,
         waiting_since: lifecycle.waiting_since,
+        open_ask: lifecycle.open_ask,
         compacting_since: lifecycle.compacting_since,
         compaction_count: lifecycle.compaction_count,
         last_compact_command_tokens: carried.last_compact_command_tokens,
@@ -1001,6 +1002,7 @@ fn assemble_launch_state(
         subagent_started_at: None,
         turn_started_at: Some(event.timestamp),
         waiting_since: None,
+        open_ask: None,
         compacting_since: None,
         compaction_count: carried.compaction_count,
         last_compact_command_tokens: carried.last_compact_command_tokens,
@@ -1017,6 +1019,7 @@ struct LifecycleProjection {
     compaction_count: u32,
     turn_started_at: Option<Timestamp>,
     waiting_since: Option<Timestamp>,
+    open_ask: Option<crate::agents::OpenAsk>,
     registered_at: Option<Timestamp>,
 }
 
@@ -1050,7 +1053,7 @@ fn lifecycle_projection(
     // no-op (no children yet).
     let resets_context = next.status == AgentStatus::Idle
         && matches!(
-            signal,
+            &signal,
             lifecycle::LifecycleSignal::CompactionEnded { .. }
                 | lifecycle::LifecycleSignal::Registered
         );
@@ -1059,12 +1062,27 @@ fn lifecycle_projection(
     } else {
         prior.and_then(|p| p.turn_started_at)
     };
-    let waiting_since = if matches!(signal, lifecycle::LifecycleSignal::AwaitingInput { .. }) {
+    let waiting_since = if matches!(&signal, lifecycle::LifecycleSignal::AwaitingInput { .. }) {
         Some(timestamp)
     } else if next.status == AgentStatus::Waiting {
         prior.and_then(|p| p.waiting_since)
     } else {
         None
+    };
+    let open_ask = match &signal {
+        lifecycle::LifecycleSignal::AwaitingInput {
+            kind,
+            ask_id: Some(id),
+            detail,
+        } => Some(crate::agents::OpenAsk {
+            id: id.clone(),
+            kind: *kind,
+            detail: detail.clone(),
+            since: timestamp,
+        }),
+        lifecycle::LifecycleSignal::AwaitingInput { ask_id: None, .. } => None,
+        _ if next.status == AgentStatus::Waiting => prior.and_then(|p| p.open_ask.clone()),
+        _ => None,
     };
     LifecycleProjection {
         status: next.status,
@@ -1073,6 +1091,7 @@ fn lifecycle_projection(
         compaction_count,
         turn_started_at,
         waiting_since,
+        open_ask,
         registered_at: prior.and_then(|p| p.registered_at).or(Some(timestamp)),
     }
 }

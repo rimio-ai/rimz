@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 
 use super::*;
-use crate::agents::AgentState;
-use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::agents::{AgentState, AskKind, OpenAsk};
+use crate::ids::{AskId, MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::sidebar::unread::{OpenedUnread, opened_unread};
 
@@ -201,6 +201,12 @@ fn projected_ask_rows_notify_as_waiting() {
 
     let mut agent = agent("a1", AgentStatus::Waiting, false);
     agent.waiting_since = Some(agent.last_activity);
+    agent.open_ask = Some(OpenAsk {
+        id: AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: AskKind::Question,
+        detail: Some("Choose?".to_owned()),
+        since: agent.last_activity,
+    });
     let next = snapshot_with(vec![agent]);
     assert_eq!(
         next.worktree_groups[0].rows[0].status(),
@@ -212,6 +218,10 @@ fn projected_ask_rows_notify_as_waiting() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].notification_kind, NotificationKind::Waiting);
     assert_eq!(out[0].agents[0].agent_id, AgentSessionId::from("a1"));
+    assert_eq!(
+        out[0].agents[0].ask_id.as_ref().map(AskId::as_str),
+        Some("ask_0123456789abcdef")
+    );
 }
 
 #[test]
@@ -609,7 +619,7 @@ fn command_spawn_receives_notification_env() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("env.txt");
     let command = format!(
-        "printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" \"${{RIMZ_NOTIFY_UNREAD-unset}}\" \"$RIMZ_NOTIFY_PANE\" \"$RIMZ_NOTIFY_ROOT\" > {}",
+        "printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" \"${{RIMZ_NOTIFY_UNREAD-unset}}\" \"$RIMZ_NOTIFY_PANE\" \"$RIMZ_NOTIFY_ROOT\" \"$RIMZ_NOTIFY_ASK\" > {}",
         sh_quote(&out)
     );
     let notification = Notification {
@@ -622,6 +632,7 @@ fn command_spawn_receives_notification_env() {
             task: None,
             pane_id: Some(PaneId::from_parts(MuxName::Tmux, "%9")),
             root: Some("/repo".to_owned()),
+            ask_id: Some(crate::ids::AskId::parse("ask_0123456789abcdef").unwrap()),
             new_status: Some(AgentStatus::Waiting),
         }],
         notification_kind: NotificationKind::Waiting,
@@ -636,7 +647,7 @@ fn command_spawn_receives_notification_env() {
     };
     assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
 
-    let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\ntmux:%9\n/repo\n";
+    let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\ntmux:%9\n/repo\nask_0123456789abcdef\n";
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut text = String::new();
     while Instant::now() < deadline {
@@ -694,6 +705,7 @@ fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
             task: Some("\"; rm -rf /".to_owned()),
             pane_id: None,
             root: None,
+            ask_id: None,
             new_status: Some(AgentStatus::Waiting),
         }],
         notification_kind: NotificationKind::Waiting,

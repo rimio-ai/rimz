@@ -61,6 +61,7 @@ fn described_ask_option(label: &str, description: &str) -> AskOption {
     AskOption {
         label: label.to_owned(),
         description: Some(description.to_owned()),
+        caution: None,
     }
 }
 
@@ -169,6 +170,8 @@ fn transcript_entry(
     entry.questions = vec![rimz::transcript::AskQuestion {
         question: "Choose path?".to_owned(),
         options: vec![ask_option("safe"), ask_option("fast")],
+        multi_select: false,
+        has_option_previews: false,
     }];
     entry
 }
@@ -391,6 +394,8 @@ fn structured_ask_card_folds_selected_answer_with_note() {
             described_ask_option("safe", "Use staged rollout with rollback ready."),
             described_ask_option("fast", "Ship immediately and monitor closely."),
         ],
+        multi_select: false,
+        has_option_previews: false,
     }];
     let mut answer = answer_entry("2026-06-28T18:01:00Z", "safe");
     answer.chat.answers = vec![rimz::transcript::AskAnswer {
@@ -428,6 +433,8 @@ fn structured_ask_card_folds_selected_answer_with_note() {
             described_ask_option("safe", "Tell @ops before rollout."),
             ask_option("fast"),
         ],
+        multi_select: false,
+        has_option_previews: false,
     }];
     let mut raw_answer = answer_entry("2026-06-28T18:01:00Z", "safe");
     raw_answer.chat.answers = vec![rimz::transcript::AskAnswer {
@@ -448,10 +455,14 @@ fn structured_ask_card_renders_other_and_multi_question_answers() {
         rimz::transcript::AskQuestion {
             question: "Merge strategy?".to_owned(),
             options: vec![ask_option("squash"), ask_option("rebase")],
+            multi_select: false,
+            has_option_previews: false,
         },
         rimz::transcript::AskQuestion {
             question: "Notify team?".to_owned(),
             options: vec![ask_option("yes"), ask_option("no")],
+            multi_select: false,
+            has_option_previews: false,
         },
     ];
     let mut answer = answer_entry("2026-06-28T18:01:00Z", "live repro first\nyes");
@@ -514,6 +525,8 @@ fn question_lines_paint_mentions() {
     ask.chat.questions = vec![rimz::transcript::AskQuestion {
         question: "Ask @codex about #cli-docs?".to_owned(),
         options: vec![ask_option("yes"), ask_option("no")],
+        multi_select: false,
+        has_option_previews: false,
     }];
 
     let raw = render_raw(&[ask], jiff::civil::date(2026, 6, 28));
@@ -534,6 +547,8 @@ fn card_lines_wrap_with_spine_and_option_hanging_indent() {
                 ),
                 ask_option("fast path"),
             ],
+            multi_select: false,
+            has_option_previews: false,
         }];
 
     let out = render(&[ask], jiff::civil::date(2026, 6, 28));

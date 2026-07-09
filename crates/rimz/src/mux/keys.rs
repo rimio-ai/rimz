@@ -18,6 +18,7 @@ pub enum NamedKey {
     Enter,
     Escape,
     Tab,
+    ShiftTab,
     Backspace,
     Up,
     Down,
@@ -30,7 +31,7 @@ pub enum NamedKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "unknown key `{0}`; expected enter, escape, tab, backspace, up, down, left, right, ctrl-c, ctrl-d, or ctrl-u"
+    "unknown key `{0}`; expected enter, escape, tab, shift-tab, backspace, up, down, left, right, ctrl-c, ctrl-d, or ctrl-u"
 )]
 pub struct UnknownKey(pub String);
 
@@ -40,6 +41,7 @@ impl NamedKey {
             Self::Enter => "Enter",
             Self::Escape => "Escape",
             Self::Tab => "Tab",
+            Self::ShiftTab => "BTab",
             Self::Backspace => "BSpace",
             Self::Up => "Up",
             Self::Down => "Down",
@@ -56,6 +58,7 @@ impl NamedKey {
             Self::Enter => b"\r",
             Self::Escape => b"\x1b",
             Self::Tab => b"\t",
+            Self::ShiftTab => b"\x1b[Z",
             Self::Backspace => b"\x7f",
             Self::Up => b"\x1b[A",
             Self::Down => b"\x1b[B",
@@ -80,6 +83,7 @@ impl FromStr for NamedKey {
             "enter" | "return" => Ok(Self::Enter),
             "escape" | "esc" => Ok(Self::Escape),
             "tab" => Ok(Self::Tab),
+            "shift-tab" | "backtab" | "btab" => Ok(Self::ShiftTab),
             "backspace" | "bspace" | "bs" => Ok(Self::Backspace),
             "up" => Ok(Self::Up),
             "down" => Ok(Self::Down),
@@ -108,6 +112,7 @@ mod tests {
         assert_eq!(NamedKey::CtrlC.tmux_name(), "C-c");
         assert_eq!(NamedKey::Enter.write_bytes(), b"\r");
         assert_eq!(NamedKey::Up.write_bytes(), b"\x1b[A");
+        assert_eq!(NamedKey::ShiftTab.write_bytes(), b"\x1b[Z");
         assert_eq!(NamedKey::Backspace.write_bytes(), b"\x7f");
     }
 

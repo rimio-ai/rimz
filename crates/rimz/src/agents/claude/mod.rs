@@ -167,6 +167,12 @@ const CLAUDE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
+        IntegrationConcern::Answer,
+        ConcernCoverage::Wired {
+            via: "pane-native ask controls",
+        },
+    ),
+    (
         IntegrationConcern::Compaction,
         ConcernCoverage::Wired {
             via: "PreCompact/PostCompact/SessionStart:compact",
@@ -662,6 +668,40 @@ impl AgentAdapter for ClaudeAdapter {
         ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
     }
 
+    fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
+        if event_name == "PermissionRequest" {
+            return ask::permission_detail(payload);
+        }
+        self.ask_question_detail(event_name, payload)
+            .and_then(|questions| questions.into_iter().next())
+            .map(|question| {
+                question
+                    .question
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .filter(|detail| !detail.is_empty())
+    }
+
+    fn ask_options(&self, kind: AskKind) -> Option<Vec<crate::transcript::AskOption>> {
+        match kind {
+            AskKind::Permission => Some(ask::permission_options()),
+            AskKind::PlanApproval => Some(ask::plan_options()),
+            AskKind::Question => None,
+        }
+    }
+
+    fn answer_plan(
+        &self,
+        kind: AskKind,
+        questions: &[AskQuestion],
+        answers: &[super::AskReply],
+    ) -> std::result::Result<Vec<super::AnswerStep>, super::AnswerPlanErr> {
+        ask::answer_plan(kind, questions, answers)
+    }
+
     fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
         if event_name != "PostToolUse" {
             return None;
@@ -948,6 +988,8 @@ fn map_claude_lifecycle_signal(
         }),
         "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,
+            ask_id: None,
+            detail: None,
         }),
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: descriptor.tool_mutates(payload),
@@ -955,7 +997,11 @@ fn map_claude_lifecycle_signal(
         }),
         "PreToolUse" => {
             match descriptor.blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()) {
-                Some(kind) => Some(LifecycleSignal::AwaitingInput { kind }),
+                Some(kind) => Some(LifecycleSignal::AwaitingInput {
+                    kind,
+                    ask_id: None,
+                    detail: None,
+                }),
                 None => Some(LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,

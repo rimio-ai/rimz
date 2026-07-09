@@ -360,7 +360,7 @@ mod tests {
         let codex = agent_cells(&matrix, "codex");
         assert_eq!(count(&codex, MatrixCellState::Ok), 11);
         assert_eq!(count(&codex, MatrixCellState::Partial), 2);
-        assert_eq!(count(&codex, MatrixCellState::Absent), 2);
+        assert_eq!(count(&codex, MatrixCellState::Absent), 3);
         // `end` and `idle` have no native hook, but pane liveness/the reaper and
         // the turn-boundary/stall path reconstruct them — partial, not absent.
         assert_eq!(
@@ -369,14 +369,14 @@ mod tests {
         );
         assert_eq!(
             agent_labels(&matrix, "codex", MatrixCellState::Absent),
-            ["plan", "bg"]
+            ["plan", "answer", "bg"]
         );
         assert!(cell_detail(&matrix, row(&matrix, "end"), "codex").contains("SessionEnd"));
 
         let pi = agent_cells(&matrix, "pi");
         assert_eq!(count(&pi, MatrixCellState::Ok), 7);
         assert_eq!(count(&pi, MatrixCellState::Partial), 3);
-        assert_eq!(count(&pi, MatrixCellState::Absent), 5);
+        assert_eq!(count(&pi, MatrixCellState::Absent), 6);
         // Pi has no idle Notification hook, but `agent_end` plus the stall
         // window reconstruct the attention slice — partial, like Codex, not
         // absent. Rich context is reconstructed from the extension envelope,
@@ -387,7 +387,7 @@ mod tests {
         );
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Absent),
-            ["plan", "ask", "sub", "bg", "remote"]
+            ["plan", "ask", "answer", "sub", "bg", "remote"]
         );
     }
 
@@ -395,7 +395,10 @@ mod tests {
     fn full_coverage_reports_no_gaps() {
         let matrix = collect_coverage();
         let claude = agent_cells(&matrix, "claude");
-        assert_eq!(count(&claude, MatrixCellState::Ok), 15);
+        assert_eq!(
+            count(&claude, MatrixCellState::Ok),
+            IntegrationConcern::ALL.len()
+        );
         assert_eq!(count(&claude, MatrixCellState::Partial), 0);
         assert_eq!(count(&claude, MatrixCellState::Absent), 0);
     }

@@ -44,6 +44,8 @@ rimz agents logs @coder -n 20        # transcript tail (-f follows)
 rimz message @coder --wait "did the migration land? one line" # ask and print the reply
 rimz message --steer @coder "stop"   # interrupt the live turn now
 rimz message show msg_<id>           # why a message hasn't landed
+rimz asks --json                     # structured prompts that currently block agents
+rimz answer @coder 2                 # answer the current prompt in its native UI
 rimz pane list                       # every pane, labelled with @handles
 rimz pane capture @coder             # what the agent's pane shows right now
 rimz loop show <task>                # schedule, next fire, run forensics
@@ -119,7 +121,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen: cockpit, agent cards, provider dashboard, rendered frames, glyph legend.
 
 **Reference** — `docs/reference/`
-- [cli.md](./docs/reference/cli.md) — CLI entry and command map; leaves [getting-started.md](./docs/reference/cli/getting-started.md) (start/attach/remote/web/list/setup/doctor), [web.md](./docs/reference/cli/web.md) (Zellij browser + token helpers), [agents.md](./docs/reference/cli/agents.md) (launch, `-p`, message, transcript, pane, worktree, loop, addressing), [channel.md](./docs/reference/cli/channel.md), [hooks-trust.md](./docs/reference/cli/hooks-trust.md), [maintenance.md](./docs/reference/cli/maintenance.md).
+- [cli.md](./docs/reference/cli.md) — CLI entry and command map; leaves [getting-started.md](./docs/reference/cli/getting-started.md) (start/attach/remote/web/list/setup/doctor), [web.md](./docs/reference/cli/web.md) (Zellij browser + token helpers), [agents.md](./docs/reference/cli/agents.md) (launch, `-p`, message, transcript, pane, worktree, loop, addressing), [asks.md](./docs/reference/cli/asks.md) (structured blocking prompts and native answers), [channel.md](./docs/reference/cli/channel.md), [hooks-trust.md](./docs/reference/cli/hooks-trust.md), [maintenance.md](./docs/reference/cli/maintenance.md).
 - [agent-support.md](./docs/reference/agent-support.md) — per-agent status, integration surface, and permission-mode mapping for Claude, Codex, Pi, OpenCode.
 
 **Internals** — `docs/internals/`; [README.md](./docs/internals/README.md) is the index. The three multi-doc subsystems keep a folder; every other subsystem is one flat file.

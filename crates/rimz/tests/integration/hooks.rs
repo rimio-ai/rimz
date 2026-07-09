@@ -180,6 +180,15 @@ fn permission_hook_sets_waiting_status() {
         assert_eq!(agents[0]["kind"], source);
         assert_eq!(agents[0]["status"], "waiting");
         assert!(agents[0]["waiting_since"].as_str().is_some());
+        assert_eq!(agents[0]["open_ask"]["kind"], "permission");
+        assert!(
+            agents[0]["open_ask"]["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("ask_"))
+        );
+        if source == "claude" {
+            assert!(agents[0]["open_ask"]["detail"].as_str().is_some());
+        }
     }
 }
 
@@ -207,6 +216,7 @@ fn permission_waiting_clears_on_tool_use() {
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["status"], "running");
     assert!(parsed["agents"][0]["waiting_since"].is_null());
+    assert!(parsed["agents"][0]["open_ask"].is_null());
 }
 
 #[test]

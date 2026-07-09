@@ -152,10 +152,14 @@ fn codex_question_summary_reads_request_user_input_questions() {
             crate::transcript::AskQuestion {
                 question: "Pick a migration path?".to_owned(),
                 options: Vec::new(),
+                multi_select: false,
+                has_option_previews: false,
             },
             crate::transcript::AskQuestion {
                 question: "Notify users?".to_owned(),
                 options: Vec::new(),
+                multi_select: false,
+                has_option_previews: false,
             },
         ])
     );

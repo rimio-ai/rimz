@@ -3620,6 +3620,8 @@ fn push_pending_agent_ask(env: &Env, session_id: &str) {
         Some(AgentSessionId::from(session_id)),
         LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,
+            ask_id: None,
+            detail: None,
         },
     );
     env.store()

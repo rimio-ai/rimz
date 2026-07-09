@@ -270,6 +270,16 @@ events.log.jsonl          terminal message.* audit events
 
 The store exposes `list()` (live records), `list_history()` (terminal records with text), and `list_pending()` (`Queued` records only). A missing `messages/messages.jsonl` means the workspace has no live queue records; pre-JSONL message files stay unread and the event log remains the source for terminal history. Store implementation: [`store/message_store.rs`](../../../crates/rimz/src/store/message_store.rs); store mutations: [`store/writer/queue.rs`](../../../crates/rimz/src/store/writer/queue.rs).
 
+## Ask lifecycle
+
+A blocking hook mints an `ask_` id at ingestion and writes it on the `AwaitingInput` lifecycle signal. The reducer projects that signal to `AgentState.open_ask`; the projection clears on the same lifecycle edges that clear `waiting_since`. Old events without an id continue to replay as waiting rows without a structured open ask.
+
+Question and plan hooks append a transcript `Ask` entry carrying the same id and their parsed questions. Permission hooks keep their short tool summary on `open_ask` and synthesize the adapter's safe semantic options at read time, avoiding a transcript ask that has no native closing answer event. `rimz asks` treats `is_awaiting_input` plus `open_ask` as truth and joins transcript detail by id only.
+
+`rimz answer` validates every selector before pane input, then re-reads the rollup and requires the target id to remain the agent's current open ask. This compare-and-swap check prevents a stale bridge response from reaching a newer prompt. The adapter maps semantic answers to native keys and paste actions; unsupported agent kinds and unstable menu actions fail before delivery.
+
+Confirmation polls until the current ask leaves the rollup or a matching transcript `Answer` appears. A confirmed command appends the structured answer only when the native PostToolUse path has not already recorded that id. `--no-wait` skips both confirmation and this synthetic answer record rather than claiming the pane accepted bytes it has not acknowledged.
+
 ## Transcript
 
 Routing text to an agent is the write side; the transcript log is the durable record of the resulting conversation, and `rimz transcript` reads it back as a chat timeline. The log is Rimz-owned, distinct from a provider's native session files, so ended agents, past channels, and their asks and answers stay visible after those native files rotate away or leave the live snapshot.

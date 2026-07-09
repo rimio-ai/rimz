@@ -158,6 +158,8 @@ fn codex_question_detail(tool_name: &str, tool_input: &Value) -> Option<Vec<AskQ
                 .map(|question| AskQuestion {
                     question,
                     options: Vec::new(),
+                    multi_select: false,
+                    has_option_previews: false,
                 })
         })
         .collect::<Vec<_>>();
@@ -265,6 +267,12 @@ const CODEX_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::UserQuestion,
         ConcernCoverage::Wired {
             via: "PreToolUse:request_user_input",
+        },
+    ),
+    (
+        IntegrationConcern::Answer,
+        ConcernCoverage::Unsupported {
+            reason: "native prompt choreography is not mapped",
         },
     ),
     (
@@ -955,6 +963,8 @@ fn map_codex_lifecycle_signal(
         }),
         "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,
+            ask_id: None,
+            detail: None,
         }),
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: descriptor.tool_mutates(payload),
@@ -967,7 +977,11 @@ fn map_codex_lifecycle_signal(
                     .as_ref()
                     .and_then(|p| p.tool_name.as_deref()),
             ) {
-                Some(kind) => Some(LifecycleSignal::AwaitingInput { kind }),
+                Some(kind) => Some(LifecycleSignal::AwaitingInput {
+                    kind,
+                    ask_id: None,
+                    detail: None,
+                }),
                 None => Some(LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,

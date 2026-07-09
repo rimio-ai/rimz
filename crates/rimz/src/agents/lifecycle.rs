@@ -19,6 +19,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentStatus;
+use crate::ids::AskId;
 
 macro_rules! lifecycle_signal_kinds {
     ($($variant:ident => $label:literal),+ $(,)?) => {
@@ -78,7 +79,7 @@ pub enum AskKind {
 /// Wire format is internally tagged on `signal` (snake_case), e.g.
 /// `{"signal":"turn_ended","errored":false,"parked_on_background":false}`. It
 /// rides the `agent.lifecycle` event params in place of the legacy bare status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "signal", rename_all = "snake_case")]
 pub enum LifecycleSignal {
     /// A session registered fresh (Claude/Codex `SessionStart` sources other
@@ -118,9 +119,14 @@ pub enum LifecycleSignal {
         edits: bool,
     },
     /// The agent opened a native blocking prompt and is waiting for input in
-    /// its own pane. Rimz observes attention here; it does not mint a decision
-    /// record or collect an answer.
-    AwaitingInput { kind: AskKind },
+    /// its own pane. Hook ingestion mints `ask_id`; adapters leave it absent.
+    AwaitingInput {
+        kind: AskKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ask_id: Option<AskId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     /// The agent began compacting its context window (Claude `PreCompact`,
     /// Codex `PreCompact`). A transient head, not a status change.
     Compacting,
@@ -145,7 +151,7 @@ pub enum LifecycleSignal {
 
 impl LifecycleSignal {
     /// Data-less kind for matrix rows and descriptor conformance.
-    pub const fn kind(self) -> LifecycleSignalKind {
+    pub const fn kind(&self) -> LifecycleSignalKind {
         match self {
             Self::Registered => LifecycleSignalKind::Registered,
             Self::TurnStarted => LifecycleSignalKind::TurnStarted,
@@ -163,12 +169,12 @@ impl LifecycleSignal {
 
     /// Whether this signal establishes a rollup identity when no prior row
     /// exists for the `(kind, agent_id)` key.
-    pub const fn establishes_identity(self) -> bool {
+    pub const fn establishes_identity(&self) -> bool {
         matches!(self, Self::Registered | Self::SubagentStarted)
     }
 
     /// Stable serde tag for runtime wakeups and diagnostics.
-    pub const fn tag(self) -> &'static str {
+    pub const fn tag(&self) -> &'static str {
         match self {
             Self::Registered => "registered",
             Self::TurnStarted => "turn_started",

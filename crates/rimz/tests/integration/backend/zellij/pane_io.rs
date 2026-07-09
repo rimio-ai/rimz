@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use rimz::mux::{ClientFocusOptions, MuxBackend, SplitPaneOptions, ZellijBackend};
+use rimz::mux::{ClientFocusOptions, MuxBackend, NamedKey, SplitPaneOptions, ZellijBackend};
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, Env};
@@ -190,6 +190,53 @@ fn paste_text_delivers_the_literal_payload() {
         captured.contains(payload),
         "the pasted payload should arrive contiguous and byte-safe, got: {captured:?}",
     );
+}
+
+#[test]
+fn semantic_answer_keys_reach_a_live_pane() {
+    require_zellij!();
+
+    let session = ZellijSession::spawn(unique_session_name("answerkeys"));
+    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
+    let panes = wait_for_pane_count(session.xdg.path(), &session.name, 1);
+    let pane_id = panes[0].pane_id.clone();
+    let marker_dir = TempDir::new().expect("marker dir");
+    let key_bytes = marker_dir.path().join("named-key-bytes");
+
+    backend
+        .send_keys(
+            &pane_id,
+            &format!(
+                "stty raw -echo; dd bs=1 count=4 of={} 2>/dev/null; stty sane",
+                key_bytes.display()
+            ),
+        )
+        .expect("type raw key reader");
+    backend
+        .send_key(&pane_id, NamedKey::Enter)
+        .expect("start raw key reader");
+    std::thread::sleep(Duration::from_millis(100));
+    backend
+        .send_key(&pane_id, NamedKey::Escape)
+        .expect("send escape");
+    backend
+        .send_key(&pane_id, NamedKey::ShiftTab)
+        .expect("send shift-tab");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let bytes = loop {
+        if let Ok(bytes) = std::fs::read(&key_bytes)
+            && bytes.len() == 4
+        {
+            break bytes;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "named keys did not reach Zellij pane"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(bytes, b"\x1b\x1b[Z");
 }
 /// `client_view` reads each client's focused pane from `list-clients`.
 /// A background session with no client focuses nothing; an attached client

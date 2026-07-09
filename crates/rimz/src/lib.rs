@@ -51,7 +51,7 @@ pub use crate::agents::{
 pub use crate::harness::run_wake::RunWakeErr;
 pub use crate::harness::target::TargetErr;
 pub use crate::ids::{
-    EventId, MessageId, MuxName, PaneId, RunId, SidebarInstanceId, ViewKind, WorkspaceId,
+    AskId, EventId, MessageId, MuxName, PaneId, RunId, SidebarInstanceId, ViewKind, WorkspaceId,
 };
 pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::store::event::EventEnvelope;

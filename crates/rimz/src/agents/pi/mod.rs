@@ -153,6 +153,12 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
+        IntegrationConcern::Answer,
+        ConcernCoverage::Unsupported {
+            reason: "native prompt choreography is not mapped",
+        },
+    ),
+    (
         IntegrationConcern::Compaction,
         ConcernCoverage::Wired {
             via: "session_before_compact/session_compact",

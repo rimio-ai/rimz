@@ -120,6 +120,12 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
+        IntegrationConcern::Answer,
+        ConcernCoverage::Unsupported {
+            reason: "native prompt choreography is not mapped",
+        },
+    ),
+    (
         IntegrationConcern::Compaction,
         ConcernCoverage::Wired {
             via: "session_compacting/session_compacted",
@@ -412,6 +418,8 @@ impl AgentAdapter for OpencodeAdapter {
             "session_created" => LifecycleSignal::Registered,
             "permission_ask" => LifecycleSignal::AwaitingInput {
                 kind: AskKind::Permission,
+                ask_id: None,
+                detail: None,
             },
             "chat_message" => LifecycleSignal::TurnStarted,
             "session_idle" => LifecycleSignal::TurnEnded {

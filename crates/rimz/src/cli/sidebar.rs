@@ -995,6 +995,7 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
             task: row.task().map(str::to_owned),
             pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
             root: row.worktree_path.clone(),
+            ask_id: None,
             new_status: row.status(),
         })
         .collect::<Vec<_>>();

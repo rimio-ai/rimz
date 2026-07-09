@@ -162,6 +162,21 @@ rimz channel rm design                           # remove a named-channel record
 
 Named channels and worktrees share one namespace, so a name is a worktree channel or a named channel, never both. How channels render on screen — the pods, headers, and glyphs — is [the sidebar guide](./sidebar.md); the full command surface is [cli/channel.md](../reference/cli/channel.md).
 
+## Asks and answers
+
+An agent holding a permission prompt, plan approval, or user question reserves its input. `rimz asks` reads that open prompt as structured data, and `rimz answer` drives the choice through the same native terminal interface you would use in the pane:
+
+```sh
+rimz asks --json
+rimz asks show @planner
+rimz answer @planner safe
+rimz answer ask_0123456789abcdef 2
+```
+
+One answer command submits the whole ask. Positional selectors cover one choice per question and comma-separated multi-select choices; JSON input carries mixed choices and free text across several questions. The ask id is a compare-and-swap token, so a prompt already answered or superseded receives no stale keystrokes.
+
+An answer differs from a message. A waiting prompt owns the agent's input and keeps ordinary messages parked; an answer enters the prompt UI, releases it, and confirms that lifecycle change before returning. Claude permission answers expose only `allow` and `deny`, the two controls whose meaning stays stable when Claude changes the rest of its menu; persistent grants stay in the pane. To deny with instructions, run `rimz answer @claude deny` and then `rimz message @claude "<instructions>"`; the parked message lands when denial releases the turn. Plan refinement composes the same way with `keep-planning` followed by `rimz message`.
+
 ## See also
 
 - [Agents](./agents.md) — how handles and profiles come to be.
@@ -170,5 +185,5 @@ Named channels and worktrees share one namespace, so a name is a worktree channe
 - [The sidebar](./sidebar.md) — reading the channels and the messages they carry on screen.
 - [Scripting agents](./scripting.md) — `--wait` and message records inside pipelines and CI.
 - [Loops and schedules](./loops.md) — scheduled and handler-driven messages that steer the fleet unattended.
-- [cli/message.md](../reference/cli/message.md) · [cli/channel.md](../reference/cli/channel.md) — the exact flags.
+- [cli/message.md](../reference/cli/message.md) · [cli/asks.md](../reference/cli/asks.md) · [cli/channel.md](../reference/cli/channel.md) — the exact flags.
 - [Message internals](../internals/harness/messaging.md) — the delivery engine underneath.
