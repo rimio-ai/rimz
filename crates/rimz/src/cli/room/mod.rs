@@ -638,7 +638,7 @@ fn prompt_project_trust(project_root: &Path) {
             Err(err) => tracing::warn!(error = %err, "trust grant from birth prompt failed"),
         },
         Ok(false) => {
-            if let Err(err) = rimz::trust::dismiss_birth_prompt(project_root) {
+            if let Err(err) = rimz::trust::dismiss_birth_prompt_offer(project_root, &offer) {
                 tracing::warn!(error = %err, "recording trust decline failed");
             }
             if let Err(err) = write_project_trust_notice(&[

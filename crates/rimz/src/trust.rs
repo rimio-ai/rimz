@@ -205,6 +205,11 @@ pub fn dismiss_birth_prompt(project_root: &Path) -> Result<()> {
     dismiss_birth_prompt_with_roots(project_root, &config_home())
 }
 
+/// Mark a shown birth prompt as declined using its already-computed surface hash.
+pub fn dismiss_birth_prompt_offer(project_root: &Path, offer: &BirthPromptOffer) -> Result<()> {
+    dismiss_birth_prompt_offer_with_roots(project_root, &config_home(), offer)
+}
+
 pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
     let workspace_id = WorkspaceId::from_project_root(project_root);
     let config_path = project_root.join(CONFIG_REL);
@@ -336,13 +341,33 @@ pub fn birth_prompt_with_roots(
 }
 
 pub fn dismiss_birth_prompt_with_roots(project_root: &Path, config_root: &Path) -> Result<()> {
-    let workspace_id = WorkspaceId::from_project_root(project_root);
     let config_path = project_root.join(CONFIG_REL);
     let Some(config) = read_project_config(&config_path)? else {
         return Ok(());
     };
+    dismiss_birth_prompt_hash_with_roots(
+        project_root,
+        config_root,
+        surface_snapshot(&config).hash.as_str(),
+    )
+}
+
+pub fn dismiss_birth_prompt_offer_with_roots(
+    project_root: &Path,
+    config_root: &Path,
+    offer: &BirthPromptOffer,
+) -> Result<()> {
+    dismiss_birth_prompt_hash_with_roots(project_root, config_root, &offer.current_hash)
+}
+
+fn dismiss_birth_prompt_hash_with_roots(
+    project_root: &Path,
+    config_root: &Path,
+    current_hash: &str,
+) -> Result<()> {
+    let workspace_id = WorkspaceId::from_project_root(project_root);
     let record = BirthPromptDismissal {
-        dismissed_hash: surface_snapshot(&config).hash,
+        dismissed_hash: current_hash.to_owned(),
         dismissed_at: Timestamp::now(),
     };
     let text = toml::to_string_pretty(&record).map_err(TrustErr::BirthPromptSerialize)?;
@@ -499,7 +524,11 @@ fn remove_birth_prompt_dismissal(path: &Path) {
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => {}
+        Err(err) => tracing::warn!(
+            path = %path.display(),
+            error = %err,
+            "failed to remove birth prompt dismissal after trust grant"
+        ),
     }
 }
 
