@@ -247,6 +247,14 @@ mod tests {
     }
 
     #[test]
+    fn resolve_trims_inline_text() {
+        assert_eq!(
+            resolve_message(&["  review this\\n  ".to_owned()], None, None).unwrap(),
+            "review this"
+        );
+    }
+
+    #[test]
     fn resolve_rejects_text_and_file_together() {
         // A conflict fails before the path is touched, so the bogus path is safe.
         let err = resolve_message(&["hi".to_owned()], Some(Path::new("/nope")), None)
