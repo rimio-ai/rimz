@@ -101,6 +101,8 @@ pub enum Cell {
         /// The launch reasoning effort selected by the profile, role, or CLI
         /// override. The wrapper keeps `RIMZ_AGENT_EFFORT` for card identity.
         effort: Option<String>,
+        /// Canonical dollar cap carried into the launched session.
+        budget: Option<String>,
     },
     Command {
         argv: Vec<String>,
@@ -119,6 +121,7 @@ impl Cell {
             role: None,
             model: None,
             effort: None,
+            budget: None,
         }
     }
 
@@ -134,6 +137,7 @@ pub struct ResolvedProfile {
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub budget: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_file: Option<PathBuf>,
     pub args: Option<String>,
@@ -146,6 +150,7 @@ impl ResolvedProfile {
             mode: None,
             model: None,
             effort: None,
+            budget: None,
             system_prompt_file: None,
             append_system_prompt_file: None,
             args: None,
@@ -443,6 +448,15 @@ fn role_cell(team_name: &str, binding: &RoleBinding, profiles: &ProfilesConfig) 
         other => other,
     })?;
     apply_role_overrides(&mut resolved, binding);
+    if let Some(raw) = resolved.budget.as_deref() {
+        let spec = raw
+            .parse::<crate::harness::budget::BudgetSpec>()
+            .map_err(|err| LayoutErr::InvalidProfile {
+                profile: binding.profile.clone(),
+                reason: err.to_string(),
+            })?;
+        resolved.budget = Some(spec.to_string());
+    }
     Ok(Cell::Agent {
         kind: resolved.kind.clone(),
         args: render_profile_args(&binding.profile, &resolved)?,
@@ -453,6 +467,7 @@ fn role_cell(team_name: &str, binding: &RoleBinding, profiles: &ProfilesConfig) 
         role: Some(binding.role.clone()),
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
+        budget: resolved.budget.clone(),
     })
 }
 
@@ -529,6 +544,9 @@ fn apply_role_overrides(resolved: &mut ResolvedProfile, binding: &RoleBinding) {
     if let Some(effort) = binding.effort.as_ref() {
         resolved.effort = Some(effort.clone());
     }
+    if let Some(budget) = binding.budget.as_ref() {
+        resolved.budget = Some(budget.clone());
+    }
     if let Some(path) = binding.system_prompt_file.as_ref() {
         resolved.system_prompt_file = Some(path.clone());
     }
@@ -594,6 +612,9 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         if resolved.effort.is_none() {
             resolved.effort = layer.effort.clone();
         }
+        if resolved.budget.is_none() {
+            resolved.budget = layer.budget.clone();
+        }
         if resolved.system_prompt_file.is_none() {
             resolved.system_prompt_file = layer.system_prompt_file.clone();
         }
@@ -612,6 +633,15 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             profile: name.to_owned(),
             reason: err.to_string(),
         })?;
+    if let Some(raw) = resolved.budget.as_deref() {
+        let spec = raw
+            .parse::<crate::harness::budget::BudgetSpec>()
+            .map_err(|err| LayoutErr::InvalidProfile {
+                profile: name.to_owned(),
+                reason: err.to_string(),
+            })?;
+        resolved.budget = Some(spec.to_string());
+    }
     Ok(resolved)
 }
 
@@ -746,6 +776,7 @@ fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<Cell> {
         role: None,
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
+        budget: resolved.budget.clone(),
     })
 }
 
@@ -869,6 +900,7 @@ fn virtual_cell_from(
         role: None,
         model: resolved.model,
         effort: resolved.effort,
+        budget: resolved.budget,
     })
 }
 

@@ -82,6 +82,8 @@ pub struct Profile {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    #[serde(default)]
+    pub budget: Option<String>,
     /// A file whose contents replace the agent's base system prompt, giving the
     /// profile its own voice. Resolved relative to the config file and
     /// existence-checked when the profile launches.
@@ -128,6 +130,8 @@ pub struct RoleBinding {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    #[serde(default)]
+    pub budget: Option<String>,
     #[serde(
         default,
         rename = "system-prompt-file",

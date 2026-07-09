@@ -115,6 +115,18 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     if let Some(timeout) = args.timeout.as_deref() {
         parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
     }
+    let budget = args
+        .budget
+        .as_deref()
+        .map(str::parse::<rimz::harness::budget::BudgetSpec>)
+        .transpose()?
+        .map(|spec| spec.to_string());
+    let budget_per_day = args
+        .budget_per_day
+        .as_deref()
+        .map(str::parse::<rimz::harness::budget::BudgetSpec>)
+        .transpose()?
+        .map(|spec| format!("${:.2}", spec.cap_usd));
     let on = args.on.as_deref().map(parse_check_on).transpose()?;
     let timing = resolve_add_timing(&args)?;
     let prompt = args.prompt;
@@ -142,6 +154,8 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 worktree: args.worktree,
                 mode,
                 effort: args.effort,
+                budget,
+                budget_per_day,
                 system_prompt_file: args.system_prompt_file,
                 timeout: args.timeout,
                 at: timing.at,
@@ -163,6 +177,8 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 worktree: None,
                 mode: None,
                 effort: None,
+                budget: None,
+                budget_per_day: None,
                 system_prompt_file: None,
                 timeout: uses_check_timeout.then_some(args.timeout).flatten(),
                 at: timing.at,
@@ -182,6 +198,8 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             worktree: None,
             mode: None,
             effort: None,
+            budget: None,
+            budget_per_day: None,
             system_prompt_file: None,
             timeout: uses_check_timeout.then_some(args.timeout).flatten(),
             at: timing.at,
@@ -406,6 +424,12 @@ fn reject_delivery_spawn_flags(args: &AddArgs) -> Result<()> {
     if args.effort.is_some() {
         flags.push("--effort");
     }
+    if args.budget.is_some() {
+        flags.push("--budget");
+    }
+    if args.budget_per_day.is_some() {
+        flags.push("--budget-per-day");
+    }
     if args.system_prompt_file.is_some() {
         flags.push("--system-prompt-file");
     }
@@ -432,6 +456,12 @@ fn reject_check_only_agent_flags(args: &AddArgs) -> Result<()> {
     }
     if args.effort.is_some() {
         flags.push("--effort");
+    }
+    if args.budget.is_some() {
+        flags.push("--budget");
+    }
+    if args.budget_per_day.is_some() {
+        flags.push("--budget-per-day");
     }
     if args.system_prompt_file.is_some() {
         flags.push("--system-prompt-file");

@@ -300,6 +300,7 @@ placement = "auto"
 [agents.profiles.claude-slim]
 agent = "claude"                                       # a built-in kind, or another profile
 effort = "low"
+budget = "5"
 system-prompt-file = "~/.config/rimz/prompts/slim.md"
 
 [agents.profiles.planner]
@@ -334,9 +335,9 @@ mode = "plan"
 
 #### Profiles
 
-A profile is a named agent preset, addressable as `@<name>` once it is running. `agent` is its base, a built-in kind (`claude`, `codex`, …) or another profile that resolves to one, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `system-prompt-file`, `append-system-prompt-file`, and raw `args`. These same override fields recur wherever you preset an agent (profiles, team roles, and loop tasks), so the template and `rimz config get` carry the current per-field defaults.
+A profile is a named agent preset, addressable as `@<name>` once it is running. `agent` is its base, a built-in kind (`claude`, `codex`, …) or another profile that resolves to one, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-file`, and raw `args`. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. These same override fields recur wherever you preset an agent (profiles, team roles, and loop tasks), so the template and `rimz config get` carry the current per-field defaults.
 
-Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field, including `args`**: a child that sets `args` replaces the base `args` rather than appending. `system-prompt-file` gives the profile its own voice; `append-system-prompt-file` keeps the adapter's base prompt and adds rules where the adapter supports it. A `~` expands to home and a relative path roots at the config file, so a prompt file points at the same file wherever the profile launches; each file must exist at launch, and a missing one fails with the path to fix. A field the resolved adapter has no flag for fails the launch and names the field to remove. Command-line `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` render after the profile and override it for that launch.
+Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field, including `args`**: a child that sets `args` replaces the base `args` rather than appending. `system-prompt-file` gives the profile its own voice; `append-system-prompt-file` keeps the adapter's base prompt and adds rules where the adapter supports it. A `~` expands to home and a relative path roots at the config file, so a prompt file points at the same file wherever the profile launches; each file must exist at launch, and a missing one fails with the path to fix. A field the resolved adapter has no flag for fails the launch and names the field to remove. Command-line `--model`, `--effort`, `--budget`, `--system-prompt-file`, and `--append-system-prompt-file` render after the profile and override it for that launch.
 
 A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, for profiles that set `agent = "claude"`, and for virtual cells like `claude-auto` and `claude-ping`.
 
@@ -432,6 +433,7 @@ Each task chooses `agent`, `wake`, `check`, or `check` plus one agent action:
 - `[tasks.<name>.wake]` pins delivery to one live agent session through the message path: `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only.
 - `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, `on = "success"` on zero exit. Check output is appended to the agent prompt when the guard fires.
 - `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
+- `budget` caps each spawned supervised run; `budget-per-day` requires it and skips a fire when today's recorded task spend, plus the next run's cap, would exceed the daily amount.
 
 Field notes:
 

@@ -75,6 +75,9 @@ pub(in crate::cli::hooks) fn fill_root_launch_identity(
         observation.launch.effort = identity_env(observation, rimz::harness::run::ENV_AGENT_EFFORT)
             .or(configured_identity.1);
     }
+    if observation.launch.budget.is_none() {
+        observation.launch.budget = identity_env(observation, rimz::harness::run::ENV_AGENT_BUDGET);
+    }
 }
 
 pub(super) fn validate_agent_name_env(raw: String, source: &str, _var: &str) -> Option<String> {

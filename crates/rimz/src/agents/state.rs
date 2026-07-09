@@ -381,6 +381,9 @@ pub(crate) fn resume_gate_recovered(
     if agent.effective_status() != AgentStatus::Paused {
         return false;
     }
+    if let Some(park) = agent.budget_park.as_ref() {
+        return park.resets_at.is_some_and(|resets_at| now >= resets_at);
+    }
     let account_budgets = account_budgets_from_caches(runtime, now);
     let budget = account_budgets.get(&agent.kind);
     match resume_park(agent, budget, now) {
@@ -717,6 +720,9 @@ pub struct AgentState {
     pub recent_prompts: Vec<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Canonical launch-carried budget (`$5.00` or `$20.00/day`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<String>,
     /// Context-window utilization in percent (0..=100). Reported by the
     /// agent's hooks when available; `None` while the agent hasn't surfaced
     /// it. Display-only — never drives a decision (the no-transcript-correctness
@@ -751,6 +757,10 @@ pub struct AgentState {
     /// Same enrich-only discipline as `context_pct`: display, never routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
+    /// Runtime-ledger projection. The producer and consumers rebuild it from
+    /// the budget cache; the event reducer never treats it as durable truth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_park: Option<crate::harness::budget::BudgetPark>,
     /// What the parent asked this *subagent* to do, harvested from Claude's
     /// `subagentStatusLine`. Folded in at snapshot time by
     /// `SidebarSnapshot::with_subagent_context`, never reduced from the event
@@ -851,6 +861,8 @@ struct AgentStateWire {
     recent_prompts: Vec<String>,
     model: Option<String>,
     effort: Option<String>,
+    #[serde(default)]
+    budget: Option<String>,
     context_pct: Option<u8>,
     context_window: Option<u64>,
     total_tokens: Option<u64>,
@@ -859,6 +871,8 @@ struct AgentStateWire {
     fresh_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     context: Option<AgentContext>,
+    #[serde(default)]
+    budget_park: Option<crate::harness::budget::BudgetPark>,
     subagent_description: Option<String>,
     subagent_started_at: Option<Timestamp>,
     turn_started_at: Option<Timestamp>,
@@ -912,6 +926,7 @@ impl From<AgentStateWire> for AgentState {
             recent_prompts: wire.recent_prompts,
             model: wire.model,
             effort: wire.effort,
+            budget: wire.budget,
             context_pct: wire.context_pct,
             context_window: wire.context_window,
             total_tokens: wire.total_tokens,
@@ -920,6 +935,7 @@ impl From<AgentStateWire> for AgentState {
             fresh_input_tokens: wire.fresh_input_tokens,
             output_tokens: wire.output_tokens,
             context: wire.context,
+            budget_park: wire.budget_park,
             subagent_description: wire.subagent_description,
             subagent_started_at: wire.subagent_started_at,
             turn_started_at: wire.turn_started_at,
@@ -973,6 +989,7 @@ impl AgentState {
             recent_prompts: Vec::new(),
             model: None,
             effort: None,
+            budget: None,
             context_pct: None,
             context_window: None,
             total_tokens: None,
@@ -981,6 +998,7 @@ impl AgentState {
             fresh_input_tokens: None,
             output_tokens: None,
             context: None,
+            budget_park: None,
             subagent_description: None,
             subagent_started_at: None,
             turn_started_at: None,
@@ -1039,6 +1057,9 @@ impl AgentState {
     /// `success`/`idle`, which opens message delivery gates. Budget-aware
     /// callers may still upgrade a paused projection to `failed`.
     pub fn effective_status(&self) -> AgentStatus {
+        if self.budget_park.is_some() && self.status != AgentStatus::Waiting {
+            return AgentStatus::Paused;
+        }
         if self.status != AgentStatus::Running {
             return self.status;
         }
@@ -1175,6 +1196,9 @@ impl AgentState {
         }
         if self.effort.is_none() {
             self.effort = base.effort.clone();
+        }
+        if self.budget.is_none() {
+            self.budget = base.budget.clone();
         }
         if self.context_window.is_none() {
             self.context_window = base.context_window;
@@ -1449,6 +1473,19 @@ mod tests {
         let mut unknown = test_agent(AgentStatus::Running, 1_000);
         unknown.context = Some(context_error(TurnErrorClass::Unknown, 1_010));
         assert_eq!(unknown.effective_status(), AgentStatus::Running);
+    }
+
+    #[test]
+    fn human_waiting_outranks_a_budget_park() {
+        let mut waiting = test_agent(AgentStatus::Waiting, 1_000);
+        waiting.budget_park = Some(crate::harness::budget::BudgetPark {
+            cap_usd: 5.0,
+            spend_usd: 5.25,
+            window: crate::harness::budget::BudgetWindow::Session,
+            at: Timestamp::from_second(1_000).unwrap(),
+            resets_at: None,
+        });
+        assert_eq!(waiting.effective_status(), AgentStatus::Waiting);
     }
 
     #[test]

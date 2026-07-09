@@ -6,6 +6,7 @@
 rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
 rimz loop add weekly-prime --agent claude-ping --prompt ping --every reset
 rimz loop add pr-watch --agent codex --prompt "check CI on the release PR" --every 15m --mode auto --root .
+rimz loop add nightly --agent codex --prompt "triage issues" --every day --at 02:00 --budget 5 --budget-per-day 15
 rimz loop add self-wake --wake @planner --prompt "resume the review and fix the next blocking comment" --in 30m --root .
 rimz loop add watchdog --check "cargo test" --on fail --agent codex --prompt "fix the failing test" --every 15m
 rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --wake @planner --prompt "CI is green; merge"
@@ -24,6 +25,8 @@ rimz loop remove pr-watch
 Schedules repeat only with `--every` or `--cron`. Shapes are: one-shot (`--at 07:00` or `--in 30m`), interval (`--every 15m`), calendar (`--every weekday --at 07:00`), raw cron (`--cron`), window-reset (`--every reset` on a `<kind>-ping` agent), and poll-until (`--every`, `--check`, `--on`, `--until`, plus an agent action). Calendar, cron, `--in`, and `--until` resolution use the top-level `timezone`, falling back to the system zone when unset.
 
 A `<kind>-ping` agent is the window-primer: the run skips when the provider's window is already counting down. `--every reset` fires that ping one minute after the provider's longest observed budget window resets, then uses the ping turn's own cache refresh as the next occurrence.
+
+`--budget <AMOUNT[/day]>` caps each spawned agent run. `--budget-per-day <AMOUNT>` requires a per-run budget, sums that task's cost-bearing run records in the configured local day, and records a skip when the remaining amount cannot fund the next run's cap. `loop show` prints today's spend against the daily cap.
 
 ## Wakes and checks
 

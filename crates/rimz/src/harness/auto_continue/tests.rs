@@ -237,6 +237,56 @@ fn still_parked_tracks_frozen_activity() {
 }
 
 #[test]
+fn only_day_budget_parks_arm_a_resume_deadline() {
+    let (_dir, runtime) = temp_runtime();
+    let path = park_path(&runtime);
+    let mut budgeted = agent(1_000);
+    budgeted.budget_park = Some(crate::harness::budget::BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.25,
+        window: crate::harness::budget::BudgetWindow::Day,
+        at: ts(1_000),
+        resets_at: Some(ts(5_000)),
+    });
+    let snapshot = SidebarSnapshot::build_with_agents(
+        runtime.workspace_id.clone(),
+        vec![budgeted.clone()],
+        ts(4_000),
+    );
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &ResumeConfig {
+            auto_continue: true,
+            ..ResumeConfig::default()
+        },
+        &[],
+    );
+    assert!(read_park(&path).is_some_and(|record| {
+        matches!(record.kind, ParkKind::Budget { deadline } if deadline == ts(5_000))
+    }));
+
+    remove_park(&path);
+    budgeted.budget_park = Some(crate::harness::budget::BudgetPark {
+        window: crate::harness::budget::BudgetWindow::Session,
+        resets_at: None,
+        ..budgeted.budget_park.expect("day park")
+    });
+    let snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![budgeted], ts(4_000));
+    resume_parked(
+        &snapshot,
+        &runtime,
+        &ResumeConfig {
+            auto_continue: true,
+            ..ResumeConfig::default()
+        },
+        &[],
+    );
+    assert!(read_park(&path).is_none());
+}
+
+#[test]
 fn fire_if_due_keeps_records_when_activity_regresses() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);

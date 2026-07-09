@@ -135,6 +135,7 @@ pub struct ExecIdentity<'a> {
     pub channel: Option<&'a str>,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
+    pub budget: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -204,6 +205,9 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
     }
     if let Some(effort) = inv.identity.effort {
         argv.extend(["--agent-effort".to_owned(), effort.to_owned()]);
+    }
+    if let Some(budget) = inv.identity.budget {
+        argv.extend(["--agent-budget".to_owned(), budget.to_owned()]);
     }
     if inv.exit_on_run_completion {
         argv.push("--exit-on-run-completion".to_owned());
@@ -292,6 +296,12 @@ pub fn exec_identity_env(inv: &ExecInvocation<'_>) -> BTreeMap<String, String> {
         env.insert(
             crate::harness::run::ENV_AGENT_EFFORT.to_owned(),
             effort.to_owned(),
+        );
+    }
+    if let Some(budget) = inv.identity.budget {
+        env.insert(
+            crate::harness::run::ENV_AGENT_BUDGET.to_owned(),
+            budget.to_owned(),
         );
     }
     env
@@ -680,6 +690,7 @@ mod tests {
                 channel: Some("design"),
                 model: Some("opus"),
                 effort: Some("high"),
+                budget: None,
             },
         };
 

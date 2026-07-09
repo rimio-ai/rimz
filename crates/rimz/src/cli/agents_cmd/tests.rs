@@ -68,6 +68,7 @@ fn role_binding(role: &str) -> rimz::config::RoleBinding {
         mode: None,
         model: None,
         effort: None,
+        budget: None,
         system_prompt_file: None,
         append_system_prompt_file: None,
         args: None,
@@ -85,6 +86,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         role: role.map(ToOwned::to_owned),
         model: None,
         effort: None,
+        budget: None,
     }
 }
 
@@ -100,6 +102,7 @@ fn agent_profile(
             mode: None,
             model: None,
             effort: None,
+            budget: None,
             system_prompt_file: system_prompt_file.map(Path::to_path_buf),
             append_system_prompt_file: append_system_prompt_file.map(Path::to_path_buf),
             args: None,
@@ -680,6 +683,7 @@ mod placement {
                 mode: None,
                 model: None,
                 effort: None,
+                budget: None,
                 system_prompt_file: None,
                 append_system_prompt_file: None,
                 args: None,
@@ -883,6 +887,7 @@ mod launch_options {
             role: None,
             model: None,
             effort: None,
+            budget: None,
         });
         apply_launch_mode_and_passthrough(
             &mut layout,
@@ -911,6 +916,7 @@ mod launch_options {
             role: None,
             model: None,
             effort: None,
+            budget: None,
         });
         apply_launch_mode_and_passthrough(
             &mut layout,
@@ -936,6 +942,7 @@ mod launch_options {
             role: None,
             model: None,
             effort: None,
+            budget: None,
         });
         apply_launch_mode_and_passthrough(
             &mut layout,
@@ -961,6 +968,7 @@ mod launch_options {
             role: Some("coder".to_owned()),
             model: Some("profile-model".to_owned()),
             effort: Some("medium".to_owned()),
+            budget: None,
         });
 
         apply_launch_mode_and_passthrough(
@@ -1050,6 +1058,7 @@ mod identity {
             role: Some("coder".to_owned()),
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
+            budget: None,
         });
 
         let requests = launch_identity_requests(
@@ -1182,6 +1191,7 @@ mod pane_exec {
             role: Some("planner".to_owned()),
             model: Some("claude-sonnet".to_owned()),
             effort: Some("high".to_owned()),
+            budget: None,
         };
         let launch = LaunchIdentity {
             kind: AgentKind::new_unchecked("claude"),
@@ -1263,6 +1273,7 @@ mod pane_exec {
             role: Some("new-role".to_owned()),
             model: Some("new-model".to_owned()),
             effort: Some("new-effort".to_owned()),
+            budget: None,
         };
         let mut agent = agent_with_status(
             "sess-1",
@@ -1995,6 +2006,7 @@ mod automation {
             worktree: Some("main".to_owned()),
             mode: None,
             effort: Some("low".to_owned()),
+            budget: None,
             system_prompt_file: None,
             timeout: None,
             keep: false,
@@ -2029,6 +2041,7 @@ mod automation {
                 worktree: None,
                 mode: None,
                 effort: None,
+                budget: None,
                 system_prompt_file: None,
                 timeout: None,
                 keep: true,
@@ -2043,6 +2056,7 @@ mod automation {
                 worktree: None,
                 mode: None,
                 effort: None,
+                budget: None,
                 system_prompt_file: None,
                 timeout: None,
                 keep: true,
@@ -2068,6 +2082,7 @@ fn bare_exec_args() -> ExecArgs {
         agent_channel: None,
         agent_model: None,
         agent_effort: None,
+        agent_budget: None,
         launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
         exit_on_run_completion: false,
         close_pane_on_exit: false,

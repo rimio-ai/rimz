@@ -516,6 +516,32 @@ fn render_context_section(
         )
         .dash(),
     );
+    let budget = agent
+        .budget_park
+        .as_ref()
+        .map(|park| park.label())
+        .or_else(|| {
+            agent.budget.as_deref().and_then(|raw| {
+                raw.parse::<rimz::harness::budget::BudgetSpec>()
+                    .ok()
+                    .map(|spec| {
+                        let spend = cost.and_then(|cost| cost.total_cost_usd).unwrap_or(0.0);
+                        format!(
+                            "${spend:.2} of ${:.2}{}",
+                            spec.cap_usd,
+                            if spec.window == rimz::harness::budget::BudgetWindow::Day {
+                                "/day"
+                            } else {
+                                ""
+                            }
+                        )
+                    })
+            })
+        });
+    kv.push(
+        "budget",
+        render::cell(budget.unwrap_or_else(|| "-".to_owned())).dash(),
+    );
     kv.render(w)?;
     writeln!(w)
 }
@@ -1149,6 +1175,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             channel: args.channel.as_deref(),
             model: agent_cell.model,
             effort: agent_cell.effort,
+            budget: agent_cell.budget,
             ..rimz::harness::launch::ExecIdentity::default()
         },
     };
@@ -1233,6 +1260,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         prompt.clone(),
         launch.cwd.clone(),
     );
+    record.budget = agent_cell.budget.map(ToOwned::to_owned);
     let run_id = record.run_id.clone();
     let launch_requests = launch_identity_requests(
         &layout,
@@ -1277,6 +1305,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         agent_channel: room_channel.as_deref(),
         agent_model: agent_cell.model,
         agent_effort: agent_cell.effort,
+        agent_budget: agent_cell.budget,
         launch_id: Some(&launch_identity.agent_id),
         cwd: &launch.cwd,
         prompt: &prompt,
@@ -1599,6 +1628,7 @@ struct AgentCell<'a> {
     role: Option<&'a str>,
     model: Option<&'a str>,
     effort: Option<&'a str>,
+    budget: Option<&'a str>,
 }
 
 fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
@@ -1613,6 +1643,7 @@ fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
                 role,
                 model,
                 effort,
+                budget,
                 ..
             } => Some(AgentCell {
                 kind: kind.as_str(),
@@ -1622,6 +1653,7 @@ fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
                 role: role.as_deref(),
                 model: model.as_deref(),
                 effort: effort.as_deref(),
+                budget: budget.as_deref(),
             }),
             Cell::Command { .. } => None,
         })

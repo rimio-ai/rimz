@@ -23,6 +23,8 @@
 ## root = "/home/you/code/app"
 ## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
 ## mode = "auto"                       # auto, ask, or yolo
+## budget = "5"                        # cap each spawned run
+## budget-per-day = "20"               # skip fires that cannot fit today's task budget
 ##
 ## [tasks.watchdog]
 ## agent = "codex"

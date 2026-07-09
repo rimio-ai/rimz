@@ -145,6 +145,12 @@ struct AddArgs {
     /// Reasoning effort for the launched agent.
     #[arg(long)]
     effort: Option<String>,
+    /// Dollar cap for each spawned agent run.
+    #[arg(long, value_name = "AMOUNT[/day]")]
+    budget: Option<String>,
+    /// Skip a fire once this task's local-day run spend reaches the amount.
+    #[arg(long = "budget-per-day", value_name = "AMOUNT", requires = "budget")]
+    budget_per_day: Option<String>,
     /// Replace the agent's base system prompt with a file's contents.
     #[arg(long = "system-prompt-file", value_name = "PATH")]
     system_prompt_file: Option<PathBuf>,
@@ -673,6 +679,12 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
     }
     if let Some(effort) = &entry.effort {
         table["effort"] = value(effort);
+    }
+    if let Some(budget) = &entry.budget {
+        table["budget"] = value(budget);
+    }
+    if let Some(budget) = &entry.budget_per_day {
+        table["budget-per-day"] = value(budget);
     }
     if let Some(path) = &entry.system_prompt_file {
         table["system-prompt-file"] = value(path.to_string_lossy().into_owned());

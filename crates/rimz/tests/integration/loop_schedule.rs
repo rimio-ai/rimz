@@ -7,12 +7,12 @@ use std::process::Command;
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use rimz::config::{CheckOn, TaskEntry, TaskTarget, Tasks};
+use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::schedule::instances;
 use rimz::harness::schedule::pauses::{self, PauseEntry};
 use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
-use rimz::ids::AgentKind;
+use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::MessageStatus;
 
 use crate::common::{Env, ScrubSessionEnvExt};
@@ -98,6 +98,68 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
         }),
         "loop show should name the machine task source file: {stdout}"
     );
+}
+
+#[test]
+fn loop_add_round_trips_run_and_daily_budgets() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "bounded",
+            "--agent",
+            "claude",
+            "--prompt",
+            "bounded work",
+            "--every",
+            "15m",
+            "--budget",
+            "$5",
+            "--budget-per-day",
+            "20",
+        ],
+    );
+
+    let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(config.contains("budget = \"$5.00\""), "{config}");
+    assert!(config.contains("budget-per-day = \"$20.00\""), "{config}");
+    let loop_config: LoopConfig = toml::from_str(&config).expect("parse loop config");
+    let task = loop_config.tasks.0.get("bounded").expect("bounded task");
+    assert_eq!(task.budget.as_deref(), Some("$5.00"));
+    assert_eq!(task.budget_per_day.as_deref(), Some("$20.00"));
+}
+
+#[test]
+fn agent_budget_command_persists_absolute_relative_and_clear_edits() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-budget", "feature-budget");
+    let agent_id = AgentSessionId::from("sess-budget");
+    let kind = AgentKind::new_unchecked("claude");
+
+    for (value, expected_cap, disabled) in [
+        ("10", Some(10.0), false),
+        ("+5", Some(15.0), false),
+        ("clear", None, true),
+    ] {
+        let output = env
+            .rimz()
+            .args(["agents", "budget", "@claude", value, "--no-continue"])
+            .output()
+            .expect("rimz agents budget");
+        assert!(
+            output.status.success(),
+            "budget {value} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ledger = rimz::harness::budget::read_ledger(&env.runtime_paths(), &kind, &agent_id)
+            .expect("budget ledger");
+        assert_eq!(ledger.effective_cap_usd(), expected_cap);
+        assert_eq!(ledger.disabled, disabled);
+    }
 }
 
 #[test]
@@ -829,6 +891,7 @@ fn loop_show_displays_shadowed_error_and_run_tail() {
                 transcript_path: None,
                 last_message: None,
                 target: None,
+                cost_usd: None,
             },
             LoopRunRecord {
                 task: "forensics".to_owned(),
@@ -842,6 +905,7 @@ fn loop_show_displays_shadowed_error_and_run_tail() {
                 transcript_path: Some("/tmp/rimz-transcript.jsonl".to_owned()),
                 last_message: None,
                 target: None,
+                cost_usd: None,
             },
         ],
     );

@@ -52,6 +52,7 @@ A **profile** is a named preset in `agents.toml`: the base CLI plus the fields t
 agent = "claude"                                           # the base CLI, or another profile
 model = "opus"
 effort = "high"
+budget = "20/day"                                        # local-calendar-day cap
 system-prompt-file = "~/.config/rimz/prompts/planner.md"   # its role, craft, and boundaries
 args = "--allowed-tools Read Grep Glob"                    # read and search only, no edits
 ```
@@ -66,6 +67,7 @@ Each field renders into the base CLI's own flag, so a profile can pin anything t
 | --- | --- | --- |
 | `model` | the model to run | `--model opus` |
 | `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
+| `budget` | dollar cap for the session, or for each local day with `/day` | `--budget 20/day` |
 | `system-prompt-file` | replace the system prompt with the role's craft and rules | `--system-prompt-file …` |
 | `append-system-prompt-file` | keep the base prompt and add rules on top | `--append-system-prompt-file …` |
 | `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
@@ -78,10 +80,14 @@ When does a bare kind stop being enough? The moment you type the same shaping fl
 Override any field for one launch with the matching flag, which wins over the profile:
 
 ```sh
-rimz agents claude --model opus --effort xhigh --system-prompt-file ./review.md
+rimz agents claude --model opus --effort xhigh --budget 5 --system-prompt-file ./review.md
 ```
 
 Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi to `xhigh`. The full profile shape, inheritance between profiles, and per-field rules are in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams); pairing several profiles by role is a [team](./teams.md).
+
+## Cap what an agent can spend
+
+`--budget 5` parks an agent when its session cost reaches $5; `--budget 20/day` measures from the start of each local calendar day and resumes through auto-continue at the next day boundary. Cost arrives after provider responses, so the last tool call can overshoot slightly before Rimz sends Esc. Inspect or raise a cap with `rimz agents budget @coder`, `rimz agents budget @coder 10`, or `rimz agents budget @coder +5`; `clear` removes it. A delivered human message waives an absolute cap for the one turn that message starts.
 
 ## Set a permission mode
 

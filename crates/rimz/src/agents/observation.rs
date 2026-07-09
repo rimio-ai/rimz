@@ -41,6 +41,9 @@ pub struct LaunchParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The launcher-selected dollar cap, passed through `RIMZ_AGENT_BUDGET`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<String>,
     /// The `[agents.teams]` team name the launcher selected, passed through
     /// `RIMZ_TEAM`. It is role/cohort/resume identity; routing uses `channel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

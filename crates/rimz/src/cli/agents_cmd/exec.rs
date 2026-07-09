@@ -68,6 +68,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             channel: args.agent_channel.as_deref(),
             model: args.agent_model.as_deref(),
             effort: args.agent_effort.as_deref(),
+            budget: args.agent_budget.as_deref(),
             ..rimz::harness::launch::ExecIdentity::default()
         },
     };
@@ -426,6 +427,7 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                     role: args.agent_role.clone(),
                     model: args.agent_model.clone(),
                     effort: args.agent_effort.clone(),
+                    budget: args.agent_budget.clone(),
                     team: args.agent_team.clone(),
                     launch_group: args.launch_group.clone(),
                     launch_ordinal: args.launch_ordinal,

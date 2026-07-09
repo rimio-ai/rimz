@@ -95,16 +95,15 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
     let message_id = if let Some(message_id) = retry_message_id {
         message_id
     } else {
-        let message = MessageRecord::new(
-            workspace_id,
-            agent,
-            text.to_owned(),
-            true,
-            DeliveryGate::Resume,
-        )
-        .with_channel(rimz::harness::target::agent_channel(agent))
-        .with_sender(MessageSender::Human)
-        .with_pane_id(pane_id.clone());
+        let gate = if args.reason == "budget_day_reset" {
+            DeliveryGate::Done
+        } else {
+            DeliveryGate::Resume
+        };
+        let message = MessageRecord::new(workspace_id, agent, text.to_owned(), true, gate)
+            .with_channel(rimz::harness::target::agent_channel(agent))
+            .with_sender(MessageSender::Human)
+            .with_pane_id(pane_id.clone());
         let message_id = message.message_id.clone();
         store
             .queue_message(&message, &workspace.session_name)

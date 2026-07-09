@@ -18,9 +18,10 @@ use crate::agents::longest_window_reset_at;
 use crate::config::effective;
 use crate::config::{TaskEntry, Tasks};
 use crate::harness::schedule;
+use crate::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
 use crate::ids::WorkspaceId;
 use crate::store::atomic::write_temp_then_rename_cache;
-use crate::store::paths::{StatePaths, config_home};
+use crate::store::paths::{StatePaths, config_home, state_home};
 use crate::store::workspace_record;
 use crate::trust::TrustState;
 
@@ -60,6 +61,35 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     }
     for (name, action) in actions {
         if action == Action::Fire {
+            let Some(entry) = tasks.get(&name) else {
+                continue;
+            };
+            match run_log::daily_budget_gate(&state_home(), &name, entry, now) {
+                Ok(Some(gate)) => {
+                    let reason = gate.reason();
+                    run_log::append(&LoopRunRecord {
+                        task: name.clone(),
+                        at: now.timestamp(),
+                        result: LoopRunResult::BudgetSkipped,
+                        mode: Some(LoopRunMode::Scheduled),
+                        duration_ms: Some(0),
+                        error: Some(reason.clone()),
+                        check: None,
+                        run_id: None,
+                        transcript_path: None,
+                        last_message: None,
+                        target: None,
+                        cost_usd: None,
+                    });
+                    tracing::info!(task = name, reason, "sidebar: loop fire skipped by budget");
+                    continue;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(task = name, error = %err, "invalid loop budget skipped by scheduler");
+                    continue;
+                }
+            }
             spawn_loop_run(runtime, project_root.as_deref(), &name);
         }
     }

@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
-use jiff::Timestamp;
+use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
 use crate::harness::run::RunStatus;
@@ -24,7 +24,7 @@ const CHECK_OUTPUT_CAP: usize = 4 * 1024;
 const ERROR_CAP: usize = 2 * 1024;
 const LAST_MESSAGE_CAP: usize = 2 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LoopRunRecord {
     pub task: String,
     pub at: Timestamp,
@@ -45,6 +45,8 @@ pub struct LoopRunRecord {
     pub last_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +78,8 @@ pub enum LoopRunResult {
     Completed,
     Failed,
     TimedOut,
+    BudgetExceeded,
+    BudgetSkipped,
     Canceled,
     Delivered,
     TargetGone,
@@ -92,6 +96,8 @@ impl LoopRunResult {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::TimedOut => "timed out",
+            Self::BudgetExceeded => "budget exceeded",
+            Self::BudgetSkipped => "budget skipped",
             Self::Canceled => "canceled",
             Self::Delivered => "delivered",
             Self::TargetGone => "target gone",
@@ -110,13 +116,14 @@ impl From<RunStatus> for LoopRunResult {
             RunStatus::Completed => Self::Completed,
             RunStatus::Failed => Self::Failed,
             RunStatus::TimedOut => Self::TimedOut,
+            RunStatus::BudgetExceeded => Self::BudgetExceeded,
             RunStatus::Canceled => Self::Canceled,
             RunStatus::Pending | RunStatus::Running => Self::Failed,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LoopRunStats {
     pub runs: usize,
     pub streak: usize,
@@ -151,6 +158,74 @@ pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
     append_task_records(&rotated_path(&path), task, &mut records);
     append_task_records(&path, task, &mut records);
     records
+}
+
+pub fn task_spend_today(state_root: &Path, task: &str, now: &Zoned) -> f64 {
+    spend_on_local_day(&task_records(state_root, task), now)
+}
+
+pub fn spend_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> f64 {
+    let date = now.date();
+    records
+        .iter()
+        .filter(|record| record.at.to_zoned(now.time_zone().clone()).date() == date)
+        .filter_map(|record| record.cost_usd)
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        .sum()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DailyBudgetGate {
+    pub spend_usd: f64,
+    pub cap_usd: f64,
+    pub reserved_usd: f64,
+}
+
+impl DailyBudgetGate {
+    pub fn reason(self) -> String {
+        if self.reserved_usd > 0.0 {
+            format!(
+                "daily budget ${:.2} cannot fund the next ${:.2} run (${:.2} spent)",
+                self.cap_usd, self.reserved_usd, self.spend_usd
+            )
+        } else {
+            format!(
+                "daily budget ${:.2} exhausted (${:.2} spent)",
+                self.cap_usd, self.spend_usd
+            )
+        }
+    }
+}
+
+pub fn daily_budget_gate(
+    state_root: &Path,
+    task: &str,
+    entry: &crate::config::TaskEntry,
+    now: &Zoned,
+) -> std::result::Result<Option<DailyBudgetGate>, String> {
+    let Some(raw_cap) = entry.budget_per_day.as_deref() else {
+        return Ok(None);
+    };
+    let cap = raw_cap
+        .parse::<crate::harness::budget::BudgetSpec>()
+        .map_err(|err| format!("task `{task}` has invalid budget-per-day: {err}"))?
+        .cap_usd;
+    let raw_reserved = entry
+        .budget
+        .as_deref()
+        .ok_or_else(|| format!("task `{task}` uses budget-per-day without a per-run budget"))?;
+    let reserved = raw_reserved
+        .parse::<crate::harness::budget::BudgetSpec>()
+        .map_err(|err| format!("task `{task}` has invalid budget: {err}"))?
+        .cap_usd;
+    let spend = task_spend_today(state_root, task, now);
+    Ok(
+        ((spend >= cap) || (reserved > 0.0 && spend + reserved > cap)).then_some(DailyBudgetGate {
+            spend_usd: spend,
+            cap_usd: cap,
+            reserved_usd: reserved,
+        }),
+    )
 }
 
 pub fn automation_transcripts() -> HashSet<PathBuf> {
@@ -287,6 +362,7 @@ mod tests {
             transcript_path: None,
             last_message: None,
             target: None,
+            cost_usd: None,
         }
     }
 
@@ -302,6 +378,48 @@ mod tests {
         assert_eq!(wake.runs, 2);
         assert_eq!(wake.streak, 1);
         assert_eq!(wake.last.result, LoopRunResult::TargetGone);
+    }
+
+    #[test]
+    fn daily_spend_uses_the_configured_local_day() {
+        let now = "2026-06-02T00:30:00-04:00[America/New_York]"
+            .parse::<Zoned>()
+            .expect("zoned");
+        let mut prior = record("wake", 0, LoopRunResult::Completed);
+        prior.at = "2026-06-01T23:30:00Z".parse().expect("timestamp");
+        prior.cost_usd = Some(3.0);
+        let mut today = record("wake", 0, LoopRunResult::Completed);
+        today.at = "2026-06-02T04:10:00Z".parse().expect("timestamp");
+        today.cost_usd = Some(4.0);
+        assert_eq!(spend_on_local_day(&[prior, today], &now), 4.0);
+    }
+
+    #[test]
+    fn daily_gate_reserves_the_next_runs_full_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().expect("zoned");
+        let mut spent = record("bounded", 0, LoopRunResult::Completed);
+        spent.at = now.timestamp();
+        spent.cost_usd = Some(6.0);
+        let path = log_path(dir.path());
+        std::fs::create_dir_all(path.parent().expect("log parent")).expect("log dir");
+        std::fs::write(
+            path,
+            format!("{}\n", serde_json::to_string(&spent).expect("record json")),
+        )
+        .expect("write run log");
+        let entry = crate::config::TaskEntry {
+            budget: Some("$5.00".to_owned()),
+            budget_per_day: Some("$10.00".to_owned()),
+            ..crate::config::TaskEntry::default()
+        };
+
+        let gate = daily_budget_gate(dir.path(), "bounded", &entry, &now)
+            .expect("valid gate")
+            .expect("next run does not fit");
+        assert_eq!(gate.spend_usd, 6.0);
+        assert_eq!(gate.reserved_usd, 5.0);
+        assert_eq!(gate.cap_usd, 10.0);
     }
 
     #[test]

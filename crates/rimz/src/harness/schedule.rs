@@ -653,6 +653,8 @@ mod tests {
             mode: None,
             effort: None,
             system_prompt_file: None,
+            budget: None,
+            budget_per_day: None,
             timeout: None,
             at: at.map(ToOwned::to_owned),
             every: every.map(ToOwned::to_owned),

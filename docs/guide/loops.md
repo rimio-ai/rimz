@@ -114,6 +114,8 @@ rimz config set harness.smart_compact "70%"   # compact before a message once co
 
 **Auto-continue** picks a parked turn back up on its own. A rate-limit or spend-limit park resumes the moment the provider's budget window resets, and a transient overload or API error retries on a lengthening backoff ramp: the first retry a few minutes after the failure, then spaced further out, giving up after a bounded number of attempts. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 
+**Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap. The skip is recorded in `rimz loop show`. A `/day` agent budget resets and auto-continues at the next local day; an absolute cap stays parked until you raise or clear it, or a human message waives one turn.
+
 **Smart compaction** rides the same loop. Past the threshold, Rimz submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
 
 Turn both on and a long-running agent keeps its footing through the five-hour wall, a flaky API, and a filling context window, with no babysitter process watching it.
@@ -135,7 +137,7 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 
 Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
 
-The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, and `--timeout` caps the wall clock. Inspect, test, and manage tasks with the rest of the surface:
+The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, and `--timeout` caps the wall clock. Inspect, test, and manage tasks with the rest of the surface:
 
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run
@@ -176,7 +178,7 @@ rimz loop add ci-fix --check "gh run watch --exit-status" --on fail \
     --agent codex --prompt "CI failed on the release PR; read the failing job's logs and fix it" --every 15m
 
 # 02:00 every night: a triage that fans out and opens PRs
-rimz loop add nightly --agent claude --worktree nightly --timeout 4h --every day --at 02:00 \
+rimz loop add nightly --agent claude --worktree nightly --timeout 4h --budget 5 --budget-per-day 20 --every day --at 02:00 \
     --prompt "Scan the repository for bugs and cheap improvements. For each one worth fixing, \
 run a codex -p subagent in its own worktree, review its diff, and open a PR."
 ```

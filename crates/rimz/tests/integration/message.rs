@@ -3682,6 +3682,8 @@ fn seed_provisional_codex_launch(
 
                 effort: None,
 
+                budget: None,
+
                 team: None,
 
                 launch_group: None,

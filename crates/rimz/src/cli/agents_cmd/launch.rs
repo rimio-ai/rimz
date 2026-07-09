@@ -623,6 +623,9 @@ pub(super) fn prepare_launch_layout(
         &launch_override_preset(args)?,
         &args.passthrough,
     )?;
+    if let Some(budget) = args.budget {
+        apply_launch_budget(&mut layout, budget);
+    }
     apply_default_launch_models(&mut layout)?;
     Ok(PreparedLaunch {
         profiles: launch.profiles,
@@ -858,6 +861,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.yolo
         || args.print
         || args.effort.is_some()
+        || args.budget.is_some()
         || args.model.is_some()
         || args.description.is_some()
         || args.system_prompt_file.is_some()
@@ -1058,6 +1062,17 @@ pub(super) fn apply_launch_mode_and_passthrough(
     Ok(())
 }
 
+fn apply_launch_budget(layout: &mut LayoutSpec, spec: rimz::harness::budget::BudgetSpec) {
+    let canonical = spec.to_string();
+    for column in &mut layout.columns {
+        for cell in &mut column.rows {
+            if let Cell::Agent { budget, .. } = cell {
+                *budget = Some(canonical.clone());
+            }
+        }
+    }
+}
+
 pub(super) fn apply_supervised_turn_limit(layout: &mut LayoutSpec, limit: u32) -> Result<()> {
     for column in &mut layout.columns {
         for cell in &mut column.rows {
@@ -1146,6 +1161,7 @@ pub(super) fn launch_identity_requests(
             role,
             model,
             effort,
+            budget,
             ..
         } = cell
         else {
@@ -1180,6 +1196,7 @@ pub(super) fn launch_identity_requests(
                 role: role.clone(),
                 model: model.clone(),
                 effort: effort.clone(),
+                budget: budget.clone(),
                 team: team.map(ToOwned::to_owned),
                 launch_group: inline_launch_group.clone(),
                 launch_ordinal,
@@ -1371,6 +1388,7 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
             role,
             model,
             effort,
+            budget,
             ..
         } => {
             if let Some(rimz::harness::resume::CohortSeed::Resume(agent)) = options.resume_seed {
@@ -1413,6 +1431,7 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
                         channel: options.channel,
                         model: model.as_deref(),
                         effort: effort.as_deref(),
+                        budget: budget.as_deref(),
                     },
                 },
             )

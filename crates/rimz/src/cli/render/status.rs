@@ -28,7 +28,7 @@ pub(crate) fn run(status: RunStatus) -> anstyle::Style {
     match status {
         RunStatus::Completed => palette::GOOD,
         RunStatus::Running | RunStatus::Pending => palette::COOL,
-        RunStatus::Failed | RunStatus::TimedOut => palette::ALARM,
+        RunStatus::Failed | RunStatus::TimedOut | RunStatus::BudgetExceeded => palette::ALARM,
         RunStatus::Canceled => palette::MUTED,
     }
 }

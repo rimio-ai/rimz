@@ -17,6 +17,7 @@ struct RunOutcome {
     exit_code: Option<i32>,
     polarity: Option<CheckOn>,
     wake_subject: Option<String>,
+    cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -38,6 +39,7 @@ impl RunOutcome {
             exit_code: None,
             polarity: None,
             wake_subject: None,
+            cost_usd: None,
         }
     }
 }
@@ -59,6 +61,28 @@ pub(super) fn run_one(
         writeln!(ui::out(), "loop `{name}`: task is paused; firing anyway")?;
     }
     let started = Instant::now();
+    let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
+    if let Some(gate) =
+        run_log::daily_budget_gate(&state_home(), name, &entry, &now).map_err(anyhow::Error::msg)?
+    {
+        let reason = gate.reason();
+        run_log::append(&LoopRunRecord {
+            task: name.to_owned(),
+            at: now.timestamp(),
+            result: LoopRunResult::BudgetSkipped,
+            mode: Some(mode),
+            duration_ms: Some(elapsed_ms(started)),
+            error: Some(reason.clone()),
+            check: None,
+            run_id: None,
+            transcript_path: None,
+            last_message: None,
+            target: None,
+            cost_usd: None,
+        });
+        writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;
+        return Ok(());
+    }
     let _run_lock = match acquire_run_lock(name, &entry) {
         Ok(Some(guard)) => guard,
         Ok(None) => {
@@ -75,6 +99,7 @@ pub(super) fn run_one(
                 transcript_path: None,
                 last_message: None,
                 target: None,
+                cost_usd: None,
             });
             writeln!(
                 ui::out(),
@@ -120,6 +145,7 @@ fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &an
         transcript_path: None,
         last_message: None,
         target: None,
+        cost_usd: None,
     });
     tracing::warn!(task = name, error = %error, "loop task run failed");
 }
@@ -276,6 +302,11 @@ fn execute_task(
         worktree: entry.worktree.clone(),
         mode: task_mode,
         effort,
+        budget: entry
+            .budget
+            .as_deref()
+            .map(str::parse::<rimz::harness::budget::BudgetSpec>)
+            .transpose()?,
         system_prompt_file,
         timeout,
         keep,
@@ -289,6 +320,7 @@ fn execute_task(
             run.transcript_path = record.transcript_path;
             run.failure_tail = record.failure_tail;
             run.last_message = record.last_message;
+            run.cost_usd = record.cost_usd;
             run.exit_code = Some(status.exit_code());
             Ok(run)
         }
@@ -394,6 +426,7 @@ fn loop_record(
         transcript_path: outcome.transcript_path.clone(),
         last_message: outcome.last_message.clone(),
         target: outcome.target.clone(),
+        cost_usd: outcome.cost_usd,
     }
 }
 
@@ -428,7 +461,7 @@ fn write_run_summary(
     let exit_label = outcome_exit_label(outcome);
     if matches!(
         outcome.result,
-        LoopRunResult::Failed | LoopRunResult::TimedOut
+        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::BudgetExceeded
     ) {
         let mut label = outcome.result.label().to_owned();
         if let Some(exit_label) = exit_label.as_deref() {

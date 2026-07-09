@@ -1225,6 +1225,8 @@ fn seed_agent_launch(
 
                 effort: None,
 
+                budget: None,
+
                 team: None,
 
                 launch_group: None,

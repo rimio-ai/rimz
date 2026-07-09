@@ -167,6 +167,21 @@ fn record_run_lifecycle(
         last_message,
     ) {
         Ok(Some(record)) => {
+            let cost_usd = recorded
+                .observation
+                .agent_id
+                .as_ref()
+                .and_then(|agent_id| {
+                    rimz::store::agent_context::read_one(
+                        store.runtime_paths(),
+                        agent.descriptor().kind,
+                        agent_id.as_str(),
+                    )
+                })
+                .and_then(|record| record.context.cost)
+                .and_then(|cost| cost.total_cost_usd);
+            let record = rimz::harness::run::record_cost(store.paths(), &record.run_id, cost_usd)
+                .unwrap_or(record);
             if let Err(err) = rimz::store::wakeup::wake_run(store.runtime_paths(), &record) {
                 warn!(
                     agent = agent.descriptor().kind,

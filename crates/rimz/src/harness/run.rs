@@ -46,6 +46,9 @@ pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
 /// The reasoning effort selected by launch flags or profile presets. Set by
 /// the launch wrapper; read into the lifecycle observation as card identity fallback.
 pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
+/// The canonical dollar cap selected by launch flags, profiles, or roles.
+/// Set by the launch wrapper and read into lifecycle observations.
+pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
 /// The configured `[harness] rtk` mode (`auto`/`on`/`off`), exported to every
 /// agent launch so `cargo xtask` can route recognized cargo commands through
 /// `rtk`. Read by xtask, never by rimz itself.
@@ -85,6 +88,7 @@ pub enum RunStatus {
     Completed,
     Failed,
     TimedOut,
+    BudgetExceeded,
     Canceled,
 }
 
@@ -92,7 +96,7 @@ impl RunStatus {
     pub const fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Completed | Self::Failed | Self::TimedOut | Self::Canceled
+            Self::Completed | Self::Failed | Self::TimedOut | Self::BudgetExceeded | Self::Canceled
         )
     }
 
@@ -101,6 +105,7 @@ impl RunStatus {
             Self::Completed => 0,
             Self::Failed => 1,
             Self::Canceled => 130,
+            Self::BudgetExceeded => 125,
             Self::TimedOut | Self::Pending | Self::Running => 124,
         }
     }
@@ -123,6 +128,10 @@ pub struct RunRecord {
     pub failure_tail: Option<String>,
     pub status: RunStatus,
     pub permission_mode: PermissionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     pub prompt: String,
     pub worktree_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +162,8 @@ impl RunRecord {
             failure_tail: None,
             status: RunStatus::Pending,
             permission_mode,
+            budget: None,
+            cost_usd: None,
             prompt,
             worktree_path,
             last_message: None,
@@ -217,6 +228,37 @@ pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Re
 
 pub fn timeout(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
     mark_terminal(paths, run_id, RunStatus::TimedOut).map(|(record, _wrote)| record)
+}
+
+pub fn budget_exceeded(
+    paths: &StatePaths,
+    run_id: &RunId,
+    cost_usd: Option<f64>,
+) -> Result<(RunRecord, bool)> {
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut record = load(paths, run_id)?;
+    if record.status.is_terminal() {
+        return Ok((record, false));
+    }
+    let now = Timestamp::now();
+    record.status = RunStatus::BudgetExceeded;
+    record.cost_usd = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0);
+    record.updated_at = now;
+    record.completed_at = Some(now);
+    run_store::write(&paths.runs_dir, &record)?;
+    Ok((record, true))
+}
+
+pub fn record_cost(paths: &StatePaths, run_id: &RunId, cost_usd: Option<f64>) -> Result<RunRecord> {
+    let Some(cost_usd) = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0) else {
+        return load(paths, run_id);
+    };
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut record = load(paths, run_id)?;
+    record.cost_usd = Some(cost_usd);
+    record.updated_at = Timestamp::now();
+    run_store::write(&paths.runs_dir, &record)?;
+    Ok(record)
 }
 
 pub fn cancel(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
@@ -515,8 +557,17 @@ mod tests {
         assert!(!wrote);
         assert_eq!(still_canceled.status, RunStatus::Canceled);
 
+        let (_dir, paths, record) = setup();
+        let (budgeted, wrote) = budget_exceeded(&paths, &record.run_id, Some(5.25)).unwrap();
+        assert!(wrote);
+        assert_eq!(budgeted.status, RunStatus::BudgetExceeded);
+        assert_eq!(budgeted.cost_usd, Some(5.25));
+        assert_eq!(budgeted.status.exit_code(), 125);
+
         assert_eq!(RunStatus::Completed.exit_code(), 0);
         assert_eq!(RunStatus::Failed.exit_code(), 1);
+        assert_eq!(RunStatus::BudgetExceeded.exit_code(), 125);
+        assert!(RunStatus::BudgetExceeded.is_terminal());
         assert!(RunStatus::Canceled.is_terminal());
     }
 

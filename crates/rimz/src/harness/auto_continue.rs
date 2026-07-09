@@ -90,6 +90,9 @@ enum ParkKind {
         /// immediately.
         overloaded_at: Timestamp,
     },
+    Budget {
+        deadline: Timestamp,
+    },
 }
 
 /// Arm or fire each park when live auto-continue is enabled. Best-effort: an
@@ -115,6 +118,25 @@ pub(crate) fn resume_parked(
             continue;
         }
         let path = park_record_path(runtime, &agent.kind, &agent.agent_id);
+        if let Some(park) = agent.budget_park.as_ref() {
+            if let Some(deadline) = park.resets_at {
+                arm_park(&path, ParkKind::Budget { deadline }, agent.last_activity);
+                fire_if_due(
+                    agent,
+                    &path,
+                    FireContext {
+                        snapshot,
+                        runtime,
+                        now,
+                        text,
+                        config,
+                        resume_messages,
+                    },
+                );
+            }
+            continue;
+        }
+        clear_budget_park(runtime, &agent.kind, &agent.agent_id);
         let budget = account_budgets.get(&agent.kind);
         match resume_park(agent, budget, now) {
             Some(ResumeArm::RateLimit { deadline }) => {
@@ -286,6 +308,7 @@ fn same_park_class(left: &ParkKind, right: &ParkKind) -> bool {
         (left, right),
         (ParkKind::RateLimit { .. }, ParkKind::RateLimit { .. })
             | (ParkKind::Overloaded { .. }, ParkKind::Overloaded { .. })
+            | (ParkKind::Budget { .. }, ParkKind::Budget { .. })
     )
 }
 
@@ -330,6 +353,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     let reason = match &record.kind {
         ParkKind::RateLimit { .. } => "rate_limit_window_reset",
         ParkKind::Overloaded { .. } => "overloaded_backoff_retry",
+        ParkKind::Budget { .. } => "budget_day_reset",
     };
     if ctx.text.is_empty() {
         return;
@@ -397,6 +421,16 @@ fn nudge_due(
 ) -> bool {
     match &record.kind {
         ParkKind::RateLimit { deadline } => {
+            if attempts >= max_retries {
+                return false;
+            }
+            now >= *deadline
+                && record.last_nudge_at.is_none_or(|at| {
+                    now.as_second() - at.as_second()
+                        >= AUTO_CONTINUE_RETRY_INTERVAL.as_secs() as i64
+                })
+        }
+        ParkKind::Budget { deadline } => {
             if attempts >= max_retries {
                 return false;
             }
@@ -563,6 +597,31 @@ fn park_record_path(
     runtime
         .root
         .join(format!("auto-continue.{}.json", &digest[..32]))
+}
+
+pub(crate) fn arm_budget_park(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    deadline: Timestamp,
+    last_activity: Timestamp,
+) {
+    arm_park(
+        &park_record_path(runtime, kind, agent_id),
+        ParkKind::Budget { deadline },
+        last_activity,
+    );
+}
+
+pub(crate) fn clear_budget_park(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+) {
+    let path = park_record_path(runtime, kind, agent_id);
+    if read_park(&path).is_some_and(|record| matches!(record.kind, ParkKind::Budget { .. })) {
+        remove_park(&path);
+    }
 }
 
 /// Spawn the detached, fresh-stdio helper that queues or redelivers the

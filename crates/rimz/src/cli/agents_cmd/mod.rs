@@ -1,6 +1,8 @@
 //! `rimz agents` — launcher sugar plus the hidden supervised exec wrapper.
 
 mod auto_continue;
+mod budget;
+mod budget_park;
 mod commands;
 mod exec;
 mod launch;
@@ -37,6 +39,8 @@ use rimz::store::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, Agent
 use rimz::workspace::WorkspaceResolver;
 
 use auto_continue::{AutoContinueArgs, run_auto_continue};
+use budget::{BudgetArgs, run_budget};
+use budget_park::{BudgetParkArgs, run_budget_park};
 pub(crate) use commands::render_agents_table;
 #[cfg(test)]
 use commands::{RunPlacement, run_placement, run_stop_should_cancel};
@@ -112,6 +116,7 @@ pub struct AgentsArgs {
             "description",
             "model",
             "effort",
+            "budget",
             "ask",
             "yolo",
             "system_prompt_file",
@@ -152,6 +157,9 @@ pub struct AgentsArgs {
     /// Reasoning effort for the launched agents (provider-specific levels).
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
+    /// Cap agent spend for the session (`5`) or local day (`20/day`).
+    #[arg(long, value_name = "AMOUNT[/day]")]
+    budget: Option<rimz::harness::budget::BudgetSpec>,
     /// Run one supervised agent prompt and print its final answer.
     #[arg(short = 'p', long = "print")]
     print: bool,
@@ -280,6 +288,8 @@ enum AgentsSubcmd {
     },
     /// Force-refresh agent-card context from local transcripts and helpers.
     Refresh(RefreshArgs),
+    /// Inspect or change one agent's dollar cap.
+    Budget(BudgetArgs),
     /// Hidden wrapper used inside launched agent panes.
     #[command(hide = true)]
     Exec(Box<ExecArgs>),
@@ -287,6 +297,9 @@ enum AgentsSubcmd {
     /// condition is due (`sidebar::enrich` auto-continue).
     #[command(hide = true)]
     AutoContinue(AutoContinueArgs),
+    /// Hidden helper that interrupts an agent after its dollar cap is crossed.
+    #[command(hide = true)]
+    BudgetPark(BudgetParkArgs),
     /// Hidden helper the producer spawns to refresh one provider's account usage
     /// (rate-limit windows + paid credits) into the shared cache.
     #[command(hide = true)]
@@ -335,6 +348,9 @@ struct ExecArgs {
     /// The profile/CLI-selected reasoning effort to stamp into lifecycle observations.
     #[arg(long)]
     agent_effort: Option<String>,
+    /// The launch-selected canonical budget to stamp into lifecycle observations.
+    #[arg(long)]
+    agent_budget: Option<String>,
     #[arg(long)]
     launch_id: Option<String>,
     #[arg(long, hide = true)]
@@ -353,7 +369,9 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
+        Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args),
         Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),
+        Some(AgentsSubcmd::Budget(args)) => return run_budget(args, globals),
         Some(AgentsSubcmd::List {
             scope,
             json,
@@ -476,6 +494,7 @@ impl AgentsArgs {
             system_prompt_file: None,
             append_system_prompt_file: None,
             effort: None,
+            budget: None,
             print: false,
             timeout: None,
             keep: false,
@@ -511,6 +530,7 @@ impl AgentsArgs {
             system_prompt_file: task.system_prompt_file,
             append_system_prompt_file: None,
             effort: task.effort,
+            budget: task.budget,
             print: true,
             timeout: task.timeout,
             keep: task.keep,
@@ -529,6 +549,7 @@ pub(crate) struct TaskRunArgs {
     pub(crate) worktree: Option<String>,
     pub(crate) mode: Option<PermissionMode>,
     pub(crate) effort: Option<String>,
+    pub(crate) budget: Option<rimz::harness::budget::BudgetSpec>,
     pub(crate) system_prompt_file: Option<PathBuf>,
     pub(crate) timeout: Option<Duration>,
     pub(crate) keep: bool,

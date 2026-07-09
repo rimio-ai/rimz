@@ -47,6 +47,10 @@ pub(super) fn project_display_status(
         let effective_status = source_agent
             .map(AgentState::effective_status)
             .unwrap_or(status);
+        let budget_park = source_agent.and_then(|state| state.budget_park.as_ref());
+        if let Some(park) = budget_park {
+            agent.turn_error_label = Some(park.label());
+        }
         let resume_exhausted = source_agent.is_some_and(|state| {
             exhausted_resumes.contains(&(state.kind.clone(), state.agent_id.clone()))
         });
@@ -60,7 +64,9 @@ pub(super) fn project_display_status(
             last_activity,
             turn_started_at,
         );
-        let projected = if let Some((error, class)) = turn_error
+        let projected = if budget_park.is_some() {
+            AgentStatus::Paused
+        } else if let Some((error, class)) = turn_error
             .map(|error| (error, effective_turn_error_class(error)))
             .filter(|(_, class)| {
                 matches!(
@@ -69,7 +75,8 @@ pub(super) fn project_display_status(
                         | TurnErrorClass::PausedSpendLimit
                         | TurnErrorClass::PausedOverloaded
                 )
-            }) {
+            })
+        {
             let reset_without_budget = matches!(
                 class,
                 TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit

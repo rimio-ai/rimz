@@ -20,6 +20,8 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
 
                 effort: None,
 
+                budget: None,
+
                 team: Some("forge".to_owned()),
 
                 launch_group: None,

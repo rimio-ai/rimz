@@ -292,6 +292,15 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     }
     kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
     kv.push("source", ui::cell(source_detail(source, &entry)));
+    if let Some(raw) = entry.budget_per_day.as_deref()
+        && let Ok(spec) = raw.parse::<rimz::harness::budget::BudgetSpec>()
+    {
+        let spend = run_log::spend_on_local_day(&records, &now_zoned);
+        kv.push(
+            "budget_today",
+            ui::cell(format!("${spend:.2} of ${:.2}", spec.cap_usd)),
+        );
+    }
     kv.render(&mut out)?;
 
     if records.is_empty() {
@@ -371,7 +380,7 @@ impl RunRowKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct CollapsedRunRow<'a> {
     key: RunRowKey,
     latest: &'a LoopRunRecord,
@@ -445,6 +454,8 @@ fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
             ("✗", label, ui::palette::ALARM)
         }
         LoopRunResult::TimedOut => ("✗", "timed out".to_owned(), ui::palette::ALARM),
+        LoopRunResult::BudgetExceeded => ("✗", "budget exceeded".to_owned(), ui::palette::ALARM),
+        LoopRunResult::BudgetSkipped => ("○", "budget skipped".to_owned(), ui::palette::WARN),
         LoopRunResult::Errored => ("✗", "error".to_owned(), ui::palette::ALARM),
         LoopRunResult::SkippedWindow => ("○", "skipped".to_owned(), ui::palette::WARN),
         LoopRunResult::Expired => ("○", "expired".to_owned(), ui::palette::WARN),
@@ -483,21 +494,27 @@ fn failure_exit_label(record: &LoopRunRecord) -> Option<String> {
 fn failure_note_visible(result: LoopRunResult) -> bool {
     matches!(
         result,
-        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored
+        LoopRunResult::Failed
+            | LoopRunResult::TimedOut
+            | LoopRunResult::BudgetExceeded
+            | LoopRunResult::BudgetSkipped
+            | LoopRunResult::Errored
     )
 }
 
 pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
     match result {
         LoopRunResult::Completed | LoopRunResult::Delivered => ui::palette::GOOD,
-        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored => {
-            ui::palette::ALARM
-        }
+        LoopRunResult::Failed
+        | LoopRunResult::TimedOut
+        | LoopRunResult::BudgetExceeded
+        | LoopRunResult::Errored => ui::palette::ALARM,
         LoopRunResult::Expired
         | LoopRunResult::Canceled
         | LoopRunResult::TargetGone
         | LoopRunResult::Overlapped
-        | LoopRunResult::SkippedWindow => ui::palette::WARN,
+        | LoopRunResult::SkippedWindow
+        | LoopRunResult::BudgetSkipped => ui::palette::WARN,
         LoopRunResult::CheckSkipped => ui::palette::MUTED,
     }
 }
@@ -538,6 +555,7 @@ fn spawn_exit_code(result: LoopRunResult) -> Option<i32> {
         LoopRunResult::Completed => Some(0),
         LoopRunResult::Failed => Some(1),
         LoopRunResult::TimedOut => Some(124),
+        LoopRunResult::BudgetExceeded => Some(125),
         LoopRunResult::Canceled => Some(130),
         _ => None,
     }
@@ -590,7 +608,10 @@ fn record_has_detail(record: &LoopRunRecord) -> bool {
 fn record_is_failure(record: &LoopRunRecord) -> bool {
     matches!(
         record.result,
-        LoopRunResult::Errored | LoopRunResult::Failed | LoopRunResult::TimedOut
+        LoopRunResult::Errored
+            | LoopRunResult::Failed
+            | LoopRunResult::TimedOut
+            | LoopRunResult::BudgetExceeded
     )
 }
 
@@ -686,7 +707,10 @@ fn render_record_detail(
 fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
     if matches!(
         record.result,
-        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::Errored
+        LoopRunResult::Failed
+            | LoopRunResult::TimedOut
+            | LoopRunResult::BudgetExceeded
+            | LoopRunResult::Errored
     ) {
         return None;
     }
@@ -767,6 +791,7 @@ mod tests {
             transcript_path: None,
             last_message: None,
             target: None,
+            cost_usd: None,
         }
     }
 

@@ -67,6 +67,7 @@ pub(crate) fn status_label(status: RunStatus) -> &'static str {
         RunStatus::Completed => "completed",
         RunStatus::Failed => "failed",
         RunStatus::TimedOut => "timed_out",
+        RunStatus::BudgetExceeded => "budget_exceeded",
         RunStatus::Canceled => "canceled",
     }
 }

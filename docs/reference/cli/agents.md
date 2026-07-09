@@ -98,7 +98,7 @@ Because resume takes identity from the store, it conflicts with `PROMPT`, `--fro
 
 These broadcast to every agent cell, and each adapter renders them into its own native flags.
 
-- `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` carry the same meaning and resolution rules as the [profile fields](../../guide/configuration.md#profiles) of the same names; a command-line flag renders after any profile and wins. `--effort` levels are provider-specific: Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`.
+- `--model`, `--effort`, `--budget <AMOUNT[/day]>`, `--system-prompt-file`, and `--append-system-prompt-file` carry the same meaning and resolution rules as the [profile fields](../../guide/configuration.md#profiles) of the same names; a command-line flag renders after any profile and wins. A bare budget caps the session; `/day` resets at the configured local day boundary. `--effort` levels are provider-specific: Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`.
 - `--description <TEXT>` is a card label only: it seeds the card's second line, never enters the agent's argv or environment, and the agent's own session preview replaces it.
 - `--name <HANDLE>` applies to a single-agent launch and makes that user-chosen name the rendered handle after any team role, so `rimz agents claude --name writer` appears as `@writer` in lists, sidebar cards, and peer message prefixes. Bare launches still get an internal pet name for stable instance addressing, but they render as `@<kind>` when that is unambiguous.
 
@@ -114,7 +114,11 @@ Placement follows intent under the default `auto` policy: a named-channel launch
 
 ### Supervised runs (`-p`)
 
-`-p` launches exactly one supervised agent pane, waits for the root turn, prints the result, and exits with the run's status code (`0` completed, `1` failed, `124` timed out, `130` canceled), so a script branches on the outcome. The turn still runs in a real pane you can watch and steer while the pipeline waits. Text mode keeps stdout as the final assistant answer; failed, timed-out, or canceled runs print status, captured pane tail when present, and transcript path on stderr.
+`-p` launches exactly one supervised agent pane, waits for the root turn, prints the result, and exits with the run's status code (`0` completed, `1` failed, `124` timed out, `125` budget exceeded, `130` canceled), so a script branches on the outcome. The turn still runs in a real pane you can watch and steer while the pipeline waits. Text mode keeps stdout as the final assistant answer; failed, timed-out, budget-exceeded, or canceled runs print status, captured pane tail when present, and transcript path on stderr.
+
+### Inspect and change a budget
+
+`rimz agents budget @coder` prints current spend, cap, window, and park state. Set a new cap with `rimz agents budget @coder 10`, add headroom with `+5`, or remove the cap with `clear`. Raising or clearing a parked cap queues the configured continue prompt by default; pass `--no-continue` to leave the agent at rest.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json

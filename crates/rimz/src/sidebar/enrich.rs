@@ -344,6 +344,7 @@ pub fn enrich(
                 .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
         );
         snapshot = snapshot.with_agent_activity(&activity);
+        crate::harness::budget::project_parks(&mut snapshot, runtime, &machine_config.time_zone());
     }
 
     // Wiring state gates the live-pane fold (idle synthesis), so set it before

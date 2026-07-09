@@ -290,6 +290,7 @@ fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
                 role: Some("pruner".to_owned()),
                 model: None,
                 effort: None,
+                budget: None,
                 team: Some("trim".to_owned()),
                 launch_group: None,
                 launch_ordinal: None,

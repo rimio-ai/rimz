@@ -38,6 +38,7 @@ Nothing else moves: no daemon, no forked agent, no Rimz-private copy of the sess
 | `0` | The run completed. |
 | `1` | The run failed. |
 | `124` | The run hit its `--timeout`. |
+| `125` | The run reached its `--budget`. |
 | `130` | The run was canceled (Ctrl+C on a blocking `-p`). |
 
 ```sh
@@ -55,6 +56,8 @@ On success, stdout is the final assistant answer and nothing else, so it pipes c
 ```sh
 rimz agents codex "Update dependencies and run the test suite." -p --timeout 30m
 ```
+
+**Cap the dollars.** `--budget 2` records `budget_exceeded` and exits `125`, distinct from a timeout or agent failure.
 
 ## Feed the prompt in
 

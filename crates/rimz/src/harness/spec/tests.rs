@@ -9,6 +9,7 @@ fn profile(agent: &str) -> Profile {
         mode: None,
         model: None,
         effort: None,
+        budget: None,
         system_prompt_file: None,
         append_system_prompt_file: None,
         args: None,
@@ -40,6 +41,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         mode: None,
         model: None,
         effort: None,
+        budget: None,
         system_prompt_file: None,
         append_system_prompt_file: None,
         args: None,
@@ -232,6 +234,7 @@ fn profile_mode_preset_and_extra_args_render_in_order_and_stamp_profile() {
             mode: Some(PermissionMode::Auto),
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
+            budget: None,
             system_prompt_file: None,
             append_system_prompt_file: None,
             args: Some("--profile reviewer".to_owned()),
@@ -573,6 +576,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             role: None,
             model: None,
             effort: None,
+            budget: None,
         }
     );
     assert_eq!(
@@ -589,6 +593,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             role: None,
             model: None,
             effort: None,
+            budget: None,
         }
     );
     assert_eq!(
@@ -603,6 +608,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             role: None,
             model: None,
             effort: None,
+            budget: None,
         }
     );
 
@@ -626,6 +632,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             role: None,
             model: None,
             effort: None,
+            budget: None,
         }
     );
     let Cell::Agent { args, .. } = parse_layout_spec("codex-ping", &no_profiles(), &no_commands())
@@ -799,6 +806,7 @@ fn named_teams_resolve_roles_to_one_column_each() {
             role: Some("planner".to_owned()),
             model: None,
             effort: None,
+            budget: None,
         }
     );
     assert_eq!(
@@ -813,6 +821,7 @@ fn named_teams_resolve_roles_to_one_column_each() {
             role: Some("reviewer".to_owned()),
             model: None,
             effort: None,
+            budget: None,
         }
     );
 }
@@ -849,6 +858,7 @@ fn team_role_overrides_profile_fields_and_args_replace() {
                 mode: Some(PermissionMode::Ask),
                 model: Some("role-model".to_owned()),
                 effort: Some("high".to_owned()),
+                budget: None,
                 system_prompt_file: Some("/prompts/coder.md".into()),
                 append_system_prompt_file: None,
                 args: Some("--role".to_owned()),
@@ -859,6 +869,7 @@ fn team_role_overrides_profile_fields_and_args_replace() {
                 mode: None,
                 model: None,
                 effort: None,
+                budget: None,
                 system_prompt_file: None,
                 append_system_prompt_file: Some("/prompts/role-extra.md".into()),
                 args: None,
@@ -940,6 +951,7 @@ fn team_role_spec_resolves_one_role_with_team_identity() {
                 mode: Some(PermissionMode::Ask),
                 model: Some("role-model".to_owned()),
                 effort: Some("high".to_owned()),
+                budget: None,
                 system_prompt_file: None,
                 append_system_prompt_file: None,
                 args: None,

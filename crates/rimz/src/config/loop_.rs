@@ -48,6 +48,10 @@ pub struct TaskEntry {
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<String>,
+    #[serde(rename = "budget-per-day", skip_serializing_if = "Option::is_none")]
+    pub budget_per_day: Option<String>,
     #[serde(rename = "system-prompt-file", skip_serializing_if = "Option::is_none")]
     pub system_prompt_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,6 +156,8 @@ mod tests {
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
             every: Some("reset".to_owned()),
+            budget: Some("$5.00".to_owned()),
+            budget_per_day: Some("$20.00".to_owned()),
             deadline: Some(deadline),
             ..TaskEntry::default()
         };
@@ -192,6 +198,8 @@ mod tests {
             toml.contains("every = \"reset\""),
             "reset cadence should round-trip through TOML: {toml}"
         );
+        assert!(toml.contains("budget = \"$5.00\""), "{toml}");
+        assert!(toml.contains("budget-per-day = \"$20.00\""), "{toml}");
 
         let json = serde_json::to_string(&loop_config.tasks).expect("json");
         let json_round: Tasks = serde_json::from_str(&json).expect("json round trip");
