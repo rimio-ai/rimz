@@ -236,6 +236,12 @@ impl MachineConfig {
         Self::load_from(&Self::config_path(), &paths::agents_home())
     }
 
+    /// Strictly load only the per-machine loop task file. Missing file is the
+    /// default loop config.
+    pub fn load_loop() -> Result<LoopConfig> {
+        load_optional(&Self::loop_path(), parse_loop_text).map(|loop_| loop_.unwrap_or_default())
+    }
+
     /// Load per-machine config for a runtime entry point. A file that fails to
     /// load degrades to its built-in defaults with a warning instead of
     /// aborting the room; the strict [`Self::load`] and [`Self::load_from`]

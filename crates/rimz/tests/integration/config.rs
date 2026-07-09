@@ -507,12 +507,12 @@ fn setup_yes_merges_loop_tasks_as_table_blocks() {
         &loop_config_path(&env),
         r#"
 [tasks.self_wake]
-bind = { kind = "claude", session = "s1", handle = "@planner" }
+wake = { kind = "claude", session = "s1", handle = "@planner" }
 prompt = "resume"
 root = "/r"
 
 [tasks.pr_watch]
-spec = "codex"
+agent = "codex"
 prompt = "check CI"
 root = "/r"
 every = "15m"
@@ -533,18 +533,18 @@ every = "15m"
     );
     assert!(
         text.contains("[tasks.pr_watch]"),
-        "bind-less task should render as a table block:\n{text}"
+        "wake-less task should render as a table block:\n{text}"
     );
     assert!(
-        text.contains("[tasks.self_wake.bind]"),
-        "bind should render as a nested table block:\n{text}"
+        text.contains("[tasks.self_wake.wake]"),
+        "wake should render as a nested table block:\n{text}"
     );
     assert!(
         !text.contains("tasks = {"),
         "tasks should not collapse to one inline table:\n{text}"
     );
     assert!(
-        text.contains("spec = \"codex\"")
+        text.contains("agent = \"codex\"")
             && text.contains("every = \"15m\"")
             && text.contains("session = \"s1\""),
         "task fields should survive:\n{text}"

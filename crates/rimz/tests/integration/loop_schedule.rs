@@ -22,19 +22,24 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-live", "feature-loop");
 
-    loop_ok(
+    let add_stdout = loop_ok(
         &env,
         &[
             "loop",
             "add",
             "wake",
-            "--bind",
+            "--wake",
             "@claude",
             "--every",
             "15m",
             "--prompt",
             "next step",
         ],
+    );
+    assert!(
+        add_stdout.contains("pinned to claude session `sess-loop-live`")
+            && add_stdout.contains("next fire:"),
+        "loop add should explain wake pin and next fire: {add_stdout}"
     );
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -142,6 +147,29 @@ fn loop_project_tasks_list_and_refuse_until_trusted() {
 }
 
 #[test]
+fn loop_list_rejects_old_task_keys() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.old]\n\
+             spec = \"claude\"\n\
+             prompt = \"wake\"\n\
+             root = \"{}\"\n\
+             at = \"07:00\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let (_stdout, stderr) = loop_fail(&env, &["loop", "list"]);
+
+    assert!(
+        stderr.contains("unknown field `spec`"),
+        "old key should fail loudly: {stderr}"
+    );
+}
+
+#[test]
 fn loop_untrusted_project_shadow_does_not_block_machine_task() {
     let env = Env::new();
     write_loop_config(
@@ -209,7 +237,7 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
             "loop",
             "add",
             "later",
-            "--bind",
+            "--wake",
             "@claude",
             "--in",
             "5m",
@@ -237,22 +265,24 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
         &[
             "loop",
             "add",
-            "daily",
-            "--bind",
+            "morning",
+            "--wake",
             "@claude",
+            "--every",
+            "weekday",
             "--at",
             "07:00",
             "--prompt",
-            "daily wake",
+            "weekday wake",
         ],
     );
     let loop_text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
-        loop_text.contains("[tasks.daily]"),
+        loop_text.contains("[tasks.morning]"),
         "recurring task should persist in loop.toml: {loop_text}"
     );
     assert!(
-        !read_loop_instances(&env).0.contains_key("daily"),
+        !read_loop_instances(&env).0.contains_key("morning"),
         "recurring task should not persist as state"
     );
 }
@@ -271,7 +301,6 @@ fn loop_fire_keeps_ephemeral_task() {
             "printf ok",
             "--at",
             "07:00",
-            "--once",
         ],
     );
     assert!(
@@ -312,7 +341,7 @@ fn loop_add_replaces_same_name_across_config_and_state() {
             "loop",
             "add",
             "swap",
-            "--bind",
+            "--wake",
             "@claude",
             "--every",
             "15m",
@@ -330,7 +359,7 @@ fn loop_add_replaces_same_name_across_config_and_state() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "swap", "--bind", "@claude", "--in", "5m", "--prompt", "one shot",
+            "loop", "add", "swap", "--wake", "@claude", "--in", "5m", "--prompt", "one shot",
         ],
     );
     assert!(
@@ -349,7 +378,7 @@ fn loop_add_replaces_same_name_across_config_and_state() {
             "loop",
             "add",
             "swap",
-            "--bind",
+            "--wake",
             "@claude",
             "--every",
             "30m",
@@ -481,7 +510,7 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
             "loop",
             "add",
             "healthy",
-            "--bind",
+            "--wake",
             "@claude",
             "--every",
             "15m",
@@ -522,7 +551,7 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
             "loop",
             "add",
             "broken",
-            "--bind",
+            "--wake",
             "@claude",
             "--every",
             "15m",
@@ -565,7 +594,7 @@ fn loop_run_error_records_and_show_displays_message() {
         &env,
         &format!(
             "[tasks.bad_prompt]\n\
-             bind = {{ kind = \"claude\", session = \"sess-loop-error\", handle = \"@claude\" }}\n\
+             wake = {{ kind = \"claude\", session = \"sess-loop-error\", handle = \"@claude\" }}\n\
              prompt-file = \"missing-prompt.txt\"\n\
              root = \"{}\"\n\
              every = \"15m\"\n",
@@ -601,7 +630,7 @@ fn loop_run_missing_machine_prompt_error_names_task() {
         &env,
         &format!(
             "[tasks.named_spawn]\n\
-             spec = \"claude\"\n\
+             agent = \"claude\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",
             env.project_root.display()
@@ -710,7 +739,7 @@ fn loop_run_poll_until_fires_once_and_expires() {
             "loop",
             "add",
             "green",
-            "--bind",
+            "--wake",
             "@claude",
             "--every",
             "2m",
@@ -744,7 +773,7 @@ fn loop_run_poll_until_fires_once_and_expires() {
         Tasks(BTreeMap::from([(
             "expired".to_owned(),
             TaskEntry {
-                bind: Some(TaskTarget {
+                wake: Some(TaskTarget {
                     kind: "claude".to_owned(),
                     session: "sess-expired".to_owned(),
                     handle: "@claude".to_owned(),
@@ -809,7 +838,7 @@ fn loop_run_bind_git_worktree_session_queues_prompt() {
             "loop",
             "add",
             "wake-worktree",
-            "--bind",
+            "--wake",
             "@claude",
             "--every",
             "15m",
@@ -839,7 +868,7 @@ fn loop_run_bind_dead_session_reaps_schedule() {
         &env,
         &format!(
             "[tasks.dead]\n\
-             bind = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
+             wake = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",
@@ -866,7 +895,7 @@ fn loop_fire_bind_dead_session_keeps_schedule() {
         &env,
         &format!(
             "[tasks.dead]\n\
-             bind = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
+             wake = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",
@@ -901,7 +930,7 @@ fn loop_fire_bind_delivers_prompt() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "manual", "--bind", "@claude", "--every", "15m", "--prompt", "fire now",
+            "loop", "add", "manual", "--wake", "@claude", "--every", "15m", "--prompt", "fire now",
         ],
     );
 
@@ -964,16 +993,18 @@ fn loop_list_next_uses_room_arm_stamp() {
 }
 
 #[test]
-fn loop_add_at_reset_is_ping_only_and_renders_without_cold_cache() {
+fn loop_add_reset_is_ping_only_and_renders_without_cold_cache() {
     let env = Env::new();
 
     let (_stdout, stderr) = loop_fail(
         &env,
-        &["loop", "add", "bad", "--spec", "claude", "--at-reset"],
+        &[
+            "loop", "add", "bad", "--agent", "claude", "--every", "reset",
+        ],
     );
     assert!(
         stderr.contains("<kind>-ping"),
-        "at-reset should name the ping requirement: {stderr}"
+        "reset cadence should name the ping requirement: {stderr}"
     );
 
     env.install_agent_hooks("claude");
@@ -983,7 +1014,7 @@ fn loop_add_at_reset_is_ping_only_and_renders_without_cold_cache() {
             "loop",
             "add",
             "pingless",
-            "--spec",
+            "--agent",
             "claude-ping",
             "--at",
             "07:00",
@@ -1000,17 +1031,18 @@ fn loop_add_at_reset_is_ping_only_and_renders_without_cold_cache() {
             "loop",
             "add",
             "w7",
-            "--spec",
+            "--agent",
             "claude-ping",
             "--prompt",
             "ping",
-            "--at-reset",
+            "--every",
+            "reset",
         ],
     );
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
-        config.contains("at-reset = true"),
-        "at-reset should persist in loop.toml: {config}"
+        config.contains("every = \"reset\""),
+        "reset cadence should persist in loop.toml: {config}"
     );
 
     write_loop_fire_state(
@@ -1025,14 +1057,14 @@ fn loop_add_at_reset_is_ping_only_and_renders_without_cold_cache() {
         stdout
             .lines()
             .any(|line| line.trim_start().starts_with("w7")
-                && line.contains("at window reset")
+                && line.contains("every window reset")
                 && line.split_whitespace().any(|cell| cell == "-")),
-        "cold cache should render at-reset with dash next: {stdout}"
+        "cold cache should render reset with dash next: {stdout}"
     );
     let stdout = loop_ok(&env, &["loop", "show", "w7"]);
     assert!(
-        stdout.contains("w7 — at window reset") && !stdout.contains(" · next "),
-        "show should render at-reset with dash next: {stdout}"
+        stdout.contains("w7 — every window reset") && !stdout.contains(" · next "),
+        "show should render reset with dash next: {stdout}"
     );
 }
 
@@ -1071,9 +1103,7 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
     let env = Env::new();
     loop_ok(
         &env,
-        &[
-            "loop", "add", "busy", "--check", "true", "--at", "07:00", "--once",
-        ],
+        &["loop", "add", "busy", "--check", "true", "--at", "07:00"],
     );
     assert!(
         read_loop_instances(&env).0.contains_key("busy"),
@@ -1121,7 +1151,7 @@ fn loop_run_bind_tilde_root_queues_prompt() {
     write_loop_config(
         &env,
         "[tasks.tilde]\n\
-         bind = { kind = \"claude\", session = \"sess-loop-tilde\", handle = \"@claude\" }\n\
+         wake = { kind = \"claude\", session = \"sess-loop-tilde\", handle = \"@claude\" }\n\
          prompt = \"tilde wake\"\n\
          root = \"~/project\"\n\
          every = \"15m\"\n",
@@ -1146,14 +1176,14 @@ fn loop_add_bind_validates_mode_selection() {
         &["loop", "add", "bad", "--every", "15m", "--prompt", "x"],
     );
     assert!(
-        stderr.contains("needs --spec, --bind, or --check"),
+        stderr.contains("needs --agent, --wake, or --check"),
         "unexpected stderr: {stderr}"
     );
 
     loop_fail(
         &env,
         &[
-            "loop", "add", "bad", "--spec", "claude", "--bind", "@claude", "--every", "15m",
+            "loop", "add", "bad", "--agent", "claude", "--wake", "@claude", "--every", "15m",
             "--prompt", "x",
         ],
     );
@@ -1161,12 +1191,12 @@ fn loop_add_bind_validates_mode_selection() {
     let (_stdout, stderr) = loop_fail(
         &env,
         &[
-            "loop", "add", "bad", "--bind", "@claude", "--mode", "auto", "--every", "15m",
+            "loop", "add", "bad", "--wake", "@claude", "--mode", "auto", "--every", "15m",
             "--prompt", "x",
         ],
     );
     assert!(
-        stderr.contains("only apply to --spec tasks"),
+        stderr.contains("only apply to --agent tasks"),
         "unexpected stderr: {stderr}"
     );
 }
@@ -1179,13 +1209,12 @@ fn loop_add_project_rejects_one_shots() {
         &[
             "loop",
             "add",
-            "bad-once",
+            "bad-at",
             "--project",
             "--check",
             "true",
             "--at",
             "07:00",
-            "--once",
         ][..],
         &[
             "loop",
@@ -1200,7 +1229,7 @@ fn loop_add_project_rejects_one_shots() {
     ] {
         let (_stdout, stderr) = loop_fail(&env, args);
         assert!(
-            stderr.contains("--once or --in") && stderr.contains("committed project config"),
+            stderr.contains("must repeat") && stderr.contains("--every or --cron"),
             "unexpected stderr: {stderr}"
         );
     }
@@ -1244,7 +1273,6 @@ fn loop_rename_moves_config_and_instance_entries() {
             "true",
             "--at",
             "07:00",
-            "--once",
         ],
     );
 
@@ -1282,9 +1310,7 @@ fn loop_rename_rejects_collision_and_missing() {
 
     loop_ok(
         &env,
-        &[
-            "loop", "add", "state", "--check", "true", "--at", "07:00", "--once",
-        ],
+        &["loop", "add", "state", "--check", "true", "--at", "07:00"],
     );
 
     let (_stdout, stderr) = loop_fail(&env, &["loop", "rename", "old", "state"]);

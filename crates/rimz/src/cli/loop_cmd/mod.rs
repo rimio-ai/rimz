@@ -92,12 +92,12 @@ enum LoopSubcmd {
 struct AddArgs {
     /// Schedule name (letters, digits, `-`, `_`).
     name: String,
-    /// Single agent cell to drive: a kind, profile, or virtual cell.
-    #[arg(long, conflicts_with = "bind")]
-    spec: Option<String>,
-    /// Live agent instance to wake through the message path.
-    #[arg(long, value_name = "ADDRESS", conflicts_with = "spec")]
-    bind: Option<String>,
+    /// Kind, profile, or virtual cell; launches a fresh supervised pane.
+    #[arg(long, conflicts_with = "wake")]
+    agent: Option<String>,
+    /// Live agent to wake through the message path; resolved and pinned now.
+    #[arg(long, value_name = "ADDRESS", conflicts_with = "agent")]
+    wake: Option<String>,
     /// Inline prompt for the scheduled turn.
     #[arg(long, conflicts_with = "prompt_file")]
     prompt: Option<String>,
@@ -113,26 +113,17 @@ struct AddArgs {
     /// Poll-until deadline as a duration such as `30m`; resolves at add time.
     #[arg(long, value_name = "DUR")]
     until: Option<String>,
-    /// Daily firing time, 24-hour `HH:MM` in the configured timezone.
-    #[arg(long, conflicts_with_all = ["every", "cron", "in_after"])]
+    /// One-shot firing time, or calendar time paired with --every day masks.
+    #[arg(long, conflicts_with_all = ["cron", "in_after"])]
     at: Option<String>,
-    /// Fire the ping 1 minute after the provider's longest budget window resets.
-    #[arg(long = "at-reset", conflicts_with_all = ["at", "days", "every", "cron", "in_after"])]
-    at_reset: bool,
-    /// Day mask: `daily`, `weekdays`, `weekends`, a range `mon-fri`, or a list `mon,wed,fri`.
-    #[arg(long, conflicts_with_all = ["every", "cron", "in_after"])]
-    days: Option<String>,
-    /// Interval such as `15m`, `2h`, or `1d`.
-    #[arg(long, conflicts_with_all = ["at", "days", "cron"])]
+    /// Repeat cadence: `15m`, `day`, `weekday`, `mon,wed,fri`, or `reset`.
+    #[arg(long, conflicts_with_all = ["cron", "in_after"])]
     every: Option<String>,
-    /// Raw 5-field cron expression (replaces `--at`/`--days`).
-    #[arg(long, conflicts_with_all = ["at", "days", "every", "in_after"])]
+    /// Raw 5-field cron expression.
+    #[arg(long, conflicts_with_all = ["at", "every", "in_after"])]
     cron: Option<String>,
-    /// Remove the task after a successful fire.
-    #[arg(long)]
-    once: bool,
     /// Fire once after a duration such as `30m`; resolves in the configured timezone.
-    #[arg(long = "in", value_name = "DUR", conflicts_with_all = ["at", "days", "every", "cron"])]
+    #[arg(long = "in", value_name = "DUR", conflicts_with_all = ["at", "every", "cron"])]
     in_after: Option<String>,
     /// Project root whose room hosts the task; resolved to an absolute root.
     #[arg(long, default_value = ".")]
@@ -214,14 +205,14 @@ enum TaskAction<'a> {
 }
 
 fn task_action<'a>(name: &str, entry: &'a TaskEntry) -> Result<TaskAction<'a>> {
-    match (entry.spec.as_deref(), entry.bind.as_ref()) {
-        (Some(spec), None) if !spec.trim().is_empty() => Ok(TaskAction::Spawn(spec)),
+    match (entry.agent.as_deref(), entry.wake.as_ref()) {
+        (Some(agent), None) if !agent.trim().is_empty() => Ok(TaskAction::Spawn(agent)),
         (None, Some(target)) => Ok(TaskAction::Deliver(target)),
         (None, None) if entry.check.is_some() => Ok(TaskAction::CheckOnly),
         (Some(_), Some(_)) => {
-            bail!("loop task `{name}` sets both `spec` and `bind`; keep exactly one")
+            bail!("loop task `{name}` sets both `agent` and `wake`; keep exactly one")
         }
-        _ => bail!("loop task `{name}` needs `spec`, `bind`, or `check`"),
+        _ => bail!("loop task `{name}` needs `agent`, `wake`, or `check`"),
     }
 }
 
@@ -244,9 +235,9 @@ fn preflight_entry(
 
 fn task_subject(entry: &TaskEntry) -> String {
     entry
-        .spec
+        .agent
         .clone()
-        .or_else(|| entry.bind.as_ref().map(|target| target.handle.clone()))
+        .or_else(|| entry.wake.as_ref().map(|target| target.handle.clone()))
         .or_else(|| entry.check.as_ref().map(|_| "check".to_owned()))
         .unwrap_or_else(|| "<invalid>".to_owned())
 }
@@ -307,9 +298,9 @@ fn preflight_task(entry: &TaskEntry) -> Result<ResolvedTaskSpec> {
     let workspace = WorkspaceResolver::resolve(&root, None)
         .with_context(|| format!("resolving project root at {}", root.display()))?;
     let spec = entry
-        .spec
+        .agent
         .as_deref()
-        .context("loop task is missing `spec`")?;
+        .context("loop task is missing `agent`")?;
     let resolved = resolve_task_spec(spec, &workspace)?;
     preflight_resolved_task(spec, &resolved)?;
     Ok(resolved)
@@ -400,6 +391,7 @@ fn project_tasks_for_globals(
 }
 
 fn load_all_tasks(globals: &GlobalFlags) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
+    validate_machine_loop_stores()?;
     let project = project_tasks_for_globals(globals)?;
     Ok(instances::load_all_visible_with_project(
         project_visible_merge(&project),
@@ -407,6 +399,7 @@ fn load_all_tasks(globals: &GlobalFlags) -> Result<BTreeMap<String, (TaskEntry, 
 }
 
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<(TaskEntry, TaskSource)>> {
+    validate_machine_loop_stores()?;
     let project = project_tasks_for_globals(globals)?;
     Ok(instances::load_entry_visible_with_project(
         name,
@@ -418,6 +411,7 @@ fn load_runnable_task(
     name: &str,
     globals: &GlobalFlags,
 ) -> Result<Option<(TaskEntry, TaskSource)>> {
+    validate_machine_loop_stores()?;
     let project = project_tasks_for_globals(globals)?;
     if let Some(task) = instances::load_entry_with_project(name, project_effective_merge(&project))
     {
@@ -437,6 +431,20 @@ fn load_runnable_task(
             },
         )
     }))
+}
+
+fn validate_machine_loop_stores() -> Result<()> {
+    MachineConfig::load_loop().context("reading per-machine loop.toml")?;
+    let path = instances::path(&state_home());
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            serde_json::from_slice::<rimz::config::Tasks>(&bytes)
+                .with_context(|| format!("reading {}", path.display()))?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+    }
+    Ok(())
 }
 
 fn project_trust_fix(state: TrustState) -> &'static str {
@@ -605,11 +613,11 @@ fn project_config_set_entry(project_root: &Path, name: &str, entry: &TaskEntry) 
 
 fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
     let mut table = Table::new();
-    if let Some(spec) = &entry.spec {
-        table["spec"] = value(spec);
+    if let Some(agent) = &entry.agent {
+        table["agent"] = value(agent);
     }
-    if let Some(target) = &entry.bind {
-        table["bind"] = Item::Table(task_target_table(target));
+    if let Some(target) = &entry.wake {
+        table["wake"] = Item::Table(task_target_table(target));
     }
     if let Some(prompt) = &entry.prompt {
         table["prompt"] = value(prompt);
@@ -647,12 +655,6 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
     if let Some(at) = &entry.at {
         table["at"] = value(at);
     }
-    if entry.at_reset {
-        table["at-reset"] = value(true);
-    }
-    if let Some(days) = &entry.days {
-        table["days"] = value(days);
-    }
     if let Some(every) = &entry.every {
         table["every"] = value(every);
     }
@@ -661,9 +663,6 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
     }
     if let Some(deadline) = entry.deadline {
         table["deadline"] = value(deadline.to_string());
-    }
-    if entry.once {
-        table["once"] = value(true);
     }
     table
 }

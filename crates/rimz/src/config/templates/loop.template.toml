@@ -6,26 +6,26 @@
 
 # Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
 # fired by the sidebar elder while a room for the task's project is open. Use
-# either `spec` to spawn a supervised turn or `bind` to wake one pinned live
+# either `agent` to spawn a supervised turn or `wake` to wake one pinned live
 # session. Edit entries here or with `rimz loop add`; a running room fires them.
 # [tasks]
 ## [tasks.morning]
-## spec = "claude-ping"                # `<kind>-ping` primes the provider window
+## agent = "claude-ping"               # `<kind>-ping` primes the provider window
 ## prompt = "ping"
 ## root = "/home/you/code/app"         # absolute project root whose room hosts the turn
 ## at = "07:00"                        # 24h firing time in the configured timezone
-## days = "weekdays"                   # "daily", "weekdays", "weekends", or "mon,wed,fri"
+## every = "weekdays"                  # "day", "weekday", "weekend", or "mon,wed,fri"
 ## worktree = "main"                   # optional channel to host the transient pane
 ##
 ## [tasks.pr_watch]
-## spec = "codex"                      # kind, profile, or virtual single-agent cell
+## agent = "codex"                     # kind, profile, or virtual single-agent cell
 ## prompt = "check CI on the release PR"
 ## root = "/home/you/code/app"
 ## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
 ## mode = "auto"                       # auto, ask, or yolo
 ##
 ## [tasks.watchdog]
-## spec = "codex"
+## agent = "codex"
 ## prompt = "tests are failing; fix the next failure"
 ## root = "/home/you/code/app"
 ## every = "15m"
@@ -39,7 +39,7 @@
 ## check = "gh run watch --exit-status"
 ## on = "success"
 ## deadline = "2026-07-01T12:00:00Z"   # `rimz loop add --until 30m` stores this as state
-## [tasks.ci_green.bind]
+## [tasks.ci_green.wake]
 ## kind = "claude"
 ## session = "sess-abc123"
 ## handle = "@planner"
@@ -48,7 +48,7 @@
 ## prompt = "resume the review and fix the next blocking comment"
 ## root = "/home/you/code/app"
 ## at = "09:30"
-## [tasks.self_wake.bind]
+## [tasks.self_wake.wake]
 ## kind = "claude"
 ## session = "sess-abc123"
 ## handle = "@planner"

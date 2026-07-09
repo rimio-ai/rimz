@@ -67,7 +67,7 @@ pub fn load_entry_visible_with_project(
 }
 
 pub fn is_ephemeral(entry: &TaskEntry) -> bool {
-    entry.once || entry.deadline.is_some()
+    (entry.every.is_none() && entry.cron.is_none()) || entry.deadline.is_some()
 }
 
 pub fn insert(name: &str, entry: &TaskEntry) -> Result<()> {
@@ -174,11 +174,10 @@ mod tests {
 
     fn task() -> TaskEntry {
         TaskEntry {
-            spec: Some("claude".to_owned()),
+            agent: Some("claude".to_owned()),
             prompt: Some("wake".to_owned()),
             root: PathBuf::from("/repo"),
             at: Some("07:00".to_owned()),
-            once: true,
             ..TaskEntry::default()
         }
     }
@@ -197,7 +196,7 @@ mod tests {
 
         insert_into(dir.path(), "wake", &entry).expect("insert");
         assert_eq!(
-            load_from(dir.path()).0.get("wake").map(|entry| entry.once),
+            load_from(dir.path()).0.get("wake").map(is_ephemeral),
             Some(true)
         );
 
@@ -316,16 +315,16 @@ mod tests {
     }
 
     #[test]
-    fn ephemeral_tasks_are_once_or_deadline_bound() {
+    fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
         let mut entry = task();
-        entry.once = false;
+        entry.every = Some("15m".to_owned());
         entry.deadline = None;
         assert!(!is_ephemeral(&entry));
 
-        entry.once = true;
+        entry.every = None;
         assert!(is_ephemeral(&entry));
 
-        entry.once = false;
+        entry.every = Some("15m".to_owned());
         entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
         assert!(is_ephemeral(&entry));
     }

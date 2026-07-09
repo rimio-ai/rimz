@@ -17,7 +17,6 @@ use crate::agents::longest_window_reset_at;
 use crate::config::effective;
 use crate::config::{TaskEntry, Tasks};
 use crate::harness::schedule;
-use crate::harness::spec;
 use crate::ids::WorkspaceId;
 use crate::store::atomic::write_temp_then_rename_cache;
 use crate::store::paths::{StatePaths, config_home};
@@ -151,9 +150,12 @@ fn reset_occurrences(
 ) -> BTreeMap<String, Timestamp> {
     tasks
         .iter()
-        .filter(|(_, entry)| entry.at_reset)
+        .filter(|(_, entry)| entry.every.as_deref() == Some("reset"))
         .filter_map(|(name, entry)| {
-            let kind = entry.spec.as_deref().and_then(spec::ping_kind)?;
+            let kind = entry
+                .agent
+                .as_deref()
+                .and_then(crate::harness::spec::ping_kind)?;
             longest_window_reset_at(runtime, kind).map(|reset| (name.clone(), reset))
         })
         .collect()
@@ -233,7 +235,7 @@ mod tests {
 
     fn task(root: &str, every: &str) -> TaskEntry {
         TaskEntry {
-            spec: Some("claude".to_owned()),
+            agent: Some("claude".to_owned()),
             prompt: Some("do it".to_owned()),
             root: PathBuf::from(root),
             every: Some(every.to_owned()),
@@ -243,10 +245,10 @@ mod tests {
 
     fn reset_task(root: &str) -> TaskEntry {
         TaskEntry {
-            spec: Some("claude-ping".to_owned()),
+            agent: Some("claude-ping".to_owned()),
             prompt: Some("ping".to_owned()),
             root: PathBuf::from(root),
-            at_reset: true,
+            every: Some("reset".to_owned()),
             ..TaskEntry::default()
         }
     }

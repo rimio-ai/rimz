@@ -140,12 +140,12 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.profiles.codex-slim.effort",
         "agents.profiles.codex-slim.args",
         "agents.profiles.codex-slim.system-prompt-file",
-        "loop.tasks.watch.spec",
+        "loop.tasks.watch.agent",
         "loop.tasks.watch.prompt",
         "loop.tasks.watch.check",
         "loop.tasks.watch.on",
         "loop.tasks.watch.deadline",
-        "loop.tasks.watch.bind.kind",
+        "loop.tasks.watch.wake.kind",
         "theme.providers.claude.color",
         "theme.pets.enabled",
         "theme.pets.pet",
@@ -376,7 +376,7 @@ fn set_document_value_renders_inline_tables_as_table_blocks() {
     let mut doc = DocumentMut::new();
     let path = document_key_for_set(&parse_key("loop.tasks").expect("key"));
     let value = parse_edit_value(
-        r#"{ pr_watch = { spec = "codex", prompt = "check CI", root = "/r", every = "15m" }, self_wake = { bind = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", at = "09:30" } }"#,
+        r#"{ pr_watch = { agent = "codex", prompt = "check CI", root = "/r", every = "15m" }, self_wake = { wake = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", at = "09:30" } }"#,
     );
 
     set_document_value(&mut doc, &path, value).expect("set tasks");
@@ -389,12 +389,12 @@ fn set_document_value_renders_inline_tables_as_table_blocks() {
     let task = rendered
         .find("[tasks.self_wake]")
         .unwrap_or_else(|| panic!("task should render as a table block:\n{rendered}"));
-    let bind = rendered
-        .find("[tasks.self_wake.bind]")
-        .unwrap_or_else(|| panic!("bind should render as a nested table block:\n{rendered}"));
+    let wake = rendered
+        .find("[tasks.self_wake.wake]")
+        .unwrap_or_else(|| panic!("wake should render as a nested table block:\n{rendered}"));
     assert!(
-        task < bind,
-        "task table should render before bind table:\n{rendered}"
+        task < wake,
+        "task table should render before wake table:\n{rendered}"
     );
     assert!(
         !rendered.contains("= { "),

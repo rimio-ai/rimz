@@ -385,14 +385,14 @@ base = "fresh"
 
 ```toml
 [tasks.morning]
-spec = "claude-ping"     # `<kind>-ping` primes a provider window
+agent = "claude-ping"     # `<kind>-ping` primes a provider window
 prompt = "ping"
 root = "/home/you/code/app"
 at = "07:00"             # 24h time in the configured timezone
-days = "weekdays"        # daily | weekdays | weekends | mon,wed,fri
+every = "weekdays"       # day | weekday | weekend | mon,wed,fri
 
 [tasks.pr_watch]
-spec = "codex"
+agent = "codex"
 prompt = "check CI on the release PR"
 root = "/home/you/code/app"
 every = "15m"
@@ -408,7 +408,7 @@ check = "gh run watch --exit-status"
 on = "success"
 deadline = "2026-07-01T12:00:00Z"
 
-[tasks.ci_green.bind]
+[tasks.ci_green.wake]
 kind = "claude"
 session = "sess-abc123"
 handle = "@planner"
@@ -418,7 +418,7 @@ prompt = "resume the review: inspect the latest comments and fix the next blocki
 root = "/home/you/code/app"
 at = "09:30"
 
-[tasks.self_wake.bind]
+[tasks.self_wake.wake]
 kind = "claude"
 session = "sess-abc123"
 handle = "@planner"
@@ -426,10 +426,10 @@ handle = "@planner"
 
 Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. The scheduling model (shapes, watchdogs, pings, self-wakes) is [loops.md](./loops.md); this section is the field shape.
 
-Each task chooses `spec`, `bind`, `check`, or `check` plus one agent action:
+Each task chooses `agent`, `wake`, `check`, or `check` plus one agent action:
 
-- `spec` drives one supervised turn for a single agent spec on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` spec is the window-primer: it skips when that provider's budget window is already counting down, and takes a short prompt like any spawn task.
-- `[tasks.<name>.bind]` pins delivery to one live agent session through the message path: `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only.
+- `agent` drives one supervised turn for a single agent cell on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` agent is the window-primer: it skips when that provider's budget window is already counting down, and takes a short prompt like any spawn task.
+- `[tasks.<name>.wake]` pins delivery to one live agent session through the message path: `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only.
 - `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, `on = "success"` on zero exit. Check output is appended to the agent prompt when the guard fires.
 - `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
 
@@ -437,7 +437,7 @@ Field notes:
 
 - Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset.
 - Machine tasks carry a `root`: `rimz loop add` writes an absolute path, and a hand-edited `~` or relative root is normalized before room matching, firing, and display.
-- Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, and reject `root`, `bind`, `deadline`, and one-shots, since those are machine-local state or would rewrite committed config on fire.
+- Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, reject `root`, `wake`, and `deadline`, and require `every` or `cron` because one-shots are machine state.
 - Trusted project tasks win over same-named machine tasks and state instances; an untrusted or stale project task stays visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up.
 - Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file.
 
@@ -482,10 +482,10 @@ event = "PreToolUse"
 command = "notify-send rimz"
 
 [tasks.morning-codex-ping]
-spec = "codex-ping"
+agent = "codex-ping"
 prompt = "ping"
 at = "08:00"
-days = "daily"
+every = "daily"
 ```
 
 Command-running fields enter the trust hash, so a clone with project config reads `untrusted` until `rimz trust grant` pins the current surface on this machine. A trusted repo profile, team, or task overlays machine config and wins on a name collision; a repo profile may inherit only another repo profile or a built-in kind, and a repo team role may bind only a repo profile, keeping the hashed surface closed and machine-independent. An `untrusted` or `stale` workspace refuses a launch or project-only task run that would consume project config, with the `rimz trust grant` fix; a same-named machine task continues to run, `rimz loop list` and `rimz loop show` still display project tasks with their trust state, and a `stale` report shows a field-level diff of what changed since the grant, so the re-grant is informed. The hash contract, stored surface, and launch-time enforcement are in [trust.md](../internals/harness/trust.md); the threat model is in [security.md](./security.md).

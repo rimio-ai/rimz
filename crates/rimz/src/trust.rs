@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::config::{CheckOn, TaskTarget, Team};
+use crate::config::{CheckOn, Team};
 use crate::harness::run::PermissionMode;
 use crate::ids::WorkspaceId;
 use crate::store::atomic::{self, write_bytes_atomically};
@@ -652,8 +652,7 @@ pub struct ProjectProfile {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ProjectTask {
-    pub spec: Option<String>,
-    pub bind: Option<TaskTarget>,
+    pub agent: Option<String>,
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file")]
     pub prompt_file: Option<PathBuf>,
@@ -667,13 +666,9 @@ pub struct ProjectTask {
     pub system_prompt_file: Option<PathBuf>,
     pub timeout: Option<String>,
     pub at: Option<String>,
-    #[serde(rename = "at-reset")]
-    pub at_reset: bool,
-    pub days: Option<String>,
     pub every: Option<String>,
     pub cron: Option<String>,
     pub deadline: Option<Timestamp>,
-    pub once: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -744,7 +739,7 @@ struct ExecutableHook<'a> {
 #[derive(Serialize)]
 struct ExecutableTask<'a> {
     name: &'a str,
-    spec: Option<&'a str>,
+    agent: Option<&'a str>,
     prompt: Option<&'a str>,
     prompt_file: Option<String>,
     check: Option<&'a str>,
@@ -755,11 +750,8 @@ struct ExecutableTask<'a> {
     system_prompt_file: Option<String>,
     timeout: Option<&'a str>,
     at: Option<&'a str>,
-    at_reset: bool,
-    days: Option<&'a str>,
     every: Option<&'a str>,
     cron: Option<&'a str>,
-    once: bool,
 }
 
 fn permission_mode_name(mode: PermissionMode) -> &'static str {
@@ -830,7 +822,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 .iter()
                 .map(|(name, task)| ExecutableTask {
                     name: name.as_str(),
-                    spec: task.spec.as_deref(),
+                    agent: task.agent.as_deref(),
                     prompt: task.prompt.as_deref(),
                     prompt_file: task
                         .prompt_file
@@ -847,11 +839,8 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                         .map(|path| path.to_string_lossy().into_owned()),
                     timeout: task.timeout.as_deref(),
                     at: task.at.as_deref(),
-                    at_reset: task.at_reset,
-                    days: task.days.as_deref(),
                     every: task.every.as_deref(),
                     cron: task.cron.as_deref(),
-                    once: task.once,
                 })
                 .collect(),
             hooks: config
@@ -996,7 +985,7 @@ mod tests {
     #[test]
     fn birth_prompt_offers_current_hash_and_summary_for_untrusted_config() {
         let dir = project_with(
-            "[tasks.sync]\nspec = \"codex\"\nprompt = \"sync the repo\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+            "[tasks.sync]\nagent = \"codex\"\nprompt = \"sync the repo\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
         );
         let config = tempdir().expect("config root");
         let offer = birth_prompt_with_roots(dir.path(), config.path())
@@ -1360,8 +1349,8 @@ mod tests {
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nappend-system-prompt-file = \"prompts/planner-extra.md\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
-            "[tasks.x]\nspec = \"codex\"\n",
-            "[tasks.y]\nspec = \"codex\"\n",
+            "[tasks.x]\nagent = \"codex\"\n",
+            "[tasks.y]\nagent = \"codex\"\n",
             "[tasks.x]\nprompt = \"repair CI\"\n",
             "[tasks.x]\nprompt-file = \"prompts/ci.md\"\n",
             "[tasks.x]\ncheck = \"cargo test\"\n",
@@ -1372,11 +1361,8 @@ mod tests {
             "[tasks.x]\nsystem-prompt-file = \"prompts/system.md\"\n",
             "[tasks.x]\ntimeout = \"2h\"\n",
             "[tasks.x]\nat = \"08:00\"\n",
-            "[tasks.x]\nat-reset = true\n",
-            "[tasks.x]\ndays = \"weekdays\"\n",
             "[tasks.x]\nevery = \"15m\"\n",
             "[tasks.x]\ncron = \"0 8 * * 1\"\n",
-            "[tasks.x]\nonce = true\n",
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
             "[env]\nPATH_PREPEND = \"/opt/rimz/bin\"\n",
         ];

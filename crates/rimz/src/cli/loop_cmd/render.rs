@@ -128,7 +128,7 @@ fn schedule_style<T, E>(parsed: std::result::Result<&T, &E>) -> anstyle::Style {
 
 fn check_summary(entry: &TaskEntry) -> Option<String> {
     let check = entry.check.as_ref()?;
-    if entry.spec.is_some() || entry.bind.is_some() {
+    if entry.agent.is_some() || entry.wake.is_some() {
         let on = match entry.on.unwrap_or_default() {
             CheckOn::Fail => "fail",
             CheckOn::Success => "success",
@@ -185,11 +185,11 @@ fn next_fire_text(
 }
 
 fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
-    if !entry.at_reset {
+    if entry.every.as_deref() != Some("reset") {
         return None;
     }
     let kind = entry
-        .spec
+        .agent
         .as_deref()
         .and_then(rimz::harness::spec::ping_kind)?;
     window_reset_at(entry, kind).ok().flatten()

@@ -752,36 +752,35 @@ fn loop_tasks_parse_and_default_empty() {
         &dir,
         "loop.toml",
         "[tasks.morning]\n\
-             spec = \"claude-ping\"\n\
+             agent = \"claude-ping\"\n\
              prompt = \"ping\"\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n\
-             days = \"weekdays\"\n\
+             every = \"weekdays\"\n\
              worktree = \"main\"\n\
              mode = \"auto\"\n\
              effort = \"low\"\n\
              system-prompt-file = \"/prompts/primer.md\"\n\
              timeout = \"5m\"\n\
-             once = true\n\
              [tasks.pr_watch]\n\
-             spec = \"codex\"\n\
+             agent = \"codex\"\n\
              prompt-file = \"prompts/pr-watch.md\"\n\
              root = \"/home/me/app\"\n\
              every = \"15m\"\n\
              [tasks.self_wake]\n\
-             bind = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
+             wake = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
              prompt = \"pick up the review\"\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n",
     ))
     .expect("load");
     let entry = config.r#loop.tasks.0.get("morning").expect("morning task");
-    assert_eq!(entry.spec.as_deref(), Some("claude-ping"));
-    assert_eq!(entry.bind, None);
+    assert_eq!(entry.agent.as_deref(), Some("claude-ping"));
+    assert_eq!(entry.wake, None);
     assert_eq!(entry.prompt.as_deref(), Some("ping"));
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
     assert_eq!(entry.at.as_deref(), Some("07:00"));
-    assert_eq!(entry.days.as_deref(), Some("weekdays"));
+    assert_eq!(entry.every.as_deref(), Some("weekdays"));
     assert_eq!(entry.worktree.as_deref(), Some("main"));
     assert_eq!(entry.mode.as_deref(), Some("auto"));
     assert_eq!(entry.effort.as_deref(), Some("low"));
@@ -791,10 +790,9 @@ fn loop_tasks_parse_and_default_empty() {
     );
     assert_eq!(entry.timeout.as_deref(), Some("5m"));
     assert_eq!(entry.cron, None);
-    assert!(entry.once);
 
     let general = config.r#loop.tasks.0.get("pr_watch").expect("general task");
-    assert_eq!(general.spec.as_deref(), Some("codex"));
+    assert_eq!(general.agent.as_deref(), Some("codex"));
     assert_eq!(
         general.prompt_file.as_deref(),
         Some(std::path::Path::new("prompts/pr-watch.md"))
@@ -802,8 +800,8 @@ fn loop_tasks_parse_and_default_empty() {
     assert_eq!(general.every.as_deref(), Some("15m"));
 
     let bound = config.r#loop.tasks.0.get("self_wake").expect("bind task");
-    assert_eq!(bound.spec, None);
-    let target = bound.bind.as_ref().expect("target");
+    assert_eq!(bound.agent, None);
+    let target = bound.wake.as_ref().expect("target");
     assert_eq!(target.kind, "claude");
     assert_eq!(target.session, "sess-1");
     assert_eq!(target.handle, "@planner");

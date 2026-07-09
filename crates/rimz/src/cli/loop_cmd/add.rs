@@ -4,8 +4,6 @@ use super::*;
 
 struct AddTiming {
     at: Option<String>,
-    days: Option<String>,
-    once: bool,
     deadline: Option<Timestamp>,
 }
 
@@ -25,22 +23,23 @@ enum AddTaskAction {
 
 pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     schedule::validate_name(&args.name)?;
-    if args.project && args.bind.is_some() {
+    if args.project && args.wake.is_some() {
         bail!(
-            "--project tasks cannot use --bind; project config cannot pin a machine-local session"
+            "--project tasks cannot use --wake; project config cannot pin a machine-local session"
         );
     }
     if args.project && args.until.is_some() {
         bail!("--project tasks cannot use --until; poll-until deadlines are machine state");
     }
-    if args.project && (args.once || args.in_after.is_some()) {
-        bail!(
-            "--project tasks cannot use --once or --in; one-shot cleanup would edit committed project config"
-        );
+    if args.project && (args.every.is_none() && args.cron.is_none()) {
+        bail!("--project tasks must repeat; set --every or --cron");
     }
-    let agent_action_requested = args.spec.is_some() || args.bind.is_some();
+    let agent_action_requested = args.agent.is_some() || args.wake.is_some();
     if !agent_action_requested && args.check.is_none() {
-        bail!("loop task `{}` needs --spec, --bind, or --check", args.name);
+        bail!(
+            "loop task `{}` needs --agent, --wake, or --check",
+            args.name
+        );
     }
     if args.on.is_some() && args.check.is_none() {
         bail!("--on requires --check");
@@ -53,10 +52,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             bail!("--until requires --every");
         }
         if !agent_action_requested {
-            bail!("--until requires --spec or --bind");
-        }
-        if args.once {
-            bail!("--until conflicts with --once");
+            bail!("--until requires --agent or --wake");
         }
         if args.in_after.is_some() {
             bail!("--until conflicts with --in");
@@ -78,11 +74,11 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         task_workspace
     };
     let project_root = workspace.project_root.clone();
-    let target = match args.bind.as_deref() {
+    let target = match args.wake.as_deref() {
         Some(address) => Some(resolve_delivery_target(&workspace, &args, address)?),
         None => None,
     };
-    let resolved = match args.spec.as_deref() {
+    let resolved = match args.agent.as_deref() {
         Some(spec) => Some(resolve_task_spec(spec, &workspace)?),
         None => None,
     };
@@ -90,7 +86,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         (Some(target), resolved) => AddTaskAction::Deliver { target, resolved },
         (None, Some(resolved)) => {
             let is_ping = args
-                .spec
+                .agent
                 .as_deref()
                 .is_some_and(agents_spec::virtual_ping_shape);
             if is_ping {
@@ -100,8 +96,10 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         }
         (None, None) => AddTaskAction::CheckOnly,
     };
-    if args.at_reset && !matches!(action, AddTaskAction::Spawn { is_ping: true, .. }) {
-        bail!("--at-reset only applies to a `<kind>-ping` spec task");
+    if args.every.as_deref() == Some("reset")
+        && !matches!(action, AddTaskAction::Spawn { is_ping: true, .. })
+    {
+        bail!("--every reset only applies to a `<kind>-ping` agent task");
     }
     let mode = match &action {
         AddTaskAction::Spawn { .. } => args.mode.as_deref().map(parse_mode).transpose()?,
@@ -134,8 +132,8 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         AddTaskAction::Spawn { resolved, .. } => {
             resolved_for_preflight = Some(resolved);
             TaskEntry {
-                spec: args.spec,
-                bind: None,
+                agent: args.agent,
+                wake: None,
                 prompt,
                 prompt_file: args.prompt_file,
                 check,
@@ -147,19 +145,16 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 system_prompt_file: args.system_prompt_file,
                 timeout: args.timeout,
                 at: timing.at,
-                at_reset: args.at_reset,
-                days: timing.days,
                 every: args.every,
                 cron: args.cron,
                 deadline: timing.deadline,
-                once: timing.once,
             }
         }
         AddTaskAction::Deliver { target, resolved } => {
             resolved_for_preflight = resolved;
             TaskEntry {
-                spec: args.spec,
-                bind: Some(target),
+                agent: args.agent,
+                wake: Some(target),
                 prompt,
                 prompt_file: args.prompt_file,
                 check,
@@ -171,17 +166,14 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 system_prompt_file: None,
                 timeout: uses_check_timeout.then_some(args.timeout).flatten(),
                 at: timing.at,
-                at_reset: false,
-                days: timing.days,
                 every: args.every,
                 cron: args.cron,
                 deadline: timing.deadline,
-                once: timing.once,
             }
         }
         AddTaskAction::CheckOnly => TaskEntry {
-            spec: None,
-            bind: None,
+            agent: None,
+            wake: None,
             prompt,
             prompt_file: args.prompt_file,
             check,
@@ -193,17 +185,14 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             system_prompt_file: None,
             timeout: uses_check_timeout.then_some(args.timeout).flatten(),
             at: timing.at,
-            at_reset: false,
-            days: timing.days,
             every: args.every,
             cron: args.cron,
             deadline: timing.deadline,
-            once: timing.once,
         },
     };
-    // Validate the firing time before writing, so a bad `--at`/`--days` fails here.
+    // Validate the firing time before writing, so a bad `--at`/`--every` fails here.
     let parsed = schedule::parse_schedule(&args.name, &entry)?;
-    if entry.spec.is_some() || entry.bind.is_some() {
+    if entry.agent.is_some() || entry.wake.is_some() {
         preflight_entry(&args.name, &entry, resolved_for_preflight.as_ref())?;
     }
     if args.project {
@@ -229,14 +218,8 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     }
 
     let mut out = ui::out();
-    writeln!(
-        out,
-        "added loop task `{}`: {} {} in {}",
-        args.name,
-        task_subject(&entry),
-        parsed.describe(),
-        entry.root.display()
-    )?;
+    writeln!(out, "added loop task `{}`", args.name)?;
+    write_add_feedback(&mut out, &args.name, &entry, &parsed)?;
     writeln!(
         out,
         "live while a room for {} is open",
@@ -365,7 +348,7 @@ fn reject_delivery_spawn_flags(args: &AddArgs) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "`{}` uses --bind, so {} only apply to --spec tasks",
+        "`{}` uses --wake, so {} only apply to --agent tasks",
         args.name,
         flags.join(", ")
     )
@@ -389,7 +372,7 @@ fn reject_check_only_agent_flags(args: &AddArgs) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "`{}` uses --check without an agent action, so {} only apply to --spec tasks",
+        "`{}` uses --check without an agent action, so {} only apply to --agent tasks",
         args.name,
         flags.join(", ")
     )
@@ -400,8 +383,6 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     let Some(raw) = args.in_after.as_deref() else {
         return Ok(AddTiming {
             at: args.at.clone(),
-            days: args.days.clone(),
-            once: args.once,
             deadline,
         });
     };
@@ -415,10 +396,66 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
         .context("resolving --in against the configured clock")?;
     Ok(AddTiming {
         at: Some(format!("{:02}:{:02}", target.hour(), target.minute())),
-        days: Some(weekday_name(target.weekday()).to_owned()),
-        once: true,
         deadline,
     })
+}
+
+fn write_add_feedback(
+    out: &mut impl Write,
+    name: &str,
+    entry: &TaskEntry,
+    parsed: &schedule::ParsedSchedule,
+) -> Result<()> {
+    match task_action(name, entry)? {
+        TaskAction::Spawn(agent) => {
+            writeln!(
+                out,
+                "action: launches a fresh {agent} pane in {}",
+                entry.root.display()
+            )?;
+        }
+        TaskAction::Deliver(target) => {
+            writeln!(
+                out,
+                "action: wakes {} — pinned to {} session `{}` now; skipped and removed if that session exits",
+                target.handle, target.kind, target.session
+            )?;
+        }
+        TaskAction::CheckOnly => {
+            writeln!(out, "action: runs check in {}", entry.root.display())?;
+        }
+    }
+    let suffix = if parsed.once { "; then removed" } else { "" };
+    writeln!(out, "schedule: {}{suffix}", parsed.describe())?;
+    if let Some(next) = first_next_fire(entry, parsed) {
+        let zone = MachineConfig::load_lenient().time_zone();
+        let local = next.to_zoned(zone);
+        writeln!(
+            out,
+            "next fire: {} ({})",
+            local.strftime("%Y-%m-%d %H:%M"),
+            ui::rel_until(next, Timestamp::now())
+        )?;
+    } else {
+        writeln!(out, "next fire: waiting for a provider reset reading")?;
+    }
+    Ok(())
+}
+
+fn first_next_fire(entry: &TaskEntry, parsed: &schedule::ParsedSchedule) -> Option<Timestamp> {
+    let now = Timestamp::now();
+    let zone = MachineConfig::load_lenient().time_zone();
+    let window_reset = match &parsed.schedule {
+        schedule::Schedule::WindowReset => entry
+            .agent
+            .as_deref()
+            .and_then(rimz::harness::spec::ping_kind)
+            .and_then(|kind| window_reset_at(entry, kind).ok().flatten()),
+        _ => None,
+    };
+    parsed
+        .schedule
+        .next_after(now, &now.to_zoned(zone), window_reset)
 }
 
 fn resolve_deadline(raw: &str) -> Result<Timestamp> {
@@ -431,16 +468,4 @@ fn resolve_deadline(raw: &str) -> Result<Timestamp> {
         .checked_add(duration)
         .context("resolving --until against the configured clock")?
         .timestamp())
-}
-
-fn weekday_name(day: jiff::civil::Weekday) -> &'static str {
-    match day {
-        jiff::civil::Weekday::Monday => "mon",
-        jiff::civil::Weekday::Tuesday => "tue",
-        jiff::civil::Weekday::Wednesday => "wed",
-        jiff::civil::Weekday::Thursday => "thu",
-        jiff::civil::Weekday::Friday => "fri",
-        jiff::civil::Weekday::Saturday => "sat",
-        jiff::civil::Weekday::Sunday => "sun",
-    }
 }

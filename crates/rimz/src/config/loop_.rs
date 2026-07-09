@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::ops::Not;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -24,16 +23,16 @@ impl LoopConfig {
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
-/// One scheduled loop wake-up. The firing time is either a calendar time, an
-/// interval, or a raw cron escape hatch; `spec` spawns a supervised turn and
-/// `bind` delivers to a pinned session.
+/// One scheduled loop wake-up. The firing time is either a one-shot calendar
+/// time, an explicit repeat cadence, or a raw cron escape hatch; `agent`
+/// spawns a supervised turn and `wake` delivers to a pinned session.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub spec: Option<String>,
+    pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bind: Option<TaskTarget>,
+    pub wake: Option<TaskTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]
@@ -55,18 +54,12 @@ pub struct TaskEntry {
     pub timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
-    #[serde(rename = "at-reset", default, skip_serializing_if = "Not::not")]
-    pub at_reset: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub days: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub every: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cron: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Timestamp>,
-    #[serde(default, skip_serializing_if = "Not::not")]
-    pub once: bool,
 }
 
 impl TaskEntry {
@@ -149,7 +142,7 @@ mod tests {
     fn task_entry_check_fields_round_trip_toml_and_json() {
         let deadline = Timestamp::from_second(1_783_000_000).expect("deadline");
         let entry = TaskEntry {
-            bind: Some(TaskTarget {
+            wake: Some(TaskTarget {
                 kind: "claude".to_owned(),
                 session: "sess-1".to_owned(),
                 handle: "@claude".to_owned(),
@@ -158,8 +151,7 @@ mod tests {
             check: Some("cargo test".to_owned()),
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
-            at_reset: true,
-            every: Some("2m".to_owned()),
+            every: Some("reset".to_owned()),
             deadline: Some(deadline),
             ..TaskEntry::default()
         };
@@ -189,16 +181,30 @@ mod tests {
             Some(deadline)
         );
         assert_eq!(
-            toml_round.tasks.0.get("ci").map(|entry| entry.at_reset),
-            Some(true)
+            toml_round
+                .tasks
+                .0
+                .get("ci")
+                .and_then(|entry| entry.every.as_deref()),
+            Some("reset")
         );
         assert!(
-            toml.contains("at-reset = true"),
-            "at-reset should round-trip through TOML: {toml}"
+            toml.contains("every = \"reset\""),
+            "reset cadence should round-trip through TOML: {toml}"
         );
 
         let json = serde_json::to_string(&loop_config.tasks).expect("json");
         let json_round: Tasks = serde_json::from_str(&json).expect("json round trip");
         assert_eq!(json_round.0.get("ci"), Some(&entry));
+    }
+
+    #[test]
+    fn old_task_keys_are_rejected_by_name() {
+        let err = toml::from_str::<Tasks>("[old]\nspec = \"claude\"\nroot = \"/repo\"\n")
+            .expect_err("old key rejected");
+        assert!(
+            err.to_string().contains("unknown field `spec`"),
+            "unexpected error: {err}"
+        );
     }
 }

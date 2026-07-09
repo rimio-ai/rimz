@@ -1,6 +1,6 @@
 # Loops and Schedules
 
-> `rimz loop` is cron for your agents: a named task, a schedule, and a supervised turn that fires in a real pane while the room is open. This page goes from small single-purpose loops to a fleet that works nights. The elder clock, state files, and run log underneath are [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop).
+> `rimz loop` is cron for your agents: a named task, a schedule, and one action — an agent turn in a real pane, a wake to a running agent, or a guarded command — that fires while the room is open. This page goes from small single-purpose loops to a fleet that works nights. The elder clock, state files, and run log underneath are [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop).
 
 ## Why `rimz loop`
 
@@ -8,7 +8,9 @@ You already automate on a clock. Crontab lines and systemd timers run your maint
 
 The plumbing fights back. A cron line firing `claude -p` inherits every headless problem [scripting.md](./scripting.md#why-rimz-agents--p) starts from — an invisible run that hangs silently on its first permission prompt. It also fires blind: cron cannot check whether there is anything to do, so you write wrapper scripts around it, and it knows nothing about provider budget windows, so the first turn of the day starts a 5-hour window at whatever random time the job lands. The while-loop is no better: it burns a turn every pass whether or not anything changed, dies with the terminal, and leaves no record of what pass seventeen actually did. And neither can wake an agent that is already mid-conversation — they can only start fresh processes and lose the context.
 
-`rimz loop` is the same clock with the room behind it. A task is a name, a schedule, and one action — open a supervised agent turn, deliver a prompt to a running agent, or run a shell command that guards either — and it fires while the room is open. The turn lands in a real pane with a live sidebar card, a question routes to you instead of hanging, and every fire is recorded for `rimz loop show`.
+`rimz loop` is the same clock with the room behind it. A task is a name, a schedule, and one action: `--agent` opens a fresh supervised turn in a real pane, `--wake` delivers a prompt to an agent that is already running, and `--check` runs a shell command that can guard either. The turn lands with a live sidebar card, a question routes to you instead of hanging, and every fire is recorded for `rimz loop show`.
+
+One rule covers every schedule: **a task repeats only when `--every` or `--cron` says so.** A bare time — `--at 07:00` or `--in 30m` — fires once, then the task removes itself. And `loop add` always prints back what it armed — the action, the schedule in plain words, and the concrete next fire — so you read the answer instead of guessing at it.
 
 What that buys day to day is small and immediate: a budget window that starts before you do, an agent that sets its own alarm instead of making you the reminder service, a test suite that wakes a fixer only when it goes red. The next three sections are those loops, each a one-liner; the rest of the page is the machinery behind them and how far it stacks.
 
@@ -28,30 +30,34 @@ Subscription providers meter usage in rolling windows: five hours that start wit
 A ping task starts the window before you do:
 
 ```sh
-rimz loop add morning --spec claude-ping --prompt ping --at 07:00 --days weekdays
+rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
 ```
 
-At 07:00 the task runs one lowest-effort turn (Claude's ping pins Sonnet, so a flagship account does not prime at the flagship rate), and the window runs 07:00–12:00. You sit down at 9:00 with an almost untouched budget, the reset lands at noon instead of mid-afternoon, and the second window carries you to 17:00. Same subscription, same limits — the resets just stop landing in the middle of your deep work.
+Every weekday at 07:00 the task runs one lowest-effort turn (Claude's ping pins Sonnet, so a flagship account does not prime at the flagship rate), and the window runs 07:00–12:00. You sit down at 9:00 with an almost untouched budget, the reset lands at noon instead of mid-afternoon, and the second window carries you to 17:00. Same subscription, same limits — the resets just stop landing in the middle of your deep work.
 
-The ping is cheap insurance, not a wasted turn: before firing, Rimz reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping per provider primes every session of that kind — `codex-ping` does the same for Codex. And `--at-reset` replaces the fixed time with the window's own rhythm: it fires one minute after the provider's longest observed window resets, then uses the ping's own reading to schedule the next.
+The ping is cheap insurance, not a wasted turn: before firing, Rimz reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping per provider primes every session of that kind — `codex-ping` does the same for Codex.
+
+`--every reset` replaces the fixed time with the window's own rhythm: it fires one minute after the provider's longest observed budget window resets, then uses that ping's own reading to schedule the next — so each window opens the moment the last one closes, back-to-back all day.
 
 ```sh
-rimz loop add prime --spec claude-ping --prompt ping --at-reset   # keep the windows running back-to-back
+rimz loop add prime --agent claude-ping --prompt ping --every reset
 ```
 
 ## The agent's alarm clock
 
 An agent's work often ends with a wait. CI has twenty minutes left, a reviewer was asked for comments, a deploy is baking. The agent has nothing to do until then — but the follow-up lands on you: remember to check CI, then tell the agent to merge. You become the reminder service for your own fleet.
 
-`--bind` with `--in` is the alarm clock:
+`--wake` with `--in` is the alarm clock:
 
 ```sh
-rimz loop add check-ci --bind @planner --prompt "CI should be done; check the run and merge if green" --in 30m
+rimz loop add check-ci --wake @planner --prompt "CI should be done; check the run and merge if green" --in 30m
 ```
 
-The one-shot delivers the prompt to that exact agent session through the same durable path as [`rimz message`](./messaging.md): `--bind` resolves the address when the task is added and pins the session, so the wake reaches the same conversation with all its context. An idle agent receives it immediately, a mid-turn agent parks it for its next turn boundary, and a session that has since exited is skipped and the task removed.
+How it finds `@planner` is decided up front: `--wake` resolves the address the moment you add the task — in the current room and channel, same as [`rimz message`](./messaging.md) — and pins that exact session; the add output names the session it pinned. Thirty minutes later the prompt travels the same durable delivery path as any message, so the wake reaches the same conversation with all its context: an idle agent receives it immediately, a mid-turn agent parks it for its next turn boundary, and a session that has exited by then is skipped and the task removed.
 
-Because it is a plain command, the agent can set the alarm itself. At the end of a turn — "tests pass, CI needs half an hour" — it runs the `loop add` from its own shell tool and goes idle; thirty minutes later it wakes itself and finishes the job. Tell your agent once that the command exists, or package the pattern as a few-line skill, and "check back later" stops being your job. Chained, this is a self-paced loop: each wake schedules the next `--in` only while there is still work, so the loop advances exactly as long as the goal is unmet and then stops by itself. Self-set alarms persist as state — they never edit your `loop.toml` — show up in `rimz loop list`, and vanish on delivery.
+Because it is a plain command, the agent can set the alarm itself. At the end of a turn — "tests pass, CI needs half an hour" — it runs the `loop add` from its own shell tool and goes idle; thirty minutes later it wakes itself and finishes the job. Tell your agent once that the command exists, or package the pattern as a few-line skill, and "check back later" stops being your job. Chained, this is a self-paced loop: each wake schedules the next `--in` only while there is still work, so the loop advances exactly as long as the goal is unmet and then stops by itself. Self-set alarms are one-shots, so they persist as state — they never edit your `loop.toml` — show up in `rimz loop list`, and vanish after firing.
+
+For a bare reminder, [`rimz message --schedule`](./messaging.md) is the lighter tool — one delivery on a timer, no task at all. A loop `--wake` earns its keep when the wake repeats with `--every` or waits on a [`--check` guard](#watchdogs-a-script-for-the-routine-an-agent-for-the-recovery), and its fires land in the run history.
 
 ## Watchdogs: a script for the routine, an agent for the recovery
 
@@ -62,11 +68,11 @@ Most recurring automation should stay a script. A cron job that runs the test su
 ```sh
 # Watchdog: run the suite every 15m; Codex wakes only when it fails
 rimz loop add watchdog --check "cargo test" --on fail \
-    --spec codex --prompt "fix the failing test" --every 15m
+    --agent codex --prompt "fix the failing test" --every 15m
 
 # Trigger-when-green: poll CI until it passes, then hand the merge to the planner
 rimz loop add ci-green --check "gh run watch --exit-status" --on success \
-    --until 30m --every 2m --bind @planner --prompt "CI is green; merge"
+    --until 30m --every 2m --wake @planner --prompt "CI is green; merge"
 ```
 
 The check runs first, every time, and costs nothing. Only its result spends a turn: `--on fail` (the default) wakes the agent on a non-zero exit or a timeout, `--on success` on a zero exit. When the guard fires, Rimz appends the command, its exit status, and its output tail to the prompt, so the agent wakes already reading the evidence instead of rediscovering it. The escalation ladder gets a new rung: the script handles the routine, the agent handles the failure, and you hear about it only when the agent gets stuck — its turn is supervised like any other, so a stuck fix goes `? waiting` and a [notification](./notifications.md) reaches you.
@@ -77,13 +83,13 @@ A `--check` with no agent action is still useful: a scheduled command that logs 
 
 `rimz loop add` edits one file and starts no process:
 
-- By default it appends a `[tasks.<name>]` entry to `~/.config/rimz/loop.toml` — per-machine automation, like your crontab, never inherited by a cloned repository.
-- `--project` writes the entry to `<root>/.rimz/config.toml` instead: shared automation that travels with the repo. A committed task runs commands on whoever pulls it, so it enters the project trust hash and stays inert until each user reviews the diff and runs `rimz trust grant` ([security.md](./security.md)); a trusted project task wins over a same-named machine task without double-firing.
-- One-shots (`--in`, `--once`, `--until`) persist as state rather than config, so an agent scheduling its own wake never edits your `loop.toml`.
+- A repeating task (`--every` or `--cron`) appends a `[tasks.<name>]` entry to `~/.config/rimz/loop.toml` — per-machine automation, like your crontab, never inherited by a cloned repository.
+- A one-shot (bare `--at`, `--in`, or a `--until` deadline) persists as state instead, so an agent scheduling its own wake never touches your `loop.toml`; the entry retires itself after firing.
+- `--project` writes the entry to `<root>/.rimz/config.toml` instead: shared automation that travels with the repo, so it must be a repeating task — a one-shot is machine state by definition. A committed task runs commands on whoever pulls it, so it enters the project trust hash and stays inert until each user reviews the diff and runs `rimz trust grant` ([security.md](./security.md)); a trusted project task wins over a same-named machine task without double-firing.
 
 There is no daemon; the room keeps time. While a room for the task's project is open — attached or not — the room's elected sidebar process fires due tasks on its regular tick, running each through the hidden `rimz loop run`. Close the room and the clock stops. Opening one late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
 
-A fire leaves two things behind: whatever the task did — one transient supervised pane for `--spec`, one delivered message for `--bind` — and one appended line of run history that `rimz loop show <name>` reads back. Everything reverses in one move: `rimz loop remove <name>` deletes the entry (a project removal prints the `rimz trust grant` follow-up, since the trusted file changed), and both files are plain TOML you can read and edit by hand.
+A fire leaves two things behind: whatever the task did — one transient supervised pane for `--agent`, one delivered message for `--wake` — and one appended line of run history that `rimz loop show <name>` reads back. Everything reverses in one move: `rimz loop remove <name>` deletes the entry (a project removal prints the `rimz trust grant` follow-up, since the trusted file changed), and both files are plain TOML you can read and edit by hand.
 
 ## Built-in recovery
 
@@ -102,18 +108,20 @@ Turn both on and a long-running agent keeps its footing — through the 5-hour w
 
 ## Every schedule shape
 
-The loops above are points in a small grammar. Each task names one action — `--spec` (a kind, a profile, or a virtual cell like `codex-yolo` or `claude-ping`) for a fresh supervised pane, or `--bind @<handle>` for a running session — carries a `--prompt` or `--prompt-file`, and picks one firing shape:
+The loops above are points in a small grammar. Each task names one action — `--agent` (a kind, a profile, or a virtual cell like `codex-yolo` or `claude-ping`) for a fresh supervised pane, or `--wake @<handle>` for a running session — carries a `--prompt` or `--prompt-file`, and picks one firing shape. The rule from the top of the page fills the middle column: a task repeats only when `--every` or `--cron` says so.
 
-| Shape | Flags | Example |
-| --- | --- | --- |
-| Calendar | `--at`, with an optional `--days` mask (`daily`, `weekdays`, `weekends`, a range `mon-fri`, or a list `mon,wed,fri`) | `--at 07:00 --days weekdays` |
-| Interval | `--every`, measured from the last fire | `--every 15m` |
-| Raw cron | `--cron`, a five-field expression | `--cron "*/15 * * * *"` |
-| One-shot | `--once` on a calendar or cron schedule, or `--in <delay>` | `--in 30m` |
-| Window-reset | `--at-reset` on a `<kind>-ping` spec, tied to the provider's budget-window reset ([above](#start-the-budget-window-before-you-do)) | `--spec claude-ping --at-reset` |
-| Poll-until | `--every` plus `--check`, `--on`, `--until`, and an agent action ([above](#watchdogs-a-script-for-the-routine-an-agent-for-the-recovery)) | `--check "gh run watch --exit-status" --on success --until 30m --every 2m` |
+| Shape | Flags | Repeats? | Example |
+| --- | --- | --- | --- |
+| One-shot | a bare `--at HH:MM`, or `--in <delay>` | fires once, then the task removes itself | `--in 30m` |
+| Interval | `--every <duration>`, measured from the last fire | yes | `--every 15m` |
+| Calendar | `--every <days> --at HH:MM`, where days is `day`, `weekday`, `weekend`, a range `mon-fri`, or a list `mon,wed,fri` | on each matching day | `--every weekday --at 07:00` |
+| Window-reset | `--every reset` on a `<kind>-ping` agent ([above](#start-the-budget-window-before-you-do)) | after every budget-window reset | `--agent claude-ping --every reset` |
+| Raw cron | `--cron`, a five-field expression | per the expression | `--cron "*/15 * * * *"` |
+| Poll-until | `--every <duration>` plus `--check`, `--on`, `--until`, and an agent action ([above](#watchdogs-a-script-for-the-routine-an-agent-for-the-recovery)) | until the check trips or the deadline passes | `--check "gh run watch --exit-status" --on success --until 30m --every 2m` |
 
-Calendar, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
+One pair worth a second look: `--every 1d` is an interval — it fires a day after the last fire and drifts with it — while `--every day --at 07:00` is the calendar's 07:00 sharp.
+
+Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
 
 The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, and `--timeout` caps the wall clock. Inspect, test, and manage tasks with the rest of the surface:
 
@@ -142,15 +150,15 @@ Reserve the bypass flag for runs where you accept the missing per-decision trail
 [Scripting](./scripting.md) turns an agent into a shell command; a loop puts that command on a clock; and because a scheduled turn is a full room citizen, it reaches every other primitive — `-p` subagents, teams, worktrees, messages. Stacked, the layers turn routine work into standing tasks:
 
 ```sh
-# 07:00 — the budget windows are running before you sit down
-rimz loop add prime --spec claude-ping --prompt ping --at 07:00 --days daily
+# 07:00 every day — the budget windows are running before you sit down
+rimz loop add prime --agent claude-ping --prompt ping --every day --at 07:00
 
 # every 15m — CI on the release PR fixes itself
 rimz loop add ci-fix --check "gh run watch --exit-status" --on fail \
-    --spec codex --prompt "CI failed on the release PR; read the failing job's logs and fix it" --every 15m
+    --agent codex --prompt "CI failed on the release PR; read the failing job's logs and fix it" --every 15m
 
-# 02:00 — a nightly triage that fans out and opens PRs
-rimz loop add nightly --spec claude --worktree nightly --timeout 4h --at 02:00 --days daily \
+# 02:00 every night — a triage that fans out and opens PRs
+rimz loop add nightly --agent claude --worktree nightly --timeout 4h --every day --at 02:00 \
     --prompt "Scan the repository for bugs and cheap improvements. For each one worth fixing, \
 run a codex -p subagent in its own worktree, review its diff, and open a PR."
 ```
@@ -161,9 +169,9 @@ The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#
 
 ## See also
 
-- [Scripting agents](./scripting.md) — the supervised-run mechanics every scheduled `--spec` task rides on: exit codes, `--output-format`, `wait --stream`.
+- [Scripting agents](./scripting.md) — the supervised-run mechanics every scheduled `--agent` task rides on: exit codes, `--output-format`, `wait --stream`.
 - [Notifications](./notifications.md) — the push routes and acting handlers that catch what a loop cannot handle alone.
-- [Messaging](./messaging.md) — the delivery path `--bind` uses, and smart compaction in full.
+- [Messaging](./messaging.md) — the delivery path `--wake` uses, `--schedule` for one-off reminders, and smart compaction in full.
 - [Loop CLI](../reference/cli/loop.md) — every flag on `add`, `fire`, `list`, `show`, `rename`, and `remove`.
 - [Configuration](./configuration.md) — the `[resume]` and `[harness]` keys, and the `loop.toml` shape.
 - [Security and trust](./security.md) — the safety posture for bypass flags and project trust.

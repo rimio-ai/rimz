@@ -26,29 +26,27 @@ pub use fire::last_stamps;
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ScheduleErr {
     #[error(
-        "schedule `{name}` needs a firing time: set `at = \"HH:MM\"`, `every = \"30m\"`, or `cron = \"...\"`"
+        "schedule `{name}` needs a firing time: set `at = \"HH:MM\"` for a one-shot, `every = \"30m\"`, or `cron = \"...\"`"
     )]
     NoTime { name: String },
     #[error(
-        "schedule `{name}` sets more than one of `at`/`days`, `every`, `cron`, and `at-reset`; use one"
+        "schedule `{name}` sets conflicting schedule fields; use `cron`, `every`, or bare `at`"
     )]
     TimeConflict { name: String },
-    #[error("schedule `{name}` sets `at-reset`, which only applies to a `<kind>-ping` spec task")]
+    #[error(
+        "schedule `{name}` sets `every = \"reset\"`, which only applies to a `<kind>-ping` agent task"
+    )]
     ResetNeedsPing { name: String },
+    #[error("schedule `{name}` sets a calendar `every` value without `at`; add `at = \"HH:MM\"`")]
+    EveryNeedsAt { name: String },
     #[error("schedule `{name}` has an invalid time `{value}`; use 24-hour `HH:MM`")]
     BadTime { name: String, value: String },
-    #[error(
-        "schedule `{name}` has an unknown day `{value}`; use mon..sun, a range like `mon-fri`, `daily`, `weekdays`, or `weekends`"
-    )]
-    BadDay { name: String, value: String },
     #[error("schedule `{name}` has an invalid cron expression `{value}`; expected 5 fields")]
     BadCron { name: String, value: String },
     #[error(
-        "schedule `{name}` has an invalid interval `{value}`; use a duration like `30m`, `2h`, or `1d`"
+        "schedule `{name}` has an invalid `every` value `{value}`; use `reset`, a duration like `30m`, or a day mask like `weekday` or `mon,wed,fri`"
     )]
-    BadInterval { name: String, value: String },
-    #[error("schedule `{name}` sets both `once` and `every`; one-shot intervals are contradictory")]
-    OnceWithInterval { name: String },
+    BadEvery { name: String, value: String },
     #[error("schedule name `{name}` must be non-empty and use only letters, digits, `-`, or `_`")]
     BadName { name: String },
 }
@@ -148,10 +146,10 @@ impl Schedule {
     pub fn describe(&self) -> String {
         match self {
             Schedule::RawCron(cron) => format!("cron `{cron}`"),
-            Schedule::WindowReset => "at window reset".to_owned(),
+            Schedule::WindowReset => "every window reset".to_owned(),
             Schedule::Calendar(spec) => {
                 let days = if spec.weekdays.is_empty() {
-                    "every day".to_owned()
+                    "day".to_owned()
                 } else {
                     spec.weekdays
                         .iter()
@@ -159,7 +157,7 @@ impl Schedule {
                         .collect::<Vec<_>>()
                         .join(",")
                 };
-                format!("{:02}:{:02} {days}", spec.hour, spec.minute)
+                format!("every {days} at {:02}:{:02}", spec.hour, spec.minute)
             }
             Schedule::Interval(spec) => format!("every {}", format_minutes(spec.minutes)),
         }
@@ -210,12 +208,12 @@ pub struct ParsedSchedule {
 impl ParsedSchedule {
     /// A short human description for listings.
     pub fn describe(&self) -> String {
-        let description = self.schedule.describe();
-        if self.once {
-            format!("once {description}")
-        } else {
-            description
+        if self.once
+            && let Schedule::Calendar(spec) = &self.schedule
+        {
+            return format!("once at {:02}:{:02}", spec.hour, spec.minute);
         }
+        self.schedule.describe()
     }
 }
 
@@ -265,69 +263,100 @@ pub fn parse_duration_units(raw: &str, allowed: &[(&str, u64)]) -> Result<Durati
 /// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Full
 /// agent preflight is validated separately by the CLI.
 pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, ScheduleErr> {
-    let has_calendar = entry.at.is_some() || entry.days.is_some();
-    let set_count = usize::from(has_calendar)
-        + usize::from(entry.every.is_some())
-        + usize::from(entry.cron.is_some())
-        + usize::from(entry.at_reset);
-    if set_count > 1 {
+    if entry.cron.is_some() && (entry.at.is_some() || entry.every.is_some()) {
         return Err(ScheduleErr::TimeConflict {
-            name: name.to_owned(),
-        });
-    }
-    if entry.once && entry.every.is_some() {
-        return Err(ScheduleErr::OnceWithInterval {
             name: name.to_owned(),
         });
     }
     let schedule = match (
         entry.cron.as_deref(),
         entry.every.as_deref(),
-        has_calendar,
-        entry.at_reset,
+        entry.at.as_deref(),
     ) {
-        (None, None, false, true) => {
-            if entry
-                .spec
-                .as_deref()
-                .is_some_and(crate::harness::spec::virtual_ping_shape)
-            {
-                Schedule::WindowReset
-            } else {
-                return Err(ScheduleErr::ResetNeedsPing {
-                    name: name.to_owned(),
-                });
-            }
-        }
-        (Some(cron), None, false, false) => {
+        (Some(cron), None, None) => {
             validate_cron_expr(name, cron)?;
             Schedule::RawCron(cron.trim().to_owned())
         }
-        (None, Some(every), false, false) => {
-            Schedule::Interval(IntervalSpec::new(parse_interval_minutes(name, every)?))
-        }
-        (None, None, true, false) => {
-            let at = entry.at.as_deref().ok_or_else(|| ScheduleErr::NoTime {
-                name: name.to_owned(),
-            })?;
+        (None, Some(every), at) => match parse_every(name, every)? {
+            EverySpec::Reset => {
+                if at.is_some() {
+                    return Err(ScheduleErr::TimeConflict {
+                        name: name.to_owned(),
+                    });
+                }
+                if entry
+                    .agent
+                    .as_deref()
+                    .is_some_and(crate::harness::spec::virtual_ping_shape)
+                {
+                    Schedule::WindowReset
+                } else {
+                    return Err(ScheduleErr::ResetNeedsPing {
+                        name: name.to_owned(),
+                    });
+                }
+            }
+            EverySpec::Interval(minutes) => {
+                if at.is_some() {
+                    return Err(ScheduleErr::TimeConflict {
+                        name: name.to_owned(),
+                    });
+                }
+                Schedule::Interval(IntervalSpec::new(minutes))
+            }
+            EverySpec::Days(weekdays) => {
+                let at = at.ok_or_else(|| ScheduleErr::EveryNeedsAt {
+                    name: name.to_owned(),
+                })?;
+                let (hour, minute) = parse_hhmm(name, at)?;
+                Schedule::Calendar(CalendarSpec {
+                    minute,
+                    hour,
+                    weekdays,
+                })
+            }
+        },
+        (None, None, Some(at)) => {
             let (hour, minute) = parse_hhmm(name, at)?;
-            let weekdays = parse_days(name, entry.days.as_deref())?;
             Schedule::Calendar(CalendarSpec {
                 minute,
                 hour,
-                weekdays,
+                weekdays: Vec::new(),
             })
         }
-        (None, None, false, false) => {
+        (None, None, None) => {
             return Err(ScheduleErr::NoTime {
                 name: name.to_owned(),
             });
         }
-        _ => unreachable!("conflicts returned before parsing"),
+        _ => unreachable!("cron conflicts returned before parsing"),
     };
     Ok(ParsedSchedule {
         schedule,
-        once: entry.once,
+        once: entry.every.is_none() && entry.cron.is_none(),
+    })
+}
+
+enum EverySpec {
+    Interval(u32),
+    Days(Vec<Weekday>),
+    Reset,
+}
+
+fn parse_every(name: &str, raw: &str) -> Result<EverySpec, ScheduleErr> {
+    let value = raw.trim();
+    if raw == "reset" {
+        return Ok(EverySpec::Reset);
+    }
+    if let Ok(minutes) = parse_interval_minutes(raw) {
+        return Ok(EverySpec::Interval(minutes));
+    }
+    if let Some(days) = parse_days(value) {
+        return Ok(EverySpec::Days(days));
+    }
+    Err(ScheduleErr::BadEvery {
+        name: name.to_owned(),
+        value: raw.to_owned(),
     })
 }
 
@@ -345,32 +374,29 @@ fn parse_hhmm(name: &str, value: &str) -> Result<(u8, u8), ScheduleErr> {
     Ok((hour, minute))
 }
 
-fn parse_days(name: &str, days: Option<&str>) -> Result<Vec<Weekday>, ScheduleErr> {
-    let Some(days) = days.map(str::trim).filter(|d| !d.is_empty()) else {
-        return Ok(Vec::new());
-    };
-    let bad = |value: &str| ScheduleErr::BadDay {
-        name: name.to_owned(),
-        value: value.to_owned(),
-    };
+fn parse_days(days: &str) -> Option<Vec<Weekday>> {
+    let days = days.trim();
+    if days.is_empty() {
+        return None;
+    }
     match days.to_ascii_lowercase().as_str() {
-        "daily" | "every" | "everyday" | "all" | "*" => return Ok(Vec::new()),
-        "weekdays" => return Ok(weekday_range(Weekday::Mon, Weekday::Fri)),
-        "weekends" => return Ok(vec![Weekday::Sat, Weekday::Sun]),
+        "day" | "daily" => return Some(Vec::new()),
+        "weekday" | "weekdays" => return Some(weekday_range(Weekday::Mon, Weekday::Fri)),
+        "weekend" | "weekends" => return Some(vec![Weekday::Sat, Weekday::Sun]),
         _ => {}
     }
     let mut set: Vec<Weekday> = Vec::new();
     for token in days.split(',') {
         let token = token.trim();
         if token.is_empty() {
-            return Err(bad(days));
+            return None;
         }
         let expanded = if let Some((lo, hi)) = token.split_once('-') {
-            let lo = Weekday::parse(lo).ok_or_else(|| bad(token))?;
-            let hi = Weekday::parse(hi).ok_or_else(|| bad(token))?;
+            let lo = Weekday::parse(lo)?;
+            let hi = Weekday::parse(hi)?;
             weekday_range(lo, hi)
         } else {
-            vec![Weekday::parse(token).ok_or_else(|| bad(token))?]
+            vec![Weekday::parse(token)?]
         };
         for day in expanded {
             if !set.contains(&day) {
@@ -379,33 +405,29 @@ fn parse_days(name: &str, days: Option<&str>) -> Result<Vec<Weekday>, ScheduleEr
         }
     }
     set.sort();
-    Ok(set)
+    Some(set)
 }
 
-fn parse_interval_minutes(name: &str, raw: &str) -> Result<u32, ScheduleErr> {
+fn parse_interval_minutes(raw: &str) -> Result<u32, ()> {
     let value = raw.trim();
-    let bad = || ScheduleErr::BadInterval {
-        name: name.to_owned(),
-        value: raw.to_owned(),
-    };
     if value.len() < 2 {
-        return Err(bad());
+        return Err(());
     }
-    let unit = value.chars().last().ok_or_else(bad)?;
+    let unit = value.chars().last().ok_or(())?;
     let digits = &value[..value.len() - unit.len_utf8()];
-    let amount: u64 = digits.parse().map_err(|_| bad())?;
+    let amount: u64 = digits.parse().map_err(|_| ())?;
     if amount == 0 {
-        return Err(bad());
+        return Err(());
     }
     let seconds = match unit {
         's' => amount,
-        'm' => amount.checked_mul(60).ok_or_else(bad)?,
-        'h' => amount.checked_mul(60 * 60).ok_or_else(bad)?,
-        'd' => amount.checked_mul(24 * 60 * 60).ok_or_else(bad)?,
-        _ => return Err(bad()),
+        'm' => amount.checked_mul(60).ok_or(())?,
+        'h' => amount.checked_mul(60 * 60).ok_or(())?,
+        'd' => amount.checked_mul(24 * 60 * 60).ok_or(())?,
+        _ => return Err(()),
     };
     let minutes = seconds.div_ceil(60);
-    u32::try_from(minutes).map_err(|_| bad())
+    u32::try_from(minutes).map_err(|_| ())
 }
 
 /// Inclusive Mon..Sun range; a wrap-around (e.g. `fri-mon`) walks forward to Sun.
@@ -617,16 +639,10 @@ mod tests {
     use jiff::civil::date;
     use std::path::PathBuf;
 
-    fn entry(
-        at: Option<&str>,
-        days: Option<&str>,
-        every: Option<&str>,
-        cron: Option<&str>,
-        once: bool,
-    ) -> TaskEntry {
+    fn entry(at: Option<&str>, every: Option<&str>, cron: Option<&str>) -> TaskEntry {
         TaskEntry {
-            spec: Some("claude".to_owned()),
-            bind: None,
+            agent: Some("claude".to_owned()),
+            wake: None,
             prompt: Some("do it".to_owned()),
             prompt_file: None,
             check: None,
@@ -638,46 +654,43 @@ mod tests {
             system_prompt_file: None,
             timeout: None,
             at: at.map(ToOwned::to_owned),
-            at_reset: false,
-            days: days.map(ToOwned::to_owned),
             every: every.map(ToOwned::to_owned),
             cron: cron.map(ToOwned::to_owned),
             deadline: None,
-            once,
         }
     }
 
     #[test]
     fn weekdays_describe_in_mon_to_sun_order() {
-        let parsed = parse_schedule(
-            "morning",
-            &entry(Some("07:30"), Some("weekdays"), None, None, false),
-        )
-        .expect("parse");
-        assert_eq!(parsed.describe(), "07:30 Mon,Tue,Wed,Thu,Fri");
+        let parsed = parse_schedule("morning", &entry(Some("07:30"), Some("weekdays"), None))
+            .expect("parse");
+        assert_eq!(parsed.describe(), "every Mon,Tue,Wed,Thu,Fri at 07:30");
     }
 
     #[test]
-    fn daily_is_the_default_day_mask() {
-        let from_none = parse_schedule("m", &entry(Some("07:00"), None, None, None, false))
+    fn bare_at_is_a_one_shot() {
+        let parsed = parse_schedule("m", &entry(Some("07:00"), None, None)).expect("parse");
+        assert!(parsed.once);
+        assert_eq!(parsed.describe(), "once at 07:00");
+    }
+
+    #[test]
+    fn daily_is_the_empty_day_mask() {
+        let from_day = parse_schedule("m", &entry(Some("07:00"), Some("day"), None))
             .expect("parse")
             .schedule;
-        let from_daily =
-            parse_schedule("m", &entry(Some("07:00"), Some("daily"), None, None, false))
-                .expect("parse")
-                .schedule;
-        assert_eq!(from_none, from_daily);
-        assert_eq!(from_none.describe(), "07:00 every day");
+        let from_daily = parse_schedule("m", &entry(Some("07:00"), Some("daily"), None))
+            .expect("parse")
+            .schedule;
+        assert_eq!(from_day, from_daily);
+        assert_eq!(from_day.describe(), "every day at 07:00");
     }
 
     #[test]
     fn day_lists_ranges_and_weekends_parse() {
-        let list = parse_schedule(
-            "m",
-            &entry(Some("06:05"), Some("mon,wed,fri"), None, None, false),
-        )
-        .expect("parse")
-        .schedule;
+        let list = parse_schedule("m", &entry(Some("06:05"), Some("mon,wed,fri"), None))
+            .expect("parse")
+            .schedule;
         assert_eq!(
             list,
             Schedule::Calendar(CalendarSpec {
@@ -686,34 +699,28 @@ mod tests {
                 weekdays: vec![Weekday::Mon, Weekday::Wed, Weekday::Fri],
             })
         );
-        let range = parse_schedule(
-            "m",
-            &entry(Some("06:00"), Some("mon-fri"), None, None, false),
-        )
-        .expect("parse")
-        .schedule;
-        assert_eq!(range.describe(), "06:00 Mon,Tue,Wed,Thu,Fri");
-        let weekends = parse_schedule(
-            "m",
-            &entry(Some("09:00"), Some("weekends"), None, None, false),
-        )
-        .expect("parse")
-        .schedule;
-        assert_eq!(weekends.describe(), "09:00 Sat,Sun");
+        let range = parse_schedule("m", &entry(Some("06:00"), Some("mon-fri"), None))
+            .expect("parse")
+            .schedule;
+        assert_eq!(range.describe(), "every Mon,Tue,Wed,Thu,Fri at 06:00");
+        let weekends = parse_schedule("m", &entry(Some("09:00"), Some("weekends"), None))
+            .expect("parse")
+            .schedule;
+        assert_eq!(weekends.describe(), "every Sat,Sun at 09:00");
     }
 
     #[test]
     fn raw_cron_passes_through() {
-        let schedule = parse_schedule("m", &entry(None, None, None, Some("0 7 * * 1-5"), false))
-            .expect("parse")
-            .schedule;
+        let parsed = parse_schedule("m", &entry(None, None, Some("0 7 * * 1-5"))).expect("parse");
+        let schedule = parsed.schedule;
+        assert!(!parsed.once);
         assert_eq!(schedule, Schedule::RawCron("0 7 * * 1-5".to_owned()));
         assert_eq!(schedule.describe(), "cron `0 7 * * 1-5`");
     }
 
     #[test]
     fn intervals_describe_exact_duration() {
-        let schedule = parse_schedule("m", &entry(None, None, Some("7m"), None, false))
+        let schedule = parse_schedule("m", &entry(None, Some("7m"), None))
             .expect("parse")
             .schedule;
         assert_eq!(schedule.describe(), "every 7m");
@@ -721,7 +728,7 @@ mod tests {
 
     #[test]
     fn seconds_interval_rounds_up_to_one_minute() {
-        let schedule = parse_schedule("m", &entry(None, None, Some("1s"), None, false))
+        let schedule = parse_schedule("m", &entry(None, Some("1s"), None))
             .expect("parse")
             .schedule;
         assert_eq!(schedule.describe(), "every 1m");
@@ -730,29 +737,26 @@ mod tests {
     #[test]
     fn conflicting_and_missing_times_error() {
         assert_eq!(
-            parse_schedule(
-                "m",
-                &entry(Some("07:00"), None, None, Some("0 7 * * *"), false)
-            ),
+            parse_schedule("m", &entry(Some("07:00"), None, Some("0 7 * * *"))),
             Err(ScheduleErr::TimeConflict {
                 name: "m".to_owned()
             })
         );
         assert_eq!(
-            parse_schedule("m", &entry(None, None, None, None, false)),
+            parse_schedule("m", &entry(None, None, None)),
             Err(ScheduleErr::NoTime {
                 name: "m".to_owned()
             })
         );
         assert_eq!(
-            parse_schedule("m", &entry(None, Some("weekdays"), None, None, false)),
-            Err(ScheduleErr::NoTime {
+            parse_schedule("m", &entry(None, Some("weekdays"), None)),
+            Err(ScheduleErr::EveryNeedsAt {
                 name: "m".to_owned()
             })
         );
         assert_eq!(
-            parse_schedule("m", &entry(None, None, Some("5m"), None, true)),
-            Err(ScheduleErr::OnceWithInterval {
+            parse_schedule("m", &entry(Some("07:00"), Some("5m"), None)),
+            Err(ScheduleErr::TimeConflict {
                 name: "m".to_owned()
             })
         );
@@ -761,39 +765,37 @@ mod tests {
     #[test]
     fn bad_time_day_and_cron_are_rejected() {
         assert!(matches!(
-            parse_schedule("m", &entry(Some("7am"), None, None, None, false)),
+            parse_schedule("m", &entry(Some("7am"), None, None)),
             Err(ScheduleErr::BadTime { .. })
         ));
         assert!(matches!(
-            parse_schedule("m", &entry(Some("24:00"), None, None, None, false)),
+            parse_schedule("m", &entry(Some("24:00"), None, None)),
             Err(ScheduleErr::BadTime { .. })
         ));
         assert!(matches!(
-            parse_schedule(
-                "m",
-                &entry(Some("07:00"), Some("funday"), None, None, false)
-            ),
-            Err(ScheduleErr::BadDay { .. })
+            parse_schedule("m", &entry(Some("07:00"), Some("funday"), None)),
+            Err(ScheduleErr::BadEvery { .. })
         ));
         assert!(matches!(
-            parse_schedule("m", &entry(None, None, None, Some("0 7 * *"), false)),
+            parse_schedule("m", &entry(None, None, Some("0 7 * *"))),
             Err(ScheduleErr::BadCron { .. })
         ));
         assert!(matches!(
-            parse_schedule("m", &entry(None, None, Some("0m"), None, false)),
-            Err(ScheduleErr::BadInterval { .. })
+            parse_schedule("m", &entry(None, Some("0m"), None)),
+            Err(ScheduleErr::BadEvery { .. })
         ));
         assert!(matches!(
-            parse_schedule("m", &entry(None, None, Some("later"), None, false)),
-            Err(ScheduleErr::BadInterval { .. })
+            parse_schedule("m", &entry(None, Some("later"), None)),
+            Err(ScheduleErr::BadEvery { .. })
         ));
-    }
-
-    #[test]
-    fn one_shot_describe_is_prefixed() {
-        let parsed =
-            parse_schedule("m", &entry(Some("07:00"), None, None, None, true)).expect("parse");
-        assert_eq!(parsed.describe(), "once 07:00 every day");
+        assert!(matches!(
+            parse_schedule("m", &entry(None, Some("Reset"), None)),
+            Err(ScheduleErr::BadEvery { .. })
+        ));
+        assert!(matches!(
+            parse_schedule("m", &entry(None, Some(" reset "), None)),
+            Err(ScheduleErr::BadEvery { .. })
+        ));
     }
 
     #[test]
@@ -816,26 +818,20 @@ mod tests {
         Timestamp::from_second(ts.as_second() - seconds).expect("shifted timestamp")
     }
 
-    fn at_reset_entry(spec: Option<&str>, once: bool) -> TaskEntry {
-        let mut entry = entry(None, None, None, None, once);
-        entry.spec = spec.map(ToOwned::to_owned);
-        entry.at_reset = true;
+    fn reset_entry(agent: Option<&str>) -> TaskEntry {
+        let mut entry = entry(None, Some("reset"), None);
+        entry.agent = agent.map(ToOwned::to_owned);
         entry
     }
 
     #[test]
-    fn at_reset_parse_requires_ping_spec() {
-        let parsed = parse_schedule("w", &at_reset_entry(Some("claude-ping"), false))
-            .expect("at-reset ping");
+    fn every_reset_parse_requires_ping_agent() {
+        let parsed = parse_schedule("w", &reset_entry(Some("claude-ping"))).expect("reset ping");
         assert_eq!(parsed.schedule, Schedule::WindowReset);
-        assert_eq!(parsed.describe(), "at window reset");
+        assert_eq!(parsed.describe(), "every window reset");
 
-        let once = parse_schedule("w", &at_reset_entry(Some("claude-ping"), true))
-            .expect("once at-reset ping");
-        assert_eq!(once.describe(), "once at window reset");
-
-        let mut conflict = at_reset_entry(Some("claude-ping"), false);
-        conflict.every = Some("5m".to_owned());
+        let mut conflict = reset_entry(Some("claude-ping"));
+        conflict.at = Some("07:00".to_owned());
         assert_eq!(
             parse_schedule("w", &conflict),
             Err(ScheduleErr::TimeConflict {
@@ -844,19 +840,19 @@ mod tests {
         );
 
         assert_eq!(
-            parse_schedule("w", &at_reset_entry(Some("claude"), false)),
+            parse_schedule("w", &reset_entry(Some("claude"))),
             Err(ScheduleErr::ResetNeedsPing {
                 name: "w".to_owned()
             })
         );
         assert_eq!(
-            parse_schedule("w", &at_reset_entry(None, false)),
+            parse_schedule("w", &reset_entry(None)),
             Err(ScheduleErr::ResetNeedsPing {
                 name: "w".to_owned()
             })
         );
 
-        let mut check_only = at_reset_entry(None, false);
+        let mut check_only = reset_entry(None);
         check_only.check = Some("true".to_owned());
         assert_eq!(
             parse_schedule("w", &check_only),
@@ -865,14 +861,14 @@ mod tests {
             })
         );
 
-        let mut bind = at_reset_entry(None, false);
-        bind.bind = Some(crate::config::TaskTarget {
+        let mut wake = reset_entry(None);
+        wake.wake = Some(crate::config::TaskTarget {
             kind: "claude".to_owned(),
             session: "sess".to_owned(),
             handle: "@claude".to_owned(),
         });
         assert_eq!(
-            parse_schedule("w", &bind),
+            parse_schedule("w", &wake),
             Err(ScheduleErr::ResetNeedsPing {
                 name: "w".to_owned()
             })
@@ -889,7 +885,7 @@ mod tests {
 
     #[test]
     fn calendar_fires_once_per_matching_day() {
-        let schedule = parse_schedule("m", &entry(Some("07:30"), Some("wed"), None, None, false))
+        let schedule = parse_schedule("m", &entry(Some("07:30"), Some("wed"), None))
             .expect("parse")
             .schedule;
         let now = zdt(2026, 6, 24, 7, 30, 0);
@@ -914,10 +910,9 @@ mod tests {
 
     #[test]
     fn calendar_waits_for_matching_weekday_and_time() {
-        let weekday_schedule =
-            parse_schedule("m", &entry(Some("07:30"), Some("mon"), None, None, false))
-                .expect("parse")
-                .schedule;
+        let weekday_schedule = parse_schedule("m", &entry(Some("07:30"), Some("mon"), None))
+            .expect("parse")
+            .schedule;
         let wednesday = zdt(2026, 6, 24, 7, 30, 0);
         assert!(!weekday_schedule.due(
             seconds_before(wednesday.timestamp(), 86_400),
@@ -925,7 +920,7 @@ mod tests {
             None
         ));
 
-        let time_schedule = parse_schedule("m", &entry(Some("07:30"), None, None, None, false))
+        let time_schedule = parse_schedule("m", &entry(Some("07:30"), None, None))
             .expect("parse")
             .schedule;
         let before_time = zdt(2026, 6, 24, 7, 29, 59);
@@ -994,7 +989,7 @@ mod tests {
 
     #[test]
     fn calendar_next_after_crosses_week_boundary() {
-        let schedule = parse_schedule("m", &entry(Some("07:30"), Some("mon"), None, None, false))
+        let schedule = parse_schedule("m", &entry(Some("07:30"), Some("mon"), None))
             .expect("parse")
             .schedule;
         let now = zdt(2026, 6, 24, 8, 0, 0);
@@ -1007,7 +1002,7 @@ mod tests {
 
     #[test]
     fn calendar_next_after_reports_due_today() {
-        let schedule = parse_schedule("m", &entry(Some("07:30"), None, None, None, false))
+        let schedule = parse_schedule("m", &entry(Some("07:30"), None, None))
             .expect("parse")
             .schedule;
         let now = zdt(2026, 6, 24, 8, 0, 0);

@@ -215,7 +215,7 @@ fn execute_task(
     // one already counting down buys nothing — skip it. Best-effort: an unknown or
     // cold reading falls through to the ping.
     if is_ping {
-        let window_running = if entry.at_reset {
+        let window_running = if entry.every.as_deref() == Some("reset") {
             reset_window_already_running(entry, &resolved.kind)?
         } else {
             window_already_running(entry, &resolved.kind)?

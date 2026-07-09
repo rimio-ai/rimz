@@ -719,7 +719,7 @@ fn is_disallowed_set_container(path: &[String]) -> bool {
         )
         || matches!(path, [root, child, set, _, _, ..] if root == "theme" && child == "glyphs" && is_theme_glyph_set(set) && path.len() > 5)
         || matches!(path, [root, tasks, _] if root == "loop" && tasks == "tasks")
-        || matches!(path, [root, tasks, _, bind] if root == "loop" && tasks == "tasks" && bind == "bind")
+        || matches!(path, [root, tasks, _, wake] if root == "loop" && tasks == "tasks" && wake == "wake")
 }
 
 fn is_theme_glyph_set(set: &str) -> bool {

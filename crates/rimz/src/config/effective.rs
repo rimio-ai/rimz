@@ -59,6 +59,8 @@ pub enum ProjectTasksErr {
     },
     #[error("task `{task}` has no prompt; set `prompt` or `prompt-file`")]
     MissingPrompt { task: String },
+    #[error("task `{task}` must repeat; set `every` or `cron` for project tasks")]
+    MustRepeat { task: String },
     #[error(transparent)]
     Schedule(#[from] ScheduleErr),
 }
@@ -200,10 +202,16 @@ pub fn project_tasks_from_value(
             source: source.into(),
         })?;
         entry.root = project_root.to_path_buf();
-        if entry.spec.is_some() && !task_has_prompt(entry) {
+        if entry.agent.is_some() && !task_has_prompt(entry) {
             return Err(EffectiveConfigErr::Tasks {
                 path: config_path.to_path_buf(),
                 source: ProjectTasksErr::MissingPrompt { task: name.clone() },
+            });
+        }
+        if entry.every.is_none() && entry.cron.is_none() {
+            return Err(EffectiveConfigErr::Tasks {
+                path: config_path.to_path_buf(),
+                source: ProjectTasksErr::MustRepeat { task: name.clone() },
             });
         }
         resolve_task_prompt_paths(entry, config_dir);
@@ -305,14 +313,14 @@ fn reject_project_task_state_fields(
         let Some(table) = value.as_table() else {
             continue;
         };
-        for field in ["root", "bind", "deadline"] {
+        for field in ["root", "wake", "deadline"] {
             if table.contains_key(field) {
                 return Err(ProjectTasksErr::UnsupportedField {
                     task: task.clone(),
                     field,
                     fix: match field {
                         "root" => "project tasks run at the project root; remove `root`",
-                        "bind" => "project tasks cannot pin a machine-local session; use `spec`",
+                        "wake" => "project tasks cannot pin a machine-local session; use `agent`",
                         "deadline" => {
                             "poll-until deadlines are machine state; create them with `rimz loop add --until`"
                         }
@@ -320,13 +328,6 @@ fn reject_project_task_state_fields(
                     },
                 });
             }
-        }
-        if table.get("once").and_then(toml::Value::as_bool) == Some(true) {
-            return Err(ProjectTasksErr::UnsupportedField {
-                task: task.clone(),
-                field: "once",
-                fix: "one-shot cleanup would edit committed project config; use a machine task",
-            });
         }
     }
     Ok(())
