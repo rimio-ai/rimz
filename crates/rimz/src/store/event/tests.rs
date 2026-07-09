@@ -91,6 +91,7 @@ fn agent_lifecycle_constructor_serializes_compact_wire_shape() {
             "role": "reviewer",
             "team": "forge",
             "profile": "claude-reviewer",
+            "mode": "ask",
             "kind_ordinal": 2,
             "signal": {
                 "signal": "turn_ended",
@@ -161,6 +162,7 @@ fn agent_lifecycle_constructor_omits_absent_fields() {
         "launch_group",
         "launch_ordinal",
         "profile",
+        "mode",
         "kind_ordinal",
         "agent_process_start",
         "runtime_owner",
