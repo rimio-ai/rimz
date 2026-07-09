@@ -35,6 +35,9 @@ pub const DEFAULT_RESUME_MAX: usize = 128;
 pub enum ResumeSkipReason {
     /// The agent's kind has no resume CLI ([`crate::agents::AgentAdapter::resume_command`]).
     NoResumeSupport,
+    /// The session id names a conversation the provider never persisted, so
+    /// there is nothing to resume.
+    NoConversation,
     /// Dropped to stay within the resume cap.
     OverCap,
 }
@@ -140,6 +143,7 @@ pub fn plan_resume(
     max: usize,
     project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
     rimz_bin: &Path,
 ) -> ResumePlan {
     // Root agents that were bound to a pane in the dead incarnation, still
@@ -200,6 +204,13 @@ pub fn plan_resume(
             plan.skipped.push(ResumeSkip {
                 label,
                 reason: ResumeSkipReason::NoResumeSupport,
+            });
+            continue;
+        }
+        if !session_backed(agent) {
+            plan.skipped.push(ResumeSkip {
+                label,
+                reason: ResumeSkipReason::NoConversation,
             });
             continue;
         }
@@ -266,6 +277,7 @@ pub fn plan_cohort_resume(
     cells: &[CohortCell],
     team: Option<&str>,
     worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
 ) -> Result<CohortResumePlan, CohortResumeErr> {
     let spec = cohort_spec_label(cells, team);
     let candidates = cohort_candidates(agents, worktree_exists);
@@ -314,7 +326,7 @@ pub fn plan_cohort_resume(
     for (index, cell) in cells.iter().enumerate() {
         let matched = matches[index];
         let seed = match matched {
-            Some(agent) if supports_agent_resume(agent) => {
+            Some(agent) if supports_agent_resume(agent) && session_backed(agent) => {
                 CohortSeed::Resume(Box::new(agent.clone()))
             }
             Some(agent) => {

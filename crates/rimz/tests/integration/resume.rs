@@ -72,6 +72,7 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
         rimz::harness::resume::DEFAULT_RESUME_MAX,
         None,
         |_| true,
+        |_| true,
         Path::new("/bin/rimz"),
     )
 }
@@ -348,6 +349,7 @@ fn missing_worktree_candidate_is_tombstoned_not_reported() {
         rimz::harness::resume::DEFAULT_RESUME_MAX,
         None,
         |_| false,
+        |_| true,
         Path::new("/bin/rimz"),
     );
     assert!(plan.tabs.is_empty());

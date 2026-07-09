@@ -131,6 +131,7 @@ fn cohort_resume_selects_newest_team_member_per_role() {
         &cells,
         Some("forge"),
         |_| true,
+        |_| true,
     )
     .expect("cohort plan");
 
@@ -179,7 +180,7 @@ fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere
         cohort_cell("codex", Some("coder")),
     ];
 
-    let plan = plan_cohort_resume(&scoped, dead, &cells, Some("forge"), |_| true)
+    let plan = plan_cohort_resume(&scoped, dead, &cells, Some("forge"), |_| true, |_| true)
         .expect("filtered cohort plan");
 
     assert_eq!(
@@ -200,6 +201,7 @@ fn cohort_resume_includes_cleanly_ended_members() {
         dead,
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),
+        |_| true,
         |_| true,
     )
     .expect("closed team member remains a cohort candidate");
@@ -222,6 +224,7 @@ fn cohort_resume_refuses_a_still_live_member() {
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),
         |_| true,
+        |_| true,
     )
     .expect_err("live member refuses resume");
 
@@ -236,9 +239,14 @@ fn cohort_resume_refuses_a_still_live_member() {
 #[test]
 fn cohort_resume_refuses_when_nothing_matches() {
     let agents = vec![agent("codex", "c1", "/code/query-engine", Some("main"), 1)];
-    let err = plan_cohort_resume(&agents, dead, &[cohort_cell("claude", None)], None, |_| {
-        true
-    })
+    let err = plan_cohort_resume(
+        &agents,
+        dead,
+        &[cohort_cell("claude", None)],
+        None,
+        |_| true,
+        |_| true,
+    )
     .expect_err("no matching kind");
 
     assert_eq!(
@@ -252,8 +260,15 @@ fn cohort_resume_refuses_when_nothing_matches() {
 #[test]
 fn cohort_resume_starts_fresh_for_kind_without_resume_cli() {
     let agents = vec![agent("ghost", "g1", "/code/query-engine", None, 1)];
-    let plan = plan_cohort_resume(&agents, dead, &[cohort_cell("ghost", None)], None, |_| true)
-        .expect("unsupported kind still matched prior cohort");
+    let plan = plan_cohort_resume(
+        &agents,
+        dead,
+        &[cohort_cell("ghost", None)],
+        None,
+        |_| true,
+        |_| true,
+    )
+    .expect("unsupported kind still matched prior cohort");
 
     assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
     assert_eq!(plan.fresh, vec!["ghost:query-engine".to_owned()]);
@@ -278,12 +293,31 @@ fn cohort_resume_starts_fresh_for_provisional_launch_placeholder() {
         &[cohort_cell("codex", Some("coder"))],
         Some("forge"),
         |_| true,
+        |_| true,
     )
     .expect("provisional placeholder still matched the cohort");
 
     assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
     assert_eq!(plan.fresh, vec!["codex:pets-l".to_owned()]);
     assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/pets-l")));
+}
+
+#[test]
+fn cohort_resume_relaunches_empty_session_fresh() {
+    let agents = vec![agent("claude", "a1", "/code/query-engine", None, 1)];
+    let plan = plan_cohort_resume(
+        &agents,
+        dead,
+        &[cohort_cell("claude", None)],
+        None,
+        |_| true,
+        |_| false,
+    )
+    .expect("empty session still relaunches the matched cohort cell");
+
+    assert_eq!(plan.seeds, vec![CohortSeed::Fresh]);
+    assert_eq!(plan.fresh, vec!["claude:query-engine".to_owned()]);
+    assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/query-engine")));
 }
 
 #[test]
@@ -299,8 +333,15 @@ fn cohort_resume_matches_inline_group_by_launch_ordinal() {
     second.launch_ordinal = Some(1);
     let cells = vec![cohort_cell("claude", None), cohort_cell("codex", None)];
 
-    let plan = plan_cohort_resume(&[old, first, second], dead, &cells, None, |_| true)
-        .expect("inline cohort plan");
+    let plan = plan_cohort_resume(
+        &[old, first, second],
+        dead,
+        &cells,
+        None,
+        |_| true,
+        |_| true,
+    )
+    .expect("inline cohort plan");
 
     assert_eq!(
         plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
@@ -312,9 +353,14 @@ fn cohort_resume_matches_inline_group_by_launch_ordinal() {
 #[test]
 fn cohort_resume_drops_members_whose_worktree_is_gone() {
     let agents = vec![agent("claude", "a1", "/code/gone", None, 1)];
-    let err = plan_cohort_resume(&agents, dead, &[cohort_cell("claude", None)], None, |_| {
-        false
-    })
+    let err = plan_cohort_resume(
+        &agents,
+        dead,
+        &[cohort_cell("claude", None)],
+        None,
+        |_| false,
+        |_| true,
+    )
     .expect_err("missing worktree drops candidate");
 
     assert_eq!(
@@ -342,6 +388,7 @@ fn resumes_root_agents_most_recent_first() {
         &no_ended(),
         DEFAULT_RESUME_MAX,
         None,
+        |_| true,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -378,6 +425,7 @@ fn rebirth_resume_skips_provisional_launch_placeholder() {
         DEFAULT_RESUME_MAX,
         None,
         |_| true,
+        |_| true,
         Path::new("/bin/rimz"),
     );
 
@@ -387,6 +435,30 @@ fn rebirth_resume_skips_provisional_launch_placeholder() {
         vec![ResumeSkip {
             label: "codex:pets-l".to_owned(),
             reason: ResumeSkipReason::NoResumeSupport,
+        }]
+    );
+    assert!(plan.tombstone.is_empty());
+}
+
+#[test]
+fn plan_resume_skips_agent_without_conversation() {
+    let agents = vec![agent("claude", "a1", "/code/query-engine", Some("main"), 1)];
+    let plan = plan_resume(
+        &agents,
+        &no_ended(),
+        DEFAULT_RESUME_MAX,
+        None,
+        |_| true,
+        |_| false,
+        Path::new("/bin/rimz"),
+    );
+
+    assert!(plan.tabs.is_empty());
+    assert_eq!(
+        plan.skipped,
+        vec![ResumeSkip {
+            label: "claude:query-engine".to_owned(),
+            reason: ResumeSkipReason::NoConversation,
         }]
     );
     assert!(plan.tombstone.is_empty());
@@ -403,6 +475,7 @@ fn disambiguates_reborn_tabs_with_the_same_basename() {
         &no_ended(),
         DEFAULT_RESUME_MAX,
         None,
+        |_| true,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -482,6 +555,7 @@ fn filters_subagents_paneless_and_ended_candidates() {
         DEFAULT_RESUME_MAX,
         None,
         |_| true,
+        |_| true,
         Path::new("/bin/rimz"),
     );
     assert!(plan.is_empty());
@@ -497,6 +571,7 @@ fn tombstones_a_missing_worktree() {
         DEFAULT_RESUME_MAX,
         None,
         |_| false,
+        |_| true,
         Path::new("/bin/rimz"),
     );
     assert!(plan.tabs.is_empty());
@@ -534,6 +609,7 @@ fn dedups_a_relaunched_agent_keeping_the_newest() {
         &no_ended(),
         DEFAULT_RESUME_MAX,
         None,
+        |_| true,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -575,6 +651,7 @@ fn collapses_a_relaunch_that_changed_branch_on_one_pane() {
         DEFAULT_RESUME_MAX,
         None,
         |_| true,
+        |_| true,
         Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
@@ -614,6 +691,7 @@ fn keeps_two_same_kind_agents_in_one_worktree() {
         DEFAULT_RESUME_MAX,
         None,
         |_| true,
+        |_| true,
         Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
@@ -641,6 +719,7 @@ fn caps_and_reports_the_overflow() {
         1,
         None,
         |_| true,
+        |_| true,
         Path::new("/bin/rimz"),
     );
     assert_eq!(plan.tabs.len(), 1);
@@ -661,6 +740,7 @@ fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
         &no_ended(),
         DEFAULT_RESUME_MAX,
         None,
+        |_| true,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -684,6 +764,7 @@ fn named_channel_groups_by_explicit_channel_and_replays_identity() {
         &no_ended(),
         DEFAULT_RESUME_MAX,
         None,
+        |_| true,
         |_| true,
         Path::new("/bin/rimz"),
     );
@@ -718,6 +799,7 @@ fn worktree_team_resume_replays_flat_worktree_channel() {
         &no_ended(),
         DEFAULT_RESUME_MAX,
         Some(Path::new("/code/project")),
+        |_| true,
         |_| true,
         Path::new("/bin/rimz"),
     );

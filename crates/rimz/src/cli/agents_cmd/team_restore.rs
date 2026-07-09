@@ -33,6 +33,7 @@ pub(crate) fn plan_team_restore_tabs(
     commands: &CommandsConfig,
     project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
 ) -> Vec<PlannedTeamTab> {
     let mut groups: BTreeMap<(String, PathBuf), Vec<&AgentState>> = BTreeMap::new();
     for agent in agents {
@@ -67,6 +68,7 @@ pub(crate) fn plan_team_restore_tabs(
             &cells,
             Some(&team),
             |path| worktree_exists(path),
+            &session_backed,
         ) else {
             continue;
         };
@@ -97,6 +99,23 @@ pub(crate) fn plan_team_restore_tabs(
     }
     tabs.sort_by(|a, b| newest_cmp(a.freshest, &a.team, b.freshest, &b.team));
     tabs
+}
+
+/// A resumed agent must have a conversation on disk. Claude and Codex stamp a
+/// `transcript_path` on their first `SessionStart` hook, before any prompt,
+/// so a never-answered session carries an id and a path to a file that was
+/// never written. Require a recorded transcript to exist and be non-empty;
+/// treat an unreported path (Pi, OpenCode) as present so their resume is
+/// unchanged.
+pub(crate) fn resume_session_present(agent: &AgentState) -> bool {
+    match agent
+        .transcript_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    {
+        Some(path) => std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0),
+        None => true,
+    }
 }
 
 pub(crate) fn materialize_team_restore_tab(
@@ -283,6 +302,31 @@ mod tests {
     }
 
     #[test]
+    fn resume_session_present_requires_non_empty_recorded_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let present = dir.path().join("present.jsonl");
+        std::fs::write(&present, "{}\n").expect("write transcript");
+        let empty = dir.path().join("empty.jsonl");
+        std::fs::write(&empty, "").expect("write empty transcript");
+        let missing = dir.path().join("missing.jsonl");
+
+        let mut agent = root_agent("claude", "a1", Timestamp::now());
+        assert!(resume_session_present(&agent));
+
+        agent.transcript_path = Some(present.to_string_lossy().into_owned());
+        assert!(resume_session_present(&agent));
+
+        agent.transcript_path = Some(missing.to_string_lossy().into_owned());
+        assert!(!resume_session_present(&agent));
+
+        agent.transcript_path = Some(empty.to_string_lossy().into_owned());
+        assert!(!resume_session_present(&agent));
+
+        agent.transcript_path = Some(dir.path().to_string_lossy().into_owned());
+        assert!(!resume_session_present(&agent));
+    }
+
+    #[test]
     fn plans_team_restore_in_declared_layout_order() {
         let (teams, profiles, commands) = configs();
         let planner = agent("claude", "planner", "planner", "/repo/forge", 3);
@@ -294,6 +338,7 @@ mod tests {
             &profiles,
             &commands,
             Some(Path::new("/repo")),
+            |_| true,
             |_| true,
         );
 
@@ -322,6 +367,7 @@ mod tests {
             &commands,
             Some(Path::new("/repo")),
             |_| true,
+            |_| true,
         );
 
         assert_eq!(tabs.len(), 1);
@@ -346,6 +392,7 @@ mod tests {
             &profiles,
             &commands,
             Some(Path::new("/repo")),
+            |_| true,
             |_| true,
         );
 

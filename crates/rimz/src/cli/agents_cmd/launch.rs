@@ -297,6 +297,7 @@ fn launch_resume_layout(
         &cells,
         team_name.as_deref(),
         |path| path.is_dir(),
+        super::team_restore::resume_session_present,
     )
     .map_err(|err| cohort_resume_error(err, spec, scope.as_deref()))?;
     let cwd = plan

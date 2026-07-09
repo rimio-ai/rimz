@@ -10,7 +10,7 @@ use rimz::{RuntimePaths, StatePaths, Store};
 
 use crate::cli::agents_cmd::team_restore::{
     PlannedTeamTab, materialize_team_restore_tab, plan_team_restore_tabs,
-    planned_team_matches_agent,
+    planned_team_matches_agent, resume_session_present,
 };
 
 pub(crate) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
@@ -257,6 +257,7 @@ fn plan_agent_resume_at(
         commands,
         project_root,
         |path| path.is_dir(),
+        resume_session_present,
     );
     let flat_agents = projection
         .agents
@@ -275,6 +276,7 @@ fn plan_agent_resume_at(
         resume_cfg.max.saturating_sub(team_panes),
         project_root,
         |path| path.is_dir(),
+        resume_session_present,
         &rimz_bin,
     );
     Ok(RoomResumePlan { flat, team })
@@ -487,6 +489,7 @@ pub(super) fn report_resume(plan: &rimz::harness::resume::ResumePlan) {
 fn resume_skip_reason(reason: rimz::harness::resume::ResumeSkipReason) -> &'static str {
     match reason {
         rimz::harness::resume::ResumeSkipReason::NoResumeSupport => "no resume CLI",
+        rimz::harness::resume::ResumeSkipReason::NoConversation => "no saved conversation",
         rimz::harness::resume::ResumeSkipReason::OverCap => "over the resume cap",
     }
 }
