@@ -396,15 +396,30 @@ pub fn session_cost_usd(
         return None;
     }
     let parsed = adapter.parse_spend(transcript_path, None, prices);
-    let has_thread_ids = parsed.entries.iter().any(|entry| {
+    let total = session_entries(&parsed.entries, session_id)
+        .into_iter()
+        .map(|entry| entry.cost_usd)
+        .filter(|cost| cost.is_finite() && *cost > 0.0)
+        .sum::<f64>();
+    (total > 0.0).then_some(AgentCost {
+        total_cost_usd: Some(total),
+        ..AgentCost::default()
+    })
+}
+
+/// Select one provider session from parsed spend rows. A file with no native
+/// thread ids is already session-scoped, so every row belongs to the requested
+/// session.
+pub fn session_entries<'a>(entries: &'a [CachedEntry], session_id: &str) -> Vec<&'a CachedEntry> {
+    let session_id = session_id.trim();
+    let has_thread_ids = entries.iter().any(|entry| {
         entry
             .thread_id
             .as_deref()
             .map(str::trim)
             .is_some_and(|thread_id| !thread_id.is_empty())
     });
-    let total = parsed
-        .entries
+    entries
         .iter()
         .filter(|entry| {
             entry
@@ -414,13 +429,7 @@ pub fn session_cost_usd(
                 .filter(|thread_id| !thread_id.is_empty())
                 .map_or(!has_thread_ids, |thread_id| thread_id == session_id)
         })
-        .map(|entry| entry.cost_usd)
-        .filter(|cost| cost.is_finite() && *cost > 0.0)
-        .sum::<f64>();
-    (total > 0.0).then_some(AgentCost {
-        total_cost_usd: Some(total),
-        ..AgentCost::default()
-    })
+        .collect()
 }
 
 pub(crate) fn aggregate_walk_publish(

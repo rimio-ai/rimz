@@ -5,6 +5,7 @@ mod budget;
 mod budget_park;
 mod commands;
 mod exec;
+mod history;
 mod launch;
 mod reconcile;
 mod refresh;
@@ -49,6 +50,7 @@ use commands::{
     wait_agent,
 };
 use exec::run_exec;
+use history::history_agent;
 use launch::*;
 use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
@@ -259,6 +261,16 @@ enum AgentsSubcmd {
         #[arg(long)]
         json: bool,
     },
+    /// Show token usage and cost for each turn in an agent session.
+    History {
+        reference: String,
+        /// Keep the last N turns.
+        #[arg(short = 'n', long = "tail")]
+        tail: Option<usize>,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show live agent resource usage.
     Top(TopArgs),
     /// Focus an agent pane.
@@ -400,6 +412,11 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             all,
             json,
         }) => return logs_agent(reference, tail, follow, all, json, globals),
+        Some(AgentsSubcmd::History {
+            reference,
+            tail,
+            json,
+        }) => return history_agent(reference, tail, json, globals),
         Some(AgentsSubcmd::Top(args)) => return run_top(args, globals),
         Some(AgentsSubcmd::Focus { reference }) => return focus_agent(reference, globals),
         Some(AgentsSubcmd::Wait {

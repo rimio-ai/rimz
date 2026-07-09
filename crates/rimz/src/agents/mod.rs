@@ -38,6 +38,7 @@ pub mod state;
 pub(crate) mod testkit;
 pub mod transcript;
 pub(crate) mod transcript_fs;
+pub mod turns;
 pub mod version;
 
 use std::path::{Path, PathBuf};

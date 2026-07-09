@@ -197,6 +197,18 @@ mod parse {
         ));
 
         let parsed =
+            AgentsHarness::try_parse_from(["rimz", "history", "@coder", "--tail", "5", "--json"])
+                .expect("parse history");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::History {
+                reference,
+                tail: Some(5),
+                json: true,
+            }) if reference == "@coder"
+        ));
+
+        let parsed =
             AgentsHarness::try_parse_from(["rimz", "refresh", "@codex"]).expect("parse refresh");
         assert!(matches!(
             parsed.args.command,

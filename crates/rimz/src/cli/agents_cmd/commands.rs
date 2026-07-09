@@ -335,7 +335,7 @@ pub(super) fn show_agent(
     Ok(())
 }
 
-fn resolve_audit_agent(
+pub(super) fn resolve_audit_agent(
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
