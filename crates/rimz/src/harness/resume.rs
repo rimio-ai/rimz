@@ -506,7 +506,7 @@ fn map_inline_group_to_cells<'a>(
     matches
 }
 
-pub(crate) fn supports_agent_resume(agent: &AgentState) -> bool {
+fn supports_agent_resume(agent: &AgentState) -> bool {
     // A provisional `launch_...` id only names Rimz's pre-adoption placeholder.
     // Keep the matched cohort cell and relaunch it fresh instead of asking the
     // adapter to resume an id outside the provider session store.

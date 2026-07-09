@@ -209,6 +209,13 @@ mod parse {
         ));
 
         let parsed =
+            AgentsHarness::try_parse_from(["rimz", "restart", "@coder"]).expect("parse restart");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Restart { reference }) if reference == "@coder"
+        ));
+
+        let parsed =
             AgentsHarness::try_parse_from(["rimz", "refresh", "@codex"]).expect("parse refresh");
         assert!(matches!(
             parsed.args.command,

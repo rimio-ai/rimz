@@ -10,6 +10,7 @@ mod launch;
 mod reconcile;
 mod refresh;
 mod refresh_usage;
+mod restart;
 mod supervised;
 pub(crate) mod team_restore;
 mod top;
@@ -55,6 +56,7 @@ use launch::*;
 use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
 pub(crate) use supervised::stream::TranscriptCursor;
+use restart::restart_agent;
 use top::{TopArgs, run_top};
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
@@ -302,6 +304,8 @@ enum AgentsSubcmd {
         #[arg(long)]
         all: bool,
     },
+    /// Stop an agent and relaunch it in place, resuming its session.
+    Restart { reference: String },
     /// Force-refresh agent-card context from local transcripts and helpers.
     Refresh(RefreshArgs),
     /// Inspect or change one agent's dollar cap.
@@ -430,6 +434,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             return wait_agent(references, any, timeout, stream, from_start, json, globals);
         }
         Some(AgentsSubcmd::Stop { reference, all }) => return stop_agent(reference, all, globals),
+        Some(AgentsSubcmd::Restart { reference }) => return restart_agent(reference, globals),
         Some(AgentsSubcmd::Refresh(args)) => return run_refresh(args, globals),
         None => {}
     }
