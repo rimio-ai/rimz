@@ -119,9 +119,10 @@ impl ResumePlan {
 
 /// Plan the resume seeds for one reborn session from the durable agent rollup.
 ///
-/// `agents` is the audit rollup (non-tombstoned durable agents; dead-process
-/// owners may already have been reaped); `ended` is the `(kind, agent_id)` set
-/// the user closed cleanly from [`crate::RuntimeProjection::ended`]; `max` caps the auto-launched panes;
+/// `agents` is the audit rollup (non-tombstoned durable agents; the persisted
+/// live roster protects crash candidates from the write-path reap until
+/// planning completes); `ended` is the `(kind, agent_id)` set the user closed
+/// cleanly from [`crate::RuntimeProjection::ended`]; `max` caps the auto-launched panes;
 /// `worktree_exists` decides whether a candidate's worktree
 /// is still on disk (production passes `|p| p.is_dir()`); `rimz_bin` is the
 /// `rimz` executable each pane's wrapper argv names (production passes

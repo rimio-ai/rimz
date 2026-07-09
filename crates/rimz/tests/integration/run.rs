@@ -326,31 +326,82 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
 }
 
 #[test]
-fn agents_show_falls_back_to_audit_rollup_for_pidless_stale_card() {
+fn agents_show_converges_stale_pidless_audit_card_and_keeps_fresh_context() {
     let env = Env::new();
     let store = env.store();
-    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+    std::fs::write(store.paths().locks_dir.join("dead-reap.stamp"), b"")
+        .expect("defer initial reap");
+    let mut stale = rimz::agents::AgentLifecycleObservation::new(
         Some("sess-stale".into()),
         rimz::agents::LifecycleSignal::Registered,
     );
-    observation.agent_name = Some("lucid-atlas".to_owned());
-    observation.worktree_branch = Some("pets".to_owned());
+    stale.agent_name = Some("lucid-atlas".to_owned());
+    stale.worktree_branch = Some("pets".to_owned());
     let mut event = rimz::EventEnvelope::agent_lifecycle(
         env.workspace_id.clone(),
         "session",
         "claude",
         "SessionStart",
-        &observation,
+        &stale,
     );
     event.timestamp = jiff::Timestamp::now() - Duration::from_secs(4 * 60 * 60);
     store.append_event(&event).expect("append stale lifecycle");
 
-    // A rich statusline sidecar for the same session: `show --json` must fold it
-    // onto the resolved card (even via the audit fallback) so the real token
-    // window reaches consumers, not the carried-forward `context_pct`.
+    let before_reap = env
+        .rimz()
+        .args(["agents", "show", "lucid-atlas", "--json"])
+        .output()
+        .expect("spawn agents show before reap");
+    assert!(
+        before_reap.status.success(),
+        "agents show should resolve the audit card before convergence\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&before_reap.stdout),
+        String::from_utf8_lossy(&before_reap.stderr)
+    );
+    let before_reap: serde_json::Value =
+        serde_json::from_slice(&before_reap.stdout).expect("show json before reap");
+    assert_eq!(before_reap["agent"]["agent_id"], "sess-stale");
+    assert_eq!(before_reap["stale"], true);
+
+    let mut fresh = rimz::agents::AgentLifecycleObservation::new(
+        Some("sess-fresh".into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    fresh.agent_name = Some("vivid-ocean".to_owned());
+    fresh.worktree_branch = Some("fresh".to_owned());
+    std::fs::remove_file(store.paths().locks_dir.join("dead-reap.stamp"))
+        .expect("force convergence reap");
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "session",
+            "claude",
+            "SessionStart",
+            &fresh,
+        ))
+        .expect("append fresh lifecycle and reap stale card");
+
+    let after_reap = env
+        .rimz()
+        .args(["agents", "show", "lucid-atlas"])
+        .output()
+        .expect("spawn agents show after reap");
+    assert!(
+        !after_reap.status.success(),
+        "tombstoned stale card should no longer resolve\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&after_reap.stdout),
+        String::from_utf8_lossy(&after_reap.stderr)
+    );
+    let after_reap_stderr = String::from_utf8_lossy(&after_reap.stderr);
+    assert!(
+        after_reap_stderr.contains("no agent matches") && after_reap_stderr.contains("lucid-atlas"),
+        "show should report the converged card as unknown: {after_reap_stderr}"
+    );
+
+    // A fresh session remains runtime-visible, and its rich statusline sidecar
+    // still reaches the `show --json` payload.
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    // A fresh `observed_at`: `read_all` ages out a sidecar past its TTL.
     let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         context_window_size: Some(1_000_000),
@@ -362,24 +413,24 @@ fn agents_show_falls_back_to_audit_rollup_for_pidless_stale_card() {
         }),
         ..Default::default()
     });
-    let record = rimz::store::agent_context::new_record("claude", "sess-stale", context);
+    let record = rimz::store::agent_context::new_record("claude", "sess-fresh", context);
     rimz::store::agent_context::write_record(&runtime, &record).expect("write context sidecar");
 
     let out = env
         .rimz()
-        .args(["agents", "show", "lucid-atlas", "--json"])
+        .args(["agents", "show", "vivid-ocean", "--json"])
         .output()
-        .expect("spawn agents show");
+        .expect("spawn agents show for fresh card");
 
     assert!(
         out.status.success(),
-        "agents show should resolve stale card from audit rollup\nstdout:\n{}\nstderr:\n{}",
+        "agents show should resolve fresh card\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("show json");
-    assert_eq!(parsed["agent"]["agent_id"], "sess-stale");
-    assert_eq!(parsed["stale"], true);
+    assert_eq!(parsed["agent"]["agent_id"], "sess-fresh");
+    assert!(parsed.get("stale").is_none());
     assert_eq!(
         parsed["agent"]["context"]["tokens"]["context_window_size"], 1_000_000,
         "show --json folds the rich context window: {parsed}"

@@ -1,13 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use jiff::Timestamp;
-
 use crate::agents::AgentState;
-use crate::agents::SessionOrigin;
 use crate::ids::{AgentSessionId, PaneId};
-use crate::pane::{PaneRef, RuntimeOwnerKind};
+use crate::pane::PaneRef;
 use crate::remote_control;
-use crate::store::snapshot::panes::{agent_owner_pid, is_daemon_owned};
+use crate::store::session_death;
+use crate::store::snapshot::panes::is_daemon_owned;
 use crate::store::snapshot::process::command_is_sidebar_chrome;
 
 use super::SidebarSnapshot;
@@ -130,7 +128,7 @@ impl SidebarSnapshot {
     /// the workspace-level `rimz gc`. Three rules, all safe for the
     /// one-pane-one-row invariant:
     ///
-    /// (a) a **pidless** session past [`GHOST_SESSION_TTL_SECS`] — it never
+    /// (a) a **pidless** session past [`session_death::GHOST_SESSION_TTL_SECS`] — it never
     ///     captured a pid, so process liveness can never reap it, yet it has
     ///     not reported in hours. A recent pidless session (a just-launched
     ///     agent) is kept.
@@ -148,20 +146,16 @@ impl SidebarSnapshot {
     ///     `Forked` lineage and survives; unknown lineage keeps both sessions.
     pub fn reap_stale_sessions(&mut self) {
         let now = self.now;
-        retain_unsuperseded(&mut self.agents, |older, newer| {
-            newer.kind == older.kind
-                && newer.agent_id != older.agent_id
-                && newer.last_activity > older.last_activity
-                && (older_yields_pane(older, newer)
-                    || cleared_conversation_supersedes(older, newer))
-        });
+        retain_unsuperseded(&mut self.agents, session_death::supersedes);
         self.agents.retain(|agent| {
             // Subagents are never reaped here — kept until their parent leaves,
             // when the projection's orphan-drop hides them.
             if agent.parent_agent_id.is_some() {
                 return true;
             }
-            !(agent_is_pidless(agent) && session_age_secs(now, agent) > GHOST_SESSION_TTL_SECS)
+            !(session_death::agent_is_pidless(agent)
+                && session_death::session_age_secs(now, agent)
+                    > session_death::GHOST_SESSION_TTL_SECS)
         });
     }
 
@@ -213,13 +207,6 @@ impl SidebarSnapshot {
     }
 }
 
-/// Age in seconds after which a pidless agent session is reaped as a ghost.
-/// A session that never captured a pid can't be reaped by process liveness, so
-/// without a TTL it would linger forever; a few hours is long enough that a
-/// genuinely live but pidless session (rare) survives, short enough that an
-/// abandoned one clears on its own.
-pub(super) const GHOST_SESSION_TTL_SECS: i64 = 3 * 60 * 60;
-
 /// Retain only root sessions not superseded under `supersedes(older, newer)`;
 /// subagents always remain because they leave transitively with their parent.
 fn retain_unsuperseded(
@@ -246,69 +233,4 @@ fn retain_unsuperseded(
         let is_superseded = superseded.next().unwrap_or(false);
         agent.parent_agent_id.is_some() || !is_superseded
     });
-}
-
-fn agent_is_pidless(agent: &AgentState) -> bool {
-    match agent.runtime_owner.as_ref().map(|owner| owner.kind) {
-        Some(RuntimeOwnerKind::Agent | RuntimeOwnerKind::Script) => false,
-        Some(RuntimeOwnerKind::Daemon) => true,
-        None => true,
-    }
-}
-
-fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
-    now.duration_since(agent.last_activity).as_secs()
-}
-
-/// True when reaping `older` cannot drop a concurrently-live agent. The pane is
-/// the unit of identity: an older session yields when the newer one *relaunched*
-/// in its exact pane — a provably different process ([`relaunched_in_pane`]),
-/// regardless of any branch checkout between the two — or when both are paneless
-/// remnants of the same worktree (indistinguishable daemon/shared-pid ghosts).
-/// An older paneless session does not yield to a newer distinctly stamped pane:
-/// it may still be the occupant of another same-cwd lazy agent pane that only
-/// the projection can bind.
-fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
-    match (older.pane.as_ref(), newer.pane.as_ref()) {
-        (Some(older_pane), Some(newer_pane)) => {
-            newer_pane.pane_id == older_pane.pane_id && relaunched_in_pane(older, newer)
-        }
-        (None, None) => {
-            older.worktree_path == newer.worktree_path
-                && older.worktree_branch == newer.worktree_branch
-        }
-        (None, Some(_)) | (Some(_), None) => false,
-    }
-}
-
-/// Whether `newer` is a fresh `/clear` / `/new` conversation superseding
-/// `older` in their shared pane. Both roots carrying `Fresh` rollout lineage
-/// on one stamped pane are sequential conversations of a single terminal; the
-/// older ended when the newer began, live pane or not. A fork carries `Forked`
-/// lineage and survives; unknown lineage keeps both.
-fn cleared_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
-    older.origin == Some(SessionOrigin::Fresh)
-        && newer.origin == Some(SessionOrigin::Fresh)
-        && matches!(
-            (older.pane.as_ref(), newer.pane.as_ref()),
-            (Some(older_pane), Some(newer_pane)) if older_pane.pane_id == newer_pane.pane_id
-        )
-}
-
-/// Whether the newer session is a *relaunch* of the older in their shared pane —
-/// a provably different process — rather than a same-process in-pane thread fork.
-/// A Codex `/side` / `/btw` fork registers a fresh session id in the live process
-/// the primary still owns, so the pair shares one owner pid and must not collapse;
-/// only the projection (`stamped_agent_for_pane`) arbitrates such a pair, pinning
-/// the pane to its earliest-registered primary. A standalone relaunch records two
-/// distinct live pids, so it still collapses here. A daemon-routed relaunch shares
-/// the daemon's owner pid like a fork, but the loaded-thread reaper
-/// ([`SidebarSnapshot::reap_runtime`]) and the projection's process-start guard
-/// ([`crate::store::snapshot::panes::pane_start_allows_bind`]) collapse it
-/// instead. Unknown owners never collapse — a missing pid cannot prove a relaunch.
-fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
-    match (agent_owner_pid(older), agent_owner_pid(newer)) {
-        (Some(older_pid), Some(newer_pid)) => older_pid != newer_pid,
-        _ => false,
-    }
 }

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::AgentSessionId;
-use rimz::store::event::EventEnvelope;
+use rimz::store::event::{EventEnvelope, EventKind};
 
 use crate::common::Harness;
 
@@ -76,7 +76,13 @@ fn assert_burst_landed(h: &Harness, label: &str) {
     assert_eq!(
         events
             .iter()
-            .filter(|e| e.method == "agent.lifecycle")
+            .filter(|event| {
+                matches!(
+                    event.kind(),
+                    EventKind::AgentLifecycle(payload)
+                        if payload.event_name.as_deref() == Some("SessionStart")
+                )
+            })
             .count(),
         WRITERS * EVENTS_EACH,
         "{label}: every concurrent append lands durably"

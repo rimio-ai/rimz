@@ -77,6 +77,14 @@ fn log_len(h: &crate::common::Harness) -> u64 {
         .unwrap_or(0)
 }
 
+fn is_session_start(event: &EventEnvelope) -> bool {
+    matches!(
+        event.kind(),
+        EventKind::AgentLifecycle(payload)
+            if payload.event_name.as_deref() == Some("SessionStart")
+    )
+}
+
 /// Drop the checkpoint cadence stamp so the next write tail publishes —
 /// the test-side lever for asserting what a due publish reflects, the same
 /// way tests age `abandon-sweep.stamp` to force the sweep.
@@ -86,26 +94,54 @@ fn force_next_publish(h: &crate::common::Harness) {
 
 #[cfg(unix)]
 #[test]
-fn publishing_commit_reaps_dead_owner_agent_into_tombstone() {
+fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
     let h = crate::common::Harness::new();
+    let reap_stamp = h.store.paths().locks_dir.join("dead-reap.stamp");
+    std::fs::write(&reap_stamp, b"").expect("defer initial reap");
 
     h.store
         .append_event(&dead_owner_lifecycle(&h, "SessionStart", "ghost"))
         .expect("append dead-owner lifecycle");
+    let key = (
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("ghost"),
+    );
+    rimz::store::live_roster::publish(
+        &h.store.paths().live_roster,
+        [key.clone()].into_iter().collect(),
+    )
+    .expect("publish recovery roster");
 
-    let projection = h
+    std::fs::remove_file(&reap_stamp).expect("force guarded reap");
+    h.store
+        .append_event(&lifecycle(&h, "SessionStart", "guarded-trigger"))
+        .expect("publishing commit with recovery roster");
+
+    let guarded = h
         .store
         .runtime_projection(RuntimeScope::Audit)
         .expect("audit projection");
-    let ids: Vec<&str> = projection
-        .agents
-        .iter()
-        .map(|agent| agent.agent_id.as_str())
-        .collect();
     assert!(
-        !ids.contains(&"ghost"),
-        "dead-owner agent should be tombstoned from audit projection: {ids:?}"
+        guarded.agents.iter().any(|agent| agent.agent_id == key.1),
+        "rostered crash candidate should survive the publishing reap"
     );
+    assert!(
+        !guarded.ended.contains(&key),
+        "rostered crash candidate should remain resumable"
+    );
+
+    std::fs::remove_file(&h.store.paths().live_roster).expect("consume recovery roster");
+    std::fs::remove_file(&reap_stamp).expect("force unguarded reap");
+    h.store
+        .append_event(&lifecycle(&h, "SessionStart", "unguarded-trigger"))
+        .expect("publishing commit after recovery boundary");
+
+    let reaped = h
+        .store
+        .runtime_projection(RuntimeScope::Audit)
+        .expect("reaped audit projection");
+    assert!(!reaped.agents.iter().any(|agent| agent.agent_id == key.1));
+    assert!(reaped.ended.contains(&key));
 
     let events = h.store.read_events().expect("events");
     assert!(
@@ -119,12 +155,12 @@ fn publishing_commit_reaps_dead_owner_agent_into_tombstone() {
                 false
             }
         }),
-        "publishing commit should append the reconstructed SessionEnd tombstone"
+        "post-boundary publishing commit should append the reconstructed SessionEnd tombstone"
     );
 }
 
 #[test]
-fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
+fn launch_allocation_reuses_name_after_stale_rollup_converges() {
     let h = crate::common::Harness::new();
     let mut ghost = named_codex_lifecycle(&h, "SessionStart", "ghost-session", "ghost-pet");
     ghost.timestamp = jiff::Timestamp::now() - std::time::Duration::from_secs(4 * 60 * 60);
@@ -169,9 +205,9 @@ fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
 
     assert_eq!(identities.len(), 1);
     let launched = &identities[0];
-    assert_ne!(
+    assert_eq!(
         launched.name, "ghost-pet",
-        "allocation must see unreaped rollup names"
+        "durably reaped ghosts no longer reserve names in the audit rollup"
     );
     let snapshot = h.store.snapshot().expect("snapshot with launch");
     let card = snapshot
@@ -214,7 +250,7 @@ fn concurrent_writers_group_commit_the_newest_state() {
     assert_eq!(
         events
             .iter()
-            .filter(|e| e.method == "agent.lifecycle")
+            .filter(|event| is_session_start(event))
             .count(),
         WRITERS * EVENTS_EACH,
         "every concurrent append landed durably"
@@ -434,7 +470,7 @@ fn rotation_serializes_with_writers_and_drops_no_append() {
         .read_events()
         .expect("active log")
         .iter()
-        .filter(|event| event.method == "agent.lifecycle")
+        .filter(|event| is_session_start(event))
         .count();
     if let Ok(entries) = std::fs::read_dir(&h.store.paths().events_archive_dir) {
         for entry in entries {
@@ -442,7 +478,7 @@ fn rotation_serializes_with_writers_and_drops_no_append() {
             appended += rimz::store::event_log::read_all(&path)
                 .expect("archived log")
                 .iter()
-                .filter(|event| event.method == "agent.lifecycle")
+                .filter(|event| is_session_start(event))
                 .count();
         }
     }

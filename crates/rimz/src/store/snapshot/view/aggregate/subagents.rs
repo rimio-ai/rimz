@@ -5,7 +5,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent};
 
 use super::super::layout::cmp_start_asc;
-use super::super::reap::GHOST_SESSION_TTL_SECS;
+use crate::store::session_death::GHOST_SESSION_TTL_SECS;
 
 /// Nest each subagent under its parent root row. A subagent is a reduced
 /// `AgentState` carrying `parent_agent_id`; it is paneless, so it built no row

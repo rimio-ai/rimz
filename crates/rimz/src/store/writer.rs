@@ -169,7 +169,7 @@ impl Store {
             PublishPolicy::Skip => {}
         }
         if txn.publish != PublishPolicy::Skip {
-            self.reap_dead_agents_if_due();
+            self.reap_dead_sessions_if_due();
         }
         Ok(out)
     }

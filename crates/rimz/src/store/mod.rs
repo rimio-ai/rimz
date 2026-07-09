@@ -12,6 +12,7 @@
 //!   event_log/      frame codec, rotation, recovery, unit tests
 //!   message_store.rs live message queue JSONL store
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
+//!   session_death.rs shared store-provable session death rules
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
 //!   writer/         debounce, publish, queue, reap, reset
 //!   gc.rs           maintenance façade
@@ -44,6 +45,7 @@ pub(crate) mod parse_cache;
 pub mod paths;
 pub mod run_store;
 pub mod runtime;
+pub(crate) mod session_death;
 pub(crate) mod sidecar;
 pub mod single_flight;
 pub mod snapshot;

@@ -22,7 +22,6 @@ use std::path::PathBuf;
 
 use super::aggregate::{attach_sub_agents, sub_agent_from_state};
 use super::providers::fresh_windows;
-use super::reap::GHOST_SESSION_TTL_SECS;
 use super::rows::row_from_agent;
 use super::{SidebarSnapshot, SidebarWorktreeKind, WorktreePrState, row_identity_violations};
 use crate::agent_activity::AgentActivity;
@@ -31,6 +30,7 @@ use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally, 
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::AgentKind;
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
+use crate::store::session_death::GHOST_SESSION_TTL_SECS;
 use crate::store::snapshot::project::reduce_agent_states;
 use crate::store::snapshot::row::SidebarRow;
 use crate::store::snapshot::testkit::*;

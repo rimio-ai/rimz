@@ -10,6 +10,7 @@ use super::process::pane_agent_kind;
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwnerKind};
+use crate::store::session_death::agent_owner_pid;
 
 mod lazy;
 
@@ -88,13 +89,6 @@ pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> Card
         return CardAdmission::RemoteControlOrAppServerHost;
     }
     CardAdmission::Admitted
-}
-
-/// The pid the hook recorded as this session's owner. In daemon mode this is
-/// the shared app-server daemon; in standalone mode it is the session's own
-/// process.
-pub(super) fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
-    agent.runtime_owner.as_ref().map(|owner| owner.pid)
 }
 
 /// The agent that stamped this exact pane id, if one is still unbound. Non-lazy
