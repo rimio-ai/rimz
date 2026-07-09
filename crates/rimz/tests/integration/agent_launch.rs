@@ -287,6 +287,7 @@ fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
             agent_name_explicit: false,
             launch: LaunchParams {
                 profile: None,
+                mode: None,
                 role: Some("pruner".to_owned()),
                 model: None,
                 effort: None,

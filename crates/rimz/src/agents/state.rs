@@ -661,6 +661,10 @@ pub struct AgentState {
     /// sender-attribution identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The permission posture selected for this launch, carried forward so an
+    /// explicit restart can reproduce it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::harness::run::PermissionMode>,
     /// The `[agents.teams]` role this agent launched as (`planner`, `coder`),
     /// stamped by the launch event and carried forward like `profile`. The
     /// agent answers to `@<role>` when that role uniquely names it in scope.
@@ -851,6 +855,8 @@ struct AgentStateWire {
     name_explicit: bool,
     kind_ordinal: Option<u32>,
     profile: Option<String>,
+    #[serde(default)]
+    mode: Option<crate::harness::run::PermissionMode>,
     role: Option<String>,
     team: Option<String>,
     launch_group: Option<String>,
@@ -924,6 +930,7 @@ impl From<AgentStateWire> for AgentState {
             name_explicit: wire.name_explicit,
             kind_ordinal: wire.kind_ordinal,
             profile: wire.profile,
+            mode: wire.mode,
             role: wire.role,
             team: wire.team,
             launch_group: wire.launch_group,
@@ -985,6 +992,7 @@ impl AgentState {
             name_explicit: false,
             kind_ordinal: Some(1),
             profile: None,
+            mode: None,
             role: None,
             team: None,
             launch_group: None,

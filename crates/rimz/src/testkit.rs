@@ -17,6 +17,7 @@ pub fn agent_state(kind: &str, agent_id: &str, at: jiff::Timestamp) -> crate::ag
         name_explicit: false,
         kind_ordinal: None,
         profile: None,
+        mode: None,
         role: None,
         team: None,
         launch_group: None,

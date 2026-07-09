@@ -32,7 +32,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
     let machine_config = crate::cli::machine_config();
     let rtk = machine_config.harness.rtk;
-    let argv = match args.resume.as_deref() {
+    let mut argv = match args.resume.as_deref() {
         Some(session_id) => {
             let cwd = std::env::current_dir().context("reading the resume pane cwd")?;
             adapter
@@ -43,8 +43,14 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .launch_command(&args.extra_args, args.prompt.as_deref())
             .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?,
     };
+    if args.resume.is_some() {
+        argv.extend(args.extra_args.iter().cloned());
+    }
     let exec_action = match args.resume.as_deref() {
-        Some(session_id) => rimz::harness::launch::ExecAction::Resume { session_id },
+        Some(session_id) => rimz::harness::launch::ExecAction::Resume {
+            session_id,
+            extra_args: &args.extra_args,
+        },
         None => rimz::harness::launch::ExecAction::Launch {
             prompt: args.prompt.as_deref(),
             extra_args: &args.extra_args,
@@ -61,6 +67,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             name: args.agent_name.as_deref(),
             name_explicit: args.agent_name_explicit,
             profile: args.agent_profile.as_deref(),
+            mode: args.agent_mode,
             role: args.agent_role.as_deref(),
             team: args.agent_team.as_deref(),
             launch_group: args.launch_group.as_deref(),
@@ -424,6 +431,7 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                 name_explicit: args.agent_name_explicit,
                 launch: rimz::agents::LaunchParams {
                     profile: args.agent_profile.clone(),
+                    mode: args.agent_mode,
                     role: args.agent_role.clone(),
                     model: args.agent_model.clone(),
                     effort: args.agent_effort.clone(),

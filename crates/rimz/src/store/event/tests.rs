@@ -2,6 +2,7 @@ use super::*;
 
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{LaunchParams, SessionOrigin};
+use crate::harness::run::PermissionMode;
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
@@ -15,6 +16,7 @@ fn lifecycle_observation() -> AgentLifecycleObservation {
         agent_name: Some("amber-atlas".to_owned()),
         launch: LaunchParams {
             profile: Some("claude-reviewer".to_owned()),
+            mode: Some(PermissionMode::Ask),
             role: Some("reviewer".to_owned()),
             model: Some("claude-opus".to_owned()),
             effort: Some("high".to_owned()),
@@ -274,6 +276,7 @@ fn agent_launch_payload_round_trips_channel_identity() {
         "agent_id": "launch-1",
         "agent_name": "swift-otter",
         "profile": "codex-coder",
+        "mode": "yolo",
         "role": "coder",
         "model": "gpt-5.5-codex",
         "effort": "xhigh",
@@ -286,6 +289,7 @@ fn agent_launch_payload_round_trips_channel_identity() {
     .unwrap();
 
     assert_eq!(payload.launch.profile.as_deref(), Some("codex-coder"));
+    assert_eq!(payload.launch.mode, Some(PermissionMode::Yolo));
     assert_eq!(payload.launch.team.as_deref(), Some("forge"));
     assert_eq!(
         payload.launch.launch_group.as_deref(),
@@ -297,6 +301,7 @@ fn agent_launch_payload_round_trips_channel_identity() {
     assert!(!payload.agent_name_explicit);
     let encoded = serde_json::to_value(&payload).unwrap();
     assert_eq!(encoded["profile"], "codex-coder");
+    assert_eq!(encoded["mode"], "yolo");
     assert_eq!(encoded["role"], "coder");
     assert_eq!(encoded["model"], "gpt-5.5-codex");
     assert_eq!(encoded["effort"], "xhigh");
@@ -323,8 +328,9 @@ fn agent_launch_payload_round_trips_channel_identity() {
 
 #[test]
 fn shared_launch_params_stay_top_level_in_launch_and_lifecycle_events() {
-    const KEYS: [&str; 9] = [
+    const KEYS: [&str; 10] = [
         "profile",
+        "mode",
         "role",
         "model",
         "effort",
@@ -345,6 +351,7 @@ fn shared_launch_params_stay_top_level_in_launch_and_lifecycle_events() {
             agent_name_explicit: false,
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
+                mode: Some(PermissionMode::Yolo),
                 role: Some("coder".to_owned()),
                 model: Some("gpt-5.5-codex".to_owned()),
                 effort: Some("xhigh".to_owned()),

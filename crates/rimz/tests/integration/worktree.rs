@@ -1218,6 +1218,7 @@ fn seed_agent_launch(
             agent_name_explicit: false,
             launch: LaunchParams {
                 profile: None,
+                mode: None,
 
                 role: None,
 

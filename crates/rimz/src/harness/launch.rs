@@ -128,6 +128,7 @@ pub struct ExecIdentity<'a> {
     /// (`--launch-id` requires `--agent-name` at the parse side).
     pub launch_id: Option<&'a str>,
     pub profile: Option<&'a str>,
+    pub mode: Option<crate::harness::run::PermissionMode>,
     pub role: Option<&'a str>,
     pub team: Option<&'a str>,
     pub launch_group: Option<&'a str>,
@@ -146,6 +147,7 @@ pub enum ExecAction<'a> {
     },
     Resume {
         session_id: &'a str,
+        extra_args: &'a [String],
     },
 }
 
@@ -167,7 +169,7 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
         "exec".to_owned(),
         inv.kind.to_owned(),
     ];
-    if let ExecAction::Resume { session_id } = inv.action {
+    if let ExecAction::Resume { session_id, .. } = inv.action {
         argv.extend(["--resume".to_owned(), session_id.to_owned()]);
     }
     if let Some(run_id) = inv.run_id {
@@ -184,6 +186,9 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
     }
     if let Some(profile) = inv.identity.profile {
         argv.extend(["--agent-profile".to_owned(), profile.to_owned()]);
+    }
+    if let Some(mode) = inv.identity.mode {
+        argv.extend(["--agent-mode".to_owned(), mode.to_string()]);
     }
     if let Some(role) = inv.identity.role {
         argv.extend(["--agent-role".to_owned(), role.to_owned()]);
@@ -221,14 +226,17 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
             path.to_string_lossy().into_owned(),
         ]);
     }
-    if let ExecAction::Launch { prompt, extra_args } = inv.action {
+    if let ExecAction::Launch { prompt, .. } = inv.action {
         if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
             argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
         }
-        if !extra_args.is_empty() {
-            argv.push("--".to_owned());
-            argv.extend(extra_args.iter().cloned());
-        }
+    }
+    let extra_args = match inv.action {
+        ExecAction::Launch { extra_args, .. } | ExecAction::Resume { extra_args, .. } => extra_args,
+    };
+    if !extra_args.is_empty() {
+        argv.push("--".to_owned());
+        argv.extend(extra_args.iter().cloned());
     }
     argv
 }
@@ -683,6 +691,7 @@ mod tests {
                 name_explicit: true,
                 launch_id: Some("launch_123"),
                 profile: Some("planner"),
+                mode: Some(crate::harness::run::PermissionMode::Yolo),
                 role: Some("coder"),
                 team: Some("forge"),
                 launch_group: Some("launch_group_1"),
@@ -710,6 +719,8 @@ mod tests {
                 "launch_123",
                 "--agent-profile",
                 "planner",
+                "--agent-mode",
+                "yolo",
                 "--agent-role",
                 "coder",
                 "--agent-team",
@@ -738,10 +749,12 @@ mod tests {
 
     #[test]
     fn exec_argv_renders_resume() {
+        let extra_args = argv(&["--dangerously-skip-permissions"]);
         let invocation = ExecInvocation {
             kind: "claude",
             action: ExecAction::Resume {
                 session_id: "session-1",
+                extra_args: &extra_args,
             },
             run_id: None,
             worktree_path: None,
@@ -783,6 +796,8 @@ mod tests {
                 "--agent-channel",
                 "design",
                 "--close-pane-on-exit",
+                "--",
+                "--dangerously-skip-permissions",
             ])
         );
     }

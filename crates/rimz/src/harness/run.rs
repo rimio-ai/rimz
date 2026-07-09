@@ -1,5 +1,6 @@
 //! Supervised interactive-agent runs.
 
+use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -77,6 +78,17 @@ impl FromStr for PermissionMode {
                 "unknown permission mode `{raw}`; expected auto, ask, plan, or yolo"
             )),
         }
+    }
+}
+
+impl fmt::Display for PermissionMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+            Self::Yolo => "yolo",
+            Self::Plan => "plan",
+        })
     }
 }
 

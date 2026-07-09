@@ -328,6 +328,9 @@ struct ExecArgs {
     /// remains the pane's sender-attribution identity.
     #[arg(long)]
     agent_profile: Option<String>,
+    /// The permission posture selected for this launch.
+    #[arg(long)]
+    agent_mode: Option<PermissionMode>,
     /// The `[agents.teams]` role this agent launched as. The launch event
     /// makes the rollup answer to `@<role>`; `RIMZ_AGENT_ROLE` remains the
     /// pane's sender-attribution identity.

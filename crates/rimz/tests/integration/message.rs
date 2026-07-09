@@ -3677,6 +3677,7 @@ fn seed_provisional_codex_launch(
             agent_name_explicit: false,
             launch: LaunchParams {
                 profile: None,
+                mode: None,
 
                 role: role.map(ToOwned::to_owned),
 

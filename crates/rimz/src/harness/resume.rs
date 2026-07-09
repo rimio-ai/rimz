@@ -506,7 +506,7 @@ fn map_inline_group_to_cells<'a>(
     matches
 }
 
-fn supports_agent_resume(agent: &AgentState) -> bool {
+pub(crate) fn supports_agent_resume(agent: &AgentState) -> bool {
     // A provisional `launch_...` id only names Rimz's pre-adoption placeholder.
     // Keep the matched cohort cell and relaunch it fresh instead of asking the
     // adapter to resume an id outside the provider session store.
@@ -615,6 +615,7 @@ pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>
             kind: agent.kind.as_str(),
             action: crate::harness::launch::ExecAction::Resume {
                 session_id: agent.agent_id.as_str(),
+                extra_args: &[],
             },
             run_id: None,
             worktree_path: None,
@@ -624,6 +625,7 @@ pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>
                 name: agent.name.as_deref(),
                 name_explicit: agent.name_explicit,
                 profile: agent.profile.as_deref(),
+                mode: None,
                 role: agent.role.as_deref(),
                 team: agent.team.as_deref(),
                 launch_group: agent.launch_group.as_deref(),

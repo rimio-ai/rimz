@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::harness::run::PermissionMode;
 use crate::ids::{AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwner};
 
@@ -33,6 +34,10 @@ pub struct LaunchParams {
     /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The permission posture selected by the launcher. Stored durably so an
+    /// explicit restart can reproduce it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PermissionMode>,
     /// The `[agents.teams]` role the launcher selected, passed through
     /// `RIMZ_AGENT_ROLE`. The reducer projects it to the card handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]

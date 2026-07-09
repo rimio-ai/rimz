@@ -772,6 +772,7 @@ struct AgentStateInput<'a> {
 
 struct CarriedFields {
     profile: Option<String>,
+    mode: Option<crate::harness::run::PermissionMode>,
     role: Option<String>,
     team: Option<String>,
     launch_group: Option<String>,
@@ -803,6 +804,7 @@ struct CarriedFields {
 fn carried_state(prior: Option<&AgentState>) -> CarriedFields {
     CarriedFields {
         profile: prior.and_then(|state| state.profile.clone()),
+        mode: prior.and_then(|state| state.mode),
         role: prior.and_then(|state| state.role.clone()),
         team: prior.and_then(|state| state.team.clone()),
         launch_group: prior.and_then(|state| state.launch_group.clone()),
@@ -857,6 +859,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         name_explicit: input.card_identity.name_explicit,
         kind_ordinal: Some(input.card_identity.kind_ordinal),
         profile: input.observation.launch.profile.clone().or(carried.profile),
+        mode: input.observation.launch.mode.or(carried.mode),
         role: input.observation.launch.role.clone().or(carried.role),
         team: input.observation.launch.team.clone().or(carried.team),
         launch_group: input
@@ -957,6 +960,7 @@ fn assemble_launch_state(
         name_explicit: card_identity.name_explicit,
         kind_ordinal: Some(card_identity.kind_ordinal),
         profile: payload.launch.profile.clone().or(carried.profile),
+        mode: payload.launch.mode.or(carried.mode),
         role: payload.launch.role.clone().or(carried.role),
         team: payload.launch.team.clone().or(carried.team),
         launch_group: payload.launch.launch_group.clone().or(carried.launch_group),

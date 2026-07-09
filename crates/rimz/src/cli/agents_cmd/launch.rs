@@ -1158,6 +1158,7 @@ pub(super) fn launch_identity_requests(
         let Cell::Agent {
             kind,
             profile,
+            mode,
             role,
             model,
             effort,
@@ -1193,6 +1194,7 @@ pub(super) fn launch_identity_requests(
             name,
             launch: rimz::agents::LaunchParams {
                 profile: profile.clone(),
+                mode: *mode,
                 role: role.clone(),
                 model: model.clone(),
                 effort: effort.clone(),
@@ -1384,6 +1386,7 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
         Cell::Agent {
             kind,
             args,
+            mode,
             profile,
             role,
             model,
@@ -1420,6 +1423,7 @@ pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Re
                         name_explicit: options.launch.is_some_and(|launch| launch.name_explicit),
                         launch_id: options.launch.map(|launch| launch.agent_id.as_str()),
                         profile: profile.as_deref(),
+                        mode: *mode,
                         role: role.as_deref(),
                         team: options.team,
                         launch_group: options

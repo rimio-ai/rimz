@@ -1379,6 +1379,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         exit_on_run_completion: false,
         identity: rimz::harness::launch::ExecIdentity {
             profile: agent_cell.profile,
+            mode: agent_cell.mode,
             role: agent_cell.role,
             channel: args.channel.as_deref(),
             model: agent_cell.model,
@@ -1509,6 +1510,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         agent_name: Some(&launch_identity.name),
         agent_name_explicit: launch_identity.name_explicit,
         agent_profile: agent_cell.profile,
+        agent_mode: agent_cell.mode,
         agent_role: agent_cell.role,
         agent_channel: room_channel.as_deref(),
         agent_model: agent_cell.model,

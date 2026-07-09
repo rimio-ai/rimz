@@ -419,6 +419,8 @@ mod parse {
             "run_0123456789abcdef0123456789abcdef",
             "--agent-name",
             "lucid-atlas",
+            "--agent-mode",
+            "yolo",
             "--agent-role",
             "coder",
             "--agent-team",
@@ -455,6 +457,7 @@ mod parse {
             Some("run_0123456789abcdef0123456789abcdef")
         );
         assert_eq!(args.agent_name.as_deref(), Some("lucid-atlas"));
+        assert_eq!(args.agent_mode, Some(PermissionMode::Yolo));
         assert_eq!(args.agent_role.as_deref(), Some("coder"));
         assert_eq!(args.agent_team.as_deref(), Some("forge"));
         assert_eq!(args.launch_group.as_deref(), Some("launch_group_1"));
@@ -1075,7 +1078,7 @@ mod identity {
         let layout = LayoutSpec::single(Cell::Agent {
             kind: AgentKind::new_unchecked("codex"),
             args: Vec::new(),
-            mode: None,
+            mode: Some(PermissionMode::Yolo),
             system_prompt_file: None,
             append_system_prompt_file: None,
             profile: Some("codex-coder".to_owned()),
@@ -1101,6 +1104,7 @@ mod identity {
         );
         assert_eq!(requests[0].kind.as_str(), "codex");
         assert_eq!(requests[0].launch.profile.as_deref(), Some("codex-coder"));
+        assert_eq!(requests[0].launch.mode, Some(PermissionMode::Yolo));
         assert_eq!(requests[0].launch.role.as_deref(), Some("coder"));
         assert_eq!(requests[0].launch.model.as_deref(), Some("gpt-5-codex"));
         assert_eq!(requests[0].launch.effort.as_deref(), Some("high"));
@@ -2099,6 +2103,7 @@ fn bare_exec_args() -> ExecArgs {
         agent_name: Some("lucid-atlas".to_owned()),
         agent_name_explicit: false,
         agent_profile: None,
+        agent_mode: None,
         agent_role: None,
         agent_team: None,
         launch_group: None,
