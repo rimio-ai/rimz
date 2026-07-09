@@ -247,7 +247,10 @@ fn rimz_start_pty_output(env: &Env, shim: &FakeZellij, session_name: &str) -> St
         output
     });
 
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // CI runs the full `rimz start` birth/reset path under load; this assertion
+    // cares that the process exits without waiting for a second prompt, not
+    // that every preflight completes inside a short wall-clock budget.
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut exited = false;
     while Instant::now() < deadline {
         if child.try_wait().expect("poll rimz").is_some() {
