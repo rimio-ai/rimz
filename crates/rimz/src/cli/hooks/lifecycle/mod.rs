@@ -412,6 +412,7 @@ mod tests {
     fn turn_end_supplements_partial_realtime_cost_from_prior_transcript() {
         let dir = tempfile::TempDir::new().unwrap();
         let transcript = dir.path().join("2026-06-02T10-00-00-000Z_sess-1.jsonl");
+        let pricing_cache_path = dir.path().join("pricing-cache.json");
         let mut file = std::fs::File::create(&transcript).unwrap();
         writeln!(
             file,
@@ -446,6 +447,7 @@ mod tests {
         supplement_realtime_cost(
             &rimz::agents::PiAdapter,
             "sess-1",
+            &pricing_cache_path,
             false,
             Some(&prior),
             &mut skipped,
@@ -456,6 +458,7 @@ mod tests {
         supplement_realtime_cost(
             &rimz::agents::PiAdapter,
             "sess-1",
+            &pricing_cache_path,
             true,
             Some(&prior),
             &mut refresh,
@@ -511,6 +514,7 @@ mod tests {
     fn turn_end_reconciles_resumed_claude_cost_upward() {
         let dir = tempfile::TempDir::new().unwrap();
         let transcript = dir.path().join("2026-06-02T10-00-00-000Z_sess-1.jsonl");
+        let pricing_cache_path = dir.path().join("pricing-cache.json");
         let mut file = std::fs::File::create(&transcript).unwrap();
         writeln!(
             file,
@@ -534,6 +538,7 @@ mod tests {
         supplement_realtime_cost(
             &rimz::agents::ClaudeAdapter,
             "sess-1",
+            &pricing_cache_path,
             false,
             Some(&prior),
             &mut skipped,
@@ -544,6 +549,7 @@ mod tests {
         supplement_realtime_cost(
             &rimz::agents::ClaudeAdapter,
             "sess-1",
+            &pricing_cache_path,
             true,
             Some(&prior),
             &mut refresh,
@@ -570,6 +576,7 @@ mod tests {
         supplement_realtime_cost(
             &rimz::agents::ClaudeAdapter,
             "sess-1",
+            &pricing_cache_path,
             true,
             Some(&prior),
             &mut no_downgrade,

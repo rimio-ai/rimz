@@ -112,6 +112,12 @@ pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
         "gpt-5.4-nano".to_owned(),
         p(0.2e-6, 1.25e-6, 0.2e-6, 0.02e-6),
     );
+    entries.insert("gpt-5.6-sol".to_owned(), p(5e-6, 30e-6, 5e-6, 0.5e-6));
+    entries.insert(
+        "gpt-5.6-terra".to_owned(),
+        p(2.5e-6, 15e-6, 2.5e-6, 0.25e-6),
+    );
+    entries.insert("gpt-5.6-luna".to_owned(), p(1e-6, 6e-6, 1e-6, 0.1e-6));
 
     let glm = |input: f64, output: f64, cache_read: f64| Pricing {
         input,
@@ -204,6 +210,10 @@ mod tests {
         assert!((entries["gpt-5"].input - 1.25e-6).abs() < 1e-18);
         assert!((entries["gpt-5"].cache_create - 1.25e-6).abs() < 1e-18);
         assert_eq!(entries["gpt-5.5"].fast_multiplier, 2.5);
+        assert_eq!(entries["gpt-5.6-sol"].input, 5e-6);
+        assert_eq!(entries["gpt-5.6-sol"].output, 30e-6);
+        assert_eq!(entries["gpt-5.6-sol"].cache_create, 5e-6);
+        assert_eq!(entries["gpt-5.6-sol"].cache_read, 0.5e-6);
         assert_eq!(entries["claude-opus-4-8"].fast_multiplier, 2.0);
         assert_eq!(entries["claude-sonnet-4"].input_above_200k, Some(6e-6));
         assert!((entries["moonshot/kimi-k2.6"].cache_read - 0.16e-6).abs() < 1e-18);

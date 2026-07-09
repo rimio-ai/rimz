@@ -826,6 +826,7 @@ impl AgentAdapter for CodexAdapter {
             ctx.model_hint,
             ctx.prior_transcript_path,
             ctx.prior_transcript_stat,
+            ctx.shared_pricing_cache_path,
         )
     }
 

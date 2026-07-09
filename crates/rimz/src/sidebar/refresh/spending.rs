@@ -5,7 +5,7 @@
 use std::collections::{BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::agents::spending::{
@@ -389,14 +389,17 @@ fn walk_fleet_spending(
     let cache_path = runtime.shared_spending_cursor_path();
     // The price book exists only to price the walk, so its load (and TTL-gated
     // remote refresh, including the unknown-model chase) rides the stale arm
-    // with it. A local fallback uses the embedded table so it never writes the
-    // shared pricing cache without the spending lock.
+    // with it. A local fallback reads the shared pricing cache without writing;
+    // only the producer refreshes it while holding the spending lock.
     let now_secs = unix_secs_now();
     let prices = if publish {
         let unknowns = walker.recorded_unknown_models(&cache_path, &files, now_secs);
-        pricing::load_for_spending(&runtime.shared_pricing_cache_path(), &unknowns)
+        Arc::new(pricing::load_for_spending(
+            &runtime.shared_pricing_cache_path(),
+            &unknowns,
+        ))
     } else {
-        pricing::PriceBook::embedded()
+        pricing::cached_book(&runtime.shared_pricing_cache_path())
     };
     let origin_overrides = codex_origin_overrides(snapshot);
     let automation_signature = run_log::automation_signature();

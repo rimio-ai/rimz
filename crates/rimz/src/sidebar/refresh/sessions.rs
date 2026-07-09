@@ -149,6 +149,7 @@ fn refresh_session_transcript_context_core(
         return Ok(false);
     };
     let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
+    let shared_pricing_cache_path = runtime.shared_pricing_cache_path();
     let ctx = LocalContextRefreshCtx {
         agent_id: session_id,
         model_hint,
@@ -162,6 +163,7 @@ fn refresh_session_transcript_context_core(
                 .as_ref()
                 .and_then(|record| record.transcript_stat.as_ref())
         },
+        shared_pricing_cache_path: &shared_pricing_cache_path,
     };
     let refresh = adapter.local_context_refresh(RefreshTrigger::Tick, &ctx);
     let Some(refresh) = refresh else {

@@ -449,11 +449,13 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     )
     .unwrap();
     let path = path.to_string_lossy().into_owned();
+    let pricing_cache_path = dir.path().join("pricing-cache.json");
     let ctx = crate::agents::LocalContextRefreshCtx {
         agent_id: "sess-1",
         model_hint: Some("gpt-5"),
         prior_transcript_path: Some(&path),
         prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing_cache_path,
     };
     let refresh = CodexAdapter
         .local_context_refresh(crate::agents::RefreshTrigger::Hook("PostToolUse"), &ctx)

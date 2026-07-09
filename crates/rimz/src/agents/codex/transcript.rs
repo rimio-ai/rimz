@@ -1,6 +1,6 @@
 //! Codex rollout transcript read path for local context refresh.
 //!
-//! This module locates session JSONL files, reads bounded tails, folds token usage, and enriches context/cost fields without touching the live app-server.
+//! This module locates session JSONL files, reads bounded tails, folds token usage, and enriches context/cost fields without touching the live app-server. Costs use the shared cached price book, so refreshed prices heal post-release models.
 
 use std::env;
 use std::fs::{self, File};
@@ -18,7 +18,7 @@ use super::install::{codex_config_path, read_existing_table};
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass,
 };
-use crate::agents::pricing::PriceBook;
+use crate::agents::pricing::{self, PriceBook};
 use crate::agents::state::AccountBudget;
 use crate::agents::{
     LocalContextRefresh, SessionOrigin, TranscriptStat, optional_payload_string,
@@ -32,6 +32,7 @@ pub fn refresh_transcript_context(
     model_hint: Option<&str>,
     prior_transcript_path: Option<&str>,
     prior_transcript_stat: Option<&TranscriptStat>,
+    pricing_cache_path: &Path,
 ) -> Option<LocalContextRefresh> {
     let mut path = prior_transcript_path.map(PathBuf::from);
     let mut stat = path.as_deref().and_then(transcript_stat);
@@ -45,6 +46,7 @@ pub fn refresh_transcript_context(
         return None;
     }
 
+    let prices = pricing::cached_book(pricing_cache_path);
     let tail = read_transcript_tail(&path);
     let usage = tail
         .as_deref()
@@ -57,7 +59,7 @@ pub fn refresh_transcript_context(
         Some(RestingTurnOutcome::Died(error)) => (None, None, Some(error)),
         None => (None, None, None),
     };
-    let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint);
+    let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint, &prices);
     Some(LocalContextRefresh {
         model_id,
         effort: usage.effort,
@@ -128,6 +130,7 @@ pub(super) struct TranscriptUsage {
 pub(super) fn transcript_enrichment(
     usage: &TranscriptUsage,
     model_hint: Option<&str>,
+    prices: &PriceBook,
 ) -> (Option<AgentTokenUsage>, Option<AgentCost>, Option<String>) {
     let current_usage = if usage.last_input_tokens.is_some()
         || usage.last_cached_input_tokens.is_some()
@@ -169,8 +172,7 @@ pub(super) fn transcript_enrichment(
         model_id.as_deref(),
     ) {
         (Some(total_input), Some(total_output), Some(model_id)) => {
-            let price_book = PriceBook::embedded();
-            price_book.price(model_id).and_then(|price| {
+            prices.price(model_id).and_then(|price| {
                 let uncached = total_input.saturating_sub(usage.cumulative_cached_tokens);
                 let cost = price.cost(
                     uncached,

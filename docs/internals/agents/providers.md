@@ -215,6 +215,8 @@ The book is assembled from four ordered passes. Builtins are an offline fallback
 
 `gpt-5` is mandatory in the builtins: it is the Codex parser's fallback model, so a Codex event with no resolvable model still prices.
 
+Every read-only price consumer uses the same current book: the embedded snapshot plus builtins and the shared `pricing-cache.json`. This includes local spending fallbacks, live-card transcript costs, and hook-side transcript reconciliation, so an unknown model heals across every USD surface once the chase lands its price without requiring a binary upgrade. Long-lived processes memoize that book by cache path, modification time, and file length; each call still stats the cache so an atomic rewrite invalidates the memo.
+
 ### The refresh
 
 `rimz sidebar snapshot` is a one-shot process, so the refresh is disk-cached at `$XDG_STATE_HOME/rimz/shared/pricing-cache.json` rather than held in memory: the spending producer reads the embedded snapshot plus the cache instantly while it holds the shared runtime spending lock, and re-fetches when the cache is older than a week. The pricing cache carries a schema stamp; a stale cache shape is dropped so tierless rows cannot override the embedded snapshot and builtins after a formula upgrade. A failed fetch records its attempt time and backs off an hour, so a persistent outage never re-fetches on every snapshot. `RIMZ_PRICING_OFFLINE` skips every fetch path.

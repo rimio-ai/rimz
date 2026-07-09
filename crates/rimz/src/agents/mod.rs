@@ -327,6 +327,9 @@ pub struct LocalContextRefreshCtx<'a> {
     pub model_hint: Option<&'a str>,
     pub prior_transcript_path: Option<&'a str>,
     pub prior_transcript_stat: Option<&'a TranscriptStat>,
+    /// Persistent shared `pricing-cache.json`, for adapters that price token
+    /// counts into card dollars. The spending producer owns writes.
+    pub shared_pricing_cache_path: &'a Path,
 }
 
 /// Display-only context derived from a local transcript/rollout read. The

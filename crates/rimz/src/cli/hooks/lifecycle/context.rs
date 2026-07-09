@@ -158,6 +158,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             .as_ref()
             .and_then(|record| record.context.model_id.as_deref())
     });
+    let shared_pricing_cache_path = store.runtime_paths().shared_pricing_cache_path();
     let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
         agent_id: context_agent_id,
         model_hint: local_model_hint,
@@ -167,12 +168,14 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         prior_transcript_stat: prior
             .as_ref()
             .and_then(|record| record.transcript_stat.as_ref()),
+        shared_pricing_cache_path: &shared_pricing_cache_path,
     };
     let mut refresh =
         agent.local_context_refresh(rimz::agents::RefreshTrigger::Hook(event_name), &refresh_ctx);
     supplement_realtime_cost(
         agent,
         context_agent_id,
+        &shared_pricing_cache_path,
         turn_ended,
         prior.as_ref(),
         &mut refresh,
@@ -202,6 +205,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
 pub(super) fn supplement_realtime_cost(
     agent: &dyn AgentAdapter,
     context_agent_id: &str,
+    pricing_cache_path: &Path,
     turn_ended: bool,
     prior: Option<&rimz::store::agent_context::AgentContextRecord>,
     refresh: &mut Option<rimz::agents::LocalContextRefresh>,
@@ -240,12 +244,10 @@ pub(super) fn supplement_realtime_cost(
         return;
     }
 
-    let Some(cost) = rimz::agents::spending::session_cost_usd(
-        agent,
-        context_agent_id,
-        &path,
-        &rimz::agents::PriceBook::embedded(),
-    ) else {
+    let prices = rimz::agents::pricing::cached_book(pricing_cache_path);
+    let Some(cost) =
+        rimz::agents::spending::session_cost_usd(agent, context_agent_id, &path, &prices)
+    else {
         return;
     };
 

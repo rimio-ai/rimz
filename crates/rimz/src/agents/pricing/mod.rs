@@ -18,8 +18,8 @@
 //!    fallback rows; the models.dev catalogue is fetched only during an
 //!    unknown-model chase and fills models LiteLLM lacks.
 //!
-//! Lookups are pure and network-free: the merged book is assembled once per
-//! process from the embedded data and the on-disk cache, and
+//! Lookups are pure and network-free: [`cached_book`] memoizes the merged
+//! embedded, builtin, and on-disk cache data by file stamp, and
 //! [`PriceBook::price`] resolves a model by exact match then a boundary-aware
 //! fuzzy scan. The only network is the gated refresh in [`load_for_spending`]:
 //! a weekly refresh, plus an escalating unknown-model chase when a transcript
@@ -32,7 +32,8 @@ mod remote;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -221,12 +222,39 @@ pub fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -
     book
 }
 
-/// Load the spending price book from the embedded snapshot plus the persistent
-/// shared pricing cache, without refreshing or writing. Used by local fallback
-/// spending reads that could not win the shared spending election but still need
-/// the same cached prices the producer normally uses.
-pub fn load_cached_for_spending(cache_path: &Path) -> PriceBook {
-    PriceBook::assembled(&read_cache(cache_path))
+type CachedBookMemo = Option<(PathBuf, Option<(u64, u64)>, Arc<PriceBook>)>;
+
+static CACHED_BOOK_MEMO: LazyLock<Mutex<CachedBookMemo>> = LazyLock::new(|| Mutex::new(None));
+
+/// Load the current read-only price book from the embedded snapshot, builtins,
+/// and persistent shared cache, without refreshing or writing. Spending
+/// fallbacks, agent-card costs, and hook reconciliation share this path.
+pub fn cached_book(cache_path: &Path) -> Arc<PriceBook> {
+    let stamp = cache_stamp(cache_path);
+    let mut memo = CACHED_BOOK_MEMO
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some((memo_path, memo_stamp, book)) = memo.as_ref()
+        && memo_path == cache_path
+        && *memo_stamp == stamp
+    {
+        return Arc::clone(book);
+    }
+
+    let book = Arc::new(PriceBook::assembled(&read_cache(cache_path)));
+    *memo = Some((cache_path.to_owned(), stamp, Arc::clone(&book)));
+    book
+}
+
+fn cache_stamp(path: &Path) -> Option<(u64, u64)> {
+    let metadata = fs::metadata(path).ok()?;
+    let mtime_secs = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some((mtime_secs, metadata.len()))
 }
 
 fn refresh_cache(
@@ -503,6 +531,7 @@ mod tests {
         assert!(book().price("totally-unknown-model").is_none());
         assert!(PriceBook::embedded().price("gpt-5").is_some());
         assert!(PriceBook::embedded().price("gpt-5.5-codex").is_some());
+        assert!(PriceBook::embedded().price("gpt-5.6-sol").is_some());
     }
 
     #[test]
@@ -771,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_spending_loader_reads_shared_cache_without_refresh() {
+    fn cached_book_reads_shared_cache_without_refresh() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pricing-cache.json");
         let model = "rimz-test-cached-model";
@@ -790,11 +819,47 @@ mod tests {
         };
         write_cache(&path, &cache);
 
-        let book = load_cached_for_spending(&path);
+        let book = cached_book(&path);
         let price = book.price(model).expect("cached price");
 
         assert!((price.input - 3e-6).abs() < f64::EPSILON);
         assert!((price.output - 15e-6).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn cached_book_invalidates_when_shared_cache_stamp_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pricing-cache.json");
+        let model = "rimz-test-changing-model";
+        let mut cache = PricingCache {
+            litellm: BTreeMap::from([(
+                model.to_owned(),
+                Pricing {
+                    input: 3e-6,
+                    output: 15e-6,
+                    ..Pricing::empty()
+                },
+            )]),
+            ..Default::default()
+        };
+        write_cache(&path, &cache);
+
+        let first = cached_book(&path);
+        assert!((first.price(model).unwrap().input - 3e-6).abs() < f64::EPSILON);
+
+        cache.litellm.get_mut(model).unwrap().input = 30e-6;
+        cache.litellm.insert(
+            "rimz-test-length-bump".to_owned(),
+            Pricing {
+                input: 1e-6,
+                output: 1e-6,
+                ..Pricing::empty()
+            },
+        );
+        write_cache(&path, &cache);
+
+        let second = cached_book(&path);
+        assert!((second.price(model).unwrap().input - 30e-6).abs() < f64::EPSILON);
     }
 
     #[test]

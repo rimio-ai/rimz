@@ -302,9 +302,12 @@ fn compute_stats_from_files(
     let now_secs = unix_secs_now();
     let prices = if publish {
         let unknowns = walker.recorded_unknown_models(&cursor_path, &files, now_secs);
-        pricing::load_for_spending(&paths.shared_pricing_cache_path(), &unknowns)
+        Arc::new(pricing::load_for_spending(
+            &paths.shared_pricing_cache_path(),
+            &unknowns,
+        ))
     } else {
-        pricing::load_cached_for_spending(&paths.shared_pricing_cache_path())
+        pricing::cached_book(&paths.shared_pricing_cache_path())
     };
     let origin_overrides = HashMap::new();
     let automation_files = rimz::harness::schedule::run_log::automation_transcripts();
