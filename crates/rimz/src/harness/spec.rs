@@ -305,8 +305,8 @@ pub fn validate_config(
     Ok(())
 }
 
-/// The team a launch spec names, for the whole-team form (`pcr`) and the
-/// single-role form (`pcr.planner`). `None` when the spec names no team.
+/// The team a launch spec names, for the whole-team form (`forge`) and the
+/// single-role form (`forge.planner`). `None` when the spec names no team.
 pub fn spec_team<'a>(spec: &'a str, teams: &TeamsConfig) -> Option<&'a str> {
     let spec = spec.trim();
     if teams.0.contains_key(spec) {

@@ -88,7 +88,7 @@ fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
         launch: rimz::agents::LaunchParams {
             profile: Some("codex-coder".to_owned()),
             role: Some("coder".to_owned()),
-            team: Some("pcr".to_owned()),
+            team: Some("forge".to_owned()),
             ..rimz::agents::LaunchParams::default()
         },
         run_id: None,

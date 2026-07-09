@@ -18,7 +18,7 @@ fn lifecycle_observation() -> AgentLifecycleObservation {
             role: Some("reviewer".to_owned()),
             model: Some("claude-opus".to_owned()),
             effort: Some("high".to_owned()),
-            team: Some("pcr".to_owned()),
+            team: Some("forge".to_owned()),
             launch_group: None,
             launch_ordinal: None,
             channel: None,
@@ -86,7 +86,7 @@ fn agent_lifecycle_constructor_serializes_compact_wire_shape() {
             "agent_id": "sess-1",
             "agent_name": "amber-atlas",
             "role": "reviewer",
-            "team": "pcr",
+            "team": "forge",
             "profile": "claude-reviewer",
             "kind_ordinal": 2,
             "signal": {
@@ -276,7 +276,7 @@ fn agent_launch_payload_round_trips_channel_identity() {
         "role": "coder",
         "model": "gpt-5.5-codex",
         "effort": "xhigh",
-        "team": "pcr",
+        "team": "forge",
         "launch_group": "launch_group_1",
         "launch_ordinal": 2,
         "channel": "design",
@@ -285,7 +285,7 @@ fn agent_launch_payload_round_trips_channel_identity() {
     .unwrap();
 
     assert_eq!(payload.launch.profile.as_deref(), Some("codex-coder"));
-    assert_eq!(payload.launch.team.as_deref(), Some("pcr"));
+    assert_eq!(payload.launch.team.as_deref(), Some("forge"));
     assert_eq!(
         payload.launch.launch_group.as_deref(),
         Some("launch_group_1")
@@ -299,7 +299,7 @@ fn agent_launch_payload_round_trips_channel_identity() {
     assert_eq!(encoded["role"], "coder");
     assert_eq!(encoded["model"], "gpt-5.5-codex");
     assert_eq!(encoded["effort"], "xhigh");
-    assert_eq!(encoded["team"], "pcr");
+    assert_eq!(encoded["team"], "forge");
     assert_eq!(encoded["launch_group"], "launch_group_1");
     assert_eq!(encoded["launch_ordinal"], 2);
     assert_eq!(encoded["channel"], "design");
@@ -347,7 +347,7 @@ fn shared_launch_params_stay_top_level_in_launch_and_lifecycle_events() {
                 role: Some("coder".to_owned()),
                 model: Some("gpt-5.5-codex".to_owned()),
                 effort: Some("xhigh".to_owned()),
-                team: Some("pcr".to_owned()),
+                team: Some("forge".to_owned()),
                 launch_group: Some("launch_group_1".to_owned()),
                 launch_ordinal: Some(2),
                 channel: Some("design".to_owned()),

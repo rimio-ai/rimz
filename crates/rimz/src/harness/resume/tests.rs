@@ -110,15 +110,15 @@ fn resume_id(seed: &CohortSeed) -> Option<&str> {
 
 #[test]
 fn cohort_resume_selects_newest_team_member_per_role() {
-    let mut old_planner = agent("claude", "old-planner", "/code/pcr", Some("pcr"), 30);
-    old_planner.team = Some("pcr".to_owned());
+    let mut old_planner = agent("claude", "old-planner", "/code/forge", Some("forge"), 30);
+    old_planner.team = Some("forge".to_owned());
     old_planner.role = Some("planner".to_owned());
-    let mut planner = agent("claude", "planner", "/code/pcr", Some("pcr"), 2);
-    planner.team = Some("pcr".to_owned());
+    let mut planner = agent("claude", "planner", "/code/forge", Some("forge"), 2);
+    planner.team = Some("forge".to_owned());
     planner.role = Some("planner".to_owned());
     planner.channel = Some("design".to_owned());
-    let mut coder = agent("codex", "coder", "/code/pcr", Some("pcr"), 4);
-    coder.team = Some("pcr".to_owned());
+    let mut coder = agent("codex", "coder", "/code/forge", Some("forge"), 4);
+    coder.team = Some("forge".to_owned());
     coder.role = Some("coder".to_owned());
     let cells = vec![
         cohort_cell("claude", Some("planner")),
@@ -129,7 +129,7 @@ fn cohort_resume_selects_newest_team_member_per_role() {
         &[old_planner, planner, coder],
         dead,
         &cells,
-        Some("pcr"),
+        Some("forge"),
         |_| true,
     )
     .expect("cohort plan");
@@ -138,7 +138,7 @@ fn cohort_resume_selects_newest_team_member_per_role() {
         plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
         [Some("planner"), Some("coder")]
     );
-    assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/pcr")));
+    assert_eq!(plan.cwd.as_deref(), Some(Path::new("/code/forge")));
     assert_eq!(plan.channel.as_deref(), Some("design"));
     assert!(plan.fresh.is_empty());
 }
@@ -191,15 +191,15 @@ fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere
 
 #[test]
 fn cohort_resume_includes_cleanly_ended_members() {
-    let mut ended_agent = agent("claude", "ended", "/code/pcr", Some("pcr"), 1);
-    ended_agent.team = Some("pcr".to_owned());
+    let mut ended_agent = agent("claude", "ended", "/code/forge", Some("forge"), 1);
+    ended_agent.team = Some("forge".to_owned());
     ended_agent.role = Some("planner".to_owned());
 
     let plan = plan_cohort_resume(
         &[ended_agent],
         dead,
         &[cohort_cell("claude", Some("planner"))],
-        Some("pcr"),
+        Some("forge"),
         |_| true,
     )
     .expect("closed team member remains a cohort candidate");
@@ -212,15 +212,15 @@ fn cohort_resume_includes_cleanly_ended_members() {
 
 #[test]
 fn cohort_resume_refuses_a_still_live_member() {
-    let mut planner = agent("claude", "planner", "/code/pcr", Some("pcr"), 1);
-    planner.team = Some("pcr".to_owned());
+    let mut planner = agent("claude", "planner", "/code/forge", Some("forge"), 1);
+    planner.team = Some("forge".to_owned());
     planner.role = Some("planner".to_owned());
     planner.name = Some("swift-otter".to_owned());
     let err = plan_cohort_resume(
         &[planner],
         |_| AgentLiveness::Live { pid: 42 },
         &[cohort_cell("claude", Some("planner"))],
-        Some("pcr"),
+        Some("forge"),
         |_| true,
     )
     .expect_err("live member refuses resume");
@@ -430,7 +430,7 @@ fn resume_command_replays_launch_identity() {
     agent.name = Some("swift-otter".to_owned());
     agent.profile = Some("claude-planner".to_owned());
     agent.role = Some("planner".to_owned());
-    agent.team = Some("pcr".to_owned());
+    agent.team = Some("forge".to_owned());
     agent.launch_group = Some("launch_group_1".to_owned());
     agent.launch_ordinal = Some(2);
     assert_eq!(
@@ -449,7 +449,7 @@ fn resume_command_replays_launch_identity() {
             "--agent-role",
             "planner",
             "--agent-team",
-            "pcr",
+            "forge",
             "--launch-group",
             "launch_group_1",
             "--launch-ordinal",
@@ -711,7 +711,7 @@ fn worktree_team_resume_replays_flat_worktree_channel() {
         Some("feature/auth"),
         1,
     );
-    planner.team = Some("pcr".to_owned());
+    planner.team = Some("forge".to_owned());
     planner.role = Some("planner".to_owned());
     let plan = plan_resume(
         &[planner],
@@ -733,7 +733,7 @@ fn worktree_team_resume_replays_flat_worktree_channel() {
     assert!(
         first_argv(&plan.tabs[0])
             .windows(2)
-            .any(|pair| { pair[0].as_str() == "--agent-team" && pair[1].as_str() == "pcr" }),
+            .any(|pair| { pair[0].as_str() == "--agent-team" && pair[1].as_str() == "forge" }),
         "resume argv keeps the team identity: {:?}",
         first_argv(&plan.tabs[0])
     );

@@ -150,7 +150,7 @@ fn resume_replays_role_and_team() {
         "feature",
     );
     obs.launch.role = Some("planner".to_owned());
-    obs.launch.team = Some("pcr".to_owned());
+    obs.launch.team = Some("forge".to_owned());
     obs.launch.profile = Some("claude-planner".to_owned());
     h.store
         .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
@@ -175,7 +175,7 @@ fn resume_replays_role_and_team() {
                 "--agent-role",
                 "planner",
                 "--agent-team",
-                "pcr",
+                "forge",
                 "--close-pane-on-exit",
             ]
             .into_iter()

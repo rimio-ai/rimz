@@ -222,10 +222,10 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
     let mut snapshot = empty_snapshot();
     let mut planner = agent("claude", "session-planner", None, "terminal_1");
     planner.worktree_path = Some("/code/team-channel".to_owned());
-    planner.channel = Some("team-channel/pcr".to_owned());
+    planner.channel = Some("team-channel/forge".to_owned());
     let mut coder = agent("codex", "session-coder", None, "terminal_2");
     coder.worktree_path = Some("/code/team-channel".to_owned());
-    coder.channel = Some("team-channel/pcr".to_owned());
+    coder.channel = Some("team-channel/forge".to_owned());
     let mut other = agent("codex", "session-other", None, "terminal_3");
     other.worktree_path = Some("/code/team-channel".to_owned());
     other.channel = Some("team-channel/docs".to_owned());
@@ -233,13 +233,13 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
 
     assert_eq!(
         agent_channel(&snapshot.agents[0]).as_deref(),
-        Some("team-channel/pcr")
+        Some("team-channel/forge")
     );
-    assert_eq!((&snapshot.agents[0]).channel_label(), "team-channel/pcr");
-    assert!((&snapshot.agents[0]).in_worktree("team-channel/pcr"));
+    assert_eq!((&snapshot.agents[0]).channel_label(), "team-channel/forge");
+    assert!((&snapshot.agents[0]).in_worktree("team-channel/forge"));
     assert!(!(&snapshot.agents[0]).in_worktree("team-channel"));
 
-    let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, Some("team-channel/pcr"))
+    let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, Some("team-channel/forge"))
         .unwrap()
         .iter()
         .map(|agent| agent.agent_id.as_str())
@@ -253,7 +253,7 @@ fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
         resolve_room_channel(
             std::path::Path::new("/code/project"),
             std::path::Path::new("/code/project-wt/auth"),
-            Some("pcr"),
+            Some("forge"),
             None,
         )
         .as_deref(),
@@ -263,11 +263,11 @@ fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
         resolve_room_channel(
             std::path::Path::new("/code/project"),
             std::path::Path::new("/code/project"),
-            Some("pcr"),
+            Some("forge"),
             None,
         )
         .as_deref(),
-        Some("project/pcr")
+        Some("project/forge")
     );
     assert_eq!(
         resolve_room_channel(
@@ -282,7 +282,7 @@ fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
         resolve_room_channel(
             std::path::Path::new("/code/project"),
             std::path::Path::new("/code/project-wt/auth"),
-            Some("pcr"),
+            Some("forge"),
             Some("design"),
         )
         .as_deref(),
@@ -293,24 +293,24 @@ fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
 #[test]
 fn launch_stamped_worktree_team_channel_renders_flat_worktree() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
-    team_agent.team = Some("pcr".to_owned());
+    team_agent.team = Some("forge".to_owned());
     team_agent.channel = Some("auth".to_owned());
 
     assert_eq!(agent_channel(&team_agent).as_deref(), Some("auth"));
     assert_eq!((&team_agent).channel_label(), "auth");
     assert!((&team_agent).in_worktree("auth"));
-    assert!(!(&team_agent).in_worktree("auth/pcr"));
+    assert!(!(&team_agent).in_worktree("auth/forge"));
 }
 
 #[test]
 fn agent_channel_and_in_worktree_use_directory_not_branch() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
-    team_agent.team = Some("pcr".to_owned());
+    team_agent.team = Some("forge".to_owned());
     team_agent.worktree_branch = Some("scratch".to_owned());
 
     assert_eq!(agent_channel(&team_agent).as_deref(), Some("auth"));
     assert_eq!((&team_agent).channel_label(), "auth");
-    assert!(!(&team_agent).in_worktree("auth/pcr"));
+    assert!(!(&team_agent).in_worktree("auth/forge"));
     assert!((&team_agent).in_worktree("auth"));
     assert!(!(&team_agent).in_worktree("scratch"));
     assert!(!(&team_agent).in_worktree("feat/auth"));
@@ -329,7 +329,7 @@ fn branch_style_worktree_filter_matches_dashed_channel() {
 fn explicit_named_channel_wins_over_worktree_and_team() {
     let mut agent = agent("claude", "session-design", Some("feat/auth"), "terminal_1");
     agent.worktree_path = Some("/code/repo".to_owned());
-    agent.team = Some("pcr".to_owned());
+    agent.team = Some("forge".to_owned());
     agent.channel = Some("design".to_owned());
 
     assert_eq!(agent_channel(&agent).as_deref(), Some("design"));

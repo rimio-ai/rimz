@@ -506,13 +506,13 @@ mod tests {
         let mut table = Table::new(["NAME"]);
         table.section_cells(vec![
             cell("⑂ auth-refresh").fg(palette::ACCENT.bold()),
-            cell("· pcr team").fg(palette::META),
+            cell("· forge team").fg(palette::META),
         ]);
         table.row([cell("@coder")]);
 
         assert_eq!(
             strip(|w| table.render(w)),
-            "NAME\n\n⑂ auth-refresh · pcr team\n@coder\n"
+            "NAME\n\n⑂ auth-refresh · forge team\n@coder\n"
         );
     }
 

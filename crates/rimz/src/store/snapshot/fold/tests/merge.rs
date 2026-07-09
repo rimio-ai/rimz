@@ -38,7 +38,7 @@ fn live_winner_backfills_trimmed_carryover_enrichment() {
     carried.worktree_path = Some("/repo".into());
     carried.worktree_branch = Some("main".into());
     carried.role = Some("coder".into());
-    carried.team = Some("pcr".into());
+    carried.team = Some("forge".into());
     carried.channel = Some("event-log".into());
     carried.profile = Some("claude-coder".into());
     carried.model = Some("opus".into());

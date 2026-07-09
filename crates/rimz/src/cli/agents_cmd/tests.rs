@@ -254,17 +254,17 @@ mod parse {
         assert!(parsed.args.print);
         assert!(parsed.args.json);
 
-        let parsed = AgentsHarness::try_parse_from(["rimz", "pcr", "--resume"])
+        let parsed = AgentsHarness::try_parse_from(["rimz", "forge", "--resume"])
             .expect("parse cohort resume");
         assert!(parsed.args.resume);
 
-        let parsed = AgentsHarness::try_parse_from(["rimz", "pcr", "--continue"])
+        let parsed = AgentsHarness::try_parse_from(["rimz", "forge", "--continue"])
             .expect("parse cohort resume alias");
         assert!(parsed.args.resume);
 
         let parsed = AgentsHarness::try_parse_from([
             "rimz",
-            "pcr",
+            "forge",
             "--worktree=restore-living-team",
             "--resume",
         ])
@@ -395,7 +395,7 @@ mod parse {
             "--agent-role",
             "coder",
             "--agent-team",
-            "pcr",
+            "forge",
             "--launch-group",
             "launch_group_1",
             "--launch-ordinal",
@@ -429,7 +429,7 @@ mod parse {
         );
         assert_eq!(args.agent_name.as_deref(), Some("lucid-atlas"));
         assert_eq!(args.agent_role.as_deref(), Some("coder"));
-        assert_eq!(args.agent_team.as_deref(), Some("pcr"));
+        assert_eq!(args.agent_team.as_deref(), Some("forge"));
         assert_eq!(args.launch_group.as_deref(), Some("launch_group_1"));
         assert_eq!(args.launch_ordinal, Some(2));
         assert_eq!(args.agent_channel.as_deref(), Some("design"));
@@ -1056,7 +1056,7 @@ mod identity {
             &layout,
             Some("docs"),
             None,
-            Some("pcr"),
+            Some("forge"),
             None,
             Some("design"),
         )
@@ -1071,7 +1071,7 @@ mod identity {
         assert_eq!(requests[0].launch.role.as_deref(), Some("coder"));
         assert_eq!(requests[0].launch.model.as_deref(), Some("gpt-5-codex"));
         assert_eq!(requests[0].launch.effort.as_deref(), Some("high"));
-        assert_eq!(requests[0].launch.team.as_deref(), Some("pcr"));
+        assert_eq!(requests[0].launch.team.as_deref(), Some("forge"));
         assert_eq!(requests[0].launch.channel.as_deref(), Some("design"));
 
         let requests =
@@ -1114,7 +1114,7 @@ mod identity {
             &team_layout,
             None,
             None,
-            Some("pcr"),
+            Some("forge"),
             Some(&team_roles),
             None,
         )
@@ -1136,7 +1136,7 @@ mod identity {
             &single_role,
             None,
             None,
-            Some("pcr"),
+            Some("forge"),
             Some(&team_roles),
             None,
         )
@@ -1204,7 +1204,7 @@ mod pane_exec {
                 prompt: None,
                 cleanup_worktree: false,
                 in_place: false,
-                team: Some("pcr"),
+                team: Some("forge"),
                 channel: Some("design"),
                 launch: Some(&launch),
                 resume_seed: None,
@@ -1217,7 +1217,7 @@ mod pane_exec {
             ("--launch-id", "launch_0123456789abcdef0123456789abcdef"),
             ("--agent-profile", "claude-planner"),
             ("--agent-role", "planner"),
-            ("--agent-team", "pcr"),
+            ("--agent-team", "forge"),
             ("--launch-group", "launch_group_1"),
             ("--launch-ordinal", "2"),
             ("--agent-channel", "design"),
@@ -1237,7 +1237,7 @@ mod pane_exec {
                     prompt: None,
                     cleanup_worktree,
                     in_place,
-                    team: Some("pcr"),
+                    team: Some("forge"),
                     channel: None,
                     launch: Some(&launch),
                     resume_seed: None,
@@ -1273,7 +1273,7 @@ mod pane_exec {
         agent.name = Some("swift-otter".to_owned());
         agent.profile = Some("prior-profile".to_owned());
         agent.role = Some("prior-role".to_owned());
-        agent.team = Some("pcr".to_owned());
+        agent.team = Some("forge".to_owned());
         agent.launch_group = Some("launch_group_1".to_owned());
         agent.launch_ordinal = Some(1);
         agent.channel = Some("design".to_owned());
@@ -1302,7 +1302,7 @@ mod pane_exec {
             ("--agent-name", "swift-otter"),
             ("--agent-profile", "prior-profile"),
             ("--agent-role", "prior-role"),
-            ("--agent-team", "pcr"),
+            ("--agent-team", "forge"),
             ("--launch-group", "launch_group_1"),
             ("--launch-ordinal", "1"),
             ("--agent-channel", "design"),
@@ -1856,7 +1856,7 @@ mod render {
         );
         planner.channel = Some("auth-refresh".to_owned());
         planner.worktree_path = Some("/repo/worktrees/auth-refresh".to_owned());
-        planner.team = Some("pcr".to_owned());
+        planner.team = Some("forge".to_owned());
         let mut coder = agent_with_status(
             "coder",
             rimz::agents::AgentStatus::Running,
@@ -1875,7 +1875,7 @@ mod render {
 
         let text = render_agents_text(&snapshot, now, 120);
 
-        assert!(text.contains("⑂ auth-refresh · pcr team"), "{text}");
+        assert!(text.contains("⑂ auth-refresh · forge team"), "{text}");
     }
 
     #[test]
@@ -1887,8 +1887,8 @@ mod render {
             rimz::agents::TurnPhase::Idle,
             1_000,
         );
-        repeated.channel = Some("rimz/pcr".to_owned());
-        repeated.team = Some("pcr".to_owned());
+        repeated.channel = Some("rimz/forge".to_owned());
+        repeated.team = Some("forge".to_owned());
         let repeated_snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo/main")),
             vec![repeated],
@@ -1898,7 +1898,7 @@ mod render {
         let repeated_text = render_agents_text(&repeated_snapshot, now, 120);
         let repeated_header = repeated_text
             .lines()
-            .find(|line| line.contains("rimz/pcr"))
+            .find(|line| line.contains("rimz/forge"))
             .unwrap_or_default();
         assert!(!repeated_header.contains("team"), "{repeated_text}");
 
@@ -1909,7 +1909,7 @@ mod render {
             1_000,
         );
         planner.channel = Some("mixed".to_owned());
-        planner.team = Some("pcr".to_owned());
+        planner.team = Some("forge".to_owned());
         let mut coder = agent_with_status(
             "mixed-coder",
             rimz::agents::AgentStatus::Idle,

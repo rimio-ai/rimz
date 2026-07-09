@@ -220,7 +220,7 @@ mod tests {
         agent.status = AgentStatus::Idle;
         agent.pane = Some(pane(&format!("%{id}")));
         agent.worktree_path = Some(worktree.to_owned());
-        agent.team = Some("pcr".to_owned());
+        agent.team = Some("forge".to_owned());
         agent.role = Some(role.to_owned());
         agent
     }
@@ -240,7 +240,7 @@ mod tests {
         profiles.0.insert("codex-code".to_owned(), profile("codex"));
         let mut teams = TeamsConfig::default();
         teams.0.insert(
-            "pcr".to_owned(),
+            "forge".to_owned(),
             Team {
                 roles: vec![
                     RoleBinding {
@@ -285,8 +285,8 @@ mod tests {
     #[test]
     fn plans_team_restore_in_declared_layout_order() {
         let (teams, profiles, commands) = configs();
-        let planner = agent("claude", "planner", "planner", "/repo/pcr", 3);
-        let coder = agent("codex", "coder", "coder", "/repo/pcr", 5);
+        let planner = agent("claude", "planner", "planner", "/repo/forge", 3);
+        let coder = agent("codex", "coder", "coder", "/repo/forge", 5);
 
         let tabs = plan_team_restore_tabs(
             &[coder, planner],
@@ -298,7 +298,7 @@ mod tests {
         );
 
         assert_eq!(tabs.len(), 1);
-        assert_eq!(tabs[0].label, "#pcr");
+        assert_eq!(tabs[0].label, "#forge");
         assert_eq!(tabs[0].cohort.seeds.len(), 2);
         assert!(matches!(
             &tabs[0].cohort.seeds[0],
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn plans_fresh_seed_for_missing_team_member() {
         let (teams, profiles, commands) = configs();
-        let planner = agent("claude", "planner", "planner", "/repo/pcr", 3);
+        let planner = agent("claude", "planner", "planner", "/repo/forge", 3);
 
         let tabs = plan_team_restore_tabs(
             &[planner],
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn ignores_group_whose_team_no_longer_resolves() {
         let (_teams, profiles, commands) = configs();
-        let planner = agent("claude", "planner", "planner", "/repo/pcr", 3);
+        let planner = agent("claude", "planner", "planner", "/repo/forge", 3);
 
         let tabs = plan_team_restore_tabs(
             &[planner],

@@ -272,7 +272,7 @@ mod tests {
         observation.worktree_path = Some("/tmp/project".to_owned());
         observation.worktree_branch = Some("feature".to_owned());
         observation.launch.role = Some("coder".to_owned());
-        observation.launch.team = Some("pcr".to_owned());
+        observation.launch.team = Some("forge".to_owned());
         observation.launch.channel = Some("event-log".to_owned());
         observation.launch.profile = Some("claude-coder".to_owned());
         observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));

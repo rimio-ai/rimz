@@ -336,12 +336,12 @@ fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
 #[test]
 fn set_document_value_renders_inline_table_arrays_as_table_blocks() {
     let mut doc = r#"
-[agents.teams.pcr]
+[agents.teams.forge]
 layout = "planner,coder"
 "#
     .parse::<DocumentMut>()
     .expect("parse config snippet");
-    let path = parse_key("agents.teams.pcr.roles").expect("key");
+    let path = parse_key("agents.teams.forge.roles").expect("key");
     let value = parse_edit_value(
         r#"[
             { role = "planner", profile = "claude-planner" },
@@ -353,7 +353,7 @@ layout = "planner,coder"
 
     let rendered = doc.to_string();
     assert!(
-        rendered.contains("[[agents.teams.pcr.roles]]"),
+        rendered.contains("[[agents.teams.forge.roles]]"),
         "roles should render as array-of-tables:\n{rendered}"
     );
     assert!(
@@ -365,7 +365,7 @@ layout = "planner,coder"
             .find("layout = \"planner,coder\"")
             .expect("layout survives")
             < rendered
-                .find("[[agents.teams.pcr.roles]]")
+                .find("[[agents.teams.forge.roles]]")
                 .expect("roles block renders"),
         "layout should stay in the team table before role blocks:\n{rendered}"
     );

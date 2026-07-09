@@ -36,7 +36,7 @@ The launch grammar, profiles, and teams these commands consume are configured pe
 
 - `#design` matches a named channel created by [`rimz channel`](./channel.md); `--channel design` is the flag spelling.
 - `#auth-refresh` matches by branch, generated worktree name, or directory basename; `--worktree auth-refresh` is the worktree flag spelling.
-- `#query-engine/pcr` matches the named team `pcr` launched in-place from the `query-engine` directory.
+- `#query-engine/forge` matches the named team `forge` launched in-place from the `query-engine` directory.
 - The default channel is the named-channel tab or worktree you run the command in.
 - A team member pane launched in-place carries `RIMZ_CHANNEL=<dir>/<team>`, so its own `rimz` commands default to that stamped lane.
 - A pane id (`tmux:%12`, `zellij:terminal_3`) addresses one pane directly and ignores channels.
@@ -64,7 +64,7 @@ rimz agents claude,codex --channel=design "Draft the API shape."
 rimz agents claude,codex --worktree=cli-docs "Review the CLI docs."
 rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
-rimz agents pcr.planner                              # re-add one role of team pcr
+rimz agents forge.planner                              # re-add one role of team forge
 rimz agents claude --worktree "Take one approach."   # parallel attempts, each in its own fresh worktree
 rimz agents claude --worktree "Take another approach."
 ```
@@ -80,8 +80,8 @@ A second positional that is itself a known cell is rejected with a `rimz agents 
 `--resume` relaunches a prior cohort matching the same spec; `--continue` is the same visible alias.
 
 ```sh
-rimz agents pcr --resume                             # reopen the newest closed pcr cohort
-rimz agents pcr -w restore-living-team --resume      # reopen that exact team instance
+rimz agents forge --resume                             # reopen the newest closed forge cohort
+rimz agents forge -w restore-living-team --resume      # reopen that exact team instance
 rimz agents claude,codex --resume                    # reopen the newest matching inline cohort
 rimz agents claude --resume                          # resume the freshest closed Claude session
 ```

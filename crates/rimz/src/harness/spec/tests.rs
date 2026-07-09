@@ -932,7 +932,7 @@ fn team_role_spec_resolves_one_role_with_team_identity() {
         },
     )]);
     let teams = TeamsConfig(BTreeMap::from([(
-        "pcr".to_owned(),
+        "forge".to_owned(),
         team(vec![
             RoleBinding {
                 role: "planner".to_owned(),
@@ -949,7 +949,7 @@ fn team_role_spec_resolves_one_role_with_team_identity() {
     )]));
 
     let spec =
-        resolve_spec(Some("pcr.planner"), &profiles, &no_commands(), &teams).expect("team role");
+        resolve_spec(Some("forge.planner"), &profiles, &no_commands(), &teams).expect("team role");
 
     assert_eq!(spec.columns.len(), 1);
     let [
@@ -973,7 +973,7 @@ fn team_role_spec_resolves_one_role_with_team_identity() {
     assert_eq!(model.as_deref(), Some("role-model"));
     assert_eq!(effort.as_deref(), Some("high"));
 
-    let dotted_role = resolve_spec(Some("pcr.sub.planner"), &profiles, &no_commands(), &teams)
+    let dotted_role = resolve_spec(Some("forge.sub.planner"), &profiles, &no_commands(), &teams)
         .expect("dotted role");
     assert!(matches!(
         &dotted_role.columns[0].rows[0],
@@ -985,7 +985,7 @@ fn team_role_spec_resolves_one_role_with_team_identity() {
 fn team_role_spec_reports_unknown_role_and_preserves_non_team_dot_specs() {
     let team_profiles = profiles([("planner-profile", profile("claude"))]);
     let teams = TeamsConfig(BTreeMap::from([(
-        "pcr".to_owned(),
+        "forge".to_owned(),
         team(vec![
             role("planner", "planner-profile"),
             role("coder", "planner-profile"),
@@ -993,12 +993,12 @@ fn team_role_spec_reports_unknown_role_and_preserves_non_team_dot_specs() {
     )]));
 
     assert!(matches!(
-        resolve_spec(Some("pcr.bogus"), &team_profiles, &no_commands(), &teams),
+        resolve_spec(Some("forge.bogus"), &team_profiles, &no_commands(), &teams),
         Err(LayoutErr::UnknownRoleInTeam {
             team,
             role,
             valid_roles
-        }) if team == "pcr" && role == "bogus" && valid_roles == "planner, coder"
+        }) if team == "forge" && role == "bogus" && valid_roles == "planner, coder"
     ));
     assert!(matches!(
         resolve_spec(
@@ -1024,12 +1024,12 @@ fn team_role_spec_reports_unknown_role_and_preserves_non_team_dot_specs() {
 fn team_names_reject_dots_and_spec_team_handles_team_role_specs() {
     let profiles = profiles([("planner-profile", profile("claude"))]);
     let teams = TeamsConfig(BTreeMap::from([(
-        "pcr".to_owned(),
+        "forge".to_owned(),
         team(vec![role("planner", "planner-profile")]),
     )]));
 
-    assert_eq!(spec_team("pcr", &teams), Some("pcr"));
-    assert_eq!(spec_team("pcr.planner", &teams), Some("pcr"));
+    assert_eq!(spec_team("forge", &teams), Some("forge"));
+    assert_eq!(spec_team("forge.planner", &teams), Some("forge"));
     assert_eq!(spec_team("notateam.planner", &teams), None);
 
     let bad_teams = TeamsConfig(BTreeMap::from([(
@@ -1268,12 +1268,12 @@ fn title_uses_first_agent_or_terminal_and_worktree_name() {
             &agent,
             Path::new("/code/wt/tab-name"),
             Some("tab-name"),
-            Some("pcr")
+            Some("forge")
         ),
         "#tab-name"
     );
     assert_eq!(
-        default_tab_title(&agent, Path::new("/code/query-engine"), None, Some("pcr")),
-        "team:pcr"
+        default_tab_title(&agent, Path::new("/code/query-engine"), None, Some("forge")),
+        "team:forge"
     );
 }

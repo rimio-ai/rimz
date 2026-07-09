@@ -731,11 +731,11 @@ mod tests {
             rimz::harness::target::resolve_room_channel(
                 &workspace.project_root,
                 &workspace.worktree_root,
-                Some("pcr"),
+                Some("forge"),
                 None,
             )
             .as_deref(),
-            Some("team-channel/pcr")
+            Some("team-channel/forge")
         );
         assert_eq!(
             rimz::harness::target::resolve_room_channel(

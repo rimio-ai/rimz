@@ -58,7 +58,7 @@ fn standalone_team_role_uses_team_channel_and_role_handle() {
 
     room.agent_hook_as_team(
         "planner",
-        "pcr",
+        "forge",
         "codex",
         &session_start_at(
             "team-planner",
@@ -81,10 +81,10 @@ fn standalone_team_role_uses_team_channel_and_role_handle() {
         .iter()
         .find(|agent| agent.role.as_deref() == Some("planner"))
         .expect("planner agent");
-    assert_eq!(planner.team.as_deref(), Some("pcr"));
+    assert_eq!(planner.team.as_deref(), Some("forge"));
     assert_eq!(
         rimz::harness::target::agent_channel(planner).as_deref(),
-        Some("project/pcr")
+        Some("project/forge")
     );
 }
 

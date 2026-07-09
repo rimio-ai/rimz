@@ -465,7 +465,7 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 role: Some("coder".to_owned()),
-                team: Some("pcr".to_owned()),
+                team: Some("forge".to_owned()),
                 launch_group: Some("launch_group_1".to_owned()),
                 launch_ordinal: Some(2),
                 ..LaunchParams::default()
@@ -490,7 +490,7 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
     assert_eq!(agents[0].agent_id.as_str(), "sess-1");
     assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
     assert_eq!(agents[0].role.as_deref(), Some("coder"));
-    assert_eq!(agents[0].team.as_deref(), Some("pcr"));
+    assert_eq!(agents[0].team.as_deref(), Some("forge"));
     assert_eq!(agents[0].launch_group.as_deref(), Some("launch_group_1"));
     assert_eq!(agents[0].launch_ordinal, Some(2));
 }
@@ -503,7 +503,7 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 role: Some("coder".to_owned()),
-                team: Some("pcr".to_owned()),
+                team: Some("forge".to_owned()),
                 ..LaunchParams::default()
             },
             pane_id: Some(PaneId::parse("zellij:terminal_1").expect("pane id")),
@@ -526,7 +526,7 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
     assert_eq!(agents[0].agent_id.as_str(), "sess-1");
     assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
     assert_eq!(agents[0].role.as_deref(), Some("coder"));
-    assert_eq!(agents[0].team.as_deref(), Some("pcr"));
+    assert_eq!(agents[0].team.as_deref(), Some("forge"));
     assert_eq!(
         agents[0].pane.as_ref().map(|pane| pane.pane_id.to_string()),
         Some("zellij:terminal_1".to_owned())

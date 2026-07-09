@@ -135,7 +135,7 @@ fn launch_identity_env(
 ) -> Option<String> {
     match var {
         rimz::harness::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
-        rimz::harness::run::ENV_TEAM => Some("pcr".to_owned()),
+        rimz::harness::run::ENV_TEAM => Some("forge".to_owned()),
         rimz::harness::run::ENV_LAUNCH_GROUP => Some("launch_group_1".to_owned()),
         rimz::harness::run::ENV_LAUNCH_ORDINAL => Some("2".to_owned()),
         rimz::harness::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
@@ -273,7 +273,7 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
         launch_identity_env,
     );
     assert_eq!(observed.launch.role.as_deref(), Some("coder"));
-    assert_eq!(observed.launch.team.as_deref(), Some("pcr"));
+    assert_eq!(observed.launch.team.as_deref(), Some("forge"));
     assert_eq!(
         observed.launch.launch_group.as_deref(),
         Some("launch_group_1")
@@ -313,7 +313,7 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
         |_observation, var| match var {
             rimz::harness::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
-            rimz::harness::run::ENV_TEAM => Some("pcr".to_owned()),
+            rimz::harness::run::ENV_TEAM => Some("forge".to_owned()),
             rimz::harness::run::ENV_LAUNCH_ORDINAL => Some("not-a-number".to_owned()),
             rimz::harness::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
             _ => None,

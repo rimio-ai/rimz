@@ -20,7 +20,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
 
                 effort: None,
 
-                team: Some("pcr".to_owned()),
+                team: Some("forge".to_owned()),
 
                 launch_group: None,
 
@@ -89,7 +89,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.output_tokens, Some(800));
     assert_eq!(agent.profile.as_deref(), Some("codex-coder"));
     assert_eq!(agent.role.as_deref(), Some("coder"));
-    assert_eq!(agent.team.as_deref(), Some("pcr"));
+    assert_eq!(agent.team.as_deref(), Some("forge"));
     assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
 }
 
