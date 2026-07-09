@@ -117,6 +117,7 @@ rimz doctor [--audit] [--json] [--output PATH]
 - **Backend** — backend and version, PATH-visible backend binaries, server-log excerpts, server socket, session health, duplicate sidebars
 - **Integration** — hook status, remote-control state, protocol versions, trust state
 - **State** — storage footprint, live agent problem rows, message-delivery failures, recent sidebar diagnostics
+- **Last incident** — previous room death cause and time, lost agents, `recovered N of M`, and the crash forensic archive path when a prior incarnation died
 - **Verdict** — the closing summary line
 
 `--audit` widens the agent section to every observed session, `--json` emits the whole report as one machine-readable document, and `--output PATH` writes it atomically to a file. Static adapter coverage has its own command, [`rimz coverage`](./maintenance.md#adapter-coverage).

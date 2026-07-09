@@ -67,6 +67,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
         messages: ws.map(messages::collect_messages),
         diagnostics: ws.map(runtime::collect_diagnostics),
+        last_incident: ws.and_then(runtime::collect_last_incident),
     }
 }
 

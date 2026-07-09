@@ -78,7 +78,7 @@ History and runtime are separate views over the one durable store ([`runtime.rs`
 
 `session.death` records the previous room incarnation's death before a genuine birth replaces it. The event carries `cause` (`reboot` or `crash`) and `lost_agents`; reboot wins when the boot marker changed, while same-boot crash recovery requires positive `agent-lost` markers from the exec wrappers. The fold keeps the `lost` set only until the next `session.rebirth`, so a later incarnation never sees stale crash evidence.
 
-The coroner also writes `last-death.json` beside the workspace store for cheap `rimz list --all` display. Crash births archive mux forensics under `crashes/<utc-ts>/mux-cache/` and write `roster.json` with the lost agents' rollup rows; retention keeps the newest five archives. The archive is best-effort and never blocks launch.
+The coroner also writes `last-death.json` beside the workspace store for cheap `rimz list --all` display. The reborn room writes back `recovered` after the recovery plan is finalized, so the marker records how many lost agents were seeded again. Crash births archive mux forensics under `crashes/<utc-ts>/mux-cache/` and write `roster.json` with the lost agents' rollup rows; retention keeps the newest five archives. The archive is best-effort and never blocks launch. `rimz doctor` surfaces the last incident with cause, time, lost agents, recovered count, and the crash archive path when one exists.
 
 ## Wakeups
 

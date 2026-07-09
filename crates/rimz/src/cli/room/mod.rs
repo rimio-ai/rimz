@@ -889,6 +889,10 @@ fn resume_plan_for_birth(
         }
         None => rimz::harness::resume::ResumePlan::default(),
     };
+    if let Some(death) = death {
+        let recovered = plan.tabs.iter().map(rimz::mux::ResumeTab::pane_count).sum();
+        coroner::record_recovery_outcome(room.workspace_id, death, recovered);
+    }
     record_rebirth_boundary(room.workspace_id, room.session_name);
     Ok(plan)
 }

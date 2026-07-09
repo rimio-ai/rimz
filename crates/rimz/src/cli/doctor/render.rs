@@ -150,6 +150,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_agents(w, report, &mut tally)?;
     render_messages(w, report, &mut tally)?;
     render_diagnostics(w, report, &mut tally)?;
+    render_last_incident(w, report, &mut tally)?;
     render_tally(w, &tally)?;
     Ok(())
 }
@@ -978,6 +979,66 @@ fn render_diagnostics(
     }
 }
 
+fn render_last_incident(
+    w: &mut impl Write,
+    report: &DoctorReport,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    let Some(incident) = &report.last_incident else {
+        return Ok(());
+    };
+    section(w, "LAST INCIDENT")?;
+    let now = Timestamp::now();
+    note(
+        tally,
+        w,
+        Health::Info,
+        &format!(
+            "{} · {} ({})",
+            incident.cause,
+            incident.at.strftime("%Y-%m-%d %H:%M"),
+            age_short(now, incident.at),
+        ),
+    )?;
+    if !incident.lost_agents.is_empty() {
+        let names = incident
+            .lost_agents
+            .iter()
+            .map(|agent| match &agent.name {
+                Some(name) => format!("{name} ({})", agent.kind),
+                None => agent.kind.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            w,
+            "      {}",
+            paint(palette::BODY, &format!("lost: {names}"))
+        )?;
+    }
+    if let Some(recovered) = incident.recovered {
+        writeln!(
+            w,
+            "      {}",
+            paint(
+                palette::BODY,
+                &format!("recovered: {recovered} of {}", incident.lost_agents.len()),
+            ),
+        )?;
+    }
+    if let Some(forensics) = &incident.forensics {
+        writeln!(
+            w,
+            "      {}",
+            paint(
+                palette::MUTED,
+                &format!("forensics: {}", home_relative(forensics)),
+            ),
+        )?;
+    }
+    Ok(())
+}
+
 fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
     writeln!(w)?;
     if tally.alarms > 0 {
@@ -1070,8 +1131,8 @@ fn age_ms_short(now_ms: u64, then_ms: u64) -> String {
 mod tests {
     use super::*;
     use crate::cli::doctor::model::{
-        HookRow, Host, LoopTaskRow, MessageProblemRow, MuxBinaries, OpenCounts, RemoteAgent,
-        StorageRootView, TmuxCaps,
+        HookRow, Host, IncidentAgent, LastIncident, LoopTaskRow, MessageProblemRow, MuxBinaries,
+        OpenCounts, RemoteAgent, StorageRootView, TmuxCaps,
     };
     use rimz::ids::MuxName;
 
@@ -1126,6 +1187,7 @@ mod tests {
             agents: None,
             messages: None,
             diagnostics: None,
+            last_incident: None,
         }
     }
 
@@ -1448,6 +1510,59 @@ mod tests {
         });
         assert!(out.contains("MESSAGES"), "{out}");
         assert!(out.contains("no open messages"), "{out}");
+    }
+
+    #[test]
+    fn last_incident_section_renders_cause_agents_and_forensics() {
+        let mut report = report_fixture();
+        report.last_incident = Some(LastIncident {
+            cause: "crash",
+            at: Timestamp::UNIX_EPOCH,
+            lost_agents: vec![
+                IncidentAgent {
+                    kind: "claude".to_owned(),
+                    name: Some("lucid-atlas".to_owned()),
+                    agent_id: "sess-a".to_owned(),
+                },
+                IncidentAgent {
+                    kind: "codex".to_owned(),
+                    name: Some("quiet-comet".to_owned()),
+                    agent_id: "sess-b".to_owned(),
+                },
+            ],
+            recovered: Some(2),
+            forensics: Some("/tmp/rimz/crashes/20260709T082717Z".to_owned()),
+        });
+
+        let out = strip(|w| {
+            let mut tally = Tally::default();
+            render_last_incident(w, &report, &mut tally)?;
+            render_tally(w, &tally)
+        });
+
+        assert!(out.contains("LAST INCIDENT"), "{out}");
+        assert!(out.contains("crash"), "{out}");
+        assert!(
+            out.contains("lucid-atlas") && out.contains("quiet-comet"),
+            "{out}"
+        );
+        assert!(out.contains("recovered: 2 of 2"), "{out}");
+        assert!(out.contains("forensics:"), "{out}");
+        assert!(
+            out.contains("✓ no problems found"),
+            "info incident does not affect tally:\n{out}"
+        );
+    }
+
+    #[test]
+    fn last_incident_section_is_absent_without_marker() {
+        let report = report_fixture();
+        let out = strip(|w| {
+            let mut tally = Tally::default();
+            render_last_incident(w, &report, &mut tally)
+        });
+
+        assert!(!out.contains("LAST INCIDENT"), "{out}");
     }
 
     #[test]

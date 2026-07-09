@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use rimz::config::{ColorDepth, MachineConfig, ThemeMode};
@@ -10,6 +10,7 @@ use rimz::mux::{
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
+use rimz::store::event::SessionDeathCause;
 use rimz::{RuntimePaths, StatePaths};
 
 use super::model;
@@ -67,6 +68,41 @@ pub(super) fn collect_storage() -> model::Storage {
             })
             .collect(),
     }
+}
+
+pub(super) fn collect_last_incident(ws: &rimz::ResolvedWorkspace) -> Option<model::LastIncident> {
+    let paths = StatePaths::for_workspace(ws.workspace_id.clone()).ok()?;
+    let marker: rimz::store::event::LastDeathMarker =
+        serde_json::from_slice(&fs::read(&paths.last_death_marker).ok()?).ok()?;
+    let forensics = (marker.cause == SessionDeathCause::Crash)
+        .then(|| newest_crash_archive(&paths.crashes_dir))
+        .flatten()
+        .map(|path| path.display().to_string());
+    let lost_agents = marker
+        .lost_agents
+        .iter()
+        .map(|agent| model::IncidentAgent {
+            kind: agent.kind.as_str().to_owned(),
+            name: agent.name.clone(),
+            agent_id: agent.agent_id.as_str().to_owned(),
+        })
+        .collect();
+    Some(model::LastIncident {
+        cause: marker.cause.as_str(),
+        at: marker.at,
+        lost_agents,
+        recovered: marker.recovered,
+        forensics,
+    })
+}
+
+fn newest_crash_archive(crashes_dir: &Path) -> Option<PathBuf> {
+    fs::read_dir(crashes_dir)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .max_by_key(|path| path.file_name().map(std::ffi::OsStr::to_owned))
 }
 
 /// The multiplexer section: which backend Rimz detected, its version, floor, and

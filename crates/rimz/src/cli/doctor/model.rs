@@ -46,6 +46,26 @@ pub(super) struct DoctorReport {
     pub(super) messages: Option<Probe<Messages>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) diagnostics: Option<Diagnostics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) last_incident: Option<LastIncident>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct LastIncident {
+    pub(super) cause: &'static str,
+    pub(super) at: Timestamp,
+    pub(super) lost_agents: Vec<IncidentAgent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) recovered: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) forensics: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct IncidentAgent {
+    pub(super) kind: String,
+    pub(super) name: Option<String>,
+    pub(super) agent_id: String,
 }
 
 /// Host/process identity: who is running doctor and from which binary — the

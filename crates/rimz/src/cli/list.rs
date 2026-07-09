@@ -294,6 +294,7 @@ mod tests {
                 })
                 .collect(),
             at: Timestamp::UNIX_EPOCH,
+            recovered: None,
         }
     }
 

@@ -2,12 +2,15 @@
 //! then run the binary and assert the report. The JSON report is the stable
 //! contract checked here; a smoke test pins the human report's shape.
 
+use jiff::Timestamp;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
-use rimz::ids::{MuxName, PaneId, SidebarInstanceId};
+use rimz::ids::{AgentKind, MuxName, PaneId, SidebarInstanceId};
 use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
-use rimz::store::event::{EventEnvelope, MessageEventMethod};
+use rimz::store::event::{
+    EventEnvelope, LastDeathMarker, MessageEventMethod, SessionDeathAgent, SessionDeathCause,
+};
 use serde_json::Value;
 
 use crate::common::Env;
@@ -498,6 +501,88 @@ fn doctor_writes_json_report_to_file() {
     let bytes = std::fs::read(&path).expect("report file on disk");
     let report: Value = serde_json::from_slice(&bytes).expect("valid json on disk");
     assert!(report["hooks"].is_array(), "report is the full document");
+}
+
+#[test]
+fn doctor_reports_last_incident() {
+    let env = Env::new();
+    let archive = write_last_death_marker(&env, SessionDeathCause::Crash, Some(2))
+        .expect("crash marker creates archive");
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn"),
+    );
+    let incident = &report["last_incident"];
+    assert_eq!(incident["cause"], "crash");
+    assert_eq!(incident["recovered"], 2);
+    assert_eq!(
+        incident["lost_agents"]
+            .as_array()
+            .expect("lost agents")
+            .len(),
+        2
+    );
+    assert!(
+        incident["forensics"]
+            .as_str()
+            .expect("forensics path")
+            .ends_with(archive.file_name().expect("archive name").to_str().unwrap()),
+        "{incident}"
+    );
+
+    let env = Env::new();
+    let _ = write_last_death_marker(&env, SessionDeathCause::Reboot, Some(1));
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn"),
+    );
+    let incident = report["last_incident"]
+        .as_object()
+        .expect("last incident object");
+    assert_eq!(incident["cause"], "reboot");
+    assert_eq!(incident["recovered"], 1);
+    assert!(
+        !incident.contains_key("forensics"),
+        "reboot has no crash archive pointer: {incident:?}"
+    );
+}
+
+fn write_last_death_marker(
+    env: &Env,
+    cause: SessionDeathCause,
+    recovered: Option<usize>,
+) -> Option<PathBuf> {
+    let paths = env.state_path_for(&env.project_root);
+    let marker = LastDeathMarker {
+        cause,
+        lost_agents: vec![
+            SessionDeathAgent {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: "sess-a".into(),
+                name: Some("lucid-atlas".to_owned()),
+            },
+            SessionDeathAgent {
+                kind: AgentKind::new_unchecked("codex"),
+                agent_id: "sess-b".into(),
+                name: Some("quiet-comet".to_owned()),
+            },
+        ],
+        at: Timestamp::UNIX_EPOCH,
+        recovered,
+    };
+    rimz::store::atomic::write_temp_then_rename(&paths.last_death_marker, &marker)
+        .expect("write last death marker");
+    (cause == SessionDeathCause::Crash).then(|| {
+        std::fs::create_dir_all(paths.crashes_dir.join("20260708T082717Z"))
+            .expect("mkdir older crash archive");
+        let archive = paths.crashes_dir.join("20260709T082717Z");
+        std::fs::create_dir_all(&archive).expect("mkdir crash archive");
+        archive
+    })
 }
 
 /// Append `[hooks.state]` trust entries for every Rimz-installed codex event,

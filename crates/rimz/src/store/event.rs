@@ -102,6 +102,8 @@ pub struct LastDeathMarker {
     pub cause: SessionDeathCause,
     pub lost_agents: Vec<SessionDeathAgent>,
     pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovered: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

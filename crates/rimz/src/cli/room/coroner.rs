@@ -60,6 +60,7 @@ pub(super) fn inspect_previous_incarnation(
         cause,
         lost_agents: lost_agents.clone(),
         at: Timestamp::now(),
+        recovered: None,
     };
     append_session_death(&audit.store, workspace_id, session_name, &marker);
     write_last_death_marker(&audit.paths, &marker);
@@ -82,6 +83,19 @@ pub(super) fn inspect_previous_incarnation(
 
 pub(super) fn report_previous_session_death(death: &LastDeathMarker) {
     let _ = writeln!(std::io::stderr().lock(), "{}", death_notice(death));
+}
+
+pub(super) fn record_recovery_outcome(
+    workspace_id: &WorkspaceId,
+    death: &LastDeathMarker,
+    recovered: usize,
+) {
+    let Ok(paths) = StatePaths::for_workspace(workspace_id.clone()) else {
+        return;
+    };
+    let mut marker = death.clone();
+    marker.recovered = Some(recovered);
+    write_last_death_marker(&paths, &marker);
 }
 
 fn death_notice(death: &LastDeathMarker) -> String {
@@ -281,6 +295,7 @@ mod tests {
                 name: Some("lucid-atlas".to_owned()),
             }],
             at: Timestamp::UNIX_EPOCH,
+            recovered: Some(2),
         };
 
         write_last_death_marker(&paths, &marker);
@@ -361,6 +376,7 @@ mod tests {
                 })
                 .collect(),
             at: Timestamp::UNIX_EPOCH,
+            recovered: None,
         }
     }
 }
