@@ -126,11 +126,15 @@ fn run_ssh_session(
         .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)))?;
     let started = Instant::now();
     let mut reported_established = false;
+    let mut transport_confirmed = false;
     loop {
         if let Some(status) = child.try_wait().context("polling ssh session")? {
+            while let Ok(event) = events.try_recv() {
+                transport_confirmed |= matches!(event, LinkEvent::FirstAck);
+            }
             return Ok(SessionOutcome {
                 status,
-                established: started.elapsed() >= gatetime,
+                established: session_established(transport_confirmed, started.elapsed(), gatetime),
             });
         }
         if !reported_established && started.elapsed() >= gatetime {
@@ -143,8 +147,10 @@ fn run_ssh_session(
             events,
             ssh_session_poll_interval(started, gatetime, reported_established),
         ) {
+            transport_confirmed |= matches!(event, LinkEvent::FirstAck);
             handle_link_event(host, event, outage_active);
             while let Ok(event) = events.try_recv() {
+                transport_confirmed |= matches!(event, LinkEvent::FirstAck);
                 handle_link_event(host, event, outage_active);
             }
         }
@@ -172,6 +178,12 @@ fn ssh_session_poll_interval(
 struct SessionOutcome {
     status: std::process::ExitStatus,
     established: bool,
+}
+
+/// A finished ssh session counts as established once its SSH transport is
+/// confirmed up by the link probe, or it outlived the gatetime fallback.
+fn session_established(transport_confirmed: bool, lifetime: Duration, gatetime: Duration) -> bool {
+    transport_confirmed || lifetime >= gatetime
 }
 
 fn recv_link_event(events: &mpsc::Receiver<LinkEvent>, poll: Duration) -> Option<LinkEvent> {

@@ -463,15 +463,15 @@ fn display_word(word: &str) -> String {
     }
 }
 
-/// Reconnect tuning. Defaults follow autossh: a session must live past the
-/// gatetime to count as established, and retries back off exponentially to a
-/// ceiling.
+/// Reconnect tuning. Defaults follow autossh: a session must confirm its
+/// transport or live past the gatetime to count as established, and retries
+/// back off exponentially to a ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReconnectPolicy {
-    /// How long a session must live to count as established (autossh's
-    /// `AUTOSSH_GATETIME`). A transport failure before any session
-    /// establishes is an auth/host problem, not a drop — fatal, never a
-    /// password-prompt loop.
+    /// How long a session must live to count as established when no probe ack
+    /// confirms the transport first (autossh's `AUTOSSH_GATETIME`). A
+    /// transport failure before any session establishes is an auth/host
+    /// problem, not a drop — fatal, never a password-prompt loop.
     pub gatetime: Duration,
     /// First retry delay; doubles per consecutive failed attempt.
     pub backoff_base: Duration,
@@ -531,8 +531,8 @@ pub enum Verdict {
 }
 
 /// Classify a finished ssh session. Pure: the caller measures `established`
-/// (any session has lived past the gatetime) and counts consecutive failed
-/// attempts since the last established session.
+/// (any session confirmed its transport or lived past the gatetime) and counts
+/// consecutive failed attempts since the last established session.
 pub fn verdict(
     exit_code: Option<i32>,
     established: bool,
@@ -569,11 +569,11 @@ impl ReconnectState {
         }
     }
 
-    /// Settle one finished ssh session: a session that lived past the gatetime
-    /// marks the link established and resets the failure count; a Retry verdict
-    /// counts one more consecutive failure.
-    pub fn settle(&mut self, exit_code: Option<i32>, lived_past_gatetime: bool) -> Verdict {
-        if lived_past_gatetime {
+    /// Settle one finished ssh session: a session that confirmed its transport
+    /// or lived past the gatetime marks the link established and resets the
+    /// failure count; a Retry verdict counts one more consecutive failure.
+    pub fn settle(&mut self, exit_code: Option<i32>, established: bool) -> Verdict {
+        if established {
             self.established = true;
             self.consecutive_failures = 0;
         }

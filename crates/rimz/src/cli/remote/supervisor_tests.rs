@@ -3,6 +3,33 @@ use std::time::{Duration, Instant};
 use super::*;
 
 #[test]
+fn probe_ack_establishes_session_before_gatetime() {
+    assert!(session_established(
+        true,
+        Duration::from_secs(5),
+        Duration::from_secs(30)
+    ));
+}
+
+#[test]
+fn fast_unconfirmed_session_stays_unestablished() {
+    assert!(!session_established(
+        false,
+        Duration::from_secs(5),
+        Duration::from_secs(30)
+    ));
+}
+
+#[test]
+fn gatetime_still_establishes_session_without_probe_ack() {
+    assert!(session_established(
+        false,
+        Duration::from_secs(30),
+        Duration::from_secs(30)
+    ));
+}
+
+#[test]
 fn disconnected_link_event_channel_keeps_poll_cadence() {
     let (tx, rx) = std::sync::mpsc::channel::<LinkEvent>();
     drop(tx);

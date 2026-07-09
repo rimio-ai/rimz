@@ -26,7 +26,7 @@ Remote web uses three SSH connections: prep, token provisioning, and tunnel. The
 
 ## Reconnect Policy
 
-OpenSSH keepalives stay at `ServerAliveInterval=5` and `ServerAliveCountMax=3`, with `Compression=yes` on the same attach transport, so a hard transport loss reaches exit `255` in about fifteen seconds. A session must live past the gatetime (`30s` by default, `RIMZ_REMOTE_GATETIME_MS` in tests) before exit `255` counts as a dropped established link; an initial auth, host-key, or connect failure is fatal and does not loop a password prompt.
+OpenSSH keepalives stay at `ServerAliveInterval=5` and `ServerAliveCountMax=3`, with `Compression=yes` on the same attach transport, so a hard transport loss reaches exit `255` in about fifteen seconds. A session counts as established once the link probe receives its first ack over the same ControlMaster transport, or once it lives past the gatetime fallback (`30s` by default, `RIMZ_REMOTE_GATETIME_MS` in tests); an early exit `255` after that ack reconnects, while an initial auth, host-key, or connect failure stays fatal and does not loop a password prompt.
 
 Established transport drops reconnect with capped exponential backoff (`1s` to `30s`, with `RIMZ_REMOTE_BACKOFF_MS` as the test seam). Clean exit `0` returns to the caller. Missing remote `rimz`, remote room failures, and signal death are fatal.
 
