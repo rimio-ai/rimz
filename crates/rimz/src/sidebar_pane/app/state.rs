@@ -119,6 +119,7 @@ pub(super) struct FetchDiagnostics<'a> {
     pub(super) fetch_failure: Option<String>,
     pub(super) rejected: bool,
     pub(super) released_via_escape_hatch: bool,
+    pub(super) is_elder: bool,
     pub(super) now: Timestamp,
 }
 
@@ -134,6 +135,7 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
         fetch_failure,
         rejected,
         released_via_escape_hatch,
+        is_elder,
         now,
     } = diagnostics;
     if let Some(reason) = fetch_failure {
@@ -182,8 +184,10 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
         }
         _ => {}
     }
-    for event in diff_group_migrations(prev_snapshot, next_snapshot) {
-        diag.emit(event);
+    if is_elder {
+        for event in diff_group_migrations(prev_snapshot, next_snapshot) {
+            diag.emit(event);
+        }
     }
 }
 

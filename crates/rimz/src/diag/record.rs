@@ -26,6 +26,8 @@ pub struct DiagEnvelope {
     pub at_ms: u64,
     pub severity: DiagSeverity,
     pub event: DiagEvent,
+    /// Suppressed same-identity records since the previous emitted record, plus
+    /// per-kind ceiling drops flushed onto this passing record.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub suppressed_since_last: u32,
 }

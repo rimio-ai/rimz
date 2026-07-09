@@ -30,6 +30,7 @@ const DIAG_FRAME_RING: usize = 8;
 /// Matches the observer diagnostics cadence (`OBSERVE_COOLDOWN`) so per-tick
 /// repeats collapse into periodic records carrying their suppressed count.
 const DIAG_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(30);
+const DIAG_KIND_CEILING: u32 = 120;
 static DIAG_FRAME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -50,6 +51,7 @@ struct Inner {
 pub(crate) struct Limiter {
     window: Duration,
     entries: HashMap<String, LimiterEntry>,
+    kind_windows: HashMap<String, KindWindow>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -58,18 +60,52 @@ struct LimiterEntry {
     suppressed: u32,
 }
 
+#[derive(Clone, Debug)]
+struct KindWindow {
+    window_start_ms: u64,
+    emitted: u32,
+    dropped: u32,
+}
+
 impl Limiter {
     pub(crate) fn new(window: Duration) -> Self {
         Self {
             window,
             entries: HashMap::new(),
+            kind_windows: HashMap::new(),
         }
     }
 
     /// Returns `Some(suppressed_since_last)` when `key` may emit now; `None`
     /// when the emission is suppressed.
-    pub(crate) fn allow(&mut self, key: &str, at_ms: u64) -> Option<u32> {
+    pub(crate) fn allow(&mut self, key: &str, kind: &str, at_ms: u64) -> Option<u32> {
         let window_ms = self.window.as_millis() as u64;
+        self.gc(at_ms, window_ms, key);
+        let suppressed = {
+            let entry = self.entries.entry(key.to_owned()).or_default();
+            if entry
+                .last_emit_ms
+                .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
+            {
+                entry.suppressed = entry.suppressed.saturating_add(1);
+                return None;
+            }
+            entry.suppressed
+        };
+        let kind_dropped = self.allow_kind_emit(kind, at_ms, window_ms)?;
+        let entry = self.entries.entry(key.to_owned()).or_default();
+        entry.suppressed = 0;
+        entry.last_emit_ms = Some(at_ms);
+        Some(suppressed.saturating_add(kind_dropped))
+    }
+
+    pub(crate) fn allow_kind_only(&mut self, kind: &str, at_ms: u64) -> Option<u32> {
+        let window_ms = self.window.as_millis() as u64;
+        self.gc(at_ms, window_ms, "");
+        self.allow_kind_emit(kind, at_ms, window_ms)
+    }
+
+    fn gc(&mut self, at_ms: u64, window_ms: u64, key: &str) {
         self.entries.retain(|entry_key, entry| {
             entry_key == key
                 || entry.suppressed > 0
@@ -77,17 +113,30 @@ impl Limiter {
                     .last_emit_ms
                     .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
         });
-        let entry = self.entries.entry(key.to_owned()).or_default();
-        if entry
-            .last_emit_ms
-            .is_some_and(|last| at_ms.saturating_sub(last) < window_ms)
-        {
-            entry.suppressed = entry.suppressed.saturating_add(1);
+        self.kind_windows.retain(|_, window| {
+            window.dropped > 0 || at_ms.saturating_sub(window.window_start_ms) < window_ms
+        });
+    }
+
+    fn allow_kind_emit(&mut self, kind: &str, at_ms: u64, window_ms: u64) -> Option<u32> {
+        let window = self
+            .kind_windows
+            .entry(kind.to_owned())
+            .or_insert_with(|| KindWindow {
+                window_start_ms: at_ms,
+                emitted: 0,
+                dropped: 0,
+            });
+        if at_ms.saturating_sub(window.window_start_ms) >= window_ms {
+            window.window_start_ms = at_ms;
+            window.emitted = 0;
+        }
+        if window.emitted >= DIAG_KIND_CEILING {
+            window.dropped = window.dropped.saturating_add(1);
             return None;
         }
-        let suppressed = std::mem::take(&mut entry.suppressed);
-        entry.last_emit_ms = Some(at_ms);
-        Some(suppressed)
+        window.emitted = window.emitted.saturating_add(1);
+        Some(std::mem::take(&mut window.dropped))
     }
 }
 
@@ -169,7 +218,17 @@ impl DiagSink {
         let Some(inner) = self.inner.as_ref() else {
             return;
         };
-        inner.append(event, crate::sidebar::timing::unix_now_ms(), 0);
+        let at_ms = crate::sidebar::timing::unix_now_ms();
+        let kind = event.kind_name();
+        let Ok(mut limiter) = inner.limiter.lock() else {
+            inner.append(event, at_ms, 0);
+            return;
+        };
+        let Some(suppressed_since_last) = limiter.allow_kind_only(kind, at_ms) else {
+            return;
+        };
+        drop(limiter);
+        inner.append(event, at_ms, suppressed_since_last);
     }
 
     /// Append a notification trace record to the sibling `notify.log.jsonl`.
@@ -246,10 +305,11 @@ impl Inner {
 
     fn suppression(&self, event: &DiagEvent, at_ms: u64) -> Option<u32> {
         let key = event.identity_key();
+        let kind = event.kind_name();
         let Ok(mut limiter) = self.limiter.lock() else {
             return Some(0);
         };
-        limiter.allow(&key, at_ms)
+        limiter.allow(&key, kind, at_ms)
     }
 }
 
@@ -376,6 +436,12 @@ mod tests {
         }
     }
 
+    fn duplicate_pane(raw: impl std::fmt::Display) -> DiagEvent {
+        DiagEvent::DuplicatePaneId {
+            pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw}")),
+        }
+    }
+
     fn diag_records(sink: &DiagSink) -> Vec<DiagEnvelope> {
         std::fs::read_to_string(sink.log_path().unwrap())
             .unwrap()
@@ -465,10 +531,49 @@ mod tests {
     }
 
     #[test]
-    fn unlimited_bypasses_rate_limit() {
+    fn per_kind_ceiling_bounds_distinct_identity_storms_and_flushes_drops() {
         let dir = tempfile::tempdir().unwrap();
         let sink = sink(dir.path());
-        for _ in 0..2 {
+
+        for i in 0..(DIAG_KIND_CEILING + 3) {
+            sink.emit_at_ms(duplicate_pane(i), 1_000);
+        }
+        sink.emit_at_ms(duplicate_pane("flush"), 32_000);
+
+        let records = diag_records(&sink);
+        assert_eq!(records.len(), DIAG_KIND_CEILING as usize + 1);
+        assert_eq!(
+            records.last().unwrap().suppressed_since_last,
+            3,
+            "drops over the per-kind ceiling flush onto the next passing record"
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| matches!(record.event, DiagEvent::DuplicatePaneId { .. }))
+        );
+    }
+
+    #[test]
+    fn per_kind_ceiling_resets_after_window_rolls() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = sink(dir.path());
+
+        for i in 0..DIAG_KIND_CEILING {
+            sink.emit_at_ms(duplicate_pane(i), 1_000);
+        }
+        sink.emit_at_ms(duplicate_pane("next-window"), 32_000);
+
+        let records = diag_records(&sink);
+        assert_eq!(records.len(), DIAG_KIND_CEILING as usize + 1);
+        assert_eq!(records.last().unwrap().suppressed_since_last, 0);
+    }
+
+    #[test]
+    fn unlimited_is_kind_bounded_without_key_deduping() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = sink(dir.path());
+        for _ in 0..(DIAG_KIND_CEILING + 1) {
             sink.emit_unlimited(DiagEvent::RendererPanic {
                 message: "boom".to_owned(),
                 backtrace: None,
@@ -476,7 +581,7 @@ mod tests {
         }
 
         let records = diag_records(&sink);
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), DIAG_KIND_CEILING as usize);
         assert!(
             records
                 .iter()

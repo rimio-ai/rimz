@@ -58,9 +58,13 @@ fn active_alert(health: &Health) -> &Alert {
 }
 
 fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<DiagEvent> {
-    std::fs::read_to_string(sink.log_path().unwrap())
-        .expect("diagnostic log")
-        .lines()
+    let path = sink.log_path().unwrap();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) => panic!("diagnostic log: {err}"),
+    };
+    text.lines()
         .map(|line| {
             serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
                 .expect("diagnostic envelope")
@@ -406,6 +410,107 @@ fn moving_between_groups_records_one_migration() {
         diff_group_migrations(&prev, &next).as_slice(),
         [DiagEvent::GroupMigration { pane_id, .. }] if pane_id.raw() == "terminal_1"
     ));
+}
+
+#[test]
+fn diagnostics_scope_group_migrations_to_elder_only() {
+    let ws = workspace();
+    let prev = snapshot_in_group(
+        crate::SidebarWorktreeKind::External,
+        "external",
+        "terminal_1",
+        Some("/tmp/a"),
+    );
+    let next = snapshot_in_group(
+        crate::SidebarWorktreeKind::Worktree,
+        "/repo/feature",
+        "terminal_1",
+        Some("/repo/feature"),
+    );
+    let held_gate = GateState {
+        reject_streak: 1,
+        rejecting_since: Some(fixed_time(1_700_000_000)),
+        spend_carry_since: None,
+        rule: Some(GateRule::EmptyStampedFrame),
+    };
+    let active_health = Health {
+        failure_streak: ALERT_AFTER_FAILURES,
+        alert: Some(Alert::active("snapshot failed", fixed_time(1_700_000_000))),
+    };
+
+    let consumer_dir = tempfile::tempdir().unwrap();
+    let consumer_sink = crate::diag::DiagSink::under(
+        consumer_dir.path().to_path_buf(),
+        ws.clone(),
+        "rimz-test",
+        None,
+    );
+    emit_diagnostics(
+        &consumer_sink,
+        FetchDiagnostics {
+            prev_snapshot: &prev,
+            incoming_snapshot: &next,
+            next_snapshot: &next,
+            prev_health: &Health::default(),
+            next_health: &active_health,
+            prev_gate: &GateState::default(),
+            next_gate: &held_gate,
+            fetch_failure: Some("pane discovery failed".to_owned()),
+            rejected: true,
+            released_via_escape_hatch: false,
+            is_elder: false,
+            now: fixed_time(1_700_000_000),
+        },
+    );
+    let consumer_events = diagnostic_events(&consumer_sink);
+
+    assert!(
+        consumer_events
+            .iter()
+            .any(|event| matches!(event, DiagEvent::FetchFailure { .. }))
+    );
+    assert!(
+        consumer_events
+            .iter()
+            .any(|event| matches!(event, DiagEvent::GateHold { .. }))
+    );
+    assert!(
+        consumer_events
+            .iter()
+            .any(|event| matches!(event, DiagEvent::HealthAlert { .. }))
+    );
+    assert!(
+        !consumer_events
+            .iter()
+            .any(|event| matches!(event, DiagEvent::GroupMigration { .. }))
+    );
+
+    let elder_dir = tempfile::tempdir().unwrap();
+    let elder_sink =
+        crate::diag::DiagSink::under(elder_dir.path().to_path_buf(), ws, "rimz-test", None);
+    emit_diagnostics(
+        &elder_sink,
+        FetchDiagnostics {
+            prev_snapshot: &prev,
+            incoming_snapshot: &next,
+            next_snapshot: &next,
+            prev_health: &Health::default(),
+            next_health: &Health::default(),
+            prev_gate: &GateState::default(),
+            next_gate: &GateState::default(),
+            fetch_failure: None,
+            rejected: false,
+            released_via_escape_hatch: false,
+            is_elder: true,
+            now: fixed_time(1_700_000_000),
+        },
+    );
+
+    assert!(
+        diagnostic_events(&elder_sink)
+            .iter()
+            .any(|event| matches!(event, DiagEvent::GroupMigration { .. }))
+    );
 }
 
 #[test]
@@ -955,6 +1060,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             fetch_failure: Some("pane discovery failed".to_owned()),
             rejected: false,
             released_via_escape_hatch: false,
+            is_elder: true,
             now: fixed_time(1_700_000_000),
         },
     );
@@ -971,6 +1077,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             fetch_failure: None,
             rejected: true,
             released_via_escape_hatch: false,
+            is_elder: true,
             now: fixed_time(1_700_000_001),
         },
     );
@@ -987,6 +1094,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
             fetch_failure: None,
             rejected: false,
             released_via_escape_hatch: true,
+            is_elder: true,
             now: fixed_time(1_700_000_003),
         },
     );

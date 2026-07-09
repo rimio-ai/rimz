@@ -16,6 +16,7 @@ use super::state::{
 use super::*;
 use crate::diag::record::RendererExitCause;
 use crate::observability::SIDEBAR_HEALTH_TARGET;
+use crate::sidebar::observe::writer::{RoleCache, crosscheck_enabled};
 use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pets::PetRenderCaps;
@@ -104,6 +105,7 @@ pub(super) struct LoopState {
     last_pulled: SidebarSnapshot,
     own_pane: Option<PaneId>,
     last_known_elder: bool,
+    elder_role: RoleCache,
     pending_fetch: Option<PendingFetch>,
     optimistic_watch_until: Option<Instant>,
     /// Deadline for the tab-view read sweep: armed when the own tab comes on
@@ -199,6 +201,7 @@ impl LoopState {
             current,
             own_pane,
             last_known_elder: true,
+            elder_role: RoleCache::default(),
             pending_fetch: None,
             optimistic_watch_until: None,
             tab_read_dwell_until: None,
@@ -1035,6 +1038,11 @@ impl LoopState {
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<ApplyOutcome> {
+        let is_elder = !diag.is_enabled()
+            || RuntimePaths::for_workspace(config.workspace_id.clone())
+                .ok()
+                .map(|rt| crosscheck_enabled(self.elder_role.current(&rt, &config.instance_id)))
+                .unwrap_or(true);
         let own_pane = self.own_pane.as_ref();
         let last_snapshot = &mut self.last_snapshot;
         let current = &mut self.current;
@@ -1084,6 +1092,7 @@ impl LoopState {
                 fetch_failure,
                 rejected,
                 released_via_escape_hatch,
+                is_elder,
                 now,
             },
         );

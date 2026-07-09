@@ -73,7 +73,9 @@ impl Writer {
     }
 
     fn emit_anomaly(&mut self, draft: AnomalyDraft) {
-        let Some(suppressed_since_last) = self.cooldowns.allow(draft.kind.key(), draft.at_ms)
+        let Some(suppressed_since_last) =
+            self.cooldowns
+                .allow(draft.kind.key(), draft.kind.key(), draft.at_ms)
         else {
             return;
         };
@@ -118,13 +120,17 @@ impl Writer {
 }
 
 #[derive(Default)]
-struct RoleCache {
+pub(crate) struct RoleCache {
     role: Option<ObserveRole>,
     polled_at: Option<Instant>,
 }
 
 impl RoleCache {
-    fn current(&mut self, runtime: &RuntimePaths, instance: &SidebarInstanceId) -> ObserveRole {
+    pub(crate) fn current(
+        &mut self,
+        runtime: &RuntimePaths,
+        instance: &SidebarInstanceId,
+    ) -> ObserveRole {
         if self
             .polled_at
             .is_none_or(|last| last.elapsed() >= OBSERVE_CROSSCHECK_TTL)
@@ -358,9 +364,9 @@ mod tests {
             count: 2,
         };
 
-        assert_eq!(cooldowns.allow(kind.key(), 1_000), Some(0));
-        assert_eq!(cooldowns.allow(kind.key(), 2_000), None);
-        assert_eq!(cooldowns.allow(kind.key(), 31_001), Some(1));
+        assert_eq!(cooldowns.allow(kind.key(), kind.key(), 1_000), Some(0));
+        assert_eq!(cooldowns.allow(kind.key(), kind.key(), 2_000), None);
+        assert_eq!(cooldowns.allow(kind.key(), kind.key(), 31_001), Some(1));
     }
 
     #[test]
