@@ -43,6 +43,22 @@ Beyond the preset, the launcher carries three habits that build on it, each with
 - **an isolated [worktree](./worktrees.md)** per line of work, one `-w` flag away,
 - **a named [team](./teams.md)** of profiles, launched, messaged, and resumed as a unit.
 
+## Add a third-party agent
+
+Rimz loads external agent bundles from `$XDG_CONFIG_HOME/rimz/agents.d/<kind>/`. Scaffold one, implement its native-to-canonical shim, and validate it before opening a room:
+
+```sh
+rimz agents register mybot
+rimz agents register --check
+rimz coverage
+rimz doctor
+rimz agents mybot "take the first task"
+```
+
+The bundle controls launch flags, branding, tool classification, transcript discovery, and optional spend, account, and version probes. Its declared events derive the same coverage grid as a built-in adapter. Hook installation stays with the bundle because only the agent vendor knows its extension surface; `rimz doctor` points at the bundle's setup document.
+
+See the [agent plugin reference](../reference/agent-plugins.md) for the manifest and JSON contracts, or copy the runnable [ScriptBot example](../../examples/agent-plugin/README.md).
+
 ## Profiles: shape an agent for one job
 
 A **profile** is a named preset in `agents.toml`: the base CLI plus the fields that shape it — model, reasoning effort, system prompt, permission mode, and raw flags. Define it once, launch it by name:

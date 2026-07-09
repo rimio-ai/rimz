@@ -144,6 +144,7 @@ fn accounts() -> AccountsCache {
             "claude".to_owned(),
             AgentAccount {
                 plan: Some("max".to_owned()),
+                account_id: None,
                 metered: Some(true),
                 version: Some("2.1.158".to_owned()),
                 sub_provider: None,

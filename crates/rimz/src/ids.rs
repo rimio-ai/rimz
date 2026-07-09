@@ -454,7 +454,7 @@ impl<'de> Deserialize<'de> for MessageId {
 /// Agent adapter kind label (`claude`, `codex`, `pi`).
 ///
 /// An open set, deliberately: the registry
-/// ([`registry::ADAPTERS`](crate::agents::registry)) is the source of truth
+/// ([`registry::all_adapters`](crate::agents::registry::all_adapters)) is the source of truth
 /// for *known* kinds — every dispatch resolves through it and an unknown kind
 /// degrades gracefully (skipped probe, title-cased panel) — while store
 /// replay and snapshot decode stay open so events from a removed adapter

@@ -373,13 +373,12 @@ pub fn discover_spending_files() -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
         return files;
     }
 
-    crate::agents::ADAPTERS
-        .iter()
+    crate::agents::all_adapters()
         .flat_map(|adapter| {
             adapter
                 .transcript_files()
                 .into_iter()
-                .map(move |file| (*adapter, file))
+                .map(move |file| (adapter, file))
         })
         .collect()
 }

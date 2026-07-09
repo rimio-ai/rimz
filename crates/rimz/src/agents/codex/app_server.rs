@@ -264,6 +264,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         let account = (plan.is_some() || windows.is_some()).then_some(AgentAccount {
             metered: Some(true),
             plan,
+            account_id: None,
             version: None,
             sub_provider: None,
         });

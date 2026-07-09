@@ -61,6 +61,8 @@ You rarely open these by hand: `rimz config set` writes to them for you, and `ri
 
 Two more things share the directory but are managed for you: `remote.toml` (named SSH room aliases, written by `rimz remote`) and a handful of machine-managed sidecars (trust grants, notification state), which you reach through their own commands rather than by hand ([Sidecars and privacy](#sidecars-and-privacy)).
 
+`agents.d/<kind>/agent.toml` is the machine-tier library for [third-party agent plugins](../reference/agent-plugins.md). Each bundle may also carry a shim, setup guide, and executable probes. `rimz agents register <kind>` creates the directory; `rimz agents register --check` validates every bundle.
+
 ### How the layers combine
 
 RimZ reads configuration in four layers, and a later layer wins:
@@ -75,6 +77,8 @@ Today the per-machine layer is live, CLI and env overrides apply where each comm
 ### A broken file never blocks the room
 
 Per-machine settings load leniently. A missing file is the default config, unknown keys are ignored so an older binary tolerates a newer file, and a file RimZ cannot parse falls back to built-in defaults with a startup warning. The room still opens, and `rimz config` and `rimz doctor` report the precise error and the fix.
+
+Agent plugin manifests are the deliberate exception because they declare executable launch and probe commands. A malformed `agents.d/*/agent.toml` makes `rimz start` refuse before room side effects; read-only commands skip it, and `rimz doctor` reports its path and validation error.
 
 ## Generate and refresh the files
 

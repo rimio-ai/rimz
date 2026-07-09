@@ -69,6 +69,7 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
     };
     AccountProbe::Found(AgentAccount {
         plan: Some(sub_label(provider, credential.kind.as_deref())),
+        account_id: None,
         // The reference mapping: an OAuth credential is a metered
         // subscription, an API key is unmetered, and an unknown type stays
         // unknown. Pi's own window feeders publish under the `pi` kind.

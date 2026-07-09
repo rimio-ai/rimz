@@ -266,6 +266,71 @@ fn awaiting_input_projects_to_waiting() {
     }
 }
 
+#[test]
+fn loaded_plugin_uses_the_same_descriptor_cross_checks() {
+    let root = tempfile::TempDir::new().expect("plugin root");
+    let plugin_dir = root.path().join("fixturebot");
+    fs::create_dir(&plugin_dir).expect("plugin dir");
+    fs::write(plugin_dir.join("README.md"), "hook setup").expect("setup doc");
+    fs::write(
+        plugin_dir.join("agent.toml"),
+        r#"protocol = 1
+kind = "fixturebot"
+display-name = "Fixture Bot"
+process-names = ["fixturebot"]
+events = ["session_start", "turn_start", "turn_end"]
+setup-doc = "README.md"
+"#,
+    )
+    .expect("manifest");
+    let loaded = super::plugin::load_from_root(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let adapter = loaded.adapters[0];
+    let descriptor = adapter.descriptor();
+    let samples = corpus(adapter);
+    let installed_events = adapter.installed_hook_events();
+
+    assert_eq!(descriptor.coverage.len(), IntegrationConcern::ALL.len());
+    for concern in IntegrationConcern::ALL {
+        let coverage = coverage_for(adapter, concern);
+        assert_coverage_honest(adapter, &samples, &installed_events, concern, coverage);
+    }
+
+    assert_eq!(
+        descriptor.lifecycle_hooks.len(),
+        LifecycleSignalKind::ALL.len()
+    );
+    for signal_kind in LifecycleSignalKind::ALL {
+        let coverage = hook_coverage_for(adapter, signal_kind);
+        assert_lifecycle_hook_honest(adapter, &samples, &installed_events, signal_kind, coverage);
+    }
+    assert_hook_matches_concern(
+        adapter,
+        LifecycleSignalKind::Ended,
+        IntegrationConcern::SessionEnd,
+    );
+    assert_hook_matches_concern(
+        adapter,
+        LifecycleSignalKind::SubagentStarted,
+        IntegrationConcern::Subagents,
+    );
+    assert_hook_matches_concern(
+        adapter,
+        LifecycleSignalKind::SubagentStopped,
+        IntegrationConcern::Subagents,
+    );
+    assert_hook_matches_concern(
+        adapter,
+        LifecycleSignalKind::Compacting,
+        IntegrationConcern::Compaction,
+    );
+    assert_hook_matches_concern(
+        adapter,
+        LifecycleSignalKind::CompactionEnded,
+        IntegrationConcern::Compaction,
+    );
+}
+
 fn corpus(adapter: &dyn AgentAdapter) -> Vec<ClassificationSample> {
     let samples = adapter.classification_corpus();
     assert!(

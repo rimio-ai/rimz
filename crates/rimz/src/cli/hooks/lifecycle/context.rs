@@ -326,7 +326,11 @@ pub(super) const OBSERVED_CONTEXT_KEYS: &[&str] = &[
 ];
 
 pub(super) fn payload_carries_observed_context(payload: &Value) -> bool {
-    OBSERVED_CONTEXT_KEYS
-        .iter()
-        .any(|key| payload.get(*key).is_some())
+    payload
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .is_some_and(|event| event == "context")
+        || OBSERVED_CONTEXT_KEYS
+            .iter()
+            .any(|key| payload.get(*key).is_some())
 }

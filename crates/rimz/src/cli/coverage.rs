@@ -102,7 +102,7 @@ fn collect_coverage() -> CoverageMatrix {
     let mut rows = Vec::new();
     for concern in IntegrationConcern::ALL {
         let mut cells = Vec::new();
-        for agent in rimz::agents::ADAPTERS {
+        for agent in rimz::agents::all_adapters() {
             let descriptor = agent.descriptor();
             let coverage = concern_coverage(descriptor, concern);
             match coverage {
@@ -127,7 +127,7 @@ fn collect_hook_matrix() -> CoverageMatrix {
     let mut rows = Vec::new();
     for signal_kind in LifecycleSignalKind::ALL {
         let mut cells = Vec::new();
-        for agent in rimz::agents::ADAPTERS {
+        for agent in rimz::agents::all_adapters() {
             let descriptor = agent.descriptor();
             let coverage = hook_coverage(descriptor, signal_kind);
             match coverage {
@@ -147,8 +147,7 @@ fn collect_hook_matrix() -> CoverageMatrix {
 }
 
 fn matrix_agents() -> Vec<String> {
-    rimz::agents::ADAPTERS
-        .iter()
+    rimz::agents::all_adapters()
         .map(|agent| agent.descriptor().kind.to_owned())
         .collect()
 }

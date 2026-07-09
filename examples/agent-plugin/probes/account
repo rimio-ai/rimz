@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+cat >/dev/null
+printf '%s\n' '{"plan":"demo","account_id":"local-example"}'

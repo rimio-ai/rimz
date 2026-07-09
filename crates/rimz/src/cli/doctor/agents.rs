@@ -2,7 +2,10 @@ use rimz::agents::AgentStatus;
 use rimz::trust::{self};
 
 use super::super::open_store;
-use super::model::{AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus, Probe, Trust};
+use super::model::{
+    AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus, PluginProbeRow, PluginRow, Probe,
+    Trust,
+};
 
 /// Walk the snapshot's agent rollup into health counts and problem rows. The
 /// default scope is live runtime state; audit widens to durable history and
@@ -62,8 +65,7 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
 /// until the agent's own hook system invokes `rimz hooks feed`, so this
 /// distinguishes installed, installable, and known-but-not-installable adapters.
 pub(super) fn collect_hooks() -> Vec<HookRow> {
-    rimz::agents::ADAPTERS
-        .iter()
+    rimz::agents::all_adapters()
         .map(|agent| {
             let descriptor = agent.descriptor();
             let name = descriptor.kind;
@@ -93,6 +95,33 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
                 kind: name.to_owned(),
                 status,
             }
+        })
+        .collect()
+}
+
+pub(super) fn collect_plugins() -> Vec<PluginRow> {
+    rimz::agents::plugin::loaded()
+        .diagnostics
+        .iter()
+        .map(|plugin| PluginRow {
+            kind: plugin.kind.clone(),
+            manifest: plugin.path.display().to_string(),
+            valid: plugin.valid,
+            error: plugin.error.clone(),
+            setup_doc: plugin
+                .setup_doc
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            probes: plugin
+                .probes
+                .iter()
+                .map(|probe| PluginProbeRow {
+                    name: probe.name,
+                    command: probe.command.clone(),
+                    present: probe.present,
+                    executable: probe.executable,
+                })
+                .collect(),
         })
         .collect()
 }

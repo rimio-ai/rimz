@@ -225,6 +225,15 @@ fn observed_context_merge_preserves_fields_and_keeps_cost_monotonic() {
     assert!(merge_observed(&runtime, "pi", "sess-1", observed_context()).unwrap());
     let first = read_one(&runtime, "pi", "sess-1").unwrap();
     assert_eq!(first.context.model_id.as_deref(), Some("gpt-5.5"));
+    assert_eq!(
+        first.context.session_name.as_deref(),
+        Some("fixture session")
+    );
+    assert_eq!(
+        first.context.model_display_name.as_deref(),
+        Some("Fixture 5.5")
+    );
+    assert_eq!(first.context.agent_version.as_deref(), Some("1.2.3"));
     assert_eq!(first.context.effort.as_deref(), Some("high"));
     assert_eq!(total_cost(&first), Some(0.5));
     assert_eq!(
@@ -622,15 +631,15 @@ fn observed_at() -> Timestamp {
 fn observed_context() -> AgentContext {
     AgentContext {
         source: "pi".to_owned(),
-        session_name: None,
+        session_name: Some("fixture session".to_owned()),
         session_preview: None,
         model_id: Some("gpt-5.5".to_owned()),
-        model_display_name: None,
+        model_display_name: Some("Fixture 5.5".to_owned()),
         effort: Some("high".to_owned()),
         thinking_enabled: None,
         output_style: None,
         vim_mode: None,
-        agent_version: None,
+        agent_version: Some("1.2.3".to_owned()),
         exceeds_200k_tokens: None,
         cost: Some(cost(0.5)),
         tokens: Some(AgentTokenUsage {

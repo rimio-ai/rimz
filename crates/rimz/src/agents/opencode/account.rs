@@ -58,6 +58,7 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
     };
     AccountProbe::Found(AgentAccount {
         plan: Some(sub_label(provider, credential.kind.as_deref())),
+        account_id: None,
         metered: match credential.kind.as_deref() {
             Some("oauth") => Some(true),
             Some("api" | "api_key") => Some(false),

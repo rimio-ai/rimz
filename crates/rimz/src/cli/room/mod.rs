@@ -164,6 +164,7 @@ fn resume_prompt_mode(confirm_resume: bool, stdin_is_terminal: bool) -> ResumePr
 }
 
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
+    validate_agent_plugins()?;
     let workspace = match rimz::WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
         Ok(workspace) => workspace,
         Err(err) => {
@@ -206,6 +207,7 @@ pub(crate) fn ensure_workspace_room_for_web(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<WebRoom> {
+    validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let mux = MuxName::Zellij;
@@ -223,6 +225,22 @@ pub(crate) fn ensure_workspace_room_for_web(
         session_name: workspace.session_name,
         workspace_id: workspace.workspace_id,
     })
+}
+
+fn validate_agent_plugins() -> Result<()> {
+    let loaded = rimz::agents::plugin::loaded();
+    if loaded.errors.is_empty() {
+        return Ok(());
+    }
+    let details = loaded
+        .errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    bail!(
+        "agent plugin validation failed before room start:\n{details}\nfix or remove the manifest, then run `rimz agents register --check`"
+    )
 }
 
 pub(crate) fn ensure_session_room_for_web(

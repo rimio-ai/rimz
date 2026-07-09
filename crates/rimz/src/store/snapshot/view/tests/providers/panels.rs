@@ -207,6 +207,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
         "claude".to_owned(),
         AgentAccount {
             plan: Some("max".to_owned()),
+            account_id: None,
             metered: Some(true),
             version: None,
             sub_provider: None,

@@ -11,6 +11,7 @@ mod launch;
 mod reconcile;
 mod refresh;
 mod refresh_usage;
+mod register;
 mod restart;
 mod resume;
 mod supervised;
@@ -61,6 +62,7 @@ use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
 use restart::restart_agent;
 use resume::resume_lane;
 pub(crate) use supervised::stream::TranscriptCursor;
+use register::{RegisterArgs, run_register};
 use top::{TopArgs, run_top};
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
@@ -239,6 +241,8 @@ pub(super) enum InputFormat {
 
 #[derive(Debug, Subcommand)]
 enum AgentsSubcmd {
+    /// Scaffold or validate a machine-tier third-party agent plugin.
+    Register(RegisterArgs),
     /// List agent cards in the current room.
     #[command(aliases = ["ls", "ps"])]
     List {
@@ -464,6 +468,7 @@ struct ExecArgs {
 
 pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
+        Some(AgentsSubcmd::Register(args)) => return run_register(args),
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args),

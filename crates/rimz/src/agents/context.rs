@@ -164,6 +164,11 @@ pub struct AgentAccount {
     /// the renderer formats it into a brand label (`Claude Max`, `ChatGPT Pro`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// Provider-native account identifier when an integration exposes one.
+    /// Display remains provider-specific; this stable value primarily keys
+    /// account switches and machine-readable diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
     /// Whether the account is metered by rate-limit windows. `Some(false)` marks
     /// an unmetered (API-key) account, which the dashboard paints as an
     /// "infinite power" bar instead of a draining budget; `None` is unknown, and

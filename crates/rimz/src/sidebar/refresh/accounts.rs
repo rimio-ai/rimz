@@ -366,6 +366,7 @@ mod tests {
             "pi".to_owned(),
             AgentAccount {
                 plan: Some("OpenAI OAuth".to_owned()),
+                account_id: None,
                 metered: Some(true),
                 version: None,
                 sub_provider: Some("openai".to_owned()),
@@ -475,6 +476,7 @@ mod tests {
                 kind.to_owned(),
                 crate::agents::AgentAccount {
                     plan: Some("Pro".to_owned()),
+                    account_id: None,
                     metered: Some(true),
                     version: None,
                     sub_provider: None,

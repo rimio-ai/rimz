@@ -59,6 +59,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
     {
         return AccountProbe::Found(AgentAccount {
             plan: None,
+            account_id: None,
             metered: Some(false),
             version: None,
             sub_provider: None,
@@ -71,6 +72,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
     {
         return AccountProbe::Found(AgentAccount {
             plan: None,
+            account_id: None,
             metered: Some(true),
             version: None,
             sub_provider: None,

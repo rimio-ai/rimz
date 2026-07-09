@@ -1,9 +1,8 @@
 //! The agent registry — the single registration point.
 //!
-//! Every agent Rimz can wire, in display order. Adding an agent is a new
-//! `agents/<name>/` directory plus one line in [`ADAPTERS`]; every dispatch
-//! site (the hook CLI, doctor, the sidebar reducer, spending, branding)
-//! resolves through here, so no shared file grows a per-agent match arm.
+//! Built-ins live in [`ADAPTERS`]; validated machine-tier process plugins join
+//! them through [`all_adapters`]. Every behavioral dispatch site resolves
+//! through this module, so no consumer grows a per-agent match arm.
 
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
@@ -17,6 +16,14 @@ use super::{AgentAdapter, AgentErr, Result};
 pub static ADAPTERS: &[&'static dyn AgentAdapter] =
     &[&ClaudeAdapter, &CodexAdapter, &PiAdapter, &OpencodeAdapter];
 
+/// Every built-in and valid machine-tier plugin adapter, in display order.
+pub fn all_adapters() -> impl Iterator<Item = &'static dyn AgentAdapter> {
+    ADAPTERS
+        .iter()
+        .copied()
+        .chain(super::plugin::loaded().adapters.iter().copied())
+}
+
 /// Resolve an adapter for the `--source <agent>` CLI tag.
 pub fn adapter_by_kind(kind: &str) -> Result<&'static dyn AgentAdapter> {
     find_adapter(kind).ok_or_else(|| AgentErr::Unknown(kind.to_owned()))
@@ -24,10 +31,7 @@ pub fn adapter_by_kind(kind: &str) -> Result<&'static dyn AgentAdapter> {
 
 /// [`adapter_by_kind`] for callers that treat an unknown kind as absence.
 pub fn find_adapter(kind: &str) -> Option<&'static dyn AgentAdapter> {
-    ADAPTERS
-        .iter()
-        .copied()
-        .find(|adapter| adapter.descriptor().kind == kind)
+    all_adapters().find(|adapter| adapter.descriptor().kind == kind)
 }
 
 /// The static descriptor for `kind`, for sites that need only const data
@@ -38,7 +42,7 @@ pub fn descriptor_by_kind(kind: &str) -> Option<&'static AgentDescriptor> {
 
 /// Display-order kinds — the walk doctor and the wiring probes iterate.
 pub fn known_kinds() -> impl Iterator<Item = &'static str> {
-    ADAPTERS.iter().map(|adapter| adapter.descriptor().kind)
+    all_adapters().map(|adapter| adapter.descriptor().kind)
 }
 
 #[cfg(test)]

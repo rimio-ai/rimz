@@ -4,6 +4,8 @@ RimZ watches the coding agents you already run — Claude Code, Codex, Pi, and O
 
 The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts all four the same way. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
+Third-party agents use the same boundary through a machine-tier process plugin. Its manifest derives the same matrices and its shim speaks the [canonical agent plugin protocol](./agent-plugins.md); feature status is bundle-specific rather than assigned a RimZ release tier.
+
 Every integration is declared cell by cell, not assumed. Each adapter states its own coverage, conformance tests cross-check that declaration against the code that backs it, and `rimz coverage` prints the same matrix on demand — so what RimZ claims to read is a thing you verify on your own machine rather than take on faith:
 
 ```sh
@@ -21,6 +23,7 @@ This page is the annotated read of that command.
 | Codex | ✅ stable | 11 wired · 2 derived · 3 unsupported | hooks + `notify` · app-server · rollout `.jsonl` · `codex resume` |
 | Pi | beta | 7 wired · 3 derived · 6 unsupported | extension API · session `.jsonl` · `pi --session` |
 | OpenCode | alpha | 8 wired · 3 derived · 5 unsupported | plugin API · session `.jsonl` + SQLite |
+| Third-party plugin | bundle-defined | derived by `rimz coverage` | canonical event shim · optional executable probes |
 
 What the tiers promise:
 

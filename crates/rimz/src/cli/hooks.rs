@@ -151,7 +151,19 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         })
         .unwrap_or_else(|| "unknown".to_owned());
 
-    let agent = adapter_by_kind(&source)?;
+    let agent = match adapter_by_kind(&source) {
+        Ok(agent) => agent,
+        Err(err)
+            if rimz::agents::plugin::loaded()
+                .errors
+                .iter()
+                .any(|load_error| load_error.kind_hint.as_deref() == Some(source.as_str())) =>
+        {
+            warn!(source, error = %err, "hooks feed: invalid agent plugin skipped");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
     let classified = agent.classify_hook(&event_name, &payload);
 
     if classified.class != AgentHookClass::AwaitingUser {

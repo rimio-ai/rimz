@@ -7,13 +7,15 @@ Topic detail lives in the internals leaves the root map describes — [model.md]
 ## Layout
 
 - Shared, kind-agnostic code sits at the top level — the [`AgentAdapter`](./mod.rs) trait, [`state.rs`](./state.rs) rollup types, descriptor/registry/lifecycle/context companions, the wire enums, the account probe contract, [`spending/`](./spending/mod.rs) aggregation, the [`pricing/`](./pricing/mod.rs) tables, and helper modules for payloads ([`payload.rs`](./payload.rs)), identity ([`identity.rs`](./identity.rs)), location ([`locate.rs`](./locate.rs)), and whole-file managed sources ([`managed_source.rs`](./managed_source.rs)); per-file detail lives in the `//!` headers.
-- Each agent kind is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs), [`pi/`](./pi/mod.rs), [`opencode/`](./opencode/mod.rs)) owning its integration, typed payloads, rich-context transport, account and OAuth-usage probes, and `spend.rs`.
+- Each built-in agent kind is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs), [`pi/`](./pi/mod.rs), [`opencode/`](./opencode/mod.rs)) owning its integration, typed payloads, rich-context transport, account and OAuth-usage probes, and `spend.rs`; [`plugin/`](./plugin/mod.rs) is one kind-agnostic adapter for every validated machine-tier process plugin.
 - `spend.rs` is the read-only, sidebar-safe full-history cost parser; a CI grep keeps every `spend.rs` free of store-write, run-wake, and broker imports.
 - Pi and OpenCode own their wire: both integrate through RimZ-authored in-process TypeScript installed whole-file — [`pi/extension.ts`](./pi/extension.ts) and [`opencode/plugin.ts`](./opencode/plugin.ts) — so the payload schema is RimZ's by design and drift is a RimZ bug, never an upstream one.
 
 ## The boundary
 
-An adapter is the *single* place a native agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, `render_neutral`, and install / uninstall / preview for one agent. Adding an agent is implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs) — including tool vocabularies and the full `IntegrationConcern` coverage table — and one line in [`registry::ADAPTERS`](./registry.rs) — nothing else.
+An adapter is the *single* place an agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, and `render_neutral`; a built-in also owns install / uninstall / preview for one agent. Add a third-party agent with the manifest and canonical wire under [`plugin/`](./plugin/mod.rs). Add a built-in by implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs) — including tool vocabularies and the full `IntegrationConcern` coverage table — and one line in [`registry::ADAPTERS`](./registry.rs).
+
+- **Plugin manifests derive claims.** The declared canonical event list, capabilities, and probes generate both descriptor matrices. Keep hook installation self-managed and neutral output empty; probes stay bounded, read-only, and off the store import graph.
 
 - **Adapters never touch the store.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) owns every store write, calling the adapter for classification, neutral rendering, and normalized run output.
 - **Emit only the normalized outputs downstream consumes** — an `AgentLifecycleObservation`, a blocking-ask classification, and a supervised-run final assistant message. A native event name or payload field reached for outside this module is a mapping that belongs *in* an adapter.

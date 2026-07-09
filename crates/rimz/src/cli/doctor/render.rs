@@ -95,6 +95,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_mux(w, &report.mux, &mut tally)?;
     render_terminal(w, &report.terminal, &mut tally)?;
     render_hooks(w, report, &mut tally)?;
+    render_plugins(w, report, &mut tally)?;
     render_loop(w, &report.loop_tasks, &mut tally)?;
     render_remote_control(w, &report.remote_control, &mut tally)?;
     render_storage(w, &report.disk_usage, &mut tally)?;
@@ -640,6 +641,76 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
     table.render(w)
 }
 
+fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -> io::Result<()> {
+    if report.plugins.is_empty() {
+        return Ok(());
+    }
+    section(w, "AGENT PLUGINS")?;
+    let mut table = Table::new(["", "AGENT", "STATUS", "MANIFEST", "DETAIL"]);
+    for plugin in &report.plugins {
+        let (health, status, detail) = if plugin.valid {
+            let bad_probes = plugin
+                .probes
+                .iter()
+                .filter(|probe| !probe.present || !probe.executable)
+                .map(|probe| probe.name)
+                .collect::<Vec<_>>();
+            if bad_probes.is_empty() {
+                (
+                    Health::Ok,
+                    "valid",
+                    plugin
+                        .setup_doc
+                        .clone()
+                        .unwrap_or_else(|| "self-managed hooks".to_owned()),
+                )
+            } else {
+                (
+                    Health::Warn,
+                    "valid; probe unavailable",
+                    format!("check {}", bad_probes.join(", ")),
+                )
+            }
+        } else {
+            (
+                Health::Alarm,
+                "invalid",
+                plugin
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "manifest validation failed".to_owned()),
+            )
+        };
+        table.row([
+            badge(tally, health),
+            cell(plugin.kind.as_str()).fg(palette::ACCENT),
+            cell(status).fg(style_of(health)),
+            cell(home_relative(&plugin.manifest)).fg(palette::BODY),
+            cell(detail).dash(),
+        ]);
+        for probe in &plugin.probes {
+            let probe_health = if probe.present && probe.executable {
+                Health::Ok
+            } else {
+                Health::Warn
+            };
+            let status = match (probe.present, probe.executable) {
+                (true, true) => "executable",
+                (true, false) => "not executable",
+                (false, _) => "missing",
+            };
+            table.row([
+                badge(tally, probe_health),
+                cell(format!("  {} probe", probe.name)).fg(palette::META),
+                cell(status).fg(style_of(probe_health)),
+                cell("-"),
+                cell(probe.command.as_str()).fg(palette::BODY),
+            ]);
+        }
+    }
+    table.render(w)
+}
+
 fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) -> io::Result<()> {
     section(w, "LOOP TASKS")?;
     if loop_tasks.tasks.is_empty() {
@@ -1179,6 +1250,7 @@ mod tests {
             },
             terminal: terminal_fixture(),
             hooks: Vec::new(),
+            plugins: Vec::new(),
             loop_tasks: LoopTasks { tasks: Vec::new() },
             remote_control: RemoteControl::Off,
             disk_usage: storage_fixture(),

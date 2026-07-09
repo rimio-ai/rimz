@@ -6,6 +6,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
     let pi_reading = window(70, 3_600);
     let account = AgentAccount {
         plan: Some("OpenAI OAuth".to_owned()),
+        account_id: None,
         metered: Some(true),
         version: Some("0.78.0".to_owned()),
         sub_provider: Some("openai".to_owned()),

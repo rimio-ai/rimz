@@ -1,0 +1,52 @@
+protocol = 1
+kind = "scriptbot"
+display-name = "ScriptBot"
+process-names = ["scriptbot", "node"]
+events = [
+  "session_start",
+  "turn_start",
+  "turn_end",
+  "tool_use",
+  "awaiting_input",
+  "compaction_start",
+  "compaction_end",
+  "session_end",
+  "context",
+]
+setup-doc = "README.md"
+
+[brand]
+emblem = "[sb]"
+color = 141
+color-rgb = [175, 135, 255]
+
+[capabilities]
+native-ask-ui = true
+context-usage = true
+
+[tools]
+mutating = ["write", "shell"]
+editing = ["write"]
+
+[launch]
+bin = "./fake-agent.js"
+args = []
+model-flag = "--model"
+effort-flag = "--effort"
+resume = ["./fake-agent.js", "--resume", "{session_id}"]
+compact-command = "/compact"
+
+[launch.permission-args]
+ask = []
+auto = []
+yolo = ["--yolo"]
+plan = []
+
+[transcripts]
+globs = ["fixtures/*.jsonl"]
+thread-key = "per-file"
+
+[probes]
+spend = ["node", "./probes/spend.js"]
+account = ["./probes/account"]
+version = ["./fake-agent.js", "--version"]

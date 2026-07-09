@@ -53,3 +53,7 @@ Try the team before installing by pointing RimZ at this checkout:
 ```sh
 RIMZ_AGENTS_HOME="$PWD/examples" rimz agents forge
 ```
+
+## Third-party agent plugin — `agent-plugin/`
+
+[`agent-plugin`](./agent-plugin/) is a complete ScriptBot process plugin: a manifest, scripted agent, canonical event shim behavior, priced spend probe, account probe, and fixture transcript. Its [README](./agent-plugin/README.md) installs the bundle and launches the demo; the public contract is [agent-plugins.md](../docs/reference/agent-plugins.md).

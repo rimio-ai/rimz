@@ -19,6 +19,9 @@ fn is_agent_spend_parser_path(path: &Path, agents_root: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(agents_root) else {
         return false;
     };
+    if relative == Path::new("plugin/probes.rs") {
+        return true;
+    }
     relative
         .components()
         .any(|component| component.as_os_str() == OsStr::new("spend"))

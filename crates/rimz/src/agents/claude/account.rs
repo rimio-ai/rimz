@@ -63,6 +63,7 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     let metered = plan.is_some() && status.auth_method.as_deref() != Some("apiKey");
     AccountProbe::Found(AgentAccount {
         plan,
+        account_id: None,
         metered: Some(metered),
         version: None,
         sub_provider: None,

@@ -208,13 +208,13 @@ Like every heartbeat it is latency, not truth: a missing file just leaves `last_
 
 ## The adapter boundary
 
-A coding agent reports to RimZ through hooks, and every agent speaks through one trait, [`AgentAdapter`](../../../crates/rimz/src/agents/mod.rs), registered in [`registry::ADAPTERS`](../../../crates/rimz/src/agents/registry.rs). The trait is the single place a native protocol diverges and the single place it is normalized; nothing downstream of it is agent-specific. The per-provider mappings it produces are the adapter docs; the raw upstream protocols they read are the [external references](../../externals/agent-adapter/claude-reference.md).
+A coding agent reports to RimZ through hooks, and every agent speaks through one trait, [`AgentAdapter`](../../../crates/rimz/src/agents/mod.rs). [`registry::all_adapters`](../../../crates/rimz/src/agents/registry.rs) chains the compiled-in `ADAPTERS` slice with validated machine-tier process plugins. The trait is the single place a native protocol diverges and the single place it is normalized; nothing downstream of it is agent-specific. The per-provider mappings it produces are the adapter docs; the raw upstream protocols they read are the [external references](../../externals/agent-adapter/claude-reference.md), and the external process wire is [plugin.md](./plugin.md).
 
 An agent reports through the same public shape everything else uses: a hook is an adapter that translates a native protocol onto one RimZ CLI entrypoint, and the observations it records land in the same store every read surface projects.
 
 ### The seam: `AgentAdapter`
 
-Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables, integration coverage) and one registry line. The methods, by role (signatures live in the trait):
+Built-in adapters implement the trait plus a static [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) (identity, branding, capabilities, tool tables, integration coverage) and one registry line. External plugins use the shared `PluginAdapter`, which builds the same descriptor and behavior from a validated manifest and canonical envelope. The methods, by role (signatures live in the trait):
 
 - **`classify_hook`** sorts a native event into one of the two channels below (or `Unknown`, dropped) and, for a blocking event, names the [`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs).
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs). `None` means "no transition here", so high-frequency events stay silent.
@@ -308,7 +308,7 @@ The sidecar lives wholly off the durable path (store first; sidebar wakeups are 
 
 ## Adding an agent
 
-Claude, Codex, Pi, and OpenCode are the worked examples. New agents such as Cursor, Gemini, or Copilot land through `AgentAdapter` once their hook surface is verified. The work is one new directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md) (the trait impl, its `AgentDescriptor`, typed payloads, and `spend.rs`) plus one line in `registry::ADAPTERS` and a new doc under [`adapter/`](./claude.md). Nothing else changes: spending, coverage, doctor status, install, branding, and classification all resolve through the registry.
+Claude, Codex, Pi, and OpenCode are compiled-in integrations because Rimz owns their hook installers and provider-specific enrichment. A third-party agent normally ships a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, native shim, and optional probes, with no Rimz source change. A new built-in remains appropriate when Rimz must own a native config migration or a protocol surface that the canonical wire cannot express; it lands as one directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md), one `registry::ADAPTERS` line, conformance coverage, and its adapter doc.
 
 The descriptor carries two declared matrices, both conformance-checked and both printed by `rimz coverage` (wired green, partial yellow, unsupported/absent dim, so absences are visible at a glance):
 

@@ -78,6 +78,10 @@ fn spend_parser_path_predicate_covers_nested_modules() {
         &agents_root.join("transcript_fs.rs"),
         agents_root,
     ));
+    assert!(is_agent_spend_parser_path(
+        &agents_root.join("plugin/probes.rs"),
+        agents_root,
+    ));
     assert!(!is_agent_spend_parser_path(
         &agents_root.join("codex/mod.rs"),
         agents_root,

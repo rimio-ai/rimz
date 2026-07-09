@@ -208,6 +208,29 @@ pub fn merge_observed(
     let mut record = read_one(runtime, kind, agent_id)
         .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
     let mut changed = false;
+    macro_rules! merge_optional {
+        ($field:ident) => {
+            if let Some(value) = context.$field
+                && record.context.$field.as_ref() != Some(&value)
+            {
+                record.context.$field = Some(value);
+                changed = true;
+            }
+        };
+    }
+    merge_optional!(session_name);
+    merge_optional!(session_preview);
+    merge_optional!(model_display_name);
+    merge_optional!(thinking_enabled);
+    merge_optional!(output_style);
+    merge_optional!(vim_mode);
+    merge_optional!(agent_version);
+    merge_optional!(exceeds_200k_tokens);
+    merge_optional!(pr);
+    merge_optional!(account);
+    merge_optional!(turn_error);
+    merge_optional!(turn_complete);
+    merge_optional!(turn_interrupted);
     if let Some(rate_limits) = context.rate_limits
         && record.context.rate_limits.as_ref() != Some(&rate_limits)
     {

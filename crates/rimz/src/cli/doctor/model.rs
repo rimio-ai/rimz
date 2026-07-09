@@ -33,6 +33,7 @@ pub(super) struct DoctorReport {
     pub(super) mux: Probe<Mux>,
     pub(super) terminal: Terminal,
     pub(super) hooks: Vec<HookRow>,
+    pub(super) plugins: Vec<PluginRow>,
     pub(super) loop_tasks: LoopTasks,
     pub(super) remote_control: RemoteControl,
     pub(super) disk_usage: Storage,
@@ -289,6 +290,26 @@ pub(super) struct TopologyWriterId {
 pub(super) struct HookRow {
     pub(super) kind: String,
     pub(super) status: HookStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PluginRow {
+    pub(super) kind: String,
+    pub(super) manifest: String,
+    pub(super) valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) setup_doc: Option<String>,
+    pub(super) probes: Vec<PluginProbeRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PluginProbeRow {
+    pub(super) name: &'static str,
+    pub(super) command: String,
+    pub(super) present: bool,
+    pub(super) executable: bool,
 }
 
 #[derive(Debug, Serialize)]

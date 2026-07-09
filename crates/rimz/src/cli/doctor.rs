@@ -59,6 +59,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         mux: runtime::collect_mux(globals.mux, ws),
         terminal: runtime::collect_terminal(),
         hooks: agents::collect_hooks(),
+        plugins: agents::collect_plugins(),
         loop_tasks: collect_loop(),
         remote_control: runtime::collect_remote_control(),
         disk_usage: runtime::collect_storage(),

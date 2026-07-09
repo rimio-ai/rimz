@@ -8,9 +8,9 @@
 //! Adapters also own hook install and uninstall — translating the trait
 //! defaults into whatever per-agent config file the upstream agent reads.
 //!
-//! Static per-agent data — identity, branding, capabilities, tool tables —
-//! lives in each adapter's [`AgentDescriptor`]; [`registry::ADAPTERS`] is the
-//! single registration table every dispatch site resolves through.
+//! Per-agent data — identity, branding, capabilities, tool tables — lives in
+//! each adapter's [`AgentDescriptor`]; [`registry::all_adapters`] chains the
+//! built-in [`registry::ADAPTERS`] table with validated process plugins.
 
 pub mod account;
 pub mod claude;
@@ -30,6 +30,7 @@ mod observation;
 pub mod opencode;
 pub(crate) mod payload;
 pub mod pi;
+pub mod plugin;
 pub mod pricing;
 pub mod registry;
 pub mod spending;
@@ -78,7 +79,9 @@ pub(crate) use payload::{
     sanitize_user_prompt, stop_payload_errored,
 };
 pub use pricing::{PriceBook, Pricing};
-pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};
+pub use registry::{
+    ADAPTERS, adapter_by_kind, all_adapters, descriptor_by_kind, find_adapter, known_kinds,
+};
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
