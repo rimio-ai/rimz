@@ -1,0 +1,14 @@
+name: Docs site dispatch
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**"]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh api repos/rimio-ai/rimz-docs/dispatches -f event_type=docs-updated
+        env:
+          GH_TOKEN: ${{ secrets.RIMZ_DOCS_DISPATCH }}
