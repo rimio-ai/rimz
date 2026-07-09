@@ -439,6 +439,12 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         let rimz_bin = room_owner_bin();
         record_room_bin(workspace, rimz_bin.as_path())?;
     }
+    if let RoomEntry::Start { workspace, .. } = &entry
+        && !was_live
+        && std::io::stdin().is_terminal()
+    {
+        prompt_project_trust(&workspace.project_root);
+    }
 
     let mut attached_workspace_id = None;
     match &entry {
@@ -605,6 +611,89 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn prompt_project_trust(project_root: &Path) {
+    let offer = match rimz::trust::birth_prompt(project_root) {
+        Ok(Some(offer)) => offer,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!(error = %err, "trust birth prompt skipped");
+            return;
+        }
+    };
+    if let Err(err) = write_project_trust_offer(&offer) {
+        tracing::warn!(error = %err, "trust birth prompt render failed");
+        return;
+    }
+    match confirm_with_default("Trust this project's config on this machine?", true) {
+        Ok(true) => match rimz::trust::grant(project_root) {
+            Ok(_) => {
+                if let Err(err) = write_project_trust_notice(&[
+                    "rimz: trusted — scheduled loops and project config are now active.",
+                ]) {
+                    tracing::warn!(error = %err, "trust grant notice failed");
+                }
+            }
+            Err(err) => tracing::warn!(error = %err, "trust grant from birth prompt failed"),
+        },
+        Ok(false) => {
+            if let Err(err) = rimz::trust::dismiss_birth_prompt(project_root) {
+                tracing::warn!(error = %err, "recording trust decline failed");
+            }
+            if let Err(err) = write_project_trust_notice(&[
+                "rimz: left untrusted; run `rimz trust grant` when ready.",
+                "Rimz won't ask again until .rimz/config.toml changes.",
+            ]) {
+                tracing::warn!(error = %err, "trust decline notice failed");
+            }
+        }
+        Err(err) => tracing::warn!(error = %err, "trust prompt read failed"),
+    }
+}
+
+fn write_project_trust_offer(offer: &rimz::trust::BirthPromptOffer) -> std::io::Result<()> {
+    let mut out = render::err();
+    write_project_trust_offer_to(&mut out, offer)
+}
+
+fn write_project_trust_offer_to(
+    out: &mut impl Write,
+    offer: &rimz::trust::BirthPromptOffer,
+) -> std::io::Result<()> {
+    let summary = &offer.summary;
+    writeln!(
+        out,
+        "This project ships .rimz/config.toml with config that stays inert"
+    )?;
+    writeln!(out, "until you trust it on this machine:")?;
+    write_project_trust_list(&mut *out, "loop tasks", &summary.task_names)?;
+    write_project_trust_list(&mut *out, "profiles", &summary.profiles)?;
+    write_project_trust_list(&mut *out, "teams", &summary.teams)?;
+    write_project_trust_list(&mut *out, "env for", &summary.env_agents)?;
+    if summary.hooks > 0 {
+        writeln!(out, "  hooks: {}", summary.hooks)?;
+    }
+    Ok(())
+}
+
+fn write_project_trust_list(
+    out: &mut impl Write,
+    label: &str,
+    values: &[String],
+) -> std::io::Result<()> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "  {label}: {}", values.join(", "))
+}
+
+fn write_project_trust_notice(lines: &[&str]) -> std::io::Result<()> {
+    let mut out = render::err();
+    for line in lines {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
 }
 
 fn mux_environment_preflight(mux: MuxName, session_name: &str) -> Result<()> {

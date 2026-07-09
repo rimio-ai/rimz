@@ -79,6 +79,8 @@ granted_at   = "2026-05-23T12:34:56Z"
 
 `surface_json` is the canonical surface JSON the hash was computed over. Storing it lets a stale grant report *what* drifted, not just that it did. A record missing `surface_json` fails to parse rather than silently degrading to a hash-only comparison.
 
+A declined birth prompt writes `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/birth-prompt.toml` beside `trust.toml`. The record stores the declined surface hash and timestamp; when `.rimz/config.toml` changes a command-running field, the live hash differs and the prompt becomes eligible again.
+
 ## The surface diff
 
 A `stale` report carries a field-level diff of the granted surface against the current one: a structured walk over the two canonical JSON values that yields added, removed, and changed leaves with their paths ([`executable_surface_diff`](../../../crates/rimz/src/trust.rs)). `rimz trust status` renders it under the state line, and `rimz trust grant` renders it before pinning the new surface so a re-grant is informed rather than blind. Under `--json` the entries ride in the `surface_diff` array.
@@ -90,6 +92,8 @@ rimz trust [status|grant|revoke] [--json]
 ```
 
 `status` is the default. `grant` renders the surface diff when a prior record exists, then pins the live hash and surface. `revoke` deletes the record, reverting the workspace to `untrusted` (or `no_config` when `.rimz/config.toml` is absent). `rimz doctor` surfaces the trust state alongside its protocol checks. The full command surface is in the [reference](../../reference/cli/hooks-trust.md#project-trust).
+
+A fresh interactive `rimz start` on an `untrusted` workspace offers the grant before room birth. The prompt is scoped to never-granted repos; `stale` remains a re-grant flow through `rimz trust grant`. A decline writes `birth-prompt.toml` for the current surface hash, so Rimz asks again only after the executable surface changes. Attach, web starts, supervised runs, and non-TTY starts skip the prompt, and prompt errors log a warning rather than blocking the room.
 
 ## Adding a command-running field
 

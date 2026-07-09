@@ -1,4 +1,6 @@
-use super::{ResumePromptMode, resume_prompt_mode};
+use super::{ResumePromptMode, resume_prompt_mode, write_project_trust_offer_to};
+
+use rimz::trust::{BirthPromptOffer, SurfaceSummary};
 
 #[test]
 fn resume_prompt_mode_uses_tty_or_confirm_flag() {
@@ -11,4 +13,32 @@ fn resume_prompt_mode_uses_tty_or_confirm_flag() {
         ResumePromptMode::Interactive
     );
     assert_eq!(resume_prompt_mode(false, false), ResumePromptMode::Silent);
+}
+
+#[test]
+fn trust_birth_prompt_offer_renders_only_present_summary_lines() {
+    let offer = BirthPromptOffer {
+        current_hash: "sha256:test".to_owned(),
+        summary: SurfaceSummary {
+            task_names: vec!["sync".to_owned()],
+            env_agents: vec!["claude".to_owned()],
+            hooks: 2,
+            ..SurfaceSummary::default()
+        },
+    };
+    let mut out = Vec::new();
+
+    write_project_trust_offer_to(&mut out, &offer).expect("render prompt");
+
+    let rendered = String::from_utf8(out).expect("utf8");
+    assert_eq!(
+        rendered,
+        concat!(
+            "This project ships .rimz/config.toml with config that stays inert\n",
+            "until you trust it on this machine:\n",
+            "  loop tasks: sync\n",
+            "  env for: claude\n",
+            "  hooks: 2\n",
+        )
+    );
 }

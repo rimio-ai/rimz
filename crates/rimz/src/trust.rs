@@ -27,6 +27,7 @@ use crate::store::paths::config_home;
 const CONFIG_REL: &str = ".rimz/config.toml";
 const PROJECTS_SUBDIR: [&str; 2] = ["rimz", "projects"];
 const TRUST_FILE: &str = "trust.toml";
+const BIRTH_PROMPT_FILE: &str = "birth-prompt.toml";
 const HASH_PREFIX: &str = "sha256:";
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +50,12 @@ pub enum TrustErr {
         #[source]
         source: toml::de::Error,
     },
+    #[error("parsing birth prompt dismissal at {path}: {source}")]
+    BirthPromptParse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
     #[error("parsing stored surface json in trust record at {path}: {source}")]
     RecordSurfaceJson {
         path: PathBuf,
@@ -59,6 +66,8 @@ pub enum TrustErr {
     RemovedProjectTable { path: PathBuf, detail: String },
     #[error("serializing trust record: {0}")]
     RecordSerialize(#[from] toml::ser::Error),
+    #[error("serializing birth prompt dismissal: {0}")]
+    BirthPromptSerialize(toml::ser::Error),
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
 }
@@ -102,6 +111,42 @@ pub struct TrustReport {
     pub granted_hash: Option<String>,
     pub granted_at: Option<Timestamp>,
     pub surface_diff: Option<Vec<SurfaceDiffEntry>>,
+}
+
+/// Offer shown by a fresh interactive `rimz start` for a never-granted project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BirthPromptOffer {
+    pub current_hash: String,
+    pub summary: SurfaceSummary,
+}
+
+/// Human summary of the executable surface in project config.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceSummary {
+    pub task_names: Vec<String>,
+    pub profiles: Vec<String>,
+    pub teams: Vec<String>,
+    pub env_agents: Vec<String>,
+    pub hooks: usize,
+}
+
+impl SurfaceSummary {
+    fn from_config(config: &ProjectConfig) -> Self {
+        Self {
+            task_names: config.tasks.keys().cloned().collect(),
+            profiles: config.profiles.keys().cloned().collect(),
+            teams: config.teams().keys().cloned().collect(),
+            env_agents: config
+                .agent_entries()
+                .iter()
+                .filter(|agent| !agent.env.is_empty() && !agent.name.is_empty())
+                .map(|agent| agent.name.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            hooks: config.hooks.len(),
+        }
+    }
 }
 
 /// Leaf-level change from the granted surface to the current surface.
@@ -148,6 +193,16 @@ pub fn grant(project_root: &Path) -> Result<TrustReport> {
 /// when `.rimz/config.toml` is absent.
 pub fn revoke(project_root: &Path) -> Result<TrustReport> {
     revoke_with_roots(project_root, &config_home())
+}
+
+/// Return the one-time birth trust offer for an untrusted project, when due.
+pub fn birth_prompt(project_root: &Path) -> Result<Option<BirthPromptOffer>> {
+    birth_prompt_with_roots(project_root, &config_home())
+}
+
+/// Mark the current untrusted surface as declined for the one-time birth prompt.
+pub fn dismiss_birth_prompt(project_root: &Path) -> Result<()> {
+    dismiss_birth_prompt_with_roots(project_root, &config_home())
 }
 
 pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
@@ -225,6 +280,7 @@ pub fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<Trust
     };
     let text = toml::to_string_pretty(&record)?;
     write_bytes_atomically(&record_path, text.as_bytes())?;
+    remove_birth_prompt_dismissal(&birth_prompt_path(config_root, &workspace_id));
 
     Ok(TrustReport {
         state: TrustState::Trusted,
@@ -253,6 +309,48 @@ pub fn revoke_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
         }
     }
     status_with_roots(project_root, config_root)
+}
+
+pub fn birth_prompt_with_roots(
+    project_root: &Path,
+    config_root: &Path,
+) -> Result<Option<BirthPromptOffer>> {
+    let workspace_id = WorkspaceId::from_project_root(project_root);
+    let config_path = project_root.join(CONFIG_REL);
+    let Some(config) = read_project_config(&config_path)? else {
+        return Ok(None);
+    };
+    let current_surface = surface_snapshot(&config);
+    if read_trust_record(&trust_record_path(config_root, &workspace_id))?.is_some() {
+        return Ok(None);
+    }
+    if read_birth_prompt_dismissal(&birth_prompt_path(config_root, &workspace_id))?
+        .is_some_and(|record| record.dismissed_hash == current_surface.hash)
+    {
+        return Ok(None);
+    }
+    Ok(Some(BirthPromptOffer {
+        current_hash: current_surface.hash,
+        summary: SurfaceSummary::from_config(&config),
+    }))
+}
+
+pub fn dismiss_birth_prompt_with_roots(project_root: &Path, config_root: &Path) -> Result<()> {
+    let workspace_id = WorkspaceId::from_project_root(project_root);
+    let config_path = project_root.join(CONFIG_REL);
+    let Some(config) = read_project_config(&config_path)? else {
+        return Ok(());
+    };
+    let record = BirthPromptDismissal {
+        dismissed_hash: surface_snapshot(&config).hash,
+        dismissed_at: Timestamp::now(),
+    };
+    let text = toml::to_string_pretty(&record).map_err(TrustErr::BirthPromptSerialize)?;
+    write_bytes_atomically(
+        &birth_prompt_path(config_root, &workspace_id),
+        text.as_bytes(),
+    )?;
+    Ok(())
 }
 
 /// Launch-time `[[agents]]` env for one agent kind, resolved under the trust
@@ -310,12 +408,20 @@ pub fn agent_env_with_roots(
 }
 
 fn trust_record_path(config_root: &Path, workspace_id: &WorkspaceId) -> PathBuf {
+    project_record_path(config_root, workspace_id, TRUST_FILE)
+}
+
+fn birth_prompt_path(config_root: &Path, workspace_id: &WorkspaceId) -> PathBuf {
+    project_record_path(config_root, workspace_id, BIRTH_PROMPT_FILE)
+}
+
+fn project_record_path(config_root: &Path, workspace_id: &WorkspaceId, file: &str) -> PathBuf {
     let mut path = config_root.to_path_buf();
     for segment in PROJECTS_SUBDIR {
         path.push(segment);
     }
     path.push(workspace_id.as_str());
-    path.push(TRUST_FILE);
+    path.push(file);
     path
 }
 
@@ -370,6 +476,33 @@ fn read_trust_record(path: &Path) -> Result<Option<TrustRecord>> {
     }
 }
 
+fn read_birth_prompt_dismissal(path: &Path) -> Result<Option<BirthPromptDismissal>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let record = toml::from_str::<BirthPromptDismissal>(&text).map_err(|source| {
+                TrustErr::BirthPromptParse {
+                    path: path.to_path_buf(),
+                    source,
+                }
+            })?;
+            Ok(Some(record))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(TrustErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn remove_birth_prompt_dismissal(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {}
+    }
+}
+
 /// Hash the executable surface — every field that can cause a process to run.
 ///
 /// The hash input is canonical JSON over [`ExecutableSurface`], so struct
@@ -407,6 +540,13 @@ struct TrustRecord {
     surface_hash: String,
     surface_json: String,
     granted_at: Timestamp,
+}
+
+/// One-time decline record for the fresh-room trust prompt.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BirthPromptDismissal {
+    dismissed_hash: String,
+    dismissed_at: Timestamp,
 }
 
 /// Project config schema for the trust subsystem. Lenient on unknown keys
@@ -796,6 +936,12 @@ mod tests {
         dir
     }
 
+    fn birth_prompt_due(project_root: &Path, config_root: &Path) -> bool {
+        birth_prompt_with_roots(project_root, config_root)
+            .expect("birth prompt")
+            .is_some()
+    }
+
     #[test]
     fn empty_project_reports_no_config() {
         let dir = tempdir().expect("tempdir");
@@ -804,6 +950,7 @@ mod tests {
         assert_eq!(report.state, TrustState::NoConfig);
         assert!(report.current_hash.is_none());
         assert!(report.granted_hash.is_none());
+        assert!(!birth_prompt_due(dir.path(), config.path()));
     }
 
     #[test]
@@ -818,6 +965,49 @@ mod tests {
     }
 
     #[test]
+    fn birth_prompt_offers_current_hash_and_summary_for_untrusted_config() {
+        let dir = project_with(
+            "[tasks.sync]\nspec = \"codex\"\nprompt = \"sync the repo\"\n\n[profiles.planner]\nagent = \"claude\"\n\n[agents.teams.review]\nlayout = \"planner\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n\n[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
+        );
+        let config = tempdir().expect("config root");
+        let offer = birth_prompt_with_roots(dir.path(), config.path())
+            .expect("birth prompt")
+            .expect("offer");
+        let project_config = read_project_config(&dir.path().join(CONFIG_REL))
+            .expect("read config")
+            .expect("config present");
+
+        assert_eq!(offer.current_hash, executable_surface_hash(&project_config));
+        assert_eq!(offer.summary.task_names, vec!["sync".to_owned()]);
+        assert_eq!(offer.summary.profiles, vec!["planner".to_owned()]);
+        assert_eq!(offer.summary.teams, vec!["review".to_owned()]);
+        assert_eq!(offer.summary.hooks, 1);
+    }
+
+    #[test]
+    fn birth_prompt_dismissal_suppresses_until_surface_changes_and_grant_cleans_it() {
+        let dir =
+            project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
+        let config = tempdir().expect("config root");
+        let dismissal_path =
+            birth_prompt_path(config.path(), &WorkspaceId::from_project_root(dir.path()));
+
+        dismiss_birth_prompt_with_roots(dir.path(), config.path()).expect("dismiss prompt");
+        assert!(dismissal_path.exists());
+        assert!(!birth_prompt_due(dir.path(), config.path()));
+
+        std::fs::write(
+            dir.path().join(CONFIG_REL),
+            "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
+        )
+        .expect("rewrite");
+        assert!(birth_prompt_due(dir.path(), config.path()));
+
+        grant_with_roots(dir.path(), config.path()).expect("grant");
+        assert!(!dismissal_path.exists());
+    }
+
+    #[test]
     fn grant_pins_hash_and_returns_trusted() {
         let dir =
             project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
@@ -828,6 +1018,7 @@ mod tests {
         assert_eq!(now.state, TrustState::Trusted);
         assert_eq!(now.current_hash, granted.current_hash);
         assert_eq!(now.granted_hash, granted.current_hash);
+        assert!(!birth_prompt_due(dir.path(), config.path()));
     }
 
     #[test]
@@ -846,6 +1037,7 @@ mod tests {
         let report = status_with_roots(dir.path(), config.path()).expect("status");
         assert_eq!(report.state, TrustState::Stale);
         assert_ne!(report.current_hash, report.granted_hash);
+        assert!(!birth_prompt_due(dir.path(), config.path()));
         let entries = report
             .surface_diff
             .expect("stale status should explain changed fields");
