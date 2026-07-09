@@ -507,6 +507,76 @@ mod tests {
         );
     }
 
+    #[test]
+    fn turn_end_reconciles_resumed_claude_cost_upward() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let transcript = dir.path().join("2026-06-02T10-00-00-000Z_sess-1.jsonl");
+        let mut file = std::fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-06-02T10:00:00.000Z","costUSD":15.91,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+        )
+        .unwrap();
+
+        let observed_at = jiff::Timestamp::from_second(1_780_394_400).unwrap();
+        let mut prior = rimz::store::agent_context::new_record(
+            "claude",
+            "sess-1",
+            rimz::store::agent_context::empty_context("claude", observed_at),
+        );
+        prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        prior.context.cost = Some(rimz::agents::AgentCost {
+            total_cost_usd: Some(0.0),
+            ..rimz::agents::AgentCost::default()
+        });
+
+        let mut skipped = None;
+        supplement_realtime_cost(
+            &rimz::agents::ClaudeAdapter,
+            "sess-1",
+            false,
+            Some(&prior),
+            &mut skipped,
+        );
+        assert!(skipped.is_none());
+
+        let mut refresh = None;
+        supplement_realtime_cost(
+            &rimz::agents::ClaudeAdapter,
+            "sess-1",
+            true,
+            Some(&prior),
+            &mut refresh,
+        );
+
+        let refresh = refresh.expect("turn end reconciles resumed cost");
+        let cost = refresh
+            .cost
+            .as_ref()
+            .and_then(|cost| cost.total_cost_usd)
+            .expect("supplemented total cost");
+        assert!((cost - 15.91).abs() < 1e-9);
+        assert_eq!(
+            refresh.transcript_path.as_deref(),
+            Some(transcript.to_string_lossy().as_ref())
+        );
+        assert!(refresh.transcript_stat.is_some());
+
+        prior.context.cost = Some(rimz::agents::AgentCost {
+            total_cost_usd: Some(99.0),
+            ..rimz::agents::AgentCost::default()
+        });
+        let mut no_downgrade = None;
+        supplement_realtime_cost(
+            &rimz::agents::ClaudeAdapter,
+            "sess-1",
+            true,
+            Some(&prior),
+            &mut no_downgrade,
+        );
+        assert!(no_downgrade.is_none());
+    }
+
     fn test_agent() -> AgentState {
         let now = jiff::Timestamp::now();
         rimz::testkit::agent_state("claude", "sess-1", now)

@@ -216,9 +216,6 @@ pub(super) fn supplement_realtime_cost(
     if matches!(coverage, rimz::agents::ConcernCoverage::Unsupported { .. }) {
         return;
     }
-    if !partial && prior_total_cost(prior).is_some() {
-        return;
-    }
 
     let prior_path = refresh
         .as_ref()
@@ -251,6 +248,16 @@ pub(super) fn supplement_realtime_cost(
     ) else {
         return;
     };
+
+    // A Wired realtime signal, such as Claude's statusline, is live-session-only
+    // and under-reports a resumed session. Reconcile upward from the transcript
+    // without dragging down a fresher live figure the price book cannot rebuild.
+    if !partial
+        && prior_total_cost(prior)
+            .is_some_and(|prior_usd| cost.total_cost_usd.unwrap_or_default() <= prior_usd)
+    {
+        return;
+    }
 
     let refresh = refresh.get_or_insert_with(|| rimz::agents::LocalContextRefresh {
         model_id: None,
