@@ -242,6 +242,30 @@ pub fn parse_tea_pr_detail_json(raw: &str) -> Result<Option<WorktreePrState>, St
     Ok(pr_state_from_value(&value))
 }
 
+/// Build the `tea pr list` argv for PR-state enrichment.
+///
+/// Both tea callers use the same bounded page size so older closed or merged
+/// PRs do not fall off tea's default page while the sidebar is detecting a
+/// branch transition.
+pub fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a str> {
+    let mut args = vec![
+        "pr",
+        "list",
+        "--state",
+        state,
+        "--output",
+        "json",
+        "--fields",
+        "index,state,head",
+        "--limit",
+        "500",
+    ];
+    if let Some(repo) = repo {
+        args.extend_from_slice(&["--repo", repo]);
+    }
+    args
+}
+
 fn pr_state_from_value(value: &Value) -> Option<WorktreePrState> {
     if value
         .get("merged")
@@ -274,17 +298,10 @@ fn prefer_pr_state(
     current: Option<WorktreePrState>,
     next: WorktreePrState,
 ) -> Option<WorktreePrState> {
-    match (current, next) {
-        (Some(WorktreePrState::Merged), _) | (_, WorktreePrState::Merged) => {
-            Some(WorktreePrState::Merged)
-        }
-        (Some(WorktreePrState::Open), _) | (_, WorktreePrState::Open) => {
-            Some(WorktreePrState::Open)
-        }
-        (Some(WorktreePrState::Closed), _) | (None, WorktreePrState::Closed) => {
-            Some(WorktreePrState::Closed)
-        }
-    }
+    Some(match current {
+        Some(current) if pr_state_rank(current) >= pr_state_rank(next) => current,
+        _ => next,
+    })
 }
 
 fn prefer_tea_candidate(
@@ -302,6 +319,7 @@ fn prefer_tea_candidate(
 }
 
 fn pr_state_rank(state: WorktreePrState) -> u8 {
+    // Single precedence source: merged beats open beats closed.
     match state {
         WorktreePrState::Closed => 0,
         WorktreePrState::Open => 1,
@@ -559,6 +577,21 @@ mod tests {
         assert_eq!(states.get("feature"), Some(&WorktreePrState::Open));
         assert_eq!(states.get("other"), Some(&WorktreePrState::Open));
         assert!(parse_tea_pr_list_states("{}").is_err());
+    }
+
+    #[test]
+    fn tea_pr_list_args_thread_limit_state_and_repo() {
+        let args = tea_pr_list_args("all", Some("org/repo"));
+        assert!(args.windows(2).any(|window| window == ["--state", "all"]));
+        assert!(args.windows(2).any(|window| window == ["--limit", "500"]));
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--repo", "org/repo"])
+        );
+
+        let bare = tea_pr_list_args("open", None);
+        assert!(bare.windows(2).any(|window| window == ["--limit", "500"]));
+        assert!(!bare.contains(&"--repo"));
     }
 
     #[test]

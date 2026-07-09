@@ -2,6 +2,11 @@
 //!
 //! The probe shells out to the repo's forge CLI on a long TTL, publishes
 //! `pr-state.json`, and lets consumers project the cached map without forking.
+//! `gh` reports `MERGED` as a first-class PR state, so one `gh pr list`
+//! resolves open/closed/merged. `tea pr list` reports only open/closed, so
+//! `probe_tea` follows a closed candidate with a `tea pr <n>` detail read to
+//! tell merged from closed. Both tea list calls page through
+//! [`crate::forge::tea_pr_list_args`] with the same `--limit`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -643,24 +648,11 @@ fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, WorktreePrState>
                 "500",
             ],
         )?,
-        ForgeCli::Tea => {
-            let mut args = vec![
-                "pr",
-                "list",
-                "--state",
-                "open",
-                "--output",
-                "json",
-                "--fields",
-                "index,state,head",
-                "--limit",
-                "500",
-            ];
-            if let Some(repo) = group.repo_slug.as_deref() {
-                args.extend_from_slice(&["--repo", repo]);
-            }
-            command_stdout(&group.worktree, "tea", &args)?
-        }
+        ForgeCli::Tea => command_stdout(
+            &group.worktree,
+            "tea",
+            &forge::tea_pr_list_args("open", group.repo_slug.as_deref()),
+        )?,
     };
     match group.forge_cli {
         ForgeCli::Gh => forge::parse_gh_pr_list_states(&output),
@@ -719,19 +711,7 @@ fn probe_github(worktree: &Path, branch: &str) -> ProbeState {
 
 fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
     let repo = forge::remote_repo_slug(remote);
-    let mut list_args = vec![
-        "pr",
-        "list",
-        "--state",
-        "all",
-        "--output",
-        "json",
-        "--fields",
-        "index,state,head",
-    ];
-    if let Some(repo) = repo.as_deref() {
-        list_args.extend_from_slice(&["--repo", repo]);
-    }
+    let list_args = forge::tea_pr_list_args("all", repo.as_deref());
     let Some(output) = command_stdout(worktree, "tea", &list_args) else {
         return ProbeState {
             state: None,
@@ -760,6 +740,8 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
         if let Some(repo) = repo.as_deref() {
             detail_args.extend_from_slice(&["--repo", repo]);
         }
+        // `tea pr list` omits merged metadata; the detail object carries
+        // `merged`/`merged_at` so closed candidates can become merged.
         if let Some(output) = command_stdout(worktree, "tea", &detail_args)
             && let Ok(Some(WorktreePrState::Merged)) = forge::parse_tea_pr_detail_json(&output)
         {
