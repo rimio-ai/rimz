@@ -1,4 +1,4 @@
-# Scripting agents
+# Scripting
 
 > `rimz agents -p` is `claude -p` for every agent Rimz supports: one prompt, one supervised turn, one exit code — with the turn running in a real pane you can watch, answer, and steer. This page is how you drop an agent into a shell script, a `Makefile`, a cron line, or a CI job. The run records, wakeup socket, and pane cleanup underneath it are [harness.md → Supervised runs](../internals/harness/harness.md#supervised-runs).
 

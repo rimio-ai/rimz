@@ -14,7 +14,7 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 
 - [Sidebar](./guide/sidebar.md): read the zones, the agent cards and their lifecycle, and the process rows, and follow how Rimz decides which agent needs you.
 - [Agents](./guide/agents.md): run the stock CLIs in the room, shape an agent for one job with a profile, and compose several into one layout.
-- [Spending](./guide/spending.md): read what the fleet costs and how hard it is working, from the live cockpit to `rimz stats`, and how every figure is calculated.
+- [Token Insight](./guide/insight.md): read what the fleet costs and how hard it is working, from the live cockpit to `rimz stats`, and how every figure is calculated.
 - [Remote](./guide/remote.md): attach to a room on another host over SSH, a multiplexer attach with a self-healing link, kept alive across reboots.
 - [Web](./guide/web.md): open a room in the browser, on the host or tunnelled from a server, gated by a login token.
 
@@ -36,13 +36,12 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 ## Help
 
 - [Troubleshooting](./guide/troubleshooting.md): start with `rimz doctor`, then the fixes for a room that will not start, agents not reporting, degraded banners, version drift, and resetting state.
-- [Security and trust](./guide/security.md): what Rimz changes on your machine and how to undo it, the two places config can run a command (project trust and notification handlers), and what leaves the box.
+- [Security and Trust](./guide/security.md): what Rimz changes on your machine and how to undo it, the two places config can run a command (project trust and notification handlers), and what leaves the box.
 
 ## Reference
 
-- [CLI](./reference/cli.md): the command map and conventions, with a page per group: [getting started](./reference/cli/getting-started.md), [agents](./reference/cli/agents.md), [message](./reference/cli/message.md), [transcript](./reference/cli/transcript.md), [pane](./reference/cli/pane.md), [loop](./reference/cli/loop.md), [channels](./reference/cli/channel.md), [worktrees](./reference/cli/worktree.md), [web](./reference/cli/web.md), [hooks and trust](./reference/cli/hooks-trust.md), and [maintenance](./reference/cli/maintenance.md).
+- [CLI](./reference/cli.md): the command map and conventions, with a page per group.
 - [Agent support](./reference/agent-support.md): per-agent status, integration surface, and permission-mode mapping for Claude Code, Codex, Pi, and OpenCode.
-- [The sidebar on screen](./interface/sidebar.md): every zone, glyph, and meter of the sidebar, with rendered frames.
 
 ## How it works
 

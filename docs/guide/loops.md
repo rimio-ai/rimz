@@ -1,4 +1,4 @@
-# Loops and schedules
+# Loops and Schedules
 
 > `rimz loop` is cron for your agents: a named task, a schedule, and a supervised turn that fires in a real pane while the room is open. This page goes from small single-purpose loops to a fleet that works nights. The elder clock, state files, and run log underneath are [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop).
 

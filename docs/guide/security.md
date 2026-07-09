@@ -1,4 +1,4 @@
-# Security and trust
+# Security and Trust
 
 Rimz runs as you: no daemon, no elevated privileges, no account of its own. It reports on the agents you already run, inside the terminal you already use. Its security model follows from that. Rimz asks before it changes anything on your machine, every change has a matching undo, and the only places a config file can make Rimz run a command are decisions you make by hand.
 

@@ -1,4 +1,4 @@
-# Spending and token insight
+# Token Insight
 
 You run a fleet now, not a single agent, and the fleet spends. Tokens turn into dollars across every provider you use, and each keeps its own tally on its own billing page: none beside your code, none aware of the others. The one number you actually want, what the fleet cost and how hard it worked, is the one nobody puts in front of you.
 
@@ -6,14 +6,14 @@ Token insight is that number, in the terminal. Every turn your agents run leaves
 
 You read it two ways. `rimz stats` prints the whole history on demand, from anywhere. The sidebar keeps a live slice of the same data in front of you while you work.
 
-## The full picture: rimz stats
-
-`rimz stats` prints your account-global history: a heatmap of daily token use, the totals for a chosen window, and where the spend went by model and by agent. It reads the same data as the sidebar, so it runs inside a room or anywhere else on the machine, in or out of a project.
-
 <p align="center">
   <img src="../rimz-stats.png" alt="The rimz stats dashboard: a year-long token heatmap, the All time / Week / Month / Year window row, per-model and per-agent spend breakdowns, and activity insights" width="100%">
   <br/><sub><code>rimz stats</code>: a year of token activity, then where it went by model and by agent.</sub>
 </p>
+
+## The full picture: rimz stats
+
+`rimz stats` prints your account-global history: a heatmap of daily token use, the totals for a chosen window, and where the spend went by model and by agent. It reads the same data as the sidebar, so it runs inside a room or anywhere else on the machine, in or out of a project.
 
 - **The heatmap** is a GitHub-style contribution graph of tokens per day, about a year of history, shaded from an idle day up to your heaviest. The scale is relative to your own busiest day in view, so the texture reads against your rhythm rather than an absolute ceiling. `--dollars` shades it by cost instead of tokens.
 - **The window row** (All time, Week, Month, Year) scopes the Models, Agents, and insight rows below it, while the heatmap stays full-history. In the held dashboard, `Tab` and `Shift-Tab` cycle the window; a plain `rimz stats` prints the All-time view.
@@ -75,7 +75,7 @@ The top of the sidebar narrows all of this to the room you are standing in. Two 
 
 ```
  ◎ 91                          ◇ 32M ↘ 28M ↗ 3M ◌ 472M    ← sessions · token breakdown
- ¤ 16 (2)                                      $420.00    ← live agents · unread · room spend
+ ¤ 16 (2)                                      $420.00    ← live agents · unread · spend
 ```
 
 The token breakdown sums every session that ran in the room's spend window, and the dollar figure below it is the room's cost for that same window, counting up in an eased roll the moment any agent's cost moves. Both are scoped to this room: the project root and the worktrees grouped under it, never your whole machine.

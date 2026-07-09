@@ -229,7 +229,7 @@ Adapters are thin layers over the same hook and transcript primitives; the agent
 The [documentation index](./docs/README.md) maps the whole set. Highlights:
 
 - [Set up your machine](./docs/guide/setup.md) — install to a working fleet: config, hooks, true color, pets, and the Zellij/tmux baselines
-- [Working with agents](./docs/guide/agents.md) — [agents](./docs/guide/agents.md) · [the sidebar](./docs/guide/sidebar.md) · [spending](./docs/guide/spending.md) · [remote](./docs/guide/remote.md) · [web](./docs/guide/web.md)
+- [Working with agents](./docs/guide/agents.md) — [agents](./docs/guide/agents.md) · [the sidebar](./docs/guide/sidebar.md) · [token insight](./docs/guide/insight.md) · [remote](./docs/guide/remote.md) · [web](./docs/guide/web.md)
 - [Harness](./docs/guide/messaging.md) — [messaging](./docs/guide/messaging.md) · [teams](./docs/guide/teams.md) · [worktrees](./docs/guide/worktrees.md) · [scripting agents](./docs/guide/scripting.md) · [loops & schedules](./docs/guide/loops.md)
 - [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/guide/configuration.md) · [Theming](./docs/guide/theme.md) · [Troubleshooting](./docs/guide/troubleshooting.md)
 - [DESIGN.md](./DESIGN.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [internals](./docs/internals/README.md) — how it works, in depth
