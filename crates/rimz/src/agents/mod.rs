@@ -404,8 +404,6 @@ pub enum AnswerPlanErr {
     #[error("{0} does not support structured answers")]
     Unsupported(&'static str),
     #[error("{0}")]
-    ReadOnly(&'static str),
-    #[error("{0}")]
     Invalid(String),
 }
 

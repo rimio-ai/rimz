@@ -164,7 +164,7 @@ Named channels and worktrees share one namespace, so a name is a worktree channe
 
 ## Asks and answers
 
-An agent holding a permission prompt, plan approval, or user question reserves its input. `rimz asks` reads every open prompt as structured data, and `rimz answer` drives supported user-question choices through the same native terminal interface you would use in the pane:
+An agent holding a permission prompt, plan approval, or user question reserves its input. `rimz asks` reads every open prompt as structured data, and `rimz answer` drives supported choices through the same native terminal interface you would use in the pane:
 
 ```sh
 rimz asks --json
@@ -175,7 +175,7 @@ rimz answer ask_0123456789abcdef 2
 
 One answer command submits the whole ask. Positional selectors cover one choice per question and comma-separated multi-select choices; JSON input carries mixed choices and free text across several questions. The ask id is a compare-and-swap token, so a prompt already answered or superseded receives no stale keystrokes.
 
-An answer differs from a message. A waiting prompt owns the agent's input and keeps ordinary messages parked; a supported answer enters the prompt UI, releases it, and confirms that lifecycle change before returning. Claude questions support picks, multi-select, and free text. Permission and plan-approval asks remain read-only because Claude's Escape rejection paths emit no lifecycle confirmation; answer those in the Claude pane. Once the pane releases the prompt, a parked `rimz message` lands at the next turn boundary as usual.
+An answer differs from a message. A waiting prompt owns the agent's input and keeps ordinary messages parked; a supported answer enters the prompt UI, releases it, and confirms that lifecycle change before returning. Claude questions support picks, multi-select, and free text. A permission ask offers `allow` once, and a plan approval offers caution-marked `approve`, which enables auto-accept edits. Denial, persistent grants, keep-planning, refinement text, and manual-review approval stay in the Claude pane because their stable controls cannot provide the same confirmation contract.
 
 ## See also
 

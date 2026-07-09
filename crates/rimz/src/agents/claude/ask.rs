@@ -115,21 +115,15 @@ fn exit_plan_mode_detail(tool_input: &Value) -> Option<Vec<AskQuestion>> {
 }
 
 pub(super) fn permission_options() -> Vec<AskOption> {
-    vec![
-        AskOption::from("allow".to_owned()),
-        AskOption::from("deny".to_owned()),
-    ]
+    vec![AskOption::from("allow".to_owned())]
 }
 
 pub(super) fn plan_options() -> Vec<AskOption> {
-    vec![
-        AskOption {
-            label: "approve".to_owned(),
-            description: Some("Approve in Claude with auto-accept edits".to_owned()),
-            caution: Some("enables auto-accept for subsequent edits".to_owned()),
-        },
-        AskOption::from("keep-planning".to_owned()),
-    ]
+    vec![AskOption {
+        label: "approve".to_owned(),
+        description: Some("Approve in Claude with auto-accept edits".to_owned()),
+        caution: Some("enables auto-accept for subsequent edits".to_owned()),
+    }]
 }
 
 pub(super) fn permission_detail(payload: &Value) -> Option<String> {
@@ -154,13 +148,39 @@ pub(super) fn answer_plan(
     answers: &[AskReply],
 ) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
     match kind {
-        AskKind::Permission => Err(AnswerPlanErr::ReadOnly(
-            "Claude permission asks are read-only in Rimz; answer in the Claude pane",
-        )),
-        AskKind::PlanApproval => Err(AnswerPlanErr::ReadOnly(
-            "Claude plan approvals are read-only in Rimz; answer in the Claude pane",
-        )),
+        AskKind::Permission => permission_answer_plan(answers),
+        AskKind::PlanApproval => plan_approval_answer_plan(answers),
         AskKind::Question => question_answer_plan(questions, answers),
+    }
+}
+
+fn permission_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
+    let [answer] = answers else {
+        return Err(AnswerPlanErr::Invalid(
+            "permission asks require exactly one answer".to_owned(),
+        ));
+    };
+    match answer.picks.as_slice() {
+        [0] if answer.text.is_none() => Ok(vec![AnswerStep::Text("1".to_owned())]),
+        _ => Err(AnswerPlanErr::Invalid(
+            "permission asks accept only `allow`; deny and persistent grants require the Claude pane"
+                .to_owned(),
+        )),
+    }
+}
+
+fn plan_approval_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
+    let [answer] = answers else {
+        return Err(AnswerPlanErr::Invalid(
+            "plan approvals require exactly one answer".to_owned(),
+        ));
+    };
+    match answer.picks.as_slice() {
+        [0] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::ShiftTab)]),
+        _ => Err(AnswerPlanErr::Invalid(
+            "plan approvals accept only `approve`; keep-planning, refinement text, and manual-review approval require the Claude pane"
+                .to_owned(),
+        )),
     }
 }
 
@@ -585,12 +605,51 @@ mod tests {
     }
 
     #[test]
-    fn permission_and_plan_answers_are_read_only() {
-        for kind in [AskKind::Permission, AskKind::PlanApproval] {
-            assert!(matches!(
-                answer_plan(kind, &[], &[]),
-                Err(AnswerPlanErr::ReadOnly(_))
-            ));
+    fn permission_and_plan_answers_use_confirmed_menu_actions() {
+        assert_eq!(
+            answer_plan(
+                AskKind::Permission,
+                &[],
+                &[AskReply {
+                    picks: vec![0],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![AnswerStep::Text("1".to_owned())]
+        );
+        assert_eq!(
+            answer_plan(
+                AskKind::PlanApproval,
+                &[],
+                &[AskReply {
+                    picks: vec![0],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap(),
+            vec![AnswerStep::Key(NamedKey::ShiftTab)]
+        );
+    }
+
+    #[test]
+    fn permission_and_plan_answers_reject_unlisted_actions() {
+        for (kind, message) in [
+            (AskKind::Permission, "deny"),
+            (AskKind::PlanApproval, "keep-planning"),
+        ] {
+            let error = answer_plan(
+                kind,
+                &[],
+                &[AskReply {
+                    picks: vec![1],
+                    ..AskReply::default()
+                }],
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(message));
+            assert!(error.contains("Claude pane"));
         }
     }
 

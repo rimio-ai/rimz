@@ -45,7 +45,7 @@ rimz message @coder --wait "did the migration land? one line" # ask and print th
 rimz message --steer @coder "stop"   # interrupt the live turn now
 rimz message show msg_<id>           # why a message hasn't landed
 rimz asks --json                     # structured prompts that currently block agents
-rimz answer @coder 2                 # answer the current supported question in its native UI
+rimz answer @coder 2                 # answer the current supported prompt in its native UI
 rimz pane list                       # every pane, labelled with @handles
 rimz pane capture @coder             # what the agent's pane shows right now
 rimz loop show <task>                # schedule, next fire, run forensics

@@ -102,3 +102,32 @@ fn label_resolution_rejects_case_insensitive_ambiguity() {
             .contains("ambiguous")
     );
 }
+
+#[test]
+fn menu_only_actions_name_the_agent_pane() {
+    for (kind, option, rejected) in [
+        (AskKind::Permission, "allow", "deny"),
+        (AskKind::PlanApproval, "approve", "keep-planning"),
+    ] {
+        let question = AskQuestion {
+            question: "Continue?".to_owned(),
+            options: vec![AskOption::from(option.to_owned())],
+            multi_select: false,
+            has_option_previews: false,
+        };
+        let selector_error = resolve_answer_selector(kind, rejected, &question).unwrap_err();
+        assert!(selector_error.contains("agent pane"));
+        assert!(selector_error.contains(&format!("valid options: 1={option}")));
+
+        let text_error = validate_reply(
+            kind,
+            &question,
+            AskReply {
+                text: Some("instructions".to_owned()),
+                ..AskReply::default()
+            },
+        )
+        .unwrap_err();
+        assert!(text_error.contains("agent pane"));
+    }
+}

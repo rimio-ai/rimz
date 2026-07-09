@@ -127,10 +127,9 @@ fn asks_synthesizes_safe_permission_options() {
     let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
     assert_eq!(asks[0]["kind"], "permission");
     assert_eq!(asks[0]["questions"][0]["options"][0]["label"], "allow");
-    assert_eq!(asks[0]["questions"][0]["options"][1]["label"], "deny");
     assert_eq!(
         asks[0]["questions"][0]["options"].as_array().unwrap().len(),
-        2
+        1
     );
 }
 
@@ -172,8 +171,7 @@ fn asks_marks_plan_approval_mode_changes() {
             .as_str()
             .is_some_and(|text| text.contains("auto-accept"))
     );
-    assert_eq!(options[1]["label"], "keep-planning");
-    assert_eq!(options.len(), 2);
+    assert_eq!(options.len(), 1);
 }
 
 #[test]
@@ -222,23 +220,19 @@ fn answer_refuses_an_unwired_agent_before_pane_delivery() {
 }
 
 #[test]
-fn answer_refuses_unconfirmed_claude_menu_kinds_before_pane_delivery() {
-    for (payload, selector, expected) in [
-        (
-            permission_payload("Bash"),
-            "allow",
-            "permission asks are read-only",
-        ),
+fn answer_refuses_unconfirmable_claude_menu_actions_before_pane_delivery() {
+    for (payload, selector, valid) in [
+        (permission_payload("Bash"), "deny", "valid options: 1=allow"),
         (
             serde_json::to_string(&json!({
                 "hook_event_name": "PreToolUse",
-                "session_id": "sess-plan-read-only",
+                "session_id": "sess-plan-pane-only",
                 "tool_name": "ExitPlanMode",
                 "tool_input": { "plan": "1. Make the change" }
             }))
             .expect("plan payload"),
-            "approve",
-            "plan approvals are read-only",
+            "keep-planning",
+            "valid options: 1=approve",
         ),
     ] {
         let env = Env::new();
@@ -249,9 +243,11 @@ fn answer_refuses_unconfirmed_claude_menu_kinds_before_pane_delivery() {
             .rimz()
             .args(["answer", "@claude", selector])
             .bounded_output()
-            .expect("answer read-only ask");
+            .expect("answer pane-only action");
         assert_eq!(output.status.code(), Some(3));
-        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("agent pane"), "{stderr}");
+        assert!(stderr.contains(valid), "{stderr}");
     }
 }
 
@@ -312,4 +308,54 @@ fn answer_question_sends_to_bound_pane_and_timeout_has_distinct_exit() {
         .expect("timeout question answer");
     assert_eq!(output.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&output.stderr).contains("did not confirm"));
+}
+
+#[cfg(unix)]
+#[test]
+fn answer_confirmable_claude_menu_actions_reach_bound_pane() {
+    for (payload, selector, expected_command) in [
+        (
+            permission_payload("Bash"),
+            "allow",
+            "send-keys -l -t %7 -- 1",
+        ),
+        (
+            serde_json::to_string(&json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "sess-plan-approve",
+                "tool_name": "ExitPlanMode",
+                "tool_input": { "plan": "1. Make the change" }
+            }))
+            .expect("plan payload"),
+            "approve",
+            "send-keys -t %7 BTab",
+        ),
+    ] {
+        let env = Env::new();
+        let hook = env.run_installed_hook_in_pane("claude", &payload, &[("TMUX_PANE", "%7")]);
+        assert!(
+            hook.status.success(),
+            "{}",
+            String::from_utf8_lossy(&hook.stderr)
+        );
+        let pane_fixture = env.write_pane_fixture(&[tmux_pane("%7", "claude", &env.project_root)]);
+        let (bin, log) = fake_tmux(&env);
+
+        let output = env
+            .rimz()
+            .args(["answer", "@claude", selector, "--no-wait", "--mux", "tmux"])
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_TEST_MUX_LOG", &log)
+            .env("PATH", path_with_front(&bin))
+            .bounded_output()
+            .expect("answer confirmed menu action");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert!(sent.contains("%7"), "{sent}");
+        assert!(sent.contains(expected_command), "{sent}");
+    }
 }

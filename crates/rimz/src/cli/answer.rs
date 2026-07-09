@@ -73,12 +73,10 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_else(|err| answer_exit(2, &err.to_string()));
     let adapter = rimz::agents::adapter_by_kind(kind.as_str())
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
-    match adapter.answer_plan(open.kind, &view.questions, &[]) {
-        Err(AnswerPlanErr::Unsupported(kind)) => {
-            answer_exit(3, &format!("{kind} does not support structured answers"));
-        }
-        Err(AnswerPlanErr::ReadOnly(message)) => answer_exit(3, message),
-        _ => {}
+    if let Err(AnswerPlanErr::Unsupported(kind)) =
+        adapter.answer_plan(open.kind, &view.questions, &[])
+    {
+        answer_exit(3, &format!("{kind} does not support structured answers"));
     }
     let replies = parse_replies(&args, &view).unwrap_or_else(|message| answer_exit(3, &message));
     let steps = adapter
@@ -211,7 +209,7 @@ fn parse_replies(
                     raw.split(',')
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
-                        .map(|value| resolve_selector(value, &question.options))
+                        .map(|value| resolve_answer_selector(view.kind, value, question))
                         .collect::<std::result::Result<Vec<_>, _>>()
                 })
                 .transpose()?
@@ -247,8 +245,8 @@ fn normalize_json_answers(
                 .pick
                 .iter()
                 .map(|pick| match pick {
-                    JsonPick::Index(index) => resolve_index(*index, &question.options),
-                    JsonPick::Label(label) => resolve_selector(label, &question.options),
+                    JsonPick::Index(index) => resolve_answer_index(view.kind, *index, question),
+                    JsonPick::Label(label) => resolve_answer_selector(view.kind, label, question),
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             validate_reply(
@@ -268,6 +266,11 @@ fn validate_reply(
     question: &rimz::transcript::AskQuestion,
     reply: AskReply,
 ) -> std::result::Result<AskReply, String> {
+    if reply.text.is_some()
+        && let Some(message) = menu_action_error(kind, question)
+    {
+        return Err(message);
+    }
     if reply
         .text
         .as_deref()
@@ -293,24 +296,38 @@ fn validate_reply(
     if unique.len() != reply.picks.len() {
         return Err("an option can be selected only once".to_owned());
     }
-    if reply.text.is_some() {
-        match kind {
-            AskKind::Permission => {
-                return Err(
-                    "permission asks accept only `allow` or `deny`; deny first, then send instructions with `rimz message`, or answer in the pane"
-                        .to_owned(),
-                );
-            }
-            AskKind::PlanApproval => {
-                return Err(
-                    "plan approvals accept only `approve` or `keep-planning`; keep planning first, then send feedback with `rimz message`, or answer in the pane"
-                        .to_owned(),
-                );
-            }
-            AskKind::Question => {}
-        }
-    }
     Ok(reply)
+}
+
+fn resolve_answer_selector(
+    kind: AskKind,
+    selector: &str,
+    question: &rimz::transcript::AskQuestion,
+) -> std::result::Result<usize, String> {
+    resolve_selector(selector, &question.options)
+        .map_err(|error| menu_action_error(kind, question).unwrap_or(error))
+}
+
+fn resolve_answer_index(
+    kind: AskKind,
+    index: usize,
+    question: &rimz::transcript::AskQuestion,
+) -> std::result::Result<usize, String> {
+    resolve_index(index, &question.options)
+        .map_err(|error| menu_action_error(kind, question).unwrap_or(error))
+}
+
+fn menu_action_error(kind: AskKind, question: &rimz::transcript::AskQuestion) -> Option<String> {
+    let valid = valid_options(question);
+    match kind {
+        AskKind::Permission => Some(format!(
+            "permission asks accept only the listed remote option; use the agent pane for deny or any other action; valid options: {valid}"
+        )),
+        AskKind::PlanApproval => Some(format!(
+            "plan approvals accept only the listed remote option; use the agent pane for keep-planning, refinement text, or manual-review approval; valid options: {valid}"
+        )),
+        AskKind::Question => None,
+    }
 }
 
 fn resolve_selector(
