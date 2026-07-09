@@ -36,12 +36,13 @@ use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 pub(crate) use hook_install::{
     detected_installable_adapters, ensure_detected_agent_hooks, render_dry_run,
 };
-use resume::{materialize_room_resume, plan_room_resume, record_rebirth_boundary, report_resume};
+use resume::{materialize_room_resume, plan_room_resume, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;
 use session_record::{retire_renamed_session, session_probe_retry_timeout, session_probe_timeout};
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
+pub(crate) use resume::record_rebirth_boundary;
 pub(crate) use resume::session_is_healthy_live;
 pub(crate) use room_recovery::{print_reset_report, rebirth_room};
 pub(crate) use session_record::{
@@ -952,6 +953,9 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
             true
         }
     };
+    if !pre_existed {
+        purge_rebirth_heartbeats_for_workspace(room.workspace_id);
+    }
     birth.backend.ensure_session(&SessionOptions {
         session_name: room.session_name.to_owned(),
         workspace_id: room.workspace_id.clone(),
@@ -1008,6 +1012,17 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
         machine_config.sidebar.focus_key_label(),
     );
     Ok(())
+}
+
+pub(crate) fn purge_rebirth_heartbeats_for_workspace(workspace_id: &WorkspaceId) {
+    match RuntimePaths::for_workspace(workspace_id.clone()) {
+        Ok(runtime) => rimz::sidebar::purge_rebirth_heartbeats(&runtime),
+        Err(err) => tracing::debug!(
+            workspace = %workspace_id,
+            error = %err,
+            "sidebar rebirth heartbeat purge skipped because runtime paths are unavailable",
+        ),
+    }
 }
 
 fn finish_attach(

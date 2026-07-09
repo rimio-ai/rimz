@@ -1185,6 +1185,9 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         None,
         args.channel.as_deref(),
     );
+    if !was_live {
+        crate::cli::room::purge_rebirth_heartbeats_for_workspace(&workspace.workspace_id);
+    }
     backend.ensure_session(&rimz::mux::SessionOptions {
         session_name: workspace.session_name.clone(),
         workspace_id: workspace.workspace_id.clone(),
@@ -1194,6 +1197,9 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         detected_size,
         truecolor: rimz::tui::truecolor(),
     })?;
+    if !was_live {
+        crate::cli::room::record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
+    }
     // A supervised run can birth the room, so the focus chord registers here
     // too (tmux binds it; Zellij routes it through the presence plugin below) —
     // the key reaches the sidebar from any pane regardless of how the room came
@@ -1209,7 +1215,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         detected_size: if was_live { None } else { detected_size },
         refresh_ms: None,
     };
-    crate::cli::room::launch_sidebar_for_workspace(backend.as_ref(), &room, None, false, &[]);
+    crate::cli::room::launch_sidebar_for_workspace(backend.as_ref(), &room, None, !was_live, &[]);
     crate::cli::room::gate_room_before_attach(backend.as_ref(), &room, None, &[])?;
     crate::cli::room::ensure_presence_plugin(
         backend.as_ref(),

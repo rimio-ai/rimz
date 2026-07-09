@@ -63,6 +63,8 @@ Per-session **sidecars** (`agent_context/`, `subagent_context/`, `agent-activity
 
 The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (a TTL-gated jump viewport hint that every renderer reads on focus adoption), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../diagnostics.md)). The store's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the store write tail — [store.md](../store.md) owns them.
 
+Heartbeat lifecycle is bounded by TTL between session boundaries and by purge at rebirth. The renderer writes and restamps its own heartbeat, the launch gate and producer election trust fresh heartbeats while the session lives, and a birth that has proven the session absent purges heartbeat files before creating the replacement session.
+
 ## Realtime events
 
 Wakeup datagrams carry `SidebarEventEnvelope` ([`sidebar/events.rs`](../../../crates/rimz/src/sidebar/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event. `session_name` is the scope — `Some` targets the one mux session whose pane ids the event names, `None` is workspace-wide (store deltas, reloads, and pane-frame publications reach every renderer of the workspace).

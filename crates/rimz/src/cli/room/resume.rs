@@ -427,10 +427,12 @@ fn add_empty_named_channel_tabs(paths: &StatePaths, plan: &mut rimz::harness::re
 /// longer exists — and the new session reuses those ids. The appended
 /// `session.rebirth` event makes the fold clear all prior stamps, so a stale
 /// session can never bind (or block stamp recovery of) a reborn pane id.
-/// Called only on a genuine birth (`!was_live`), *after* resume planning —
-/// the planner reads the old stamps to pick its candidates. Best-effort like
-/// the plan itself: boundary hygiene never blocks the launch.
-pub(super) fn record_rebirth_boundary(workspace_id: &rimz::WorkspaceId, session_name: &str) {
+/// Called only on a genuine birth (`!was_live`). The room start path calls it
+/// *after* resume planning — the planner reads the old stamps to pick its
+/// candidates. Supervised-run births have no resume planner, so they draw the
+/// boundary after `ensure_session`. Best-effort like the plan itself: boundary
+/// hygiene never blocks the launch.
+pub(crate) fn record_rebirth_boundary(workspace_id: &rimz::WorkspaceId, session_name: &str) {
     let appended = (|| -> Result<()> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;

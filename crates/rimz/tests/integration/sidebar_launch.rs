@@ -12,7 +12,7 @@ use rimz::mux::{
 use rimz::pane::PaneRef;
 use rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
-use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed};
+use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, purge_rebirth_heartbeats};
 use rimz::{RuntimePaths, ViewKind};
 use tempfile::TempDir;
 
@@ -67,6 +67,25 @@ fn sidebar_launch_replaces_old_protocol_heartbeat() {
 }
 
 #[test]
+fn rebirth_purge_makes_fresh_heartbeat_miss_the_launch_gate() {
+    let h = SidebarHarness::new();
+    let heartbeat = h.write_heartbeat();
+    let backend = FakeBackend::default();
+
+    purge_rebirth_heartbeats(&h.runtime);
+    let outcome = launch_sidebar_if_needed(&backend, &h.runtime, &h.sidebar_opts(), None);
+
+    assert_eq!(outcome, SidebarLaunchOutcome::Opened);
+    assert!(!heartbeat.exists(), "rebirth purges the stale incarnation");
+    assert_eq!(backend.open_calls(), 1);
+    assert_eq!(
+        backend.reconcile_calls(),
+        0,
+        "purged heartbeat must not route through reconcile"
+    );
+}
+
+#[test]
 fn sidebar_launch_error_is_non_fatal() {
     let h = SidebarHarness::new();
     h.runtime.ensure_dirs().expect("runtime dirs");
@@ -116,11 +135,11 @@ impl SidebarHarness {
         }
     }
 
-    fn write_heartbeat(&self) {
-        self.write_heartbeat_with_protocol(SIDEBAR_PROTOCOL_VERSION);
+    fn write_heartbeat(&self) -> PathBuf {
+        self.write_heartbeat_with_protocol(SIDEBAR_PROTOCOL_VERSION)
     }
 
-    fn write_heartbeat_with_protocol(&self, protocol_version: &str) {
+    fn write_heartbeat_with_protocol(&self, protocol_version: &str) -> PathBuf {
         self.runtime.ensure_dirs().expect("runtime dirs");
         let mut heartbeat = SidebarHeartbeat::new(
             self.workspace_id.clone(),
@@ -131,11 +150,10 @@ impl SidebarHarness {
             None,
         );
         heartbeat.protocol_version = protocol_version.to_owned();
-        std::fs::write(
-            self.runtime.heartbeat_dir.join("sidebar.fresh.json"),
-            serde_json::to_vec(&heartbeat).expect("json"),
-        )
-        .expect("write heartbeat");
+        let path = self.runtime.heartbeat_dir.join("sidebar.fresh.json");
+        std::fs::write(&path, serde_json::to_vec(&heartbeat).expect("json"))
+            .expect("write heartbeat");
+        path
     }
 }
 

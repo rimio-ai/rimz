@@ -221,6 +221,42 @@ pub fn sweep_orphan_runtime(rt: &RuntimePaths) {
     }
 }
 
+/// Purge sidebar heartbeats at a session rebirth boundary. Call only while the
+/// workspace's mux session is provably absent: heartbeats are incarnation-scoped
+/// liveness claims and must not outlive their session into a rebirth.
+pub fn purge_rebirth_heartbeats(rt: &RuntimePaths) {
+    let entries = match fs::read_dir(&rt.heartbeat_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            debug!(
+                path = %rt.heartbeat_dir.display(),
+                error = %err,
+                "sidebar rebirth heartbeat purge skipped; heartbeat dir unreadable"
+            );
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                debug!(
+                    path = %rt.heartbeat_dir.display(),
+                    error = %err,
+                    "sidebar rebirth heartbeat purge skipped unreadable entry"
+                );
+                continue;
+            }
+        };
+        let path = entry.path();
+        if SidebarHeartbeat::is_heartbeat_file(&path) {
+            remove_rebirth_heartbeat(&path);
+        }
+    }
+}
+
 /// Launch the workspace sidebar daemon if no fresh one is present, coalescing
 /// concurrent attaches through the single-flight election. `daemon` is forwarded
 /// to a session (re)birth so `rimz start` can lead the session with the daemon
@@ -340,6 +376,16 @@ fn remove_orphan(path: &Path) {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => {
             debug!(path = %path.display(), error = %err, "sweeping orphaned runtime file failed")
+        }
+    }
+}
+
+fn remove_rebirth_heartbeat(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => debug!(path = %path.display(), "purged sidebar heartbeat at session rebirth"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            debug!(path = %path.display(), error = %err, "purging rebirth sidebar heartbeat failed")
         }
     }
 }
@@ -616,9 +662,46 @@ mod tests {
     }
 
     #[test]
-    fn sweep_removes_orphan_socket_keeps_live_and_starting() {
+    fn purge_rebirth_heartbeats_removes_all_heartbeats_only() {
         let h = Harness::new();
         let live = instance("0c");
+        let stale = instance("0d");
+        let live_path = h.write_sidebar_for(&live);
+        let stale_path = h.write_sidebar_for(&stale);
+        make_stale(&stale_path);
+        let socket = h.runtime.sock_dir.join("sidebar.keep.sock");
+        let read_marks = h.runtime.read_marks_dir.join("sidebar.keep.json");
+        let other = h.runtime.heartbeat_dir.join("producer.json");
+        std::fs::write(&socket, b"").expect("write socket");
+        std::fs::write(&read_marks, b"{}").expect("write read marks");
+        std::fs::write(&other, b"{}").expect("write non-heartbeat");
+
+        purge_rebirth_heartbeats(&h.runtime);
+
+        assert!(!live_path.exists(), "fresh heartbeat removed at rebirth");
+        assert!(!stale_path.exists(), "stale heartbeat removed at rebirth");
+        assert!(socket.exists(), "sockets are not part of the rebirth purge");
+        assert!(
+            read_marks.exists(),
+            "read marks are not part of the rebirth purge"
+        );
+        assert!(other.exists(), "non-heartbeat files are kept");
+        assert!(!fresh_sidebar_present(&h.runtime));
+    }
+
+    #[test]
+    fn purge_rebirth_heartbeats_missing_dir_is_noop() {
+        let h = Harness::new();
+
+        purge_rebirth_heartbeats(&h.runtime);
+
+        assert!(!h.runtime.heartbeat_dir.exists());
+    }
+
+    #[test]
+    fn sweep_removes_orphan_socket_keeps_live_and_starting() {
+        let h = Harness::new();
+        let live = instance("0e");
         h.write_sidebar_for(&live);
 
         let live_sock = h
@@ -646,10 +729,10 @@ mod tests {
     fn sweep_removes_orphan_read_marks_keeps_live_and_fresh() {
         let h = Harness::new();
         h.ensure_runtime();
-        let live = instance("0d");
+        let live = instance("0f");
         h.write_sidebar_for(&live);
-        let dead = instance("0e");
-        let fresh = instance("0f");
+        let dead = instance("10");
+        let fresh = instance("11");
         let live_marks = h.runtime.sidebar_read_marks_path(&live);
         let dead_marks = h.runtime.sidebar_read_marks_path(&dead);
         let fresh_marks = h.runtime.sidebar_read_marks_path(&fresh);
