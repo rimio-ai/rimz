@@ -83,7 +83,7 @@ protocol = 1
 kind = "{kind}"
 display-name = "{kind}"
 process-names = ["{kind}"]
-events = ["session_start"]
+emits = ["session_start"]
 setup-doc = "README.md"
 
 [brand]

@@ -42,7 +42,7 @@ protocol = 1
 kind = "mybot"
 display-name = "MyBot"
 process-names = ["mybot", "node"]
-events = ["session_start", "turn_start", "turn_end", "context"]
+emits = ["session_start", "turn_start", "turn_end", "context"]
 setup-doc = "README.md"
 
 [brand]
@@ -89,7 +89,7 @@ version = ["mybot", "--version"]
 
 Relative probe executables and relative transcript globs resolve from the bundle directory. A launch or resume executable containing a path separator also resolves from the bundle directory; bare executable names use `PATH`. Launch presets fail when a configured `model`, `effort`, or system-prompt field has no declared rendering, so launch intent is not silently discarded.
 
-`events` is the shim's conformance declaration. Rimz derives the coverage and lifecycle matrices from it plus declared probes and capabilities. Add an event only when the shim emits its canonical shape.
+`emits` is the shim's conformance declaration. Rimz derives the coverage and lifecycle matrices from it plus declared probes and capabilities. The feed still processes a valid canonical event omitted from `emits` and warns, because the live event is authoritative; update `emits` so coverage remains truthful.
 
 ## Canonical event envelope
 
@@ -207,7 +207,7 @@ The version probe receives an empty stdin stream. Its first non-empty stdout lin
 
 ## Coverage, doctor, and failure behavior
 
-`rimz coverage` includes every valid plugin after the built-ins. Native rows come from `events`; context and ask claims also require the matching capability; spend comes from the declared probe; hook installation and remote control remain explicitly unsupported.
+`rimz coverage` includes every valid plugin after the built-ins. Native rows come from `emits`; context and ask claims also require the matching capability; spend comes from the declared probe; hook installation and remote control remain explicitly unsupported.
 
 `rimz doctor` shows each manifest, its validation result, the setup document, and whether every declared probe exists and is executable. `rimz start` treats a malformed configured plugin as a failed precondition. Hook feed treats that same broken bundle as unavailable and exits neutrally, keeping the agent's critical hook path open while the doctor and start error retain the fix.
 

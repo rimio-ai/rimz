@@ -2,7 +2,7 @@ protocol = 1
 kind = "scriptbot"
 display-name = "ScriptBot"
 process-names = ["scriptbot", "node"]
-events = [
+emits = [
   "session_start",
   "turn_start",
   "turn_end",

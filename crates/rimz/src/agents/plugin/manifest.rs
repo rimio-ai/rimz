@@ -19,7 +19,7 @@ pub(super) struct PluginManifest {
     /// Canonical events the agent-side shim emits. Descriptor coverage is
     /// derived from this list, so the published matrix cannot drift.
     #[serde(default)]
-    pub events: Vec<String>,
+    pub emits: Vec<String>,
     #[serde(default)]
     pub brand: BrandManifest,
     #[serde(default)]
@@ -163,14 +163,14 @@ impl PluginManifest {
             return Err("process-names must contain at least one non-empty name".into());
         }
         unique("process-names", &self.process_names)?;
-        unique("events", &self.events)?;
-        if !self.events.iter().any(|event| event == "session_start") {
+        unique("emits", &self.emits)?;
+        if !self.emits.iter().any(|event| event == "session_start") {
             return Err(
-                "events must include `session_start` so the plugin can register a session".into(),
+                "emits must include `session_start` so the plugin can register a session".into(),
             );
         }
         if let Some(event) = self
-            .events
+            .emits
             .iter()
             .find(|event| !CANONICAL_EVENTS.contains(&event.as_str()))
         {
@@ -271,7 +271,7 @@ mod tests {
 kind = "{kind}"
 display-name = "Test"
 process-names = ["test"]
-events = ["session_start", "turn_start", "turn_end"]
+emits = ["session_start", "turn_start", "turn_end"]
 setup-doc = "README.md"
 
 [tools]
@@ -290,7 +290,7 @@ editing = ["write"]
     }
 
     #[test]
-    fn validates_identity_tools_events_and_resume() {
+    fn validates_identity_tools_emits_and_resume() {
         assert!(parse(&manifest("testbot")).is_ok());
         assert!(
             parse(&manifest("Bad_kind"))

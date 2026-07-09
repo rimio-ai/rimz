@@ -12,13 +12,13 @@ The trait and descriptor APIs use `&'static` references. Loading leaks each vali
 
 ## Derived declarations
 
-[`manifest.rs`](../../../crates/rimz/src/agents/plugin/manifest.rs) makes `events` the source of truth for native lifecycle coverage. `PluginAdapter` derives every `IntegrationConcern` and `LifecycleSignalKind` row from events, capabilities, and probe presence, so a plugin author cannot hand-write a greener matrix than the bundle implements.
+[`manifest.rs`](../../../crates/rimz/src/agents/plugin/manifest.rs) makes `emits` the source of truth for native lifecycle coverage. `PluginAdapter` derives every `IntegrationConcern` and `LifecycleSignalKind` row from emitted-event declarations, capabilities, and probe presence, so a plugin author cannot hand-write a greener matrix than the bundle implements.
 
 The descriptor owns leaked strings for branding, tools, process names, activity events, setup guidance, and launch capabilities. Hook installation remains false and points at `setup-doc`. Generic descriptor defaults stay conservative for every undeclared concern.
 
 ## Ingest and probes
 
-[`protocol.rs`](../../../crates/rimz/src/agents/plugin/protocol.rs) is the structured protocol-1 parser. It checks the envelope event against the feed event, resolves root and child identities through the shared identity helpers, maps one canonical event to one `LifecycleSignal`, and normalizes context fields into `AgentContext`. Unknown events drop at debug level; malformed child identity quarantines through the normal lifecycle diagnostic target.
+[`protocol.rs`](../../../crates/rimz/src/agents/plugin/protocol.rs) is the structured protocol-1 parser. It checks the envelope event against the feed event, resolves root and child identities through the shared identity helpers, maps one canonical event to one `LifecycleSignal`, and normalizes context fields into `AgentContext`. Valid canonical events omitted from `emits` still ingest with a warning; unknown events drop at debug level, and malformed child identity quarantines through the normal lifecycle diagnostic target.
 
 [`probes.rs`](../../../crates/rimz/src/agents/plugin/probes.rs) owns fresh piped stdio, the three-second deadline, bounded output, relative executable resolution, and failure warnings. Spend cursors keep the file offset in `SpendCursor.offset` and opaque plugin state in `SpendCursor.state`; priced entries bypass `PriceBook`.
 

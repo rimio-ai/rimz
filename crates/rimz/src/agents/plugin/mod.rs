@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde_json::{Value, json};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use self::manifest::{PluginManifest, TranscriptThreadKey};
 use self::protocol::{CanonicalEvent, CompactionTrigger, Envelope};
@@ -68,12 +68,16 @@ impl AgentAdapter for PluginAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
-        if !self.emits(event_name) {
-            return unknown(event_name);
-        }
         let Some(envelope) = Envelope::parse(event_name, payload) else {
             return unknown(event_name);
         };
+        if !self.emits(event_name) {
+            warn!(
+                kind = self.descriptor.kind,
+                event = event_name,
+                "agent plugin emitted an undeclared canonical event"
+            );
+        }
         let (class, ask_kind) = match envelope.event {
             CanonicalEvent::Unknown => (AgentHookClass::Unknown, None),
             CanonicalEvent::AwaitingInput { ask, .. } => (AgentHookClass::AwaitingUser, Some(ask)),
@@ -89,7 +93,7 @@ impl AgentAdapter for PluginAdapter {
     #[cfg(test)]
     fn installed_hook_events(&self) -> Vec<&'static str> {
         let manifest: &'static PluginManifest = self.manifest;
-        manifest.events.iter().map(String::as_str).collect()
+        manifest.emits.iter().map(String::as_str).collect()
     }
 
     #[cfg(test)]
@@ -98,7 +102,7 @@ impl AgentAdapter for PluginAdapter {
 
         let manifest: &'static PluginManifest = self.manifest;
         let mut samples = Vec::new();
-        for event in &manifest.events {
+        for event in &manifest.emits {
             let event = event.as_str();
             let mut payload = json!({
                 "protocol": 1,
@@ -154,9 +158,6 @@ impl AgentAdapter for PluginAdapter {
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        if !self.emits(event_name) {
-            return None;
-        }
         let envelope = Envelope::parse(event_name, payload)?;
         let mut turn_error = None;
         let signal = match &envelope.event {
@@ -259,9 +260,6 @@ impl AgentAdapter for PluginAdapter {
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
-        if !self.emits("context") {
-            return None;
-        }
         let envelope = Envelope::parse("context", payload)?;
         normalize_context(source, payload, &envelope)
     }
@@ -431,10 +429,7 @@ impl AgentAdapter for PluginAdapter {
 
 impl PluginAdapter {
     fn emits(&self, event: &str) -> bool {
-        self.manifest
-            .events
-            .iter()
-            .any(|declared| declared == event)
+        self.manifest.emits.iter().any(|declared| declared == event)
     }
 }
 
@@ -442,7 +437,7 @@ fn build_descriptor(
     manifest: &'static PluginManifest,
     plugin_dir: &'static Path,
 ) -> AgentDescriptor {
-    let event = |name: &str| manifest.events.iter().any(|event| event == name);
+    let event = |name: &str| manifest.emits.iter().any(|event| event == name);
     let setup_doc = manifest::resolve_path(plugin_dir, &manifest.setup_doc);
     let hook_reason = leak_string(format!(
         "hook wiring is self-managed; see {}",
@@ -451,7 +446,7 @@ fn build_descriptor(
     let coverage = derive_coverage(manifest, hook_reason);
     let lifecycle_hooks = derive_lifecycle_hooks(manifest);
     let activity_events = manifest
-        .events
+        .emits
         .iter()
         .filter(|event| {
             matches!(
@@ -528,7 +523,7 @@ fn derive_coverage(
     manifest: &PluginManifest,
     hook_reason: &'static str,
 ) -> &'static [(IntegrationConcern, ConcernCoverage)] {
-    let has = |name: &str| manifest.events.iter().any(|event| event == name);
+    let has = |name: &str| manifest.emits.iter().any(|event| event == name);
     let turn = has("session_start") && has("turn_start") && has("turn_end");
     let asks = has("awaiting_input") && manifest.capabilities.native_ask_ui;
     let subagents = manifest.capabilities.subagents && has("subagent_start") && has("subagent_end");
@@ -652,7 +647,7 @@ fn derive_coverage(
 fn derive_lifecycle_hooks(
     manifest: &PluginManifest,
 ) -> &'static [(LifecycleSignalKind, HookCoverage)] {
-    let has = |name: &str| manifest.events.iter().any(|event| event == name);
+    let has = |name: &str| manifest.emits.iter().any(|event| event == name);
     let native = |event: &'static str| {
         if has(event) {
             HookCoverage::Native { event }
@@ -838,7 +833,7 @@ mod tests {
 kind = "testbot"
 display-name = "Test Bot"
 process-names = ["testbot"]
-events = ["session_start", "turn_start", "turn_end", "tool_use", "awaiting_input", "compaction_start", "compaction_end", "subagent_start", "subagent_end", "session_end", "context"]
+emits = ["session_start", "turn_start", "turn_end", "tool_use", "awaiting_input", "compaction_start", "compaction_end", "subagent_start", "subagent_end", "session_end", "context"]
 setup-doc = "README.md"
 [capabilities]
 native-ask-ui = true
@@ -853,6 +848,26 @@ model-flag = "--model"
 effort-flag = "--effort"
 resume = ["testbot", "--resume", "{session_id}"]
 compact-command = "/compact"
+"#,
+        )
+        .unwrap();
+        build_adapter(manifest, dir)
+    }
+
+    fn minimal_adapter() -> &'static PluginAdapter {
+        let root = TempDir::new().unwrap();
+        let root = root.keep();
+        let dir = root.join("minimalbot");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("README.md"), "setup").unwrap();
+        let manifest = PluginManifest::parse(
+            &dir.join("agent.toml"),
+            r#"protocol = 1
+kind = "minimalbot"
+display-name = "Minimal Bot"
+process-names = ["minimalbot"]
+emits = ["session_start"]
+setup-doc = "README.md"
 "#,
         )
         .unwrap();
@@ -918,7 +933,7 @@ compact-command = "/compact"
     }
 
     #[test]
-    fn classifies_asks_and_rejects_malformed_or_undeclared_events() {
+    fn classifies_asks_and_rejects_malformed_or_unknown_events() {
         let adapter = adapter();
         let mut ask = payload("awaiting_input");
         ask["ask"] = json!("permission");
@@ -945,6 +960,30 @@ compact-command = "/compact"
         );
         assert!(adapter.observe_lifecycle("turn_end", &json!({})).is_none());
         assert_eq!(adapter.render_neutral("awaiting_input").unwrap(), None);
+    }
+
+    #[test]
+    fn undeclared_canonical_events_still_ingest() {
+        let adapter = minimal_adapter();
+        let turn = payload("turn_start");
+        assert_eq!(
+            adapter.classify_hook("turn_start", &turn).class,
+            AgentHookClass::Lifecycle
+        );
+        assert_eq!(
+            adapter
+                .observe_lifecycle("turn_start", &turn)
+                .unwrap()
+                .signal
+                .kind(),
+            LifecycleSignalKind::TurnStarted
+        );
+        assert!(
+            adapter
+                .observe_context("minimalbot", &payload("context"))
+                .is_some()
+        );
+        assert!(!adapter.descriptor().capabilities.rich_context);
     }
 
     #[test]

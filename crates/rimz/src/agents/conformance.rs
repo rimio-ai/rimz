@@ -278,7 +278,7 @@ fn loaded_plugin_uses_the_same_descriptor_cross_checks() {
 kind = "fixturebot"
 display-name = "Fixture Bot"
 process-names = ["fixturebot"]
-events = ["session_start", "turn_start", "turn_end"]
+emits = ["session_start", "turn_start", "turn_end"]
 setup-doc = "README.md"
 "#,
     )
