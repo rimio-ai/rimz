@@ -293,8 +293,8 @@ pub fn read_all(paths: &StatePaths) -> Result<Vec<TranscriptEntry>> {
 /// The agent's latest open native ask: the newest `Ask` entry for
 /// `(kind, agent_id)` with no later `Answer` entry.
 ///
-/// Bucket files are walked newest-first and each bucket's entries newest-first,
-/// so the scan stops at the newest bucket that mentions the agent.
+/// Bucket files and their entries are walked newest-first. Answer ids accumulate
+/// across buckets until the scan reaches the newest ask they do not close.
 pub fn latest_open_ask(
     paths: &StatePaths,
     kind: &AgentKind,
