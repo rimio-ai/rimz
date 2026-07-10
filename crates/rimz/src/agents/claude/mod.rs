@@ -869,10 +869,7 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
-        crate::agents::credits::map_probe_snapshot(
-            oauth_usage::fetch_usage(None),
-            "claude.oauth_usage",
-        )
+        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch_usage(None), "claude")
     }
 
     fn oauth_credentials_stamp(&self) -> Option<u64> {

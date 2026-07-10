@@ -637,9 +637,10 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             let err = std::io::Error::other("boom");
             tracing::warn!(
-                tags.operation = "codex.oauth_usage",
+                tags.operation = "oauth_usage",
+                tags.provider = "codex",
                 error = &err as &dyn std::error::Error,
-                "codex OAuth usage fetch failed",
+                "OAuth account usage fetch failed",
             );
         });
         sentry::Hub::current()
@@ -659,7 +660,11 @@ mod tests {
         );
         assert_eq!(
             event.tags.get("operation").map(String::as_str),
-            Some("codex.oauth_usage")
+            Some("oauth_usage")
+        );
+        assert_eq!(
+            event.tags.get("provider").map(String::as_str),
+            Some("codex")
         );
         // `error = &dyn Error` attaches an exception (and, with attach_stacktrace, a stack).
         assert!(

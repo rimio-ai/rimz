@@ -617,7 +617,7 @@ impl AgentAdapter for OpencodeAdapter {
     }
 
     fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
-        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "opencode.oauth_usage")
+        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "opencode")
     }
 
     fn oauth_credentials_stamp(&self) -> Option<u64> {

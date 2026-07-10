@@ -46,6 +46,10 @@ impl HttpErrKind {
     pub(crate) fn is_auth_rejected(&self) -> bool {
         matches!(self, Self::Status(401))
     }
+
+    fn is_transient(&self) -> bool {
+        matches!(self, Self::Transport | Self::Body | Self::Status(500..=599))
+    }
 }
 
 pub(crate) fn file_mtime_ms(path: &Path) -> Option<u64> {
@@ -74,9 +78,11 @@ pub(crate) fn url_host(url: &str) -> &str {
 
 pub(crate) const OAUTH_HTTP_TIMEOUT_SECS: u64 = 5;
 pub(crate) const OAUTH_HTTP_MAX_BYTES: u64 = 512 * 1024;
+const OAUTH_HTTP_ATTEMPTS: u32 = 3;
+const OAUTH_HTTP_RETRY_BACKOFF: Duration = Duration::from_millis(300);
 
-/// Bounded GET for provider OAuth usage endpoints: 5s global timeout, 512 KiB
-/// body cap, host-only breadcrumb. Returns the body, or the error kind plus
+/// Bounded GET for provider OAuth usage endpoints: 5s timeout per attempt, 512
+/// KiB body cap, host-only breadcrumb. Returns the body, or the error kind plus
 /// host authority for the caller's provider error enum.
 pub(crate) fn oauth_http_get(
     url: &str,
@@ -89,6 +95,25 @@ pub(crate) fn oauth_http_get(
         "{}",
         breadcrumb,
     );
+
+    let mut result = oauth_http_get_once(url, headers);
+    for attempt in 1..OAUTH_HTTP_ATTEMPTS {
+        match &result {
+            Err((kind, host)) if kind.is_transient() => {
+                tracing::debug!(host, attempt, %kind, "OAuth usage HTTP retry");
+                std::thread::sleep(OAUTH_HTTP_RETRY_BACKOFF * attempt);
+                result = oauth_http_get_once(url, headers);
+            }
+            _ => break,
+        }
+    }
+    result
+}
+
+fn oauth_http_get_once(
+    url: &str,
+    headers: &[(&str, String)],
+) -> std::result::Result<String, (HttpErrKind, String)> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS)))
         .build()
@@ -305,10 +330,12 @@ pub(crate) trait OauthReportable {
 /// Fold an adapter's `Result<AccountUsageSnapshot, E>` into the shared
 /// [`OauthUsageProbe`], logging once at the right level. The single home for the
 /// debug-vs-warn split, so every adapter's `probe_oauth_usage` is a one-line
-/// delegation to its `oauth_usage` fetcher.
+/// delegation to its `oauth_usage` fetcher. Every provider reports the static
+/// `oauth_usage` operation so Sentry groups them together; the provider tag and
+/// error's host authority keep the source visible.
 pub(crate) fn map_probe_snapshot<E>(
     result: std::result::Result<AccountUsageSnapshot, E>,
-    operation: &'static str,
+    provider: &'static str,
 ) -> OauthUsageProbe
 where
     E: OauthReportable + std::error::Error + 'static,
@@ -316,12 +343,13 @@ where
     match result {
         Ok(snapshot) => OauthUsageProbe::Found(snapshot),
         Err(err) if !err.should_report() => {
-            tracing::debug!(error = %err, operation, "OAuth account usage unavailable");
+            tracing::debug!(error = %err, provider, "OAuth account usage unavailable");
             OauthUsageProbe::NoCredentials
         }
         Err(err) => {
             tracing::warn!(
-                tags.operation = operation,
+                tags.operation = "oauth_usage",
+                tags.provider = provider,
                 error = &err as &dyn std::error::Error,
                 "OAuth account usage fetch failed",
             );
@@ -333,6 +361,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_error_transience() {
+        assert!(HttpErrKind::Transport.is_transient());
+        assert!(HttpErrKind::Body.is_transient());
+        assert!(HttpErrKind::Status(503).is_transient());
+        assert!(!HttpErrKind::Status(401).is_transient());
+        assert!(!HttpErrKind::Status(404).is_transient());
+        assert!(!HttpErrKind::Status(429).is_transient());
+    }
 
     #[test]
     fn extra_credits_exhaustion_and_remaining_percentage() {

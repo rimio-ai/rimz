@@ -640,7 +640,7 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
-        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "pi.oauth_usage")
+        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "pi")
     }
 
     fn oauth_credentials_stamp(&self) -> Option<u64> {

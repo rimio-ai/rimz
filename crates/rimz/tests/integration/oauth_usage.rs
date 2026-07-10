@@ -10,7 +10,8 @@ use crate::common::{CommandTimeoutExt, Env};
 #[test]
 fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint() {
     let env = Env::new();
-    let (origin, server) = serve_once(
+    let (origin, server) = serve_after_failures(
+        0,
         r#"{
             "five_hour": {
                 "utilization": 12.5,
@@ -63,7 +64,8 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let request = server.join().expect("server request");
+    let requests = server.join().expect("server request");
+    let request = &requests[0];
     assert!(request.starts_with("GET /api/oauth/usage "));
     assert!(
         request
@@ -100,9 +102,74 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
 }
 
 #[test]
+fn claude_refresh_usage_retries_transient_http_failures() {
+    let env = Env::new();
+    let (origin, server) = serve_after_failures(
+        2,
+        r#"{
+            "five_hour": {
+                "utilization": 12.5,
+                "resets_at": "2026-09-21T14:13:20Z"
+            }
+        }"#,
+    );
+    let claude_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(&claude_home).expect("mkdir claude home");
+    std::fs::write(
+        claude_home.join(".credentials.json"),
+        r#"{
+            "claudeAiOauth": {
+                "accessToken": "claude-token",
+                "expiresAt": 4102444800000,
+                "scopes": ["user:profile"]
+            }
+        }"#,
+    )
+    .expect("write claude credentials");
+
+    let output = env
+        .rimz()
+        .args([
+            "agents",
+            "refresh-usage",
+            "--kind",
+            "claude",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--merge-windows",
+        ])
+        .env(
+            "RIMZ_CLAUDE_OAUTH_USAGE_URL",
+            format!("{origin}/api/oauth/usage"),
+        )
+        .bounded_output()
+        .expect("rimz agents refresh-usage claude");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = server.join().expect("server requests");
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.starts_with("GET /api/oauth/usage "))
+    );
+
+    let limits = read_json(env.runtime_paths().shared_rate_limits_path());
+    assert!(
+        limits["windows"]["claude"]["windows"]
+            .as_array()
+            .is_some_and(|windows| !windows.is_empty())
+    );
+}
+
+#[test]
 fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unreachable() {
     let env = Env::new();
-    let (origin, server) = serve_once(
+    let (origin, server) = serve_after_failures(
+        0,
         r#"{
             "plan_type": "pro",
             "rate_limit": {
@@ -158,7 +225,8 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let request = server.join().expect("server request");
+    let requests = server.join().expect("server request");
+    let request = &requests[0];
     assert!(request.starts_with("GET /backend-api/wham/usage "));
     let request_lower = request.to_ascii_lowercase();
     assert!(request_lower.contains("authorization: bearer codex-token"));
@@ -185,35 +253,47 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
     );
 }
 
-fn serve_once(body: &'static str) -> (String, thread::JoinHandle<String>) {
+fn serve_after_failures(
+    failures: usize,
+    body: &'static str,
+) -> (String, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind http stub");
     let addr = listener.local_addr().expect("local addr");
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept request");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .expect("set read timeout");
-        let mut request = Vec::new();
-        let mut buf = [0_u8; 1024];
-        loop {
-            let read = stream.read(&mut buf).expect("read request");
-            if read == 0 {
-                break;
+        let mut requests = Vec::with_capacity(failures + 1);
+        for response_index in 0..=failures {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("set read timeout");
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buf).expect("read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
             }
-            request.extend_from_slice(&buf[..read]);
-            if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
-            }
+            requests.push(String::from_utf8_lossy(&request).into_owned());
+
+            let (status, response_body) = if response_index < failures {
+                ("500 Internal Server Error", "")
+            } else {
+                ("200 OK", body)
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response_body}",
+                response_body.len(),
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
         }
-        let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .expect("write response");
-        String::from_utf8_lossy(&request).into_owned()
+        requests
     });
     (format!("http://{addr}"), handle)
 }
