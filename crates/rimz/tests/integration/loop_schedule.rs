@@ -71,6 +71,7 @@ fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
             && stdout.contains("NEXT")
             && stdout.contains("LAST")
             && stdout.contains("STATUS")
+            && stdout.contains("COST")
             && stdout.contains("SOURCE")
             && !stdout.contains("RUNS")
             && !stdout.contains("RESULT"),
@@ -131,6 +132,32 @@ fn loop_add_round_trips_run_and_daily_budgets() {
     let task = loop_config.tasks.0.get("bounded").expect("bounded task");
     assert_eq!(task.budget.as_deref(), Some("$5.00"));
     assert_eq!(task.budget_per_day.as_deref(), Some("$20.00"));
+
+    write_loop_run_records(
+        &env,
+        &[LoopRunRecord {
+            task: "bounded".to_owned(),
+            at: Timestamp::now(),
+            result: LoopRunResult::Completed,
+            mode: Some(rimz::harness::schedule::run_log::LoopRunMode::Manual),
+            duration_ms: Some(1_000),
+            error: None,
+            check: None,
+            run_id: None,
+            transcript_path: None,
+            last_message: None,
+            target: None,
+            cost_usd: Some(0.42),
+            input_tokens: Some(12_000),
+            output_tokens: Some(3_400),
+        }],
+    );
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(list.contains("$0.42/$20"), "{list}");
+    let show = loop_ok(&env, &["loop", "show", "bounded"]);
+    assert!(show.contains("budget: $5 per run · $20 per day"), "{show}");
+    assert!(show.contains("$0.42 today of $20 · $0.42 last"), "{show}");
+    assert!(show.contains("cost: $0.42 · ↘ 12k ↗ 3k"), "{show}");
 }
 
 #[test]
@@ -943,6 +970,8 @@ fn loop_show_displays_shadowed_error_and_run_tail() {
                 last_message: None,
                 target: None,
                 cost_usd: None,
+                input_tokens: None,
+                output_tokens: None,
             },
             LoopRunRecord {
                 task: "forensics".to_owned(),
@@ -957,6 +986,8 @@ fn loop_show_displays_shadowed_error_and_run_tail() {
                 last_message: None,
                 target: None,
                 cost_usd: None,
+                input_tokens: None,
+                output_tokens: None,
             },
         ],
     );

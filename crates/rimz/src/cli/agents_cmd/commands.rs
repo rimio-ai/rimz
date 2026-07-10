@@ -1944,18 +1944,8 @@ fn brand_style(kind: &str) -> Option<anstyle::Style> {
 fn tokens_label(agent: &AgentState) -> String {
     agent
         .total_tokens
-        .map(compact_count)
+        .map(render::compact_count)
         .unwrap_or_else(|| "-".to_owned())
-}
-
-fn compact_count(value: u64) -> String {
-    if value < 1_000 {
-        value.to_string()
-    } else if value < 1_000_000 {
-        format!("{}k", value / 1_000)
-    } else {
-        format!("{}m", value / 1_000_000)
-    }
 }
 
 /// The agent's channel for display, dashed when it runs outside any worktree.

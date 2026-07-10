@@ -97,8 +97,8 @@ fn render_history(
             render::cell(duration),
             render::cell(format!(
                 "↘{} ↗{}",
-                compact_count(turn.fresh_input),
-                compact_count(turn.output)
+                render::compact_count(turn.fresh_input),
+                render::compact_count(turn.output)
             )),
             render::cell(
                 turn.cost_usd
@@ -127,18 +127,8 @@ fn render_history(
         w,
         "{} turns · {} tokens · ${cost:.4}",
         turns.len(),
-        compact_count(tokens)
+        render::compact_count(tokens)
     )
-}
-
-fn compact_count(value: u64) -> String {
-    if value < 1_000 {
-        value.to_string()
-    } else if value < 1_000_000 {
-        format!("{}k", value / 1_000)
-    } else {
-        format!("{}m", value / 1_000_000)
-    }
 }
 
 #[cfg(test)]

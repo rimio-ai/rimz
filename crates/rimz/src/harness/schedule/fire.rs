@@ -80,6 +80,8 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
                         last_message: None,
                         target: None,
                         cost_usd: None,
+                        input_tokens: None,
+                        output_tokens: None,
                     });
                     tracing::info!(task = name, reason, "sidebar: loop fire skipped by budget");
                     continue;

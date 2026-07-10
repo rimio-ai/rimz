@@ -14,9 +14,9 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
         return Ok(());
     }
-    let stats = run_log::stats(&state_home());
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    let stats = run_log::stats(&state_home(), &now_zoned);
     let mut groups: BTreeMap<PathBuf, Vec<(&String, &TaskEntry, TaskSource)>> = BTreeMap::new();
     for (name, (entry, source)) in &tasks {
         let root = entry.resolved_root();
@@ -34,8 +34,9 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         }
         write_root_heading(&mut out, &root, room_is_open)?;
         let mut table = ui::Table::new([
-            "NAME", "TASK", "SOURCE", "SCHEDULE", "LAST", "STATUS", "NEXT",
+            "NAME", "TASK", "SOURCE", "SCHEDULE", "LAST", "STATUS", "COST", "NEXT",
         ])
+        .right(&[6])
         .indent(2);
         for (name, entry, source) in entries {
             let parsed = schedule::parse_schedule(name, entry);
@@ -71,6 +72,12 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
                 .get(name)
                 .map(|stats| last_run_cells(stats, now))
                 .unwrap_or_else(|| (ui::cell("-").dash(), ui::cell("-").dash()));
+            let cost = list_cost_label(
+                entry,
+                stats.get(name).map_or(0.0, |stats| stats.spend_today_usd),
+            )
+            .map(ui::cell)
+            .unwrap_or_else(|| ui::cell("-").dash());
             table.row([
                 ui::cell(name.as_str()).fg(ui::palette::ACCENT),
                 ui::cell(task_subject(entry)),
@@ -78,6 +85,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
                 ui::cell(when),
                 last,
                 status,
+                cost,
                 next,
             ]);
         }
@@ -225,6 +233,68 @@ fn source_label(source: TaskSource) -> String {
     }
 }
 
+fn budget_amount(raw: &str) -> String {
+    raw.parse::<rimz::harness::budget::BudgetSpec>()
+        .map(|spec| format_budget_cap(spec.cap_usd))
+        .unwrap_or_else(|_| raw.to_owned())
+}
+
+fn format_budget_cap(cap_usd: f64) -> String {
+    if cap_usd.fract() == 0.0 {
+        format!("${cap_usd:.0}")
+    } else {
+        format!("${cap_usd:.2}")
+    }
+}
+
+fn budget_label(entry: &TaskEntry) -> Option<String> {
+    let mut segments = Vec::new();
+    if let Some(raw) = entry.budget.as_deref() {
+        segments.push(format!("{} per run", budget_amount(raw)));
+    }
+    if let Some(raw) = entry.budget_per_day.as_deref() {
+        segments.push(format!("{} per day", budget_amount(raw)));
+    }
+    (!segments.is_empty()).then(|| segments.join(" · "))
+}
+
+fn list_cost_label(entry: &TaskEntry, spend_today_usd: f64) -> Option<String> {
+    if let Some(cap) = entry
+        .budget_per_day
+        .as_deref()
+        .and_then(|raw| raw.parse::<rimz::harness::budget::BudgetSpec>().ok())
+    {
+        return Some(format!(
+            "${spend_today_usd:.2}/{}",
+            format_budget_cap(cap.cap_usd)
+        ));
+    }
+    (spend_today_usd > 0.0).then(|| format!("${spend_today_usd:.2}"))
+}
+
+fn spend_label(entry: &TaskEntry, records: &[LoopRunRecord], now: &jiff::Zoned) -> Option<String> {
+    let spend_today_usd = run_log::spend_on_local_day(records, now);
+    let summary = run_log::cost_summary(records);
+    let mut segments = Vec::new();
+    if entry.budget_per_day.is_some() || run_log::has_cost_on_local_day(records, now) {
+        let mut today = format!("${spend_today_usd:.2} today");
+        if let Some(raw) = entry.budget_per_day.as_deref() {
+            today.push_str(" of ");
+            today.push_str(&budget_amount(raw));
+        }
+        segments.push(today);
+    }
+    if let Some(last_usd) = summary.last_usd {
+        segments.push(format!("${last_usd:.2} last"));
+    }
+    if summary.costed_runs >= 2
+        && let Some(avg_usd) = summary.avg_usd
+    {
+        segments.push(format!("ø ${avg_usd:.2} over {} runs", summary.costed_runs));
+    }
+    (!segments.is_empty()).then(|| segments.join(" · "))
+}
+
 fn source_detail(source: TaskSource, entry: &TaskEntry) -> String {
     format!(
         "{} — {}",
@@ -359,14 +429,11 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     }
     kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
     kv.push("source", ui::cell(source_detail(source, &entry)));
-    if let Some(raw) = entry.budget_per_day.as_deref()
-        && let Ok(spec) = raw.parse::<rimz::harness::budget::BudgetSpec>()
-    {
-        let spend = run_log::spend_on_local_day(&records, &now_zoned);
-        kv.push(
-            "budget_today",
-            ui::cell(format!("${spend:.2} of ${:.2}", spec.cap_usd)),
-        );
+    if let Some(budget) = budget_label(&entry) {
+        kv.push("budget", ui::cell(budget));
+    }
+    if let Some(spend) = spend_label(&entry, &records, &now_zoned) {
+        kv.push("spend", ui::cell(spend));
     }
     kv.render(&mut out)?;
 
@@ -390,11 +457,11 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let visible_rows = &rows[start..];
     let show_note = visible_rows.iter().any(|row| row.key.note.is_some());
     let headers = if show_note {
-        vec!["WHEN", "MODE", "STATUS", "TOOK", "NOTE"]
+        vec!["WHEN", "MODE", "STATUS", "TOOK", "COST", "NOTE"]
     } else {
-        vec!["WHEN", "MODE", "STATUS", "TOOK"]
+        vec!["WHEN", "MODE", "STATUS", "TOOK", "COST"]
     };
-    let mut table = ui::Table::new(headers).indent(2);
+    let mut table = ui::Table::new(headers).right(&[4]).indent(2);
     for row in visible_rows {
         let record = row.latest;
         let mut cells = vec![
@@ -405,6 +472,14 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 record
                     .duration_ms
                     .map(format_duration_ms)
+                    .unwrap_or_else(|| "-".to_owned()),
+            )
+            .dash(),
+            ui::cell(
+                record
+                    .cost_usd
+                    .filter(|cost| cost.is_finite() && *cost >= 0.0)
+                    .map(|cost| format!("${cost:.2}"))
                     .unwrap_or_else(|| "-".to_owned()),
             )
             .dash(),
@@ -694,6 +769,11 @@ fn record_has_detail(record: &LoopRunRecord) -> bool {
         || record.error.is_some()
         || record.last_message.is_some()
         || record.run_id.is_some()
+        || record
+            .cost_usd
+            .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
+        || record.input_tokens.is_some()
+        || record.output_tokens.is_some()
 }
 
 fn record_is_failure(record: &LoopRunRecord) -> bool {
@@ -767,6 +847,13 @@ fn render_record_detail(
         write_detail_label(out, "last message")?;
         write_gutter_block(out, None, last_message)?;
     }
+    if let Some(spend) = record_spend_label(record) {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(ui::palette::MUTED, &format!("  cost: {spend}"))
+        )?;
+    }
     if let Some(run_id) = &record.run_id {
         writeln!(
             out,
@@ -793,6 +880,26 @@ fn render_record_detail(
         }
     }
     Ok(())
+}
+
+fn record_spend_label(record: &LoopRunRecord) -> Option<String> {
+    let mut segments = record
+        .cost_usd
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        .map(|cost| format!("${cost:.2}"))
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut tokens = Vec::new();
+    if let Some(input) = record.input_tokens {
+        tokens.push(format!("↘ {}", ui::compact_count(input)));
+    }
+    if let Some(output) = record.output_tokens {
+        tokens.push(format!("↗ {}", ui::compact_count(output)));
+    }
+    if !tokens.is_empty() {
+        segments.push(tokens.join(" "));
+    }
+    (!segments.is_empty()).then(|| segments.join(" · "))
 }
 
 fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
@@ -883,6 +990,8 @@ mod tests {
             last_message: None,
             target: None,
             cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
         }
     }
 
@@ -931,6 +1040,46 @@ mod tests {
         let mut wake_only = wake;
         wake_only.check = None;
         assert_eq!(task_run_rule(&wake_only), "wake @planner");
+    }
+
+    #[test]
+    fn budget_and_cost_labels_cover_capped_plain_and_empty_spend() {
+        let entry = TaskEntry {
+            budget: Some("$5.00".to_owned()),
+            budget_per_day: Some("$20.00".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert_eq!(
+            budget_label(&entry).as_deref(),
+            Some("$5 per run · $20 per day")
+        );
+        assert_eq!(list_cost_label(&entry, 3.2).as_deref(), Some("$3.20/$20"));
+
+        let uncapped = TaskEntry::default();
+        assert_eq!(list_cost_label(&uncapped, 0.85).as_deref(), Some("$0.85"));
+        assert_eq!(list_cost_label(&uncapped, 0.0), None);
+    }
+
+    #[test]
+    fn spend_label_renders_today_last_and_cost_window() {
+        let now = "2026-06-02T12:00:00Z[UTC]".parse::<jiff::Zoned>().unwrap();
+        let entry = TaskEntry {
+            budget_per_day: Some("20".to_owned()),
+            ..TaskEntry::default()
+        };
+        let mut records = Vec::new();
+        for (second, cost) in [(1, 0.28), (2, 0.42)] {
+            let mut run = record(second, LoopRunResult::Completed);
+            run.at = now.timestamp() + jiff::SignedDuration::from_secs(second);
+            run.cost_usd = Some(cost);
+            records.push(run);
+        }
+
+        assert_eq!(
+            spend_label(&entry, &records, &now).as_deref(),
+            Some("$0.70 today of $20 · $0.42 last · ø $0.35 over 2 runs")
+        );
+        assert_eq!(spend_label(&TaskEntry::default(), &[], &now), None);
     }
 
     #[test]
@@ -1105,6 +1254,9 @@ mod tests {
         let mut detail = record(20, LoopRunResult::Errored);
         detail.mode = Some(LoopRunMode::Manual);
         detail.error = Some("outer error\ninner detail".to_owned());
+        detail.cost_usd = Some(0.42);
+        detail.input_tokens = Some(12_000);
+        detail.output_tokens = Some(3_400);
         let entry = TaskEntry {
             root: PathBuf::from("/tmp/rimz-run"),
             ..TaskEntry::default()
@@ -1126,6 +1278,7 @@ mod tests {
         assert!(out.contains("LAST FAILURE — ✗ error · "));
         assert!(out.contains(" · manual"));
         assert!(out.contains("  error:\n  │ outer error\n  │ inner detail"));
+        assert!(out.contains("  cost: $0.42 · ↘ 12k ↗ 3k"));
     }
 
     #[test]

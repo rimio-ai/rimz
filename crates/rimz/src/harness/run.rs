@@ -144,6 +144,10 @@ pub struct RunRecord {
     pub budget: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
     pub prompt: String,
     pub worktree_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -176,6 +180,8 @@ impl RunRecord {
             permission_mode,
             budget: None,
             cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
             prompt,
             worktree_path,
             last_message: None,
@@ -261,13 +267,28 @@ pub fn budget_exceeded(
     Ok((record, true))
 }
 
-pub fn record_cost(paths: &StatePaths, run_id: &RunId, cost_usd: Option<f64>) -> Result<RunRecord> {
-    let Some(cost_usd) = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0) else {
+pub fn record_spend(
+    paths: &StatePaths,
+    run_id: &RunId,
+    cost_usd: Option<f64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+) -> Result<RunRecord> {
+    let cost_usd = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0);
+    if cost_usd.is_none() && input_tokens.is_none() && output_tokens.is_none() {
         return load(paths, run_id);
-    };
+    }
     let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let mut record = load(paths, run_id)?;
-    record.cost_usd = Some(cost_usd);
+    if let Some(cost_usd) = cost_usd {
+        record.cost_usd = Some(cost_usd);
+    }
+    if let Some(input_tokens) = input_tokens {
+        record.input_tokens = Some(input_tokens);
+    }
+    if let Some(output_tokens) = output_tokens {
+        record.output_tokens = Some(output_tokens);
+    }
     record.updated_at = Timestamp::now();
     run_store::write(&paths.runs_dir, &record)?;
     Ok(record)
@@ -581,6 +602,26 @@ mod tests {
         assert_eq!(RunStatus::BudgetExceeded.exit_code(), 125);
         assert!(RunStatus::BudgetExceeded.is_terminal());
         assert!(RunStatus::Canceled.is_terminal());
+    }
+
+    #[test]
+    fn record_spend_persists_tokens_and_ignores_non_finite_cost() {
+        let (_dir, paths, record) = setup();
+
+        let updated = record_spend(
+            &paths,
+            &record.run_id,
+            Some(f64::NAN),
+            Some(1_200),
+            Some(340),
+        )
+        .unwrap();
+
+        assert_eq!(updated.cost_usd, None);
+        assert_eq!(updated.input_tokens, Some(1_200));
+        assert_eq!(updated.output_tokens, Some(340));
+        let unchanged = record_spend(&paths, &record.run_id, None, None, None).unwrap();
+        assert_eq!(unchanged, updated);
     }
 
     #[test]

@@ -26,7 +26,7 @@ Schedules repeat only with `--every` or `--cron`. Shapes are: one-shot (`--at 07
 
 A `<kind>-ping` agent is the window-primer: the run skips when the provider's window is already counting down. `--every reset` fires that ping one minute after the provider's longest observed budget window resets, then uses the ping turn's own cache refresh as the next occurrence.
 
-`--budget <AMOUNT[/day]>` caps each spawned agent run. `--budget-per-day <AMOUNT>` requires a per-run budget, sums that task's cost-bearing run records in the configured local day, and records a skip when the remaining amount cannot fund the next run's cap. `loop show` prints today's spend against the daily cap.
+`--budget <AMOUNT[/day]>` caps each spawned agent run. `--budget-per-day <AMOUNT>` requires a per-run budget, sums that task's cost-bearing run records in the configured local day, and records a skip when the remaining amount cannot fund the next run's cap. `loop list` prints today's spend in its COST column, suffixed by the daily cap when configured; `loop show` prints the configured budgets and a `spend` line with today's spend, the last run cost, and the rolling average over up to ten costed runs.
 
 ## Wakes and checks
 
@@ -52,6 +52,6 @@ Pause is per-machine state. Pausing a project task affects only this machine and
 
 A task that is already running records `overlapped` and skips instead of stacking another run. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
 
-`loop list` and `loop show` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, and next fire; paused tasks show `paused` and an automatic resume time when present. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, pause state or next fire, task, check, root, and source with the defining file path, then prints recent runs plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links.
+`loop list` and `loop show` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, today's COST, and next fire; paused tasks show `paused` and an automatic resume time when present. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, pause state or next fire, task, check, root, source with the defining file path, configured budgets, and spend trend, then prints recent runs with their costs plus stored details such as per-run fresh input/output tokens, check output, error chains, run ids, captured pane output tails, and transcript links.
 
 The task model and config shape are in [harness.md → Scheduled turns](../../internals/harness/harness.md#scheduled-turns-loop).

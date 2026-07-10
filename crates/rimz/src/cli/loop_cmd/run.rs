@@ -17,6 +17,8 @@ struct RunOutcome {
     target: Option<String>,
     exit_code: Option<i32>,
     cost_usd: Option<f64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
     skip_reason: Option<String>,
 }
 
@@ -39,6 +41,8 @@ impl RunOutcome {
             target: None,
             exit_code: None,
             cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
             skip_reason: None,
         }
     }
@@ -87,6 +91,8 @@ pub(super) fn run_one(
             last_message: None,
             target: None,
             cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
         });
         if mode == LoopRunMode::Manual {
             write_manual_verdict(
@@ -116,6 +122,8 @@ pub(super) fn run_one(
                 last_message: None,
                 target: None,
                 cost_usd: None,
+                input_tokens: None,
+                output_tokens: None,
             });
             if mode == LoopRunMode::Manual {
                 write_manual_verdict(
@@ -170,6 +178,8 @@ fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &an
         last_message: None,
         target: None,
         cost_usd: None,
+        input_tokens: None,
+        output_tokens: None,
     });
     tracing::warn!(task = name, error = %error, "loop task run failed");
 }
@@ -372,6 +382,8 @@ fn execute_task(
             run.failure_tail = record.failure_tail;
             run.last_message = record.last_message;
             run.cost_usd = record.cost_usd;
+            run.input_tokens = record.input_tokens;
+            run.output_tokens = record.output_tokens;
             run.exit_code = Some(status.exit_code());
             Ok(run)
         }
@@ -466,6 +478,8 @@ fn loop_record(
         last_message: outcome.last_message.clone(),
         target: outcome.target.clone(),
         cost_usd: outcome.cost_usd,
+        input_tokens: outcome.input_tokens,
+        output_tokens: outcome.output_tokens,
     }
 }
 
@@ -564,8 +578,23 @@ fn write_manual_run_summary(
         )
     )?;
     write!(out, " in {}", render::format_duration_ms(duration_ms))?;
-    if let Some(cost) = outcome.cost_usd {
-        write!(out, " · ${cost:.2}")?;
+    let mut spend = outcome
+        .cost_usd
+        .map(|cost| format!("${cost:.2}"))
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut tokens = Vec::new();
+    if let Some(input) = outcome.input_tokens {
+        tokens.push(format!("↘ {}", ui::compact_count(input)));
+    }
+    if let Some(output) = outcome.output_tokens {
+        tokens.push(format!("↗ {}", ui::compact_count(output)));
+    }
+    if !tokens.is_empty() {
+        spend.push(tokens.join(" "));
+    }
+    if !spend.is_empty() {
+        write!(out, " · {}", spend.join(" · "))?;
     }
     writeln!(out)?;
 
@@ -1080,6 +1109,8 @@ mod tests {
         outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
         outcome.last_message = Some("pong\n".to_owned());
         outcome.cost_usd = Some(0.42);
+        outcome.input_tokens = Some(12_000);
+        outcome.output_tokens = Some(3_400);
 
         assert_eq!(
             summary(
@@ -1090,7 +1121,7 @@ mod tests {
                 false,
                 &outcome,
             ),
-            "✓ completed in 3m · $0.42\n  │ pong\n  pane closed; rerun with --keep to watch\n"
+            "✓ completed in 3m · $0.42 · ↘ 12k ↗ 3k\n  │ pong\n  pane closed; rerun with --keep to watch\n"
         );
     }
 

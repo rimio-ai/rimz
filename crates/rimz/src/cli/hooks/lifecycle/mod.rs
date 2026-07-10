@@ -180,8 +180,29 @@ fn record_run_lifecycle(
                 })
                 .and_then(|record| record.context.cost)
                 .and_then(|cost| cost.total_cost_usd);
-            let record = rimz::harness::run::record_cost(store.paths(), &record.run_id, cost_usd)
-                .unwrap_or(record);
+            let token_totals = record
+                .agent_id
+                .as_ref()
+                .zip(record.transcript_path.as_deref())
+                .and_then(|(agent_id, transcript_path)| {
+                    let prices = rimz::agents::pricing::cached_book(
+                        &store.runtime_paths().shared_pricing_cache_path(),
+                    );
+                    rimz::agents::spending::session_token_totals(
+                        agent,
+                        agent_id.as_str(),
+                        std::path::Path::new(transcript_path),
+                        &prices,
+                    )
+                });
+            let record = rimz::harness::run::record_spend(
+                store.paths(),
+                &record.run_id,
+                cost_usd,
+                token_totals.map(|totals| totals.input),
+                token_totals.map(|totals| totals.output),
+            )
+            .unwrap_or(record);
             if let Err(err) = rimz::store::wakeup::wake_run(store.runtime_paths(), &record) {
                 warn!(
                     agent = agent.descriptor().kind,

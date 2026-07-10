@@ -115,6 +115,17 @@ pub(crate) fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
+/// Format large counts compactly for token-oriented CLI surfaces.
+pub(crate) fn compact_count(value: u64) -> String {
+    if value < 1_000 {
+        value.to_string()
+    } else if value < 1_000_000 {
+        format!("{}k", value / 1_000)
+    } else {
+        format!("{}m", value / 1_000_000)
+    }
+}
+
 pub(crate) fn rel_age(ts: Timestamp, now: Timestamp) -> String {
     let age = now.duration_since(ts);
     if age.is_negative() {

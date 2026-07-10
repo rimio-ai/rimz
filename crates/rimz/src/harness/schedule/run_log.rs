@@ -23,6 +23,7 @@ const MAX_BYTES: u64 = 4 * 1_048_576;
 const CHECK_OUTPUT_CAP: usize = 4 * 1024;
 const ERROR_CAP: usize = 2 * 1024;
 const LAST_MESSAGE_CAP: usize = 2 * 1024;
+pub const COST_WINDOW: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LoopRunRecord {
@@ -47,6 +48,10 @@ pub struct LoopRunRecord {
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +133,14 @@ pub struct LoopRunStats {
     pub runs: usize,
     pub streak: usize,
     pub last: LoopRunRecord,
+    pub spend_today_usd: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TaskCostSummary {
+    pub last_usd: Option<f64>,
+    pub avg_usd: Option<f64>,
+    pub costed_runs: usize,
 }
 
 pub fn log_path(state_root: &Path) -> PathBuf {
@@ -144,11 +157,11 @@ fn append_to(state_root: &Path, record: &LoopRunRecord) {
     crate::diag::rotating::JsonlLog::new(log_path(state_root), MAX_BYTES).append(&capped);
 }
 
-pub fn stats(state_root: &Path) -> BTreeMap<String, LoopRunStats> {
+pub fn stats(state_root: &Path, now: &Zoned) -> BTreeMap<String, LoopRunStats> {
     let path = log_path(state_root);
     let mut stats = BTreeMap::new();
-    fold_file(&rotated_path(&path), &mut stats);
-    fold_file(&path, &mut stats);
+    fold_file(&rotated_path(&path), now, &mut stats);
+    fold_file(&path, now, &mut stats);
     stats
 }
 
@@ -165,13 +178,46 @@ pub fn task_spend_today(state_root: &Path, task: &str, now: &Zoned) -> f64 {
 }
 
 pub fn spend_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> f64 {
-    let date = now.date();
     records
         .iter()
-        .filter(|record| record.at.to_zoned(now.time_zone().clone()).date() == date)
+        .filter_map(|record| cost_on_local_day(record, now))
+        .sum()
+}
+
+pub fn has_cost_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> bool {
+    records
+        .iter()
+        .any(|record| cost_on_local_day(record, now).is_some())
+}
+
+pub fn cost_summary(records: &[LoopRunRecord]) -> TaskCostSummary {
+    let costs = records
+        .iter()
+        .rev()
         .filter_map(|record| record.cost_usd)
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        .sum()
+        .take(COST_WINDOW)
+        .collect::<Vec<_>>();
+    let costed_runs = costs.len();
+    let last_usd = costs.first().copied();
+    let avg_usd = (costed_runs > 0).then(|| {
+        costs
+            .iter()
+            .map(|cost| cost / costed_runs as f64)
+            .sum::<f64>()
+    });
+    TaskCostSummary {
+        last_usd,
+        avg_usd,
+        costed_runs,
+    }
+}
+
+fn cost_on_local_day(record: &LoopRunRecord, now: &Zoned) -> Option<f64> {
+    (record.at.to_zoned(now.time_zone().clone()).date() == now.date())
+        .then_some(record.cost_usd)
+        .flatten()
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -252,7 +298,7 @@ pub(crate) fn automation_signature_in(state_root: &Path) -> u64 {
     hasher.finish()
 }
 
-fn fold_file(path: &Path, stats: &mut BTreeMap<String, LoopRunStats>) {
+fn fold_file(path: &Path, now: &Zoned, stats: &mut BTreeMap<String, LoopRunStats>) {
     let Ok(file) = std::fs::File::open(path) else {
         return;
     };
@@ -261,10 +307,12 @@ fn fold_file(path: &Path, stats: &mut BTreeMap<String, LoopRunStats>) {
         let Ok(record) = serde_json::from_str::<LoopRunRecord>(&line) else {
             continue;
         };
+        let spend_today_usd = cost_on_local_day(&record, now).unwrap_or(0.0);
         stats
             .entry(record.task.clone())
             .and_modify(|entry| {
                 entry.runs += 1;
+                entry.spend_today_usd += spend_today_usd;
                 if record.at > entry.last.at {
                     entry.streak = if record.result == entry.last.result {
                         entry.streak + 1
@@ -278,6 +326,7 @@ fn fold_file(path: &Path, stats: &mut BTreeMap<String, LoopRunStats>) {
                 runs: 1,
                 streak: 1,
                 last: record,
+                spend_today_usd,
             });
     }
 }
@@ -363,6 +412,8 @@ mod tests {
             last_message: None,
             target: None,
             cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
         }
     }
 
@@ -373,7 +424,10 @@ mod tests {
         append_to(dir.path(), &record("wake", 10, LoopRunResult::Delivered));
         append_to(dir.path(), &record("wake", 12, LoopRunResult::TargetGone));
 
-        let stats = stats(dir.path());
+        let now = Timestamp::from_second(20)
+            .expect("timestamp")
+            .to_zoned(jiff::tz::TimeZone::UTC);
+        let stats = stats(dir.path(), &now);
         let wake = stats.get("wake").expect("wake stats");
         assert_eq!(wake.runs, 2);
         assert_eq!(wake.streak, 1);
@@ -392,6 +446,56 @@ mod tests {
         today.at = "2026-06-02T04:10:00Z".parse().expect("timestamp");
         today.cost_usd = Some(4.0);
         assert_eq!(spend_on_local_day(&[prior, today], &now), 4.0);
+    }
+
+    #[test]
+    fn cost_summary_uses_the_last_ten_costed_runs() {
+        assert_eq!(cost_summary(&[]), TaskCostSummary::default());
+
+        let mut records = vec![record("wake", 0, LoopRunResult::BudgetSkipped)];
+        records[0].cost_usd = Some(f64::NAN);
+        let mut first = record("wake", 1, LoopRunResult::Completed);
+        first.cost_usd = Some(1.0);
+        records.push(first);
+        assert_eq!(cost_summary(&records).last_usd, Some(1.0));
+        assert_eq!(cost_summary(&records).costed_runs, 1);
+
+        for cost in 2..=12 {
+            let mut costed = record("wake", cost, LoopRunResult::Completed);
+            costed.cost_usd = Some(cost as f64);
+            records.push(costed);
+        }
+        let summary = cost_summary(&records);
+        assert_eq!(summary.last_usd, Some(12.0));
+        assert_eq!(summary.avg_usd, Some(7.5));
+        assert_eq!(summary.costed_runs, COST_WINDOW);
+    }
+
+    #[test]
+    fn stats_accumulates_only_same_local_day_spend() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let now = "2026-06-02T12:00:00-04:00[America/New_York]"
+            .parse::<Zoned>()
+            .expect("zoned");
+        let path = log_path(dir.path());
+        std::fs::create_dir_all(path.parent().expect("log parent")).expect("log dir");
+        let mut prior = record("wake", 0, LoopRunResult::Completed);
+        prior.at = "2026-06-02T03:00:00Z".parse().expect("timestamp");
+        prior.cost_usd = Some(3.0);
+        let mut today = record("wake", 0, LoopRunResult::Completed);
+        today.at = "2026-06-02T04:00:00Z".parse().expect("timestamp");
+        today.cost_usd = Some(4.0);
+        std::fs::write(
+            path,
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&prior).expect("prior json"),
+                serde_json::to_string(&today).expect("today json")
+            ),
+        )
+        .expect("write run log");
+
+        assert_eq!(stats(dir.path(), &now)["wake"].spend_today_usd, 4.0);
     }
 
     #[test]
@@ -441,7 +545,10 @@ mod tests {
         )
         .expect("write current");
 
-        let stats = stats(dir.path());
+        let now = Timestamp::from_second(30)
+            .expect("timestamp")
+            .to_zoned(jiff::tz::TimeZone::UTC);
+        let stats = stats(dir.path(), &now);
         let wake = stats.get("wake").expect("wake stats");
         assert_eq!(wake.runs, 2);
         assert_eq!(wake.streak, 1);
@@ -464,7 +571,10 @@ mod tests {
         )
         .expect("write current");
 
-        let stats = stats(dir.path());
+        let now = Timestamp::from_second(30)
+            .expect("timestamp")
+            .to_zoned(jiff::tz::TimeZone::UTC);
+        let stats = stats(dir.path(), &now);
         let wake = stats.get("wake").expect("wake stats");
         assert_eq!(wake.runs, 2);
         assert_eq!(wake.streak, 2);

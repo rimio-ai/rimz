@@ -246,7 +246,7 @@ fn render_top(w: &mut impl Write, sample: &TopSample, rows: &[TopRow]) -> std::i
         sample.rows.len(),
         fmt_cpu(Some(total_cpu)),
         render::fmt_bytes(total_mem),
-        compact_count(total_tokens),
+        render::compact_count(total_tokens),
     )?;
     let mut table = render::Table::new([
         "AGENT", "STATUS", "CPU", "MEM", "IO/S", "PROCS", "CTX", "TOKENS", "AGE",
@@ -281,7 +281,7 @@ fn render_top(w: &mut impl Write, sample: &TopSample, rows: &[TopRow]) -> std::i
                     .unwrap_or_else(|| "-".to_owned()),
             )
             .dash(),
-            render::cell(compact_count(row.tokens)),
+            render::cell(render::compact_count(row.tokens)),
             render::cell(row.age.as_str()),
         ]);
     }
@@ -372,16 +372,6 @@ fn fmt_cpu(value: Option<f64>) -> String {
     value
         .map(|value| format!("{value:.1}%"))
         .unwrap_or_else(|| "-".to_owned())
-}
-
-fn compact_count(value: u64) -> String {
-    if value < 1_000 {
-        value.to_string()
-    } else if value < 1_000_000 {
-        format!("{}k", value / 1_000)
-    } else {
-        format!("{}m", value / 1_000_000)
-    }
 }
 
 fn parse_interval(raw: &str) -> std::result::Result<Duration, String> {

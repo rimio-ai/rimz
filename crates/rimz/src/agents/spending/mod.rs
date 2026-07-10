@@ -407,6 +407,37 @@ pub fn session_cost_usd(
     })
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SessionTokenTotals {
+    pub input: u64,
+    pub output: u64,
+}
+
+/// Compute one live session's cumulative fresh input and output tokens from
+/// the transcript/store the adapter already parses for historical spending.
+/// Cache reads and writes stay outside these headline totals, matching the
+/// token figures rendered by `rimz agents history`.
+pub fn session_token_totals(
+    adapter: &dyn AgentAdapter,
+    session_id: &str,
+    transcript_path: &Path,
+    prices: &PriceBook,
+) -> Option<SessionTokenTotals> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    let parsed = adapter.parse_spend(transcript_path, None, prices);
+    let totals = session_entries(&parsed.entries, session_id)
+        .into_iter()
+        .fold(SessionTokenTotals::default(), |mut totals, entry| {
+            totals.input = totals.input.saturating_add(entry.input);
+            totals.output = totals.output.saturating_add(entry.output);
+            totals
+        });
+    (totals.input > 0 || totals.output > 0).then_some(totals)
+}
+
 /// Select one provider session from parsed spend rows. A file with no native
 /// thread ids is already session-scoped, so every row belongs to the requested
 /// session.
