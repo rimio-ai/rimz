@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ids::AskId;
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::{StatePaths, atomic, lock};
 
 const FILE_DAYS: u32 = 7;
@@ -55,6 +55,13 @@ pub struct TranscriptEntry {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<AskId>,
+    /// Queue record that opened this prompt/message turn, when delivery was
+    /// confirmed against a Rimz-authored message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
+    /// Messages whose receiving turn authored this entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reply_to: Vec<MessageId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,6 +93,8 @@ impl TranscriptEntry {
             kind,
             agent_id,
             id: None,
+            message_id: None,
+            reply_to: Vec::new(),
             channel: None,
             name: None,
             profile: None,
@@ -469,12 +478,32 @@ mod tests {
             let entry = entry(kind, "hello", "2026-06-01T00:00:00Z");
             let json = serde_json::to_string(&entry).expect("serialize");
             assert!(!json.contains("request_id"));
+            assert!(!json.contains("message_id"));
+            assert!(!json.contains("reply_to"));
             assert!(!json.contains("channel"));
             assert!(!json.contains("questions"));
             assert!(!json.contains("answers"));
             let decoded: TranscriptEntry = serde_json::from_str(&json).expect("decode");
             assert_eq!(decoded, entry);
         }
+    }
+
+    #[test]
+    fn chat_entry_round_trips_message_causality_and_decodes_legacy_lines() {
+        let mut entry = entry(TranscriptKind::Message, "hello", "2026-06-01T00:00:00Z");
+        entry.message_id = Some(MessageId::parse("msg_0123456789abcdef").unwrap());
+        entry.reply_to = vec![MessageId::parse("msg_123456789abcdef0").unwrap()];
+
+        let json = serde_json::to_value(&entry).expect("serialize");
+        let decoded: TranscriptEntry = serde_json::from_value(json.clone()).expect("decode");
+        assert_eq!(decoded, entry);
+
+        let mut legacy = json;
+        legacy.as_object_mut().unwrap().remove("message_id");
+        legacy.as_object_mut().unwrap().remove("reply_to");
+        let decoded: TranscriptEntry = serde_json::from_value(legacy).expect("legacy decode");
+        assert_eq!(decoded.message_id, None);
+        assert!(decoded.reply_to.is_empty());
     }
 
     #[test]

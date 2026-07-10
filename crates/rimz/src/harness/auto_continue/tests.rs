@@ -131,6 +131,7 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
         rate_limits: None,
         pr: None,
         account: None,
+        turn_opened_by: Vec::new(),
         turn_error: Some(AgentTurnError {
             class,
             at: ts(error_at),

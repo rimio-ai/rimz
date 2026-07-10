@@ -15,6 +15,8 @@
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
+use crate::ids::MessageId;
+
 /// Rich per-session enrichment that has no first-class home on
 /// [`crate::agents::AgentState`]. Attached whole as `AgentState.context` and
 /// dropped whole when the session ends. The record is identity-free — the
@@ -67,6 +69,11 @@ pub struct AgentContext {
     /// from the freshest session of each kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<AgentAccount>,
+    /// Messages whose confirmed delivery opened the current turn. Lifecycle
+    /// hooks replace this on every turn start; enqueue reads it to preserve
+    /// exact inter-agent reply causality.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turn_opened_by: Vec<MessageId>,
     /// A turn that died on a provider API error, detected from a provider hook
     /// or transcript/rollout tail. Status-projection marker: the projection
     /// reads it to refine a falsely-`running` row, or a same-turn `failed` row,

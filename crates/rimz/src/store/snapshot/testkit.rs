@@ -282,6 +282,7 @@ pub(super) fn bare_context() -> AgentContext {
         rate_limits: None,
         pr: None,
         account: None,
+        turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
         turn_interrupted: None,

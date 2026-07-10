@@ -1952,6 +1952,7 @@ fn agent_context(
             metered: Some(false),
             ..rimz::agents::AgentAccount::default()
         }),
+        turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
         turn_interrupted: None,

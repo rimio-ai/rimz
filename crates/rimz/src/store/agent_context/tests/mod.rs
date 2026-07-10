@@ -27,6 +27,7 @@ fn ctx(observed_at: Timestamp) -> AgentContext {
         rate_limits: None,
         pr: None,
         account: None,
+        turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
         turn_interrupted: None,
@@ -44,6 +45,41 @@ fn write_then_read_round_trips() {
     assert_eq!(all[0].kind, "claude");
     assert_eq!(all[0].agent_id, "sess-1");
     assert_eq!(all[0].context.model_id.as_deref(), Some("claude-opus-4-8"));
+}
+
+#[test]
+fn turn_openers_replace_and_survive_statusline_refresh() {
+    let (_dir, runtime) = runtime();
+    let now = Timestamp::now();
+    let first = crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
+    let second = crate::ids::MessageId::parse("msg_123456789abcdef0").unwrap();
+
+    assert!(merge_turn_opened_by(&runtime, "claude", "sess-1", vec![first.clone()]).unwrap());
+    write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
+    assert_eq!(
+        read_one(&runtime, "claude", "sess-1")
+            .unwrap()
+            .context
+            .turn_opened_by,
+        vec![first]
+    );
+
+    assert!(merge_turn_opened_by(&runtime, "claude", "sess-1", vec![second.clone()]).unwrap());
+    assert_eq!(
+        read_one(&runtime, "claude", "sess-1")
+            .unwrap()
+            .context
+            .turn_opened_by,
+        vec![second]
+    );
+    assert!(merge_turn_opened_by(&runtime, "claude", "sess-1", Vec::new()).unwrap());
+    assert!(
+        read_one(&runtime, "claude", "sess-1")
+            .unwrap()
+            .context
+            .turn_opened_by
+            .is_empty()
+    );
 }
 
 #[test]

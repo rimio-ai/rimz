@@ -711,6 +711,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
         rate_limits,
         pr: None,
         account: None,
+        turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
         turn_interrupted: None,

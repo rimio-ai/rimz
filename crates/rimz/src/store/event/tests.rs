@@ -445,6 +445,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
     let now = Timestamp::now();
     let message = MessageRecord {
         message_id: MessageId::new(),
+        in_reply_to: Vec::new(),
         workspace_id: workspace(),
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("sess-1"),

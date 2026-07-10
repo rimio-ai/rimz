@@ -235,6 +235,7 @@ pub(super) fn into_context(
         rate_limits: rate_limits.map(|limits| limits.stamped_at(observed_at)),
         pr: None,
         account,
+        turn_opened_by: Vec::new(),
         turn_error: None,
         // App-server enrichment carries no turn boundary; the rollout-tail
         // refresh path stamps `turn_complete`, never this fold.

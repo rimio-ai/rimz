@@ -417,6 +417,7 @@ mod tests {
                 version: None,
                 sub_provider: None,
             }),
+            turn_opened_by: Vec::new(),
             turn_error: None,
             turn_complete: None,
             turn_interrupted: None,

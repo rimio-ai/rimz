@@ -267,6 +267,9 @@ pub struct AfterCondition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageRecord {
     pub message_id: MessageId,
+    /// Messages that opened the sender turn which authored this message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub in_reply_to: Vec<MessageId>,
     pub workspace_id: WorkspaceId,
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
@@ -371,6 +374,7 @@ impl MessageRecord {
         let now = Timestamp::now();
         Self {
             message_id: MessageId::new(),
+            in_reply_to: Vec::new(),
             workspace_id,
             kind,
             agent_id,
@@ -415,6 +419,7 @@ impl MessageRecord {
         .with_address(record.address.clone())
         .with_channel(record.channel.clone())
         .with_sender(record.sender.clone())
+        .with_in_reply_to(record.in_reply_to.clone())
         .with_force(record.force)
         .with_auto_compact(record.auto_compact)
         .with_body(record.body)
@@ -435,6 +440,13 @@ impl MessageRecord {
     #[must_use]
     pub fn with_address(mut self, address: Option<String>) -> Self {
         self.address = address;
+        self
+    }
+
+    /// Attach the messages that opened the authoring turn.
+    #[must_use]
+    pub fn with_in_reply_to(mut self, in_reply_to: Vec<MessageId>) -> Self {
+        self.in_reply_to = in_reply_to;
         self
     }
 

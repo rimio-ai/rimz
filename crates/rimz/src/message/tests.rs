@@ -271,6 +271,7 @@ fn record_optional_fields_default_and_round_trip() {
         role: Some("coder".to_owned()),
         channel: Some("main".to_owned()),
     })
+    .with_in_reply_to(vec![message_id(7), message_id(8)])
     .with_body(MessageBody::Command)
     .with_force(true)
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
@@ -293,6 +294,7 @@ fn record_optional_fields_default_and_round_trip() {
         DeliveryGate::Done,
     );
     assert_eq!(fresh.channel, None);
+    assert!(fresh.in_reply_to.is_empty());
     assert_eq!(fresh.sender, MessageSender::Human);
     assert_eq!(fresh.body, MessageBody::Prompt);
     assert!(!fresh.force);
@@ -307,6 +309,7 @@ fn record_optional_fields_default_and_round_trip() {
     let encoded = serde_json::to_value(&record).unwrap();
     for key in [
         "channel",
+        "in_reply_to",
         "sender",
         "body",
         "force",
@@ -323,6 +326,7 @@ fn record_optional_fields_default_and_round_trip() {
         let back: MessageRecord = serde_json::from_value(legacy).unwrap();
         match key {
             "channel" => assert_eq!(back.channel, None),
+            "in_reply_to" => assert!(back.in_reply_to.is_empty()),
             "sender" => assert_eq!(back.sender, MessageSender::Human),
             "body" => assert_eq!(back.body, MessageBody::Prompt),
             "force" => assert!(!back.force),
@@ -336,6 +340,22 @@ fn record_optional_fields_default_and_round_trip() {
             _ => unreachable!(),
         }
     }
+}
+
+#[test]
+fn requeue_preserves_turn_causality() {
+    let original = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &agent("s1", None),
+        "next".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_in_reply_to(vec![message_id(7), message_id(8)]);
+
+    let requeued = MessageRecord::requeue_from(&original);
+
+    assert_eq!(requeued.in_reply_to, original.in_reply_to);
 }
 
 #[test]
@@ -918,6 +938,7 @@ fn settle_context(complete: Option<Timestamp>, interrupted: Option<Timestamp>) -
         rate_limits: None,
         pr: None,
         account: None,
+        turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: complete.map(|at| at + jiff::SignedDuration::from_secs(1)),
         turn_interrupted: interrupted.map(|at| at + jiff::SignedDuration::from_secs(1)),

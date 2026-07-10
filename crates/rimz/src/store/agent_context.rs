@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{AgentContext, AgentTurnError};
 use crate::agents::{AgentCost, AgentTokenUsage, LocalContextRefresh, TranscriptStat};
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::atomic;
 use crate::store::paths::RuntimePaths;
 use crate::store::sidecar;
@@ -81,12 +81,19 @@ pub fn write(
     agent_id: &str,
     context: &AgentContext,
 ) -> Result<(), atomic::AtomicErr> {
+    let mut context = context.clone();
+    // Statusline producers own their observed provider fields, while lifecycle
+    // confirmation owns turn causality. Preserve that independently-written
+    // field across whole-context statusline refreshes.
+    context.turn_opened_by = read_one(runtime, kind, agent_id)
+        .map(|record| record.context.turn_opened_by)
+        .unwrap_or_default();
     write_record(
         runtime,
         &AgentContextRecord {
             kind: AgentKind::new_unchecked(kind),
             agent_id: agent_id.into(),
-            context: context.clone(),
+            context,
             rate_limits_observed_at: None,
             rich_observed_at: None,
             transcript_path: None,
@@ -267,6 +274,27 @@ pub fn merge_turn_error(
     Ok(true)
 }
 
+/// Replace the delivered messages that opened the current turn. An empty set
+/// is meaningful: a human-opened turn clears causality from the prior turn.
+pub fn merge_turn_opened_by(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    message_ids: Vec<MessageId>,
+) -> Result<bool, atomic::AtomicErr> {
+    let observed_at = Timestamp::now();
+    let mut record = read_one(runtime, kind, agent_id)
+        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
+    if record.context.turn_opened_by == message_ids {
+        return Ok(false);
+    }
+    record.context.source = kind.to_owned();
+    record.context.turn_opened_by = message_ids;
+    record.context.observed_at = observed_at;
+    write_record(runtime, &record)?;
+    Ok(true)
+}
+
 fn merge_observed_tokens(prior: &mut Option<AgentTokenUsage>, incoming: AgentTokenUsage) -> bool {
     let target = prior.get_or_insert_with(AgentTokenUsage::default);
     let before = target.clone();
@@ -395,6 +423,7 @@ pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {
         rate_limits: None,
         pr: None,
         account: None,
+        turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
         turn_interrupted: None,

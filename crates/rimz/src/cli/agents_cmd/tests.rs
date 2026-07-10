@@ -2282,6 +2282,7 @@ impl AgentTurnErrorFixture for rimz::agents::AgentState {
             rate_limits: None,
             pr: None,
             account: None,
+            turn_opened_by: Vec::new(),
             turn_error: Some(rimz::agents::AgentTurnError {
                 class,
                 at: jiff::Timestamp::from_second(at).unwrap(),

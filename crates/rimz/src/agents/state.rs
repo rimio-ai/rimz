@@ -1326,6 +1326,7 @@ mod tests {
             rate_limits: None,
             pr: None,
             account: None,
+            turn_opened_by: Vec::new(),
             turn_error: None,
             turn_complete: None,
             turn_interrupted: None,
@@ -1438,6 +1439,7 @@ mod tests {
             rate_limits: None,
             pr: None,
             account: None,
+            turn_opened_by: Vec::new(),
             turn_error: Some(AgentTurnError {
                 class,
                 at: Timestamp::from_second(at).unwrap(),
@@ -1467,6 +1469,7 @@ mod tests {
             rate_limits: None,
             pr: None,
             account: None,
+            turn_opened_by: Vec::new(),
             turn_error: None,
             turn_complete: complete.map(|at| Timestamp::from_second(at).unwrap()),
             turn_interrupted: interrupted.map(|at| Timestamp::from_second(at).unwrap()),

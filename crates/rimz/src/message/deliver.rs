@@ -830,6 +830,7 @@ mod tests {
             rate_limits: None,
             pr: None,
             account: None,
+            turn_opened_by: Vec::new(),
             turn_error: None,
             turn_complete: complete.map(|at| at + jiff::SignedDuration::from_secs(1)),
             turn_interrupted: interrupted.map(|at| at + jiff::SignedDuration::from_secs(1)),

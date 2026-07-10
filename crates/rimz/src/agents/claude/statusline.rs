@@ -446,6 +446,7 @@ impl StatuslinePayload {
             // probed separately (`claude auth status`) and folded at the
             // provider panel, never here.
             account: None,
+            turn_opened_by: Vec::new(),
             // The payload carries no turn error either; the handler folds the
             // transcript-tail detection in post-hoc (`observe_turn_error`).
             turn_error: None,
