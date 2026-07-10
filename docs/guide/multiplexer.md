@@ -197,7 +197,8 @@ bind -n M-h select-pane -L
 bind -n M-j select-pane -D
 bind -n M-k select-pane -U
 bind -n M-l select-pane -R
-# Zellij's floating pane, approximated as a fresh centered popup.
+# Zellij's floating pane, approximated as a centered popup. tmux 3.7 adds native
+# floating panes (new-pane); the popup toggles cleanly and works on the 3.5 floor.
 bind -n M-f display-popup -C \; display-popup -E -w 50% -h 50% -t "#{client_session}:#{active_window_index}" -d "#{pane_current_path}"
 # Toggle pane frames, like Zellij's pane-mode z.
 bind -n M-z if -F '#{!=:#{pane-border-status},off}' 'setw pane-border-status off' 'setw pane-border-status top'
