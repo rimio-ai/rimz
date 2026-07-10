@@ -36,6 +36,8 @@ The account probe reads `security.auth.selectedType` and checks only whether the
 
 Session files live below `<runtime-base>/projects/*/chats/`, where runtime base is `$QWEN_RUNTIME_DIR`, then `$QWEN_HOME`, then `~/.qwen`. Each assistant record prices uncached prompt, cache-read, and candidate-plus-thought tokens through RimZ's price book. Unknown or off-book models retain tokens at zero dollars and register for pricing refresh.
 
+The transcript groups explicit and implicit cache hits in `cachedContentTokenCount`, so RimZ prices the whole category at the conservative implicit-cache rate of 20% of input; explicit hits may therefore be slightly overcounted.
+
 `uuid` is the message dedup key, `sessionId` is the billing thread, and `agentId`/`isSidechain` retain sidechain attribution so copied fork and child records can be deduplicated downstream. Multi-provider endpoints and subscription metering remain the declared cost gap.
 
 Live verification remains required for native dialog cancellation, concurrent subagent parent correlation, and provider-specific billing behavior.

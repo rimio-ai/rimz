@@ -23,6 +23,10 @@ fn classifies_native_asks_and_keeps_neutral_stdout_silent() {
 fn launch_and_permission_argv_match_qwen_cli() {
     let adapter = QwenAdapter;
     assert_eq!(
+        adapter.launch_command(&[], None),
+        Some(vec!["qwen".to_owned()])
+    );
+    assert_eq!(
         adapter.launch_command(
             &["--model".to_owned(), "qwen3".to_owned()],
             Some("start here")
