@@ -294,6 +294,7 @@ fn run_status_label(status: RunStatus) -> &'static str {
         RunStatus::Completed => "completed",
         RunStatus::Failed => "failed",
         RunStatus::TimedOut => "timed out",
+        RunStatus::BudgetExceeded => "budget exceeded",
         RunStatus::Canceled => "canceled",
     }
 }
