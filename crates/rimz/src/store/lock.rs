@@ -7,6 +7,12 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+// Writers are short-lived CLI processes; matching the mux command timeout bounds
+// a wedged holder without interrupting legitimate cold snapshot rebuilds.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_LOCK_BACKOFF: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
 pub enum LockErr {
@@ -22,6 +28,10 @@ pub enum LockErr {
         #[source]
         source: io::Error,
     },
+    #[error(
+        "timed out after {waited:?} acquiring workspace lock {path}; a stuck rimz process may hold it (run `fuser {path}` to find it)"
+    )]
+    Timeout { path: PathBuf, waited: Duration },
 }
 
 pub type Result<T> = std::result::Result<T, LockErr>;
@@ -35,6 +45,10 @@ pub struct WorkspaceLock {
 
 impl WorkspaceLock {
     pub fn acquire(path: &Path) -> Result<Self> {
+        Self::acquire_with_deadline(path, LOCK_TIMEOUT)
+    }
+
+    fn acquire_with_deadline(path: &Path, timeout: Duration) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| LockErr::Open {
                 path: parent.to_path_buf(),
@@ -51,10 +65,31 @@ impl WorkspaceLock {
                 path: path.to_path_buf(),
                 source: e,
             })?;
-        file.lock().map_err(|e| LockErr::Acquire {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+
+        let started = Instant::now();
+        let mut backoff = Duration::from_millis(1);
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    let elapsed = started.elapsed();
+                    if elapsed >= timeout {
+                        return Err(LockErr::Timeout {
+                            path: path.to_path_buf(),
+                            waited: elapsed,
+                        });
+                    }
+                    std::thread::sleep(backoff.min(timeout - elapsed));
+                    backoff = (backoff * 2).min(MAX_LOCK_BACKOFF);
+                }
+                Err(std::fs::TryLockError::Error(source)) => {
+                    return Err(LockErr::Acquire {
+                        path: path.to_path_buf(),
+                        source,
+                    });
+                }
+            }
+        }
         Ok(Self {
             file,
             path: path.to_path_buf(),
@@ -75,5 +110,47 @@ impl std::fmt::Debug for WorkspaceLock {
         f.debug_struct("WorkspaceLock")
             .field("path", &self.path)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_can_be_reacquired_after_guard_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.lock");
+
+        drop(WorkspaceLock::acquire(&path).unwrap());
+        WorkspaceLock::acquire(&path).unwrap();
+    }
+
+    #[test]
+    fn contended_lock_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.lock");
+        let _held = WorkspaceLock::acquire(&path).unwrap();
+
+        let error = WorkspaceLock::acquire_with_deadline(&path, Duration::from_millis(50))
+            .expect_err("held lock should time out");
+        assert!(matches!(&error, LockErr::Timeout { .. }));
+        let message = error.to_string();
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(message.contains("fuser"), "{message}");
+    }
+
+    #[test]
+    fn contended_lock_retries_until_guard_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.lock");
+        let held = WorkspaceLock::acquire(&path).unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            drop(held);
+        });
+
+        WorkspaceLock::acquire_with_deadline(&path, Duration::from_secs(1)).unwrap();
+        releaser.join().unwrap();
     }
 }
