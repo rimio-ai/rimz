@@ -103,8 +103,9 @@ fn split_pane_injects_env_vars() {
 
     // Birth a live background session with one long-lived pane to split from.
     create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
+    let target = wait_for_pane_count(xdg.path(), &name, 1)[0].pane_id.clone();
     assert!(
-        !wait_for_pane_count(xdg.path(), &name, 1).is_empty(),
+        !target.raw().is_empty(),
         "session should have its working pane before the split",
     );
 
@@ -112,7 +113,7 @@ fn split_pane_injects_env_vars() {
     env.insert("RIMZ_TEST_VAR".to_owned(), "marker-rimz-env".to_owned());
     ZellijBackend::with_runtime_dir(xdg.path())
         .split_pane(SplitPaneOptions {
-            target_pane_id: None,
+            target_pane_id: Some(target),
             cwd: None,
             command: Some(vec![
                 "sh".to_owned(),
