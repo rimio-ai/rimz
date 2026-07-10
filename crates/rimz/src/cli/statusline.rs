@@ -111,10 +111,10 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
         // The adapter has no rich-context source (e.g. codex): nothing to store.
         return Ok(());
     };
-    // Fold in the transcript-tail turn-death check. The payload itself can't
-    // carry it (an API-error abort fires no hook and isn't in the statusline
-    // schema); the adapter reads its own tail off the payload's transcript
-    // path. The handler owns the merge — adapters stay pure mappers.
+    // Fold in the transcript-tail resting-turn checks. The payload itself
+    // cannot carry an API-error abort or Esc interruption, so the adapter reads
+    // its own tail off the payload's transcript path. The handler owns the
+    // merge — adapters stay pure mappers.
     context.turn_error = agent.observe_turn_error(&payload);
     context.turn_interrupted = agent.observe_turn_interrupted(&payload);
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;

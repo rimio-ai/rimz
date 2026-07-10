@@ -1079,10 +1079,11 @@ impl AgentState {
 
     /// Status after cheap, context-only projections that every read path can
     /// share. A live turn with an active provider park certificate reads as
-    /// `paused` even when the lifecycle rollup is still `running`; hookless
-    /// rollout completion/interruption markers settle falsely-running rows to
-    /// `success`/`idle`, which opens message delivery gates. Budget-aware
-    /// callers may still upgrade a paused projection to `failed`.
+    /// `paused` even when the lifecycle rollup is still `running`; provider
+    /// completion markers settle falsely-running rows to `success`, and
+    /// interruption markers settle falsely-running or waiting rows to `idle`,
+    /// which opens message delivery gates. Budget-aware callers may still
+    /// upgrade a paused projection to `failed`.
     pub fn effective_status(&self) -> AgentStatus {
         if self.budget_park.is_some() && self.status != AgentStatus::Waiting {
             return AgentStatus::Paused;
