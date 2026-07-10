@@ -1634,13 +1634,396 @@ fn steer_wait_treats_the_remainder_of_the_live_turn_as_reply() {
 }
 
 #[test]
-fn message_wait_rejects_multi_target_create_schedule_pane_and_missing_hooks() {
+fn message_wait_gathers_fanout_replies_in_completion_order() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let first = env.runtime_root.join("message-wait-gather-first.jsonl");
+    let second = env.runtime_root.join("message-wait-gather-second.jsonl");
+    std::fs::write(&first, "").expect("seed first transcript");
+    std::fs::write(&second, "").expect("seed second transcript");
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-gather-first",
+        "feature-gather-first",
+        &first,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-gather-second",
+        "feature-gather-second",
+        &second,
+        &[("ZELLIJ_PANE_ID", "4")],
+    );
+
+    let trace_log = env.project_root.join("zellij-wait-gather-trace.log");
+    let child = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@all", "--wait=5s", "status?"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn fanout wait");
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
+    begin_wait_reply(
+        &env,
+        "sess-wait-gather-first",
+        "feature-gather-first",
+        &first,
+        "3",
+    );
+    begin_wait_reply(
+        &env,
+        "sess-wait-gather-second",
+        "feature-gather-second",
+        &second,
+        "4",
+    );
+    finish_wait_reply(
+        &env,
+        "sess-wait-gather-second",
+        "feature-gather-second",
+        &second,
+        "4",
+        "second finished",
+        false,
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    finish_wait_reply(
+        &env,
+        "sess-wait-gather-first",
+        "feature-gather-first",
+        &first,
+        "3",
+        "first finished",
+        false,
+    );
+
+    let out = child.wait_with_output().expect("wait fanout gather");
+    assert!(
+        out.status.success(),
+        "fanout wait failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "@claude#feature-gather-second:\nsecond finished\n\n@claude#feature-gather-first:\nfirst finished\n"
+    );
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn message_wait_json_emits_one_fanout_map() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let first = env.runtime_root.join("message-wait-json-first.jsonl");
+    let second = env.runtime_root.join("message-wait-json-second.jsonl");
+    std::fs::write(&first, "").expect("seed first transcript");
+    std::fs::write(&second, "").expect("seed second transcript");
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-json-first",
+        "feature-json-first",
+        &first,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-json-second",
+        "feature-json-second",
+        &second,
+        &[("ZELLIJ_PANE_ID", "4")],
+    );
+
+    let trace_log = env.project_root.join("zellij-wait-json-trace.log");
+    let child = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@all", "--wait=5s", "--json", "status?"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn JSON fanout wait");
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
+    begin_wait_reply(
+        &env,
+        "sess-wait-json-first",
+        "feature-json-first",
+        &first,
+        "3",
+    );
+    begin_wait_reply(
+        &env,
+        "sess-wait-json-second",
+        "feature-json-second",
+        &second,
+        "4",
+    );
+    finish_wait_reply(
+        &env,
+        "sess-wait-json-first",
+        "feature-json-first",
+        &first,
+        "3",
+        "first JSON reply",
+        false,
+    );
+    finish_wait_reply(
+        &env,
+        "sess-wait-json-second",
+        "feature-json-second",
+        &second,
+        "4",
+        "second JSON reply",
+        false,
+    );
+
+    let out = child.wait_with_output().expect("wait JSON fanout gather");
+    assert!(
+        out.status.success(),
+        "JSON fanout wait failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
+    assert_eq!(replies.as_object().unwrap().len(), 2);
+    for (label, reply) in [
+        ("@claude#feature-json-first", "first JSON reply"),
+        ("@claude#feature-json-second", "second JSON reply"),
+    ] {
+        assert_eq!(replies[label]["status"], "completed");
+        assert_eq!(replies[label]["reply"], reply);
+        assert!(
+            replies[label]["message_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("msg_"))
+        );
+        assert!(replies[label].get("error").is_none());
+    }
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn message_wait_gathers_other_replies_after_one_leg_fails() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let failed = env.runtime_root.join("message-wait-partial-failed.jsonl");
+    let completed = env
+        .runtime_root
+        .join("message-wait-partial-completed.jsonl");
+    std::fs::write(&failed, "").expect("seed failed transcript");
+    std::fs::write(&completed, "").expect("seed completed transcript");
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-partial-failed",
+        "feature-partial-failed",
+        &failed,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-partial-completed",
+        "feature-partial-completed",
+        &completed,
+        &[("ZELLIJ_PANE_ID", "4")],
+    );
+
+    let trace_log = env.project_root.join("zellij-wait-partial-trace.log");
+    let child = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@all", "--wait=5s", "try it"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn partial fanout wait");
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
+    begin_wait_reply(
+        &env,
+        "sess-wait-partial-failed",
+        "feature-partial-failed",
+        &failed,
+        "3",
+    );
+    begin_wait_reply(
+        &env,
+        "sess-wait-partial-completed",
+        "feature-partial-completed",
+        &completed,
+        "4",
+    );
+    finish_wait_reply(
+        &env,
+        "sess-wait-partial-failed",
+        "feature-partial-failed",
+        &failed,
+        "3",
+        "partial answer",
+        true,
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    finish_wait_reply(
+        &env,
+        "sess-wait-partial-completed",
+        "feature-partial-completed",
+        &completed,
+        "4",
+        "surviving reply",
+        false,
+    );
+
+    let out = child
+        .wait_with_output()
+        .expect("wait partial fanout gather");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "@claude#feature-partial-completed:\nsurviving reply\n"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("rimz: @claude#feature-partial-failed turn failed (exit 1)"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn message_wait_any_returns_only_the_first_terminal_leg() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let first = env.runtime_root.join("message-wait-any-first.jsonl");
+    let second = env.runtime_root.join("message-wait-any-second.jsonl");
+    std::fs::write(&first, "").expect("seed first transcript");
+    std::fs::write(&second, "").expect("seed second transcript");
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-any-first",
+        "feature-any-first",
+        &first,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-any-second",
+        "feature-any-second",
+        &second,
+        &[("ZELLIJ_PANE_ID", "4")],
+    );
+
+    let trace_log = env.project_root.join("zellij-wait-any-trace.log");
+    let child = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@all", "--wait=5s", "--any", "first?"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn any fanout wait");
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
+    begin_wait_reply(
+        &env,
+        "sess-wait-any-first",
+        "feature-any-first",
+        &first,
+        "3",
+    );
+    begin_wait_reply(
+        &env,
+        "sess-wait-any-second",
+        "feature-any-second",
+        &second,
+        "4",
+    );
+    finish_wait_reply(
+        &env,
+        "sess-wait-any-second",
+        "feature-any-second",
+        &second,
+        "4",
+        "winner",
+        false,
+    );
+
+    let out = child.wait_with_output().expect("wait any fanout");
+    assert!(
+        out.status.success(),
+        "any wait failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "@claude#feature-any-second:\nwinner\n"
+    );
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn message_wait_json_keeps_the_uniform_map_for_one_target() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let transcript = env.runtime_root.join("message-wait-json-one.jsonl");
+    std::fs::write(&transcript, "").expect("seed transcript");
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-json-one",
+        "feature-json-one",
+        &transcript,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let trace_log = env.project_root.join("zellij-wait-json-one-trace.log");
+    let child = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@claude", "--wait=5s", "--json", "status?"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn single JSON wait");
+    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
+    begin_wait_reply(
+        &env,
+        "sess-wait-json-one",
+        "feature-json-one",
+        &transcript,
+        "3",
+    );
+    finish_wait_reply(
+        &env,
+        "sess-wait-json-one",
+        "feature-json-one",
+        &transcript,
+        "3",
+        "single JSON reply",
+        false,
+    );
+
+    let out = child.wait_with_output().expect("wait single JSON reply");
+    assert!(out.status.success());
+    let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
+    assert_eq!(replies.as_object().unwrap().len(), 1);
+    assert_eq!(replies["@claude#feature-json-one"]["status"], "completed");
+    assert_eq!(
+        replies["@claude#feature-json-one"]["reply"],
+        "single JSON reply"
+    );
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn message_wait_rejects_conflicts_pane_targets_and_missing_hooks() {
     let env = Env::new();
     for args in [
-        vec!["message", "@claude", "--all", "--wait=1s", "x"],
         vec!["message", "@claude", "--create", "--wait=1s", "x"],
         vec!["message", "@claude", "--schedule", "1m", "--wait=1s", "x"],
-        vec!["message", "@all", "--wait=1s", "x"],
+        vec!["message", "@claude", "--json", "x"],
+        vec!["message", "@claude", "--any", "x"],
     ] {
         let out = env.rimz().args(args).output().expect("wait conflict");
         assert!(!out.status.success());
@@ -3281,6 +3664,44 @@ fn append_claude_assistant(transcript: &Path, text: &str) {
     writeln!(transcript, "{line}").expect("append assistant message");
 }
 
+fn begin_wait_reply(env: &Env, session_id: &str, branch: &str, transcript: &Path, pane: &str) {
+    run_hook(
+        env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": "fanout question",
+            "worktree_branch": branch,
+            "transcript_path": transcript.to_string_lossy(),
+        }),
+        &[("ZELLIJ_PANE_ID", pane)],
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_wait_reply(
+    env: &Env,
+    session_id: &str,
+    branch: &str,
+    transcript: &Path,
+    pane: &str,
+    reply: &str,
+    failed: bool,
+) {
+    append_claude_assistant(transcript, reply);
+    let mut payload = json!({
+        "hook_event_name": "Stop",
+        "session_id": session_id,
+        "last_assistant_message": reply,
+        "worktree_branch": branch,
+        "transcript_path": transcript.to_string_lossy(),
+    });
+    if failed {
+        payload["is_error"] = json!(true);
+    }
+    run_hook(env, payload, &[("ZELLIJ_PANE_ID", pane)]);
+}
+
 /// Seed a context sidecar so `--smart-compact` reads `used_pct` as the agent's
 /// window fill — the same record the producer would fold from a live statusline.
 fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
@@ -3556,12 +3977,25 @@ fn wake_stamp_path(env: &Env) -> PathBuf {
 }
 
 fn wait_for_message_event(env: &Env, method: &str, timeout: Duration) {
+    wait_for_message_event_count(env, method, 1, timeout);
+}
+
+fn wait_for_message_event_count(env: &Env, method: &str, count: usize, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
-        if env.read_events().iter().any(|event| event.method == method) {
+        if env
+            .read_events()
+            .iter()
+            .filter(|event| event.method == method)
+            .count()
+            >= count
+        {
             return;
         }
-        assert!(Instant::now() < deadline, "timed out waiting for {method}");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {count} {method} events"
+        );
         std::thread::sleep(Duration::from_millis(25));
     }
 }

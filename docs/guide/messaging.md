@@ -95,17 +95,21 @@ Give a percentage of the window (`70%`) or an occupied-token count (`120000` or 
 
 ## Ask and wait for the reply
 
-Add `--wait` to turn a message into a synchronous question against the agent's existing context. Rimz parks or sends the durable prompt normally, waits through the reply turn, prints that turn's final assistant message on stdout, and exits with the turn's status:
+Add `--wait` to ask one agent or scatter the same question across a fan-out and gather the replies from their existing contexts. Rimz parks or sends each durable prompt normally, waits through every reply turn, and exits after the join settles:
 
 ```sh
-rimz message @coder --wait "did the migration land? one line"  # no deadline
-rimz message @codex --wait=5m "open the PR"                     # total delivery + turn deadline
-rimz message --steer @claude --wait "answer from this turn"    # the live turn's remainder is the reply
+rimz message @coder --wait "did the migration land? one line"       # one bare reply, no deadline
+rimz message @all --wait --json "status? one line"                   # one handle-keyed reply map
+rimz message --all @reviewer --wait --any "first verdict?"           # return on the first terminal turn
+rimz message @codex --wait=5m "open the PR"                          # total delivery + turn deadline
+rimz message --steer @claude --wait "answer from this turn"         # the live turn's remainder is the reply
 ```
 
-Success or idle exits 0, a failed turn or delivery exits 1, and the deadline exits 124. `Waiting` and `Paused` remain inside the reply turn, so use `--wait=<duration>` when a script needs a bound. Reply text is the agent's own transcript output, like `agents -p`; a turn with no assistant message leaves stdout empty and explains that on stderr.
+A one-agent text wait keeps the compact output: the final assistant message alone on stdout. A fan-out text wait streams labeled blocks in completion order; failed legs write forensics to stderr while the remaining legs keep gathering. `--json` buffers one uniform map for either arity: `{"@coder":{"status":"completed","reply":"landed","message_id":"msg_…"}}`; non-reply failures also carry `error`.
 
-`--wait` addresses one existing agent with installed and trusted lifecycle hooks, and conflicts with `--all`, `@all`, `--create`, `--schedule`, and `--no-enter`. Steering mid-turn treats the rest of that interrupted turn as the reply.
+The gathered join exits 0 only when every leg completes and otherwise uses the first non-completed leg's status in target order; a deadline exits 124 after classifying unfinished legs as `timed_out`. `--any` returns on the first terminal leg regardless of success or failure, emits only that winner, and leaves every other delivered message in flight. `Waiting` and `Paused` remain inside a reply turn, so use `--wait=<duration>` when a script needs a bound.
+
+Every resolved target must be an existing lifecycle-bound agent with installed and trusted hooks. `--wait` conflicts with `--create`, `--schedule`, and `--no-enter`; `--json` and `--any` require `--wait`. Steering mid-turn treats the rest of that interrupted turn as the reply.
 
 Every message is a record you can read back and steer after the fact:
 

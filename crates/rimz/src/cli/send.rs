@@ -48,10 +48,17 @@ pub(crate) struct SendFlags {
     /// caller. No effect for a human caller, which is already verbatim.
     #[arg(long)]
     pub(crate) no_from: bool,
-    /// Wait for the agent's reply and print its final assistant message.
+    /// Wait for the target agents' replies and print or gather their final messages.
     /// Bare `--wait` has no deadline; use `--wait=5m` to bound the whole wait.
     #[arg(long, value_name = "DURATION", num_args = 0..=1, require_equals = true, value_parser = parse_wait_duration)]
     pub(crate) wait: Option<Option<Duration>>,
+    /// Emit replies as one JSON map keyed by agent handle. Requires `--wait`.
+    #[arg(long)]
+    pub(crate) json: bool,
+    /// Return when the first reply leg finishes instead of gathering all replies.
+    /// Requires `--wait`.
+    #[arg(long)]
+    pub(crate) any: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +78,29 @@ impl ReplyWait {
             Self::Off | Self::Indefinite => None,
             Self::Deadline(duration) => Some(started + duration),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WaitSpec {
+    pub(crate) mode: ReplyWait,
+    pub(crate) any: bool,
+    pub(crate) json: bool,
+}
+
+impl WaitSpec {
+    pub(crate) const OFF: Self = Self {
+        mode: ReplyWait::Off,
+        any: false,
+        json: false,
+    };
+
+    pub(crate) fn is_on(self) -> bool {
+        self.mode.is_on()
+    }
+
+    pub(crate) fn deadline_from(self, started: Instant) -> Option<Instant> {
+        self.mode.deadline_from(started)
     }
 }
 
@@ -165,30 +195,28 @@ pub(crate) fn reply_wait(wait: Option<Option<Duration>>) -> ReplyWait {
 }
 
 pub(crate) fn validate_reply_wait(
-    wait: ReplyWait,
+    wait: WaitSpec,
     enter: bool,
-    all: bool,
     create: bool,
     scheduled: bool,
-    target: &str,
 ) -> Result<()> {
     if !wait.is_on() {
+        if wait.json {
+            bail!("--json requires --wait");
+        }
+        if wait.any {
+            bail!("--any requires --wait");
+        }
         return Ok(());
     }
     if !enter {
         bail!("--wait requires submitting the message; remove --no-enter");
-    }
-    if all {
-        bail!("--wait requires one agent; remove --all");
     }
     if create {
         bail!("--wait requires an existing agent; remove --create");
     }
     if scheduled {
         bail!("--wait sends now or parks for a turn boundary; remove --schedule");
-    }
-    if rimz::harness::target::is_broadcast(target) {
-        bail!("--wait requires one agent; replace `{target}` with a single handle");
     }
     Ok(())
 }
@@ -258,6 +286,43 @@ mod tests {
             reply_wait(Some(Some(Duration::from_secs(5)))),
             ReplyWait::Deadline(Duration::from_secs(5))
         );
+    }
+
+    #[test]
+    fn reply_output_modes_require_wait() {
+        for (wait, expected) in [
+            (
+                WaitSpec {
+                    json: true,
+                    ..WaitSpec::OFF
+                },
+                "--json requires --wait",
+            ),
+            (
+                WaitSpec {
+                    any: true,
+                    ..WaitSpec::OFF
+                },
+                "--any requires --wait",
+            ),
+        ] {
+            assert_eq!(
+                validate_reply_wait(wait, true, false, false)
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn reply_wait_accepts_fanout_output_modes() {
+        let wait = WaitSpec {
+            mode: ReplyWait::Indefinite,
+            any: true,
+            json: true,
+        };
+        validate_reply_wait(wait, true, false, false).unwrap();
     }
 
     #[test]

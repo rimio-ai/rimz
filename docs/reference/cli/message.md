@@ -9,6 +9,7 @@ rimz message --schedule 60m @claude "Run the smoke test after lunch."
 rimz message --schedule 14:30 --on any @planner "Restart the review."
 rimz message --steer @claude "Inspect the failing test now."
 rimz message @coder --wait "did the migration land? one line"
+rimz message @all --wait --json "status? one line"
 rimz message --steer @codex --no-enter "Use the docs branch only."              # paste, don't submit
 rimz message --steer @planner --create "Draft the new endpoint."                # launch if missing
 rimz message @all "When you reach a boundary, summarize what changed."
@@ -55,7 +56,9 @@ The flags worth knowing tune delivery (run `rimz message --help` for the full su
 - `--force` sends over a pending native ask; without it the ask keeps the next input reserved.
 - `--smart-compact <PCT|TOKENS>` sends a tracked `/compact` command first when the agent's context window has reached the threshold (a percentage like `70%` or an occupied-token count like `120000` or `180k`), then sends the prompt one message interval later so it lands against a fresh window. Unset, [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) supplies the threshold; a window below it sends untouched.
 - `--no-from` sends the bytes exactly. By default a Rimz-launched agent's send arrives as `from @sender: text`, gaining `#channel` when it crosses channels.
-- `--wait[=DURATION]` sends or parks one prompt, waits through an existing agent's reply turn, prints its final assistant message on stdout, and maps success/idle to exit 0, failure to exit 1, and the total delivery-plus-turn deadline to exit 124. The agent needs installed and trusted lifecycle hooks. Bare `--wait` has no deadline. `Waiting` and `Paused` keep blocking; `--steer --wait` treats the remainder of the live turn as the reply. It conflicts with `--all`, broadcast targets, `--create`, `--schedule`, and `--no-enter`.
+- `--wait[=DURATION]` sends or parks one prompt per resolved target and joins their reply turns. One text reply stays bare; fan-out replies are labeled and stream in completion order while failures write forensics to stderr without stopping the other legs. The gathered exit is 0 only when every leg completes, otherwise the first non-completed leg's exit code in target order; the total delivery-plus-turn deadline classifies unfinished legs as `timed_out` and exits 124. Each target needs an existing lifecycle-bound card with installed and trusted hooks. Bare `--wait` has no deadline. `Waiting` and `Paused` keep blocking; `--steer --wait` treats the remainder of each live turn as the reply. It conflicts with `--create`, `--schedule`, and `--no-enter`.
+- `--json` with `--wait` buffers one map keyed by canonical agent handle for both single and fan-out waits. Each value carries `status`, `reply` (string or `null`), and `message_id`; delivery failure, a stopped agent, or skipped Waiting input adds `error`.
+- `--any` with `--wait` returns on the first terminal reply leg regardless of success or failure, emits only that winner, and exits with its status. The other messages stay in flight and are not canceled.
 
 ## The message record
 

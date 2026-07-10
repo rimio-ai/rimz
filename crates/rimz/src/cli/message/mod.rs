@@ -11,7 +11,7 @@ use serde::Serialize;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::address;
-use super::send::{self, ReplyWait, SendFlags, resolve_message};
+use super::send::{self, SendFlags, WaitSpec, resolve_message};
 use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::SidebarSnapshot;
@@ -293,7 +293,7 @@ pub(crate) fn to_session(
             force: false,
             auto_compact: None,
             no_from: false,
-            wait: ReplyWait::Off,
+            wait: WaitSpec::OFF,
             not_before: None,
         },
         FanoutFlags {

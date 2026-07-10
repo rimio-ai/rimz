@@ -1,18 +1,21 @@
 //! Synchronous reply wait for `rimz message --wait`.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
+use serde::Serialize;
 
 use super::DispatchOutcome;
 use crate::cli::agents_cmd::TranscriptCursor;
 use crate::cli::render;
+use crate::cli::send::WaitSpec;
 use rimz::agents::{AgentAdapter, AgentState, AgentStatus};
 use rimz::harness::run::RunStatus;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId};
-use rimz::message::MessageStatus;
+use rimz::message::{MessageRecord, MessageStatus};
 
 const POLL: Duration = Duration::from_millis(500);
 
@@ -22,6 +25,7 @@ pub(super) struct ReplyTarget {
     agent_name: Option<String>,
     label: String,
     cursor: Option<TranscriptCursor>,
+    transcript_path: Option<String>,
 }
 
 impl ReplyTarget {
@@ -33,6 +37,7 @@ impl ReplyTarget {
             agent_name: agent.name.clone(),
             label,
             cursor: Some(anchored_cursor(transcript_path.as_deref(), adapter)),
+            transcript_path,
         }
     }
 
@@ -45,6 +50,61 @@ impl ReplyTarget {
             &agent.agent_id,
             agent.name.as_deref(),
         )
+    }
+}
+
+pub(super) struct Leg {
+    target: ReplyTarget,
+    message_id: MessageId,
+    phase: WaitPhase,
+    message_status: MessageStatus,
+    wait_base: u64,
+    cursor: Option<TranscriptCursor>,
+    last_message: Option<String>,
+    transcript_path: Option<String>,
+    done: Option<RunStatus>,
+    error: Option<String>,
+}
+
+impl Leg {
+    pub(super) fn new(mut target: ReplyTarget, outcome: &DispatchOutcome, wait_base: u64) -> Self {
+        let (message_id, message_status, done, error) = match outcome {
+            DispatchOutcome::Sent { label, message_id } => {
+                debug_assert_eq!(label, &target.label);
+                (message_id.clone(), MessageStatus::Sent, None, None)
+            }
+            DispatchOutcome::Queued { label, message_id } => {
+                debug_assert_eq!(label, &target.label);
+                (message_id.clone(), MessageStatus::Queued, None, None)
+            }
+            DispatchOutcome::SkippedWaiting { label, message_id } => {
+                debug_assert_eq!(label, &target.label);
+                (
+                    message_id.clone(),
+                    MessageStatus::Errored,
+                    Some(RunStatus::Failed),
+                    Some(format!(
+                        "{label} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
+                    )),
+                )
+            }
+        };
+        let cursor = (message_status == MessageStatus::Sent)
+            .then(|| target.cursor.take())
+            .flatten();
+        let transcript_path = target.transcript_path.clone();
+        Self {
+            target,
+            message_id,
+            phase: WaitPhase::Delivery,
+            message_status,
+            wait_base,
+            cursor,
+            last_message: None,
+            transcript_path,
+            done,
+            error,
+        }
     }
 }
 
@@ -126,104 +186,167 @@ fn step_reply(turn_started_at: Option<Timestamp>, card: CardView) -> Step {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn wait_for_reply(
+pub(super) fn wait_for_replies(
     store: &rimz::Store,
     session_name: &str,
-    mut target: ReplyTarget,
+    mut legs: Vec<Leg>,
     steer: bool,
-    outcomes: &[DispatchOutcome],
-    mut wait_base: u64,
+    wait: WaitSpec,
     deadline: Option<Instant>,
 ) -> Result<()> {
-    let (message_id, initial_status) = match outcomes {
-        [DispatchOutcome::Sent { message_id, .. }] => (message_id, MessageStatus::Sent),
-        [DispatchOutcome::Queued { message_id, .. }] => (message_id, MessageStatus::Queued),
-        [DispatchOutcome::SkippedWaiting { label, message_id }] => {
-            bail!(
-                "{label} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
-            )
+    if legs.is_empty() {
+        bail!("--wait requires at least one dispatched message");
+    }
+    let total = legs.len();
+    if total == 1
+        && legs[0].done.is_some()
+        && let Some(error) = legs[0].error.take()
+    {
+        bail!(error);
+    }
+    let mut printed_block = false;
+    for leg in legs.iter().filter(|leg| leg.done.is_some()) {
+        if !wait.json {
+            print_reply_result_for_leg(leg, total, &mut printed_block)?;
         }
-        _ => bail!("--wait requires exactly one dispatched message"),
-    };
-    let adapter = rimz::agents::find_adapter(target.kind.as_str())
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", target.kind))?;
-    let mut cursor = (initial_status == MessageStatus::Sent)
-        .then(|| target.cursor.take())
-        .flatten();
-    let mut phase = WaitPhase::Delivery;
-    let mut message_status = initial_status;
-    let mut last_message = None;
+    }
+    if wait.any
+        && let Some(winner) = legs.iter().position(|leg| leg.done.is_some())
+    {
+        return finish_join(&legs, wait, Some(winner));
+    }
+    if let Some(status) = settled_status(&legs.iter().map(|leg| leg.done).collect::<Vec<_>>(), None)
+    {
+        if wait.json {
+            print_json_replies(&legs, None)?;
+        }
+        return return_or_exit(status);
+    }
 
     loop {
-        if let Some(status) = current_message_status(store, message_id, &mut wait_base)? {
-            message_status = status;
-        }
+        let messages = store.list_messages()?;
         let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-        let agent = snapshot.agents.iter().find(|agent| target.matches(agent));
-
-        if cursor.is_none()
-            && matches!(
-                message_status,
-                MessageStatus::Sent | MessageStatus::Delivered
-            )
-        {
-            cursor = Some(anchored_cursor(
-                agent.and_then(|agent| agent.transcript_path.as_deref()),
-                adapter,
-            ));
-        } else if let (Some(cursor), Some(agent)) = (&mut cursor, agent) {
-            for message in cursor.messages(agent.transcript_path.as_deref(), adapter) {
-                last_message = Some(message);
+        for index in 0..legs.len() {
+            if legs[index].done.is_some() {
+                continue;
+            }
+            if advance_leg(&mut legs[index], store, &messages, &snapshot, steer)? {
+                if !wait.json {
+                    print_reply_result_for_leg(&legs[index], total, &mut printed_block)?;
+                }
+                if wait.any {
+                    return finish_join(&legs, wait, Some(index));
+                }
             }
         }
 
-        match step(phase, steer, message_status, agent.map(CardView::from)) {
-            Step::Wait(next) => phase = next,
-            Step::Finish(status) => {
-                print_reply_result(
-                    status,
-                    last_message.as_deref(),
-                    agent.and_then(|agent| agent.transcript_path.as_deref()),
-                )?;
-                if status == RunStatus::Completed {
-                    return Ok(());
-                }
-                std::process::exit(status.exit_code());
+        let statuses = legs.iter().map(|leg| leg.done).collect::<Vec<_>>();
+        if let Some(status) = settled_status(&statuses, None) {
+            if wait.json {
+                print_json_replies(&legs, None)?;
             }
-            Step::DeliveryFailed(status) => {
-                let mut err = render::err();
-                writeln!(
-                    err,
-                    "rimz: message {} for {} ({message_id})",
-                    status.as_str(),
-                    target.label
-                )?;
-                err.flush()?;
-                std::process::exit(RunStatus::Failed.exit_code());
-            }
-            Step::AgentGone => {
-                let mut err = render::err();
-                writeln!(
-                    err,
-                    "rimz: {} stopped before its reply turn completed",
-                    target.label
-                )?;
-                err.flush()?;
-                std::process::exit(RunStatus::Failed.exit_code());
-            }
+            return return_or_exit(status);
         }
 
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            if message_status == MessageStatus::Sent {
-                let _ = store.mark_message_timed_out(message_id, session_name, Some("wait"))?;
+            let unfinished = legs
+                .iter()
+                .enumerate()
+                .filter(|(_, leg)| leg.done.is_none())
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            for index in &unfinished {
+                let leg = &mut legs[*index];
+                if leg.message_status == MessageStatus::Sent {
+                    let _ = store.mark_message_timed_out(
+                        &leg.message_id,
+                        session_name,
+                        Some("wait"),
+                    )?;
+                }
+                leg.done = Some(timeout_status(leg.done));
             }
-            let mut err = render::err();
-            writeln!(err, "rimz: wait timed out")?;
-            err.flush()?;
+            if wait.json {
+                print_json_replies(&legs, None)?;
+            } else {
+                print_timeout(&legs, &unfinished)?;
+            }
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
         std::thread::sleep(next_sleep(deadline));
+    }
+}
+
+fn advance_leg(
+    leg: &mut Leg,
+    store: &rimz::Store,
+    messages: &[MessageRecord],
+    snapshot: &rimz::SidebarSnapshot,
+    steer: bool,
+) -> Result<bool> {
+    if let Some(status) =
+        current_message_status(store, messages, &leg.message_id, &mut leg.wait_base)?
+    {
+        leg.message_status = status;
+    }
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| leg.target.matches(agent));
+    let adapter = rimz::agents::find_adapter(leg.target.kind.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", leg.target.kind))?;
+    if let Some(path) = agent.and_then(|agent| agent.transcript_path.as_deref()) {
+        leg.transcript_path = Some(path.to_owned());
+    }
+
+    if leg.cursor.is_none()
+        && matches!(
+            leg.message_status,
+            MessageStatus::Sent | MessageStatus::Delivered
+        )
+    {
+        leg.cursor = Some(anchored_cursor(
+            agent.and_then(|agent| agent.transcript_path.as_deref()),
+            adapter,
+        ));
+    } else if let (Some(cursor), Some(agent)) = (&mut leg.cursor, agent) {
+        for message in cursor.messages(agent.transcript_path.as_deref(), adapter) {
+            leg.last_message = Some(message);
+        }
+    }
+
+    match step(
+        leg.phase,
+        steer,
+        leg.message_status,
+        agent.map(CardView::from),
+    ) {
+        Step::Wait(next) => {
+            leg.phase = next;
+            Ok(false)
+        }
+        Step::Finish(status) => {
+            leg.done = Some(status);
+            Ok(true)
+        }
+        Step::DeliveryFailed(status) => {
+            leg.done = Some(RunStatus::Failed);
+            leg.error = Some(format!(
+                "message {} for {} ({})",
+                status.as_str(),
+                leg.target.label,
+                leg.message_id
+            ));
+            Ok(true)
+        }
+        Step::AgentGone => {
+            leg.done = Some(RunStatus::Failed);
+            leg.error = Some(format!(
+                "{} stopped before its reply turn completed",
+                leg.target.label
+            ));
+            Ok(true)
+        }
     }
 }
 
@@ -235,18 +358,171 @@ fn anchored_cursor(path: Option<&str>, adapter: &dyn AgentAdapter) -> Transcript
 
 fn current_message_status(
     store: &rimz::Store,
+    messages: &[MessageRecord],
     message_id: &MessageId,
     wait_base: &mut u64,
 ) -> Result<Option<MessageStatus>> {
-    if let Some(message) = store
-        .list_messages()?
-        .into_iter()
+    if let Some(message) = messages
+        .iter()
         .find(|message| message.message_id == *message_id)
     {
         return Ok(Some(message.status));
     }
     rimz::message::send::latest_terminal_message_status(store, message_id, wait_base)
         .map_err(Into::into)
+}
+
+fn finish_join(legs: &[Leg], wait: WaitSpec, winner: Option<usize>) -> Result<()> {
+    if wait.json {
+        print_json_replies(legs, winner)?;
+    }
+    let statuses = legs.iter().map(|leg| leg.done).collect::<Vec<_>>();
+    let status = settled_status(&statuses, winner)
+        .context("reply join finished without a terminal status")?;
+    return_or_exit(status)
+}
+
+fn settled_status(statuses: &[Option<RunStatus>], winner: Option<usize>) -> Option<RunStatus> {
+    if let Some(winner) = winner {
+        return statuses.get(winner).copied().flatten();
+    }
+    if statuses.iter().any(Option::is_none) {
+        return None;
+    }
+    Some(
+        statuses
+            .iter()
+            .flatten()
+            .copied()
+            .find(|status| *status != RunStatus::Completed)
+            .unwrap_or(RunStatus::Completed),
+    )
+}
+
+fn timeout_status(status: Option<RunStatus>) -> RunStatus {
+    status.unwrap_or(RunStatus::TimedOut)
+}
+
+fn return_or_exit(status: RunStatus) -> Result<()> {
+    if status == RunStatus::Completed {
+        return Ok(());
+    }
+    std::process::exit(status.exit_code());
+}
+
+fn print_reply_result_for_leg(leg: &Leg, total: usize, printed_block: &mut bool) -> Result<()> {
+    let status = leg.done.context("rendering an unfinished reply leg")?;
+    if total == 1 {
+        if let Some(error) = &leg.error {
+            let mut err = render::err();
+            writeln!(err, "rimz: {error}")?;
+            err.flush()?;
+            return Ok(());
+        }
+        return print_reply_result(
+            status,
+            leg.last_message.as_deref(),
+            leg.transcript_path.as_deref(),
+        );
+    }
+    if let Some(error) = &leg.error {
+        let mut err = render::err();
+        writeln!(err, "rimz: {error}")?;
+        err.flush()?;
+        return Ok(());
+    }
+    let message = leg
+        .last_message
+        .as_deref()
+        .map(str::trim)
+        .filter(|message| !message.is_empty());
+    if status == RunStatus::Completed {
+        if let Some(message) = message {
+            let mut out = render::out();
+            if *printed_block {
+                writeln!(out)?;
+            }
+            writeln!(out, "{}:\n{message}", leg.target.label)?;
+            out.flush()?;
+            *printed_block = true;
+        } else {
+            let mut err = render::err();
+            writeln!(
+                err,
+                "rimz: {} turn completed but no final assistant message was extracted",
+                leg.target.label
+            )?;
+            err.flush()?;
+        }
+        return Ok(());
+    }
+
+    let mut err = render::err();
+    writeln!(
+        err,
+        "rimz: {} turn {} (exit {})",
+        leg.target.label,
+        run_status_label(status),
+        status.exit_code()
+    )?;
+    if let Some(transcript_path) = &leg.transcript_path {
+        writeln!(err, "transcript: {transcript_path}")?;
+    }
+    err.flush()?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct ReplyJson<'a> {
+    status: RunStatus,
+    reply: Option<&'a str>,
+    message_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
+fn print_json_replies(legs: &[Leg], winner: Option<usize>) -> Result<()> {
+    let mut replies = BTreeMap::new();
+    for (index, leg) in legs.iter().enumerate() {
+        if winner.is_some_and(|winner| winner != index) {
+            continue;
+        }
+        let status = leg.done.context("serializing an unfinished reply leg")?;
+        replies.insert(
+            leg.target.label.as_str(),
+            ReplyJson {
+                status,
+                reply: leg
+                    .last_message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|reply| !reply.is_empty()),
+                message_id: leg.message_id.as_str(),
+                error: leg.error.as_deref(),
+            },
+        );
+    }
+    let mut out = render::out();
+    serde_json::to_writer(&mut out, &replies)?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
+}
+
+fn print_timeout(legs: &[Leg], unfinished: &[usize]) -> Result<()> {
+    let mut err = render::err();
+    if legs.len() == 1 {
+        writeln!(err, "rimz: wait timed out")?;
+    } else {
+        let labels = unfinished
+            .iter()
+            .map(|index| legs[*index].target.label.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(err, "rimz: wait timed out for {labels}")?;
+    }
+    err.flush()?;
+    Ok(())
 }
 
 fn print_reply_result(
@@ -464,6 +740,39 @@ mod tests {
                 None,
             ),
             Step::AgentGone
+        );
+    }
+
+    #[test]
+    fn gather_uses_the_first_failure_in_target_order() {
+        let statuses = [
+            Some(RunStatus::Completed),
+            Some(RunStatus::BudgetExceeded),
+            Some(RunStatus::Failed),
+        ];
+        assert_eq!(
+            settled_status(&statuses, None),
+            Some(RunStatus::BudgetExceeded)
+        );
+        assert_eq!(
+            settled_status(&[Some(RunStatus::Completed), None], None),
+            None
+        );
+    }
+
+    #[test]
+    fn any_uses_the_observed_winner_status() {
+        let statuses = [None, Some(RunStatus::Failed), Some(RunStatus::Completed)];
+        assert_eq!(settled_status(&statuses, Some(1)), Some(RunStatus::Failed));
+        assert_eq!(settled_status(&statuses, Some(0)), None);
+    }
+
+    #[test]
+    fn deadline_only_reclassifies_unfinished_legs() {
+        assert_eq!(timeout_status(None), RunStatus::TimedOut);
+        assert_eq!(
+            timeout_status(Some(RunStatus::Completed)),
+            RunStatus::Completed
         );
     }
 }

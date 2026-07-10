@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::*;
 
 /// Shared enqueue for parked messages: resolve the prompt from inline argv or
@@ -23,12 +25,18 @@ pub(super) fn message_add(
         file,
         no_from,
         wait,
+        json,
+        any,
     } = send;
     if schedule.is_some() && create {
         bail!("--schedule needs an existing agent; remove --create");
     }
-    let wait = send::reply_wait(wait);
-    send::validate_reply_wait(wait, !no_enter, all, create, schedule.is_some(), &target)?;
+    let wait = send::WaitSpec {
+        mode: send::reply_wait(wait),
+        any,
+        json,
+    };
+    send::validate_reply_wait(wait, !no_enter, create, schedule.is_some())?;
     let machine_config = crate::cli::machine_config();
     let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
@@ -75,9 +83,15 @@ pub(super) fn steer_message(
         file,
         no_from,
         wait,
+        json,
+        any,
     } = send;
-    let wait = send::reply_wait(wait);
-    send::validate_reply_wait(wait, !no_enter, all, create, false, &target)?;
+    let wait = send::WaitSpec {
+        mode: send::reply_wait(wait),
+        any,
+        json,
+    };
+    send::validate_reply_wait(wait, !no_enter, create, false)?;
     let auto_compact = smart_compact.or_else(|| crate::cli::machine_config().harness.smart_compact);
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
     dispatch_message(
@@ -187,7 +201,7 @@ pub(super) struct MessageSpec {
     pub(super) force: bool,
     pub(super) auto_compact: Option<AutoCompact>,
     pub(super) no_from: bool,
-    pub(super) wait: ReplyWait,
+    pub(super) wait: WaitSpec,
     pub(super) not_before: Option<Timestamp>,
 }
 
@@ -356,53 +370,57 @@ pub(super) fn dispatch_resolved_message(
         };
         return Err(crate::cli::ambiguous_fanout(verb, &target, &labels));
     }
-    let reply_target = if spec.wait.is_on() {
-        let [resolved] = targets.as_slice() else {
-            bail!("--wait requires exactly one agent target");
-        };
-        let label = resolved.label(snapshot);
-        let identity = resolved.agent().ok_or_else(|| {
-            anyhow::anyhow!(
-                "--wait requires an agent with lifecycle state; `{label}` is only a pane target"
-            )
-        })?;
-        let agent = snapshot
-            .agents
-            .iter()
-            .find(|agent| {
-                rimz::message::card_matches(
-                    &identity.kind,
-                    &identity.agent_id,
-                    identity.name.as_deref(),
-                    &agent.kind,
-                    &agent.agent_id,
-                    agent.name.as_deref(),
-                )
-            })
-            .ok_or_else(|| {
+    let reply_targets = if spec.wait.is_on() {
+        let mut reply_targets = Vec::with_capacity(targets.len());
+        let mut checked_kinds = BTreeSet::new();
+        for resolved in &targets {
+            let label = resolved.label(snapshot);
+            let identity = resolved.agent().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "--wait requires a live agent with lifecycle state; `{label}` is not running"
+                    "--wait requires an agent with lifecycle state; `{label}` is only a pane target"
                 )
             })?;
-        let adapter = rimz::agents::find_adapter(agent.kind.as_str())
-            .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
-        if !adapter.hooks_installed() {
-            bail!(
-                "--wait requires {} hooks so the reply turn can report its boundaries; run `rimz hooks install {}`",
-                agent.kind,
-                agent.kind
-            );
+            let agent = snapshot
+                .agents
+                .iter()
+                .find(|agent| {
+                    rimz::message::card_matches(
+                        &identity.kind,
+                        &identity.agent_id,
+                        identity.name.as_deref(),
+                        &agent.kind,
+                        &agent.agent_id,
+                        agent.name.as_deref(),
+                    )
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--wait requires a live agent with lifecycle state; `{label}` is not running"
+                    )
+                })?;
+            let adapter = rimz::agents::find_adapter(agent.kind.as_str())
+                .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
+            if checked_kinds.insert(agent.kind.clone()) {
+                if !adapter.hooks_installed() {
+                    bail!(
+                        "--wait requires {} hooks so the reply turn can report its boundaries; run `rimz hooks install {}`",
+                        agent.kind,
+                        agent.kind
+                    );
+                }
+                let untrusted = adapter.untrusted_installed_hooks();
+                if !untrusted.is_empty() {
+                    bail!(
+                        "{} hooks are installed but not trusted ({}); {}",
+                        agent.kind,
+                        untrusted.join(", "),
+                        rimz::agents::hook_trust_fix(agent.kind.as_str())
+                    );
+                }
+            }
+            reply_targets.push(reply::ReplyTarget::new(agent, label, adapter));
         }
-        let untrusted = adapter.untrusted_installed_hooks();
-        if !untrusted.is_empty() {
-            bail!(
-                "{} hooks are installed but not trusted ({}); {}",
-                agent.kind,
-                untrusted.join(", "),
-                rimz::agents::hook_trust_fix(agent.kind.as_str())
-            );
-        }
-        Some(reply::ReplyTarget::new(agent, label, adapter))
+        Some(reply_targets)
     } else {
         None
     };
@@ -443,14 +461,21 @@ pub(super) fn dispatch_resolved_message(
             },
         },
     )?;
-    if let Some(reply_target) = reply_target {
-        return reply::wait_for_reply(
+    if let Some(reply_targets) = reply_targets {
+        if reply_targets.len() != result.outcomes.len() {
+            bail!("--wait requires one dispatched message per agent target");
+        }
+        let legs = reply_targets
+            .into_iter()
+            .zip(&result.outcomes)
+            .map(|(target, outcome)| reply::Leg::new(target, outcome, wait_base.unwrap_or(0)))
+            .collect();
+        return reply::wait_for_replies(
             store,
             &workspace.session_name,
-            reply_target,
+            legs,
             matches!(mode, MessageDispatchMode::Steer),
-            &result.outcomes,
-            wait_base.unwrap_or(0),
+            spec.wait,
             spec.wait.deadline_from(wait_started),
         );
     }
