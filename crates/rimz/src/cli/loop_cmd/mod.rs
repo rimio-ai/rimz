@@ -121,6 +121,12 @@ struct AddArgs {
     /// Shell command to run before any agent action.
     #[arg(long, value_name = "CMD")]
     check: Option<String>,
+    /// Shell command that must pass before a spawned agent task is complete.
+    #[arg(long, value_name = "CMD", requires = "agent")]
+    verify: Option<String>,
+    /// Total agent turns allowed while making --verify pass.
+    #[arg(long, value_name = "N", requires = "verify")]
+    max_attempts: Option<u32>,
     /// Guard polarity for --check: fail wakes on non-zero exit, success wakes on zero exit.
     #[arg(long, value_name = "fail|success")]
     on: Option<String>,
@@ -247,6 +253,17 @@ enum TaskAction<'a> {
 }
 
 fn task_action<'a>(name: &str, entry: &'a TaskEntry) -> Result<TaskAction<'a>> {
+    if entry.verify.is_some() && entry.agent.is_none() {
+        bail!(
+            "loop task `{name}` sets `verify` without `agent`; verification needs a supervised agent run"
+        );
+    }
+    if entry.max_attempts.is_some() && entry.verify.is_none() {
+        bail!("loop task `{name}` sets `max-attempts` without `verify`");
+    }
+    if entry.max_attempts == Some(0) {
+        bail!("loop task `{name}` sets `max-attempts` to 0; use at least 1");
+    }
     match (entry.agent.as_deref(), entry.wake.as_ref()) {
         (Some(agent), None) if !agent.trim().is_empty() => Ok(TaskAction::Spawn(agent)),
         (None, Some(target)) => Ok(TaskAction::Deliver(target)),
@@ -691,6 +708,12 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
     }
     if let Some(check) = &entry.check {
         table["check"] = value(check);
+    }
+    if let Some(verify) = &entry.verify {
+        table["verify"] = value(verify);
+    }
+    if let Some(max_attempts) = entry.max_attempts {
+        table["max-attempts"] = value(i64::from(max_attempts));
     }
     if let Some(on) = entry.on {
         table["on"] = value(match on {

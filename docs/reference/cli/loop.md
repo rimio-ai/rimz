@@ -9,6 +9,7 @@ rimz loop add pr-watch --agent codex --prompt "check CI on the release PR" --eve
 rimz loop add nightly --agent codex --prompt "triage issues" --every day --at 02:00 --budget 5 --budget-per-day 15
 rimz loop add self-wake --wake @planner --prompt "resume the review and fix the next blocking comment" --in 30m --root .
 rimz loop add watchdog --check "cargo test" --on fail --agent codex --prompt "fix the failing test" --every 15m
+rimz loop add auth-fix --agent codex --prompt "fix auth" --verify "cargo xtask test auth" --max-attempts 3 --every day --at 02:00
 rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --wake @planner --prompt "CI is green; merge"
 rimz loop add repo-prime --project --agent codex-ping --prompt ping --every day --at 08:00
 rimz loop fire pr-watch
@@ -33,6 +34,8 @@ A `<kind>-ping` agent is the window-primer: the run skips when the provider's wi
 `--wake @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the task fires, Rimz skips delivery and removes the schedule.
 
 `--check` runs at the project root; `--on fail` wakes on non-zero exit or timeout, while `--on success` wakes on zero exit.
+
+`--verify <CMD>` gives an `--agent` task a completion condition after its supervised turn; `--max-attempts <N>` caps total turns and defaults to `3`. Verification is unavailable for `--wake` and check-only tasks because those actions have no supervised session to re-prompt.
 
 ## Machine, project, and state tasks
 

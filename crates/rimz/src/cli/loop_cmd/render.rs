@@ -210,7 +210,7 @@ pub(super) fn task_run_rule(entry: &TaskEntry) -> String {
     } else {
         None
     };
-    match (entry.check.is_some(), action) {
+    let mut rule = match (entry.check.is_some(), action) {
         (true, Some(action)) => format!(
             "check, then {action} on {}",
             check_on_label(entry.on.unwrap_or_default())
@@ -218,7 +218,12 @@ pub(super) fn task_run_rule(entry: &TaskEntry) -> String {
         (true, None) => "check".to_owned(),
         (false, Some(action)) => action,
         (false, None) => "run".to_owned(),
+    };
+    if let Some(cmd) = entry.verify.as_deref() {
+        let attempts = entry.max_attempts.unwrap_or(3);
+        rule.push_str(&format!(", verify `{cmd}` (up to {attempts} attempts)"));
     }
+    rule
 }
 
 pub(super) fn action_progressive_verb(entry: &TaskEntry) -> &'static str {
@@ -481,6 +486,15 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(check) = check_summary(&entry) {
         kv.push("check", ui::cell(check));
     }
+    if let Some(verify) = entry.verify.as_deref() {
+        kv.push(
+            "verify",
+            ui::cell(format!(
+                "{verify} (up to {} attempts)",
+                entry.max_attempts.unwrap_or(3)
+            )),
+        );
+    }
     kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
     kv.push("source", ui::cell(source_detail(source, &entry)));
     if let Some(state) = blocked_state {
@@ -662,6 +676,7 @@ fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
             }
             label
         }
+        LoopRunResult::VerifyFailed => "verify failed".to_owned(),
         LoopRunResult::TimedOut => "timed out".to_owned(),
         LoopRunResult::BudgetExceeded => "budget exceeded".to_owned(),
         LoopRunResult::BudgetSkipped => "budget skipped".to_owned(),
@@ -712,6 +727,7 @@ fn failure_note_visible(result: LoopRunResult) -> bool {
     matches!(
         result,
         LoopRunResult::Failed
+            | LoopRunResult::VerifyFailed
             | LoopRunResult::TimedOut
             | LoopRunResult::BudgetExceeded
             | LoopRunResult::BudgetSkipped
@@ -723,6 +739,7 @@ pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
     match result {
         LoopRunResult::Completed | LoopRunResult::Delivered => ui::palette::GOOD,
         LoopRunResult::Failed
+        | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut
         | LoopRunResult::BudgetExceeded
         | LoopRunResult::Errored => ui::palette::ALARM,
@@ -739,6 +756,7 @@ pub(super) fn loop_result_glyph(result: LoopRunResult) -> &'static str {
     match result {
         LoopRunResult::Completed | LoopRunResult::Delivered => "✓",
         LoopRunResult::Failed
+        | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut
         | LoopRunResult::BudgetExceeded
         | LoopRunResult::Errored => "✗",
@@ -787,6 +805,7 @@ fn spawn_exit_code(result: LoopRunResult) -> Option<i32> {
     match result {
         LoopRunResult::Completed => Some(0),
         LoopRunResult::Failed => Some(1),
+        LoopRunResult::VerifyFailed => Some(123),
         LoopRunResult::TimedOut => Some(124),
         LoopRunResult::BudgetExceeded => Some(125),
         LoopRunResult::Canceled => Some(130),
@@ -848,6 +867,7 @@ fn record_is_failure(record: &LoopRunRecord) -> bool {
         record.result,
         LoopRunResult::Errored
             | LoopRunResult::Failed
+            | LoopRunResult::VerifyFailed
             | LoopRunResult::TimedOut
             | LoopRunResult::BudgetExceeded
     )
@@ -914,6 +934,32 @@ fn render_record_detail(
         write_detail_label(out, "last message")?;
         write_gutter_block(out, None, last_message)?;
     }
+    if let Some(verify) = run_record
+        .as_ref()
+        .and_then(|record| record.verify.as_ref())
+        .filter(|verify| !verify.passed)
+    {
+        let status = if verify.timed_out {
+            "timeout".to_owned()
+        } else {
+            verify
+                .code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_owned())
+        };
+        writeln!(
+            out,
+            "{}",
+            ui::paint(
+                ui::palette::MUTED,
+                &format!(
+                    "  verify `{}` exited {status} (attempt {})",
+                    verify.cmd, verify.attempts
+                )
+            )
+        )?;
+        write_gutter_block(out, Some(ui::palette::ALARM), &verify.output)?;
+    }
     if let Some(spend) = record_spend_label(record) {
         writeln!(
             out,
@@ -973,6 +1019,7 @@ fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
     if matches!(
         record.result,
         LoopRunResult::Failed
+            | LoopRunResult::VerifyFailed
             | LoopRunResult::TimedOut
             | LoopRunResult::BudgetExceeded
             | LoopRunResult::Errored
@@ -1100,9 +1147,14 @@ mod tests {
 
         let spawn = TaskEntry {
             agent: Some("claude".to_owned()),
+            verify: Some("cargo xtask gate".to_owned()),
+            max_attempts: Some(4),
             ..TaskEntry::default()
         };
-        assert_eq!(task_run_rule(&spawn), "start claude");
+        assert_eq!(
+            task_run_rule(&spawn),
+            "start claude, verify `cargo xtask gate` (up to 4 attempts)"
+        );
 
         let mut wake_only = wake;
         wake_only.check = None;

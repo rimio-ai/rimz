@@ -647,6 +647,8 @@ mod tests {
             prompt: Some("do it".to_owned()),
             prompt_file: None,
             check: None,
+            verify: None,
+            max_attempts: None,
             on: None,
             root: PathBuf::from("/home/me/app"),
             worktree: None,

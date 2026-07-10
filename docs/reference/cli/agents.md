@@ -114,7 +114,7 @@ Placement follows intent under the default `auto` policy: a named-channel launch
 
 ### Supervised runs (`-p`)
 
-`-p` launches exactly one supervised agent pane, waits for the root turn, prints the result, and exits with the run's status code (`0` completed, `1` failed, `124` timed out, `125` budget exceeded, `130` canceled), so a script branches on the outcome. The turn still runs in a real pane you can watch and steer while the pipeline waits. Text mode keeps stdout as the final assistant answer; failed, timed-out, budget-exceeded, or canceled runs print status, captured pane tail when present, and transcript path on stderr.
+`-p` launches exactly one supervised agent pane, waits for the root turn, prints the result, and exits with the run's status code (`0` completed, `1` failed, `123` verify failed, `124` timed out, `125` budget exceeded, `130` canceled), so a script branches on the outcome. The turn still runs in a real pane you can watch and steer while the pipeline waits. Text mode keeps stdout as the final assistant answer; failed, verify-failed, timed-out, budget-exceeded, or canceled runs print status, captured evidence when present, and transcript path on stderr.
 
 ### Inspect and change a budget
 
@@ -132,6 +132,7 @@ cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
 - `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it, wrapped in `<stdin>…</stdin>` tags when both are present; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt.
 - `--max-turns <N>` caps the agentic turn count where the adapter exposes a native limit (Claude today); an agent without one refuses the run.
 - `--retries <N>` reruns only failed (exit `1`) turns, up to `N` more attempts, with the previous failure tail appended to the original prompt. `--timeout` and `--budget` apply per attempt; timeout, budget, and cancel results never retry; the final attempt decides the exit code. Retries require a blocking text or JSON run and refuse `--bg` and `--output-format stream-json`.
+- `--verify <CMD>` runs the command in the run cwd after every completed turn and re-prompts the same session with failure evidence until it passes. `--max-attempts <N>` is the total agent-turn cap, defaults to `3`, and must be at least `1`; exhaustion exits `123`. The verify command uses `--timeout` or a five-minute default, a timed-out verify is red, and both flags refuse `--bg` and `--output-format stream-json`.
 - Ctrl+C on a blocking `-p` cancels the run, exits `130`, and lets the wrapper stop the agent before the pane is reclaimed.
 
 Supervised runs need installed and trusted hooks, because hooks are the completion signal. The run records, wakeup socket, streaming, and pane cleanup are in [harness.md → Supervised runs](../../internals/harness/harness.md#supervised-runs).

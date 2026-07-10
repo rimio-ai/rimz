@@ -276,6 +276,10 @@ mod parse {
             "3",
             "--retries",
             "2",
+            "--verify",
+            "cargo xtask test auth",
+            "--max-attempts",
+            "4",
             "-n",
             "swift-otter",
         ])
@@ -293,6 +297,8 @@ mod parse {
         );
         assert_eq!(parsed.args.max_turns, Some(3));
         assert_eq!(parsed.args.retries, Some(2));
+        assert_eq!(parsed.args.verify.as_deref(), Some("cargo xtask test auth"));
+        assert_eq!(parsed.args.max_attempts, Some(4));
         assert_eq!(parsed.args.name.as_deref(), Some("swift-otter"));
 
         let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--json"])
@@ -370,6 +376,47 @@ mod parse {
             err.to_string().contains("choose text or json"),
             "unexpected error: {err:#}"
         );
+
+        let err = AgentsHarness::try_parse_from([
+            "rimz", "claude", "hi", "-p", "--verify", "true", "--bg",
+        ])
+        .expect_err("verify conflicts with background mode");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+
+        let err =
+            AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--max-attempts", "2"])
+                .expect_err("max attempts requires verify");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz",
+            "claude",
+            "hi",
+            "-p",
+            "--verify",
+            "true",
+            "--max-attempts",
+            "0",
+        ])
+        .expect("parse zero max attempts for runtime validation");
+        let err = validate_supervised_output(&parsed.args, OutputFormat::Text)
+            .expect_err("max attempts must be positive");
+        assert!(err.to_string().contains("at least 1"));
+
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz",
+            "claude",
+            "hi",
+            "-p",
+            "--verify",
+            "true",
+            "--output-format",
+            "stream-json",
+        ])
+        .expect("parse verify plus stream-json for runtime validation");
+        let err = validate_supervised_output(&parsed.args, OutputFormat::StreamJson)
+            .expect_err("verify conflicts with the stream contract");
+        assert!(err.to_string().contains("choose text or json"));
 
         let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--bg"])
             .expect("parse background print run");
@@ -2132,6 +2179,8 @@ mod automation {
             system_prompt_file: None,
             timeout: None,
             keep: false,
+            verify: Some("cargo xtask test auth".to_owned()),
+            max_attempts: Some(4),
         });
         assert_eq!(
             args.spec.as_deref(),
@@ -2151,6 +2200,8 @@ mod automation {
         );
         assert!(args.print, "the ping is a supervised -p run");
         assert!(!args.bg, "a window-priming ping blocks until the turn ends");
+        assert_eq!(args.verify.as_deref(), Some("cargo xtask test auth"));
+        assert_eq!(args.max_attempts, Some(4));
         assert!(
             args.passthrough.is_empty(),
             "no passthrough flags are injected"
@@ -2167,6 +2218,8 @@ mod automation {
                 system_prompt_file: None,
                 timeout: None,
                 keep: true,
+                verify: None,
+                max_attempts: None,
             })
             .worktree,
             None
@@ -2182,6 +2235,8 @@ mod automation {
                 system_prompt_file: None,
                 timeout: None,
                 keep: true,
+                verify: None,
+                max_attempts: None,
             })
             .keep,
             "manual loop fire can keep the transient pane"

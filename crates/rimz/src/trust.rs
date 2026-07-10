@@ -667,6 +667,9 @@ pub struct ProjectTask {
     #[serde(rename = "prompt-file")]
     pub prompt_file: Option<PathBuf>,
     pub check: Option<String>,
+    pub verify: Option<String>,
+    #[serde(rename = "max-attempts")]
+    pub max_attempts: Option<u32>,
     pub on: Option<CheckOn>,
     pub root: Option<PathBuf>,
     pub worktree: Option<String>,
@@ -753,6 +756,8 @@ struct ExecutableTask<'a> {
     prompt: Option<&'a str>,
     prompt_file: Option<String>,
     check: Option<&'a str>,
+    verify: Option<&'a str>,
+    max_attempts: Option<u32>,
     on: Option<CheckOn>,
     worktree: Option<&'a str>,
     mode: Option<&'a str>,
@@ -839,6 +844,8 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                         .as_ref()
                         .map(|path| path.to_string_lossy().into_owned()),
                     check: task.check.as_deref(),
+                    verify: task.verify.as_deref(),
+                    max_attempts: task.max_attempts,
                     on: task.on,
                     worktree: task.worktree.as_deref(),
                     mode: task.mode.as_deref(),
@@ -1370,6 +1377,8 @@ mod tests {
             "[tasks.x]\nprompt = \"repair CI\"\n",
             "[tasks.x]\nprompt-file = \"prompts/ci.md\"\n",
             "[tasks.x]\ncheck = \"cargo test\"\n",
+            "[tasks.x]\nverify = \"cargo test\"\n",
+            "[tasks.x]\nmax-attempts = 4\n",
             "[tasks.x]\non = \"success\"\n",
             "[tasks.x]\nworktree = \"sync\"\n",
             "[tasks.x]\nmode = \"yolo\"\n",

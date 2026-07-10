@@ -44,6 +44,9 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.on.is_some() && args.check.is_none() {
         bail!("--on requires --check");
     }
+    if args.max_attempts == Some(0) {
+        bail!("--max-attempts must be at least 1");
+    }
     if args.until.is_some() {
         if args.check.is_none() {
             bail!("--until requires --check");
@@ -149,6 +152,8 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 prompt,
                 prompt_file: args.prompt_file,
                 check,
+                verify: args.verify,
+                max_attempts: args.max_attempts,
                 on,
                 root: project_root.clone(),
                 worktree: args.worktree,
@@ -172,6 +177,8 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 prompt,
                 prompt_file: args.prompt_file,
                 check,
+                verify: None,
+                max_attempts: None,
                 on,
                 root: project_root.clone(),
                 worktree: None,
@@ -193,6 +200,8 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             prompt,
             prompt_file: args.prompt_file,
             check,
+            verify: None,
+            max_attempts: None,
             on,
             root: project_root.clone(),
             worktree: None,

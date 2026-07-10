@@ -37,6 +37,7 @@ Nothing else moves: no daemon, no forked agent, no Rimz-private copy of the sess
 | --- | --- |
 | `0` | The run completed. |
 | `1` | The run failed. |
+| `123` | The run exhausted `--max-attempts` while its `--verify` command was still red. |
 | `124` | The run hit its `--timeout`. |
 | `125` | The run reached its `--budget`. |
 | `130` | The run was canceled (Ctrl+C on a blocking `-p`). |
@@ -64,6 +65,14 @@ rimz agents codex "Update dependencies and run the test suite." -p --timeout 30m
 ```sh
 rimz agents codex "Fix the failing checks." -p --retries 1 --timeout 30m
 ```
+
+**Verify the work.** `--verify <CMD>` runs a shell command in the run's working directory after each completed agent turn. A non-zero exit, signal, or timeout re-prompts the same live session with the command, status, and output tail, then waits for that session's next turn; `--max-attempts <N>` counts total agent turns and defaults to `3`. The verify command and every re-prompted wait use `--timeout` when set; without it, the command has a five-minute cap, and a timed-out verify is red. Exhausting the attempt cap records `verify_failed` and exits `123`.
+
+```sh
+rimz agents codex "Fix the failing auth test." -p --verify "cargo xtask test auth" --max-attempts 3
+```
+
+`--verify` composes with `--retries`: verification repairs stay in the same session after a completed turn, while an agent turn that fails with exit `1` starts the existing fresh-session retry path and resets the verify attempt count. Verification requires a blocking text or JSON run and refuses `--bg` and `--output-format stream-json`.
 
 ## Feed the prompt in
 

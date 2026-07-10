@@ -33,6 +33,12 @@ pub enum RunStoreErr {
         #[source]
         source: serde_json::Error,
     },
+    #[error("run {run_id} is {actual}; expected {expected}")]
+    InvalidStatus {
+        run_id: RunId,
+        actual: &'static str,
+        expected: &'static str,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, RunStoreErr>;

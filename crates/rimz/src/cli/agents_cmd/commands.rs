@@ -1408,6 +1408,15 @@ pub(super) fn validate_supervised_output(
     if args.retries.unwrap_or(0) > 0 && output_format == OutputFormat::StreamJson {
         bail!("--retries cannot be combined with --output-format stream-json; choose text or json");
     }
+    if args.verify.is_some() && output_format == OutputFormat::StreamJson {
+        bail!("--verify cannot be combined with --output-format stream-json; choose text or json");
+    }
+    if args.max_attempts == Some(0) {
+        bail!("--max-attempts must be at least 1");
+    }
+    if args.max_attempts.is_some() && args.verify.is_none() {
+        bail!("--max-attempts requires --verify");
+    }
     Ok(())
 }
 
@@ -1685,14 +1694,15 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         let Some((sock, _sock_path)) = bound else {
             bail!("blocking run did not bind its completion socket");
         };
+        let mut wait_sock = Some(sock);
         let expected = ExpectedRunFrame {
             workspace_id: workspace.workspace_id.clone(),
             run_id: run_id.clone(),
         };
         let mut record = if output_format == OutputFormat::StreamJson {
             supervised::stream::stream_blocking_run(
-                sock,
-                expected,
+                wait_sock.take().expect("blocking run has wait socket"),
+                expected.clone(),
                 &store,
                 &run_id,
                 adapter,
@@ -1703,8 +1713,12 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             )?
         } else {
             let outcome = supervised::wait_for_run(
-                sock,
-                expected,
+                wait_sock
+                    .as_ref()
+                    .expect("blocking run has wait socket")
+                    .try_clone()
+                    .context("cloning run wait socket")?,
+                expected.clone(),
                 args.timeout,
                 interrupt
                     .as_deref()
@@ -1718,6 +1732,107 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             &workspace.session_name,
             record,
         );
+        let mut verify_error = None;
+        if let Some(cmd) = args.verify.as_deref()
+            && record.status == RunStatus::Completed
+        {
+            let max_attempts = args.max_attempts.unwrap_or(3);
+            let verify_timeout = args
+                .timeout
+                .unwrap_or(rimz::harness::schedule::runner::CHECK_DEFAULT_TIMEOUT);
+            let mut verify_attempt = 1;
+            while record.status == RunStatus::Completed {
+                let outcome = match supervised::verify::run_verify(&launch.cwd, cmd, verify_timeout)
+                {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        verify_error = Some(err);
+                        break;
+                    }
+                };
+                let detail = rimz::harness::schedule::runner::check_record(&outcome);
+                let output = if outcome.passed() {
+                    record
+                        .verify
+                        .as_ref()
+                        .filter(|verify| !verify.passed)
+                        .map(|verify| verify.output.clone())
+                        .unwrap_or_default()
+                } else {
+                    detail.output.clone()
+                };
+                let verify = rimz::harness::run::RunVerify {
+                    cmd: cmd.to_owned(),
+                    attempts: verify_attempt,
+                    passed: outcome.passed(),
+                    code: detail.code,
+                    timed_out: detail.timed_out,
+                    output,
+                };
+                if interrupt
+                    .as_deref()
+                    .expect("blocking run has interrupt flag")
+                    .load(Ordering::SeqCst)
+                {
+                    // A completed record is terminal; reopen it so the normal
+                    // cancel transition can record the interrupted verify phase.
+                    let _reopened =
+                        rimz::harness::run::reopen_for_verify(store.paths(), &run_id, verify)?;
+                    let (canceled, _wrote) = rimz::harness::run::cancel(store.paths(), &run_id)?;
+                    record = canceled;
+                    break;
+                }
+                if outcome.passed() {
+                    record = rimz::harness::run::verify_passed(store.paths(), &run_id, verify)?;
+                    break;
+                }
+                if verify_attempt == max_attempts {
+                    record = rimz::harness::run::verify_failed(store.paths(), &run_id, verify)?;
+                    break;
+                }
+                let status = verify_status_label(&verify);
+                writeln!(
+                    render::err(),
+                    "rimz: verify `{cmd}` exited {status}; re-prompting (attempt {} of {max_attempts})",
+                    verify_attempt + 1,
+                )?;
+                let reprompt = rimz::harness::run::verify_reprompt(cmd, &status, &verify.output);
+                // Reopen before delivery so the next TurnEnded can transition
+                // the record and wake this same socket instead of being dropped.
+                record = rimz::harness::run::reopen_for_verify(store.paths(), &run_id, verify)?;
+                if let Err(err) =
+                    supervised::verify::deliver_reprompt(&workspace, &store, &record, reprompt)
+                {
+                    if let Some(failed) =
+                        rimz::harness::run::fail_if_nonterminal(store.paths(), &run_id)?
+                    {
+                        record = failed;
+                    }
+                    verify_error = Some(err);
+                    break;
+                }
+                let outcome = supervised::wait_for_run(
+                    wait_sock
+                        .as_ref()
+                        .context("verify run lost its wait socket")?
+                        .try_clone()
+                        .context("cloning verify run wait socket")?,
+                    expected.clone(),
+                    args.timeout,
+                    interrupt
+                        .as_deref()
+                        .expect("blocking run has interrupt flag"),
+                )?;
+                record = supervised::terminal_record_after_wait(store.paths(), &run_id, outcome)?;
+                record = record_failure_tail_before_cleanup(
+                    backend.as_ref(),
+                    &store,
+                    &workspace.session_name,
+                    record,
+                );
+                verify_attempt += 1;
+            }
+        }
         if !args.keep {
             if record.status == RunStatus::Canceled {
                 supervised::pane::close_stopped_run_pane_after_grace(
@@ -1737,6 +1852,9 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             }
         }
         drop(socket_guard);
+        if let Some(err) = verify_error {
+            return Err(err);
+        }
         if !record.status.is_retryable() || attempt == retries {
             if retries > 0
                 && owns_worktree
@@ -1761,6 +1879,17 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         prompt = rimz::harness::run::retry_prompt(&base_prompt, record.failure_tail.as_deref());
         retry_of = Some(record.run_id.clone());
         attempt += 1;
+    }
+}
+
+fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {
+    if verify.timed_out {
+        "timeout".to_owned()
+    } else {
+        verify
+            .code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "signal".to_owned())
     }
 }
 

@@ -400,6 +400,8 @@ every = "15m"
 mode = "auto"
 check = "cargo test"
 on = "fail"              # fail | success
+verify = "cargo xtask gate"
+max-attempts = 3
 
 [tasks.ci_green]
 prompt = "CI is green; merge the PR"
@@ -432,6 +434,7 @@ Each task chooses `agent`, `wake`, `check`, or `check` plus one agent action:
 - `agent` drives one supervised turn for a single agent cell on a calendar, interval, cron, or one-shot schedule. A `<kind>-ping` agent is the window-primer: it skips when that provider's budget window is already counting down, and takes a short prompt like any spawn task.
 - `[tasks.<name>.wake]` pins delivery to one live agent session through the message path: `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only.
 - `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, `on = "success"` on zero exit. Check output is appended to the agent prompt when the guard fires.
+- `verify` runs a shell command after a spawned agent turn and re-prompts that same supervised session on failure; `max-attempts` is the total agent-turn cap and defaults to `3`.
 - `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
 - `budget` caps each spawned supervised run; `budget-per-day` requires it and skips a fire when today's recorded task spend, plus the next run's cap, would exceed the daily amount.
 

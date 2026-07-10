@@ -82,6 +82,7 @@ pub struct CheckRecord {
 pub enum LoopRunResult {
     Completed,
     Failed,
+    VerifyFailed,
     TimedOut,
     BudgetExceeded,
     BudgetSkipped,
@@ -100,6 +101,7 @@ impl LoopRunResult {
         match self {
             Self::Completed => "completed",
             Self::Failed => "failed",
+            Self::VerifyFailed => "verify failed",
             Self::TimedOut => "timed out",
             Self::BudgetExceeded => "budget exceeded",
             Self::BudgetSkipped => "budget skipped",
@@ -120,6 +122,7 @@ impl From<RunStatus> for LoopRunResult {
         match status {
             RunStatus::Completed => Self::Completed,
             RunStatus::Failed => Self::Failed,
+            RunStatus::VerifyFailed => Self::VerifyFailed,
             RunStatus::TimedOut => Self::TimedOut,
             RunStatus::BudgetExceeded => Self::BudgetExceeded,
             RunStatus::Canceled => Self::Canceled,
@@ -432,6 +435,15 @@ mod tests {
         assert_eq!(wake.runs, 2);
         assert_eq!(wake.streak, 1);
         assert_eq!(wake.last.result, LoopRunResult::TargetGone);
+    }
+
+    #[test]
+    fn verify_failed_run_status_keeps_its_distinct_loop_result() {
+        assert_eq!(
+            LoopRunResult::from(RunStatus::VerifyFailed),
+            LoopRunResult::VerifyFailed
+        );
+        assert_eq!(LoopRunResult::VerifyFailed.label(), "verify failed");
     }
 
     #[test]

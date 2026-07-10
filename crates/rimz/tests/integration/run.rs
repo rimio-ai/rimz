@@ -2,9 +2,10 @@ use crate::common::Env;
 #[cfg(unix)]
 use crate::common::{path_with_front, write_failing_agent_shim, write_fake_login_shell};
 use jiff::Timestamp;
-use rimz::agents::LifecycleSignal;
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewKind};
+use rimz::store::event::EventEnvelope;
 use serde_json::json;
 use std::io::{Read as _, Write as _};
 use std::process::Command;
@@ -339,6 +340,140 @@ fn timed_out_supervised_run_does_not_retry() {
 }
 
 #[cfg(unix)]
+#[test]
+fn completed_run_reprompts_same_session_until_verify_passes() {
+    let env = Env::new();
+    let store = env.store();
+    let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
+    let mut child = spawn_verifying_print(&env, "verify-pass", 3, &pane_fixture, None);
+
+    let mut records = wait_for_run_count(&store, &mut child, 1);
+    let mut completed = records.pop().expect("initial run");
+    register_verify_agent(&env, &store, &mut completed);
+    completed.status = RunStatus::Completed;
+    completed.last_message = Some("first answer".to_owned());
+    finish_run(&store, &mut completed);
+
+    let reopened = wait_for_run_status(&store, &mut child, &completed.run_id, RunStatus::Running);
+    let verify = reopened.verify.as_ref().expect("red verify detail");
+    assert_eq!(verify.attempts, 1);
+    assert!(!verify.passed);
+    assert_eq!(verify.code, Some(1));
+    assert!(verify.output.contains("verify red"));
+    let messages = wait_for_message_count(&store, &mut child, 1);
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].text.contains("Verification failed"));
+    assert!(messages[0].text.contains("--- verify `"));
+    assert!(messages[0].text.contains("verify red"));
+
+    std::fs::write(env.project_root.join(".verify-green"), "green\n").expect("green marker");
+    let mut second = reopened;
+    second.status = RunStatus::Completed;
+    second.last_message = Some("fixed answer".to_owned());
+    finish_run(&store, &mut second);
+
+    let out = child.wait_with_output().expect("wait verified print");
+    assert!(
+        out.status.success(),
+        "verified print failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "fixed answer\n");
+    let stored = rimz::harness::run::load(store.paths(), &second.run_id).expect("verified run");
+    assert_eq!(stored.status, RunStatus::Completed);
+    let verify = stored.verify.expect("green verify detail");
+    assert!(verify.passed);
+    assert_eq!(verify.attempts, 2);
+    assert_eq!(verify.code, Some(0));
+    assert!(verify.output.contains("verify red"));
+}
+
+#[cfg(unix)]
+#[test]
+fn red_verify_at_attempt_cap_exits_123_with_forensics() {
+    let env = Env::new();
+    let store = env.store();
+    let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
+    let mut child = spawn_verifying_print(&env, "verify-cap", 1, &pane_fixture, None);
+
+    let mut records = wait_for_run_count(&store, &mut child, 1);
+    let mut completed = records.pop().expect("initial run");
+    completed.status = RunStatus::Completed;
+    completed.last_message = Some("claimed done".to_owned());
+    finish_run(&store, &mut completed);
+
+    let out = child.wait_with_output().expect("wait capped verify");
+    assert_eq!(
+        out.status.code(),
+        Some(123),
+        "capped verify returned wrong status\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "claimed done\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("rimz: run verify_failed (exit 123)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("verify `"), "{stderr}");
+    assert!(stderr.contains("attempt 1 of 1"), "{stderr}");
+    assert!(stderr.contains("verify red"), "{stderr}");
+    let stored = rimz::harness::run::load(store.paths(), &completed.run_id).expect("failed verify");
+    assert_eq!(stored.status, RunStatus::VerifyFailed);
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_reprompt_wait_timeout_stays_terminal() {
+    let env = Env::new();
+    let store = env.store();
+    let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
+    let mut child = spawn_verifying_print(&env, "verify-timeout", 2, &pane_fixture, Some("1s"));
+
+    let mut records = wait_for_run_count(&store, &mut child, 1);
+    let mut completed = records.pop().expect("initial run");
+    register_verify_agent(&env, &store, &mut completed);
+    completed.status = RunStatus::Completed;
+    finish_run(&store, &mut completed);
+
+    let out = child
+        .wait_with_output()
+        .expect("wait timed verify re-prompt");
+    assert_eq!(out.status.code(), Some(124));
+    let stored = rimz::harness::run::load(store.paths(), &completed.run_id).expect("timed run");
+    assert_eq!(stored.status, RunStatus::TimedOut);
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_reprompt_interrupt_stays_canceled() {
+    let env = Env::new();
+    let store = env.store();
+    let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
+    let mut child = spawn_verifying_print(&env, "verify-interrupt", 2, &pane_fixture, None);
+
+    let mut records = wait_for_run_count(&store, &mut child, 1);
+    let mut completed = records.pop().expect("initial run");
+    register_verify_agent(&env, &store, &mut completed);
+    completed.status = RunStatus::Completed;
+    finish_run(&store, &mut completed);
+    wait_for_run_status(&store, &mut child, &completed.run_id, RunStatus::Running);
+    wait_for_message_count(&store, &mut child, 1);
+
+    let signal = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("signal supervised run");
+    assert!(signal.success());
+    let out = child.wait_with_output().expect("wait interrupted verify");
+    assert_eq!(out.status.code(), Some(130));
+    let stored = rimz::harness::run::load(store.paths(), &completed.run_id).expect("canceled run");
+    assert_eq!(stored.status, RunStatus::Canceled);
+}
+
+#[cfg(unix)]
 fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std::process::Child {
     env.install_agent_hooks("codex");
     trust_codex_hooks(env);
@@ -403,6 +538,99 @@ fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std:
         command.arg("--worktree=retry-worktree");
     }
     command.spawn().expect("spawn retrying print")
+}
+
+#[cfg(unix)]
+fn spawn_verifying_print(
+    env: &Env,
+    trace_name: &str,
+    max_attempts: u32,
+    pane_fixture: &std::path::Path,
+    timeout: Option<&str>,
+) -> std::process::Child {
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(env);
+    let agent_bin = write_failing_agent_shim(env, "codex", 1);
+    let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
+    let trace_log = env.project_root.join(format!("{trace_name}.log"));
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let mut command = env.rimz();
+    command
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "codex",
+            "fix it",
+            "-p",
+            "--verify",
+            "printf 'verify red\\n' >&2; test -f .verify-green",
+            "--max-attempts",
+            &max_attempts.to_string(),
+        ])
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_TEST_PANE_LIST", pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(timeout) = timeout {
+        command.args(["--timeout", timeout]);
+    }
+    command.spawn().expect("spawn verifying print")
+}
+
+#[cfg(unix)]
+fn register_verify_agent(env: &Env, store: &rimz::Store, record: &mut RunRecord) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let agent_id = AgentSessionId::from("sess-verify");
+    let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let mut observation =
+        AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Registered);
+    observation.agent_name = record.agent_name.clone();
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    observation.pane_id = Some(pane_id.clone());
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            workspace.session_name,
+            "codex",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("register verify agent");
+    record.agent_id = Some(agent_id);
+    record.pane_id = Some(pane_id);
+}
+
+#[cfg(unix)]
+fn verify_agent_pane(env: &Env) -> rimz::pane::PaneRef {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    rimz::pane::PaneRef {
+        pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_9"),
+        session_name: workspace.session_name,
+        view_id: Some("tab_1".to_owned()),
+        view_kind: Some(ViewKind::Tab),
+        view_name: Some("project".to_owned()),
+        is_focused: false,
+        is_floating: false,
+        command: Some("codex".to_owned()),
+        spawn_command: None,
+        cwd: Some(env.project_root.display().to_string()),
+        pane_pid: None,
+        pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
+        resumed_session_id: Some(AgentSessionId::from("sess-verify")),
+        elevated_agent: None,
+        first_seen_at_ms: None,
+    }
 }
 
 #[cfg(unix)]
@@ -489,6 +717,60 @@ fn wait_for_run_count(
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {expected} run records; saw {records:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_run_status(
+    store: &rimz::Store,
+    child: &mut std::process::Child,
+    run_id: &rimz::RunId,
+    expected: RunStatus,
+) -> RunRecord {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let record = rimz::harness::run::load(store.paths(), run_id).expect("load run");
+        if record.status == expected {
+            return record;
+        }
+        assert!(
+            child.try_wait().expect("poll supervised run").is_none(),
+            "supervised run exited before reaching {expected:?}: {record:?}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {expected:?}: {record:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_message_count(
+    store: &rimz::Store,
+    child: &mut std::process::Child,
+    expected: usize,
+) -> Vec<rimz::message::MessageRecord> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let messages = store.list_messages().expect("list messages");
+        if messages.len() >= expected
+            && messages
+                .iter()
+                .take(expected)
+                .all(|message| message.status == rimz::message::MessageStatus::Sent)
+        {
+            return messages;
+        }
+        assert!(
+            child.try_wait().expect("poll supervised run").is_none(),
+            "supervised run exited before queueing {expected} messages"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {expected} messages"
         );
         std::thread::sleep(Duration::from_millis(25));
     }

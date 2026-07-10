@@ -13,6 +13,7 @@ But cron and a hand-rolled `while` loop only know one move: start a fresh proces
 - `--agent` starts a new agent for the turn: a fresh supervised pane that runs the prompt once and cleans up. Reach for it when the work should begin from a clean context each time.
 - `--wake` hands the prompt to an agent you already have running and waiting, so the work resumes in that same conversation with all of its context, rather than in a cold new process.
 - `--check` runs a shell command before any agent action and spends a turn only on its result, so a scheduled agent never starts just to find nothing to do.
+- `--verify` runs a shell command after a spawned agent turn and re-prompts that same session until the task is actually done.
 
 Whichever action fires, the turn is a full room citizen: a live card in the sidebar, a permission question that routes to you instead of hanging the job, and a line in the run log that `rimz loop show` reads back.
 
@@ -91,6 +92,8 @@ The check runs first, every time, and costs nothing. Only its result spends a tu
 
 A `--check` with no agent action is still worth having. It is a scheduled command that logs `completed`, `failed`, or `timed out`, each with the exit code and output tail, into the run history, and it keeps recurring.
 
+`--check` gates firing; `--verify` gates completion. Add `--verify "cargo test"` to a scheduled `--agent` task when the command is the definition of done: a red result returns its evidence to the same live session, up to `--max-attempts` total turns, before the fire records `verify failed`.
+
 ## What a task does on your machine
 
 `rimz loop add` edits one file and starts no process:
@@ -137,7 +140,7 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 
 Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
 
-The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, and `--timeout` caps the wall clock. Inspect, test, and manage tasks with the rest of the surface:
+The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--timeout` caps each wait and verify command, and `--verify` with `--max-attempts` defines when the task is done. Inspect, test, and manage tasks with the rest of the surface:
 
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run

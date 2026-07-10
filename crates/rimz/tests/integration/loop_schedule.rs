@@ -161,6 +161,44 @@ fn loop_add_round_trips_run_and_daily_budgets() {
 }
 
 #[test]
+fn loop_add_round_trips_verify_completion_rule() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "verified",
+            "--agent",
+            "claude",
+            "--prompt",
+            "fix it",
+            "--every",
+            "15m",
+            "--verify",
+            "cargo xtask gate",
+            "--max-attempts",
+            "4",
+        ],
+    );
+
+    let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
+    assert!(config.contains("verify = \"cargo xtask gate\""), "{config}");
+    assert!(config.contains("max-attempts = 4"), "{config}");
+    let loop_config: LoopConfig = toml::from_str(&config).expect("parse loop config");
+    let task = loop_config.tasks.0.get("verified").expect("verified task");
+    assert_eq!(task.verify.as_deref(), Some("cargo xtask gate"));
+    assert_eq!(task.max_attempts, Some(4));
+
+    let shown = loop_ok(&env, &["loop", "show", "verified"]);
+    assert!(
+        shown.contains("verify: cargo xtask gate (up to 4 attempts)"),
+        "{shown}"
+    );
+}
+
+#[test]
 fn agent_budget_command_persists_absolute_relative_and_clear_edits() {
     let env = Env::new();
     env.install_agent_hooks("claude");

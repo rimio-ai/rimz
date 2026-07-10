@@ -18,6 +18,7 @@ use rimz::workspace::WorkspaceResolver;
 pub(super) mod output;
 pub(super) mod pane;
 pub(super) mod stream;
+pub(super) mod verify;
 
 const RUN_WAIT_INTERRUPT_POLL: Duration = Duration::from_millis(250);
 static RUN_INTERRUPT_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();

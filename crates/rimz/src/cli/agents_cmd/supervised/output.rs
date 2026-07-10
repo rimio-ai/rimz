@@ -42,6 +42,28 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
         {
             writeln!(err, "{}", render::paint(render::palette::FAINT, tail))?;
         }
+        if let Some(verify) = record.verify.as_ref().filter(|verify| !verify.passed) {
+            let status = if verify.timed_out {
+                "timeout".to_owned()
+            } else {
+                verify
+                    .code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "signal".to_owned())
+            };
+            writeln!(
+                err,
+                "verify `{}` exited {status} (attempt {} of {})",
+                verify.cmd, verify.attempts, verify.attempts
+            )?;
+            if !verify.output.trim().is_empty() {
+                writeln!(
+                    err,
+                    "{}",
+                    render::paint(render::palette::FAINT, &verify.output)
+                )?;
+            }
+        }
         if let Some(transcript) = record.transcript_path.as_deref() {
             writeln!(
                 err,
@@ -66,6 +88,7 @@ pub(crate) fn status_label(status: RunStatus) -> &'static str {
         RunStatus::Running => "running",
         RunStatus::Completed => "completed",
         RunStatus::Failed => "failed",
+        RunStatus::VerifyFailed => "verify_failed",
         RunStatus::TimedOut => "timed_out",
         RunStatus::BudgetExceeded => "budget_exceeded",
         RunStatus::Canceled => "canceled",
@@ -267,6 +290,30 @@ mod tests {
         assert!(err.contains("rimz: run failed (exit 1)"));
         assert!(err.contains("agent died\nfatal error"));
         assert!(err.contains("transcript: /tmp/transcript.jsonl"));
+    }
+
+    #[test]
+    fn verify_failed_run_prints_answer_and_verify_forensics() {
+        let mut record = record(RunStatus::VerifyFailed);
+        record.last_message = Some("claimed done".to_owned());
+        record.verify = Some(rimz::harness::run::RunVerify {
+            cmd: "cargo xtask test auth".to_owned(),
+            attempts: 3,
+            passed: false,
+            code: Some(7),
+            timed_out: false,
+            output: "still broken".to_owned(),
+        });
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        print_run_output(&record, &mut out, &mut err).unwrap();
+
+        assert_eq!(String::from_utf8(out).unwrap(), "claimed done\n");
+        let err = anstream::adapter::strip_str(&String::from_utf8(err).unwrap()).to_string();
+        assert!(err.contains("rimz: run verify_failed (exit 123)"));
+        assert!(err.contains("verify `cargo xtask test auth` exited 7 (attempt 3 of 3)"));
+        assert!(err.contains("still broken"));
     }
 
     #[test]

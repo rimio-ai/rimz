@@ -60,6 +60,12 @@ pub struct CheckOutcome {
     code: Option<i32>,
 }
 
+impl CheckOutcome {
+    pub fn passed(&self) -> bool {
+        self.passed
+    }
+}
+
 pub enum CheckEcho {
     Capture,
     Stream { prefix: String },

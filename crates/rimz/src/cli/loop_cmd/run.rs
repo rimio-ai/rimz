@@ -404,6 +404,8 @@ fn execute_task(
         system_prompt_file,
         timeout,
         keep,
+        verify: entry.verify.clone(),
+        max_attempts: entry.max_attempts,
     });
     match crate::cli::agents_cmd::run_blocking_task(args, &run_globals) {
         Ok(Some(record)) => {
@@ -633,7 +635,10 @@ fn write_manual_run_summary(
 
     if matches!(
         outcome.result,
-        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::BudgetExceeded
+        LoopRunResult::Failed
+            | LoopRunResult::VerifyFailed
+            | LoopRunResult::TimedOut
+            | LoopRunResult::BudgetExceeded
     ) && !is_check_only(entry)
     {
         write_failure_forensics(out, name, outcome)?;
@@ -642,7 +647,10 @@ fn write_manual_run_summary(
     }
     if !matches!(
         outcome.result,
-        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::BudgetExceeded
+        LoopRunResult::Failed
+            | LoopRunResult::VerifyFailed
+            | LoopRunResult::TimedOut
+            | LoopRunResult::BudgetExceeded
     ) && !keep
         && outcome.run_id.is_some()
     {
@@ -679,7 +687,10 @@ fn write_scheduled_run_summary(
     let exit_label = outcome_exit_label(outcome);
     if matches!(
         outcome.result,
-        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::BudgetExceeded
+        LoopRunResult::Failed
+            | LoopRunResult::VerifyFailed
+            | LoopRunResult::TimedOut
+            | LoopRunResult::BudgetExceeded
     ) {
         let mut label = outcome.result.label().to_owned();
         if let Some(exit_label) = exit_label.as_deref() {

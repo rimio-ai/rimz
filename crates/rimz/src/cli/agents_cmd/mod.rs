@@ -200,6 +200,12 @@ pub struct AgentsArgs {
     /// Retry a failed (exit 1) supervised run up to N more times, feeding the previous failure tail back into the prompt.
     #[arg(long, value_name = "N", requires = "print", conflicts_with = "bg")]
     retries: Option<u32>,
+    /// Verify a completed supervised run with a shell command and re-prompt the same session on failure.
+    #[arg(long, value_name = "CMD", requires = "print", conflicts_with = "bg")]
+    verify: Option<String>,
+    /// Total agent turns allowed while making --verify pass.
+    #[arg(long, value_name = "N", requires = "verify")]
+    max_attempts: Option<u32>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     passthrough: Vec<String>,
@@ -586,6 +592,8 @@ impl AgentsArgs {
             input_format: None,
             max_turns: None,
             retries: None,
+            verify: None,
+            max_attempts: None,
             passthrough: Vec::new(),
         }
     }
@@ -623,6 +631,8 @@ impl AgentsArgs {
             input_format: None,
             max_turns: None,
             retries: None,
+            verify: task.verify,
+            max_attempts: task.max_attempts,
             passthrough: Vec::new(),
         }
     }
@@ -638,6 +648,8 @@ pub(crate) struct TaskRunArgs {
     pub(crate) system_prompt_file: Option<PathBuf>,
     pub(crate) timeout: Option<Duration>,
     pub(crate) keep: bool,
+    pub(crate) verify: Option<String>,
+    pub(crate) max_attempts: Option<u32>,
 }
 
 fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {

@@ -855,6 +855,25 @@ mod tests {
     }
 
     #[test]
+    fn loop_verify_requires_a_spawned_agent() {
+        let err = Cli::try_parse_from([
+            "rimz",
+            "loop",
+            "add",
+            "check-only",
+            "--check",
+            "false",
+            "--verify",
+            "true",
+            "--every",
+            "1h",
+        ])
+        .expect_err("verify needs an agent task");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
     fn current_channel_is_stable_across_branch_changes() {
         let before = workspace("/code/project", "/code/project-wt/auth", Some("feat/auth"));
         let after = workspace("/code/project", "/code/project-wt/auth", Some("scratch"));

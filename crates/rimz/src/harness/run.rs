@@ -99,6 +99,7 @@ pub enum RunStatus {
     Running,
     Completed,
     Failed,
+    VerifyFailed,
     TimedOut,
     BudgetExceeded,
     Canceled,
@@ -108,7 +109,12 @@ impl RunStatus {
     pub const fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Completed | Self::Failed | Self::TimedOut | Self::BudgetExceeded | Self::Canceled
+            Self::Completed
+                | Self::Failed
+                | Self::VerifyFailed
+                | Self::TimedOut
+                | Self::BudgetExceeded
+                | Self::Canceled
         )
     }
 
@@ -116,6 +122,7 @@ impl RunStatus {
         match self {
             Self::Completed => 0,
             Self::Failed => 1,
+            Self::VerifyFailed => 123,
             Self::Canceled => 130,
             Self::BudgetExceeded => 125,
             Self::TimedOut | Self::Pending | Self::Running => 124,
@@ -125,6 +132,16 @@ impl RunStatus {
     pub const fn is_retryable(self) -> bool {
         matches!(self, Self::Failed)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunVerify {
+    pub cmd: String,
+    pub attempts: u32,
+    pub passed: bool,
+    pub code: Option<i32>,
+    pub timed_out: bool,
+    pub output: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -144,6 +161,8 @@ pub struct RunRecord {
     pub failure_tail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_of: Option<RunId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<RunVerify>,
     pub status: RunStatus,
     pub permission_mode: PermissionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -183,6 +202,7 @@ impl RunRecord {
             transcript_path: None,
             failure_tail: None,
             retry_of: None,
+            verify: None,
             status: RunStatus::Pending,
             permission_mode,
             budget: None,
@@ -210,6 +230,13 @@ pub fn retry_prompt(base: &str, failure_tail: Option<&str>) -> String {
         },
     );
     format!("{base}\n\n<previous-attempt-failure>\n{failure}\n</previous-attempt-failure>")
+}
+
+pub fn verify_reprompt(cmd: &str, code_label: &str, output: &str) -> String {
+    let tail = tail_output(output.as_bytes(), FAILURE_TAIL_CAP);
+    format!(
+        "Verification failed — the task is not done yet. Fix the underlying problem in this same session until the verify command passes.\n\n--- verify `{cmd}` exited {code_label} ---\n{tail}"
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -325,6 +352,72 @@ pub fn fail(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
 pub fn fail_if_nonterminal(paths: &StatePaths, run_id: &RunId) -> Result<Option<RunRecord>> {
     let (record, wrote) = mark_terminal(paths, run_id, RunStatus::Failed)?;
     Ok(wrote.then_some(record))
+}
+
+pub fn reopen_for_verify(
+    paths: &StatePaths,
+    run_id: &RunId,
+    verify: RunVerify,
+) -> Result<RunRecord> {
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut record = load(paths, run_id)?;
+    require_completed(&record)?;
+    record.status = RunStatus::Running;
+    record.verify = Some(verify);
+    record.updated_at = Timestamp::now();
+    record.completed_at = None;
+    run_store::write(&paths.runs_dir, &record)?;
+    Ok(record)
+}
+
+pub fn verify_failed(paths: &StatePaths, run_id: &RunId, verify: RunVerify) -> Result<RunRecord> {
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut record = load(paths, run_id)?;
+    if record.status == RunStatus::VerifyFailed {
+        return Ok(record);
+    }
+    require_completed(&record)?;
+    let now = Timestamp::now();
+    record.status = RunStatus::VerifyFailed;
+    record.verify = Some(verify);
+    record.updated_at = now;
+    record.completed_at = Some(now);
+    run_store::write(&paths.runs_dir, &record)?;
+    Ok(record)
+}
+
+pub fn verify_passed(paths: &StatePaths, run_id: &RunId, verify: RunVerify) -> Result<RunRecord> {
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut record = load(paths, run_id)?;
+    require_completed(&record)?;
+    record.verify = Some(verify);
+    record.updated_at = Timestamp::now();
+    run_store::write(&paths.runs_dir, &record)?;
+    Ok(record)
+}
+
+fn require_completed(record: &RunRecord) -> Result<()> {
+    if record.status != RunStatus::Completed {
+        return Err(RunStoreErr::InvalidStatus {
+            run_id: record.run_id.clone(),
+            actual: run_status_name(record.status),
+            expected: "completed",
+        });
+    }
+    Ok(())
+}
+
+const fn run_status_name(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Pending => "pending",
+        RunStatus::Running => "running",
+        RunStatus::Completed => "completed",
+        RunStatus::Failed => "failed",
+        RunStatus::VerifyFailed => "verify_failed",
+        RunStatus::TimedOut => "timed_out",
+        RunStatus::BudgetExceeded => "budget_exceeded",
+        RunStatus::Canceled => "canceled",
+    }
 }
 
 fn mark_terminal(
@@ -619,8 +712,11 @@ mod tests {
 
         assert_eq!(RunStatus::Completed.exit_code(), 0);
         assert_eq!(RunStatus::Failed.exit_code(), 1);
+        assert_eq!(RunStatus::VerifyFailed.exit_code(), 123);
         assert_eq!(RunStatus::BudgetExceeded.exit_code(), 125);
         assert!(RunStatus::Failed.is_retryable());
+        assert!(RunStatus::VerifyFailed.is_terminal());
+        assert!(!RunStatus::VerifyFailed.is_retryable());
         assert!(!RunStatus::Completed.is_retryable());
         assert!(!RunStatus::TimedOut.is_retryable());
         assert!(!RunStatus::BudgetExceeded.is_retryable());
@@ -642,6 +738,51 @@ mod tests {
         value.as_object_mut().unwrap().remove("retry_of");
         let decoded: RunRecord = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.retry_of, None);
+    }
+
+    #[test]
+    fn verify_transitions_reopen_completed_runs_and_finish_once() {
+        let (_dir, paths, record) = setup();
+        let completed = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+        );
+        record_lifecycle(&paths, &record.run_id, "claude", &completed, None)
+            .unwrap()
+            .expect("completed run");
+        let first = RunVerify {
+            cmd: "cargo xtask test run".to_owned(),
+            attempts: 1,
+            passed: false,
+            code: Some(1),
+            timed_out: false,
+            output: "red".to_owned(),
+        };
+
+        let reopened = reopen_for_verify(&paths, &record.run_id, first.clone()).unwrap();
+        assert_eq!(reopened.status, RunStatus::Running);
+        assert_eq!(reopened.completed_at, None);
+        assert_eq!(reopened.verify.as_ref(), Some(&first));
+        assert!(reopen_for_verify(&paths, &record.run_id, first.clone()).is_err());
+
+        record_lifecycle(&paths, &record.run_id, "claude", &completed, None)
+            .unwrap()
+            .expect("second completed turn");
+        let second = RunVerify {
+            attempts: 2,
+            output: "still red".to_owned(),
+            ..first
+        };
+        let failed = verify_failed(&paths, &record.run_id, second.clone()).unwrap();
+        assert_eq!(failed.status, RunStatus::VerifyFailed);
+        assert_eq!(failed.verify.as_ref(), Some(&second));
+        let updated_at = failed.updated_at;
+
+        let repeated = verify_failed(&paths, &record.run_id, second).unwrap();
+        assert_eq!(repeated.updated_at, updated_at);
     }
 
     #[test]
@@ -887,6 +1028,18 @@ mod tests {
         assert!(first.contains("first failure"));
         assert!(!second.contains("first failure"));
         assert_eq!(second.matches("<previous-attempt-failure>").count(), 1);
+    }
+
+    #[test]
+    fn verify_reprompt_formats_status_and_caps_the_output_tail() {
+        let output = format!("old{}latest", "x".repeat(FAILURE_TAIL_CAP));
+
+        let prompt = verify_reprompt("cargo xtask test auth", "1", &output);
+
+        assert!(prompt.starts_with("Verification failed — the task is not done yet."));
+        assert!(prompt.contains("--- verify `cargo xtask test auth` exited 1 ---"));
+        assert!(!prompt.contains("old"));
+        assert!(prompt.ends_with("latest"));
     }
 
     fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {

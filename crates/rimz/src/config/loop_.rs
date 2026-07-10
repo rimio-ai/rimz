@@ -47,6 +47,10 @@ pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify: Option<String>,
+    #[serde(rename = "max-attempts", skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub on: Option<CheckOn>,
     pub root: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -198,6 +202,8 @@ mod tests {
             }),
             prompt: Some("wake".to_owned()),
             check: Some("cargo test".to_owned()),
+            verify: Some("cargo xtask gate".to_owned()),
+            max_attempts: Some(4),
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
             every: Some("reset".to_owned()),
@@ -228,6 +234,22 @@ mod tests {
                 .tasks
                 .0
                 .get("ci")
+                .and_then(|entry| entry.verify.as_deref()),
+            Some("cargo xtask gate")
+        );
+        assert_eq!(
+            toml_round
+                .tasks
+                .0
+                .get("ci")
+                .and_then(|entry| entry.max_attempts),
+            Some(4)
+        );
+        assert_eq!(
+            toml_round
+                .tasks
+                .0
+                .get("ci")
                 .and_then(|entry| entry.deadline),
             Some(deadline)
         );
@@ -245,6 +267,7 @@ mod tests {
         );
         assert!(toml.contains("budget = \"$5.00\""), "{toml}");
         assert!(toml.contains("budget-per-day = \"$20.00\""), "{toml}");
+        assert!(toml.contains("max-attempts = 4"), "{toml}");
 
         let json = serde_json::to_string(&loop_config.tasks).expect("json");
         let json_round: Tasks = serde_json::from_str(&json).expect("json round trip");
