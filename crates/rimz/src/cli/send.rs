@@ -11,6 +11,7 @@ use rimz::ids::AgentKind;
 use rimz::message::{AutoCompact, MessageSender};
 
 const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
+const STDIN_WAIT_NOTICE_DELAY: Duration = Duration::from_secs(10);
 
 /// The flags shared by immediate and parked message delivery.
 #[derive(Debug, Args)]
@@ -161,11 +162,24 @@ pub(crate) fn combine_text_prompt(positional: Option<&str>, piped: Option<&str>)
 }
 
 pub(crate) fn read_piped_text_prompt() -> Result<Option<String>> {
-    use std::io::{IsTerminal as _, Read as _};
+    use std::io::{IsTerminal as _, Read as _, Write as _};
 
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
         return Ok(None);
+    }
+    #[cfg(unix)]
+    let data_ready = {
+        use std::os::fd::AsFd as _;
+        stdin_data_ready(stdin.as_fd(), STDIN_WAIT_NOTICE_DELAY)
+    };
+    #[cfg(not(unix))]
+    let data_ready = stdin_data_ready((), STDIN_WAIT_NOTICE_DELAY);
+    if !data_ready {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "rimz: waiting on piped stdin; close stdin (for example, `</dev/null`) if nothing is coming"
+        );
     }
     let mut buf = String::new();
     stdin
@@ -173,6 +187,22 @@ pub(crate) fn read_piped_text_prompt() -> Result<Option<String>> {
         .read_to_string(&mut buf)
         .context("reading stdin")?;
     Ok(Some(buf))
+}
+
+#[cfg(unix)]
+fn stdin_data_ready(fd: std::os::fd::BorrowedFd<'_>, deadline: Duration) -> bool {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+
+    let mut fds = [PollFd::new(fd, PollFlags::POLLIN)];
+    let Ok(timeout) = PollTimeout::try_from(deadline) else {
+        return true;
+    };
+    !matches!(poll(&mut fds, timeout), Ok(0))
+}
+
+#[cfg(not(unix))]
+fn stdin_data_ready(_fd: (), _deadline: Duration) -> bool {
+    true
 }
 
 /// The caller identity for `message`. Rimz-launched agents carry
@@ -297,6 +327,27 @@ fn unescape(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn stdin_readiness_covers_data_and_eof() {
+        use std::os::fd::AsFd as _;
+
+        let (read_end, write_end) = nix::unistd::pipe().unwrap();
+        assert!(!stdin_data_ready(
+            read_end.as_fd(),
+            Duration::from_millis(1)
+        ));
+        nix::unistd::write(&write_end, b"x").unwrap();
+        assert!(stdin_data_ready(read_end.as_fd(), Duration::from_millis(1)));
+
+        let (eof_read_end, eof_write_end) = nix::unistd::pipe().unwrap();
+        drop(eof_write_end);
+        assert!(stdin_data_ready(
+            eof_read_end.as_fd(),
+            Duration::from_millis(1)
+        ));
+    }
 
     #[test]
     fn resolves_reply_wait_modes() {
