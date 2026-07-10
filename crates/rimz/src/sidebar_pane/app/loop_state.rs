@@ -394,13 +394,7 @@ impl LoopState {
                     self.last_pulled = pulled;
                     let now_ms = crate::sidebar::timing::unix_now_ms();
                     self.event_store.prune(now_ms);
-                    let intent = self.pending_focus_intent(now_ms);
-                    outcome.snapshot = Ok(fuse(
-                        &self.last_pulled,
-                        &self.event_store,
-                        intent.as_ref(),
-                        now_ms,
-                    ));
+                    outcome.snapshot = Ok(self.fused_snapshot(now_ms));
                 }
                 self.fetched_at = Instant::now();
                 rejected = self.fold_outcome(config, outcome, anim_start, diag)?;
@@ -435,6 +429,43 @@ impl LoopState {
         if !self.should_exit && saw_final && rejected {
             fetch.request(FetchRequest::default(), false);
         }
+        Ok(())
+    }
+
+    /// Fuse the last pulled snapshot with the overlay event store and any
+    /// pending focus intent as of `now_ms`.
+    fn fused_snapshot(&mut self, now_ms: u64) -> SidebarSnapshot {
+        let intent = self.pending_focus_intent(now_ms);
+        fuse(
+            &self.last_pulled,
+            &self.event_store,
+            intent.as_ref(),
+            now_ms,
+        )
+    }
+
+    /// Fold a synthetic fused frame and snap the frame deadline so this
+    /// turn's frame phase paints it now.
+    fn fold_fused_now(
+        &mut self,
+        config: &ServeConfig,
+        anim_start: Instant,
+        diag: &crate::diag::DiagSink,
+    ) -> Result<()> {
+        let fused = self.fused_snapshot(crate::sidebar::timing::unix_now_ms());
+        self.fold_outcome(
+            config,
+            FetchOutcome {
+                snapshot: Ok(fused),
+                final_for_request: false,
+                fresh_pane_frame: false,
+                unchanged: false,
+                producer: self.last_known_elder,
+            },
+            anim_start,
+            diag,
+        )?;
+        self.next_frame = Instant::now();
         Ok(())
     }
 
@@ -514,27 +545,7 @@ impl LoopState {
                 }
             }
             SidebarEvent::FocusIntent { .. } => {
-                let now_ms = crate::sidebar::timing::unix_now_ms();
-                let intent = self.pending_focus_intent(now_ms);
-                let fused = fuse(
-                    &self.last_pulled,
-                    &self.event_store,
-                    intent.as_ref(),
-                    now_ms,
-                );
-                self.fold_outcome(
-                    config,
-                    FetchOutcome {
-                        snapshot: Ok(fused),
-                        final_for_request: false,
-                        fresh_pane_frame: false,
-                        unchanged: false,
-                        producer: self.last_known_elder,
-                    },
-                    anim_start,
-                    diag,
-                )?;
-                self.next_frame = Instant::now();
+                self.fold_fused_now(config, anim_start, diag)?;
             }
             // An overlay event fuses into the in-memory state and paints this
             // frame. A topology overlay also asks the producer to verify with a
@@ -549,47 +560,16 @@ impl LoopState {
                     if own.is_some_and(|pane| unfocused.contains(pane)));
                 let now_ms = crate::sidebar::timing::unix_now_ms();
                 self.event_store.append(event, sent_at_ms, now_ms);
-                let intent = self.pending_focus_intent(now_ms);
-                let fused = fuse(
-                    &self.last_pulled,
-                    &self.event_store,
-                    intent.as_ref(),
-                    now_ms,
-                );
-                self.fold_outcome(
-                    config,
-                    FetchOutcome {
-                        snapshot: Ok(fused),
-                        final_for_request: false,
-                        fresh_pane_frame: false,
-                        unchanged: false,
-                        producer: self.last_known_elder,
-                    },
-                    anim_start,
-                    diag,
-                )?;
-                // Snap the frame deadline so this turn's frame phase paints
-                // the fused frame now instead of waiting out a previously armed
-                // grid boundary.
-                self.next_frame = Instant::now();
-                let mut requested_verification = false;
-                if !self.should_exit && requests_verification {
+                self.fold_fused_now(config, anim_start, diag)?;
+                if !self.should_exit && (requests_verification || own_focused) {
                     self.request_now_merging_pending(
                         fetch,
                         FetchRequest::producer_fresh_panes(),
                         true,
                     );
-                    requested_verification = true;
                 }
                 if own_focused {
                     self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
-                    if !self.should_exit && !requested_verification {
-                        self.request_now_merging_pending(
-                            fetch,
-                            FetchRequest::producer_fresh_panes(),
-                            true,
-                        );
-                    }
                 } else if own_unfocused {
                     self.optimistic_watch_until = None;
                     self.ui.help_visible = false;
@@ -1369,26 +1349,7 @@ impl LoopState {
         if let Err(err) = crate::sidebar::focus_anchor::store(self.read_marks.runtime(), &anchor) {
             debug!(error = %err, "focus anchor write failed");
         }
-        let intent = self.pending_focus_intent(now_ms);
-        let fused = fuse(
-            &self.last_pulled,
-            &self.event_store,
-            intent.as_ref(),
-            now_ms,
-        );
-        self.fold_outcome(
-            config,
-            FetchOutcome {
-                snapshot: Ok(fused),
-                final_for_request: false,
-                fresh_pane_frame: false,
-                unchanged: false,
-                producer: self.last_known_elder,
-            },
-            anim_start,
-            diag,
-        )?;
-        self.next_frame = Instant::now();
+        self.fold_fused_now(config, anim_start, diag)?;
         if let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone())
             && let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
                 &runtime,
