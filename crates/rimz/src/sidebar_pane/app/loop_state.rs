@@ -387,46 +387,40 @@ impl LoopState {
             self.last_known_elder = outcome.producer;
             if outcome.unchanged {
                 self.fetched_at = Instant::now();
-                if !self.should_exit
-                    && saw_final
-                    && let Some(request) = fetch.take_pending()
-                {
-                    fetch.request(request, false);
+            } else {
+                let snapshot_ok = outcome.snapshot.is_ok();
+                let fresh_pane_frame = outcome.fresh_pane_frame;
+                if let Ok(pulled) = outcome.snapshot {
+                    self.last_pulled = pulled;
+                    let now_ms = crate::sidebar::timing::unix_now_ms();
+                    self.event_store.prune(now_ms);
+                    let intent = self.pending_focus_intent(now_ms);
+                    outcome.snapshot = Ok(fuse(
+                        &self.last_pulled,
+                        &self.event_store,
+                        intent.as_ref(),
+                        now_ms,
+                    ));
                 }
-                return Ok(());
-            }
-            let snapshot_ok = outcome.snapshot.is_ok();
-            let fresh_pane_frame = outcome.fresh_pane_frame;
-            if let Ok(pulled) = outcome.snapshot {
-                self.last_pulled = pulled;
-                let now_ms = crate::sidebar::timing::unix_now_ms();
-                self.event_store.prune(now_ms);
-                let intent = self.pending_focus_intent(now_ms);
-                outcome.snapshot = Ok(fuse(
-                    &self.last_pulled,
-                    &self.event_store,
-                    intent.as_ref(),
-                    now_ms,
-                ));
-            }
-            self.fetched_at = Instant::now();
-            rejected = self.fold_outcome(config, outcome, anim_start, diag)?;
-            if snapshot_ok {
-                self.last_self_close_check = Instant::now();
-            }
-            if !self.should_exit
-                && !rejected
-                && !self.self_close.confirming_empty()
-                && (fresh_pane_frame
-                    || self
-                        .paint_hold
-                        .releases_on_stamp(self.current.panes_observed_at_ms))
-            {
-                // The snapshot folded a post-signal pane frame. Its own-view
-                // verdict has decided the resize-grow case: exit without
-                // painting when alone, or release the hold and paint at the new
-                // size when siblings remain.
-                self.paint_hold.release();
+                self.fetched_at = Instant::now();
+                rejected = self.fold_outcome(config, outcome, anim_start, diag)?;
+                if snapshot_ok {
+                    self.last_self_close_check = Instant::now();
+                }
+                if !self.should_exit
+                    && !rejected
+                    && !self.self_close.confirming_empty()
+                    && (fresh_pane_frame
+                        || self
+                            .paint_hold
+                            .releases_on_stamp(self.current.panes_observed_at_ms))
+                {
+                    // The snapshot folded a post-signal pane frame. Its own-view
+                    // verdict has decided the resize-grow case: exit without
+                    // painting when alone, or release the hold and paint at the new
+                    // size when siblings remain.
+                    self.paint_hold.release();
+                }
             }
         }
         if !self.should_exit
