@@ -36,31 +36,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     let timeline = message_timeline(&store, &message_id)?;
     let live_messages = store.list_messages()?;
     let now = Timestamp::now();
-    let delivery = if message.status.is_open() {
-        match live_messages
-            .iter()
-            .find(|record| record.message_id == message.message_id)
-        {
-            Some(record) => {
-                let mut snapshot = crate::cli::resolution_snapshot(&workspace, &store, globals)?;
-                if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone())
-                {
-                    snapshot =
-                        snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
-                }
-                let check = deliver::explain(record, &live_messages, &snapshot, now);
-                let agents: Vec<&AgentState> = snapshot.root_agents().collect();
-                let target = message_target(&message, &agents);
-                Some(MessageDeliveryJson {
-                    verdict: delivery_verdict(&check, &target, now),
-                    check,
-                })
-            }
-            None => None,
-        }
-    } else {
-        None
-    };
+    let delivery = open_delivery(&workspace, &store, &message, &live_messages, globals, now)?;
     if json {
         let rendered = serde_json::to_string_pretty(&MessageShowJson {
             message,
@@ -88,9 +64,68 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
             message.status.as_str()
         )
     )?;
+    let kv = render_message_kv(&message, &target, &sender, now);
+    kv.render(&mut out)?;
+    writeln!(out)?;
+    writeln!(out, "{}", render::paint(render::palette::HEADER, "TEXT"))?;
+    if let Some(text) = message.text.as_deref() {
+        write_indented_block(&mut out, text)?;
+    } else {
+        writeln!(out, "  ({})", textless_location(&message, &raw_target))?;
+    }
+    writeln!(out)?;
+    render_timeline(&mut out, &timeline, now)?;
+    if let Some(delivery) = delivery {
+        render_delivery_check(
+            &mut out,
+            &message.message_id,
+            &delivery.check,
+            &delivery.verdict,
+            now,
+        )?;
+    }
+    Ok(())
+}
+
+fn open_delivery(
+    workspace: &ResolvedWorkspace,
+    store: &rimz::Store,
+    message: &MessageListRow,
+    live_messages: &[MessageRecord],
+    globals: &GlobalFlags,
+    now: Timestamp,
+) -> Result<Option<MessageDeliveryJson>> {
+    if !message.status.is_open() {
+        return Ok(None);
+    }
+    let Some(record) = live_messages
+        .iter()
+        .find(|record| record.message_id == message.message_id)
+    else {
+        return Ok(None);
+    };
+    let mut snapshot = crate::cli::resolution_snapshot(workspace, store, globals)?;
+    if let Ok(runtime) = rimz::RuntimePaths::for_workspace(record.workspace_id.clone()) {
+        snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
+    }
+    let check = deliver::explain(record, live_messages, &snapshot, now);
+    let agents: Vec<&AgentState> = snapshot.root_agents().collect();
+    let target = message_target(message, &agents);
+    Ok(Some(MessageDeliveryJson {
+        verdict: render_verdict(&check.verdict(), &target, now),
+        check,
+    }))
+}
+
+fn render_message_kv(
+    message: &MessageListRow,
+    target: &str,
+    sender: &str,
+    now: Timestamp,
+) -> render::KeyVals {
     let mut kv = render::KeyVals::new().indent(2);
     kv.push("from", render::cell(sender).fg(render::palette::META));
-    kv.push("to", render::cell(target.clone()).fg(render::palette::META));
+    kv.push("to", render::cell(target).fg(render::palette::META));
     kv.push(
         "channel",
         render::cell(message.channel.clone().unwrap_or_else(|| "-".to_owned())).dash(),
@@ -130,12 +165,9 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
                 message
                     .after
                     .iter()
-                    .map(|condition| {
-                        if condition.met_at.is_some() {
-                            format!("{} ✓", condition.address)
-                        } else {
-                            format!("{} waiting", condition.address)
-                        }
+                    .map(|condition| match condition.met_at {
+                        Some(_) => format!("{} ✓", condition.address),
+                        None => format!("{} waiting", condition.address),
                     })
                     .collect::<Vec<_>>()
                     .join(" · "),
@@ -154,15 +186,14 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     if let Some(last_error) = message.last_error.as_deref() {
         kv.push("last_error", render::cell(last_error));
     }
-    kv.render(&mut out)?;
-    writeln!(out)?;
-    writeln!(out, "{}", render::paint(render::palette::HEADER, "TEXT"))?;
-    if let Some(text) = message.text.as_deref() {
-        write_indented_block(&mut out, text)?;
-    } else {
-        writeln!(out, "  ({})", textless_location(&message, &raw_target))?;
-    }
-    writeln!(out)?;
+    kv
+}
+
+fn render_timeline(
+    out: &mut impl Write,
+    timeline: &[MessageTimelineRow],
+    now: Timestamp,
+) -> Result<()> {
     writeln!(
         out,
         "{}",
@@ -170,55 +201,46 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
     )?;
     if timeline.is_empty() {
         writeln!(out, "  -")?;
-    } else {
-        let show_attempts = timeline.iter().any(|event| event.attempts > 0);
-        let show_note = timeline.iter().any(|event| {
-            event
-                .reason
-                .as_deref()
-                .is_some_and(|reason| !reason.is_empty())
-        });
-        let mut headers = vec!["EVENT", "WHEN"];
+        return Ok(());
+    }
+    let show_attempts = timeline.iter().any(|event| event.attempts > 0);
+    let show_note = timeline.iter().any(|event| {
+        event
+            .reason
+            .as_deref()
+            .is_some_and(|reason| !reason.is_empty())
+    });
+    let mut headers = vec!["EVENT", "WHEN"];
+    if show_attempts {
+        headers.push("ATTEMPT");
+    }
+    if show_note {
+        headers.push("NOTE");
+    }
+    let mut table = render::Table::new(headers).indent(2);
+    for event in timeline {
+        let label = event
+            .method
+            .strip_prefix("message.")
+            .unwrap_or(&event.method);
+        let mut row = vec![
+            render::cell(label.to_owned()),
+            render::cell(time_with_absolute(event.at, now)),
+        ];
         if show_attempts {
-            headers.push("ATTEMPT");
+            row.push(render::cell(event.attempts.to_string()));
         }
         if show_note {
-            headers.push("NOTE");
+            let reason = event
+                .reason
+                .as_deref()
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("-");
+            row.push(render::cell(reason).dash());
         }
-        let mut table = render::Table::new(headers).indent(2);
-        for event in &timeline {
-            let label = event
-                .method
-                .strip_prefix("message.")
-                .unwrap_or(&event.method);
-            let mut row = vec![
-                render::cell(label.to_owned()),
-                render::cell(time_with_absolute(event.at, now)),
-            ];
-            if show_attempts {
-                row.push(render::cell(event.attempts.to_string()));
-            }
-            if show_note {
-                let reason = event
-                    .reason
-                    .as_deref()
-                    .filter(|reason| !reason.is_empty())
-                    .unwrap_or("-");
-                row.push(render::cell(reason).dash());
-            }
-            table.row(row);
-        }
-        table.render(&mut out)?;
+        table.row(row);
     }
-    if let Some(delivery) = delivery {
-        render_delivery_check(
-            &mut out,
-            &message.message_id,
-            &delivery.check,
-            &delivery.verdict,
-            now,
-        )?;
-    }
+    table.render(out)?;
     Ok(())
 }
 
@@ -265,22 +287,12 @@ pub(super) fn steer_failure(
             None => format!("no live pane for {target}; cannot steer {message_id}"),
         };
     }
-    if delivery_conditions_pass(check) {
+    if check.passes() {
         return format!(
             "{message_id} has a recent delivery attempt in progress; retry in a few seconds"
         );
     }
-    delivery_verdict(check, target, Timestamp::now())
-}
-
-pub(super) fn delivery_conditions_pass(check: &deliver::DeliveryCheck) -> bool {
-    check.schedule.ready
-        && check.after.iter().all(|condition| condition.met)
-        && check.fifo.head
-        && check.agent.present
-        && gate_ready(check)
-        && !check.ask.waiting
-        && check.pane.present
+    render_verdict(&check.verdict(), target, Timestamp::now())
 }
 
 pub(super) fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
@@ -333,54 +345,14 @@ pub(super) fn render_delivery_check(
         render::paint(render::palette::HEADER, "DELIVERY CHECK")
     )?;
     let mut kv = render::KeyVals::new().indent(2);
-    let schedule = if check.schedule.ready {
-        match check.schedule.retry_after {
-            Some(retry_after) if retry_after > now => {
-                format!(
-                    "ok; retry wake {}",
-                    time_until_with_absolute(retry_after, now)
-                )
-            }
-            Some(retry_after) => format!("ok; retry wake {}", time_with_absolute(retry_after, now)),
-            None => "ok".to_owned(),
-        }
-    } else {
-        check
-            .schedule
-            .not_before
-            .map(|not_before| format!("opens {}", time_until_with_absolute(not_before, now)))
-            .unwrap_or_else(|| "not ready".to_owned())
-    };
-    kv.push("schedule", condition_cell(check.schedule.ready, schedule));
+    let (ok, detail) = schedule_detail(check, now);
+    kv.push("schedule", condition_cell(ok, detail));
     if !check.after.is_empty() {
-        let ready = check.after.iter().all(|condition| condition.met);
-        let detail = check
-            .after
-            .iter()
-            .map(|condition| {
-                if condition.met {
-                    format!("{} ok", condition.address)
-                } else if condition.agent_present {
-                    format!("{} waiting", condition.address)
-                } else {
-                    format!("{} not running", condition.address)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" · ");
-        kv.push("after", condition_cell(ready, detail));
+        let (ok, detail) = after_detail(check);
+        kv.push("after", condition_cell(ok, detail));
     }
-    let fifo = if check.fifo.head {
-        "ok".to_owned()
-    } else {
-        check
-            .fifo
-            .blocker
-            .as_ref()
-            .map(|blocker| format!("behind {blocker}"))
-            .unwrap_or_else(|| "head unavailable".to_owned())
-    };
-    kv.push("fifo", condition_cell(check.fifo.head, fifo));
+    let (ok, detail) = fifo_detail(check);
+    kv.push("fifo", condition_cell(ok, detail));
     kv.push(
         "agent",
         condition_cell(
@@ -392,8 +364,75 @@ pub(super) fn render_delivery_check(
             },
         ),
     );
-    let gate_ready = gate_ready(check);
-    let gate = if check.gate.resume_recovered == Some(false) {
+    let (ok, detail) = gate_detail(check);
+    kv.push("gate", condition_cell(ok, detail));
+    let (ok, detail) = ask_detail(check);
+    kv.push("ask", condition_cell(ok, detail));
+    let (ok, detail) = pane_detail(check);
+    kv.push("pane", condition_cell(ok, detail));
+    kv.render(out)?;
+    writeln!(out, "  {verdict}")?;
+    if let Some(hint) = delivery_action_hint(&check.verdict(), message_id) {
+        writeln!(out, "  {}", render::paint(render::palette::FAINT, &hint))?;
+    }
+    Ok(())
+}
+
+fn schedule_detail(check: &deliver::DeliveryCheck, now: Timestamp) -> (bool, String) {
+    let detail = if check.schedule.ready {
+        match check.schedule.retry_after {
+            Some(retry_after) if retry_after > now => format!(
+                "ok; retry wake {}",
+                time_until_with_absolute(retry_after, now)
+            ),
+            Some(retry_after) => format!("ok; retry wake {}", time_with_absolute(retry_after, now)),
+            None => "ok".to_owned(),
+        }
+    } else {
+        check
+            .schedule
+            .not_before
+            .map(|not_before| format!("opens {}", time_until_with_absolute(not_before, now)))
+            .unwrap_or_else(|| "not ready".to_owned())
+    };
+    (check.schedule.ready, detail)
+}
+
+fn after_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
+    let ready = check.after.iter().all(|condition| condition.met);
+    let detail = check
+        .after
+        .iter()
+        .map(|condition| {
+            if condition.met {
+                format!("{} ok", condition.address)
+            } else if condition.agent_present {
+                format!("{} waiting", condition.address)
+            } else {
+                format!("{} not running", condition.address)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    (ready, detail)
+}
+
+fn fifo_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
+    let detail = if check.fifo.head {
+        "ok".to_owned()
+    } else {
+        check
+            .fifo
+            .blocker
+            .as_ref()
+            .map(|blocker| format!("behind {blocker}"))
+            .unwrap_or_else(|| "head unavailable".to_owned())
+    };
+    (check.fifo.head, detail)
+}
+
+fn gate_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
+    let detail = if check.gate.resume_recovered == Some(false) {
         "waiting for provider recovery".to_owned()
     } else if check.gate.open {
         match check.gate.status {
@@ -410,18 +449,22 @@ pub(super) fn render_delivery_check(
             None => format!("closed (gate {})", check.gate.gate),
         }
     };
-    kv.push("gate", condition_cell(gate_ready, gate));
-    let ask = if !check.ask.waiting {
-        if check.ask.force {
-            "ok (--force)".to_owned()
-        } else {
-            "ok".to_owned()
-        }
-    } else {
+    (check.gate_ready(), detail)
+}
+
+fn ask_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
+    let detail = if check.ask.waiting {
         "waiting in pane".to_owned()
+    } else if check.ask.force {
+        "ok (--force)".to_owned()
+    } else {
+        "ok".to_owned()
     };
-    kv.push("ask", condition_cell(!check.ask.waiting, ask));
-    let pane = if check.pane.present {
+    (!check.ask.waiting, detail)
+}
+
+fn pane_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
+    let detail = if check.pane.present {
         check
             .pane
             .pane_id
@@ -433,13 +476,7 @@ pub(super) fn render_delivery_check(
     } else {
         "no live pane".to_owned()
     };
-    kv.push("pane", condition_cell(check.pane.present, pane));
-    kv.render(out)?;
-    writeln!(out, "  {verdict}")?;
-    if let Some(hint) = delivery_action_hint(check, message_id) {
-        writeln!(out, "  {}", render::paint(render::palette::FAINT, &hint))?;
-    }
-    Ok(())
+    (check.pane.present, detail)
 }
 
 pub(super) fn condition_cell(ok: bool, text: String) -> render::Cell {
@@ -451,100 +488,86 @@ pub(super) fn condition_cell(ok: bool, text: String) -> render::Cell {
     render::cell(text).fg(style)
 }
 
-pub(super) fn delivery_verdict(
-    check: &deliver::DeliveryCheck,
+pub(super) fn render_verdict(
+    verdict: &deliver::DeliveryVerdict,
     target: &str,
     now: Timestamp,
 ) -> String {
-    if !check.schedule.ready {
-        return check
-            .schedule
-            .not_before
+    match verdict {
+        deliver::DeliveryVerdict::Scheduled { not_before } => not_before
+            .as_ref()
+            .copied()
             .map(|not_before| {
                 format!(
                     "scheduled: opens {}",
                     time_until_with_absolute(not_before, now)
                 )
             })
-            .unwrap_or_else(|| "scheduled: waiting for readiness floor".to_owned());
-    }
-    if let Some(condition) = check.after.iter().find(|condition| !condition.met) {
-        return if condition.agent_present {
-            format!("waiting on {} to finish", condition.address)
-        } else {
-            format!(
-                "waiting on {} to finish ({} not running)",
-                condition.address, condition.address
-            )
-        };
-    }
-    if !check.fifo.head {
-        return check
-            .fifo
-            .blocker
+            .unwrap_or_else(|| "scheduled: waiting for readiness floor".to_owned()),
+        deliver::DeliveryVerdict::WaitingOnAfter {
+            address,
+            agent_present,
+        } => {
+            if *agent_present {
+                format!("waiting on {address} to finish")
+            } else {
+                format!("waiting on {address} to finish ({address} not running)")
+            }
+        }
+        deliver::DeliveryVerdict::BehindFifo { blocker } => blocker
             .as_ref()
             .map(|blocker| format!("blocked: behind {blocker}"))
-            .unwrap_or_else(|| "blocked: FIFO head unavailable".to_owned());
-    }
-    if !check.agent.present {
-        return format!("stuck: receiver {target} is gone");
-    }
-    if !check.gate.open {
-        let status = check
-            .gate
-            .status
-            .map(|status| status.as_str())
-            .unwrap_or("unknown");
-        if check.gate.gate == DeliveryGate::Resume {
-            return format!(
-                "waiting: {target} is {status}; resume gate opens when the agent is paused and provider recovery passes"
-            );
+            .unwrap_or_else(|| "blocked: FIFO head unavailable".to_owned()),
+        deliver::DeliveryVerdict::ReceiverGone => format!("stuck: receiver {target} is gone"),
+        deliver::DeliveryVerdict::GateClosed { gate, status } => {
+            let status = status
+                .as_ref()
+                .copied()
+                .map(|status| status.as_str())
+                .unwrap_or("unknown");
+            if *gate == DeliveryGate::Resume {
+                format!(
+                    "waiting: {target} is {status}; resume gate opens when the agent is paused and provider recovery passes"
+                )
+            } else {
+                format!("waiting: {target} is {status}; gate '{gate}' opens at next turn end")
+            }
         }
-        return format!(
-            "waiting: {target} is {status}; gate '{}' opens at next turn end",
-            check.gate.gate
-        );
-    }
-    if check.gate.resume_recovered == Some(false) {
-        return format!("waiting: {target} is paused; resume gate opens after provider recovery");
-    }
-    if check.ask.waiting {
-        return format!("waiting: {target} is waiting on input in its pane");
-    }
-    if !check.pane.present {
-        return match &check.pane.pinned_pane_id {
+        deliver::DeliveryVerdict::ResumeUnrecovered => {
+            format!("waiting: {target} is paused; resume gate opens after provider recovery")
+        }
+        deliver::DeliveryVerdict::AskWaiting => {
+            format!("waiting: {target} is waiting on input in its pane")
+        }
+        deliver::DeliveryVerdict::NoPane { pinned_pane_id } => match pinned_pane_id {
             Some(pane_id) => format!("stuck: pinned pane {pane_id} is not live for {target}"),
             None => format!("stuck: no live pane for {target}"),
-        };
+        },
+        deliver::DeliveryVerdict::Ready => "ready: delivery conditions pass".to_owned(),
     }
-    "ready: delivery conditions pass".to_owned()
 }
 
 pub(super) fn delivery_action_hint(
-    check: &deliver::DeliveryCheck,
+    verdict: &deliver::DeliveryVerdict,
     message_id: &MessageId,
 ) -> Option<String> {
-    if !check.schedule.ready {
-        return Some(format!(
+    match verdict {
+        deliver::DeliveryVerdict::Scheduled { .. } => Some(format!(
             "force now: rimz message steer {message_id}  ·  or: rimz message edit {message_id} --no-schedule"
-        ));
-    }
-    if check.after.iter().any(|condition| !condition.met) {
-        return Some(format!("force now: rimz message steer {message_id}"));
-    }
-    if !check.fifo.head || !gate_ready(check) {
-        return Some(format!("force now: rimz message steer {message_id}"));
-    }
-    if check.ask.waiting {
-        return Some(format!(
+        )),
+        deliver::DeliveryVerdict::WaitingOnAfter { .. }
+        | deliver::DeliveryVerdict::BehindFifo { .. }
+        | deliver::DeliveryVerdict::GateClosed { .. }
+        | deliver::DeliveryVerdict::ResumeUnrecovered => {
+            Some(format!("force now: rimz message steer {message_id}"))
+        }
+        deliver::DeliveryVerdict::AskWaiting => Some(format!(
             "force now: rimz message steer {message_id} --force"
-        ));
+        )),
+        deliver::DeliveryVerdict::ReceiverGone
+        | deliver::DeliveryVerdict::NoPane { .. }
+        | deliver::DeliveryVerdict::Ready => None,
     }
-    None
-}
-
-pub(super) fn gate_ready(check: &deliver::DeliveryCheck) -> bool {
-    check.gate.open && check.gate.resume_recovered != Some(false)
 }
 
 #[cfg(test)]
@@ -598,9 +621,9 @@ mod tests {
             agent_present: false,
             status: None,
         });
-        assert!(!delivery_conditions_pass(&check));
+        assert!(!check.passes());
         assert_eq!(
-            delivery_verdict(&check, "@claude", Timestamp::now()),
+            render_verdict(&check.verdict(), "@claude", Timestamp::now()),
             "waiting on @planner to finish (@planner not running)"
         );
     }
