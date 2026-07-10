@@ -11,7 +11,8 @@ use super::GlobalFlags;
 use rimz::config::{DayCap, MachineConfig};
 use rimz::harness::budget::{
     BudgetSpec, BudgetWindow, account_day_spend_usd, fleet_day_spend_usd, read_account_ledger,
-    read_fleet_ledger, write_account_ledger, write_fleet_ledger,
+    read_fleet_ledger, read_scope_state, scope_interrupted, write_account_ledger,
+    write_fleet_ledger,
 };
 use rimz::ids::AgentKind;
 use rimz::message::{DeliveryGate, MessageRecord, MessageSender};
@@ -56,6 +57,7 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     }
 
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let scope_state = read_scope_state(store.runtime_paths());
     let was_parked = if let Some(kind) = account.as_ref() {
         mutate_account(
             store.runtime_paths(),
@@ -82,7 +84,11 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             &agent.kind,
             &agent.agent_id,
         );
-        if was_parked && !args.no_continue && !continue_text.is_empty() {
+        if was_parked
+            && scope_interrupted(&scope_state, agent)
+            && !args.no_continue
+            && !continue_text.is_empty()
+        {
             let message = MessageRecord::new(
                 workspace.workspace_id.clone(),
                 agent,

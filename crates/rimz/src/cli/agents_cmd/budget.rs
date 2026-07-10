@@ -57,7 +57,7 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                 window: BudgetWindow::Session,
             })
         });
-    let was_parked = ledger.parked.is_some();
+    let was_paused = ledger.parked.is_some() && ledger.last_interrupt_at.is_some();
     match args.value.as_deref().map(str::trim) {
         Some("clear") => {
             ledger.disabled = true;
@@ -101,7 +101,7 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         .context("writing the agent budget ledger")?;
     rimz::harness::budget::clear_resume_park(store.runtime_paths(), &agent.kind, &agent.agent_id);
 
-    if was_parked && !args.no_continue {
+    if was_paused && !args.no_continue {
         let text = rimz::config::MachineConfig::load_lenient()
             .resume
             .auto_continue_text

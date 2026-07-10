@@ -75,7 +75,7 @@ Dollar budgets use one model at four scopes: an agent session (`--budget` or a p
 
 Run `rimz budget` to inspect or adjust an armed cap: `20/day` replaces the live room cap, `+10` adds headroom, and `off` disables it; add `--account claude` to target that login. An armed, healthy scope reads exactly like an uncapped one. While agents are parked on a crossed cap, the cockpit or provider row turns alarm-red and explains the stop as `$50.21 of $50/day`.
 
-Crossing any cap parks a running agent through the same interrupt backstop. A human message delivered after the park waives that agent's next turn once, and the waiver is consumed when the turn ends; background delivery stays parked. Supervised `-p` launches and loop fires do not consume waivers: they fail or record `budget skipped` until the room and account scopes have headroom.
+Crossing any cap parks a running agent through the same interrupt backstop. Agents already at rest keep their lifecycle status, and a waiting agent keeps its ask visible until the answered turn runs again. A human message delivered after the park waives that agent's next turn once, and the waiver is consumed when the turn ends; background delivery stays parked. At the daily reset or after a cap is raised, only agents that RimZ interrupted receive the continue prompt. Supervised `-p` launches and loop fires do not consume waivers: they fail or record `budget skipped` until the room and account scopes have headroom.
 
 ### Per room: the cockpit
 

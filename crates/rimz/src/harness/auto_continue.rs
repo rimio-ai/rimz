@@ -624,6 +624,16 @@ pub(crate) fn clear_budget_park(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn budget_park_armed(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+) -> bool {
+    read_park(&park_record_path(runtime, kind, agent_id))
+        .is_some_and(|record| matches!(record.kind, ParkKind::Budget { .. }))
+}
+
 /// Spawn the detached, fresh-stdio helper that queues or redelivers the
 /// resume-gated message. Best-effort: a spawn failure is logged without
 /// consuming an attempt; a spawned helper that dies before queueing is still
