@@ -102,6 +102,12 @@ fn render_grouped_commands(cmd: &Command, grouped: &[(&str, Vec<&Command>)]) -> 
             out.push_str(&format!("{literal}{name}{literal:#}"));
             out.push_str(&" ".repeat(name_width.saturating_sub(name.len())));
             out.push_str(&about);
+            let aliases = cmd.get_visible_aliases().collect::<Vec<_>>();
+            if !aliases.is_empty() {
+                out.push_str(" [alias: ");
+                out.push_str(&aliases.join(", "));
+                out.push(']');
+            }
             out.push('\n');
         }
         out.push('\n');
@@ -210,6 +216,13 @@ mod tests {
                 "hidden command `{name}` leaked into rendered help"
             );
         }
+        let message_line = help
+            .lines()
+            .find(|line| {
+                line.starts_with("  ") && line.split_whitespace().next() == Some("message")
+            })
+            .expect("message command line");
+        assert!(message_line.ends_with(" [alias: msg]"));
         assert!(help.contains("Run `rimz <command> --help` for full flags and defaults."));
     }
 

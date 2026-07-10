@@ -516,6 +516,7 @@ enum Subcmd {
     /// Message agents; list, edit, steer, requeue, remove.
     ///
     /// Bare send routes now with `--steer`, or at the next safe turn boundary.
+    #[command(visible_alias = "msg")]
     Message(message::MessageArgs),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.
     #[command(hide = true)]
@@ -817,6 +818,15 @@ mod tests {
         let mut cli = Cli::try_parse_from(["rimz", "--tmux"]).unwrap();
         cli.global.normalize().unwrap();
         assert_eq!(cli.global.mux, Some(MuxName::Tmux));
+    }
+
+    #[test]
+    fn message_alias_parses_send_and_subcommands() {
+        let cli = Cli::try_parse_from(["rimz", "msg", "@codex", "hi"]).unwrap();
+        assert!(matches!(cli.subcommand, Some(Subcmd::Message(_))));
+
+        let cli = Cli::try_parse_from(["rimz", "msg", "list"]).unwrap();
+        assert!(matches!(cli.subcommand, Some(Subcmd::Message(_))));
     }
 
     #[test]

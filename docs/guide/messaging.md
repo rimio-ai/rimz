@@ -1,6 +1,6 @@
 # Messaging
 
-`rimz message` types text into a running agent's own pane, the same way you would. It reads like Slack — every agent answers to a handle — and it guarantees the text lands: parked by default (held until the agent's current turn finishes), right now with `--steer`, or at a wall-clock time with `--schedule`.
+`rimz message` (`rimz msg` for short) types text into a running agent's own pane, the same way you would. It reads like Slack — every agent answers to a handle — and it guarantees the text lands: parked by default (held until the agent's current turn finishes), right now with `--steer`, or at a wall-clock time with `--schedule`.
 
 The same command serves you, your scripts, and the agents themselves — agents talk to each other through it too. One prompt reaches one teammate; `@all` reaches everyone in your channel.
 
