@@ -351,6 +351,79 @@ fn cohort_resume_matches_inline_group_by_launch_ordinal() {
 }
 
 #[test]
+fn inline_cohort_without_ordinals_matches_same_kind_members_by_role() {
+    let mut planner = agent("claude", "planner", "/code/new", None, 2);
+    planner.launch_group = Some("launch_new".to_owned());
+    planner.role = Some("planner".to_owned());
+    let mut coder = agent("claude", "coder", "/code/new", None, 3);
+    coder.launch_group = Some("launch_new".to_owned());
+    coder.role = Some("coder".to_owned());
+    let cells = vec![
+        cohort_cell("claude", Some("coder")),
+        cohort_cell("claude", Some("planner")),
+    ];
+
+    let matches = match_cohort(&[&planner, &coder], &cells, None);
+
+    assert_eq!(
+        matches
+            .into_iter()
+            .map(|agent| agent.map(|agent| agent.agent_id.as_str()))
+            .collect::<Vec<_>>(),
+        [Some("coder"), Some("planner")]
+    );
+}
+
+#[test]
+fn inline_cohort_without_roles_falls_back_to_kind() {
+    let mut claude = agent("claude", "claude", "/code/new", None, 2);
+    claude.launch_group = Some("launch_new".to_owned());
+    let mut codex = agent("codex", "codex", "/code/new", None, 3);
+    codex.launch_group = Some("launch_new".to_owned());
+    let cells = vec![cohort_cell("codex", None), cohort_cell("claude", None)];
+
+    let matches = match_cohort(&[&claude, &codex], &cells, None);
+
+    assert_eq!(
+        matches
+            .into_iter()
+            .map(|agent| agent.map(|agent| agent.agent_id.as_str()))
+            .collect::<Vec<_>>(),
+        [Some("codex"), Some("claude")]
+    );
+}
+
+#[test]
+fn match_cohort_dispatches_team_and_inline_membership() {
+    let mut team_planner = agent("claude", "team", "/code/forge", None, 3);
+    team_planner.team = Some("forge".to_owned());
+    team_planner.role = Some("planner".to_owned());
+    let mut team_coder = agent("codex", "team-coder", "/code/forge", None, 4);
+    team_coder.team = Some("forge".to_owned());
+    team_coder.role = Some("coder".to_owned());
+    let mut inline_planner = agent("claude", "inline", "/code/forge", None, 2);
+    inline_planner.launch_group = Some("launch_inline".to_owned());
+    inline_planner.launch_ordinal = Some(0);
+    let mut inline_coder = agent("codex", "inline-coder", "/code/forge", None, 1);
+    inline_coder.launch_group = Some("launch_inline".to_owned());
+    inline_coder.launch_ordinal = Some(1);
+    let cells = vec![
+        cohort_cell("claude", Some("planner")),
+        cohort_cell("codex", Some("coder")),
+    ];
+    let candidates = [&team_planner, &team_coder, &inline_planner, &inline_coder];
+
+    let team = match_cohort(&candidates, &cells, Some("forge"));
+    let inline = match_cohort(&candidates, &cells, None);
+
+    assert_eq!(team[0].map(|agent| agent.agent_id.as_str()), Some("team"));
+    assert_eq!(
+        inline[0].map(|agent| agent.agent_id.as_str()),
+        Some("inline")
+    );
+}
+
+#[test]
 fn cohort_resume_drops_members_whose_worktree_is_gone() {
     let agents = vec![agent("claude", "a1", "/code/gone", None, 1)];
     let err = plan_cohort_resume(

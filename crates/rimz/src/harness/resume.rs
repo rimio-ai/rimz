@@ -283,11 +283,7 @@ pub fn plan_cohort_resume(
 ) -> Result<CohortResumePlan, CohortResumeErr> {
     let spec = cohort_spec_label(cells, team);
     let candidates = cohort_candidates(agents, worktree_exists);
-    let matches = match (team, cells.len()) {
-        (Some(team), _) => match_team_cohort(&candidates, cells, team),
-        (None, 1) => match_single_cohort(&candidates, &cells[0]),
-        (None, _) => match_inline_cohort(&candidates, cells),
-    };
+    let matches = match_cohort(&candidates, cells, team);
 
     let matched_any = matches.iter().any(Option::is_some);
     if !matched_any {
@@ -376,14 +372,30 @@ fn cohort_candidates(
     agents: &[AgentState],
     worktree_exists: impl Fn(&Path) -> bool,
 ) -> Vec<&AgentState> {
-    let mut candidates = agents
+    agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| agent_worktree(agent).is_some_and(|path| worktree_exists(&path)))
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+/// Match one launch layout to its newest prior cohort.
+///
+/// Named teams match by team and role, single-agent inline specs match by kind,
+/// and multi-agent inline specs match by launch group and cell identity.
+pub fn match_cohort<'a>(
+    candidates: &[&'a AgentState],
+    cells: &[CohortCell],
+    team: Option<&str>,
+) -> Vec<Option<&'a AgentState>> {
+    let mut candidates = candidates.to_vec();
     candidates.sort_by(cohort_newest_cmp);
-    candidates
+    match (team, cells.len()) {
+        (Some(team), _) => match_team_cohort(&candidates, cells, team),
+        (None, 1) => match_single_cohort(&candidates, &cells[0]),
+        (None, _) => match_inline_cohort(&candidates, cells),
+    }
 }
 
 fn match_team_cohort<'a>(
@@ -484,6 +496,29 @@ fn map_inline_group_to_cells<'a>(
             continue;
         }
         matches[ordinal] = Some(*agent);
+        claimed.insert(agent.agent_id.clone());
+    }
+
+    for agent in group {
+        if claimed.contains(&agent.agent_id) {
+            continue;
+        }
+        let Some(role) = agent.role.as_deref() else {
+            continue;
+        };
+        let Some(index) = cells
+            .iter()
+            .enumerate()
+            .find(|(index, cell)| {
+                matches[*index].is_none()
+                    && cell.kind == agent.kind
+                    && cell.role.as_deref() == Some(role)
+            })
+            .map(|(index, _)| index)
+        else {
+            continue;
+        };
+        matches[index] = Some(*agent);
         claimed.insert(agent.agent_id.clone());
     }
 
