@@ -149,6 +149,8 @@ Placement follows intent under the default `auto` policy: a named-channel launch
 
 ### Inspect and change a budget
 
+Why you cap spend, and what a park means, is the [budgets guide](../../guide/budget.md); this is the command surface.
+
 `rimz agents budget @coder` prints current spend, cap, window, and park state. Set a new cap with `rimz agents budget @coder 10`, add headroom with `+5`, or remove the cap with `clear`. Raising or clearing a parked cap queues the configured continue prompt by default; pass `--no-continue` to leave the agent at rest.
 
 `rimz budget` owns the two broader daily scopes. With no value it prints this room's fleet cap, source, local-day spend, and park state plus every configured provider-account cap. Config is the on-switch: `harness.budget` arms the room cap, `[accounts.budget].<kind>` arms an account cap, and the command refuses to arm either from an unset state. `rimz budget 20/day`, `+10`, or `off` adjusts, raises, or disables the armed room cap; `clear` aliases `off`, and `--account <kind>` applies the same operation to that login across rooms. Daily caps require `/day`, while relative raises stay bare (`+10`). A change nudges affected parked agents in the current room unless `--no-continue` is set.

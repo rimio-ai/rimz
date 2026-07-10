@@ -111,6 +111,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [messaging.md](./docs/guide/messaging.md) — addresses, park/steer/schedule delivery, smart compaction, agent-to-agent chat, and channels.
 - [sidebar.md](./docs/guide/sidebar.md) — reading the sidebar: zones, agent cards and process rows, the agent lifecycle, attention routing and card ranking.
 - [insight.md](./docs/guide/insight.md) — token and dollar insight: the cockpit and provider-dashboard figures, `rimz stats` and its heatmap and breakdowns, and how every figure is calculated.
+- [budget.md](./docs/guide/budget.md) — enforced dollar caps: the four scopes (agent, loop task, room fleet, provider login), the park and its waivers, and `rimz budget`.
 - [remote.md](./docs/guide/remote.md) — attaching to a room on another host over SSH: a multiplexer attach, the self-healing link, and continuity across reboots.
 - [web.md](./docs/guide/web.md) — browser access: the local Zellij web server, remote `--web` tunnels, and login tokens.
 - [scripting.md](./docs/guide/scripting.md) — supervised `-p` runs: exit codes, JSON and streaming output, background runs and wait, and the orchestration primitives.

@@ -77,13 +77,13 @@ args = "--allowed-tools Read Grep Glob"                    # read and search onl
 rimz agents planner           # launches Claude under the planner preset, as @planner
 ```
 
-Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't:
+Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't. The one exception is `budget`, which RimZ itself enforces:
 
 | Field | What it sets | Renders as (Claude) |
 | --- | --- | --- |
 | `model` | the model to run | `--model opus` |
 | `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
-| `budget` | dollar cap for the session, or for each local day with `/day` | `--budget 20/day` |
+| `budget` | dollar cap for the session, or per local day with `/day` | kept and enforced by RimZ ([budgets](./budget.md)) |
 | `system-prompt-file` | replace the system prompt with the role's craft and rules | `--system-prompt-file …` |
 | `append-system-prompt-file` | keep the base prompt and add rules on top | `--append-system-prompt-file …` |
 | `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
@@ -103,7 +103,7 @@ Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi t
 
 ## Cap what an agent can spend
 
-`--budget 5` parks an agent when its session cost reaches $5; `--budget 20/day` measures from the start of each local calendar day and resumes through auto-continue at the next day boundary. Cost arrives after provider responses, so the last tool call can overshoot slightly before RimZ sends Esc. Inspect or raise a cap with `rimz agents budget @coder`, `rimz agents budget @coder 10`, or `rimz agents budget @coder +5`; `clear` removes it. A delivered human message waives an absolute cap for the one turn that message starts.
+`--budget 5` parks an agent when its session cost reaches $5, and `--budget 20/day` caps each local calendar day instead; `rimz agents budget @coder` inspects or changes the cap while the agent runs. The same dollar-cap model scales up to loop tasks, the whole room, and a provider login, and the [budgets guide](./budget.md) owns it: what a park does, what resumes it, and the room and account scopes.
 
 ## Set a permission mode
 
@@ -317,6 +317,7 @@ Key detail and the daemon-view placement live in [configuration → remote contr
 - [Messaging](./messaging.md) — reach agents by handle: park, steer, schedule, and channels.
 - [The sidebar](./sidebar.md) — how the room reads the cards, worktrees, and teams you launch.
 - [Token Insight](./insight.md) — fleet-wide token and dollar insight: the cockpit, the provider dashboard, and `rimz stats`.
+- [Budgets](./budget.md) — dollar caps on an agent, a task, a room, or a provider login, and what a park means.
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.

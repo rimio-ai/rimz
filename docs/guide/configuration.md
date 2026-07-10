@@ -164,7 +164,7 @@ codex = "100/day"
 
 `harness.budget` turns on a cap for each room's whole fleet, while `[accounts.budget]` turns on a cap for one provider login across every room on the machine. Both read transcript-derived spend since local midnight in `timezone`, and both require the `/day` suffix; a bare amount is rejected with the form to use. These keys run no command and stay outside the project trust hash.
 
-`rimz budget` inspects both scopes and adjusts caps already armed by config; it refuses to arm an unset cap. `rimz budget 20/day`, `+10`, and `off` replace the room-local cap, add headroom, or disable it; `clear` aliases `off`, and `--account claude` targets the account cap. Changing a parked scope queues the configured continue prompt to the agents it interrupted in this room unless `--no-continue` is set.
+These keys are the on-switch; `rimz budget` inspects and adjusts an armed cap at runtime without touching them, and refuses to arm a cap they never set. The full cap model — the per-agent and loop-task scopes, what a park does, and what resumes it — is the [budgets guide](./budget.md).
 
 ### Smart compaction
 

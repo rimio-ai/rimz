@@ -69,13 +69,9 @@ The `5h` and `7d` bars measure a different thing from the dollar figures. They a
 
 When a window empties mid-turn the agent parks rather than fails, and with auto-continue it resumes itself the moment the window resets ([loops, built-in recovery](./loops.md#built-in-recovery)). The exact bar tones, the reset colouring, and the not-yet-started window are drawn in the [interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard); where the readings come from is [providers internals](../internals/agents/providers.md).
 
-#### Dollar caps at four scopes
+#### Cap the spend you read here
 
-Dollar budgets use one model at four scopes: an agent session (`--budget` or a profile budget), a loop task (`--budget` and `--budget-per-day`), a room fleet (`harness.budget`), and a provider login (`accounts.budget.<kind>`). The room and login caps accept `/day` only, read a dedicated local-calendar-day spend window, and turn on only through their config keys.
-
-Run `rimz budget` to inspect or adjust an armed cap: `20/day` replaces the live room cap, `+10` adds headroom, and `off` disables it; add `--account claude` to target that login. An armed, healthy scope reads exactly like an uncapped one. While agents are parked on a crossed cap, the cockpit or provider row turns alarm-red and explains the stop as `$50.21 of $50/day`.
-
-Crossing any cap parks a running agent through the same interrupt backstop. Agents already at rest keep their lifecycle status, and a waiting agent keeps its ask visible until the answered turn runs again. A human message delivered after the park waives that agent's next turn once, and the waiver is consumed when the turn ends; background delivery stays parked. At the daily reset or after a cap is raised, only agents that RimZ interrupted receive the continue prompt. Supervised `-p` launches and loop fires do not consume waivers: they fail or record `budget skipped` until the room and account scopes have headroom.
+Everything on this page reads; the same numbers can also enforce. A dollar cap on an agent, a loop task, the room's whole fleet, or a provider login parks the work when it crosses the line, and a crossed cap announces itself here: the cockpit or provider row turns alarm-red and explains the stop as `$50.21 of $50/day`. The caps, the park, and what resumes it are the [budgets guide](./budget.md).
 
 ### Per room: the cockpit
 
@@ -124,6 +120,7 @@ A few knobs, all plain TOML ([configuration](./configuration.md)):
 ## See also
 
 - [The sidebar](./sidebar.md): reading the cockpit and dashboard for attention, not just for spend.
+- [Budgets](./budget.md): turn the spend read into an enforced cap, per agent, task, room, or login.
 - [Agents](./agents.md#manage-a-running-room): one agent's token split and cost with `rimz agents show`.
 - [Loops](./loops.md#built-in-recovery): auto-continue when a budget window empties mid-turn.
 - [Configuration](./configuration.md#sidebar-rendering): the spend window, timezone, and provider-display knobs.
