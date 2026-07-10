@@ -75,6 +75,14 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
         ),
         (
             "PostToolUse",
+            json!({"session_id":"s","tool_name":"Bash"}),
+            Some(ToolUsed {
+                mutates: true,
+                edits: false,
+            }),
+        ),
+        (
+            "PostToolUse",
             json!({"session_id":"s","tool_name":"read"}),
             Some(ToolUsed {
                 mutates: false,

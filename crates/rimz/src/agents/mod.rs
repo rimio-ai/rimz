@@ -376,6 +376,7 @@ pub struct RefreshSpawn {
 pub struct RealtimeAccountUsage {
     pub rate_limits: Option<AgentRateLimits>,
     pub extra_credits: Option<ExtraCredits>,
+    pub reset_credits: Option<ResetCredits>,
 }
 
 /// Dynamic remote-control state read from the agent's own machine-local

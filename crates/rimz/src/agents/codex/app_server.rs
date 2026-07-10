@@ -28,8 +28,8 @@
 //! notification (requires a subscribing `thread/resume`), never on a read-only
 //! method. So the context gauge stays sourced from the rollout tail in
 //! [`crate::agents::codex`]; this client supplies what the app-server *does* expose
-//! read-only: rate-limit windows, model display name, thread preview/name, and
-//! version.
+//! read-only: rate-limit windows, paid/reset credits, model display name,
+//! thread preview/name, and version.
 //!
 //! Best-effort, never correctness: every failure maps to an omitted field or a
 //! `None` record — it never fails a hook or a turn.
@@ -40,8 +40,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-use crate::agents::ExtraCredits;
 use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits};
+use crate::agents::{ExtraCredits, ResetCredits};
 
 #[cfg(test)]
 mod tests;
@@ -55,8 +55,9 @@ pub(crate) use transport::{
 use transport::{FramedTransport, WsTransport};
 use wire::{
     MatchedModel, ModelListResponse, RateLimitsResponse, ThreadListResponse, ThreadReadResponse,
-    ThreadSummary, codex_version_from_user_agent, collect_credits, collect_windows, into_context,
-    parse_loaded_threads, thread_matches_session, thread_summary_from_raw,
+    ThreadSummary, codex_version_from_user_agent, collect_credits, collect_reset_credits,
+    collect_windows, into_context, parse_loaded_threads, thread_matches_session,
+    thread_summary_from_raw,
 };
 
 /// Total wall-clock budget for one refresh (spawn + handshake + reads). The
@@ -85,12 +86,14 @@ pub(crate) struct CodexAppServer<T: JsonRpcTransport> {
 pub(crate) struct AppServerObservation {
     pub(crate) context: AgentContext,
     pub(crate) extra_credits: Option<ExtraCredits>,
+    pub(crate) reset_credits: Option<ResetCredits>,
 }
 
 type RateLimitRead = (
     Option<AgentRateLimits>,
     Option<AgentAccount>,
     Option<ExtraCredits>,
+    Option<ResetCredits>,
 );
 
 /// One way [`CodexAppServer::connect`] tries to reach an app-server, in
@@ -247,11 +250,11 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         Ok(())
     }
 
-    /// Read the account's rate-limit windows and plan tier in one call. The
-    /// windows ride [`AgentRateLimits`]; the plan tier (when present) marks a
-    /// metered subscription account on [`AgentAccount`]. An API-key account
-    /// returns neither, so the account is left `None` and the dashboard infers
-    /// the unmetered "infinite" bar.
+    /// Read the account's rate-limit windows, plan tier, and credit summaries
+    /// in one call. The windows ride [`AgentRateLimits`]; the plan tier (when
+    /// present) marks a metered subscription account on [`AgentAccount`]. An
+    /// API-key account returns neither, so the account is left `None` and the
+    /// dashboard infers the unmetered "infinite" bar.
     fn rate_limits(&mut self) -> Result<RateLimitRead, AppServerErr> {
         let result = self
             .transport
@@ -259,6 +262,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         let parsed: RateLimitsResponse = serde_json::from_value(result)
             .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
         let credits = collect_credits(&parsed);
+        let reset_credits = collect_reset_credits(&parsed);
         let windows = collect_windows(parsed.rate_limits.primary, parsed.rate_limits.secondary);
         let plan = parsed.rate_limits.plan_type.filter(|plan| !plan.is_empty());
         let account = (plan.is_some() || windows.is_some()).then_some(AgentAccount {
@@ -268,7 +272,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             version: None,
             sub_provider: None,
         });
-        Ok((windows, account, credits))
+        Ok((windows, account, credits, reset_credits))
     }
 
     /// Match the session's model `hint` (a raw model id from the lifecycle
@@ -381,7 +385,8 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         model_hint: Option<&str>,
         observed_at: Timestamp,
     ) -> AppServerObservation {
-        let (rate_limits, account, extra_credits) = self.rate_limits().unwrap_or_default();
+        let (rate_limits, account, extra_credits, reset_credits) =
+            self.rate_limits().unwrap_or_default();
         let model = model_hint.and_then(|hint| self.matched_model(hint).ok().flatten());
         let thread = session_id.and_then(|id| self.thread_summary(id));
         let agent_version = self
@@ -400,6 +405,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         AppServerObservation {
             context,
             extra_credits,
+            reset_credits,
         }
     }
 

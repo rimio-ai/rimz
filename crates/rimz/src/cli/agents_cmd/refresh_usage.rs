@@ -17,7 +17,7 @@ use clap::Args;
 
 use rimz::ids::WorkspaceId;
 use rimz::sidebar::refresh::{
-    merge_account_rate_limits, merge_oauth_usage_if_due, merge_provider_credits,
+    merge_account_rate_limits, merge_oauth_usage_if_due, merge_provider_realtime_credits,
 };
 use rimz::{RuntimePaths, agents};
 
@@ -69,8 +69,8 @@ fn refresh_usage(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> boo
     };
     let mut wrote = false;
     let windows_missing = usage.rate_limits.is_none();
-    if let Some(extra_credits) = usage.extra_credits {
-        merge_provider_credits(runtime, kind, Some(extra_credits));
+    if usage.extra_credits.is_some() || usage.reset_credits.is_some() {
+        merge_provider_realtime_credits(runtime, kind, usage.extra_credits, usage.reset_credits);
         wrote = true;
     }
     if let Some(rate_limits) = usage.rate_limits {

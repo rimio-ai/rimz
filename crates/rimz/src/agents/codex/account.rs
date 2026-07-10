@@ -1,30 +1,88 @@
-//! Codex's out-of-band account probe: a `~/.codex/auth.json` read.
+//! Codex's out-of-band account probe: `auth.json`, then `codex login status`.
 //!
-//! A cheap file read, never a subprocess — the login shape alone separates a
-//! metered ChatGPT subscription from an unmetered API key
-//! ([`AgentAdapter::probe_account`]). Best-effort and producer-only — see
+//! The file path keeps the common case cheap and distinguishes a metered
+//! ChatGPT subscription from an unmetered API key. Codex can instead keep
+//! credentials in the OS keyring; when no file exists, the CLI status command
+//! supplies the same distinction. Best-effort and producer-only — see
 //! [`crate::agents::account`] for the probe contract.
 //!
 //! [`AgentAdapter::probe_account`]: crate::agents::AgentAdapter::probe_account
+
+use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
 use crate::agents::account::AccountProbe;
 use crate::agents::context::AgentAccount;
 
-/// Probe Codex's login from `~/.codex/auth.json` (honoring `CODEX_HOME`). A file
-/// read only — never a subprocess. A missing file or a no-login payload is
-/// `LoggedOut` (an authoritative answer); only an unexpected IO error — e.g. a
-/// permission failure on an existing file — is the transient `Unavailable`.
+/// Probe Codex's login from `~/.codex/auth.json` (honoring `CODEX_HOME`), then
+/// fall back to `codex login status` when credentials live in the OS keyring.
+/// A readable file remains authoritative; an unexpected file IO error is the
+/// transient `Unavailable` arm.
 pub(crate) fn probe() -> AccountProbe {
     let Some(home) = super::app_server::codex_home() else {
         return AccountProbe::LoggedOut;
     };
     match std::fs::read(home.join("auth.json")) {
         Ok(bytes) => parse_codex_auth(&bytes),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => AccountProbe::LoggedOut,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => probe_login_status(),
         Err(_) => AccountProbe::Unavailable,
     }
+}
+
+fn probe_login_status() -> AccountProbe {
+    let Ok(output) = Command::new("codex")
+        .args(["login", "status"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+    else {
+        return AccountProbe::Unavailable;
+    };
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    parse_login_status(&text)
+}
+
+/// Map `codex login status` output onto a probe outcome. Codex prints one line
+/// per auth mode (`run_login_status`): `Logged in using ChatGPT` (a metered
+/// subscription), `Logged in using an API key - <masked>` and `Logged in using
+/// Amazon Bedrock API key` (token/AWS-billed, so unmetered by subscription
+/// windows), `Logged in using access token` / `Logged in using personal access
+/// token` (logged in, metering unknown — the dashboard infers it from window
+/// presence), or `Not logged in`. Any other recognized `Logged in using …` mode
+/// is authoritatively logged in with unknown metering rather than a retried
+/// `Unavailable`; only output with no recognizable login line is transient.
+fn parse_login_status(text: &str) -> AccountProbe {
+    let normalized = text.trim().to_ascii_lowercase();
+    let mut metered = None;
+    for line in normalized.lines() {
+        let line = line.trim();
+        if line == "not logged in" {
+            return AccountProbe::LoggedOut;
+        }
+        let Some(mode) = line.strip_prefix("logged in using ") else {
+            continue;
+        };
+        metered = Some(if mode == "chatgpt" {
+            Some(true)
+        } else if mode.starts_with("an api key") || mode.starts_with("amazon bedrock api key") {
+            Some(false)
+        } else {
+            None
+        });
+    }
+    let Some(metered) = metered else {
+        return AccountProbe::Unavailable;
+    };
+    AccountProbe::Found(AgentAccount {
+        plan: None,
+        account_id: None,
+        metered,
+        version: None,
+        sub_provider: None,
+    })
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -109,9 +167,8 @@ mod tests {
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(true));
 
-        // A codex auth file read is cheap and never a subprocess, so an absent
-        // credential — or an unparseable file — is an authoritative logged-out,
-        // not the transient `Unavailable` that drives a short retry.
+        // A readable auth file remains authoritative. The CLI fallback is only
+        // for a missing file, which is the keyring-backed credential shape.
         assert!(matches!(
             parse_codex_auth(br#"{ "OPENAI_API_KEY": null }"#),
             AccountProbe::LoggedOut
@@ -123,6 +180,50 @@ mod tests {
         assert!(matches!(
             parse_codex_auth(b"not json"),
             AccountProbe::LoggedOut
+        ));
+    }
+
+    #[test]
+    fn parses_cli_login_status_for_keyring_credentials() {
+        // Strings mirror Codex `run_login_status` output verbatim (0.144.1).
+        let account = found(
+            parse_login_status("Logged in using ChatGPT\n"),
+            "keyring ChatGPT login",
+        );
+        assert_eq!(account.metered, Some(true));
+
+        let account = found(
+            parse_login_status("Logged in using an API key - sk-proj-***abcd\n"),
+            "keyring API login",
+        );
+        assert_eq!(account.metered, Some(false));
+
+        let account = found(
+            parse_login_status("Logged in using Amazon Bedrock API key\n"),
+            "keyring Bedrock API login",
+        );
+        assert_eq!(account.metered, Some(false));
+
+        // `AuthMode::AgentIdentity` prints "access token", not "agent identity".
+        let account = found(
+            parse_login_status("Logged in using access token\n"),
+            "managed agent-identity login",
+        );
+        assert_eq!(account.metered, None);
+
+        let account = found(
+            parse_login_status("Logged in using personal access token\n"),
+            "personal access-token login",
+        );
+        assert_eq!(account.metered, None);
+
+        assert!(matches!(
+            parse_login_status("Not logged in\n"),
+            AccountProbe::LoggedOut
+        ));
+        assert!(matches!(
+            parse_login_status("Error checking login status: boom\n"),
+            AccountProbe::Unavailable
         ));
     }
 }

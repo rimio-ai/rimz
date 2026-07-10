@@ -618,6 +618,42 @@ fn extra_credits_only_merge_preserves_prior_oauth_and_reset_state() {
 }
 
 #[test]
+fn realtime_reset_credit_merge_preserves_paid_credit_and_oauth_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    runtime.ensure_dirs().unwrap();
+    let paid = ExtraCredits::known(None, Some(5.0), None);
+    merge_provider_credits_entry(
+        &runtime,
+        "codex",
+        ProviderCreditsEntry {
+            observed_at_ms: 1,
+            oauth_read_at_ms: 1234,
+            auth_settled: false,
+            credentials_stamp: Some(11),
+            account_key: Some("acc".to_owned()),
+            plan: Some("pro".to_owned()),
+            ok: true,
+            extra_credits: Some(paid.clone()),
+            reset_credits: None,
+        },
+    );
+    let reset = ResetCredits {
+        count: 2,
+        soonest_expiry: jiff::Timestamp::from_second(1_800_000_000).ok(),
+    };
+    merge_provider_realtime_credits(&runtime, "codex", None, Some(reset.clone()));
+
+    let cache = read_credits_cache(&runtime.shared_credits_path());
+    let entry = cache.entries.get("codex").expect("codex credits");
+    assert_eq!(entry.extra_credits, Some(paid));
+    assert_eq!(entry.reset_credits, Some(reset));
+    assert_eq!(entry.oauth_read_at_ms, 1234);
+    assert_eq!(entry.account_key.as_deref(), Some("acc"));
+}
+
+#[test]
 fn failed_oauth_merge_preserves_prior_displayable_credits() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())

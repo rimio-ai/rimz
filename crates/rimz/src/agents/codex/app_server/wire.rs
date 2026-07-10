@@ -6,11 +6,11 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agents::ExtraCredits;
 use crate::agents::codex::oauth_usage::{credits_to_extra, parse_balance};
 use crate::agents::context::{
     AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow, WindowSource,
 };
+use crate::agents::{ExtraCredits, ResetCredits};
 
 use super::transport::AppServerErr;
 
@@ -23,6 +23,8 @@ pub(super) struct RateLimitsResponse {
     pub(super) rate_limits: RateLimitSnapshot,
     #[serde(default)]
     pub(super) credits: Option<CreditsWire>,
+    #[serde(default)]
+    pub(super) rate_limit_reset_credits: Option<ResetCreditsWire>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -63,6 +65,24 @@ pub(super) struct RawWindow {
     resets_at: Option<i64>,
     #[serde(default)]
     window_duration_mins: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ResetCreditsWire {
+    #[serde(default)]
+    available_count: Option<u64>,
+    #[serde(default)]
+    credits: Option<Vec<ResetCreditWire>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResetCreditWire {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    expires_at: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -283,6 +303,26 @@ pub(super) fn collect_credits(parsed: &RateLimitsResponse) -> Option<ExtraCredit
         .as_ref()
         .and_then(map_credits)
         .or_else(|| parsed.rate_limits.credits.as_ref().and_then(map_credits))
+}
+
+pub(super) fn collect_reset_credits(parsed: &RateLimitsResponse) -> Option<ResetCredits> {
+    let reset = parsed.rate_limit_reset_credits.as_ref()?;
+    let count = reset
+        .available_count
+        .and_then(|count| u32::try_from(count).ok())?;
+    let soonest_expiry = reset
+        .credits
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|credit| credit.status.as_deref() == Some("available"))
+        .filter_map(|credit| credit.expires_at)
+        .filter_map(|seconds| Timestamp::from_second(seconds).ok())
+        .min();
+    Some(ResetCredits {
+        count,
+        soonest_expiry,
+    })
 }
 
 fn map_credits(credits: &CreditsWire) -> Option<ExtraCredits> {

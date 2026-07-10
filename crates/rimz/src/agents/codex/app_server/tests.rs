@@ -325,6 +325,50 @@ fn rate_limits_response_maps_credit_state_fields() {
 }
 
 #[test]
+fn rate_limits_response_maps_reset_credit_summary() {
+    let transport = CannedTransport::new().with(
+        "account/rateLimits/read",
+        json!({
+            "rateLimits": {},
+            "rateLimitResetCredits": {
+                "availableCount": 3,
+                "credits": [
+                    { "status": "available", "expiresAt": 1_780_000_200_i64 },
+                    { "status": "redeemed", "expiresAt": 1_780_000_100_i64 },
+                    { "status": "available", "expiresAt": 1_780_000_300_i64 }
+                ]
+            }
+        }),
+    );
+    let mut client = CodexAppServer::new(transport);
+    client.handshake().unwrap();
+    assert_eq!(
+        client.observe("codex", None, None, ts()).reset_credits,
+        Some(ResetCredits {
+            count: 3,
+            soonest_expiry: Timestamp::from_second(1_780_000_200).ok(),
+        })
+    );
+
+    let transport = CannedTransport::new().with(
+        "account/rateLimits/read",
+        json!({
+            "rateLimits": {},
+            "rateLimitResetCredits": { "availableCount": 0, "credits": null }
+        }),
+    );
+    let mut client = CodexAppServer::new(transport);
+    client.handshake().unwrap();
+    assert_eq!(
+        client.observe("codex", None, None, ts()).reset_credits,
+        Some(ResetCredits {
+            count: 0,
+            soonest_expiry: None,
+        })
+    );
+}
+
+#[test]
 fn context_enrichment_reads_model_thread_version_and_survives_partial_failures() {
     let transport = CannedTransport::new().with("model/list", model_list_result());
     let mut client = CodexAppServer::new(transport);

@@ -184,8 +184,13 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         }
         return Ok(());
     };
-    if let (true, Some(extra_credits)) = (oauth_enabled, enrichment.extra_credits.clone()) {
-        rimz::sidebar::refresh::merge_provider_credits(&runtime, "codex", Some(extra_credits));
+    if oauth_enabled && (enrichment.extra_credits.is_some() || enrichment.reset_credits.is_some()) {
+        rimz::sidebar::refresh::merge_provider_realtime_credits(
+            &runtime,
+            "codex",
+            enrichment.extra_credits.clone(),
+            enrichment.reset_credits.clone(),
+        );
     }
     if oauth_enabled
         && (enrichment.extra_credits.is_none() || enrichment.context.rate_limits.is_none())

@@ -89,9 +89,10 @@ use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTurnError, ClassifiedHook, ExtraCredits,
     HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
     LocalContextRefresh, LocalContextRefreshCtx, RealtimeAccountUsage, RefreshSpawn,
-    RefreshTrigger, Result, RootIdentity, SubagentIdentity, TranscriptMessage, TranscriptRole,
-    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    RefreshTrigger, ResetCredits, Result, RootIdentity, SubagentIdentity, TranscriptMessage,
+    TranscriptRole, classify_agent_hook, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::harness::run::PermissionMode;
 use crate::transcript::AskQuestion;
@@ -184,7 +185,13 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // auth file names it `openai` (legacy installs `openai-codex`).
     sub_providers: &["openai", "openai-codex"],
     tools: ToolClassification {
-        mutating: &["shell", "apply_patch", "exec_command", "local_shell"],
+        mutating: &[
+            "Bash",
+            "shell",
+            "apply_patch",
+            "exec_command",
+            "local_shell",
+        ],
         editing: &["apply_patch"],
         // Codex's native blocking question tool is `request_user_input`.
         // Local rollout corpus on 2026-06-14 (Codex 0.139.0) contained 37
@@ -854,6 +861,7 @@ impl AgentAdapter for CodexAdapter {
             .map(|enrichment| RealtimeAccountUsage {
                 rate_limits: enrichment.context.rate_limits,
                 extra_credits: enrichment.extra_credits,
+                reset_credits: enrichment.reset_credits,
             })
     }
 
@@ -1146,6 +1154,7 @@ pub fn refresh_app_server_context(
 pub struct AppServerEnrichment {
     pub context: AgentContext,
     pub extra_credits: Option<ExtraCredits>,
+    pub reset_credits: Option<ResetCredits>,
 }
 
 pub fn refresh_app_server_enrichment(
@@ -1158,6 +1167,7 @@ pub fn refresh_app_server_enrichment(
     Some(AppServerEnrichment {
         context: observation.context,
         extra_credits: observation.extra_credits,
+        reset_credits: observation.reset_credits,
     })
 }
 

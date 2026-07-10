@@ -70,6 +70,15 @@ pub fn merge_provider_credits(
     kind: &str,
     extra_credits: Option<ExtraCredits>,
 ) {
+    merge_provider_realtime_credits(runtime, kind, extra_credits, None);
+}
+
+pub fn merge_provider_realtime_credits(
+    runtime: &RuntimePaths,
+    kind: &str,
+    extra_credits: Option<ExtraCredits>,
+    reset_credits: Option<ResetCredits>,
+) {
     merge_provider_credits_entry(
         runtime,
         kind,
@@ -80,9 +89,9 @@ pub fn merge_provider_credits(
             credentials_stamp: None,
             account_key: None,
             plan: None,
-            ok: extra_credits.is_some(),
+            ok: extra_credits.is_some() || reset_credits.is_some(),
             extra_credits,
-            reset_credits: None,
+            reset_credits,
         },
     );
 }
@@ -124,8 +133,8 @@ pub fn merge_provider_credits_entry_if_due(
             entry.plan = prior.plan.clone();
         }
     } else if entry.reset_credits.is_none() && !prior_account_mismatch {
-        // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
-        // and failed writes must not erase the last successful reset read.
+        // A reading without reset-credit data must not erase the last successful
+        // app-server or OAuth reset-credit read.
         entry.reset_credits = prior.as_ref().and_then(|entry| entry.reset_credits.clone());
     }
     entry.account_key = current_account_key;
@@ -156,9 +165,12 @@ pub(crate) fn merge_provider_credits_entry(
         entry.account_key = prior.account_key.clone();
         entry.plan = prior.plan.clone();
     }
+    if entry.extra_credits.is_none() {
+        entry.extra_credits = prior.and_then(|entry| entry.extra_credits.clone());
+    }
     if entry.reset_credits.is_none() {
-        // Reset credits are Codex OAuth-only; app-server, extra-credits-only,
-        // and failed writes must not erase the last successful reset read.
+        // A reading without reset-credit data must not erase the last successful
+        // app-server or OAuth reset-credit read.
         entry.reset_credits = prior.and_then(|entry| entry.reset_credits.clone());
     }
     cache.refreshed_at_ms = unix_now_ms();
