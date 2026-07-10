@@ -113,8 +113,8 @@ fn split_pane_injects_env_vars() {
     env.insert("RIMZ_TEST_VAR".to_owned(), "marker-rimz-env".to_owned());
     ZellijBackend::with_runtime_dir(xdg.path())
         .split_pane(SplitPaneOptions {
-            target_pane_id: Some(target),
-            cwd: None,
+            target_pane_id: Some(target.clone()),
+            cwd: Some(cwd.path().to_string_lossy().into_owned()),
             command: Some(vec![
                 "sh".to_owned(),
                 "-c".to_owned(),
@@ -146,6 +146,9 @@ fn split_pane_injects_env_vars() {
         marker, "marker-rimz-env",
         "Zellij split pane missed the injected RIMZ_TEST_VAR",
     );
+    ZellijBackend::with_runtime_dir(xdg.path())
+        .capture_pane(&target, Some(1), true)
+        .expect("capture split target with scrollback and ANSI");
 }
 /// `paste_text` writes one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
 /// the payload as a raw decimal byte list — the message delivery path. A
