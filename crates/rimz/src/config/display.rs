@@ -94,11 +94,10 @@ pub struct DisplayConfig {
     /// `max_provider_blocks`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub provider_list: Vec<String>,
-    /// Cap on the sidebar pane width in columns. Every sidebar pane targets the
-    /// standard percentage of the view at this cap; on an ultra-wide terminal
-    /// the percentage alone grows absurd, so a pane born above the cap is shrunk
-    /// to it once, when it is created. Creation-time only: a manual resize
-    /// afterwards sticks.
+    /// Cap on the sidebar pane width in columns. Panes are born at the standard
+    /// percentage up to this cap. Reconcile on attach or `rimz reload` converges
+    /// a sidebar outside a roughly 5%-of-view band back toward the birth width;
+    /// small manual resizes inside the band stick.
     pub max_cols: NonZeroU16,
     /// How the agent-cards scrollbar shows when the cards overflow. `auto`
     /// (default) paints it only while the viewport moves and hides it once the

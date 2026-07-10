@@ -1,4 +1,7 @@
-use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, SidebarWidth, TabOptions, ZellijBackend};
+use rimz::ids::{MuxName, PaneId};
+use rimz::mux::{
+    LayoutPanes, MuxBackend, PaneCmd, SidebarLiveness, SidebarWidth, TabOptions, ZellijBackend,
+};
 use tempfile::TempDir;
 
 use super::support::*;
@@ -31,7 +34,7 @@ fn sidebar_width_verdict_survives_birth_template_and_backend_tabs() {
     let _client = AttachedClient::attach(xdg.path(), &name, 340, 80);
     wait_for_attached_client(xdg.path(), &name);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72]),
+        wait_for_sidebar_columns(xdg.path(), &name, &[71..=73]),
         "the attached session must land the birth sidebar within rounding of \
          the 72-column cap, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
@@ -42,7 +45,7 @@ fn sidebar_width_verdict_survives_birth_template_and_backend_tabs() {
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 2);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72, 72..=72]),
+        wait_for_sidebar_columns(xdg.path(), &name, &[71..=73, 72..=72]),
         "a tab opened from an attached client must be born at exactly the \
          72-column cap, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
@@ -70,9 +73,53 @@ fn sidebar_width_verdict_survives_birth_template_and_backend_tabs() {
         .expect("open_tab");
 
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[69..=72, 72..=72, 69..=72]),
+        wait_for_sidebar_columns(xdg.path(), &name, &[71..=73, 72..=72, 69..=72]),
         "backend tab should mirror the live session width, not the stale \
          33-column caller verdict, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    // Force the birth-tab sidebar well below the repair band. Reconcile keeps
+    // the renderer and grows the pane until the first step that reaches or
+    // crosses the canonical width.
+    let panes = expect_list_panes_json(xdg.path(), &name);
+    let sidebar_panes: Vec<&serde_json::Value> = panes
+        .as_array()
+        .expect("pane array")
+        .iter()
+        .filter(|pane| {
+            pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
+                && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
+        })
+        .collect();
+    let birth_sidebar_id = sidebar_panes
+        .iter()
+        .min_by_key(|pane| pane.get("tab_id").and_then(|value| value.as_u64()))
+        .and_then(|pane| pane.get("id"))
+        .and_then(|value| value.as_u64())
+        .expect("birth sidebar id");
+    let liveness = SidebarLiveness {
+        claimed_panes: sidebar_panes
+            .iter()
+            .filter_map(|pane| pane.get("id").and_then(|value| value.as_u64()))
+            .map(|id| PaneId::from_parts(MuxName::Zellij, format!("terminal_{id}")))
+            .collect(),
+        ..Default::default()
+    };
+    resize_pane_steps(xdg.path(), &name, birth_sidebar_id, "decrease", 3);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[1..=54, 1..=100, 1..=100]),
+        "test setup must narrow the birth sidebar beyond the repair band, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
+    let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
+    let report = reconcile_until_converged(xdg.path(), &sidebar, &liveness);
+    assert_eq!(report.redocked, 1, "the narrow sidebar grows in place");
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[72..=89, 72..=72, 69..=72]),
+        "the repaired sidebar must land inside one Zellij step of the verdict, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 }

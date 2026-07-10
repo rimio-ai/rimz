@@ -9,6 +9,7 @@ use std::{
 use serde::Deserialize;
 
 use crate::ids::{MuxName, PaneId};
+use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
 use crate::mux::{ClientPresence, ClientView, PaneListing, ViewSidebars};
 use crate::pane::SIDEBAR_CHROME_TITLE;
@@ -201,11 +202,14 @@ pub(super) fn parse_new_pane_id(stdout: &str) -> Option<String> {
     Some(trimmed.to_owned())
 }
 
-/// Whether a sidebar is wider than the session's fixed birth width. Reconcile
-/// shrinks only oversized panes; a sub-canonical sidebar is left in place until
-/// the view is reopened.
-pub(super) fn sidebar_width_off_spec(cols: u64, canonical_cols: u64) -> bool {
-    cols > canonical_cols
+/// The tiled width of `tab_position`, derived from the rightmost pane extent.
+/// Floating, suppressed, and plugin panes do not define the tab's view width.
+pub(super) fn tab_view_cols(panes: &[RawPane], tab_position: u64) -> Option<u64> {
+    panes
+        .iter()
+        .filter(|pane| pane.tab_position == tab_position && pane.is_terminal())
+        .filter_map(|pane| pane.pane_x?.checked_add(pane.pane_columns?))
+        .max()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -320,9 +324,10 @@ pub(super) fn sidebar_geometry_off_spec(
         return false;
     };
     matches!(verdict, SidebarDock::SwapReachable | SidebarDock::NestedRow)
-        || pane
-            .pane_columns
-            .is_some_and(|cols| sidebar_width_off_spec(cols, canonical_cols))
+        || pane.pane_columns.is_some_and(|cols| {
+            tab_view_cols(panes, pane.tab_position)
+                .is_some_and(|view_cols| sidebar_width_off_spec(cols, canonical_cols, view_cols))
+        })
 }
 
 /// The mounted sidebar pane an add produced: a fresh live, sidebar-titled

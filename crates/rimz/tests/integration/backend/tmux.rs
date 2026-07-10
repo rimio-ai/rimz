@@ -1084,6 +1084,52 @@ fn reconcile_preserves_live_hook_birth_width() {
 }
 
 #[test]
+fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let session = "rimz-width-repair";
+    ensure_rimz_session(&server, session, Some((240, 50)));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = sidebar_opts(session, stub, Some(240));
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    let sidebar = wait_for_sidebar_pane(&server, session, None);
+    let liveness = rimz::mux::SidebarLiveness {
+        claimed_panes: [sidebar.clone()].into(),
+        ..Default::default()
+    };
+
+    server.tmux(&["resize-pane", "-t", sidebar.raw(), "-x", "90"]);
+    assert_eq!(server.display(sidebar.raw(), "#{pane_width}"), "90");
+
+    let report = server
+        .backend
+        .reconcile_sidebars(&opts, &liveness)
+        .expect("reconcile wide sidebar");
+    assert_eq!(report.redocked, 1);
+    assert_eq!(
+        server.display(sidebar.raw(), "#{pane_width}"),
+        "72",
+        "an out-of-band sidebar snaps exactly to the birth verdict",
+    );
+
+    server.tmux(&["resize-pane", "-t", sidebar.raw(), "-x", "74"]);
+    let report = server
+        .backend
+        .reconcile_sidebars(&opts, &liveness)
+        .expect("reconcile in-band sidebar");
+    assert_eq!(report.redocked, 0);
+    assert_eq!(
+        server.display(sidebar.raw(), "#{pane_width}"),
+        "74",
+        "a manual resize inside the tolerance band sticks",
+    );
+}
+
+#[test]
 fn reconcile_sidebars_reinstalls_after_new_window_hook() {
     require_tmux!();
 

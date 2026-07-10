@@ -507,7 +507,15 @@ fn sidebar_geometry_classifies_dock_shapes() {
           {"id": 28, "is_plugin": false, "tab_id": 9, "title": "shell",
            "pane_x": 160, "pane_columns": 138},
           {"id": 29, "is_plugin": false, "tab_id": 9, "title": "claude",
-           "pane_x": 0, "pane_columns": 298}
+           "pane_x": 0, "pane_columns": 298},
+          {"id": 30, "is_plugin": false, "tab_id": 10, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 57},
+          {"id": 31, "is_plugin": false, "tab_id": 10, "title": "zsh",
+           "pane_x": 57, "pane_columns": 241},
+          {"id": 32, "is_plugin": false, "tab_id": 11, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 86},
+          {"id": 33, "is_plugin": false, "tab_id": 11, "title": "zsh",
+           "pane_x": 86, "pane_columns": 212}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
     let canonical_cols = 72;
@@ -597,22 +605,40 @@ fn sidebar_geometry_classifies_dock_shapes() {
         None,
         "multi-column work layouts are left untouched instead of collapsed",
     );
+    assert!(
+        sidebar_geometry_off_spec(by_id(30), &panes, &excluded, canonical_cols),
+        "a sidebar narrower than the repair band grows",
+    );
+    assert!(
+        !sidebar_geometry_off_spec(by_id(32), &panes, &excluded, canonical_cols),
+        "a sidebar at the repair-band edge is left alone",
+    );
+    assert_eq!(
+        tab_view_cols(&panes, 7),
+        Some(298),
+        "only tiled terminals define the tab extent",
+    );
+    assert_eq!(
+        tab_view_cols(&panes, 3),
+        None,
+        "missing terminal geometry leaves the view width unknown",
+    );
 
     assert!(
-        !sidebar_width_off_spec(canonical_cols, canonical_cols),
+        !sidebar_width_off_spec(canonical_cols, canonical_cols, 298),
         "canonical width is not a mis-mount",
     );
     assert!(
-        sidebar_width_off_spec(149, canonical_cols),
+        sidebar_width_off_spec(149, canonical_cols, 298),
         "the 50% mis-mount is wider than the canonical width",
     );
     assert!(
-        !sidebar_width_off_spec(60, canonical_cols),
-        "sub-canonical panes are left untouched until the view reopens",
+        !sidebar_width_off_spec(60, canonical_cols, 298),
+        "a sub-canonical pane within one resize step is left alone",
     );
     assert!(
-        sidebar_width_off_spec(90, canonical_cols),
-        "anything wider than canonical still shrinks",
+        sidebar_width_off_spec(90, canonical_cols, 298),
+        "a pane wider than the repair band shrinks",
     );
 }
 

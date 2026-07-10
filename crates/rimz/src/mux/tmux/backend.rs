@@ -12,6 +12,7 @@ use super::parse::{parse_client_view, parse_new_window_ids, parse_pane_line};
 use super::window::sanitize_window_name;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
+use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend,
@@ -424,11 +425,9 @@ impl MuxBackend for TmuxBackend {
         // and drops a stray sidebar with `kill-pane -t`; no move/resize/refocus
         // dance and no session teardown is needed. `split-window` mounts fine on
         // a detached session, so tmux never defers an add the way the Zellij
-        // backend must (its detached screen thread drops the mount). Geometry
-        // convergence is likewise a deliberate no-op here: the common
-        // full-height-left-pane case carves the sidebar from that pane alone,
-        // while the split-column fallback uses `-f -b` to span the full window
-        // edge and land the sidebar at the session's fixed width synchronously.
+        // backend must (its detached screen thread drops the mount). Kept panes
+        // that drift beyond the cross-backend repair band snap exactly back to
+        // the session's fixed width after the close/add phases.
         let panes = self.list_panes(PaneListOptions {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()
@@ -469,6 +468,62 @@ impl MuxBackend for TmuxBackend {
                 }
             },
         );
+        let kept: Vec<(&str, &PaneId)> = views
+            .iter()
+            .filter(|view| view.sidebar_panes.len() == 1)
+            .filter(|view| !plan.add.contains(&view.view))
+            .filter_map(|view| {
+                let pane = view.sidebar_panes.first()?;
+                (!plan.close.contains(pane)).then_some((view.view.as_str(), pane))
+            })
+            .collect();
+        if !kept.is_empty() {
+            match self.session_pane_geometries(&opts.session_name) {
+                Ok(geometries) => {
+                    let canonical_cols = u64::from(canonical.get());
+                    for (window, pane) in kept {
+                        let Some(geometry) = geometries.iter().find(|geometry| {
+                            geometry.pane_id == pane.raw() && geometry.window_id == window
+                        }) else {
+                            continue;
+                        };
+                        if !sidebar_width_off_spec(
+                            geometry.pane_width,
+                            canonical_cols,
+                            geometry.window_width,
+                        ) {
+                            continue;
+                        }
+                        match self
+                            .cmd()
+                            .args([
+                                "resize-pane".to_owned(),
+                                "-t".to_owned(),
+                                pane.raw().to_owned(),
+                                "-x".to_owned(),
+                                canonical_cols.to_string(),
+                            ])
+                            .run()
+                        {
+                            Ok(_) => report.redocked += 1,
+                            Err(err) => tracing::warn!(
+                                session = %opts.session_name,
+                                pane = %pane.as_str(),
+                                tags.operation = "tmux.reconcile.resize_sidebar",
+                                error = &err as &dyn std::error::Error,
+                                "sidebar reconcile: resizing an off-spec sidebar failed; leaving it",
+                            ),
+                        }
+                    }
+                }
+                Err(err) => tracing::warn!(
+                    session = %opts.session_name,
+                    tags.operation = "tmux.reconcile.list_geometry",
+                    error = &err as &dyn std::error::Error,
+                    "sidebar reconcile: probing pane geometry failed; leaving widths unchanged",
+                ),
+            }
+        }
         Ok(report)
     }
 

@@ -68,11 +68,13 @@ impl SidebarWidth {
                     .ok()
                     .and_then(NonZeroU16::new)
                     .unwrap_or(self.max_cols);
-                // Floor keeps the percentage spelling at or under the verdict
-                // on the probed terminal; at least 1% so the spelling stays
-                // valid. `target ≤ total` bounds it at 100, so the conversion
-                // holds.
-                let derived = (target * 100 / u64::from(total)).max(1);
+                // Round the percentage spelling to the nearest whole percent,
+                // so materializing it on the probed terminal lands within
+                // roughly half a percent of the verdict on either side. The
+                // reconcile tolerance absorbs that residue. `target ≤ total`
+                // bounds it at 100, and at least 1% keeps the spelling valid.
+                let total = u64::from(total);
+                let derived = ((target * 100 + total / 2) / total).clamp(1, 100);
                 BirthSize {
                     cols,
                     percent: u16::try_from(derived).unwrap_or(percent),
@@ -106,10 +108,18 @@ pub struct BirthSize {
     /// The verdict in columns: `min(percent × probed width, max_cols)`, the
     /// bare cap when no terminal was probed.
     pub cols: NonZeroU16,
-    /// The verdict as a share of the probed width (floor, ≥ 1%) — the
-    /// unknown-geometry spelling; the configured percentage when no terminal
-    /// was probed.
+    /// The verdict as a share of the probed width (rounded to nearest, ≥ 1%)
+    /// — the unknown-geometry spelling; the configured percentage when no
+    /// terminal was probed.
     pub percent: u16,
+}
+
+/// Whether a live sidebar's width warrants repair toward the canonical
+/// verdict. The slack is one Zellij resize step (5% of the view), so a repair
+/// that stops on the near side of canonical never re-triggers the opposite
+/// direction next pass; it also lets a small manual resize stick.
+pub fn sidebar_width_off_spec(cols: u64, canonical_cols: u64, view_cols: u64) -> bool {
+    cols.abs_diff(canonical_cols) > 2.max(view_cols / 20)
 }
 
 /// The invoking terminal's `(cols, rows)`, when stdout is attached to one.
@@ -162,15 +172,32 @@ mod tests {
         assert_eq!(width.birth_size(Some(120)), birth(36, 30));
         // Exactly at the cap: 30% of 240 is 72.
         assert_eq!(width.birth_size(Some(240)), birth(72, 30));
-        // Past it the cap bites, and the percentage spelling floors to the
-        // cap's share of the probed width: ⌊72·100/340⌋ = 21.
+        // Past it the cap bites, and the percentage spelling rounds to the
+        // nearest share of the probed width: round(72·100/340) = 21.
         assert_eq!(width.birth_size(Some(340)), birth(72, 21));
-        // The percentage spelling never floors below 1%, however wide the view.
+        assert_eq!(width.birth_size(Some(250)), birth(72, 29));
+        assert_eq!(width.birth_size(Some(460)), birth(72, 16));
+        // The percentage spelling never rounds below 1%, however wide the view.
         assert_eq!(width.birth_size(Some(7300)), birth(72, 1));
         // Unknown width (no tty, or a zero-width probe) resolves to the bare
         // cap with the raw percentage for unknown-geometry panes.
         assert_eq!(width.birth_size(None), birth(72, 30));
         assert_eq!(width.birth_size(Some(0)), birth(72, 30));
+    }
+
+    #[test]
+    fn sidebar_width_repair_uses_one_resize_step_as_slack() {
+        // A 200-column view gets ten columns of slack on either side.
+        assert!(!sidebar_width_off_spec(62, 72, 200));
+        assert!(!sidebar_width_off_spec(82, 72, 200));
+        assert!(sidebar_width_off_spec(61, 72, 200));
+        assert!(sidebar_width_off_spec(83, 72, 200));
+
+        // Tiny or unknown-looking views retain a two-column minimum band.
+        assert!(!sidebar_width_off_spec(70, 72, 0));
+        assert!(!sidebar_width_off_spec(74, 72, 20));
+        assert!(sidebar_width_off_spec(69, 72, 20));
+        assert!(sidebar_width_off_spec(75, 72, 20));
     }
 
     #[test]

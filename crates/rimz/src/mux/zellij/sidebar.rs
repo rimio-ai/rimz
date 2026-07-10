@@ -12,7 +12,7 @@ use super::parse::{
 use super::raw_pane::{
     SidebarDock, docked_sidebar_cols, is_sidebar_pane, leftmost_live_work_pane,
     mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids,
-    sidebar_dock_verdict, sidebar_width_off_spec,
+    sidebar_dock_verdict, tab_view_cols,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -20,6 +20,7 @@ use super::{
     TAB_NAMES_RETRY_DELAY, ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
     DaemonView, MuxErr, PresencePluginOptions, Result, SidebarPaneOptions, sidebar_serve_args,
 };
@@ -411,10 +412,10 @@ impl ZellijBackend {
     /// between steps — `move-pane left` swaps one position per call) until the
     /// pane reaches the left column or stops progressing, a narrow nested-row
     /// repair that stacks work panes into the right column when the surrounding
-    /// layout is safe to rewrite, then a resize back toward the session's fixed
-    /// birth width when it is still too wide. Returns the last successful repair
-    /// action timestamp. Best-effort: geometry is cosmetic, so any failure just
-    /// leaves the pane where it is for the next pass.
+    /// layout is safe to rewrite, then a resize toward the session's fixed birth
+    /// width when it sits outside the repair band. Returns the last successful
+    /// repair action timestamp. Best-effort: geometry is cosmetic, so any
+    /// failure just leaves the pane where it is for the next pass.
     pub(super) fn converge_sidebar_geometry(
         &self,
         opts: &SidebarPaneOptions,
@@ -456,22 +457,30 @@ impl ZellijBackend {
             floor = Some(action_ms);
         }
         let target_cols = u64::from(opts.birth_size.cols.get());
-        if let Some(cols) = self.sidebar_cols(
+        if let Ok(panes) = self.topology_panes_for_workspace(
             &opts.session_name,
             &opts.workspace_id,
-            tab_position,
-            raw_id,
             floor,
-        ) && sidebar_width_off_spec(cols, target_cols)
-        {
-            floor = self.resize_sidebar_toward(
-                &opts.session_name,
-                &opts.workspace_id,
-                tab_position,
-                &pane_raw,
-                target_cols,
-                floor,
-            );
+            RECONCILE_LIST_TIMEOUT,
+        ) {
+            let cols = panes.iter().find_map(|pane| {
+                (pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id)
+                    .then_some(pane.pane_columns)
+                    .flatten()
+            });
+            let view_cols = tab_view_cols(&panes, tab_position);
+            if cols.zip(view_cols).is_some_and(|(cols, view_cols)| {
+                sidebar_width_off_spec(cols, target_cols, view_cols)
+            }) {
+                floor = self.resize_sidebar_toward(
+                    &opts.session_name,
+                    &opts.workspace_id,
+                    tab_position,
+                    &pane_raw,
+                    target_cols,
+                    floor,
+                );
+            }
         }
         floor
     }
@@ -671,15 +680,13 @@ impl ZellijBackend {
         Ok(parse_new_pane_id(&String::from_utf8_lossy(&output.stdout)))
     }
 
-    /// Shrink the reconcile heal path's freshly-split sidebar (born at ~50% —
-    /// `new-pane` has no tiled-size flag) toward the session's fixed birth
-    /// width. The resize step is coarse, so the target can fall between two
-    /// reachable widths; stop at the first width at or below it so the pane
-    /// never finishes above the canonical target. Bounded and best-effort: it
-    /// stops at the target, when post-step topology proves a step made no
-    /// progress (hit a real Zellij minimum), or after [`RESIZE_MAX_STEPS`] —
-    /// never a dead loop. Width is cosmetic, so any failure just leaves the
-    /// wider pane.
+    /// Converge a sidebar toward the session's fixed birth width. Zellij's
+    /// resize step is coarse, so the target can fall between two reachable
+    /// widths; stop when the pane first crosses or reaches the target from its
+    /// starting side. Bounded and best-effort: it stops at the target, when
+    /// post-step topology proves a step made no progress (hit a real Zellij
+    /// minimum), or after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is
+    /// cosmetic, so any failure leaves the pane for the next reconcile.
     pub(super) fn resize_sidebar_toward(
         &self,
         session: &str,
@@ -694,7 +701,8 @@ impl ZellijBackend {
             return min_topology_produced_at_ms;
         };
         let mut floor = min_topology_produced_at_ms;
-        let mut last_cols = u64::MAX;
+        let mut grow = None;
+        let mut last_cols = None;
         let mut no_progress_retry = false;
         for _ in 0..RESIZE_MAX_STEPS {
             let Some(cols) =
@@ -702,10 +710,19 @@ impl ZellijBackend {
             else {
                 return floor;
             };
-            if cols <= target_cols {
+            let grow = *grow.get_or_insert(cols < target_cols);
+            if cols == target_cols || (grow && cols > target_cols) || (!grow && cols < target_cols)
+            {
                 return floor;
             }
-            if cols >= last_cols {
+            let no_progress = last_cols.is_some_and(|last_cols| {
+                if grow {
+                    cols <= last_cols
+                } else {
+                    cols >= last_cols
+                }
+            });
+            if no_progress {
                 // A cache produced after action start but before Zellij applies
                 // the resize can repeat once; require one newer read before
                 // treating the pane as pinned at a backend minimum.
@@ -717,10 +734,10 @@ impl ZellijBackend {
                 return floor; // no progress (hit a minimum) — stop rather than spin.
             }
             no_progress_retry = false;
-            last_cols = cols;
+            last_cols = Some(cols);
             let action_floor = unix_now_ms();
             if self
-                .resize_sidebar_step(session, pane_id, "decrease")
+                .resize_sidebar_step(session, pane_id, if grow { "increase" } else { "decrease" })
                 .is_err()
             {
                 return floor;

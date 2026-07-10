@@ -4,11 +4,19 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
+use crate::mux::{CommandSpec, MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
 
 use super::TmuxBackend;
 use super::options::sidebar_serve_command;
 use super::parse::parse_new_window_ids;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TmuxPaneGeometry {
+    pub(super) pane_id: String,
+    pub(super) window_id: String,
+    pub(super) pane_width: u64,
+    pub(super) window_width: u64,
+}
 
 /// A tmux window name with its reserved separators neutralized. tmux parses a
 /// colon as the `session:window` boundary and a dot as the `window.pane`
@@ -85,6 +93,27 @@ impl TmuxBackend {
             .run()
             .ok()?;
         String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+    }
+
+    /// Every pane's current width and containing-window width in `session`,
+    /// collected with one tmux client invocation for sidebar reconciliation.
+    pub(super) fn session_pane_geometries(&self, session: &str) -> Result<Vec<TmuxPaneGeometry>> {
+        let output = self.session_pane_geometries_command(session).run()?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(parse_tmux_pane_geometry)
+            .collect())
+    }
+
+    pub(super) fn session_pane_geometries_command(&self, session: &str) -> CommandSpec {
+        self.cmd().args([
+            "list-panes",
+            "-s",
+            "-t",
+            session,
+            "-F",
+            "#{pane_id} #{window_id} #{pane_width} #{window_width}",
+        ])
     }
 
     /// Resize a freshly-born tab up to the widest attached client and
@@ -550,4 +579,15 @@ impl TmuxBackend {
         }
         Ok(pane_id)
     }
+}
+
+pub(super) fn parse_tmux_pane_geometry(line: &str) -> Option<TmuxPaneGeometry> {
+    let mut fields = line.split_whitespace();
+    let geometry = TmuxPaneGeometry {
+        pane_id: fields.next()?.to_owned(),
+        window_id: fields.next()?.to_owned(),
+        pane_width: fields.next()?.parse().ok()?,
+        window_width: fields.next()?.parse().ok()?,
+    };
+    fields.next().is_none().then_some(geometry)
 }

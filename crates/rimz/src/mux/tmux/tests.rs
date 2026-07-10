@@ -200,3 +200,37 @@ fn list_panes_scopes_session_without_server_wide_flag() {
     let server_args = backend.list_panes_command(None).args;
     assert_eq!(&server_args[..3], ["list-panes", "-a", "-F"]);
 }
+
+#[test]
+fn sidebar_geometry_probe_is_one_session_scoped_command() {
+    let backend = TmuxBackend::default();
+
+    assert_eq!(
+        backend.session_pane_geometries_command("rimz-room").args,
+        [
+            "list-panes",
+            "-s",
+            "-t",
+            "rimz-room",
+            "-F",
+            "#{pane_id} #{window_id} #{pane_width} #{window_width}",
+        ],
+    );
+}
+
+#[test]
+fn sidebar_geometry_probe_parser_requires_four_typed_fields() {
+    use super::window::{TmuxPaneGeometry, parse_tmux_pane_geometry};
+
+    assert_eq!(
+        parse_tmux_pane_geometry("%3 @1 72 240"),
+        Some(TmuxPaneGeometry {
+            pane_id: "%3".to_owned(),
+            window_id: "@1".to_owned(),
+            pane_width: 72,
+            window_width: 240,
+        }),
+    );
+    assert_eq!(parse_tmux_pane_geometry("%3 @1 wide 240"), None);
+    assert_eq!(parse_tmux_pane_geometry("%3 @1 72 240 extra"), None);
+}
