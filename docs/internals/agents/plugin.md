@@ -20,10 +20,12 @@ The descriptor owns leaked strings for branding, tools, process names, activity 
 
 [`protocol.rs`](../../../crates/rimz/src/agents/plugin/protocol.rs) is the structured protocol-1 parser. It checks the envelope event against the feed event, resolves root and child identities through the shared identity helpers, maps one canonical event to one `LifecycleSignal`, and normalizes context fields into `AgentContext`. Valid canonical events omitted from `emits` still ingest with a warning; unknown events drop at debug level, and malformed child identity quarantines through the normal lifecycle diagnostic target.
 
+The canonical vocabulary is transport-independent. `rimz hooks feed` supplies the version-1 process delivery path; a resident receiver can carry the same envelopes over a socket without a protocol change.
+
 [`probes.rs`](../../../crates/rimz/src/agents/plugin/probes.rs) owns fresh piped stdio, the three-second deadline, bounded output, relative executable resolution, and failure warnings. Spend cursors keep the file offset in `SpendCursor.offset` and opaque plugin state in `SpendCursor.state`; priced entries bypass `PriceBook`.
 
 ## Entry-point policy
 
 Room start reads the cached error list before creating configuration or mux state and refuses when any manifest is invalid. Registry-driven read paths retain only valid adapters and warn once for each skipped manifest. Hook feed recognizes a source whose directory failed to load and returns neutral success rather than breaking the agent's hook path.
 
-`rimz agents register` writes an atomically-created scaffold under the machine configuration root. `--check` runs the same loader validation without entering a room. `rimz doctor` renders valid and invalid diagnostics, setup guidance, and probe file status.
+`rimz agents register` writes an atomically-created scaffold under the machine configuration root. `register --check` runs the same loader validation across the machine registry without entering a room. `rimz agents check <kind>` adds probe dry-runs and diagnostic envelope replay for plugin authors; replay calls the adapter seam and the pure lifecycle state machine without writing the store. `rimz doctor` renders valid and invalid diagnostics, setup guidance, and probe file status.

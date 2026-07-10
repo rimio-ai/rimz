@@ -1,6 +1,7 @@
 //! Third-party agent plugin CLI and registry integration.
 
 use std::fs;
+use std::path::PathBuf;
 
 use serde_json::Value;
 
@@ -114,6 +115,93 @@ fn plugin_scaffold_registry_doctor_and_start_validation_work_end_to_end() {
     assert!(
         output.status.success(),
         "invalid plugin broke hook path: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn plugin_check_replays_example_envelopes_and_rejects_bad_input() {
+    let env = Env::new();
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/agent-plugin");
+    let plugin_dir = env.config_root().join("rimz/agents.d/scriptbot");
+    fs::create_dir_all(plugin_dir.join("fixtures")).expect("create plugin fixture directory");
+    fs::copy(source.join("README.md"), plugin_dir.join("README.md")).expect("copy setup doc");
+    fs::copy(
+        source.join("fixtures/envelopes.jsonl"),
+        plugin_dir.join("fixtures/envelopes.jsonl"),
+    )
+    .expect("copy replay fixture");
+    let manifest = fs::read_to_string(source.join("agent.toml")).expect("read example manifest");
+    let manifest = manifest
+        .split_once("[probes]")
+        .map_or(manifest.as_str(), |(manifest, _)| manifest);
+    fs::write(plugin_dir.join("agent.toml"), manifest).expect("write probe-free test manifest");
+
+    let replay = plugin_dir.join("fixtures/envelopes.jsonl");
+    let output = env
+        .rimz()
+        .args([
+            "agents",
+            "check",
+            "scriptbot",
+            "--replay",
+            replay.to_str().expect("utf-8 replay path"),
+        ])
+        .bounded_output()
+        .expect("check plugin replay");
+    assert!(
+        output.status.success(),
+        "check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)
+        .expect("utf-8 report")
+        .replace(plugin_dir.to_str().expect("utf-8 plugin path"), "$PLUGIN");
+    assert_eq!(
+        stdout,
+        r#"plugin `scriptbot`
+manifest: valid ($PLUGIN/agent.toml)
+coverage: 9 wired, 1 partial, 6 unsupported
+lifecycle: 8 native, 1 derived, 2 absent
+probes: none declared
+replay: $PLUGIN/fixtures/envelopes.jsonl
+LINE  EVENT           SIGNAL          STATE              RESULT
+1     session_start   registered      idle               ok
+2     turn_start      turn_started    running/reasoning  ok
+3     context         context         running/reasoning  ok
+4     tool_use        tool_used       running/acting     ok
+5     awaiting_input  awaiting_input  waiting            ok
+6     turn_end        turn_ended      success            ok
+final AgentState:
+  example-session: status=success, phase=idle, compacting=false
+"#
+    );
+
+    let bad_replay = plugin_dir.join("fixtures/bad-envelopes.jsonl");
+    fs::write(
+        &bad_replay,
+        r#"{"protocol":1,"hook_event_name":"awaiting_input","session_id":"example-session","ask":"unsupported"}
+"#,
+    )
+    .expect("write bad replay");
+    let output = env
+        .rimz()
+        .args([
+            "agents",
+            "check",
+            "scriptbot",
+            "--replay",
+            bad_replay.to_str().expect("utf-8 replay path"),
+        ])
+        .bounded_output()
+        .expect("check bad replay");
+    assert!(!output.status.success(), "bad envelope passed check");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("awaiting_input"), "{stdout}");
+    assert!(stdout.contains("unknown variant `unsupported`"), "{stdout}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("agent plugin check failed"),
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

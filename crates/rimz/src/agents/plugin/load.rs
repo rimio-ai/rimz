@@ -49,6 +49,7 @@ pub struct LoadedPlugins {
     pub adapters: Vec<&'static dyn AgentAdapter>,
     pub errors: Vec<PluginLoadError>,
     pub diagnostics: Vec<PluginDiagnostic>,
+    pub(super) plugin_adapters: Vec<&'static PluginAdapter>,
 }
 
 pub fn loaded() -> &'static LoadedPlugins {
@@ -79,6 +80,7 @@ pub fn load_from_root(root: &Path) -> LoadedPlugins {
     manifest_paths.sort();
 
     let mut adapters = Vec::new();
+    let mut plugin_adapters = Vec::new();
     let mut errors = Vec::new();
     let mut diagnostics = Vec::new();
     let mut kinds = HashSet::new();
@@ -127,12 +129,14 @@ pub fn load_from_root(root: &Path) -> LoadedPlugins {
             .to_path_buf();
         diagnostics.push(valid_diagnostic(&path, &plugin_dir, &manifest));
         let adapter: &'static PluginAdapter = build_adapter(manifest, plugin_dir);
+        plugin_adapters.push(adapter);
         adapters.push(adapter as &'static dyn AgentAdapter);
     }
     LoadedPlugins {
         adapters,
         errors,
         diagnostics,
+        plugin_adapters,
     }
 }
 

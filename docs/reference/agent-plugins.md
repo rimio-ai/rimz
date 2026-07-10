@@ -19,6 +19,20 @@ rimz doctor
 
 The complete runnable [ScriptBot example](../../examples/agent-plugin/README.md) supplies a fake agent, canonical shim, priced spend probe, account probe, and fixture transcript.
 
+## Validate a plugin
+
+Use `rimz agents check <kind>` as the authoring loop after each manifest, shim, or probe change:
+
+```sh
+rimz agents check mybot
+rimz agents check mybot --spend-file ~/.mybot/sessions/sess-123.jsonl
+rimz agents check mybot --replay ./canonical-envelopes.jsonl
+```
+
+The command validates the named manifest and prints its derived coverage and lifecycle summary. It checks every declared probe for presence and executable permission, then runs the account and version probes; the spend probe runs only with `--spend-file` because its canonical request needs a real transcript path.
+
+`--replay` reads one canonical envelope per JSONL line, runs the same diagnostic parser, hook classifier, lifecycle observer, and pure state machine as ingestion, and prints each event's signal and resulting state plus the final agent states. A malformed envelope exits non-zero with its line and exact parse reason. An event absent from `emits` remains valid but prints a warning, matching live ingestion's permissive behavior.
+
 ## Bundle anatomy
 
 ```text
@@ -137,7 +151,7 @@ The event vocabulary maps directly onto Rimz lifecycle signals:
 
 `context` also accepts the optional fields in the serialized [`AgentContext`](../../crates/rimz/src/agents/context.rs) shape, including `session_name`, `session_preview`, `model_id`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. Rimz stamps `source` and `observed_at`; the shim omits them. Top-level `model`, token split, gauge, cost, and rate-limit fields normalize into the same shape.
 
-Unknown event names and event payloads from a different protocol version are dropped at debug level. A known event with malformed typed fields is also dropped. This keeps a newer shim forward-compatible while preventing malformed input from mutating a row.
+Unknown event names and event payloads from a different protocol version are dropped at debug level. A known event with malformed typed fields is also dropped. This keeps a newer shim forward-compatible while preventing malformed input from mutating a row. `rimz agents check --replay` exposes those otherwise-quiet parser decisions while leaving ingestion behavior unchanged.
 
 ## Shim contract
 
@@ -212,3 +226,5 @@ The version probe receives an empty stdin stream. Its first non-empty stdout lin
 `rimz doctor` shows each manifest, its validation result, the setup document, and whether every declared probe exists and is executable. `rimz start` treats a malformed configured plugin as a failed precondition. Hook feed treats that same broken bundle as unavailable and exits neutrally, keeping the agent's critical hook path open while the doctor and start error retain the fix.
 
 Protocol version 1 is stable. Additive optional fields and new events require a future-compatible reader; a semantic change to an existing field or event requires a new integer protocol version.
+
+The protocol is the canonical envelope vocabulary delivered to Rimz. `rimz hooks feed` is the version-1 delivery mechanism, not part of the vocabulary: the envelopes contain no exec-specific assumptions, so a future resident receiver can accept the same objects over a socket without changing their fields or event semantics.

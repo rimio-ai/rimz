@@ -4,6 +4,7 @@
 //! agent's own shim translates native events to [`protocol`] JSON, while
 //! optional bounded executables provide pull-only enrichment.
 
+mod check;
 mod load;
 mod manifest;
 mod probes;
@@ -35,6 +36,10 @@ use super::{
 use crate::harness::run::PermissionMode;
 use crate::transcript::AskQuestion;
 
+pub use check::{
+    PluginCheckReport, PluginCheckSummary, ProbeCheckReport, ProbeCheckStatus, ReplayCheckReport,
+    ReplayFinalState, ReplayRow, check_from_root,
+};
 pub use load::{
     LoadedPlugins, PluginDiagnostic, PluginLoadError, ProbeDiagnostic, load_from_root, loaded,
     plugins_root,

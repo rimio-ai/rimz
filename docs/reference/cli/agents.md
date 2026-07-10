@@ -57,6 +57,7 @@ The `@` sigil is required for `message`, where it also keeps a target from being
 ```sh
 rimz agents register mybot           # scaffold $XDG_CONFIG_HOME/rimz/agents.d/mybot
 rimz agents register --check         # validate every machine-tier plugin
+rimz agents check mybot --replay events.jsonl # validate one plugin and replay canonical envelopes
 ```
 
 The scaffold contains the manifest, setup guide, canonical forwarding shim, and stub probes. The [agent plugin reference](../agent-plugins.md) defines the bundle and wire contracts. A valid plugin kind works anywhere a built-in kind does, including inline layouts, profiles, teams, supervised runs, coverage, and messaging.

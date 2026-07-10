@@ -3,6 +3,7 @@
 mod auto_continue;
 mod budget;
 mod budget_park;
+mod check;
 mod commands;
 mod exec;
 mod fork;
@@ -46,6 +47,7 @@ use rimz::workspace::WorkspaceResolver;
 use auto_continue::{AutoContinueArgs, run_auto_continue};
 use budget::{BudgetArgs, run_budget};
 use budget_park::{BudgetParkArgs, run_budget_park};
+use check::{CheckArgs, run_check};
 pub(crate) use commands::render_agents_table;
 #[cfg(test)]
 use commands::{RunPlacement, run_placement, run_stop_should_cancel, validate_supervised_output};
@@ -241,6 +243,8 @@ pub(super) enum InputFormat {
 
 #[derive(Debug, Subcommand)]
 enum AgentsSubcmd {
+    /// Validate one third-party plugin's manifest, probes, and envelopes.
+    Check(CheckArgs),
     /// Scaffold or validate a machine-tier third-party agent plugin.
     Register(RegisterArgs),
     /// List agent cards in the current room.
@@ -468,6 +472,7 @@ struct ExecArgs {
 
 pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
+        Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),

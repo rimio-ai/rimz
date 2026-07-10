@@ -10,6 +10,7 @@ cp -R examples/agent-plugin "${XDG_CONFIG_HOME:-$HOME/.config}/rimz/agents.d/scr
 chmod +x "${XDG_CONFIG_HOME:-$HOME/.config}/rimz/agents.d/scriptbot/fake-agent.js"
 chmod +x "${XDG_CONFIG_HOME:-$HOME/.config}/rimz/agents.d/scriptbot/probes/account"
 rimz agents register --check
+rimz agents check scriptbot --spend-file "${XDG_CONFIG_HOME:-$HOME/.config}/rimz/agents.d/scriptbot/fixtures/session.jsonl" --replay "${XDG_CONFIG_HOME:-$HOME/.config}/rimz/agents.d/scriptbot/fixtures/envelopes.jsonl"
 ```
 
 Launch it with `rimz agents scriptbot "run the demo"`. A real integration installs its native hook or extension itself; that shim translates native payloads to the envelope documented in [the agent plugin reference](../../docs/reference/agent-plugins.md) and invokes `rimz hooks feed --source scriptbot` in the same way as this example.

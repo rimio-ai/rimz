@@ -58,6 +58,12 @@ struct AccountResponse {
     rate_limit_windows: Option<Vec<RateLimitWindow>>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) enum ProbeCheck {
+    Passed(String),
+    Failed(String),
+}
+
 pub(super) fn spend(
     kind: &str,
     plugin_dir: &Path,
@@ -169,6 +175,65 @@ pub(super) fn version(kind: &str, plugin_dir: &Path, argv: &[String]) -> Option<
         .map(ToOwned::to_owned)
 }
 
+pub(super) fn check_spend(
+    kind: &str,
+    plugin_dir: &Path,
+    argv: &[String],
+    path: &Path,
+) -> ProbeCheck {
+    let request = SpendRequest {
+        file: path,
+        cursor: None,
+    };
+    let output = match run_json_diagnostic(kind, "spend", plugin_dir, argv, Some(&request)) {
+        Ok(output) => output,
+        Err(error) => return ProbeCheck::Failed(error),
+    };
+    let response: SpendResponse = match serde_json::from_slice(&output) {
+        Ok(response) => response,
+        Err(error) => return ProbeCheck::Failed(format!("invalid JSON response: {error}")),
+    };
+    if let Some(entry) = response
+        .entries
+        .iter()
+        .find(|entry| crate::agents::spending::iso_to_unix_secs(&entry.timestamp).is_none())
+    {
+        return ProbeCheck::Failed(format!(
+            "entry timestamp is not RFC 3339: {}",
+            entry.timestamp
+        ));
+    }
+    ProbeCheck::Passed(format!("{} entries", response.entries.len()))
+}
+
+pub(super) fn check_account(kind: &str, plugin_dir: &Path, argv: &[String]) -> ProbeCheck {
+    let output = match run_json_diagnostic::<Value>(kind, "account", plugin_dir, argv, None) {
+        Ok(output) => output,
+        Err(error) => return ProbeCheck::Failed(error),
+    };
+    match serde_json::from_slice::<AccountResponse>(&output) {
+        Ok(_) => ProbeCheck::Passed("canonical account response".into()),
+        Err(error) => ProbeCheck::Failed(format!("invalid JSON response: {error}")),
+    }
+}
+
+pub(super) fn check_version(kind: &str, plugin_dir: &Path, argv: &[String]) -> ProbeCheck {
+    let output = match run_json_diagnostic::<Value>(kind, "version", plugin_dir, argv, None) {
+        Ok(output) => output,
+        Err(error) => return ProbeCheck::Failed(error),
+    };
+    match String::from_utf8(output).ok().and_then(|output| {
+        output
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+    }) {
+        Some(version) => ProbeCheck::Passed(version),
+        None => ProbeCheck::Failed("response has no non-empty UTF-8 line".into()),
+    }
+}
+
 fn account_response(kind: &str, plugin_dir: &Path, argv: &[String]) -> Option<AccountResponse> {
     let output = run_json::<Value>(kind, "account", plugin_dir, argv, None)?;
     match serde_json::from_slice(&output) {
@@ -187,7 +252,26 @@ fn run_json<T: Serialize>(
     argv: &[String],
     request: Option<&T>,
 ) -> Option<Vec<u8>> {
-    let executable = resolve_executable(plugin_dir, argv.first()?);
+    match run_json_diagnostic(kind, probe, plugin_dir, argv, request) {
+        Ok(output) => Some(output),
+        Err(error) => {
+            warn!(kind, probe, error, "agent plugin probe failed");
+            None
+        }
+    }
+}
+
+fn run_json_diagnostic<T: Serialize>(
+    _kind: &str,
+    _probe: &str,
+    plugin_dir: &Path,
+    argv: &[String],
+    request: Option<&T>,
+) -> Result<Vec<u8>, String> {
+    let Some(executable_arg) = argv.first() else {
+        return Err("probe command is empty".into());
+    };
+    let executable = resolve_executable(plugin_dir, executable_arg);
     let mut command = Command::new(&executable);
     command
         .args(&argv[1..])
@@ -195,13 +279,9 @@ fn run_json<T: Serialize>(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            warn!(kind, probe, error = %err, "agent plugin probe did not start");
-            return None;
-        }
-    };
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("did not start: {error}"))?;
     let mut stdin = child.stdin.take();
     let request_failed = request.is_some_and(|request| {
         let Some(stdin) = stdin.as_mut() else {
@@ -213,8 +293,7 @@ fn run_json<T: Serialize>(
     if request_failed {
         let _ = child.kill();
         let _ = child.wait();
-        warn!(kind, probe, "agent plugin probe request write failed");
-        return None;
+        return Err("request write failed".into());
     }
     let stdout = child.stdout.take().map(|pipe| drain(pipe, MAX_STDOUT));
     let stderr = child.stderr.take().map(|pipe| drain(pipe, MAX_STDERR));
@@ -226,34 +305,27 @@ fn run_json<T: Serialize>(
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                warn!(kind, probe, "agent plugin probe timed out");
-                return None;
+                return Err("timed out after 3 seconds".into());
             }
             Err(err) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                warn!(kind, probe, error = %err, "agent plugin probe wait failed");
-                return None;
+                return Err(format!("wait failed: {err}"));
             }
         }
     };
     let stdout = join(stdout);
     let stderr = join(stderr);
     if !status.success() {
-        warn!(
-            kind,
-            probe,
-            status = %status,
-            stderr = %String::from_utf8_lossy(&stderr),
-            "agent plugin probe failed"
-        );
-        return None;
+        return Err(format!(
+            "exited with {status}: {}",
+            String::from_utf8_lossy(&stderr).trim()
+        ));
     }
     if stdout.len() as u64 > MAX_STDOUT {
-        warn!(kind, probe, "agent plugin probe output exceeded 1 MiB");
-        return None;
+        return Err("output exceeded 1 MiB".into());
     }
-    Some(stdout)
+    Ok(stdout)
 }
 
 pub(super) fn resolve_executable(plugin_dir: &Path, executable: &str) -> PathBuf {

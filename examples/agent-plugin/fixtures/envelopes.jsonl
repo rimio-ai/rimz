@@ -1,0 +1,6 @@
+{"protocol":1,"hook_event_name":"session_start","session_id":"example-session","cwd":"/work/project","model":"scriptbot-demo"}
+{"protocol":1,"hook_event_name":"turn_start","session_id":"example-session","prompt":"run the scripted demo"}
+{"protocol":1,"hook_event_name":"context","session_id":"example-session","context_window":100000,"context_pct":12,"total_tokens":12000,"total_cost_usd":0.02}
+{"protocol":1,"hook_event_name":"tool_use","session_id":"example-session","tool_name":"write","is_error":false}
+{"protocol":1,"hook_event_name":"awaiting_input","session_id":"example-session","ask":"question","question":"Continue the scripted demo?"}
+{"protocol":1,"hook_event_name":"turn_end","session_id":"example-session","errored":false,"last_assistant_message":"Scripted demo complete."}
