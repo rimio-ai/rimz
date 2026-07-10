@@ -75,6 +75,7 @@
 ## enabled = true                   # opt-in animated companion in the provider dashboard
 ## pet = "rocky"                    # built-in id, an https:// URL, a petdex pet name, or a path to your own .webp sheet
 ## glyphs = "auto"                  # auto tries pixels then sextant cell art; or pixel / sextant
+## cell_aspect = 2.5                 # cell pixel height / width override when the terminal cannot report it
 ## voice = true                     # canned captions on fleet-status changes
 
 [theme.animations]

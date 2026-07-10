@@ -17,11 +17,12 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use crate::config::{PetsConfig, PetsGlyphMode};
+use crate::config::{CellAspect, PetsConfig, PetsGlyphMode};
 
 #[cfg(test)]
 pub(crate) use cellart::PetCell;
 pub(crate) use cellart::PetCellGrid;
+pub use cellart::probe_cell_aspect;
 pub use frames::encode_png;
 pub(crate) use model::PetAction;
 pub(crate) use pixel::probe::detect as detect_pet_render_caps;
@@ -82,6 +83,7 @@ pub(crate) struct PetViewFrame {
     pub(crate) refresh_ms: u16,
     pub(crate) body: Option<PetRenderTier>,
     pub(crate) pixel_id_base: u32,
+    pub(crate) cell_aspect: CellAspect,
     pub(crate) motion_enabled: bool,
     pub(crate) unread_triggered: bool,
 }
@@ -182,6 +184,7 @@ struct MemoKey {
     sprite_index: usize,
     cols: u16,
     rows: u16,
+    aspect: CellAspect,
 }
 
 type LoadResult = Result<Vec<RgbaImage>, String>;
@@ -260,6 +263,7 @@ impl PetAssets {
             refresh_ms,
             body: body_tier,
             pixel_id_base,
+            cell_aspect,
             motion_enabled: _,
             unread_triggered: _,
         } = frame;
@@ -319,10 +323,13 @@ impl PetAssets {
                         size,
                     }))
                 }
-                PetRenderTier::Cell => self.loaded_grid(id, sprite_index, size).map(|grid| {
-                    active_track = track;
-                    PetBody::Cell(grid)
-                }),
+                PetRenderTier::Cell => {
+                    self.loaded_grid(id, sprite_index, size, cell_aspect)
+                        .map(|grid| {
+                            active_track = track;
+                            PetBody::Cell(grid)
+                        })
+                }
             }
         });
         Some(PetView {
@@ -465,6 +472,7 @@ impl PetAssets {
         pet_id: &str,
         sprite_index: usize,
         size: PetGridSize,
+        aspect: CellAspect,
     ) -> Option<PetCellGrid> {
         let loaded = self.loaded.as_mut()?;
         if loaded.id != pet_id {
@@ -474,15 +482,16 @@ impl PetAssets {
             sprite_index,
             cols: size.cols,
             rows: size.rows,
+            aspect,
         };
-        loaded
-            .memo
-            .retain(|memo_key, _| memo_key.cols == size.cols && memo_key.rows == size.rows);
+        loaded.memo.retain(|memo_key, _| {
+            memo_key.cols == size.cols && memo_key.rows == size.rows && memo_key.aspect == aspect
+        });
         if let Some(grid) = loaded.memo.get(&key) {
             return Some(grid.clone());
         }
         let frame = loaded.frames.get(sprite_index)?;
-        let grid = cellart::render_frame(frame, size.cols, size.rows);
+        let grid = cellart::render_frame(frame, size.cols, size.rows, aspect);
         loaded.memo.insert(key, grid.clone());
         Some(grid)
     }

@@ -5,6 +5,8 @@ use std::thread;
 
 use ratatui::style::Color;
 
+use crate::config::CellAspect;
+
 use super::PetGridSize;
 use super::asset::{self, PetSource};
 use super::catalog::BUILTIN_PETS;
@@ -88,11 +90,11 @@ where
     out
 }
 
-pub fn load_cell_previews(size: PetGridSize) -> Vec<PetPreview> {
+pub fn load_cell_previews(size: PetGridSize, aspect: CellAspect) -> Vec<PetPreview> {
     load_preview_results(listable_sources(), move |source| {
         super::load_pet(source)
             .map_err(|err| err.to_string())
-            .map(|frames| render_sprite(&frames, size))
+            .map(|frames| render_sprite(&frames, size, aspect))
     })
     .into_iter()
     .map(|(id, grid)| PetPreview { id, grid })
@@ -115,11 +117,15 @@ pub fn load_pixel_previews() -> Vec<PetPixelPreview> {
     .collect()
 }
 
-fn render_sprite(frames: &[RgbaImage], size: PetGridSize) -> Vec<Vec<PreviewCell>> {
+fn render_sprite(
+    frames: &[RgbaImage],
+    size: PetGridSize,
+    aspect: CellAspect,
+) -> Vec<Vec<PreviewCell>> {
     let Some(sprite) = idle_sprite(frames) else {
         return Vec::new();
     };
-    cellart::render_frame(sprite, size.cols, size.rows)
+    cellart::render_frame(sprite, size.cols, size.rows, aspect)
         .iter()
         .map(|row| row.iter().map(preview_cell).collect())
         .collect()

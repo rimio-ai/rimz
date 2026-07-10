@@ -19,6 +19,7 @@ Everything on this page is the `[theme.pets]` table in `~/.config/rimz/theme.tom
 enabled = true
 pet = "rocky"
 glyphs = "auto"
+# cell_aspect = 2.5
 voice = true
 ```
 
@@ -27,6 +28,7 @@ voice = true
 | `enabled` | turns the dashboard pet on (off by default) |
 | `pet` | which pet: a built-in id, a [petdex](#petdex) pet, an HTTPS URL, or a local sheet path |
 | `glyphs` | render tier: `auto`, `pixel`, or `sextant` |
+| `cell_aspect` | optional terminal cell height/width ratio for sextant aspect correction |
 | `voice` | canned captions on pet-action changes |
 
 ## What the pet does
@@ -73,6 +75,8 @@ Two tiers render the same sheet. **Pixel** draws the sprite through the kitty gr
 | `auto` (default) | pixels when the terminal and mux qualify, otherwise sextant cell art |
 | `pixel` | opts past the terminal-name allowlist for newer kitty-compatible terminals, while hard gates such as tmux passthrough still apply |
 | `sextant` | the most portable cell art, on every backend |
+
+Sextant pets fit their source proportions inside the fixed dashboard footprint. Rimz probes the terminal's cell pixel dimensions when the pty exposes them; Zellij reports no pixel dimensions, so set the ratio manually when its font makes pets look tall or wide: `rimz config set theme.pets.cell_aspect 2.5`. Explicit config wins over the probe, and a neutral `13/6` fallback preserves the previous rendering when neither fact is available.
 
 On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while pixel pets animate; Rimz transmits each sprite image once to minimize that traffic, and `glyphs = "sextant"` switches to the flicker-free cell-art path when you want it fully gone.
 

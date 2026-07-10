@@ -456,10 +456,19 @@ The sidebar's palette, glyphs, animations, color depth, color stops, and pets li
 enabled = false
 pet = "rocky"
 glyphs = "auto"
+# cell_aspect = 2.5
 voice = true
 ```
 
 An opt-in animated companion in the provider dashboard. The first-run and setup pet question writes `enabled = true` for the default `rocky` pet. Full setup is in the [pets guide](./pets.md); render mechanics, cache layout, and sheet geometry are in [pets.md](../internals/sidebar/pets.md).
+
+| key | does |
+| --- | --- |
+| `enabled` | turns the dashboard pet on |
+| `pet` | selects a built-in, HTTPS, local-sheet, or petdex pet |
+| `glyphs` | chooses `auto`, `pixel`, or `sextant` rendering |
+| `cell_aspect` | overrides terminal cell height/width for sextant correction; set it for tall or short fonts under Zellij, for example with `rimz config set theme.pets.cell_aspect 2.5` |
+| `voice` | toggles canned captions on pet-action changes |
 
 ### Sidebar bands
 

@@ -69,6 +69,10 @@ Cell art renders as ordinary terminal cells through ratatui. Each frame is downs
 
 Sextant cells split a terminal cell into `2x3` subcells. The converter averages source pixels in linear light and chooses the best foreground/background split for each cell.
 
+The converter aspect-fits each frame inside the fixed cell-art footprint at sextant-subcell resolution, bottom-aligning the fitted image so the pet's feet stay planted. It reads cell height/width from the pty's `TIOCGWINSZ` pixel and cell dimensions; zero or implausible pixel reports fall back to `13/6`, the ratio where the historical `36x27` subcell sample preserves a `192x208` frame exactly.
+
+`[theme.pets] cell_aspect` overrides the probe, so the effective precedence is explicit config, pty pixel probe, then the neutral `13/6` fallback. This override supplies the missing fact under Zellij, which reports zero pty pixel dimensions; tmux 3.4 and newer can forward the terminal pixel dimensions.
+
 Cell art stays pane-local across tmux, Zellij, detached sessions, plain terminals, and color-depth modes. Under `NO_COLOR`, the body is suppressed and the caption path carries the pet state.
 
 ## Pixel tier

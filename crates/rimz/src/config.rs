@@ -84,7 +84,7 @@ pub use notifications::{
     NotificationsConfigErr, NotificationsPrefs, NotifyCondition, NotifyConditionAgent,
     NotifyHandler, RenderMode, TemplateVars, render_template,
 };
-pub use pets::{PetsConfig, PetsGlyphMode};
+pub use pets::{CellAspect, PetsConfig, PetsGlyphMode};
 pub use remote_control::RemoteControlConfig;
 pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 pub use sentry::SentryConfig;

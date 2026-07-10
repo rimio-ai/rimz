@@ -107,6 +107,10 @@ fn template_lists_optional_sidebar_theme_slots() {
             "template is missing optional theme slot {slot}"
         );
     }
+    assert!(
+        template.contains("## cell_aspect = "),
+        "template is missing optional pet cell aspect"
+    );
 }
 
 fn all_template_default_paths() -> BTreeSet<String> {

@@ -3,6 +3,8 @@
 
 use ratatui::style::Color;
 
+use crate::config::CellAspect;
+
 use super::frames::RgbaImage;
 
 pub(crate) type PetCellRow = Vec<PetCell>;
@@ -25,25 +27,55 @@ type Sample = (LinearRgb, f32);
 const INK_THRESHOLD: f32 = 0.5;
 const SEXTANT_COLS: u32 = 2;
 const SEXTANT_ROWS: u32 = 3;
+const TRANSPARENT_SAMPLE: Sample = ((0.0, 0.0, 0.0), 0.0);
 
-pub(crate) fn render_frame(frame: &RgbaImage, cols: u16, rows: u16) -> PetCellGrid {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SampleRect {
+    width: u32,
+    height: u32,
+    left: u32,
+    top: u32,
+}
+
+/// Read terminal cell height/width from the pty's pixel and cell dimensions.
+pub fn probe_cell_aspect() -> Option<CellAspect> {
+    let size = ratatui::crossterm::terminal::window_size().ok()?;
+    if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
+        return None;
+    }
+    let ratio = (f32::from(size.height) * f32::from(size.columns))
+        / (f32::from(size.rows) * f32::from(size.width));
+    CellAspect::from_ratio(ratio)
+}
+
+pub(crate) fn render_frame(
+    frame: &RgbaImage,
+    cols: u16,
+    rows: u16,
+    aspect: CellAspect,
+) -> PetCellGrid {
     let sample_w = u32::from(cols) * SEXTANT_COLS;
     let sample_h = u32::from(rows) * SEXTANT_ROWS;
-    let samples = downsample(frame, sample_w, sample_h);
+    let rect = fitted_sample_rect(frame, sample_w, sample_h, aspect);
+    let samples = downsample(frame, rect.width, rect.height);
     let mut grid = Vec::with_capacity(usize::from(rows));
     for cell_y in 0..u32::from(rows) {
         let mut row = Vec::with_capacity(usize::from(cols));
         for cell_x in 0..u32::from(cols) {
-            let mut sub = [((0.0, 0.0, 0.0), 0.0); 6];
+            let mut sub = [TRANSPARENT_SAMPLE; 6];
             let count = (SEXTANT_COLS * SEXTANT_ROWS) as usize;
             for dy in 0..SEXTANT_ROWS {
                 for dx in 0..SEXTANT_COLS {
-                    sub[(dy * SEXTANT_COLS + dx) as usize] = sample_at(
-                        &samples,
-                        sample_w,
-                        cell_x * SEXTANT_COLS + dx,
-                        cell_y * SEXTANT_ROWS + dy,
-                    );
+                    let x = cell_x * SEXTANT_COLS + dx;
+                    let y = cell_y * SEXTANT_ROWS + dy;
+                    if x >= rect.left
+                        && x < rect.left + rect.width
+                        && y >= rect.top
+                        && y < rect.top + rect.height
+                    {
+                        sub[(dy * SEXTANT_COLS + dx) as usize] =
+                            sample_at(&samples, rect.width, x - rect.left, y - rect.top);
+                    }
                 }
             }
             row.push(glyph_cell(&sub[..count]));
@@ -51,6 +83,38 @@ pub(crate) fn render_frame(frame: &RgbaImage, cols: u16, rows: u16) -> PetCellGr
         grid.push(row);
     }
     grid
+}
+
+fn fitted_sample_rect(
+    frame: &RgbaImage,
+    max_width: u32,
+    max_height: u32,
+    aspect: CellAspect,
+) -> SampleRect {
+    if frame.width == 0 || frame.height == 0 || max_width == 0 || max_height == 0 {
+        return SampleRect {
+            width: 0,
+            height: 0,
+            left: 0,
+            top: max_height,
+        };
+    }
+    let source_aspect = frame.height as f32 / frame.width as f32;
+    let fitted_height =
+        (max_width as f32 * 3.0 * source_aspect / (2.0 * aspect.ratio())).round() as u32;
+    let (width, height) = if fitted_height <= max_height {
+        (max_width, fitted_height.max(1))
+    } else {
+        let fitted_width =
+            (max_height as f32 * 2.0 * aspect.ratio() / (3.0 * source_aspect)).round() as u32;
+        (fitted_width.clamp(1, max_width), max_height)
+    };
+    SampleRect {
+        width,
+        height,
+        left: (max_width - width) / 2,
+        top: max_height - height,
+    }
 }
 
 /// A sextant cell. A fully-opaque cell keeps the two-color partition for
@@ -292,6 +356,23 @@ fn linear_to_srgb(value: f32) -> u8 {
 mod tests {
     use super::*;
 
+    fn neutral_frame(left: [u8; 4], right: [u8; 4]) -> RgbaImage {
+        let mut data = Vec::with_capacity(6 * 13 * 4);
+        for _ in 0..13 {
+            for _ in 0..3 {
+                data.extend_from_slice(&left);
+            }
+            for _ in 0..3 {
+                data.extend_from_slice(&right);
+            }
+        }
+        RgbaImage {
+            width: 6,
+            height: 13,
+            data,
+        }
+    }
+
     #[test]
     fn sextant_chars_map_patterns_with_legacy_block_skips() {
         for (pattern, ch) in [
@@ -312,13 +393,9 @@ mod tests {
 
     #[test]
     fn render_frame_maps_coverage_to_ink_and_transparency() {
-        let transparent = RgbaImage {
-            width: 1,
-            height: 1,
-            data: vec![255, 0, 0, 0],
-        };
+        let transparent = neutral_frame([255, 0, 0, 0], [255, 0, 0, 0]);
         assert_eq!(
-            render_frame(&transparent, 1, 1)[0][0],
+            render_frame(&transparent, 1, 1, CellAspect::NEUTRAL)[0][0],
             PetCell {
                 ch: ' ',
                 fg: Color::Reset,
@@ -326,21 +403,9 @@ mod tests {
             }
         );
 
-        let opaque_two_color = RgbaImage {
-            width: 2,
-            height: 3,
-            data: [
-                [255, 0, 0, 255],
-                [0, 0, 255, 255],
-                [255, 0, 0, 255],
-                [0, 0, 255, 255],
-                [255, 0, 0, 255],
-                [0, 0, 255, 255],
-            ]
-            .concat(),
-        };
+        let opaque_two_color = neutral_frame([255, 0, 0, 255], [0, 0, 255, 255]);
         assert_eq!(
-            render_frame(&opaque_two_color, 1, 1)[0][0],
+            render_frame(&opaque_two_color, 1, 1, CellAspect::NEUTRAL)[0][0],
             PetCell {
                 ch: '▌',
                 fg: Color::Rgb(255, 0, 0),
@@ -348,26 +413,79 @@ mod tests {
             }
         );
 
-        let half_covered = RgbaImage {
-            width: 2,
-            height: 3,
-            data: [
-                [255, 0, 0, 255],
-                [0, 0, 0, 0],
-                [255, 0, 0, 255],
-                [0, 0, 0, 0],
-                [255, 0, 0, 255],
-                [0, 0, 0, 0],
-            ]
-            .concat(),
-        };
+        let half_covered = neutral_frame([255, 0, 0, 255], [0, 0, 0, 0]);
         assert_eq!(
-            render_frame(&half_covered, 1, 1)[0][0],
+            render_frame(&half_covered, 1, 1, CellAspect::NEUTRAL)[0][0],
             PetCell {
                 ch: '▌',
                 fg: Color::Rgb(255, 0, 0),
                 bg: Color::Reset,
             }
         );
+    }
+
+    #[test]
+    fn fitted_rect_letterboxes_at_subcell_granularity() {
+        let frame = RgbaImage {
+            width: 192,
+            height: 208,
+            data: vec![255; 192 * 208 * 4],
+        };
+        assert_eq!(
+            fitted_sample_rect(&frame, 36, 27, CellAspect::NEUTRAL),
+            SampleRect {
+                width: 36,
+                height: 27,
+                left: 0,
+                top: 0
+            }
+        );
+        let tall = fitted_sample_rect(
+            &frame,
+            36,
+            27,
+            CellAspect::from_ratio(2.5).expect("valid aspect"),
+        );
+        assert_eq!(
+            tall,
+            SampleRect {
+                width: 36,
+                height: 23,
+                left: 0,
+                top: 4
+            }
+        );
+
+        let short = fitted_sample_rect(
+            &frame,
+            36,
+            27,
+            CellAspect::from_ratio(2.0).expect("valid aspect"),
+        );
+        assert_eq!(
+            short,
+            SampleRect {
+                width: 33,
+                height: 27,
+                left: 1,
+                top: 0
+            }
+        );
+
+        let tall_grid = render_frame(
+            &frame,
+            18,
+            9,
+            CellAspect::from_ratio(2.5).expect("valid aspect"),
+        );
+        assert!(tall_grid[0].iter().all(|cell| cell == &transparent_cell()));
+
+        let short_grid = render_frame(
+            &frame,
+            18,
+            9,
+            CellAspect::from_ratio(2.0).expect("valid aspect"),
+        );
+        assert!(short_grid.iter().all(|row| row[17] == transparent_cell()));
     }
 }

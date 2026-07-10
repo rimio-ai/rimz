@@ -15,6 +15,7 @@ fn frame(
         refresh_ms,
         body,
         pixel_id_base: 0x120000,
+        cell_aspect: CellAspect::NEUTRAL,
         motion_enabled,
         unread_triggered,
     }
@@ -93,6 +94,7 @@ fn empty_pet_selector_rests_with_no_pet() {
         enabled: true,
         pet: "  ".to_owned(),
         glyphs: PetsGlyphMode::Auto,
+        cell_aspect: None,
         voice: true,
     };
     let view = assets
@@ -128,6 +130,7 @@ fn local_pet_path_begins_loading_under_its_own_id() {
         enabled: true,
         pet: "/no/such/pet/sheet.webp".to_owned(),
         glyphs: PetsGlyphMode::Auto,
+        cell_aspect: None,
         voice: true,
     };
     // `poll_loader` runs before the spawn, so the first view always reports
@@ -163,6 +166,7 @@ fn missing_body_size_does_not_start_asset_loading() {
         enabled: true,
         pet: "codex".to_owned(),
         glyphs: PetsGlyphMode::Auto,
+        cell_aspect: None,
         voice: true,
     };
 
@@ -191,6 +195,7 @@ fn failed_loader_settles_without_immediate_retry() {
         enabled: true,
         pet: "codex".to_owned(),
         glyphs: PetsGlyphMode::Auto,
+        cell_aspect: None,
         voice: true,
     };
 
@@ -319,6 +324,7 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
                 refresh_ms: 100,
                 body: Some(PetRenderTier::Pixel),
                 pixel_id_base: 0x120000,
+                cell_aspect: CellAspect::NEUTRAL,
                 motion_enabled: true,
                 unread_triggered: false,
             },
@@ -341,7 +347,7 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
 }
 
 #[test]
-fn memoized_grids_are_evicted_on_resize() {
+fn memoized_grids_are_evicted_on_size_or_aspect_change() {
     let frame = RgbaImage {
         width: 1,
         height: 1,
@@ -358,19 +364,39 @@ fn memoized_grids_are_evicted_on_resize() {
 
     assert!(
         assets
-            .loaded_grid("codex", 0, PetGridSize { cols: 12, rows: 6 })
+            .loaded_grid(
+                "codex",
+                0,
+                PetGridSize { cols: 12, rows: 6 },
+                CellAspect::NEUTRAL,
+            )
             .is_some()
     );
     assert_eq!(assets.loaded.as_ref().expect("loaded").memo.len(), 1);
 
     assert!(
         assets
-            .loaded_grid("codex", 0, PetGridSize { cols: 13, rows: 6 })
+            .loaded_grid(
+                "codex",
+                0,
+                PetGridSize { cols: 13, rows: 6 },
+                CellAspect::NEUTRAL,
+            )
             .is_some()
     );
     let memo = &assets.loaded.as_ref().expect("loaded").memo;
     assert_eq!(memo.len(), 1);
     assert!(memo.keys().all(|key| key.cols == 13));
+
+    let changed = CellAspect::from_ratio(2.5).expect("valid aspect");
+    assert!(
+        assets
+            .loaded_grid("codex", 0, PetGridSize { cols: 13, rows: 6 }, changed)
+            .is_some()
+    );
+    let memo = &assets.loaded.as_ref().expect("loaded").memo;
+    assert_eq!(memo.len(), 1);
+    assert!(memo.keys().all(|key| key.aspect == changed));
 }
 
 #[test]
@@ -388,6 +414,7 @@ fn enabled_config() -> PetsConfig {
         enabled: true,
         pet: "codex".to_owned(),
         glyphs: PetsGlyphMode::Auto,
+        cell_aspect: None,
         voice: true,
     }
 }

@@ -1368,12 +1368,13 @@ fn sidebar_pets_defaults_parse_and_round_trip() {
     let config = load_no_fragments(&write_named(
         &dir,
         "theme.toml",
-        "[theme.pets]\nenabled = true\npet = \"dewey\"\nglyphs = \"pixel\"\nvoice = false\n",
+        "[theme.pets]\nenabled = true\npet = \"dewey\"\nglyphs = \"pixel\"\ncell_aspect = 2.5\nvoice = false\n",
     ))
     .expect("load");
     assert!(config.theme.pets.enabled);
     assert_eq!(config.theme.pets.pet, "dewey");
     assert_eq!(config.theme.pets.glyphs, PetsGlyphMode::Pixel);
+    assert_eq!(config.theme.pets.cell_aspect, CellAspect::from_ratio(2.5));
     assert!(!config.theme.pets.voice);
 
     let defaults_dir = tempdir().expect("tempdir");

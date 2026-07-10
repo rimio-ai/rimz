@@ -41,7 +41,9 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
 
-    let glyphs = machine_config().theme.pets.glyphs;
+    let config = machine_config();
+    let pets_config = &config.theme.pets;
+    let glyphs = pets_config.glyphs;
     let (caps, wrap_pixels) = pets::detect_pet_render_env();
     let width = rimz::mux::detect_terminal_size()
         .map(|(cols, _)| cols)
@@ -72,7 +74,11 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
         )?;
         return Ok(());
     }
-    let previews = pets::load_cell_previews(slot).into_iter();
+    let aspect = pets_config
+        .cell_aspect
+        .or_else(pets::probe_cell_aspect)
+        .unwrap_or(rimz::config::CellAspect::NEUTRAL);
+    let previews = pets::load_cell_previews(slot, aspect).into_iter();
     write_preview_chunks(
         &mut out,
         previews,

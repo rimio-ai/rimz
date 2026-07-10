@@ -7,9 +7,10 @@ use ratatui::backend::CrosstermBackend;
 
 use crate::MuxName;
 use crate::SidebarSnapshot;
+use crate::config::CellAspect;
 use crate::sidebar_pane::pets::{
     BEGIN_SYNC, END_SYNC, PetAssets, PetBody, PetRenderCaps, PetViewFrame, PixelPainter,
-    detect_pet_render_caps, effective_render_tier,
+    detect_pet_render_caps, effective_render_tier, probe_cell_aspect,
 };
 use crate::sidebar_pane::render::{self, UiState};
 
@@ -17,6 +18,7 @@ pub(super) struct FramePainter {
     assets: PetAssets,
     painter: PixelPainter,
     caps: PetRenderCaps,
+    probed_aspect: Option<CellAspect>,
 }
 
 impl FramePainter {
@@ -25,6 +27,7 @@ impl FramePainter {
             assets: PetAssets::default(),
             painter: PixelPainter::new(pixel_wrap),
             caps,
+            probed_aspect: probe_cell_aspect(),
         }
     }
 
@@ -33,6 +36,7 @@ impl FramePainter {
             assets: PetAssets::default(),
             painter: PixelPainter::with_id_base(id_base, pixel_wrap),
             caps,
+            probed_aspect: probe_cell_aspect(),
         }
     }
 
@@ -42,6 +46,7 @@ impl FramePainter {
             assets,
             painter: PixelPainter::with_id_base(0x120000, pixel_wrap),
             caps,
+            probed_aspect: None,
         }
     }
 
@@ -57,6 +62,7 @@ impl FramePainter {
 
     pub(super) fn refresh_caps(&mut self, mux: MuxName, session_name: &str) {
         self.refresh_caps_with(mux, session_name, detect_pet_render_caps);
+        self.probed_aspect = probe_cell_aspect();
     }
 
     pub(super) fn refresh_caps_with(
@@ -91,6 +97,12 @@ impl FramePainter {
         } else {
             false
         };
+        let cell_aspect = snapshot
+            .theme
+            .pets
+            .cell_aspect
+            .or(self.probed_aspect)
+            .unwrap_or(CellAspect::NEUTRAL);
         ui.pet = self.assets.view(
             &snapshot.theme.pets,
             PetViewFrame {
@@ -99,6 +111,7 @@ impl FramePainter {
                 refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
                 body,
                 pixel_id_base: self.painter.id_base(),
+                cell_aspect,
                 motion_enabled: render::pet_motion_enabled(&theme.animations, action),
                 unread_triggered,
             },
