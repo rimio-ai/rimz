@@ -459,7 +459,7 @@ glyphs = "auto"
 voice = true
 ```
 
-An opt-in animated companion in the provider dashboard. The first-run and setup pet question writes `enabled = true` for the default `rocky` pet. Full setup is in [theme.md → Pets](./theme.md#pets); render mechanics, cache layout, and sheet geometry are in [pets.md](../internals/sidebar/pets.md).
+An opt-in animated companion in the provider dashboard. The first-run and setup pet question writes `enabled = true` for the default `rocky` pet. Full setup is in the [pets guide](./pets.md); render mechanics, cache layout, and sheet geometry are in [pets.md](../internals/sidebar/pets.md).
 
 ### Sidebar bands
 

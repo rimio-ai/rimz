@@ -30,7 +30,8 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 ## Customization
 
 - [Configuration](./guide/configuration.md): every setting and the file that owns it, across config, agent profiles and teams, loop tasks, and project trust.
-- [Theming and pets](./guide/theme.md): palettes, color depth, glyph styles, animations, provider branding, and the sidebar pets.
+- [Theming](./guide/theme.md): palettes, color depth, glyph styles, animations, and provider branding.
+- [Pets](./guide/pets.md): the dashboard companion — built-in and petdex pets, your own sprite sheets, and the pixel and cell-art render tiers.
 - [Zellij and tmux](./guide/multiplexer.md): recommended multiplexer options, parity keybindings, and a themed status bar, shipped ready to adopt under [examples/](../examples/README.md).
 
 ## Help

@@ -65,7 +65,7 @@ Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) de
 
 Budgets are account-scoped, one account shared by every session of a provider, so they live in a pinned panel at the bottom rather than on the cards. Each provider block names the account and plan (`Claude Max`, `ChatGPT Pro`) and drains a "mana" bar per budget window (5-hour, 7-day) toward its reset, so a glance reads how much of the plan is left. The block also carries that provider's spend, and two totals rows below sum the fleet across the trailing week and month. Reading those figures, and how every one is calculated, is [Token Insight](./insight.md).
 
-With several providers the panel tabs, following whichever agent you have selected; `←`/`→` or a click picks one by hand. With [pets enabled](./theme.md#pets), the companion rides the panel's right edge.
+With several providers the panel tabs, following whichever agent you have selected; `←`/`→` or a click picks one by hand. With [pets enabled](./pets.md), the companion rides the panel's right edge.
 
 ### Bottom chrome
 

@@ -105,7 +105,7 @@ rimz config set theme.pets.enabled true
 rimz list-pets                             # preview every built-in as cell art
 ```
 
-Picking a different pet, crisp pixels vs cell art, bring-your-own sprite sheets, and the privacy boundary are in [theming → Pets](./theme.md#pets).
+Picking a different pet, [petdex.dev](https://petdex.dev/) installs, crisp pixels vs cell art, bring-your-own sprite sheets, and the privacy boundary are in the [pets guide](./pets.md).
 
 ## Keep the fleet moving
 

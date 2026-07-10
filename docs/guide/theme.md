@@ -232,49 +232,12 @@ ascii_art = """
 
 ## Pets
 
-Pets add a small animated companion to the provider dashboard. The pet follows the selected row's state, giving the bottom panel a little motion while the cards stay steady; `voice = false` keeps the animation and hides the captions.
+Pets add a small animated companion to the provider dashboard, configured through `[theme.pets]`:
 
 ```toml
 [theme.pets]
 enabled = true
 pet = "rocky"
-glyphs = "auto"
-voice = true
 ```
 
-| key | does |
-| --- | --- |
-| `enabled` | turns the dashboard pet on (off by default) |
-| `pet` | which pet: a built-in id, an HTTPS URL, a local sheet path, or a petdex pet |
-| `glyphs` | render tier: `auto`, `pixel`, or `sextant` |
-| `voice` | canned captions on pet-action changes |
-
-### Choosing a pet
-
-`rimz list-pets` previews the built-ins and any petdex pets installed locally. The built-in ids are `codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, and `null-signal`.
-
-Bring-your-own sources use the same key:
-
-- `pet = "https://example.com/my-pet.webp"` fetches an HTTPS WebP sheet and caches it.
-- `pet = "~/art/my-pet.png"` reads a local WebP or PNG sheet.
-- `pet = "wall-e"` selects a petdex pet installed under `~/.codex/pets/wall-e/`; `pet = "~/.codex/pets/wall-e/"` reads the same directory by path. Petdex manifests may point at WebP or PNG sheets.
-
-### Crisp pixels vs cell art
-
-`glyphs` controls the render tier. Crisp pixels need a Ghostty or kitty terminal; inside tmux they also need tmux 3.6 or newer with `allow-passthrough on` or `allow-passthrough all`. Zellij renders cell art.
-
-| `glyphs` | renders |
-| --- | --- |
-| `auto` | pixels when the runtime is ready, then sextant cell art |
-| `pixel` | opts past the terminal-name allowlist for newer kitty-compatible terminals, while hard gates such as tmux passthrough still apply |
-| `sextant` | the most portable cell art |
-
-On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while kitty pixel pets animate; Rimz emits each sprite image once to minimize that traffic, and `glyphs = "sextant"` uses the same flicker-free cell-art path as Zellij when you want it fully gone.
-
-### Offline and privacy
-
-Built-in and URL sheets fetch once into the per-machine cache; `RIMZ_PETS_OFFLINE=1` serves the cache only. Petdex and local sheets read from disk and make no network request.
-
-Pets run no commands. Asset loading sends only the configured asset request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local.
-
-Sheet geometry, the cache layout, and the pixel gates live in [pets.md](../internals/sidebar/pets.md).
+The [pets guide](./pets.md) covers the rest: what the pet acts out, the built-in and [petdex.dev](https://petdex.dev/) catalogs, bring-your-own sprite sheets, the pixel and cell-art render tiers, and the offline and privacy story.

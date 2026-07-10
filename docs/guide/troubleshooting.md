@@ -129,7 +129,7 @@ rimz config set theme.style modern        # truecolor + Nerd Font icons
 rimz config set theme.pets.enabled true   # an animated companion on the dashboard
 ```
 
-`modern` needs a Nerd Font installed in the terminal, and pets render as crisp pixels only in Ghostty and kitty; inside tmux that also needs tmux 3.6+ with `allow-passthrough on`. Everywhere else, including Zellij, the pet falls back to cell art. The full appearance model and per-terminal notes are in [theming and pets](./theme.md).
+`modern` needs a Nerd Font installed in the terminal, and pets render as crisp pixels only in Ghostty and kitty; inside tmux that also needs tmux 3.6+ with `allow-passthrough on`. Everywhere else, including Zellij, the pet falls back to cell art. The full appearance model is in [theming](./theme.md); the per-terminal pet notes are in the [pets guide](./pets.md).
 
 ### A pane looks stale after upgrading Rimz
 

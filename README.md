@@ -204,7 +204,7 @@ rimz config set theme.pets.enabled true   # an animated companion on the provide
 rimz config set theme.pets.pet rocky      # `rimz list-pets` previews all pets
 ```
 
-Pets render as crisp pixels in Ghostty and kitty terminals; inside tmux that also needs tmux 3.6+ with `allow-passthrough on`. Everywhere else, including Zellij, the same pet renders as cell art.
+Pets render as crisp pixels in Ghostty and kitty terminals; inside tmux that also needs tmux 3.6+ with `allow-passthrough on`. Everywhere else, including Zellij, the same pet renders as cell art. The [pets guide](./docs/guide/pets.md) has the catalog, [petdex.dev](https://petdex.dev/) installs, and bring-your-own sheets.
 
 ### Auto-continue and smart compaction
 

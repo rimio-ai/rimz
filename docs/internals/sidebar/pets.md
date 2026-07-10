@@ -105,4 +105,4 @@ Geometry is fixed for every source: a `1536x1872` WebP or PNG holding an `8x9` g
 
 ## Configuration
 
-User setup lives in [theme.md Pets](../../guide/theme.md#pets). The config key appears in [configuration.md](../../guide/configuration.md#pets) because it is part of the generated theme template.
+User setup lives in the [pets guide](../../guide/pets.md). The config key appears in [configuration.md](../../guide/configuration.md#pets) because it is part of the generated theme template.
