@@ -39,6 +39,14 @@ from pathlib import Path
 
 LOCK_FILES = ("token", "pid", "host", "started", "repo", "branch", "remote")
 STASH_MARKER = "rimz-sync-repo.stash"
+INSTALL_DEV_PATHS = (
+    ".cargo",
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates",
+    "rust-toolchain.toml",
+    "xtask",
+)
 
 
 class CommandFailed(Exception):
@@ -329,7 +337,9 @@ class SyncRepo:
             saved_stash = self.stash_dirty_worktree()
             if saved_stash is not None:
                 stashes_to_restore.append(saved_stash)
+            previous_oid = git_output("rev-parse", f"refs/heads/{self.config.branch}")
             log_done = self.sync_branch()
+            self.install_dev_if_code_changed(previous_oid)
         except CommandFailed as error:
             exit_code = error.returncode
         except FatalError as error:
@@ -372,6 +382,29 @@ class SyncRepo:
             or not git_success("diff", "--cached", "--quiet")
             or bool(git_output("ls-files", "--others", "--exclude-standard"))
         )
+
+    def install_dev_if_code_changed(self, previous_oid: str) -> None:
+        current_oid = git_output("rev-parse", f"refs/heads/{self.config.branch}")
+        if current_oid == previous_oid:
+            return
+
+        changed = git(
+            "diff",
+            "--quiet",
+            previous_oid,
+            current_oid,
+            "--",
+            *INSTALL_DEV_PATHS,
+            check=False,
+            quiet=True,
+        )
+        if changed.returncode == 0:
+            return
+        if changed.returncode != 1:
+            raise CommandFailed(["git", "diff", previous_oid, current_oid], changed.returncode)
+
+        log("code changed; running cargo xtask install-dev")
+        run(["cargo", "xtask", "install-dev"])
 
     def current_branch(self) -> str:
         return git_output("rev-parse", "--abbrev-ref", "HEAD")
