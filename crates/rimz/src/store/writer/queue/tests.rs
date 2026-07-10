@@ -4,8 +4,8 @@ use super::*;
 use crate::agents::AgentLifecycleObservation;
 use crate::agents::AgentState;
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::message::{AutoCompact, DeliveryGate, MessageSender};
+use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+use crate::message::{AfterCondition, AutoCompact, DeliveryGate, MessageSender};
 use crate::store::event_log;
 use crate::{RuntimePaths, StatePaths};
 
@@ -64,6 +64,58 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     store
         .defer_message_wake(&MessageId::parse("msg_0000000000000000").unwrap(), until)
         .unwrap();
+}
+
+#[test]
+fn stamp_after_conditions_persists_event_and_skips_non_queued_records() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let condition = AfterCondition {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from("sess-planner"),
+        agent_name: Some("planner".to_owned()),
+        address: "@planner".to_owned(),
+        met_at: None,
+    };
+    let queued = message(&workspace_id).with_after(vec![condition.clone()]);
+    let claimed = message(&workspace_id).with_after(vec![condition]);
+    store.queue_message(&queued, "session").unwrap();
+    store.queue_message(&claimed, "session").unwrap();
+    store
+        .claim_message_for_steer(&claimed.message_id, now)
+        .unwrap()
+        .expect("claimed");
+
+    store
+        .stamp_after_conditions(
+            &[
+                (queued.message_id.clone(), vec![0]),
+                (claimed.message_id.clone(), vec![0]),
+            ],
+            now,
+            "session",
+        )
+        .unwrap();
+
+    let messages = store.list_messages().unwrap();
+    let queued = messages
+        .iter()
+        .find(|message| message.message_id == queued.message_id)
+        .unwrap();
+    let claimed = messages
+        .iter()
+        .find(|message| message.message_id == claimed.message_id)
+        .unwrap();
+    assert_eq!(queued.after[0].met_at, Some(now));
+    assert_eq!(claimed.after[0].met_at, None);
+    let events = event_log::read_all(&store.inner.paths.events_log).unwrap();
+    let stamped = events
+        .iter()
+        .filter(|event| event.method == "message.after_met")
+        .collect::<Vec<_>>();
+    assert_eq!(stamped.len(), 1);
+    let params: serde_json::Value = serde_json::from_str(stamped[0].params.get()).unwrap();
+    assert_eq!(params["reason"], "@planner finished");
 }
 
 #[test]

@@ -5,10 +5,12 @@ use super::*;
 /// Shared enqueue for parked messages: resolve the prompt from inline argv or
 /// `--file`, then split the mirrored `SendFlags` into the delivery spec and the
 /// fan-out controls and hand off.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn message_add(
     target: String,
     gate: DeliveryGate,
     schedule: Option<String>,
+    after: Vec<String>,
     send: SendFlags,
     text: Vec<String>,
     piped: Option<String>,
@@ -30,6 +32,9 @@ pub(super) fn message_add(
     } = send;
     if schedule.is_some() && create {
         bail!("--schedule needs an existing agent; remove --create");
+    }
+    if !after.is_empty() && create {
+        bail!("--after needs an existing recipient; remove --create");
     }
     let wait = send::WaitSpec {
         mode: send::reply_wait(wait),
@@ -59,6 +64,7 @@ pub(super) fn message_add(
             no_from,
             wait,
             not_before,
+            after,
         },
         FanoutFlags { all, create },
         globals,
@@ -108,6 +114,7 @@ pub(super) fn steer_message(
             no_from,
             wait,
             not_before: None,
+            after: Vec::new(),
         },
         FanoutFlags { all, create },
         globals,
@@ -203,6 +210,7 @@ pub(super) struct MessageSpec {
     pub(super) no_from: bool,
     pub(super) wait: WaitSpec,
     pub(super) not_before: Option<Timestamp>,
+    pub(super) after: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -225,8 +233,15 @@ pub(super) fn dispatch_message(
     let rollup_only = match mode {
         MessageDispatchMode::Steer => false,
         MessageDispatchMode::Boundary => {
-            pending = store.list_pending_messages()?;
-            let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+            pending = store.list_messages()?;
+            let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+            if !spec.after.is_empty()
+                && let Ok(runtime) =
+                    rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+            {
+                snapshot =
+                    snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
+            }
             let rollup_only = message_dispatch::rollup_targets_all_park_without_live(
                 &snapshot,
                 &target,
@@ -256,9 +271,20 @@ pub(super) fn dispatch_message(
                 else {
                     return Ok(());
                 };
+                let after = resolve_after_conditions(
+                    &snapshot,
+                    &durable_agents,
+                    &targets,
+                    &spec.after,
+                    worktree.as_deref().or(channel_flag.as_deref()),
+                    channel.as_deref(),
+                    true,
+                    spec.gate,
+                    &pending,
+                )?;
                 return dispatch_resolved_message(
                     mode, &workspace, &store, &snapshot, pending, &sender, target, text, spec,
-                    flags, targets, channel,
+                    flags, targets, channel, after,
                 );
             }
             false
@@ -268,7 +294,7 @@ pub(super) fn dispatch_message(
     // Smart compaction reads context fill. Immediate message sends share the
     // live path, so fold the disposable context sidecars before any send-now
     // decision that might compact first.
-    if spec.auto_compact.is_some()
+    if (spec.auto_compact.is_some() || !spec.after.is_empty())
         && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
     {
         snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
@@ -292,10 +318,99 @@ pub(super) fn dispatch_message(
     else {
         return Ok(());
     };
+    let after = resolve_after_conditions(
+        &snapshot,
+        &durable_agents,
+        &targets,
+        &spec.after,
+        worktree.as_deref().or(channel_flag.as_deref()),
+        channel.as_deref(),
+        false,
+        spec.gate,
+        &pending,
+    )?;
     dispatch_resolved_message(
         mode, &workspace, &store, &snapshot, pending, &sender, target, text, spec, flags, targets,
-        channel,
+        channel, after,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_after_conditions(
+    snapshot: &SidebarSnapshot,
+    durable_agents: &[AgentState],
+    recipients: &[message_dispatch::QueueTarget<'_>],
+    addresses: &[String],
+    scope: Option<&str>,
+    channel: Option<&str>,
+    rollup_only: bool,
+    gate: DeliveryGate,
+    pending: &[MessageRecord],
+) -> Result<Vec<rimz::message::AfterCondition>> {
+    let now = Timestamp::now();
+    addresses
+        .iter()
+        .map(|address| {
+            rimz::harness::target::require_mention(address)?;
+            if rimz::harness::target::is_broadcast(address) {
+                bail!("--after `{address}` must name one agent; broadcasts are not supported");
+            }
+            let targets = message_dispatch::queue_targets(
+                snapshot,
+                Some(durable_agents),
+                address,
+                scope,
+                channel,
+                rollup_only,
+            )
+            .map_err(|err| map_queue_target_err(address, err))?;
+            if targets.len() != 1 {
+                bail!(
+                    "--after `{address}` must resolve to exactly one agent; matched {}",
+                    targets.len()
+                );
+            }
+            let target = targets[0];
+            let agent = target.agent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--after `{address}` must resolve to an agent with lifecycle state"
+                )
+            })?;
+            if recipients.iter().any(|recipient| {
+                recipient.agent().is_some_and(|recipient| {
+                    rimz::message::card_matches(
+                        &agent.kind,
+                        &agent.agent_id,
+                        agent.name.as_deref(),
+                        &recipient.kind,
+                        &recipient.agent_id,
+                        recipient.name.as_deref(),
+                    )
+                })
+            }) {
+                bail!(
+                    "--after `{address}` names the message recipient; use --on to gate on the recipient's turn"
+                );
+            }
+            let mut condition = rimz::message::AfterCondition {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                agent_name: agent.name.clone(),
+                address: message_dispatch::handle_for_target(snapshot, &target),
+                met_at: None,
+            };
+            if rimz::message::after_condition_open(
+                &condition,
+                gate,
+                &snapshot.agents,
+                pending,
+                now,
+            ) {
+                condition.met_at = Some(now);
+            }
+            Ok(condition)
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -358,6 +473,7 @@ pub(super) fn dispatch_resolved_message(
     flags: FanoutFlags,
     targets: Vec<message_dispatch::QueueTarget<'_>>,
     channel: Option<String>,
+    after: Vec<rimz::message::AfterCondition>,
 ) -> Result<()> {
     if targets.len() > 1 && !flags.all && !rimz::harness::target::is_broadcast(&target) {
         let labels: Vec<String> = targets
@@ -458,6 +574,7 @@ pub(super) fn dispatch_resolved_message(
                 force: spec.force,
                 auto_compact: spec.auto_compact,
                 not_before: spec.not_before,
+                after,
             },
         },
     )?;

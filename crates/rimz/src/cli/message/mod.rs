@@ -19,8 +19,8 @@ use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use rimz::message::dispatch::{DispatchContext, DispatchOutcome, SendMode};
 use rimz::message::{
-    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
-    parse_schedule_at,
+    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
+    MessageStatus, parse_schedule_at,
 };
 use rimz::message::{deliver, dispatch as message_dispatch};
 use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
@@ -48,6 +48,9 @@ pub struct MessageArgs {
     /// Park the message until at least this duration or configured-zone `HH:MM`.
     #[arg(long, value_name = "DUR|HH:MM", conflicts_with = "steer")]
     schedule: Option<String>,
+    /// Hold delivery until this agent finishes its queued work (repeatable; all must finish).
+    #[arg(long, value_name = "ADDR", conflicts_with_all = ["steer", "wait"])]
+    after: Vec<String>,
     #[command(flatten)]
     send: SendFlags,
 }
@@ -158,7 +161,7 @@ enum MessageSubcmd {
         #[arg(long)]
         message_id: MessageId,
     },
-    /// Deliver due scheduled messages. Spawned by the sidebar elder.
+    /// Deliver due scheduled messages and cross-agent triggers.
     #[command(hide = true)]
     Sweep,
 }
@@ -247,6 +250,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                     target,
                     args.on,
                     args.schedule,
+                    args.after,
                     args.send,
                     text,
                     piped,
@@ -295,6 +299,7 @@ pub(crate) fn to_session(
             no_from: false,
             wait: WaitSpec::OFF,
             not_before: None,
+            after: Vec::new(),
         },
         FanoutFlags {
             all: false,

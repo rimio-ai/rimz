@@ -253,6 +253,17 @@ impl std::fmt::Display for MessageBody {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AfterCondition {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub met_at: Option<Timestamp>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageRecord {
     pub message_id: MessageId,
@@ -303,6 +314,10 @@ pub struct MessageRecord {
     /// has passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_before: Option<Timestamp>,
+    /// Other agents whose queued work must finish before this message can
+    /// enter its receiver's FIFO lane.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<AfterCondition>,
     /// Wake-only retry floor set by the elder sweep when a ready queued head
     /// cannot deliver. This never gates FIFO readiness or turn-boundary
     /// delivery.
@@ -378,6 +393,7 @@ impl MessageRecord {
             last_error: None,
             delivered_at: None,
             not_before: None,
+            after: Vec::new(),
             retry_after: None,
             auto_compact: None,
             compacted_context_tokens: None,
@@ -403,6 +419,17 @@ impl MessageRecord {
         .with_auto_compact(record.auto_compact)
         .with_body(record.body)
         .with_not_before(record.not_before)
+        .with_after(
+            record
+                .after
+                .iter()
+                .cloned()
+                .map(|mut condition| {
+                    condition.met_at = None;
+                    condition
+                })
+                .collect(),
+        )
     }
 
     #[must_use]
@@ -441,6 +468,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_not_before(mut self, not_before: Option<Timestamp>) -> Self {
         self.not_before = not_before;
+        self
+    }
+
+    #[must_use]
+    pub fn with_after(mut self, after: Vec<AfterCondition>) -> Self {
+        self.after = after;
         self
     }
 
@@ -490,6 +523,16 @@ impl MessageRecord {
 
     pub fn is_ready(&self, now: Timestamp) -> bool {
         self.not_before.is_none_or(|not_before| not_before <= now)
+    }
+
+    pub fn after_met(&self) -> bool {
+        self.after
+            .iter()
+            .all(|condition| condition.met_at.is_some())
+    }
+
+    pub fn is_deliverable(&self, now: Timestamp) -> bool {
+        self.is_ready(now) && self.after_met()
     }
 
     pub fn sent_reconcile_deadline(&self, window: Duration) -> Option<Timestamp> {
@@ -546,6 +589,37 @@ pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
     }
 }
 
+pub fn after_condition_open(
+    condition: &AfterCondition,
+    gate: DeliveryGate,
+    agents: &[AgentState],
+    pending: &[MessageRecord],
+    now: Timestamp,
+) -> bool {
+    let Some(agent) = agents.iter().find(|agent| {
+        card_matches(
+            &condition.kind,
+            &condition.agent_id,
+            condition.agent_name.as_deref(),
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+        )
+    }) else {
+        return false;
+    };
+    gate_open(gate, agent.effective_status())
+        && !pending.iter().any(|message| {
+            !message.status.is_terminal()
+                && message.is_ready(now)
+                && message.same_card(
+                    &condition.kind,
+                    &condition.agent_id,
+                    condition.agent_name.as_deref(),
+                )
+        })
+}
+
 pub fn gate_open_for_agent(gate: DeliveryGate, agent: &AgentState, force: bool) -> bool {
     gate_open(gate, agent.effective_status())
         || (force && gate != DeliveryGate::Resume && agent.is_awaiting_input())
@@ -569,7 +643,7 @@ pub fn queue_head<'a>(
             message.status == MessageStatus::Queued
                 && message.gate != DeliveryGate::Resume
                 && message.same_card(kind, agent_id, agent_name)
-                && message.is_ready(now)
+                && message.is_deliverable(now)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
@@ -591,7 +665,7 @@ pub fn queue_head_for_message<'a>(
                     &candidate.agent_id,
                     candidate.agent_name.as_deref(),
                 )
-                && message.is_ready(now)
+                && message.is_deliverable(now)
                 && same_delivery_lane(candidate.gate, message.gate)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
@@ -617,7 +691,7 @@ pub fn queue_batch_tail<'a>(
             message.status == MessageStatus::Queued
                 && message.gate != DeliveryGate::Resume
                 && message.same_card(&head.kind, &head.agent_id, head.agent_name.as_deref())
-                && message.is_ready(now)
+                && message.is_deliverable(now)
                 && message.message_id.as_str() > head.message_id.as_str()
         })
         .collect();

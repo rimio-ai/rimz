@@ -246,6 +246,48 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn stamp_after_conditions(
+        &self,
+        stamps: &[(MessageId, Vec<usize>)],
+        now: Timestamp,
+        session_name: &str,
+    ) -> Result<()> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            self.update_messages_locked(txn, session_name, now, |message| {
+                if message.status != MessageStatus::Queued {
+                    return MessageUpdate::Keep;
+                }
+                let Some((_, indices)) = stamps
+                    .iter()
+                    .find(|(message_id, _)| *message_id == message.message_id)
+                else {
+                    return MessageUpdate::Keep;
+                };
+                let mut addresses = Vec::new();
+                for index in indices {
+                    let Some(condition) = message.after.get_mut(*index) else {
+                        continue;
+                    };
+                    if condition.met_at.is_some() {
+                        continue;
+                    }
+                    condition.met_at = Some(now);
+                    addresses.push(condition.address.clone());
+                }
+                if addresses.is_empty() {
+                    return MessageUpdate::Keep;
+                }
+                message.updated_at = now;
+                MessageUpdate::Rewrite {
+                    method: MessageEventMethod::AfterMet,
+                    reason: Some(format!("{} finished", addresses.join(", "))),
+                }
+            })?;
+            Ok(())
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn edit_message(
         &self,
         message_id: &MessageId,

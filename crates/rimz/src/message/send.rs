@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use crate::agents::AgentState;
 use crate::ids::{AgentSessionId, MessageId, WorkspaceId};
 use crate::message::{
-    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
+    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
+    MessageStatus,
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
 use crate::store::event::EventKind;
@@ -63,6 +64,7 @@ pub struct MessageDraft {
     pub sender: MessageSender,
     pub force: bool,
     pub auto_compact: Option<AutoCompact>,
+    pub after: Vec<AfterCondition>,
 }
 
 pub struct SentPrompt {
@@ -104,6 +106,7 @@ pub fn message_for_target(
     .with_force(draft.force)
     .with_pane_id(target.pane_id.clone())
     .with_auto_compact(draft.auto_compact)
+    .with_after(draft.after)
     .with_status(MessageStatus::Queued)
 }
 
@@ -319,6 +322,7 @@ pub fn compact_message_for_target(
             sender: prompt.sender.clone(),
             force: prompt.force,
             auto_compact: None,
+            after: Vec::new(),
         },
     );
     record.compacted_context_tokens = occupied;

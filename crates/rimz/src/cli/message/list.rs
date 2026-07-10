@@ -52,6 +52,8 @@ pub(super) struct MessageListRow {
     pub(super) delivered_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) not_before: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) after: Vec<AfterCondition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) retry_after: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,6 +87,7 @@ impl MessageListRow {
             last_error: message.last_error,
             delivered_at: message.delivered_at,
             not_before: message.not_before,
+            after: message.after,
             retry_after: message.retry_after,
             auto_compact: message.auto_compact,
             compacted_context_tokens: message.compacted_context_tokens,
@@ -124,6 +127,7 @@ impl MessageListRow {
             last_error: payload.reason,
             delivered_at,
             not_before: None,
+            after: Vec::new(),
             retry_after: None,
             auto_compact: None,
             compacted_context_tokens: payload.compacted_context_tokens,
@@ -388,20 +392,33 @@ pub(super) fn scoped_handle(rendered: String, filter_channel: Option<&str>) -> S
 }
 
 pub(super) fn message_snippet(message: &MessageListRow, width: usize) -> String {
+    let after = message
+        .after
+        .iter()
+        .filter(|condition| condition.met_at.is_none())
+        .map(|condition| condition.address.as_str())
+        .collect::<Vec<_>>();
+    let marker = (!after.is_empty()).then(|| format!("after {}", after.join(", ")));
     if let Some(text) = message.text.as_deref() {
-        return preview(&collapse_home_in_snippet(text), width);
+        let text = collapse_home_in_snippet(text);
+        return preview(
+            &marker.map_or(text.clone(), |marker| format!("{text} · {marker}")),
+            width,
+        );
     }
     if let Some(reason) = message
         .last_error
         .as_deref()
         .filter(|reason| !reason.is_empty())
     {
-        return render::paint(
-            render::palette::FAINT,
-            &preview(&collapse_home_in_snippet(reason), width),
-        );
+        let reason = collapse_home_in_snippet(reason);
+        let detail = marker.map_or(reason.clone(), |marker| format!("{reason} · {marker}"));
+        return render::paint(render::palette::FAINT, &preview(&detail, width));
     }
-    render::paint(render::palette::FAINT, "-")
+    render::paint(
+        render::palette::FAINT,
+        &marker.unwrap_or_else(|| "-".to_owned()),
+    )
 }
 
 pub(super) fn collapse_home_in_snippet(text: &str) -> String {
@@ -509,6 +526,45 @@ mod tests {
         let message = MessageListRow::from_record(message);
         let agents: Vec<&AgentState> = snapshot.root_agents().collect();
         assert_eq!(message_target(&message, &agents), "@coder#project");
+    }
+
+    #[test]
+    fn message_snippet_marks_only_unmet_after_conditions() {
+        let upstream = agent("sess-planner", AgentStatus::Running);
+        let condition = AfterCondition {
+            kind: upstream.kind.clone(),
+            agent_id: upstream.agent_id.clone(),
+            agent_name: upstream.name.clone(),
+            address: "@planner".to_owned(),
+            met_at: None,
+        };
+        let receiver = agent("sess-coder", AgentStatus::Running);
+        let waiting = MessageListRow::from_record(
+            MessageRecord::new(
+                workspace_id(),
+                &receiver,
+                "read plan".to_owned(),
+                true,
+                DeliveryGate::Done,
+            )
+            .with_after(vec![condition.clone()]),
+        );
+        let met = MessageListRow::from_record(
+            MessageRecord::new(
+                workspace_id(),
+                &receiver,
+                "read plan".to_owned(),
+                true,
+                DeliveryGate::Done,
+            )
+            .with_after(vec![AfterCondition {
+                met_at: Some(now()),
+                ..condition
+            }]),
+        );
+
+        assert_eq!(message_snippet(&waiting, 120), "read plan · after @planner");
+        assert_eq!(message_snippet(&met, 120), "read plan");
     }
 
     #[test]

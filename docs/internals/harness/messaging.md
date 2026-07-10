@@ -18,6 +18,8 @@ Three modes place a send on the timing axis. All three resolve the target throug
 - Default: send now when the target can receive, meaning a live pane, an open gate, no waiting agent reserving input (unless `--force`), and no ready queued backlog for the same agent. [Gates and delivery conditions](#gates-and-delivery-conditions) has the full list. When any condition fails, the text remains a `queued` record for the next qualifying turn boundary. A successful send-now moves that record to `sent`. A mux write failure with no `sent` record yet records `last_error`, clears pane affinity, and leaves the message queued for retry when the receiver is visible again.
 - `--schedule <DUR|HH:MM>`: always parks and stores a `not_before` timestamp. The room must be open so the sidebar elder can spawn `message sweep` when the wake stamp comes due.
 
+`--after <ADDR>` adds a cross-agent condition to the default mode. Each address resolves to exactly one durable agent card; repeat flags form an all-of set. Recipient fan-out remains independent, while a fan-out condition or self-reference is rejected.
+
 ## Addressing and targets
 
 The address grammar (handle classes, channel resolution, arity, fan-out, `--create`) is [harness.md § The address](./harness.md#the-address). This section covers what a target resolves to for delivery: a live pane, or the durable **card** a parked message keys on — the logical agent identity the rollup tracks, a kind plus a session id or launch placeholder ([agent.md § The rollup](../agents/model.md#the-rollup)).
@@ -74,6 +76,7 @@ A record stores:
 | `unconfirmed_sends` | unconfirmed `Sent` retry count; gates `TimedOut` |
 | `last_error` | latest delivery or reconciliation error |
 | `not_before` | earliest delivery time for scheduled messages |
+| `after` | referenced agent cards and enqueue-time addresses; `met_at` durably stamps each satisfied condition |
 | `retry_after` | wake-only retry floor set by the elder sweep; it never gates FIFO readiness |
 | `auto_compact` | context-fill threshold that triggers a `/compact` before delivery |
 | `compacted_context_tokens` | baseline reading that suppresses duplicate compaction |
@@ -103,15 +106,18 @@ Queued ──► Claimed ──► Sent ──► Delivered
 
 ## Gates and delivery conditions
 
-A parked message delivers when all five conditions hold:
+A parked message delivers when all six conditions hold:
 
 1. Gate is open. `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`; hidden `DeliveryGate::Resume` opens only on `Paused` after the account-budget resume guard passes. A hookless settled turn counts here: rollout completion projects a falsely-`running` row to `Success`, and rollout interruption projects it to `Idle`. `Running`, `Waiting`, and `Paused` keep ordinary delivery closed.
-2. Not waiting. An agent holding an open blocking prompt ([`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs)) reserves the next input for your answer. `--force` bypasses the reservation, mirroring `message --steer --force`; without it the skip reports `is waiting on your input in its pane; answer it or pass --force`.
-3. FIFO head. The message is the oldest ready queued record for its card and lane. `msg_` id string order is FIFO order; scheduled messages whose `not_before` is still in the future are filtered out, so they never block a later ready message on the same card. Resume nudges use a control lane so a parked-turn wakeup does not wait behind ordinary user text that cannot deliver until after the wakeup.
-4. Live pane exists. The target must have a pane that can receive a paste.
-5. Hooks are installed and trusted. Parked delivery needs hooks, because hooks are the delivery signal.
+2. Cross-agent conditions are stamped. Each `after` card reaches the same gate and has no non-terminal schedule-ready message. Future scheduled work does not count; `Queued`, `Claimed`, and `Sent` ready work does. A stamp stays met across later turns.
+3. Not waiting. An agent holding an open blocking prompt ([`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs)) reserves the next input for your answer. `--force` bypasses the reservation, mirroring `message --steer --force`; without it the skip reports `is waiting on your input in its pane; answer it or pass --force`.
+4. FIFO head. The message is the oldest deliverable queued record for its card and lane. `msg_` id string order is FIFO order; future scheduled messages and unmet `after` records are filtered out, so they never block a later deliverable message on the same card. Resume nudges use a control lane so a parked-turn wakeup does not wait behind ordinary user text that cannot deliver until after the wakeup.
+5. Live pane exists. The target must have a pane that can receive a paste.
+6. Hooks are installed and trusted. Parked delivery needs hooks, because hooks are the delivery signal.
 
 `--on done` (the default) and `--on any` set the gate; `--steer` has no gate because it sends immediately.
+
+Enqueue resolves every `after` address against the same live-plus-durable view as the receiver and evaluates it once. An idle, quiescent reference receives `met_at` immediately, so upstream work must be queued before its trigger. Otherwise the referenced agent's turn-end hook nudges the single-flight `message sweep`; the sweep evaluates all unmet conditions against one context-enriched snapshot, writes each new stamp with `message.after_met`, reloads the pending records, and delivers newly eligible heads in the same run. Still-unmet records receive a delivery-window `retry_after`, so the sidebar elder re-polls after hook loss without a hot loop. Missing cards remain unmet, and `message steer` is the manual escape for disappearance or dependency cycles.
 
 `DeliveryGate::Resume` is internal. Auto-continue stamps it on the configured resume nudge, and delivery re-checks that the target still reads as a resumable `paused` park with a recovered subscription budget, or an overload park whose marker is still active. Ordinary `Done` and `Any` messages stay parked while an agent is paused.
 

@@ -7,8 +7,8 @@ use jiff::Timestamp;
 use crate::agents::AgentState;
 use crate::ids::MessageId;
 use crate::message::{
-    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, gate_open_for_agent,
-    message_interval_from_env, queue_head,
+    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
+    gate_open_for_agent, message_interval_from_env, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, SidebarSnapshot, Store, TargetErr};
@@ -21,7 +21,7 @@ pub struct QueueTarget<'a> {
     agent: Option<&'a AgentState>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum SendMode {
     Steer {
         enter: bool,
@@ -34,6 +34,7 @@ pub enum SendMode {
         force: bool,
         auto_compact: Option<AutoCompact>,
         not_before: Option<Timestamp>,
+        after: Vec<AfterCondition>,
     },
 }
 
@@ -67,6 +68,13 @@ impl SendMode {
         match self {
             Self::Steer { .. } => None,
             Self::Boundary { not_before, .. } => *not_before,
+        }
+    }
+
+    fn after(&self) -> &[AfterCondition] {
+        match self {
+            Self::Steer { .. } => &[],
+            Self::Boundary { after, .. } => after,
         }
     }
 
@@ -383,6 +391,7 @@ fn live_prompt_for_target(
         sender,
         force,
         auto_compact,
+        after,
     } = draft;
     if let Some(agent) = target.agent {
         return MessageRecord::new(workspace_id, agent, text, enter, gate)
@@ -396,7 +405,8 @@ fn live_prompt_for_target(
             )
             .with_sender(sender)
             .with_pane_id(pane.pane_id.clone())
-            .with_auto_compact(auto_compact);
+            .with_auto_compact(auto_compact)
+            .with_after(after);
     }
     send::message_for_target(
         workspace_id,
@@ -412,6 +422,7 @@ fn live_prompt_for_target(
             sender,
             force,
             auto_compact,
+            after,
         },
     )
 }
@@ -432,7 +443,7 @@ pub fn dispatch_for_targets(
     let now = Timestamp::now();
     for target in targets {
         let handle = handle_for_target(ctx.snapshot, target);
-        let park = match mode {
+        let park = match &mode {
             SendMode::Steer { .. } => target.pane.is_none(),
             SendMode::Boundary { .. } => {
                 let pending = ctx
@@ -440,6 +451,10 @@ pub fn dispatch_for_targets(
                     .as_ref()
                     .map_or(&[][..], |pending| pending.as_slice());
                 mode.not_before().is_some()
+                    || !mode
+                        .after()
+                        .iter()
+                        .all(|condition| condition.met_at.is_some())
                     || !target.receivable_now(ctx.snapshot, pending, mode.gate(), mode.force(), now)
             }
         };
@@ -461,6 +476,7 @@ pub fn dispatch_for_targets(
                     sender: ctx.sender.clone(),
                     force: mode.force(),
                     auto_compact: mode.auto_compact(),
+                    after: mode.after().to_vec(),
                 },
             );
             let message_id = message.message_id.clone();
@@ -545,7 +561,8 @@ pub fn dispatch_for_targets(
         .with_channel(crate::harness::target::agent_channel(agent))
         .with_sender(ctx.sender.clone())
         .with_auto_compact(mode.auto_compact())
-        .with_not_before(mode.not_before());
+        .with_not_before(mode.not_before())
+        .with_after(mode.after().to_vec());
         let message_id = message.message_id.clone();
         ctx.store
             .queue_message(&message, &ctx.workspace.session_name)?;

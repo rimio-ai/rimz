@@ -11,9 +11,9 @@ use serde::Serialize;
 use crate::agents::AgentStatus;
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
-    DeliveryGate, MessageRecord, MessageStatus, delivery_window_from_env, gate_open_for_agent,
-    max_delivery_attempts_from_env, message_interval_from_env, queue_batch_tail, queue_head,
-    queue_head_for_message,
+    AfterCondition, DeliveryGate, MessageRecord, MessageStatus, after_condition_open, card_matches,
+    delivery_window_from_env, gate_open_for_agent, max_delivery_attempts_from_env,
+    message_interval_from_env, queue_batch_tail, queue_head, queue_head_for_message,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, RuntimePaths, SidebarSnapshot, Store};
@@ -172,9 +172,18 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
         delivery_window,
         max_delivery_attempts_from_env(),
     )?;
+    let live = store.list_messages()?;
+    if live
+        .iter()
+        .any(|message| message.status == MessageStatus::Queued && !message.after_met())
+    {
+        let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
+        snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime));
+        evaluate_after_conditions(workspace, store, &snapshot, &live, now)?;
+    }
     let pending = store.list_pending_messages()?;
     let mut heads_seen = std::collections::BTreeSet::new();
-    for message in pending.iter().filter(|message| message.is_ready(now)) {
+    for message in pending.iter().filter(|message| message.is_deliverable(now)) {
         let Some(head) = queue_head(
             pending.iter(),
             &message.kind,
@@ -199,6 +208,51 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
         }
     }
     register_message_wake(workspace, store)?;
+    Ok(())
+}
+
+fn evaluate_after_conditions(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    snapshot: &SidebarSnapshot,
+    pending: &[MessageRecord],
+    now: Timestamp,
+) -> Result<()> {
+    let mut stamps = Vec::new();
+    let mut deferred = Vec::new();
+    for message in pending
+        .iter()
+        .filter(|message| message.status == MessageStatus::Queued && !message.after_met())
+    {
+        let met = message
+            .after
+            .iter()
+            .enumerate()
+            .filter(|(_, condition)| condition.met_at.is_none())
+            .filter_map(|(index, condition)| {
+                after_condition_open(condition, message.gate, &snapshot.agents, pending, now)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let unmet_count = message
+            .after
+            .iter()
+            .filter(|condition| condition.met_at.is_none())
+            .count();
+        if met.len() < unmet_count {
+            deferred.push(message.message_id.clone());
+        }
+        if !met.is_empty() {
+            stamps.push((message.message_id.clone(), met));
+        }
+    }
+    if !stamps.is_empty() {
+        store.stamp_after_conditions(&stamps, now, &workspace.session_name)?;
+    }
+    let retry_at = now + delivery_window_from_env();
+    for message_id in deferred {
+        store.defer_message_wake(&message_id, retry_at)?;
+    }
     Ok(())
 }
 
@@ -241,11 +295,23 @@ struct DeliveryCandidate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeliveryCheck {
     pub schedule: ScheduleCheck,
+    pub after: Vec<AfterConditionCheck>,
     pub fifo: FifoCheck,
     pub agent: AgentCheck,
     pub gate: GateCheck,
     pub ask: AskCheck,
     pub pane: PaneCheck,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AfterConditionCheck {
+    pub address: String,
+    pub met: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub met_at: Option<Timestamp>,
+    pub agent_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<AgentStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -305,8 +371,23 @@ pub fn explain(
         not_before: message.not_before,
         retry_after: message.retry_after,
     };
-    let fifo = if message.status == MessageStatus::Queued && schedule.ready {
-        match queue_head_for_message(pending.iter(), message, now) {
+    let after = message
+        .after
+        .iter()
+        .map(|condition| after_condition_check(condition, message.gate, pending, snapshot, now))
+        .collect::<Vec<_>>();
+    let after_ready = after.iter().all(|condition| condition.met);
+    let fifo = if message.status == MessageStatus::Queued && schedule.ready && after_ready {
+        let mut candidate = message.clone();
+        for condition in &mut candidate.after {
+            condition.met_at.get_or_insert(now);
+        }
+        let candidates = std::iter::once(&candidate).chain(
+            pending
+                .iter()
+                .filter(|pending| pending.message_id != message.message_id),
+        );
+        match queue_head_for_message(candidates, &candidate, now) {
             Some(head) if head.message_id == message.message_id => FifoCheck {
                 head: true,
                 blocker: None,
@@ -354,6 +435,7 @@ pub fn explain(
     });
     DeliveryCheck {
         schedule,
+        after,
         fifo,
         agent: AgentCheck {
             present: agent.is_some(),
@@ -376,6 +458,33 @@ pub fn explain(
     }
 }
 
+fn after_condition_check(
+    condition: &AfterCondition,
+    gate: DeliveryGate,
+    pending: &[MessageRecord],
+    snapshot: &SidebarSnapshot,
+    now: Timestamp,
+) -> AfterConditionCheck {
+    let agent = snapshot.agents.iter().find(|agent| {
+        card_matches(
+            &condition.kind,
+            &condition.agent_id,
+            condition.agent_name.as_deref(),
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+        )
+    });
+    AfterConditionCheck {
+        address: condition.address.clone(),
+        met: condition.met_at.is_some()
+            || after_condition_open(condition, gate, &snapshot.agents, pending, now),
+        met_at: condition.met_at,
+        agent_present: agent.is_some(),
+        status: agent.map(crate::agents::AgentState::effective_status),
+    }
+}
+
 fn delivery_candidate(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -393,7 +502,7 @@ fn delivery_candidate(
     };
     let now = Timestamp::now();
     if matches!(policy, DeliveryPolicy::Boundary) {
-        if !message.is_ready(now) {
+        if !message.is_deliverable(now) {
             return Ok(None);
         }
         let Some(head) = queue_head_for_message(pending.iter(), &message, now) else {
@@ -621,6 +730,40 @@ mod tests {
         assert!(!check.schedule.ready);
         assert_eq!(check.schedule.not_before, Some(not_before));
         assert!(check.fifo.head, "schedule is the first blocker");
+    }
+
+    #[test]
+    fn explain_reports_after_blocker() {
+        let now = Timestamp::now();
+        let receiver = agent("sess-coder", AgentStatus::Idle);
+        let mut upstream = agent("sess-planner", AgentStatus::Running);
+        upstream.role = Some("planner".to_owned());
+        let mut snapshot = snapshot(receiver.clone(), true, now);
+        snapshot.agents.push(upstream.clone());
+        let message = message(&receiver, 1, "wait for plan").with_after(vec![AfterCondition {
+            kind: upstream.kind.clone(),
+            agent_id: upstream.agent_id.clone(),
+            agent_name: upstream.name.clone(),
+            address: "@planner".to_owned(),
+            met_at: None,
+        }]);
+
+        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
+
+        assert_eq!(check.after.len(), 1);
+        assert_eq!(check.after[0].address, "@planner");
+        assert!(!check.after[0].met);
+        assert!(check.after[0].agent_present);
+        assert_eq!(check.after[0].status, Some(AgentStatus::Running));
+        assert!(check.fifo.head, "after is the first blocker");
+
+        snapshot.agents[1].status = AgentStatus::Idle;
+        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
+        assert!(check.after[0].met, "live-open conditions diagnose as met");
+        assert!(
+            check.fifo.head,
+            "live-open condition exposes the FIFO result"
+        );
     }
 
     fn snapshot(agent: AgentState, with_pane: bool, now: Timestamp) -> SidebarSnapshot {

@@ -110,6 +110,7 @@ pub struct LastDeathMarker {
 pub enum MessageEventMethod {
     Queued,
     Edited,
+    AfterMet,
     Sent,
     Delivered,
     TimedOut,
@@ -124,6 +125,7 @@ impl MessageEventMethod {
         match self {
             Self::Queued => "message.queued",
             Self::Edited => "message.edited",
+            Self::AfterMet => "message.after_met",
             Self::Sent => "message.sent",
             Self::Delivered => "message.delivered",
             Self::TimedOut => "message.timed_out",
@@ -152,6 +154,7 @@ impl MessageEventMethod {
         match raw {
             "message.queued" => Some(Self::Queued),
             "message.edited" => Some(Self::Edited),
+            "message.after_met" => Some(Self::AfterMet),
             "message.sent" => Some(Self::Sent),
             "message.delivered" => Some(Self::Delivered),
             "message.timed_out" => Some(Self::TimedOut),

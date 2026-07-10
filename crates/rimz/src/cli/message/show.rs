@@ -123,6 +123,25 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
             render::cell(time_until_with_absolute(not_before, now)),
         );
     }
+    if !message.after.is_empty() {
+        kv.push(
+            "after",
+            render::cell(
+                message
+                    .after
+                    .iter()
+                    .map(|condition| {
+                        if condition.met_at.is_some() {
+                            format!("{} ✓", condition.address)
+                        } else {
+                            format!("{} waiting", condition.address)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            ),
+        );
+    }
     if message.attempts > 0 {
         kv.push("attempts", render::cell(message.attempts.to_string()));
     }
@@ -256,6 +275,7 @@ pub(super) fn steer_failure(
 
 pub(super) fn delivery_conditions_pass(check: &deliver::DeliveryCheck) -> bool {
     check.schedule.ready
+        && check.after.iter().all(|condition| condition.met)
         && check.fifo.head
         && check.agent.present
         && gate_ready(check)
@@ -332,6 +352,24 @@ pub(super) fn render_delivery_check(
             .unwrap_or_else(|| "not ready".to_owned())
     };
     kv.push("schedule", condition_cell(check.schedule.ready, schedule));
+    if !check.after.is_empty() {
+        let ready = check.after.iter().all(|condition| condition.met);
+        let detail = check
+            .after
+            .iter()
+            .map(|condition| {
+                if condition.met {
+                    format!("{} ok", condition.address)
+                } else if condition.agent_present {
+                    format!("{} waiting", condition.address)
+                } else {
+                    format!("{} not running", condition.address)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
+        kv.push("after", condition_cell(ready, detail));
+    }
     let fifo = if check.fifo.head {
         "ok".to_owned()
     } else {
@@ -430,6 +468,16 @@ pub(super) fn delivery_verdict(
             })
             .unwrap_or_else(|| "scheduled: waiting for readiness floor".to_owned());
     }
+    if let Some(condition) = check.after.iter().find(|condition| !condition.met) {
+        return if condition.agent_present {
+            format!("waiting on {} to finish", condition.address)
+        } else {
+            format!(
+                "waiting on {} to finish ({} not running)",
+                condition.address, condition.address
+            )
+        };
+    }
     if !check.fifo.head {
         return check
             .fifo
@@ -481,6 +529,9 @@ pub(super) fn delivery_action_hint(
             "force now: rimz message steer {message_id}  ·  or: rimz message edit {message_id} --no-schedule"
         ));
     }
+    if check.after.iter().any(|condition| !condition.met) {
+        return Some(format!("force now: rimz message steer {message_id}"));
+    }
     if !check.fifo.head || !gate_ready(check) {
         return Some(format!("force now: rimz message steer {message_id}"));
     }
@@ -504,14 +555,15 @@ mod tests {
     use rimz::ids::{MessageId, MuxName, PaneId};
 
     #[test]
-    fn steer_failure_ready_check_reports_recent_attempt() {
+    fn delivery_checks_report_recent_attempt_and_after_blocker() {
         let message_id = MessageId::parse("msg_0000000000000001").unwrap();
-        let check = deliver::DeliveryCheck {
+        let mut check = deliver::DeliveryCheck {
             schedule: deliver::ScheduleCheck {
                 ready: true,
                 not_before: None,
                 retry_after: None,
             },
+            after: Vec::new(),
             fifo: deliver::FifoCheck {
                 head: true,
                 blocker: None,
@@ -538,5 +590,18 @@ mod tests {
 
         assert!(message.contains("recent delivery attempt"), "{message}");
         assert!(!message.contains("ready: delivery conditions pass"));
+
+        check.after.push(deliver::AfterConditionCheck {
+            address: "@planner".to_owned(),
+            met: false,
+            met_at: None,
+            agent_present: false,
+            status: None,
+        });
+        assert!(!delivery_conditions_pass(&check));
+        assert_eq!(
+            delivery_verdict(&check, "@claude", Timestamp::now()),
+            "waiting on @planner to finish (@planner not running)"
+        );
     }
 }

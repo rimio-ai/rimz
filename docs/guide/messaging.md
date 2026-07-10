@@ -71,6 +71,19 @@ A parked message delivers the moment the agent can take it. All of these hold:
 
 `rimz message show msg_…` names the first unmet condition when a message is still waiting, so you never have to guess why.
 
+### Gate on another agent's turn
+
+`--after @handle` holds a message until that agent finishes its queued work. Repeat the flag to wait for several agents; every condition must finish before delivery.
+
+```sh
+rimz message @planner "draft the implementation plan"
+rimz message @coder --after @planner "planner's done — read plan.md and start"
+```
+
+Queue the upstream work before its trigger. An agent that is already idle with no schedule-ready queued work satisfies the condition immediately, and that durable result stays satisfied if the agent starts another turn later. A condition waits while the referenced agent is running, waiting, or has undelivered ready work; future scheduled work does not hold it.
+
+The message's `--on` gate also applies to each referenced agent: `--on done` waits after a failure, while `--on any` releases after success, idle, or failure. An unmet `--after` message steps out of the receiver's FIFO like a future scheduled message, so later eligible text still lands. `message show` names the agent holding the trigger, and `message steer` forces the record through a missing agent or an intentional dependency cycle.
+
 ## Reach several at once
 
 A handle that matches more than one agent is an error until you opt into the fan-out — so an ambiguous `@claude` lists the candidates instead of surprising all of them.

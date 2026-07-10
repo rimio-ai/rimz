@@ -87,6 +87,82 @@ fn message_status_lifecycle_helpers_match_queue_semantics() {
 }
 
 #[test]
+fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
+    let now = Timestamp::now();
+    let mut upstream = agent("sess-upstream", Some("planner"));
+    let condition = after_condition(&upstream, None);
+
+    for status in [AgentStatus::Running, AgentStatus::Waiting] {
+        upstream.status = status;
+        assert!(!after_condition_open(
+            &condition,
+            DeliveryGate::Done,
+            std::slice::from_ref(&upstream),
+            &[],
+            now
+        ));
+    }
+
+    upstream.status = AgentStatus::Failed;
+    assert!(!after_condition_open(
+        &condition,
+        DeliveryGate::Done,
+        std::slice::from_ref(&upstream),
+        &[],
+        now
+    ));
+    assert!(after_condition_open(
+        &condition,
+        DeliveryGate::Any,
+        std::slice::from_ref(&upstream),
+        &[],
+        now
+    ));
+
+    upstream.status = AgentStatus::Idle;
+    let ready = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &upstream,
+        "work".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    assert!(!after_condition_open(
+        &condition,
+        DeliveryGate::Done,
+        std::slice::from_ref(&upstream),
+        std::slice::from_ref(&ready),
+        now
+    ));
+    let sent = MessageRecord {
+        status: MessageStatus::Sent,
+        ..ready.clone()
+    };
+    assert!(!after_condition_open(
+        &condition,
+        DeliveryGate::Done,
+        std::slice::from_ref(&upstream),
+        std::slice::from_ref(&sent),
+        now
+    ));
+    let scheduled = ready.with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
+    assert!(after_condition_open(
+        &condition,
+        DeliveryGate::Done,
+        std::slice::from_ref(&upstream),
+        std::slice::from_ref(&scheduled),
+        now
+    ));
+    assert!(after_condition_open(
+        &condition,
+        DeliveryGate::Done,
+        std::slice::from_ref(&upstream),
+        &[],
+        now
+    ));
+}
+
+#[test]
 fn claim_ttl_treats_future_stamp_as_expired() {
     let now = Timestamp::now();
     assert!(claim_expired(None, now));
@@ -482,6 +558,68 @@ fn queue_head_skips_not_yet_ready_scheduled_messages() {
 }
 
 #[test]
+fn queue_head_skips_unmet_after_without_blocking_later_messages() {
+    let receiver = agent("sess-receiver", Some("coder"));
+    let upstream = agent("sess-upstream", Some("planner"));
+    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
+    let now = Timestamp::now();
+    let mut waiting = MessageRecord::new(
+        ws.clone(),
+        &receiver,
+        "after planner".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_after(vec![after_condition(&upstream, None)]);
+    let mut ready = MessageRecord::new(ws, &receiver, "plain".to_owned(), true, DeliveryGate::Done);
+    waiting.message_id = message_id(1);
+    ready.message_id = message_id(2);
+    let pending = [waiting.clone(), ready.clone()];
+
+    let head = queue_head(
+        pending.iter(),
+        &receiver.kind,
+        &receiver.agent_id,
+        receiver.name.as_deref(),
+        now,
+    )
+    .expect("later deliverable message steps past after gate");
+
+    assert_eq!(head.message_id, ready.message_id);
+    assert!(!waiting.is_deliverable(now));
+}
+
+#[test]
+fn stamped_after_is_permanent_and_requeue_rearms_it() {
+    let now = Timestamp::now();
+    let receiver = agent("sess-receiver", Some("coder"));
+    let mut upstream = agent("sess-upstream", Some("planner"));
+    upstream.status = AgentStatus::Running;
+    let message = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &receiver,
+        "ship".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_after(vec![after_condition(&upstream, Some(now))]);
+
+    assert!(message.is_deliverable(now));
+    assert!(!after_condition_open(
+        &message.after[0],
+        message.gate,
+        std::slice::from_ref(&upstream),
+        &[],
+        now
+    ));
+
+    let requeued = MessageRecord::requeue_from(&message);
+    assert_eq!(requeued.after.len(), 1);
+    assert_eq!(requeued.after[0].met_at, None);
+    assert!(!requeued.is_deliverable(now));
+}
+
+#[test]
 fn queue_head_does_not_treat_retry_after_as_readiness() {
     let agent = agent("real-session", Some("lucid-atlas"));
     let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
@@ -750,6 +888,16 @@ fn agent(id: &str, name: Option<&str>) -> AgentState {
     let mut agent = AgentState::stub("claude", id, AgentStatus::Idle);
     agent.name = name.map(ToOwned::to_owned);
     agent
+}
+
+fn after_condition(agent: &AgentState, met_at: Option<Timestamp>) -> AfterCondition {
+    AfterCondition {
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        agent_name: agent.name.clone(),
+        address: format!("@{}", agent.name.as_deref().unwrap_or(agent.kind.as_str())),
+        met_at,
+    }
 }
 
 fn settle_context(complete: Option<Timestamp>, interrupted: Option<Timestamp>) -> AgentContext {

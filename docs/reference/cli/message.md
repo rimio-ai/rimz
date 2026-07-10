@@ -7,6 +7,7 @@ rimz message @swift-otter "Add focused tests for the parser."                   
 rimz message --on any @codex#cli-docs "If the run failed, capture the error first."
 rimz message --schedule 60m @claude "Run the smoke test after lunch."
 rimz message --schedule 14:30 --on any @planner "Restart the review."
+rimz message @coder --after @planner "Read plan.md when the planner finishes."
 rimz message --steer @claude "Inspect the failing test now."
 rimz message @coder --wait "did the migration land? one line"
 rimz message @all --wait --json "status? one line"
@@ -39,6 +40,8 @@ The default mode uses the same live path when the addressed agent can receive no
 
 `--schedule <DUR|HH:MM>` always parks and sets a `not_before` time floor; examples include `90s`, `60m`, `2h`, `1d`, and configured-timezone 24-hour times such as `14:30`. A scheduled message becomes eligible only after that floor, then the normal gate and pending-ask checks still apply.
 
+`--after <ADDR>` holds delivery until exactly one referenced agent reaches the message's `--on` gate with no schedule-ready undelivered work. Repeat it to require several agents. Queue upstream work first: an already idle, quiescent reference is stamped satisfied at enqueue and remains satisfied. Unmet conditions step out of the receiver FIFO, and `message steer <id>` bypasses them. A referenced failure waits under `--on done` and releases under `--on any`; a missing referenced card keeps waiting. `--after` conflicts with `--steer` and `--wait`, requires an existing recipient instead of `--create`, rejects fan-out references and the message recipient itself, and composes with `--schedule`, recipient fan-out, and `--force`.
+
 A bare `@<kind>`, `@<profile>`, or `@all` in `--steer` mode also reaches an agent you just started in a fresh pane, before its first turn, because the live-pane side addresses the pane it types into. Parked records key on the bound session or launch placeholder card, so FIFO survives registration.
 
 ## Delivery flags
@@ -47,6 +50,7 @@ The flags worth knowing tune delivery (run `rimz message --help` for the full su
 
 - `--steer` interrupts the live pane now and conflicts with `--schedule` and `--on`, because it has no later boundary.
 - `--schedule <DUR|HH:MM>` sets the earliest delivery time for parked records; the room must be open so the sidebar elder can spawn the scheduled-wake helper when the stamp comes due.
+- `--after <ADDR>` waits for another agent to finish its ready queued work; repeat it to wait for all named agents.
 - `--on done|any` chooses which turn-boundary statuses release parked records; `done` is the default.
 - `--no-enter` pastes the text without submitting; otherwise the text rides as a bracketed paste and Enter lands as a discrete keystroke, so a `\n` in the text stays a soft composer newline and a multi-line prompt lands multi-line (write `\\` for a literal backslash).
 - `--file <PATH>` reads the prompt from a file and sends it byte-for-byte: real newlines stay soft breaks and backslashes stay literal, so code and regex paste unchanged. It conflicts with inline text.
@@ -74,11 +78,11 @@ Bare `rimz message` renders the inbox for the current lane; in the main checkout
 
 `message list` hides archived records unless `--all` or `--status archived` asks for them, sorts newest first, and caps at 200 rows (`--limit N`, `--limit 0` for all). An empty result renders as a faint scope-aware `no messages` line; non-empty human output is a dense two-line digest: `sender → receiver  status  age  msg_id`, then an indented one-line snippet clipped to the terminal width after `$HOME` path segments collapse to `~`. Handles omit `#channel` when the row already sits inside that scoped lane, and terminal rows read their preserved text from `messages/history.jsonl` (older event-only rows show the terminal reason as the snippet). `--all` widens the view to every lane, groups rows under one `#channel` or `(main)` header per lane ordered by latest activity, and keeps messages newest-first inside each group; `--channel <NAME>` selects one lane, `--status <STATUS>` filters exactly, and `--json` keeps the full record including attempts and the enqueue-time receiver `address`.
 
-`message show <id>` (`status` alias) prints the full record text, a `message.*` event timeline, and, for open records, a delivery check that names the first blocker: schedule floor, FIFO head, receiver presence, gate, pending ask, or live pane, followed by a steer or edit hint when a command can clear the blocker.
+`message show <id>` (`status` alias) prints the full record text, a `message.*` event timeline, and, for open records, a delivery check that names the first blocker: schedule floor, referenced agent, FIFO head, receiver presence, gate, pending ask, or live pane, followed by a steer or edit hint when a command can clear the blocker.
 
 `message steer <id>` takes an existing queued record and sends it now, skipping its schedule floor, FIFO position, and turn-boundary gate; an agent Waiting on a native ask still reserves input unless `--force` is passed, and a missing receiver or pane stays a hard error.
 
-`message requeue <id>` creates a new queued record from a terminal record whose text is still in `messages/history.jsonl`; it preserves receiver identity and delivery settings unless edit flags override them.
+`message requeue <id>` creates a new queued record from a terminal record whose text is still in `messages/history.jsonl`; it preserves receiver identity and delivery settings unless edit flags override them, and re-arms every `--after` condition.
 
 `message remove` accepts one or more ids and keeps processing after misses, then exits non-zero if any id was not open. `message clear` with a target removes that agent's open messages; without a target it removes open messages in the scoped lane from `--channel`, `--worktree`, or the ambient room channel, and prints the ids it removed. Removing a `queued` record cancels delivery before it lands.
 

@@ -467,6 +467,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
         last_error: None,
         delivered_at: None,
         not_before: None,
+        after: Vec::new(),
         retry_after: None,
         auto_compact: None,
         compacted_context_tokens: None,
@@ -563,6 +564,7 @@ fn message_event_methods_round_trip_archived() {
     for method in [
         MessageEventMethod::Queued,
         MessageEventMethod::Edited,
+        MessageEventMethod::AfterMet,
         MessageEventMethod::Sent,
         MessageEventMethod::Delivered,
         MessageEventMethod::TimedOut,

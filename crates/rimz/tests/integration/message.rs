@@ -10,7 +10,9 @@ use rimz::agents::{
     LifecycleSignal, RateLimitWindow, TurnErrorClass,
 };
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
-use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
+use rimz::message::{
+    AfterCondition, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
+};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
 
 use crate::common::Env;
@@ -770,6 +772,216 @@ fn scheduled_message_parks_with_not_before_and_wake_stamp() {
         serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
             .expect("wake stamp json");
     assert_eq!(wake, Some(not_before));
+}
+
+#[test]
+fn message_record_after_conditions_round_trip() {
+    let env = Env::new();
+    let now = jiff::Timestamp::now();
+    let record = MessageRecord::new_for_card(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        AgentSessionId::from("sess-coder"),
+        Some("coder".to_owned()),
+        "ship it".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_after(vec![AfterCondition {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: AgentSessionId::from("sess-planner"),
+        agent_name: Some("planner".to_owned()),
+        address: "@planner".to_owned(),
+        met_at: Some(now),
+    }]);
+
+    let json = serde_json::to_string(&record).expect("serialize message");
+    let decoded: MessageRecord = serde_json::from_str(&json).expect("deserialize message");
+
+    assert_eq!(decoded, record);
+}
+
+#[test]
+fn message_after_rejects_conflicts_self_reference_and_fanout() {
+    let env = Env::new();
+    for args in [
+        vec!["message", "@claude", "--after", "@claude", "--steer", "x"],
+        vec!["message", "@claude", "--after", "@claude", "--wait", "x"],
+        vec!["message", "@claude", "--after", "@claude", "--create", "x"],
+    ] {
+        let out = env.rimz().args(args).output().expect("after conflict");
+        assert!(!out.status.success());
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("--after"),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    env.install_agent_hooks("claude");
+    register_role_agent(
+        &env,
+        "claude",
+        "sess-coder",
+        "coder",
+        false,
+        Some("terminal_3"),
+    );
+    register_role_agent(&env, "claude", "sess-planner", "planner", true, None);
+
+    let self_reference = env
+        .rimz()
+        .args(["message", "@coder", "--after", "@coder", "x"])
+        .output()
+        .expect("self reference");
+    assert!(!self_reference.status.success());
+    assert!(
+        String::from_utf8_lossy(&self_reference.stderr).contains("use --on"),
+        "stderr: {}",
+        String::from_utf8_lossy(&self_reference.stderr)
+    );
+
+    let fanout = env
+        .rimz()
+        .args(["message", "@coder", "--after", "@all", "x"])
+        .output()
+        .expect("after fanout");
+    assert!(!fanout.status.success());
+    assert!(
+        String::from_utf8_lossy(&fanout.stderr).contains("broadcasts are not supported"),
+        "stderr: {}",
+        String::from_utf8_lossy(&fanout.stderr)
+    );
+}
+
+#[test]
+fn message_after_show_and_sweep_complete_cross_agent_relay() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_role_agent(
+        &env,
+        "claude",
+        "sess-coder",
+        "coder",
+        false,
+        Some(TRACE_PANE),
+    );
+    register_role_agent(&env, "claude", "sess-planner", "planner", true, None);
+
+    let add = env
+        .rimz()
+        .args(["message", "@coder", "--after", "@planner", "read plan.md"])
+        .output()
+        .expect("queue relay");
+    assert!(
+        add.status.success(),
+        "queue relay failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let message_id = queued_id_from_stdout(&add.stdout);
+    let pending = env.store().list_pending_messages().expect("pending relay");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].after.len(), 1);
+    assert!(pending[0].after[0].address.starts_with("@planner"));
+    assert_eq!(pending[0].after[0].met_at, None);
+    let after_address = pending[0].after[0].address.clone();
+
+    let shown = env
+        .rimz()
+        .args(["message", "show", &message_id, "--json"])
+        .output()
+        .expect("show relay");
+    assert!(
+        shown.status.success(),
+        "show relay failed: {}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).expect("show json");
+    assert_eq!(
+        shown["delivery"]["check"]["after"][0]["address"],
+        after_address
+    );
+    assert_eq!(shown["delivery"]["check"]["after"][0]["met"], false);
+
+    append_lifecycle(
+        &env,
+        "claude",
+        "Stop",
+        "sess-planner",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        },
+        |_| {},
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-after-sweep-trace.log");
+    let sweep = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "sweep"])
+        .output()
+        .expect("sweep relay");
+    assert!(
+        sweep.status.success(),
+        "sweep relay failed: {}",
+        String::from_utf8_lossy(&sweep.stderr)
+    );
+
+    assert_text_then_enter(&trace_log, "read plan.md");
+    let sent = env
+        .store()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("sent relay");
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert!(sent.after[0].met_at.is_some());
+    assert!(
+        env.read_events()
+            .iter()
+            .any(|event| event.method == "message.after_met")
+    );
+}
+
+#[test]
+fn message_after_prestamps_quiescent_agent_and_sends_live() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_role_agent(
+        &env,
+        "claude",
+        "sess-coder",
+        "coder",
+        false,
+        Some(TRACE_PANE),
+    );
+    register_role_agent(&env, "claude", "sess-planner", "planner", false, None);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-after-prestamp-trace.log");
+
+    let add = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@coder", "--after", "@planner", "start now"])
+        .output()
+        .expect("send prestamped relay");
+    assert!(
+        add.status.success(),
+        "prestamped relay failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    assert_text_then_enter(&trace_log, "start now");
+    let messages = env.store().list_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+    assert!(messages[0].after[0].met_at.is_some());
 }
 
 #[test]
@@ -3658,6 +3870,46 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &
         }),
         pane_env,
     );
+}
+
+fn register_role_agent(
+    env: &Env,
+    kind: &str,
+    session_id: &str,
+    role: &str,
+    running: bool,
+    pane_id: Option<&str>,
+) {
+    append_lifecycle(
+        env,
+        kind,
+        "SessionStart",
+        session_id,
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some(format!("{role}-agent"));
+            observation.launch.role = Some(role.to_owned());
+            observation.worktree_branch = Some(format!("feature-{role}"));
+            observation.pane_id =
+                pane_id.map(|pane_id| PaneId::from_parts(MuxName::Zellij, pane_id));
+        },
+    );
+    if running {
+        append_lifecycle(
+            env,
+            kind,
+            "UserPromptSubmit",
+            session_id,
+            LifecycleSignal::TurnStarted,
+            |observation| {
+                observation.agent_name = Some(format!("{role}-agent"));
+                observation.launch.role = Some(role.to_owned());
+                observation.worktree_branch = Some(format!("feature-{role}"));
+                observation.pane_id =
+                    pane_id.map(|pane_id| PaneId::from_parts(MuxName::Zellij, pane_id));
+            },
+        );
+    }
 }
 
 fn register_idle_agent_with_transcript(

@@ -58,13 +58,37 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
         }
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+    let agent_name = recorded.observation.agent_name.as_deref();
+    if pending.iter().any(|message| {
+        message.status == rimz::message::MessageStatus::Queued
+            && message.after.iter().any(|condition| {
+                condition.met_at.is_none()
+                    && rimz::message::card_matches(
+                        &condition.kind,
+                        &condition.agent_id,
+                        condition.agent_name.as_deref(),
+                        &kind,
+                        agent_id,
+                        agent_name,
+                    )
+            })
+    }) {
+        spawn_refresh_detached(&rimz::agents::RefreshSpawn {
+            args: vec![
+                "--root".to_owned(),
+                workspace.project_root.display().to_string(),
+                "message".to_owned(),
+                "sweep".to_owned(),
+            ],
+        });
+    }
     // FIFO spans this card's provisional and registered ids, so the stable
     // agent name folds a message queued before registration into the same queue.
     let Some(head) = rimz::message::queue_head(
         pending.iter(),
         &kind,
         agent_id,
-        recorded.observation.agent_name.as_deref(),
+        agent_name,
         jiff::Timestamp::now(),
     ) else {
         return;
