@@ -633,20 +633,28 @@ pub(super) fn top_lines(
     // tally on a pre-overlay snapshot.
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
     let unread_agents = unread_total(&snapshot.worktree_groups);
-    let today_usd = snapshot
-        .today_spend_live_usd
-        .or(headline.map(|window| window.usd))
-        .unwrap_or(0.0);
-    let today_usd = ui
-        .spend_ratchet
-        .display(snapshot.today_spend_epoch_secs, today_usd);
+    let today_usd = snapshot.fleet_budget.as_ref().map_or_else(
+        || {
+            snapshot
+                .today_spend_live_usd
+                .or(headline.map(|window| window.usd))
+                .unwrap_or(0.0)
+        },
+        |budget| budget.spend_usd,
+    );
+    let spend_epoch = if snapshot.fleet_budget.is_some() {
+        snapshot.fleet_day_spend_epoch_secs
+    } else {
+        snapshot.today_spend_epoch_secs
+    };
+    let today_usd = ui.spend_ratchet.display(spend_epoch, today_usd);
     let spend_line = header.len();
     let unread_picked = ui.make_up_filter == Some(BodyFilter::Unread);
     let (spend, unread_range) = cockpit_spend_line(
         theme,
         live_agents,
         (unread_agents, unread_picked),
-        today_usd,
+        (today_usd, snapshot.fleet_budget.as_ref()),
         &ui.tally,
         ui.animation_phase,
         inner,

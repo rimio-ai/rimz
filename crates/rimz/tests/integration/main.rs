@@ -11,6 +11,7 @@ mod common;
 mod agent_launch;
 mod asks;
 mod backend;
+mod budget;
 mod channel;
 mod codex_broker;
 mod complete;

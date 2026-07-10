@@ -233,6 +233,8 @@ fn derive_workspace_spending(
         scope_hash,
         tally: scoped.tally,
         headline_cutoff_secs: scoped.headline_cutoff_secs,
+        day: scoped.day,
+        day_cutoff_secs: scoped.day_cutoff_secs,
         live_excluded: live_excluded.clone(),
     };
     let workspace = serve_prev_on_young_regression(
@@ -307,6 +309,7 @@ fn serve_prev_on_young_regression(
         && next.tally.headline.usd < prev.tally.headline.usd
         && now_ms.saturating_sub(prev.refreshed_at_ms) < SESSION_GAP_SECS * 1_000
         && same_window
+        && prev.day_cutoff_secs == next.day_cutoff_secs
     {
         prev
     } else {
@@ -326,7 +329,7 @@ fn walk_fleet_spending(
         PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SilentWalk, SpendScope, Spending,
         SpendingCaches, WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
         read_provider_spending_cache, unix_secs_now, write_provider_spending_cache,
-        write_provider_spending_cache_with_rollups, write_workspace_spending_cache,
+        write_workspace_spending_cache,
     };
 
     let provider_path = runtime.shared_provider_spending_path();
@@ -360,6 +363,8 @@ fn walk_fleet_spending(
             scope_hash: scope_hash.clone().unwrap_or_default(),
             tally: Default::default(),
             headline_cutoff_secs: 0,
+            day: Default::default(),
+            day_cutoff_secs: 0,
             live_excluded: live_excluded.clone(),
         };
         if publish {
@@ -378,6 +383,8 @@ fn walk_fleet_spending(
             provider: ProviderSpendingCache {
                 version: PROVIDER_SPENDING_VERSION,
                 refreshed_at_ms,
+                day_by_provider: Default::default(),
+                day_cutoff_secs: 0,
                 days: Default::default(),
                 models: Default::default(),
                 spending,
@@ -439,6 +446,8 @@ fn walk_fleet_spending(
             refreshed_at_ms,
             result.workspace_tally.clone(),
             result.workspace_headline_cutoff_secs,
+            result.workspace_day,
+            result.day_cutoff_secs,
             &live_excluded,
         )
     } else {
@@ -449,12 +458,14 @@ fn walk_fleet_spending(
         }
     };
     if publish {
-        write_provider_spending_cache_with_rollups(
+        crate::agents::spending::write_provider_spending_cache_with_day(
             &provider_path,
             refreshed_at_ms,
             &result.spending,
             &result.days,
             &result.models,
+            &result.provider_day,
+            result.day_cutoff_secs,
         );
         if let Some(scope_hash) = scope_hash.as_deref() {
             write_workspace_spending_cache(
@@ -468,6 +479,8 @@ fn walk_fleet_spending(
         provider: ProviderSpendingCache {
             version: PROVIDER_SPENDING_VERSION,
             refreshed_at_ms,
+            day_by_provider: result.provider_day,
+            day_cutoff_secs: result.day_cutoff_secs,
             days: result.days,
             models: result.models,
             spending: result.spending,
@@ -500,12 +513,14 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             self.spec,
         );
         let refreshed_at_ms = unix_now_ms();
-        crate::agents::spending::write_provider_spending_cache_with_rollups(
+        crate::agents::spending::write_provider_spending_cache_with_day(
             &self.provider_path,
             refreshed_at_ms,
             &result.spending,
             &result.days,
             &result.models,
+            &result.provider_day,
+            result.day_cutoff_secs,
         );
         if let Some(scope_hash) = self.scope_hash.as_deref() {
             let workspace = reconciled_workspace_cache(
@@ -513,6 +528,8 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
                 refreshed_at_ms,
                 result.workspace_tally,
                 result.workspace_headline_cutoff_secs,
+                result.workspace_day,
+                result.day_cutoff_secs,
                 self.live_excluded,
             );
             crate::agents::spending::write_workspace_spending_cache(
@@ -529,6 +546,8 @@ fn reconciled_workspace_cache(
     refreshed_at_ms: u64,
     tally: crate::agents::spending::SpendTally,
     headline_cutoff_secs: u64,
+    day: crate::agents::spending::SpendWindow,
+    day_cutoff_secs: u64,
     live_excluded: &BTreeSet<String>,
 ) -> crate::agents::spending::WorkspaceSpendingCache {
     use crate::agents::spending::{WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache};
@@ -539,6 +558,8 @@ fn reconciled_workspace_cache(
         scope_hash: scope_hash.to_owned(),
         tally,
         headline_cutoff_secs,
+        day,
+        day_cutoff_secs,
         live_excluded: live_excluded.clone(),
     }
 }
@@ -582,6 +603,8 @@ fn workspace_cache_from_shared_entries(
         provider.refreshed_at_ms,
         scoped.tally,
         scoped.headline_cutoff_secs,
+        scoped.day,
+        scoped.day_cutoff_secs,
         live_excluded,
     );
     let workspace = serve_prev_on_young_regression(

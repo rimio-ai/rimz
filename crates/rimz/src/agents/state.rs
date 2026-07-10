@@ -1514,6 +1514,8 @@ mod tests {
             spend_usd: 5.25,
             window: crate::harness::budget::BudgetWindow::Session,
             at: Timestamp::from_second(1_000).unwrap(),
+            scope: crate::harness::budget::BudgetScope::Agent,
+            account_kind: None,
             resets_at: None,
         });
         assert_eq!(waiting.effective_status(), AgentStatus::Waiting);

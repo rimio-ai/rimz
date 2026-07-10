@@ -26,13 +26,25 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
         "claude-opus-4-8".to_owned(),
         model_tally(4_200, 1.25, 3_000, 1_200, 0),
     )]);
-    write_provider_spending_cache_with_rollups(&path, 12_346, &spending, &days, &models);
+    let local_day = BTreeMap::from([(
+        "claude".to_owned(),
+        SpendWindow {
+            usd: 2.50,
+            sessions: 1,
+            ..Default::default()
+        },
+    )]);
+    write_provider_spending_cache_with_day(
+        &path, 12_346, &spending, &days, &models, &local_day, 12_000,
+    );
     let cache = read_provider_spending_cache(&path);
     assert_eq!(cache.version, PROVIDER_SPENDING_VERSION);
     assert_eq!(cache.refreshed_at_ms, 12_346);
     assert_eq!(cache.spending, spending);
     assert_eq!(cache.days, days);
     assert_eq!(cache.models, models);
+    assert_eq!(cache.day_by_provider, local_day);
+    assert_eq!(cache.day_cutoff_secs, 12_000);
 
     std::fs::write(&path, serde_json::to_vec(&spending).unwrap()).unwrap();
     let pre_stamp = read_provider_spending_cache(&path);

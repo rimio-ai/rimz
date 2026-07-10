@@ -453,6 +453,7 @@ fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
         address: None,
         channel: None,
         sender: MessageSender::Human,
+        automated: false,
         body: MessageBody::Prompt,
         text: "secret prompt body".to_owned(),
         enter: true,

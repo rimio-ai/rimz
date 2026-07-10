@@ -1,4 +1,5 @@
 use super::*;
+use crate::DailyBudgetView;
 
 // ── Rate-limit window fusion: the live half (the dashboard bars) ─────────────
 
@@ -195,29 +196,47 @@ fn call_split_projects_only_with_known_input_sides() {
     assert_eq!(projected.context_used_tokens(), None);
 }
 
-/// The cockpit's live headline spend rides the published frame across every
-/// snapshot wire — `rimz sidebar snapshot` stdout — so the
-/// field must survive a JSON round-trip, and a frame from a pre-overlay
-/// producer must read as `None` (version skew degrades to the walked tally,
-/// never an error).
+/// The cockpit's live headline and local-day spend ride the published frame
+/// across every snapshot wire — `rimz sidebar snapshot` stdout — so the fields
+/// must survive a JSON round-trip, and a frame from a pre-overlay producer must
+/// read as `None` (version skew degrades to the walked tally, never an error).
 #[test]
 fn today_spend_live_usd_round_trips_and_defaults_absent() {
     let mut snapshot = room(Vec::new());
     snapshot.today_spend_live_usd = Some(12.34);
     snapshot.today_spend_epoch_secs = Some(123);
+    snapshot.fleet_day_spend_usd = Some(10.50);
+    snapshot.fleet_day_spend_epoch_secs = Some(100);
+    snapshot.fleet_budget = Some(DailyBudgetView {
+        cap_usd: 20.0,
+        spend_usd: 10.50,
+        parked: false,
+    });
     let json = serde_json::to_string(&snapshot).unwrap();
     let parsed: SidebarSnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.today_spend_live_usd, Some(12.34));
     assert_eq!(parsed.today_spend_epoch_secs, Some(123));
+    assert_eq!(parsed.fleet_day_spend_usd, Some(10.50));
+    assert_eq!(parsed.fleet_day_spend_epoch_secs, Some(100));
+    assert_eq!(parsed.fleet_budget, snapshot.fleet_budget);
 
     // An old producer's frame carries no field at all (`skip_serializing_if`
     // keeps `None` off the wire symmetrically).
     snapshot.today_spend_live_usd = None;
     snapshot.today_spend_epoch_secs = None;
+    snapshot.fleet_day_spend_usd = None;
+    snapshot.fleet_day_spend_epoch_secs = None;
+    snapshot.fleet_budget = None;
     let bare = serde_json::to_string(&snapshot).unwrap();
     assert!(!bare.contains("today_spend_live_usd"));
     assert!(!bare.contains("today_spend_epoch_secs"));
+    assert!(!bare.contains("fleet_day_spend_usd"));
+    assert!(!bare.contains("fleet_day_spend_epoch_secs"));
+    assert!(!bare.contains("fleet_budget"));
     let parsed: SidebarSnapshot = serde_json::from_str(&bare).unwrap();
     assert_eq!(parsed.today_spend_live_usd, None);
     assert_eq!(parsed.today_spend_epoch_secs, None);
+    assert_eq!(parsed.fleet_day_spend_usd, None);
+    assert_eq!(parsed.fleet_day_spend_epoch_secs, None);
+    assert_eq!(parsed.fleet_budget, None);
 }

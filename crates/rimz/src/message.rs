@@ -282,6 +282,9 @@ pub struct MessageRecord {
     pub channel: Option<String>,
     #[serde(default)]
     pub sender: MessageSender,
+    /// Background orchestration traffic never earns a dollar-budget waiver.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automated: bool,
     #[serde(default)]
     pub body: MessageBody,
     pub text: String,
@@ -382,6 +385,7 @@ impl MessageRecord {
             address: None,
             channel: None,
             sender: MessageSender::Human,
+            automated: false,
             body: MessageBody::Prompt,
             text,
             enter,
@@ -419,6 +423,7 @@ impl MessageRecord {
         .with_address(record.address.clone())
         .with_channel(record.channel.clone())
         .with_sender(record.sender.clone())
+        .with_automated(record.automated)
         .with_in_reply_to(record.in_reply_to.clone())
         .with_force(record.force)
         .with_auto_compact(record.auto_compact)
@@ -440,6 +445,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_address(mut self, address: Option<String>) -> Self {
         self.address = address;
+        self
+    }
+
+    #[must_use]
+    pub fn with_automated(mut self, automated: bool) -> Self {
+        self.automated = automated;
         self
     }
 

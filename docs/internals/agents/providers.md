@@ -23,7 +23,7 @@ sources                                    shared user-scoped caches
 
 The per-kind surfaces each provider exposes are in the adapter docs ([claude.md](./claude.md#account-and-balance), [codex.md](./codex.md#account-and-balance), [pi.md](./pi.md#account-and-balance), [opencode.md](./opencode.md#account-and-balance)); the raw auth and account-usage surfaces those read are in the per-provider upstream references ([claude-reference.md](../../externals/agent-adapter/claude-reference.md#auth-surface), [codex-reference.md](../../externals/agent-adapter/codex-reference.md#auth-file), [pi-reference.md](../../externals/agent-adapter/pi-reference.md#auth-file), [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md#auth-file)).
 
-Account, balance, and spend are **enrichment, never correctness** — the no-transcript-correctness rule. A missing binary, a logged-out account, an unparseable file: each degrades to an omitted plan label, a `v?` version placeholder, or an unknown budget track, never a failed snapshot or a wrong decision.
+Account identity, included balance, and paid-usage display are **enrichment, never correctness** — the no-transcript-correctness rule. A missing binary, a logged-out account, or an unavailable API degrades to an omitted plan label, a `v?` version placeholder, or an unknown budget track. Configured daily dollar caps are the separate rate-limit surface below: their decision input is the durable transcript walk, not a provider probe.
 
 ## The model
 
@@ -48,6 +48,12 @@ A kind's account and balance reach the dashboard two ways, mirroring the [two-so
 A live session always wins where both exist: its reading is richer and current.
 
 Paid usage reaches the dashboard through a separate shared `credits.json` cache when a provider account-usage surface can be reached from local OAuth credentials or the Codex app-server, and through a read-time local spend projection for API-key accounts. Credential-file probes are read-only: RimZ does not refresh tokens, write provider auth files, or use browser-cookie dashboard strategies. Absence is an unknown `ex`/`api` row, not a synthesized value.
+
+## Daily dollar caps
+
+`[accounts.budget] <kind> = "100/day"` sets one provider-login cap across every room on the machine. The spending walk computes a local-calendar-day `SpendWindow` per provider independently of the configured headline, publishes it in machine-shared `provider-spending.json`, and version-gates the cache so an upgrade re-aggregates the current cursor without reparsing unchanged transcripts. The producer accepts the cache's normal short TTL staleness as rate-limit latency.
+
+The account ledger `budget.account.<kind>.json` carries a runtime raised cap, disabled state, and current park. Every room evaluates the shared spend and ledger, but only interrupts its own running panes; raising or clearing from one room nudges that room's parked agents, while other rooms remain unparked and at rest until a message or the next local day. The dashboard appends `$used of $cap/day` to a configured account block.
 
 An agent launched through an elevation wrapper as another real uid stays outside account aggregation. Its hooks and credentials live under that other user's home directory, and the current user's out-of-band probe reads only the current user's account surface, so the sidebar presents it as a flagged process row only and leaves it out of the provider dashboard.
 

@@ -22,6 +22,7 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
             },
             ..Default::default()
         }),
+        day_budget: None,
         extra_credits: None,
         reset_credits: None,
         windows: Vec::new(),

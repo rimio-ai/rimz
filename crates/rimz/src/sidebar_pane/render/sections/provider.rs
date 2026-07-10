@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::{
-    dollars2, reset_countdown, tokens_int, tokens_short, window_label,
+    dollars_cap, dollars2, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
     mana_bar_spans, mana_style, pace_reading, pace_style, token_breakdown_spans,
@@ -1023,20 +1023,35 @@ fn provider_stats_rows(
         .map(|spending| spending.headline)
         .unwrap_or_default();
     let detail = provider_token_detail(theme, &headline, layout, region);
-    vec![provider_stats_row(theme, &headline, detail, region).spans]
+    vec![provider_stats_row(theme, panel, &headline, detail, region).spans]
 }
 
 fn provider_stats_row(
     theme: &Theme,
+    panel: &SidebarProviderPanel,
     headline: &SpendWindow,
     detail: TokenDetail,
     region: usize,
 ) -> Line<'static> {
     let left = provider_stats_left_spans(theme, headline, detail);
-    let right = vec![Span::styled(
-        dollars2(headline.usd),
-        theme.money_style(Modifier::BOLD),
-    )];
+    let (label, style) = panel.day_budget.as_ref().map_or_else(
+        || (dollars2(headline.usd), theme.money_style(Modifier::BOLD)),
+        |budget| {
+            (
+                format!(
+                    "{} of {}/day",
+                    dollars2(budget.spend_usd),
+                    dollars_cap(budget.cap_usd)
+                ),
+                if budget.parked {
+                    theme.alarm(Modifier::BOLD)
+                } else {
+                    theme.money_style(Modifier::BOLD)
+                },
+            )
+        },
+    );
+    let right = vec![Span::styled(label, style)];
     pin_right(left, right, region)
 }
 

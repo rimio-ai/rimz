@@ -6,6 +6,7 @@ mod agents_cmd;
 mod agents_launch;
 mod answer;
 mod asks;
+mod budget;
 mod channel;
 mod codex;
 mod complete;
@@ -82,6 +83,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
+        Some(Subcmd::Budget(args)) => budget::run(args, &globals),
         Some(Subcmd::ListPets(args)) => list_pets::run(args, &globals),
         Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
@@ -188,6 +190,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Workspace(_)) => ("workspace", None, None),
         Some(Subcmd::List(_)) => ("list", None, None),
         Some(Subcmd::Stats(_)) => ("stats", None, None),
+        Some(Subcmd::Budget(_)) => ("budget", None, None),
         Some(Subcmd::ListPets(_)) => ("list-pets", None, None),
         Some(Subcmd::ListThemes(_)) => ("list-themes", None, None),
         Some(Subcmd::Gc(_)) => ("gc", None, None),
@@ -474,6 +477,8 @@ enum Subcmd {
     ///
     /// Includes model and agent breakdowns.
     Stats(stats::StatsArgs),
+    /// Inspect or change room and provider-account daily dollar caps.
+    Budget(budget::BudgetArgs),
     /// Preview the bundled provider-dashboard pets.
     ///
     /// Renders the pets as pane-local cell art.

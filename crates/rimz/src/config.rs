@@ -73,7 +73,7 @@ pub use glyphs::{
     GlyphOverrides, GlyphRole, ThemeGlyphsConfig, glyph_lookup_hint, is_named_glyph_set,
     validate_glyph_source,
 };
-pub use harness::{HarnessConfig, RtkMode};
+pub use harness::{DayCap, DayCapParseError, HarnessConfig, RtkMode};
 pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks};
 pub use mux::{
     MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,

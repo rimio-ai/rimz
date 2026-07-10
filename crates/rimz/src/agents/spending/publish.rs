@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use super::SPENDING_TTL;
-use super::aggregate::{DaySpend, SpendTally, Spending};
+use super::aggregate::{DaySpend, SpendTally, SpendWindow, Spending};
 use super::cache::peek_cache_version;
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
@@ -25,8 +25,9 @@ use super::cache::peek_cache_version;
 /// so cached headline aggregates need a cheap re-aggregate. v8: the published
 /// model rollup became per-window so the stats dashboard can scope tabs without
 /// walking transcripts. v9: daily token buckets fold in cache-read so the
-/// heatmap and `rimz stats` token totals count every token.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 9;
+/// heatmap and `rimz stats` token totals count every token. v10: a local-day
+/// per-provider window supports account daily caps independently of headline.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 10;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -35,8 +36,9 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 9;
 /// v3: scoped tallies read per-file origin instead of per-entry origin.
 /// v4: live headline carry and baselines publish atomically with the scoped
 /// walk. v5: live card sessions are excluded from walked headline USD and
-/// added back from live cards.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 5;
+/// added back from live cards. v6: a local-day window supports room daily caps
+/// independently of the configured headline.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 6;
 
 /// The published provider-spending cache: the aggregated [`Spending`] plus the
 /// stamp the producer's [`SPENDING_TTL`] gate reads. A wrapper rather than a
@@ -54,6 +56,12 @@ pub struct ProviderSpendingCache {
     /// When the producer last walked and published, for the TTL gate.
     #[serde(default)]
     pub refreshed_at_ms: u64,
+    /// Account-local calendar-day spend by provider kind.
+    #[serde(default)]
+    pub day_by_provider: BTreeMap<String, SpendWindow>,
+    /// Epoch second at which the published local calendar day began.
+    #[serde(default)]
+    pub day_cutoff_secs: u64,
     /// Account-global UTC-day buckets keyed by epoch day, published so the stats
     /// command can render its heatmap without walking transcripts.
     #[serde(default)]
@@ -105,9 +113,33 @@ pub fn write_provider_spending_cache_with_rollups(
     days: &BTreeMap<i64, DaySpend>,
     models: &BTreeMap<String, SpendTally>,
 ) -> bool {
+    write_provider_spending_cache_with_day(
+        path,
+        refreshed_at_ms,
+        spending,
+        days,
+        models,
+        &BTreeMap::new(),
+        0,
+    )
+}
+
+/// Atomic publish including the local-day windows used by account caps.
+#[allow(clippy::too_many_arguments)]
+pub fn write_provider_spending_cache_with_day(
+    path: &Path,
+    refreshed_at_ms: u64,
+    spending: &Spending,
+    days: &BTreeMap<i64, DaySpend>,
+    models: &BTreeMap<String, SpendTally>,
+    day_by_provider: &BTreeMap<String, SpendWindow>,
+    day_cutoff_secs: u64,
+) -> bool {
     let cache = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms,
+        day_by_provider: day_by_provider.clone(),
+        day_cutoff_secs,
         days: days.clone(),
         models: models.clone(),
         spending: spending.clone(),
@@ -166,6 +198,12 @@ pub struct WorkspaceSpendingCache {
     pub scope_hash: String,
     #[serde(default)]
     pub tally: SpendTally,
+    /// Workspace-local calendar-day spend with live sessions excluded for
+    /// add-back from current cards.
+    #[serde(default)]
+    pub day: SpendWindow,
+    #[serde(default)]
+    pub day_cutoff_secs: u64,
     #[serde(default)]
     pub headline_cutoff_secs: u64,
     #[serde(default)]

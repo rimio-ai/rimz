@@ -226,6 +226,8 @@ rimz config set harness.smart_compact "70%"   # compact before a message once co
 
 Add a [scheduled ping](#everyday-moves) to start each provider's budget window on your clock, and the fleet only needs you for real decisions.
 
+Bound dollar spend at the scale you promise yourself: `rimz config set harness.budget 50/day` caps each room's whole fleet, `[accounts.budget]` caps one provider login across rooms, and `rimz budget` shows or changes the live headroom.
+
 ### Asks on your phone
 
 Claude Code and Codex ship remote control, the bridge their official mobile apps drive. Two toggles make the room bring it up at every start (`claude remote-control` as a background pane, the Codex remote-control daemon ensured once per machine) so a blocking ask pushes to your phone, your answer lands in the same session, and the turn continues in its pane as if you had typed it there:

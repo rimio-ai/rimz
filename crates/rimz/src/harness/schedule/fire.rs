@@ -16,7 +16,7 @@ use super::{instances, pauses};
 use crate::RuntimePaths;
 use crate::agents::longest_window_reset_at;
 use crate::config::effective;
-use crate::config::{TaskEntry, Tasks};
+use crate::config::{MachineConfig, TaskEntry, Tasks};
 use crate::harness::schedule;
 use crate::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
 use crate::ids::WorkspaceId;
@@ -92,9 +92,63 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
                     continue;
                 }
             }
+            let config = MachineConfig::load_lenient();
+            if let Some(kind) = task_agent_kind(entry, project_root.as_deref(), &config)
+                && let Some(reason) =
+                    crate::harness::budget::scope_gate(runtime, &kind, &config, now.timestamp())
+            {
+                run_log::append(&LoopRunRecord {
+                    task: name.clone(),
+                    at: now.timestamp(),
+                    result: LoopRunResult::BudgetSkipped,
+                    mode: Some(LoopRunMode::Scheduled),
+                    duration_ms: Some(0),
+                    error: Some(reason.clone()),
+                    check: None,
+                    run_id: None,
+                    transcript_path: None,
+                    last_message: None,
+                    target: None,
+                    cost_usd: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                });
+                tracing::info!(
+                    task = name,
+                    reason,
+                    "sidebar: loop fire skipped by scope budget"
+                );
+                continue;
+            }
             spawn_loop_run(runtime, project_root.as_deref(), &name);
         }
     }
+}
+
+fn task_agent_kind(
+    entry: &TaskEntry,
+    project_root: Option<&Path>,
+    config: &MachineConfig,
+) -> Option<crate::ids::AgentKind> {
+    if let Some(target) = entry.wake.as_ref() {
+        return Some(crate::ids::AgentKind::new_unchecked(target.kind.clone()));
+    }
+    let spec = entry.agent.as_deref()?;
+    let root = project_root.unwrap_or(&entry.root);
+    let launch = effective::load(&config.agents, root, &config_home()).ok()?;
+    let layout = crate::harness::spec::resolve_spec(
+        Some(spec),
+        &launch.profiles,
+        &config.agents.commands,
+        &launch.teams,
+    )
+    .ok()?;
+    let mut kinds = layout.agent_kinds();
+    let kind = kinds.next()?;
+    kinds
+        .next()
+        .is_none()
+        .then(|| crate::ids::AgentKind::new_unchecked(kind))
 }
 
 fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {

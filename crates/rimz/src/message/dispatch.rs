@@ -110,6 +110,7 @@ pub struct DispatchContext<'a> {
     pub pending: Option<&'a mut Vec<MessageRecord>>,
     pub scope_channel: Option<&'a str>,
     pub sender: &'a MessageSender,
+    pub automated: bool,
     pub in_reply_to: &'a [MessageId],
 }
 
@@ -390,6 +391,7 @@ fn live_prompt_for_target(
         enter,
         gate,
         sender,
+        automated,
         force,
         auto_compact,
         after,
@@ -405,6 +407,7 @@ fn live_prompt_for_target(
                 }),
             )
             .with_sender(sender)
+            .with_automated(automated)
             .with_pane_id(pane.pane_id.clone())
             .with_auto_compact(auto_compact)
             .with_after(after);
@@ -421,6 +424,7 @@ fn live_prompt_for_target(
             enter,
             gate,
             sender,
+            automated,
             force,
             auto_compact,
             after,
@@ -475,6 +479,7 @@ pub fn dispatch_for_targets(
                     enter: mode.enter(),
                     gate: mode.gate(),
                     sender: ctx.sender.clone(),
+                    automated: ctx.automated,
                     force: mode.force(),
                     auto_compact: mode.auto_compact(),
                     after: mode.after().to_vec(),
@@ -562,6 +567,7 @@ pub fn dispatch_for_targets(
         .with_address(Some(handle.clone()))
         .with_channel(crate::harness::target::agent_channel(agent))
         .with_sender(ctx.sender.clone())
+        .with_automated(ctx.automated)
         .with_in_reply_to(ctx.in_reply_to.to_vec())
         .with_auto_compact(mode.auto_compact())
         .with_not_before(mode.not_before())

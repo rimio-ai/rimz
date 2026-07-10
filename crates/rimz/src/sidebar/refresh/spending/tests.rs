@@ -695,10 +695,21 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
     };
     let mut prev_tally = crate::agents::spending::SpendTally::default();
     prev_tally.headline.usd = 5.0;
+    let spec = HeadlineSpec {
+        timezone: Some("UTC".to_owned()),
+        ..Default::default()
+    };
+    let day_cutoff_secs = Timestamp::now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .start_of_day()
+        .expect("UTC day start")
+        .timestamp()
+        .as_second() as u64;
     let prev = crate::agents::spending::WorkspaceSpendingCache {
         refreshed_at_ms: unix_now_ms(),
         scope_hash: scope_hash.clone(),
         tally: prev_tally.clone(),
+        day_cutoff_secs,
         live_excluded: BTreeSet::from(["claude:old".to_owned()]),
         ..Default::default()
     };
@@ -710,7 +721,7 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
         &scope,
         Some(&scope_hash),
         &files,
-        &HeadlineSpec::default(),
+        &spec,
         &BTreeSet::new(),
     )
     .expect("workspace cache derives from shared entries");
@@ -730,13 +741,55 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
         &scope,
         Some(&scope_hash),
         &files,
-        &HeadlineSpec::default(),
+        &spec,
         &BTreeSet::new(),
     )
     .expect("workspace cache derives from shared entries");
 
     assert_eq!(reset.tally.headline.usd, 0.0);
     assert!(reset.live_excluded.is_empty());
+}
+
+#[test]
+fn workspace_regression_guard_never_carries_spend_across_local_midnight() {
+    let now_ms = unix_now_ms();
+    let prev = crate::agents::spending::WorkspaceSpendingCache {
+        version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
+        refreshed_at_ms: now_ms,
+        scope_hash: "scope".to_owned(),
+        tally: crate::agents::spending::SpendTally {
+            headline: crate::agents::spending::SpendWindow {
+                usd: 5.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        day: crate::agents::spending::SpendWindow {
+            usd: 20.0,
+            ..Default::default()
+        },
+        day_cutoff_secs: 100,
+        ..Default::default()
+    };
+    let next = crate::agents::spending::WorkspaceSpendingCache {
+        refreshed_at_ms: now_ms + 1,
+        day: crate::agents::spending::SpendWindow {
+            usd: 0.25,
+            ..Default::default()
+        },
+        day_cutoff_secs: 200,
+        ..prev.clone()
+    };
+
+    assert_eq!(
+        super::serve_prev_on_young_regression(
+            prev,
+            next.clone(),
+            now_ms + 1,
+            &HeadlineSpec::default(),
+        ),
+        next
+    );
 }
 
 #[test]

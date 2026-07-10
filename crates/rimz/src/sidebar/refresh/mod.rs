@@ -31,7 +31,7 @@ pub use credits::{
     CreditsCache, ProviderCreditsEntry, merge_provider_credits, merge_provider_credits_entry_if_due,
 };
 pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
-pub use live_spend::apply_live_today_spend;
+pub use live_spend::{apply_live_day_spend, apply_live_today_spend};
 pub use pr::PrStateCache;
 pub use rate_limits::{drop_kind_rate_limits, merge_account_rate_limits};
 pub use sessions::{
@@ -99,7 +99,9 @@ pub fn refresh_heavy_lanes(
         base.resume_outcomes.as_deref().unwrap_or_default(),
     );
     crate::harness::auto_continue::resume_parked(base, runtime, &config.resume, &resume_messages);
-    crate::harness::budget::enforce(base, runtime, state_messages_dir, &config.time_zone());
+    let mut budget_snapshot = base.clone();
+    apply_live_day_spend(&mut budget_snapshot, &lanes.spending.workspace);
+    crate::harness::budget::enforce(&budget_snapshot, runtime, state_messages_dir, config);
     refresh_diff_stats_for(base, runtime, config.sidebar.trunk.as_deref());
 
     lanes

@@ -310,6 +310,7 @@ fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
         metered: false,
         remote_control: false,
         spending: None,
+        day_budget: None,
         extra_credits: None,
         reset_credits: None,
         color_role: None,

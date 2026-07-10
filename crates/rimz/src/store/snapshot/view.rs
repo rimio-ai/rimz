@@ -36,9 +36,9 @@ pub(crate) use providers::format_plan_label;
 
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use model::{
-    PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
-    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
-    WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
+    DailyBudgetView, PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
+    SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+    WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use reap::RuntimeReapInputs;
 
@@ -65,7 +65,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 7;
+pub const SNAPSHOT_VERSION: u32 = 8;
 
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
@@ -251,6 +251,15 @@ pub struct SidebarSnapshot {
     /// producer frames leaves the ratchet inert.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub today_spend_epoch_secs: Option<u64>,
+    /// Room-local calendar-day spend, independent of the configured headline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_day_spend_usd: Option<f64>,
+    /// Local-day epoch for [`Self::fleet_day_spend_usd`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_day_spend_epoch_secs: Option<u64>,
+    /// Effective room-fleet local-day cap and current enforcement state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_budget: Option<DailyBudgetView>,
     /// Remote SSH link health published by `rimz remote connect` through the
     /// remote-side `link-stats.json` sidecar. Local rooms and old remotes carry
     /// `None`, keeping the footer byte-identical to the pre-link-health render.
@@ -327,6 +336,9 @@ impl SidebarSnapshot {
             workspace_value_tally: None,
             today_spend_live_usd: None,
             today_spend_epoch_secs: None,
+            fleet_day_spend_usd: None,
+            fleet_day_spend_epoch_secs: None,
+            fleet_budget: None,
             link: None,
             reflects_log: None,
             resume_outcomes: Some(Vec::new()),

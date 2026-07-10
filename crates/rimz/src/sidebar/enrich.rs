@@ -30,7 +30,7 @@ use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
     DiffStatsCache, DiffStatsCacheEntry, git_backed_worktree_path, read_diff_stats_cache,
 };
-use super::refresh::live_spend::apply_live_today_spend;
+use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
 use super::refresh::pr::read_pr_state_cache;
 use super::refresh::rate_limits::apply_rate_limit_cache;
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
@@ -344,7 +344,7 @@ pub fn enrich(
                 .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
         );
         snapshot = snapshot.with_agent_activity(&activity);
-        crate::harness::budget::project_parks(&mut snapshot, runtime, &machine_config.time_zone());
+        crate::harness::budget::project_parks(&mut snapshot, runtime, &machine_config);
     }
 
     // Wiring state gates the live-pane fold (idle synthesis), so set it before
@@ -457,6 +457,13 @@ pub fn enrich(
     // cockpit's headline retargets in the same frame — no waiting out the
     // walk's TTL.
     apply_live_today_spend(&mut snapshot, &spending_caches.workspace);
+    apply_live_day_spend(&mut snapshot, &spending_caches.workspace);
+    crate::harness::budget::project_budget_views(
+        &mut snapshot,
+        runtime,
+        &machine_config,
+        &spending_caches.provider,
+    );
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
     // Git facts and late unread bits land after the pane fold's initial sort,
     // so publish the spine once both ranking inputs are present.

@@ -51,6 +51,7 @@ fn provider(
         metered: true,
         remote_control: false,
         spending,
+        day_budget: None,
         extra_credits: None,
         reset_credits: None,
         windows: vec![crate::agents::RateLimitWindow {

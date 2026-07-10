@@ -470,6 +470,7 @@ fn provider_panel(
             },
             ..Default::default()
         }),
+        day_budget: None,
         extra_credits: None,
         reset_credits: None,
         windows: windows

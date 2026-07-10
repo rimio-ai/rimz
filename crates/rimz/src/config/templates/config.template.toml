@@ -23,6 +23,11 @@
 ## cwd = "/var/log"
 
 [accounts]
+[accounts.budget]
+# Per-login local-calendar-day caps shared by every room. Values require /day.
+## claude = "100/day"
+## codex = "100/day"
+
 [accounts.usage_limit_usd]
 # Display-only monthly USD ceilings for the extra/API usage bar. These are not
 # provider-enforced spending limits; they only scale the dashboard bar when the
@@ -129,5 +134,6 @@ aggressive_resize = true
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
 
 [harness]
+## budget = "50/day"             # default whole-room local-calendar-day cap; runtime override: `rimz budget 20/day`
 ## smart_compact = "70%"          # default compact-first threshold for message ("70%", "120000", or "180k"); unset = off
 # rtk = "auto"                    # wrap agent cargo runs (build/check/test/nextest/clippy) through `rtk`; auto = when rtk is on PATH, on = force, off = never

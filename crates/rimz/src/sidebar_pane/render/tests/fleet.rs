@@ -116,6 +116,28 @@ fn cockpit_reads_workspace_tally_while_store_reads_global_tally() {
         "global store week/month stay visible:\n{rendered}"
     );
 }
+
+#[test]
+fn cockpit_daily_cap_uses_day_spend_and_names_the_cap() {
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.today_spend_live_usd = Some(1.25);
+    snapshot.today_spend_epoch_secs = Some(10);
+    snapshot.fleet_day_spend_usd = Some(41.20);
+    snapshot.fleet_day_spend_epoch_secs = Some(20);
+    snapshot.fleet_budget = Some(crate::DailyBudgetView {
+        cap_usd: 50.0,
+        spend_usd: 41.20,
+        parked: false,
+    });
+
+    let rendered = snapshot_to_screen(&snapshot, 60, 14);
+    let spend = rendered.lines().nth(3).expect("cockpit spend row");
+    assert!(spend.contains("$41.20 of $50/day"), "{rendered}");
+    assert!(
+        !spend.contains("$1.25"),
+        "day cap must ignore headline spend: {rendered}"
+    );
+}
 /// The read cockpit `?`/`!` buckets hold their fixed semantic tone at rest —
 /// `?` yellow — regardless of how old the oldest contributing row is.
 #[test]

@@ -21,6 +21,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
             "channel",
             "worktree",
             "loop",
+            "budget",
         ],
     ),
     ("Hooks and trust", &["hooks", "trust"]),

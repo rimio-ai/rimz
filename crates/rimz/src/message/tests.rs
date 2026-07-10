@@ -272,6 +272,7 @@ fn record_optional_fields_default_and_round_trip() {
         channel: Some("main".to_owned()),
     })
     .with_in_reply_to(vec![message_id(7), message_id(8)])
+    .with_automated(true)
     .with_body(MessageBody::Command)
     .with_force(true)
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
@@ -296,6 +297,7 @@ fn record_optional_fields_default_and_round_trip() {
     assert_eq!(fresh.channel, None);
     assert!(fresh.in_reply_to.is_empty());
     assert_eq!(fresh.sender, MessageSender::Human);
+    assert!(!fresh.automated);
     assert_eq!(fresh.body, MessageBody::Prompt);
     assert!(!fresh.force);
     assert_eq!(fresh.pane_id, None);
@@ -311,6 +313,7 @@ fn record_optional_fields_default_and_round_trip() {
         "channel",
         "in_reply_to",
         "sender",
+        "automated",
         "body",
         "force",
         "pane_id",
@@ -328,6 +331,7 @@ fn record_optional_fields_default_and_round_trip() {
             "channel" => assert_eq!(back.channel, None),
             "in_reply_to" => assert!(back.in_reply_to.is_empty()),
             "sender" => assert_eq!(back.sender, MessageSender::Human),
+            "automated" => assert!(!back.automated),
             "body" => assert_eq!(back.body, MessageBody::Prompt),
             "force" => assert!(!back.force),
             "pane_id" => assert_eq!(back.pane_id, None),
@@ -351,11 +355,13 @@ fn requeue_preserves_turn_causality() {
         true,
         DeliveryGate::Done,
     )
-    .with_in_reply_to(vec![message_id(7), message_id(8)]);
+    .with_in_reply_to(vec![message_id(7), message_id(8)])
+    .with_automated(true);
 
     let requeued = MessageRecord::requeue_from(&original);
 
     assert_eq!(requeued.in_reply_to, original.in_reply_to);
+    assert!(requeued.automated);
 }
 
 #[test]

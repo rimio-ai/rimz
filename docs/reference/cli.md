@@ -11,7 +11,7 @@ This page is the map: it indexes every command and collects the conventions that
 | **Open and attach a room** | `rimz`, `start`, `attach`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
 | **Reach a room anywhere** | `remote`, `web` | [Remote](./cli/remote.md) · [Web](./cli/web.md) |
 | **Run and steer agents** | `agents`, `asks`, `answer`, `message`, `transcript`, `pane` | [Agents](./cli/agents.md) · [Asks](./cli/asks.md) · [Message](./cli/message.md) · [Transcript](./cli/transcript.md) · [Pane](./cli/pane.md) |
-| **Cost and usage** | `stats` | [Stats](./cli/stats.md) |
+| **Cost, usage, and budgets** | `stats`, `budget` | [Stats](./cli/stats.md) · [Budgets](./cli/agents.md#inspect-and-change-a-budget) |
 | **Lanes, worktrees, and schedules** | `channel`, `worktree`, `loop` | [Channels](./cli/channel.md) · [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
 | **Hooks and trust** | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
 | **Configure appearance and behavior** | `config`, `list-themes`, `list-pets` | [Config](./cli/config.md) |

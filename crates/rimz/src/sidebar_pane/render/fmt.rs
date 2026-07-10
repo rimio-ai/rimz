@@ -112,6 +112,16 @@ pub(super) fn dollars2(usd: f64) -> String {
     format!("${}.{:02}", group_thousands(cents / 100), cents % 100)
 }
 
+/// A daily cap keeps whole-dollar amounts compact and cents exact otherwise.
+pub(super) fn dollars_cap(usd: f64) -> String {
+    let cents = (usd.max(0.0) * 100.0).round() as u64;
+    if cents.is_multiple_of(100) {
+        format!("${}", group_thousands(cents / 100))
+    } else {
+        format!("${}.{:02}", group_thousands(cents / 100), cents % 100)
+    }
+}
+
 /// Insert `,` every three digits from the right — `1240` → `1,240`,
 /// `47200000` → `47,200,000`. The shared grouping behind [`dollars2`].
 fn group_thousands(n: u64) -> String {
@@ -342,6 +352,8 @@ mod tests {
         ] {
             assert_eq!(dollars2(usd), expected);
         }
+        assert_eq!(dollars_cap(50.0), "$50");
+        assert_eq!(dollars_cap(1_250.25), "$1,250.25");
 
         for (count, short, int) in [
             (523, "523", "523"),

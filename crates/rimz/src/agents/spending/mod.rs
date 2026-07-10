@@ -53,7 +53,8 @@ pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
     read_workspace_spending_cache, write_provider_spending_cache,
-    write_provider_spending_cache_with_rollups, write_workspace_spending_cache,
+    write_provider_spending_cache_with_day, write_provider_spending_cache_with_rollups,
+    write_workspace_spending_cache,
 };
 pub(crate) use refresh::{
     RefreshCallbacks, is_priceable_model_name, record_unknown_model, recorded_unknown_models,
@@ -97,6 +98,9 @@ pub struct SpendingWalkResult {
     pub spending: Spending,
     pub workspace_tally: SpendTally,
     pub workspace_headline_cutoff_secs: u64,
+    pub workspace_day: SpendWindow,
+    pub provider_day: BTreeMap<String, SpendWindow>,
+    pub day_cutoff_secs: u64,
     pub days: BTreeMap<i64, DaySpend>,
     pub models: BTreeMap<String, SpendTally>,
     pub stats: WalkStats,
@@ -503,6 +507,9 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
         spending: aggregate.spending,
         workspace_tally: aggregate.workspace_tally,
         workspace_headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
+        workspace_day: aggregate.workspace_day,
+        provider_day: aggregate.provider_day,
+        day_cutoff_secs: aggregate.day_cutoff_secs,
         days: aggregate.days,
         models: aggregate.models,
         stats,
@@ -513,6 +520,8 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
 pub struct ScopedSpending {
     pub tally: SpendTally,
     pub headline_cutoff_secs: u64,
+    pub day: SpendWindow,
+    pub day_cutoff_secs: u64,
 }
 
 /// Compute the cockpit's workspace-scoped tally plus the headline epoch cutoff
@@ -540,6 +549,8 @@ pub fn compute_scoped_spending(
     ScopedSpending {
         tally: aggregate.workspace_tally,
         headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
+        day: aggregate.workspace_day,
+        day_cutoff_secs: aggregate.day_cutoff_secs,
     }
 }
 

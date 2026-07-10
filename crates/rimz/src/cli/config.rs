@@ -645,6 +645,7 @@ fn is_known_get_key(path: &[String]) -> Result<bool> {
 
 fn is_unknown_get_shape(path: &[String]) -> bool {
     matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
+        || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(
             path,
@@ -696,6 +697,8 @@ fn is_disallowed_set_container(path: &[String]) -> bool {
     matches!(path, [root] if root == "loop")
         || matches!(path, [root, child] if root == "accounts" && child == "usage_limit_usd")
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
+        || matches!(path, [root, child] if root == "accounts" && child == "budget")
+        || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
         || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "teams" | "commands"))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(path, [root, child, _] if root == "agents" && matches!(child.as_str(), "profiles" | "teams"))
@@ -755,6 +758,7 @@ fn parse_edit_value(raw: &str) -> Value {
 fn parse_set_value(path: &[String], raw: &str) -> Value {
     if is_harness_smart_compact_edit(path)
         || is_harness_rtk_edit(path)
+        || is_daily_budget_edit(path)
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
     {
@@ -771,6 +775,13 @@ fn parse_string_edit_value(raw: &str) -> Value {
 }
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
+    if is_daily_budget_edit(path) {
+        let Some(raw) = value.as_str() else {
+            bail!("{} must be a string ending in `/day`", path.join("."));
+        };
+        raw.parse::<rimz::config::DayCap>()
+            .map_err(anyhow::Error::msg)?;
+    }
     if is_harness_smart_compact_edit(path) {
         let Some(threshold) = value.as_str() else {
             bail!("harness.smart_compact must be a string");
@@ -836,6 +847,11 @@ fn is_harness_smart_compact_edit(path: &[String]) -> bool {
 
 fn is_harness_rtk_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "rtk")
+}
+
+fn is_daily_budget_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "budget")
+        || matches!(path, [root, child, _] if root == "accounts" && child == "budget")
 }
 
 fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {

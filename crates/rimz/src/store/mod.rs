@@ -66,11 +66,11 @@ use crate::store::event::{AgentLaunchState, EventEnvelope};
 pub use crate::store::paths::{RuntimePaths, StatePaths};
 pub use crate::store::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::store::snapshot::{
-    AgentCard, PaneAgent, PresenceSample, ProcessCard, ProcessState, RowCallSplit, RowCard,
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence, SidebarProviderPanel,
-    SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
-    lead_unread_row, triage_key,
+    AgentCard, DailyBudgetView, PaneAgent, PresenceSample, ProcessCard, ProcessState, RowCallSplit,
+    RowCard, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence,
+    SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent,
+    SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync,
+    actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use crate::store::workspace_record::WorkspaceRecord;
 pub use crate::store::writer::{EditOutcome, MessageEdit};

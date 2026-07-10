@@ -247,6 +247,8 @@ fn only_day_budget_parks_arm_a_resume_deadline() {
         spend_usd: 5.25,
         window: crate::harness::budget::BudgetWindow::Day,
         at: ts(1_000),
+        scope: crate::harness::budget::BudgetScope::Agent,
+        account_kind: None,
         resets_at: Some(ts(5_000)),
     });
     let snapshot = SidebarSnapshot::build_with_agents(

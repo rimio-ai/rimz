@@ -141,6 +141,9 @@ pub(crate) struct CountedRollups {
     pub(crate) spending: Spending,
     pub(crate) workspace_tally: SpendTally,
     pub(crate) workspace_headline_cutoff_secs: u64,
+    pub(crate) workspace_day: SpendWindow,
+    pub(crate) provider_day: BTreeMap<String, SpendWindow>,
+    pub(crate) day_cutoff_secs: u64,
     pub(crate) days: BTreeMap<i64, DaySpend>,
     pub(crate) models: BTreeMap<String, SpendTally>,
 }
@@ -169,6 +172,12 @@ pub(crate) fn aggregate_counted_rollups(
     );
     let mut spending = Spending::default();
     let mut workspace_tally = SpendTally::default();
+    let day_cutoff_secs = local_day_start_secs(now_secs, spec.timezone.as_deref())
+        .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
+    let mut workspace_day = SpendWindow::default();
+    let mut provider_day = BTreeMap::<String, SpendWindow>::new();
+    let mut workspace_day_sessions = BTreeSet::new();
+    let mut provider_day_sessions = BTreeMap::<String, BTreeSet<String>>::new();
     let mut days = BTreeMap::<i64, DaySpend>::new();
     let mut models = BTreeMap::<&str, SpendTally>::new();
 
@@ -182,18 +191,33 @@ pub(crate) fn aggregate_counted_rollups(
             now_secs,
             cutoffs.provider(provider),
         );
+        if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
+            provider_day
+                .entry(provider.to_owned())
+                .or_default()
+                .add(entry.cost_usd, entry);
+            provider_day_sessions
+                .entry(provider.to_owned())
+                .or_default()
+                .insert(counted.session_key().to_owned());
+        }
         if let Some(workspace) = workspace
             && counted
                 .origin()
                 .is_some_and(|origin| workspace.scope.contains(origin))
         {
+            let live_excluded = workspace.live_excluded.contains(counted.session_key());
             accum_scoped(
                 &mut workspace_tally,
                 entry,
                 now_secs,
                 cutoffs.scoped(),
-                workspace.live_excluded.contains(counted.session_key()),
+                live_excluded,
             );
+            if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
+                workspace_day.add(if live_excluded { 0.0 } else { entry.cost_usd }, entry);
+                workspace_day_sessions.insert(counted.session_key().to_owned());
+            }
         }
 
         if include_history_rollups {
@@ -224,11 +248,19 @@ pub(crate) fn aggregate_counted_rollups(
             cutoffs.scoped(),
         );
     }
+    workspace_day.sessions = workspace_day_sessions.len().try_into().unwrap_or(u32::MAX);
+    for (provider, sessions) in provider_day_sessions {
+        provider_day.entry(provider).or_default().sessions =
+            sessions.len().try_into().unwrap_or(u32::MAX);
+    }
 
     CountedRollups {
         spending,
         workspace_tally,
         workspace_headline_cutoff_secs: workspace.map(|_| cutoffs.scoped()).unwrap_or_default(),
+        workspace_day,
+        provider_day,
+        day_cutoff_secs,
         days,
         models: if include_history_rollups {
             models

@@ -1493,6 +1493,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
     let detected_size = rimz::mux::detect_terminal_size();
     let was_live = backend.list_sessions()?.contains(&workspace.session_name);
     let store = crate::cli::open_store(&workspace)?;
+    let kind = AgentKind::new_unchecked(adapter.descriptor().kind);
     if let Some(channel) = args.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(store.paths(), channel)?;
@@ -1551,6 +1552,15 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
     let mut retry_of = None;
     let mut attempt = 0;
     loop {
+        if let Some(reason) = rimz::harness::budget::scope_gate(
+            store.runtime_paths(),
+            &kind,
+            &machine_config,
+            jiff::Timestamp::now(),
+        ) {
+            crate::cli::render::report(&anyhow::anyhow!(reason));
+            std::process::exit(RunStatus::BudgetExceeded.exit_code());
+        }
         let permission_mode = agent_cell.mode.unwrap_or(mode);
         let mut record = RunRecord::new(
             workspace.workspace_id.clone(),

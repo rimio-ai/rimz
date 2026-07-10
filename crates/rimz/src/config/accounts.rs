@@ -4,10 +4,15 @@ use std::fmt;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use super::harness::DayCap;
+
 /// Provider-account enrichment preferences.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AccountsConfig {
+    /// Local-calendar-day dollar caps by provider login, shared across rooms.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub budget: BTreeMap<String, DayCap>,
     /// Display-only monthly USD ceiling by provider kind. It scales the
     /// extra/API usage bar when no provider limit is available; it is not a
     /// provider-enforced spending limit.
@@ -15,6 +20,10 @@ pub struct AccountsConfig {
 }
 
 impl AccountsConfig {
+    pub fn budget(&self, kind: &str) -> Option<DayCap> {
+        self.budget.get(kind).copied()
+    }
+
     pub fn usage_limit(&self, kind: &str) -> Option<f64> {
         self.usage_limit_usd.get(kind).map(|limit| limit.as_usd())
     }
@@ -116,5 +125,27 @@ mod tests {
         .unwrap();
         assert_eq!(config.usage_limit("claude"), Some(50.25));
         assert_eq!(config.usage_limit("codex"), Some(12.0));
+    }
+
+    #[test]
+    fn account_day_caps_parse_and_round_trip() {
+        let config: AccountsConfig = toml::from_str(
+            r#"
+            [budget]
+            claude = "100/day"
+            codex = "$25.50/day"
+            "#,
+        )
+        .expect("parse account budgets");
+        assert_eq!(config.budget("claude").map(DayCap::as_usd), Some(100.0));
+        assert_eq!(config.budget("codex").map(DayCap::as_usd), Some(25.5));
+        let rendered = toml::to_string(&config).expect("serialize accounts");
+        assert!(rendered.contains("claude = \"100/day\""), "{rendered}");
+        assert!(
+            toml::from_str::<AccountsConfig>("[budget]\nclaude = \"100\"")
+                .unwrap_err()
+                .to_string()
+                .contains("must end in `/day`")
+        );
     }
 }

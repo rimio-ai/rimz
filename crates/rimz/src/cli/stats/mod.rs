@@ -35,12 +35,11 @@ use rimz::RuntimePaths;
 use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
 use rimz::agents::spending::{
-    DaySpend, HeadlineSpec, ProviderSpendingCache, SilentWalk, SpendProgress, SpendTally,
-    SpendWindow, Spending, SpendingWalker, WalkObserver, WalkRequest, discover_spending_files,
-    read_provider_spending_cache, unix_secs_now, utc_date,
-    write_provider_spending_cache_with_rollups,
+    DaySpend, ProviderSpendingCache, SilentWalk, SpendProgress, SpendTally, SpendWindow, Spending,
+    SpendingWalker, WalkObserver, WalkRequest, discover_spending_files,
+    read_provider_spending_cache, unix_secs_now, utc_date, write_provider_spending_cache_with_day,
 };
-use rimz::config::{GlyphRole, Semantic, ThemeConfig};
+use rimz::config::{GlyphRole, MachineConfig, Semantic, ThemeConfig};
 use rimz::store::single_flight::{Coalesced, coalesce};
 use rimz::tui::{MouseCapture, TerminalModeGuard};
 
@@ -312,7 +311,7 @@ fn compute_stats_from_files(
     let origin_overrides = HashMap::new();
     let automation_files = rimz::harness::schedule::run_log::automation_transcripts();
     let live_excluded = BTreeSet::new();
-    let spec = HeadlineSpec::default();
+    let spec = MachineConfig::load_lenient().headline_spec();
     let req = WalkRequest {
         files: &files,
         prices: &prices,
@@ -339,12 +338,14 @@ fn compute_stats_from_files(
         }
     };
     if publish {
-        write_provider_spending_cache_with_rollups(
+        write_provider_spending_cache_with_day(
             &paths.shared_provider_spending_path(),
             unix_millis_now(),
             &result.spending,
             &result.days,
             &result.models,
+            &result.provider_day,
+            result.day_cutoff_secs,
         );
     }
     let Spending { total, by_provider } = result.spending;

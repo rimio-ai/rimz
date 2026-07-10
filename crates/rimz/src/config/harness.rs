@@ -1,4 +1,91 @@
+use std::fmt;
+use std::str::FromStr;
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::harness::budget::{BudgetSpec, BudgetWindow};
+
+/// A local-calendar-day dollar cap stored as cents so machine config keeps
+/// exact equality while reusing the public budget grammar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DayCap {
+    cents: u64,
+}
+
+impl DayCap {
+    pub fn as_usd(self) -> f64 {
+        self.cents as f64 / 100.0
+    }
+
+    pub fn as_spec(self) -> BudgetSpec {
+        BudgetSpec {
+            cap_usd: self.as_usd(),
+            window: BudgetWindow::Day,
+        }
+    }
+}
+
+impl FromStr for DayCap {
+    type Err = DayCapParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let spec = raw
+            .parse::<BudgetSpec>()
+            .map_err(DayCapParseError::Budget)?;
+        if spec.window != BudgetWindow::Day {
+            return Err(DayCapParseError::DayRequired(raw.trim().to_owned()));
+        }
+        let cents = (spec.cap_usd * 100.0).round();
+        if cents > u64::MAX as f64 {
+            return Err(DayCapParseError::TooLarge(raw.trim().to_owned()));
+        }
+        Ok(Self {
+            cents: cents as u64,
+        })
+    }
+}
+
+impl fmt::Display for DayCap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let dollars = self.cents / 100;
+        let cents = self.cents % 100;
+        if cents == 0 {
+            write!(f, "{dollars}/day")
+        } else {
+            write!(f, "{dollars}.{cents:02}/day")
+        }
+    }
+}
+
+impl Serialize for DayCap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for DayCap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum DayCapParseError {
+    #[error(transparent)]
+    Budget(#[from] crate::harness::budget::BudgetParseError),
+    #[error("daily budget `{0}` must end in `/day`; use an amount such as `50/day`")]
+    DayRequired(String),
+    #[error("daily budget `{0}` is too large")]
+    TooLarge(String),
+}
 
 use crate::message::AutoCompact;
 
@@ -29,6 +116,9 @@ impl RtkMode {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct HarnessConfig {
+    /// Default local-calendar-day cap for one room's whole agent fleet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<DayCap>,
     /// Compact before `message` sends when the agent's context window
     /// has reached this threshold. Unset keeps compact-first sends opt-in.
     #[serde(
@@ -79,6 +169,21 @@ mod tests {
             toml::from_str("smart_compact = \"70%\"").expect("parse harness config");
 
         assert_eq!(config.smart_compact, Some(AutoCompact::Percent(70)));
+    }
+
+    #[test]
+    fn day_cap_requires_day_and_round_trips() {
+        let config: HarnessConfig =
+            toml::from_str("budget = \"50.25/day\"").expect("parse day cap");
+        assert_eq!(config.budget.map(DayCap::as_usd), Some(50.25));
+        let rendered = toml::to_string(&config).expect("serialize harness");
+        assert!(rendered.contains("budget = \"50.25/day\""), "{rendered}");
+        assert!(
+            toml::from_str::<HarnessConfig>("budget = \"50\"")
+                .unwrap_err()
+                .to_string()
+                .contains("must end in `/day`")
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use jiff::Timestamp;
 
 #[test]
 fn token_windows_and_native_sessions_populate_public_tallies() {
@@ -183,6 +184,58 @@ fn headline_cutoffs_are_global_scoped_and_provider_local() {
     );
     assert_eq!(scoped.headline.usd, 0.0);
     assert!((scoped.week.usd - 5.0).abs() < 1e-9);
+}
+
+#[test]
+fn local_day_rollups_ignore_headline_mode_and_exclude_live_workspace_usd() {
+    let now: Timestamp = "2025-06-01T04:30:00Z".parse().expect("now");
+    let before: Timestamp = "2025-06-01T03:59:00Z".parse().expect("before midnight");
+    let after: Timestamp = "2025-06-01T04:01:00Z".parse().expect("after midnight");
+    let project = PathBuf::from("/repo/project");
+    let file = PathBuf::from("/tmp/rimz/day.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file_with_origin(
+            &file,
+            &project,
+            vec![
+                cached_entry(before.as_second() as u64, 1.0, "before"),
+                cached_entry(after.as_second() as u64, 2.0, "live"),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let live_excluded = BTreeSet::from(["claude:live".to_owned()]);
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Session,
+        timezone: Some("America/New_York".to_owned()),
+    };
+    let rollups = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        Some(WorkspaceRollupScope {
+            scope: &scope,
+            live_excluded: &live_excluded,
+        }),
+        now.as_second() as u64,
+        &spec,
+        false,
+    );
+
+    assert_eq!(
+        rollups.day_cutoff_secs,
+        "2025-06-01T04:00:00Z"
+            .parse::<Timestamp>()
+            .expect("cutoff")
+            .as_second() as u64
+    );
+    assert!((rollups.provider_day["claude"].usd - 2.0).abs() < 1e-9);
+    assert_eq!(rollups.workspace_day.usd, 0.0);
+    assert_eq!(rollups.workspace_day.tokens, 15);
+    assert!((rollups.workspace_tally.headline.usd - 1.0).abs() < 1e-9);
 }
 
 #[test]

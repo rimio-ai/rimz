@@ -57,6 +57,28 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     assert!(!rendered.contains('∞'), "no unmetered bar:\n{rendered}");
     assert_snapshot("provider_dashboard", rendered);
 }
+
+#[test]
+fn provider_daily_cap_renders_against_account_day_spend() {
+    let mut panels = two_provider_panels();
+    panels[0].day_budget = Some(crate::DailyBudgetView {
+        cap_usd: 10.0,
+        spend_usd: 9.5,
+        parked: false,
+    });
+    let theme = Theme::default();
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &panels[..1],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+    assert!(rendered.contains("$9.50 of $10/day"), "{rendered}");
+}
 /// The dashboard paints the Codex block whichever way the active tab is
 /// derived: a manual pick (`←`/`→` or a click on the label) swaps the chip onto
 /// `Codex` — fill alone, no glyph moves in the rail — and with no manual pick

@@ -71,6 +71,7 @@ pub(crate) fn provider_panel(
         metered: true,
         remote_control: false,
         spending: None,
+        day_budget: None,
         extra_credits: None,
         reset_credits: None,
         windows,

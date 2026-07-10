@@ -116,6 +116,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
             month: spend_window(118.0 + index as f64),
             year: spend_window(960.0 + index as f64),
         }),
+        day_budget: None,
         extra_credits: None,
         reset_credits: None,
         // Two budget windows per panel so the mana bars and the fleet store's
@@ -200,6 +201,9 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         workspace_value_tally: None,
         today_spend_live_usd: None,
         today_spend_epoch_secs: None,
+        fleet_day_spend_usd: None,
+        fleet_day_spend_epoch_secs: None,
+        fleet_budget: None,
         link: None,
         reflects_log: None,
         resume_outcomes: Some(Vec::new()),

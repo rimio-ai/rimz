@@ -1,14 +1,14 @@
 //! The cockpit's two summary lines: headline sessions + token breakdown, and
 //! the live-agent count with the animated count-up spend.
 
-use crate::SpendWindow;
 use crate::agents::AgentStatus;
+use crate::{DailyBudgetView, SpendWindow};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::TallyAnim;
-use crate::sidebar_pane::render::fmt::{dollars2, tokens_int};
+use crate::sidebar_pane::render::fmt::{dollars_cap, dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::token_breakdown_spans;
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
@@ -54,25 +54,36 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 /// [`TallyAnim`] roll — big decaying steps, then penny by penny onto the exact
 /// figure — and brightens for a beat the instant it settles (the W/M store
 /// rows below stay static). Always present — an empty room reads `¤ 0` with
-/// `$0.00` on the right edge.
+/// `$0.00` on the right edge. A configured room cap switches the right edge to
+/// local-day spend plus `of $CAP/day`, independent of the headline window.
 /// The steady unread count is a click-to-filter target and paints as a picked
 /// chip while the unread lens is active.
 pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     theme: &Theme,
     live_agents: usize,
     unread: (usize, bool),
-    today_usd: f64,
+    spend: (f64, Option<&DailyBudgetView>),
     anim: &TallyAnim,
     phase: u64,
     width: usize,
 ) -> (Line<'static>, Option<(u16, u16)>) {
+    let (today_usd, daily_budget) = spend;
     let usd = anim.today_usd.display(today_usd, phase);
     let style = if anim.today_usd.flashing(phase) {
         theme.value_flash()
     } else {
         theme.money_style(Modifier::BOLD)
     };
-    let right = vec![Span::styled(dollars2(usd), style)];
+    let label = daily_budget.map_or_else(
+        || dollars2(usd),
+        |budget| format!("{} of {}/day", dollars2(usd), dollars_cap(budget.cap_usd)),
+    );
+    let style = if daily_budget.is_some_and(|budget| budget.parked) {
+        theme.alarm(Modifier::BOLD)
+    } else {
+        style
+    };
+    let right = vec![Span::styled(label, style)];
     let right_width = spans_width(&right);
     let mut left = metric_spans(
         theme,

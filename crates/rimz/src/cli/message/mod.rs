@@ -297,6 +297,7 @@ pub(crate) fn to_session(
             force: false,
             auto_compact: None,
             no_from: false,
+            automated: true,
             wait: WaitSpec::OFF,
             not_before: None,
             after: Vec::new(),

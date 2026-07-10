@@ -110,33 +110,18 @@ pub(super) fn run_one(
     if let Some(gate) =
         run_log::daily_budget_gate(&state_home(), name, &entry, &now).map_err(anyhow::Error::msg)?
     {
-        let reason = gate.reason();
-        run_log::append(&LoopRunRecord {
-            task: name.to_owned(),
-            at: now.timestamp(),
-            result: LoopRunResult::BudgetSkipped,
-            mode: Some(mode),
-            duration_ms: Some(elapsed_ms(started)),
-            error: Some(reason.clone()),
-            check: None,
-            run_id: None,
-            transcript_path: None,
-            last_message: None,
-            target: None,
-            cost_usd: None,
-            input_tokens: None,
-            output_tokens: None,
-        });
-        if mode == LoopRunMode::Manual {
-            write_manual_verdict(
-                &mut ui::out(),
-                LoopRunResult::BudgetSkipped,
-                &format!("budget skipped — {reason}"),
-            )?;
-        } else {
-            writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;
-        }
-        return Ok(());
+        return finish_budget_skip(name, mode, started, now.timestamp(), gate.reason());
+    }
+    let config = MachineConfig::load_lenient();
+    if let Some((kind, workspace_id)) = task_scope_target(&entry)?
+        && let Some(reason) = rimz::harness::budget::scope_gate(
+            &RuntimePaths::for_workspace(workspace_id)?,
+            &kind,
+            &config,
+            now.timestamp(),
+        )
+    {
+        return finish_budget_skip(name, mode, started, now.timestamp(), reason);
     }
     let _run_lock = match acquire_run_lock(name, &entry) {
         Ok(Some(guard)) => guard,
@@ -193,6 +178,58 @@ pub(super) fn run_one(
             Err(err)
         }
     }
+}
+
+fn task_scope_target(
+    entry: &TaskEntry,
+) -> Result<Option<(rimz::ids::AgentKind, rimz::ids::WorkspaceId)>> {
+    let workspace = WorkspaceResolver::resolve(entry.resolved_root(), None)?;
+    match task_action("budget gate", entry)? {
+        TaskAction::Spawn(spec) => Ok(Some((
+            rimz::ids::AgentKind::new_unchecked(resolve_task_spec(spec, &workspace)?.kind),
+            workspace.workspace_id,
+        ))),
+        TaskAction::Deliver(target) => Ok(Some((
+            rimz::ids::AgentKind::new_unchecked(target.kind.clone()),
+            workspace.workspace_id,
+        ))),
+        TaskAction::CheckOnly => Ok(None),
+    }
+}
+
+fn finish_budget_skip(
+    name: &str,
+    mode: LoopRunMode,
+    started: Instant,
+    at: Timestamp,
+    reason: String,
+) -> Result<()> {
+    run_log::append(&LoopRunRecord {
+        task: name.to_owned(),
+        at,
+        result: LoopRunResult::BudgetSkipped,
+        mode: Some(mode),
+        duration_ms: Some(elapsed_ms(started)),
+        error: Some(reason.clone()),
+        check: None,
+        run_id: None,
+        transcript_path: None,
+        last_message: None,
+        target: None,
+        cost_usd: None,
+        input_tokens: None,
+        output_tokens: None,
+    });
+    if mode == LoopRunMode::Manual {
+        write_manual_verdict(
+            &mut ui::out(),
+            LoopRunResult::BudgetSkipped,
+            &format!("budget skipped — {reason}"),
+        )?;
+    } else {
+        writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;
+    }
+    Ok(())
 }
 
 fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &anyhow::Error) {

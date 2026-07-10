@@ -69,6 +69,14 @@ The `5h` and `7d` bars measure a different thing from the dollar figures. They a
 
 When a window empties mid-turn the agent parks rather than fails, and with auto-continue it resumes itself the moment the window resets ([loops, built-in recovery](./loops.md#built-in-recovery)). The exact bar tones, the reset colouring, and the not-yet-started window are drawn in the [interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard); where the readings come from is [providers internals](../internals/agents/providers.md).
 
+#### Dollar caps at four scopes
+
+Dollar budgets use one model at four scopes: an agent session (`--budget` or a profile budget), a loop task (`--budget` and `--budget-per-day`), a room fleet (`harness.budget`), and a provider login (`accounts.budget.<kind>`). The room and login caps accept `/day` only and read a dedicated local-calendar-day spend window, independent of the headline window displayed in the sidebar.
+
+Run `rimz budget` to inspect the room and configured accounts, `rimz budget 20/day` to override this room, or `rimz budget --account claude +10` to add account headroom. A room cap appears in the cockpit as `$41.20 of $50/day`; an account cap appears beside that provider's day spend.
+
+Crossing any cap parks a running agent through the same interrupt backstop. A human message delivered after the park waives that agent's next turn once, and the waiver is consumed when the turn ends; background delivery stays parked. Supervised `-p` launches and loop fires do not consume waivers: they fail or record `budget skipped` until the room and account scopes have headroom.
+
 ### Per room: the cockpit
 
 The top of the sidebar narrows all of this to the room you are standing in. Two lines carry the spend:

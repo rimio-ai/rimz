@@ -145,6 +145,23 @@ While the room is **live**, `auto_continue` (off by default) picks a parked turn
 
 The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 
+### Daily dollar budgets
+
+```toml
+timezone = "America/New_York"
+
+[harness]
+budget = "50/day"
+
+[accounts.budget]
+claude = "100/day"
+codex = "100/day"
+```
+
+`harness.budget` is the machine default for each room's whole fleet, while `[accounts.budget]` caps one provider login across every room on the machine. Both read transcript-derived spend since local midnight in `timezone`, and both require the `/day` suffix; a bare amount is rejected with the form to use. These keys run no command and stay outside the project trust hash.
+
+`rimz budget` inspects both scopes. `rimz budget 20/day`, `+10`, and `clear` set a room-local override, add headroom, or disable that room's cap; add `--account claude` to target the account cap. Raising or clearing a parked scope queues the configured continue prompt to affected agents in this room unless `--no-continue` is set.
+
 ### Smart compaction
 
 ```toml
@@ -207,12 +224,15 @@ cwd = "/var/log"
 ### Accounts
 
 ```toml
+[accounts.budget]
+claude = "100/day"
+
 [accounts.usage_limit_usd]
 claude = 50.0
 codex = 25.0
 ```
 
-`usage_limit_usd` sets display-only monthly USD ceilings per provider kind: a ceiling scales the provider dashboard's `ex`/`api` bar when the provider reports no real cap. It tunes the bar only, the provider still enforces real spend and agents keep running, and an unset provider reads uncapped with `∞`. Account enrichment is local, read-only, and best-effort; `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the live fetches for one process tree without touching transcript-derived totals or credential files.
+`budget` sets the enforced local-day dollar cap described in [Daily dollar budgets](#daily-dollar-budgets). `usage_limit_usd` is separate and display-only: its monthly ceiling scales the provider dashboard's `ex`/`api` bar when the provider reports no real cap, while the provider still enforces real spend and agents keep running. Account enrichment is local, read-only, and best-effort; `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the live fetches for one process tree without touching transcript-derived totals or credential files.
 
 ### Off-box error reporting
 

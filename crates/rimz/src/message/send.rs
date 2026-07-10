@@ -62,6 +62,7 @@ pub struct MessageDraft {
     pub enter: bool,
     pub gate: DeliveryGate,
     pub sender: MessageSender,
+    pub automated: bool,
     pub force: bool,
     pub auto_compact: Option<AutoCompact>,
     pub after: Vec<AfterCondition>,
@@ -102,6 +103,7 @@ pub fn message_for_target(
     ))
     .with_address(draft.address)
     .with_sender(draft.sender)
+    .with_automated(draft.automated)
     .with_body(draft.body)
     .with_force(draft.force)
     .with_pane_id(target.pane_id.clone())
@@ -320,6 +322,7 @@ pub fn compact_message_for_target(
             enter: true,
             gate: prompt.gate,
             sender: prompt.sender.clone(),
+            automated: prompt.automated,
             force: prompt.force,
             auto_compact: None,
             after: Vec::new(),

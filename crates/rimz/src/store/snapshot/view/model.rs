@@ -6,6 +6,14 @@ use crate::config::PaletteRole;
 use crate::remote::link::LinkTier;
 use crate::store::snapshot::row::SidebarRow;
 
+/// One configured local-day dollar cap and its current metered state.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DailyBudgetView {
+    pub cap_usd: f64,
+    pub spend_usd: f64,
+    pub parked: bool,
+}
+
 /// One provider's aggregate dashboard block, pinned to the bottom of the
 /// sidebar. Account-scoped: every session of one agent kind folds into one
 /// block — summed spend and tokens, plus the freshest session's plan, version,
@@ -40,6 +48,9 @@ pub struct SidebarProviderPanel {
     /// for this provider, summed across all of its sessions' transcript history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spending: Option<SpendTally>,
+    /// Configured provider-login local-day dollar cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub day_budget: Option<DailyBudgetView>,
     /// Paid usage beyond subscription windows: provider extra credits or
     /// API-key spend against an optional display ceiling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
