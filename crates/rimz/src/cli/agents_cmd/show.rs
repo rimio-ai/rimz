@@ -4,7 +4,7 @@ use super::list::{
     agent_status_label, agent_status_projection, agent_status_style, context_cell, model_label,
     phase_label, worktree_label,
 };
-use super::runs_lookup::{agent_name, newest_run_by_ref, print_run_line};
+use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
 use crate::cli::render;
 
 #[derive(serde::Serialize)]
@@ -109,6 +109,7 @@ fn collect_show_report(
 
 fn render_show_report(
     report: ShowReport,
+    store: &rimz::Store,
     snapshot: &rimz::SidebarSnapshot,
     runtime: &rimz::RuntimePaths,
     deferred_error: Option<anyhow::Error>,
@@ -131,7 +132,12 @@ fn render_show_report(
     render_activity_section(&mut out, agent, report.ask.as_ref(), report.stale, now)?;
     render_context_section(&mut out, agent, report.cost.as_ref(), runtime)?;
     render_placement_section(&mut out, agent)?;
-    if let Some(run) = report.run.as_ref() {
+    let fallback_run = if report.run.is_none() {
+        newest_run_for_agent(store, agent).ok().flatten()
+    } else {
+        None
+    };
+    if let Some(run) = report.run.as_ref().or(fallback_run.as_ref()) {
         render_run_section(&mut out, run, now)?;
     }
     if !report.messages.is_empty() {
@@ -171,7 +177,7 @@ pub(super) fn show_agent(
         supervised::output::print_json(&report)?;
         return Ok(());
     }
-    render_show_report(report, &snapshot, &runtime, deferred_error)
+    render_show_report(report, &store, &snapshot, &runtime, deferred_error)
 }
 
 pub(super) fn resolve_audit_agent(
