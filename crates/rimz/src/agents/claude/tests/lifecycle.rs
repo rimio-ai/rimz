@@ -260,12 +260,24 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
 
 #[test]
 fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
-    for (source, expected) in [
-        ("compact", LifecycleSignal::CompactionEnded { auto: None }),
-        ("startup", LifecycleSignal::Registered),
-        ("resume", LifecycleSignal::Registered),
-        ("clear", LifecycleSignal::Registered),
-        ("future", LifecycleSignal::Registered),
+    for (source, expected_signal, expected_origin) in [
+        (
+            "compact",
+            LifecycleSignal::CompactionEnded { auto: None },
+            None,
+        ),
+        (
+            "startup",
+            LifecycleSignal::Registered,
+            Some(SessionOrigin::Fresh),
+        ),
+        ("resume", LifecycleSignal::Registered, None),
+        (
+            "clear",
+            LifecycleSignal::Registered,
+            Some(SessionOrigin::Fresh),
+        ),
+        ("future", LifecycleSignal::Registered, None),
     ] {
         let obs = ClaudeAdapter
             .observe_lifecycle(
@@ -274,13 +286,15 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             )
             .unwrap();
         assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-        assert_eq!(obs.signal, expected, "{source}");
+        assert_eq!(obs.signal, expected_signal, "{source}");
+        assert_eq!(obs.origin, expected_origin, "{source}");
         assert_eq!(obs.task, None);
     }
     let absent = ClaudeAdapter
         .observe_lifecycle("SessionStart", &json!({ "session_id": "sess-1" }))
         .unwrap();
     assert_eq!(absent.signal, LifecycleSignal::Registered);
+    assert_eq!(absent.origin, Some(SessionOrigin::Fresh));
 
     assert!(
         ClaudeAdapter

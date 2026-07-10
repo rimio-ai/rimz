@@ -61,7 +61,7 @@ use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, Result, RootIdentity,
-    SubagentIdentity, SubagentObservation, TranscriptMessage, classify_agent_hook,
+    SessionOrigin, SubagentIdentity, SubagentObservation, TranscriptMessage, classify_agent_hook,
     non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
@@ -749,13 +749,17 @@ impl AgentAdapter for ClaudeAdapter {
             payload,
             &parts,
         )?;
-        Some(build_claude_observation(
-            payload,
-            &parts,
-            signal,
-            agent_id,
-            parent_agent_id,
-        ))
+        let mut observation =
+            build_claude_observation(payload, &parts, signal, agent_id, parent_agent_id);
+        if observation.parent_agent_id.is_none()
+            && matches!(observation.signal, LifecycleSignal::Registered)
+            && parts.session_start.as_ref().is_some_and(|start| {
+                matches!(start.source, SessionSource::Startup | SessionSource::Clear)
+            })
+        {
+            observation.origin = Some(SessionOrigin::Fresh);
+        }
+        Some(observation)
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {

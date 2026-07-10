@@ -128,9 +128,9 @@ pub struct AgentLifecycleObservation {
     /// sidecar refresh hints, never as routing truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
-    /// Provider-reported session lineage from the session store head (Codex
-    /// today), carried forward so the rollup projection can collapse the
-    /// superseded same-pane `/clear` conversation.
+    /// Provider-reported session lineage from the Codex rollout head or Claude
+    /// `SessionStart` source, carried forward so the rollup projection can
+    /// collapse the superseded same-pane `/clear` conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
     /// Context-window utilization in percent reported by the agent (0..=100).
