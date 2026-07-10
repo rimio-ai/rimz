@@ -1016,6 +1016,26 @@ fn plans_team_restore_in_declared_layout_order() {
 }
 
 #[test]
+fn plans_fresh_seed_for_missing_team_member() {
+    let (teams, profiles, commands) = team_configs();
+    let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
+
+    let tabs = plan_team_restore_tabs(
+        &[planner],
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        |_| true,
+        |_| true,
+    );
+
+    assert_eq!(tabs.len(), 1);
+    assert!(matches!(tabs[0].cohort.seeds[0], CohortSeed::Resume(_)));
+    assert_eq!(tabs[0].cohort.seeds[1], CohortSeed::Fresh);
+}
+
+#[test]
 fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
     let (teams, profiles, commands) = team_configs();
     let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);

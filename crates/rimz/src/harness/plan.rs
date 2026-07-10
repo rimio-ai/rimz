@@ -51,7 +51,8 @@ pub fn fresh_resume_launch_requests(
         .collect())
 }
 
-/// Where an interactive launch lands.
+/// Where a launch lands. The resolver derives it from the per-launch flags, the
+/// `[agents] placement` default, and whether in-pane placement is feasible here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Placement {
     SamePane,
@@ -59,7 +60,11 @@ pub enum Placement {
     NewTab,
 }
 
-/// Resolve launch placement from explicit flags, policy, and pane feasibility.
+/// Resolve launch placement. Explicit flags win; otherwise the config policy
+/// decides, with `auto` running a single non-worktree cell in the current pane
+/// and opening a new tab for a worktree or multi-cell layout. In-pane placement
+/// needs a single cell and a launching pane; an explicit `--new-pane` that
+/// cannot be honored fails fast, while a defaulted one falls back to a new tab.
 pub fn resolve_placement(
     new_tab: bool,
     new_pane: bool,
@@ -97,8 +102,9 @@ pub fn resolve_placement(
     })
 }
 
-/// Downgrade same-pane placement when the caller cannot replace its pane.
 pub fn apply_in_place_downgrade(placement: Placement, bg: bool, allow_in_place: bool) -> Placement {
+    // In-place takes over the launching pane: it cannot honor --bg, and
+    // create-on-miss must never replace the caller's pane. Downgrade to a split.
     if placement == Placement::SamePane && (bg || !allow_in_place) {
         Placement::NewPane
     } else {
@@ -106,6 +112,8 @@ pub fn apply_in_place_downgrade(placement: Placement, bg: bool, allow_in_place: 
     }
 }
 
+/// In-pane placement (same pane or new pane) needs a single cell and a
+/// launching pane to take over or split; otherwise fall back to a new tab.
 fn feasible_or_new(target: Placement, single_cell: bool, has_launching_pane: bool) -> Placement {
     if single_cell && has_launching_pane {
         target
