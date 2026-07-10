@@ -366,7 +366,7 @@ fn wait_interactive_agent_stream(
     let agent = crate::cli::resolve_agent_one(&snapshot, reference, None, current_channel)?;
     let adapter = rimz::agents::find_adapter(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
-    let mut cursor = supervised::stream::TranscriptCursor::new(from_start);
+    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(from_start);
     let mut stdout = render::out();
     let mut stderr = render::err();
     let mut json_stdout = std::io::stdout().lock();

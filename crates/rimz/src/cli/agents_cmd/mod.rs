@@ -20,7 +20,6 @@ mod runs_lookup;
 mod show;
 mod stop;
 mod supervised;
-pub(crate) mod team_restore;
 mod top;
 mod wait;
 
@@ -39,10 +38,14 @@ use super::GlobalFlags;
 use crate::cli::room::RoomTarget;
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
-use rimz::config::LaunchPlacement;
+use rimz::harness::plan::{
+    LayoutPaneParams, Placement, apply_in_place_downgrade, cohort_cells,
+    fresh_resume_launch_requests, launch_identity_requests, layout_panes_with_names,
+    mint_launch_id, resolve_placement, validate_agent_name,
+};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::{Cell, LayoutSpec};
-use rimz::ids::{AgentKind, AgentSessionId, EventId};
+use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
 use rimz::store::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
@@ -71,7 +74,6 @@ use stop::stop_agent;
 #[cfg(test)]
 use supervised::run::{RunPlacement, run_placement, validate_supervised_output};
 use supervised::run::{run_print, run_supervised};
-pub(crate) use supervised::stream::TranscriptCursor;
 use top::{TopArgs, run_top};
 use wait::wait_agent;
 

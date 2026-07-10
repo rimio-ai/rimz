@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::agents::AgentState;
+use rimz::harness::resume::{resume_session_present, split_team_and_flat};
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{ResumeTab, SplitPaneOptions, TabOptions};
 use rimz::store::runtime::AgentLiveness;
 
 use super::GlobalFlags;
-use crate::cli::room::{RoomTarget, build_sidebar_opts};
+use crate::cli::room::{RoomTarget, build_sidebar_opts, materialize_team_restore_tab};
 
 #[derive(Clone, Debug)]
 struct LocalWorktree {
@@ -130,11 +131,7 @@ pub(super) fn resume_lane(
         )?;
         return Ok(());
     }
-    if !liveness
-        .closed
-        .iter()
-        .any(super::team_restore::resume_session_present)
-    {
+    if !liveness.closed.iter().any(resume_session_present) {
         return Err(ResumeLaneErr::Nothing {
             scope: lane.display,
         }
@@ -388,7 +385,7 @@ fn resume_closed_into_live_lane(
             adapter
                 .resume_command(agent.agent_id.as_str(), &lane.path)
                 .is_some()
-        }) && super::team_restore::resume_session_present(agent)
+        }) && resume_session_present(agent)
         {
             super::launch::agent_launch_env(&workspace.project_root, agent.kind.as_str())?;
         }
@@ -455,27 +452,18 @@ fn resume_closed_lane(
     bg: bool,
 ) -> Result<()> {
     let launch = super::launch::effective_launch_agents(machine_config, workspace)?;
-    let team = super::team_restore::plan_team_restore_tabs(
+    let (team, flat_agents) = split_team_and_flat(
         agents,
         &launch.teams,
         &launch.profiles,
         &machine_config.agents.commands,
         Some(&workspace.project_root),
         Path::is_dir,
-        super::team_restore::resume_session_present,
+        resume_session_present,
     );
     for kind in team.iter().flat_map(|planned| planned.layout.agent_kinds()) {
         super::launch::agent_launch_env(&workspace.project_root, kind)?;
     }
-    let flat_agents = agents
-        .iter()
-        .filter(|agent| {
-            !team
-                .iter()
-                .any(|planned| super::team_restore::planned_team_matches_agent(planned, agent))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
     let team_panes = team
         .iter()
         .map(|planned| planned.cohort.seeds.len())
@@ -490,7 +478,7 @@ fn resume_closed_lane(
             adapter
                 .resume_command(agent.agent_id.as_str(), &lane.path)
                 .is_some()
-        }) && super::team_restore::resume_session_present(agent)
+        }) && resume_session_present(agent)
         {
             super::launch::agent_launch_env(&workspace.project_root, agent.kind.as_str())?;
         }
@@ -499,7 +487,7 @@ fn resume_closed_lane(
 
     let mut tabs = Vec::new();
     for planned in &team {
-        tabs.push(super::team_restore::materialize_team_restore_tab(
+        tabs.push(materialize_team_restore_tab(
             store,
             &workspace.workspace_id,
             &workspace.session_name,
@@ -538,7 +526,7 @@ fn flat_resume_plan(
         max,
         project_root,
         Path::is_dir,
-        super::team_restore::resume_session_present,
+        resume_session_present,
         &rimz::proc::rimz_exe(),
     )
 }
@@ -921,7 +909,7 @@ mod tests {
             },
         );
         let commands = rimz::config::CommandsConfig::default();
-        let team = super::super::team_restore::plan_team_restore_tabs(
+        let (team, flat_agents) = split_team_and_flat(
             &agents,
             &teams,
             &profiles,
@@ -930,15 +918,6 @@ mod tests {
             |_| true,
             |_| true,
         );
-        let flat_agents = agents
-            .iter()
-            .filter(|agent| {
-                !team.iter().any(|planned| {
-                    super::super::team_restore::planned_team_matches_agent(planned, agent)
-                })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
         let flat = rimz::harness::resume::plan_resume(
             &flat_agents,
             &BTreeSet::new(),

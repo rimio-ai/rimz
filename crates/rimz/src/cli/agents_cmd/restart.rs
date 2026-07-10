@@ -65,7 +65,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         && adapter
             .resume_command(agent.agent_id.as_str(), &cwd)
             .is_some();
-    let session_present = super::team_restore::resume_session_present(&agent);
+    let session_present = rimz::harness::resume::resume_session_present(&agent);
     let fresh_reason = fresh_reason(resume_support, session_present);
     let fresh_identity = if fresh_reason.is_some() {
         Some(append_fresh_launch(
@@ -279,7 +279,7 @@ fn append_fresh_launch(
     mode: Option<PermissionMode>,
 ) -> Result<LaunchIdentity> {
     let layout = LayoutSpec::single(cell);
-    let mut requests = super::launch::launch_identity_requests(
+    let mut requests = rimz::harness::plan::launch_identity_requests(
         &layout,
         None,
         None,

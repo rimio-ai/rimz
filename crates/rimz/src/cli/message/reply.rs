@@ -9,10 +9,10 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use super::DispatchOutcome;
-use crate::cli::agents_cmd::TranscriptCursor;
 use crate::cli::render;
 use crate::cli::send::WaitSpec;
 use crate::cli::spinner::Spinner;
+use rimz::agents::transcript::TranscriptCursor;
 use rimz::agents::{AgentAdapter, AgentState, AgentStatus};
 use rimz::harness::run::RunStatus;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId};

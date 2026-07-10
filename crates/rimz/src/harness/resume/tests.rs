@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::AgentStatus;
+use crate::config::{Profile, RoleBinding, Team};
 use crate::ids::{MuxName, PaneId};
 use crate::pane::PaneRef;
 use jiff::Timestamp;
@@ -892,4 +893,163 @@ fn worktree_team_resume_replays_flat_worktree_channel() {
         "resume argv keeps the team identity: {:?}",
         first_argv(&plan.tabs[0])
     );
+}
+
+fn team_configs() -> (TeamsConfig, ProfilesConfig, CommandsConfig) {
+    let mut profiles = ProfilesConfig::default();
+    profiles.0.insert(
+        "claude-plan".to_owned(),
+        Profile {
+            agent: "claude".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            budget: None,
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+            args: None,
+        },
+    );
+    profiles.0.insert(
+        "codex-code".to_owned(),
+        Profile {
+            agent: "codex".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            budget: None,
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+            args: None,
+        },
+    );
+    let mut teams = TeamsConfig::default();
+    teams.0.insert(
+        "forge".to_owned(),
+        Team {
+            roles: vec![
+                RoleBinding {
+                    role: "planner".to_owned(),
+                    profile: "claude-plan".to_owned(),
+                    mode: None,
+                    model: None,
+                    effort: None,
+                    budget: None,
+                    system_prompt_file: None,
+                    append_system_prompt_file: None,
+                    args: None,
+                },
+                RoleBinding {
+                    role: "coder".to_owned(),
+                    profile: "codex-code".to_owned(),
+                    mode: None,
+                    model: None,
+                    effort: None,
+                    budget: None,
+                    system_prompt_file: None,
+                    append_system_prompt_file: None,
+                    args: None,
+                },
+            ],
+            leader: None,
+            layout: Some("planner,coder".to_owned()),
+        },
+    );
+    (teams, profiles, CommandsConfig::default())
+}
+
+fn team_agent(kind: &str, id: &str, role: &str, worktree: &str, secs_ago: i64) -> AgentState {
+    let mut agent = agent(kind, id, worktree, None, secs_ago);
+    agent.team = Some("forge".to_owned());
+    agent.role = Some(role.to_owned());
+    agent
+}
+
+#[test]
+fn resume_session_present_requires_non_empty_recorded_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let present = dir.path().join("present.jsonl");
+    std::fs::write(&present, "{}\n").expect("write transcript");
+    let empty = dir.path().join("empty.jsonl");
+    std::fs::write(&empty, "").expect("write empty transcript");
+    let missing = dir.path().join("missing.jsonl");
+
+    let mut agent = agent("claude", "a1", "/repo", None, 0);
+    assert!(resume_session_present(&agent));
+    agent.transcript_path = Some(present.to_string_lossy().into_owned());
+    assert!(resume_session_present(&agent));
+    agent.transcript_path = Some(missing.to_string_lossy().into_owned());
+    assert!(!resume_session_present(&agent));
+    agent.transcript_path = Some(empty.to_string_lossy().into_owned());
+    assert!(!resume_session_present(&agent));
+    agent.transcript_path = Some(dir.path().to_string_lossy().into_owned());
+    assert!(!resume_session_present(&agent));
+}
+
+#[test]
+fn plans_team_restore_in_declared_layout_order() {
+    let (teams, profiles, commands) = team_configs();
+    let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
+    let coder = team_agent("codex", "coder", "coder", "/repo/forge", 5);
+
+    let tabs = plan_team_restore_tabs(
+        &[coder, planner],
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        |_| true,
+        |_| true,
+    );
+
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(tabs[0].label, "#forge");
+    assert_eq!(tabs[0].cohort.seeds.len(), 2);
+    assert!(matches!(
+        &tabs[0].cohort.seeds[0],
+        CohortSeed::Resume(agent) if agent.agent_id.as_str() == "planner"
+    ));
+    assert!(matches!(
+        &tabs[0].cohort.seeds[1],
+        CohortSeed::Resume(agent) if agent.agent_id.as_str() == "coder"
+    ));
+}
+
+#[test]
+fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
+    let (teams, profiles, commands) = team_configs();
+    let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
+    let flat = agent("codex", "flat", "/repo/other", None, 5);
+
+    let (tabs, flat_agents) = split_team_and_flat(
+        &[planner, flat],
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        |_| true,
+        |_| true,
+    );
+
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(flat_agents.len(), 1);
+    assert_eq!(flat_agents[0].agent_id.as_str(), "flat");
+}
+
+#[test]
+fn team_restore_ignores_group_whose_team_no_longer_resolves() {
+    let (_teams, profiles, commands) = team_configs();
+    let planner = team_agent("claude", "planner", "planner", "/repo/forge", 3);
+
+    let tabs = plan_team_restore_tabs(
+        &[planner],
+        &TeamsConfig::default(),
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        |_| true,
+        |_| true,
+    );
+
+    assert!(tabs.is_empty());
 }

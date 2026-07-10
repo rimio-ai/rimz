@@ -30,7 +30,7 @@ use output::RunStreamEvent;
 #[cfg(test)]
 use pane::{ensure_sendable, latest_resolved_run_pane, resolve_run_pane_in_snapshot};
 #[cfg(test)]
-use stream::{TranscriptCursor, stream_attached_run, stream_blocking_run};
+use stream::{stream_attached_run, stream_blocking_run};
 
 pub(super) fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::ResolvedWorkspace> {
     WorkspaceResolver::resolve_participant(".", globals.root.clone())

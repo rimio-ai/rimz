@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -6,6 +5,7 @@ use anyhow::{Context, Result};
 
 use super::output::StreamSink;
 use rimz::agents::AgentAdapter;
+use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::run::RunRecord;
 use rimz::harness::run_wake::{self, ExpectedRunFrame, RunWakeOutcome};
 
@@ -124,55 +124,6 @@ fn next_stream_wait(deadline: Option<Instant>) -> Option<Duration> {
         return None;
     }
     Some((deadline - now).min(STREAM_TICK))
-}
-
-#[derive(Debug)]
-pub(crate) struct TranscriptCursor {
-    path: Option<String>,
-    offset: u64,
-    skip_existing_on_first_path: bool,
-}
-
-impl TranscriptCursor {
-    pub(crate) fn new(from_start: bool) -> Self {
-        Self {
-            path: None,
-            offset: 0,
-            skip_existing_on_first_path: !from_start,
-        }
-    }
-
-    pub(crate) fn messages(
-        &mut self,
-        transcript_path: Option<&str>,
-        adapter: &dyn AgentAdapter,
-    ) -> Vec<String> {
-        let Some(path) = transcript_path else {
-            return Vec::new();
-        };
-        if self.path.as_deref() != Some(path) {
-            self.offset = if self.skip_existing_on_first_path {
-                std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
-            } else {
-                0
-            };
-            self.path = Some(path.to_owned());
-            self.skip_existing_on_first_path = false;
-        }
-        if std::fs::metadata(path)
-            .map(|meta| meta.len() < self.offset)
-            .unwrap_or(false)
-        {
-            self.offset = 0;
-        }
-        let Some((bytes, next)) = rimz::agents::read_transcript_lines(Path::new(path), self.offset)
-        else {
-            return Vec::new();
-        };
-        self.offset = next;
-        let text = String::from_utf8_lossy(&bytes);
-        adapter.stream_assistant_messages(&text)
-    }
 }
 
 fn emit_stream_updates(

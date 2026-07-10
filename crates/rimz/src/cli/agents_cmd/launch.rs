@@ -1,3 +1,5 @@
+//! Interactive launch orchestration and CLI-side launch event sequencing.
+
 use super::*;
 use crate::cli::room::build_sidebar_opts;
 use crate::cli::{agents_launch, machine_config, open_store, record_workspace};
@@ -312,7 +314,7 @@ fn launch_resume_layout(
         &cells,
         team_name.as_deref(),
         |path| path.is_dir(),
-        super::team_restore::resume_session_present,
+        rimz::harness::resume::resume_session_present,
     )
     .map_err(|err| cohort_resume_error(err, spec, scope.as_deref()))?;
     let cwd = plan
@@ -508,19 +510,6 @@ fn resume_worktree_scope_with(
     }
 }
 
-pub(super) fn cohort_cells(layout: &LayoutSpec) -> Vec<rimz::harness::resume::CohortCell> {
-    layout
-        .agent_cells()
-        .filter_map(|cell| match cell {
-            Cell::Agent { kind, role, .. } => Some(rimz::harness::resume::CohortCell {
-                kind: kind.clone(),
-                role: role.clone(),
-            }),
-            Cell::Command { .. } => None,
-        })
-        .collect()
-}
-
 fn worktree_scope_label(path: &Path) -> Option<String> {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -550,33 +539,6 @@ fn cohort_resume_subject(spec: &str, scope: Option<&str>) -> String {
         Some(scope) => format!("`{spec}` in worktree `{scope}`"),
         None => format!("`{spec}`"),
     }
-}
-
-pub(super) fn fresh_resume_launch_requests(
-    layout: &LayoutSpec,
-    plan: &rimz::harness::resume::CohortResumePlan,
-    team: Option<&str>,
-    team_roles: Option<&[rimz::config::RoleBinding]>,
-    channel: Option<&str>,
-) -> Result<Vec<AgentLaunchRequest>> {
-    let mut requests =
-        launch_identity_requests(layout, None, None, team, team_roles, channel, None)?;
-    if team.is_none() {
-        for request in &mut requests {
-            if request.launch.launch_group.is_some()
-                && let Some(group) = plan.launch_group.as_ref()
-            {
-                request.launch.launch_group = Some(group.clone());
-            }
-        }
-    }
-    Ok(requests
-        .into_iter()
-        .zip(plan.seeds.iter())
-        .filter_map(|(request, seed)| {
-            matches!(seed, rimz::harness::resume::CohortSeed::Fresh).then_some(request)
-        })
-        .collect())
 }
 
 fn report_cohort_resume(plan: &rimz::harness::resume::CohortResumePlan) {
@@ -648,81 +610,6 @@ pub(super) fn prepare_launch_layout(
         layout,
         team_name,
     })
-}
-
-/// Where a launch lands. The resolver derives it from the per-launch flags, the
-/// `[agents] placement` default, and whether in-pane placement is feasible here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Placement {
-    SamePane,
-    NewPane,
-    NewTab,
-}
-
-/// Resolve launch placement. Explicit flags win; otherwise the config policy
-/// decides, with `auto` running a single non-worktree cell in the current pane
-/// and opening a new tab for a worktree or multi-cell layout. In-pane placement
-/// needs a single cell and a launching pane; an explicit `--new-pane` that
-/// cannot be honored fails fast, while a defaulted one falls back to a new tab.
-pub(super) fn resolve_placement(
-    new_tab: bool,
-    new_pane: bool,
-    policy: LaunchPlacement,
-    is_worktree: bool,
-    single_cell: bool,
-    has_launching_pane: bool,
-) -> Result<Placement> {
-    if new_tab {
-        return Ok(Placement::NewTab);
-    }
-    if new_pane {
-        if !single_cell {
-            bail!(
-                "--new-pane opens a single agent cell; a multi-cell layout opens a new tab — drop --new-pane or pass --new-tab"
-            );
-        }
-        if !has_launching_pane {
-            bail!(
-                "--new-pane splits the current pane, so run it from inside the room; drop it to open a new tab"
-            );
-        }
-        return Ok(Placement::NewPane);
-    }
-    Ok(match policy {
-        LaunchPlacement::Tab => Placement::NewTab,
-        LaunchPlacement::Pane if is_worktree => Placement::NewTab,
-        LaunchPlacement::Pane => {
-            feasible_or_new(Placement::NewPane, single_cell, has_launching_pane)
-        }
-        LaunchPlacement::Auto if is_worktree => Placement::NewTab,
-        LaunchPlacement::Auto => {
-            feasible_or_new(Placement::SamePane, single_cell, has_launching_pane)
-        }
-    })
-}
-
-pub(super) fn apply_in_place_downgrade(
-    placement: Placement,
-    bg: bool,
-    allow_in_place: bool,
-) -> Placement {
-    // In-place takes over the launching pane: it cannot honor --bg, and
-    // create-on-miss must never replace the caller's pane. Downgrade to a split.
-    if placement == Placement::SamePane && (bg || !allow_in_place) {
-        Placement::NewPane
-    } else {
-        placement
-    }
-}
-
-/// In-pane placement (same pane or new pane) needs a single cell and a
-/// launching pane to take over or split; otherwise fall back to a new tab.
-fn feasible_or_new(target: Placement, single_cell: bool, has_launching_pane: bool) -> Placement {
-    if single_cell && has_launching_pane {
-        target
-    } else {
-        Placement::NewTab
-    }
 }
 
 /// The one pane command of an in-pane launch (the resolver guarantees a single
@@ -1153,100 +1040,6 @@ pub(super) fn generated_worktree_name(launch: &agents_launch::ResolvedCwd) -> Op
         .then_some(launch.worktree_name.as_deref())?
 }
 
-pub(super) fn launch_identity_requests(
-    layout: &LayoutSpec,
-    explicit_name: Option<&str>,
-    generated_worktree_name: Option<&str>,
-    team: Option<&str>,
-    team_roles: Option<&[rimz::config::RoleBinding]>,
-    channel: Option<&str>,
-    prompt: Option<(&str, usize)>,
-) -> Result<Vec<AgentLaunchRequest>> {
-    let agent_cells: Vec<&Cell> = layout.agent_cells().collect();
-    let agent_count = agent_cells.len();
-    let inline_launch_group = (team.is_none() && agent_count >= 2).then(mint_launch_group);
-    let mut requests = Vec::with_capacity(agent_cells.len());
-    for (index, cell) in agent_cells.into_iter().enumerate() {
-        let Cell::Agent {
-            kind,
-            profile,
-            mode,
-            role,
-            model,
-            effort,
-            budget,
-            ..
-        } = cell
-        else {
-            continue;
-        };
-        let launch_ordinal = match team {
-            Some(_) => role
-                .as_deref()
-                .and_then(|role| team_role_ordinal(team_roles, role)),
-            None if inline_launch_group.is_some() => Some(index_to_launch_ordinal(index)),
-            None => None,
-        };
-        let name = if agent_count == 1 && index == 0 {
-            match explicit_name {
-                Some(name) => {
-                    validate_agent_name(name)?;
-                    AgentLaunchName::Explicit(name.to_owned())
-                }
-                None => generated_worktree_name
-                    .map(|name| AgentLaunchName::Soft(name.to_owned()))
-                    .unwrap_or(AgentLaunchName::Mint),
-            }
-        } else {
-            AgentLaunchName::Mint
-        };
-        requests.push(AgentLaunchRequest {
-            kind: (*kind).clone(),
-            agent_id: mint_launch_id(),
-            name,
-            launch: rimz::agents::LaunchParams {
-                profile: profile.clone(),
-                mode: *mode,
-                role: role.clone(),
-                model: model.clone(),
-                effort: effort.clone(),
-                budget: budget.clone(),
-                team: team.map(ToOwned::to_owned),
-                launch_group: inline_launch_group.clone(),
-                launch_ordinal,
-                channel: channel.map(ToOwned::to_owned),
-                kind_ordinal: None,
-            },
-            run_id: None,
-            prompt: prompt
-                .filter(|(_, leader_index)| *leader_index == index)
-                .map(|(prompt, _)| prompt.to_owned()),
-        });
-    }
-    Ok(requests)
-}
-
-pub(super) fn mint_launch_id() -> AgentSessionId {
-    let raw = EventId::new();
-    let suffix = raw.as_str().strip_prefix("evt_").unwrap_or(raw.as_str());
-    AgentSessionId::from(format!("launch_{suffix}"))
-}
-
-fn mint_launch_group() -> String {
-    mint_launch_id().to_string()
-}
-
-fn team_role_ordinal(team_roles: Option<&[rimz::config::RoleBinding]>, role: &str) -> Option<u32> {
-    let index = team_roles?
-        .iter()
-        .position(|binding| binding.role == role)?;
-    Some(index_to_launch_ordinal(index))
-}
-
-fn index_to_launch_ordinal(index: usize) -> u32 {
-    u32::try_from(index).unwrap_or(u32::MAX)
-}
-
 pub(super) fn append_launch_events(
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
@@ -1300,181 +1093,6 @@ pub(super) fn append_launch_event(
     );
     store.append_event(&event)?;
     Ok(())
-}
-
-pub(super) fn layout_panes_with_names(
-    layout: &LayoutSpec,
-    params: LayoutPaneParams<'_>,
-    launch_identities: &[LaunchIdentity],
-) -> Result<LayoutPanes> {
-    let rimz_bin = rimz::proc::rimz_exe();
-    let mut agent_index = 0usize;
-    let mut launch_index = 0usize;
-    let columns = layout
-        .columns
-        .iter()
-        .map(|column| {
-            let panes = column
-                .rows
-                .iter()
-                .map(|cell| {
-                    let cell_agent_index =
-                        matches!(cell, Cell::Agent { .. }).then_some(agent_index);
-                    let (resume_seed, launch) = if matches!(cell, Cell::Agent { .. }) {
-                        let resume_seed = params
-                            .resume_seeds
-                            .map(|seeds| {
-                                seeds.get(agent_index).with_context(|| {
-                                    format!("resume plan missing seed for agent cell {agent_index}")
-                                })
-                            })
-                            .transpose()?;
-                        let resumes = matches!(
-                            resume_seed,
-                            Some(rimz::harness::resume::CohortSeed::Resume(_))
-                        );
-                        let launch = if resumes {
-                            None
-                        } else {
-                            let Some(launch) = launch_identities.get(launch_index) else {
-                                bail!("launch plan missing identity for agent cell {agent_index}");
-                            };
-                            launch_index = launch_index.saturating_add(1);
-                            Some(launch)
-                        };
-                        agent_index = agent_index.saturating_add(1);
-                        (resume_seed, launch)
-                    } else {
-                        (None, None)
-                    };
-                    pane_cmd_with_name(
-                        cell,
-                        PaneCmdOptions {
-                            rimz_bin: &rimz_bin,
-                            cwd: params.cwd,
-                            prompt: (params.prompt_agent_index == cell_agent_index)
-                                .then_some(params.prompt)
-                                .flatten(),
-                            cleanup_worktree: params.cleanup_worktree,
-                            in_place: params.in_place,
-                            team: params.team,
-                            channel: params.channel,
-                            launch,
-                            resume_seed,
-                        },
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(LayoutColumn {
-                panes,
-                stacked: column.stacked,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(LayoutPanes { columns })
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct LayoutPaneParams<'a> {
-    pub cwd: &'a Path,
-    pub prompt: Option<&'a str>,
-    pub prompt_agent_index: Option<usize>,
-    pub cleanup_worktree: bool,
-    pub in_place: bool,
-    pub team: Option<&'a str>,
-    pub channel: Option<&'a str>,
-    pub resume_seeds: Option<&'a [rimz::harness::resume::CohortSeed]>,
-}
-
-pub(super) struct PaneCmdOptions<'a> {
-    pub rimz_bin: &'a Path,
-    pub cwd: &'a Path,
-    pub prompt: Option<&'a str>,
-    pub cleanup_worktree: bool,
-    pub in_place: bool,
-    pub team: Option<&'a str>,
-    pub channel: Option<&'a str>,
-    pub launch: Option<&'a LaunchIdentity>,
-    pub resume_seed: Option<&'a rimz::harness::resume::CohortSeed>,
-}
-
-pub(super) fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<PaneCmd> {
-    let argv = match cell {
-        Cell::Command { argv } if argv.is_empty() => {
-            vec![rimz::harness::launch::user_shell_program()]
-        }
-        Cell::Command { argv } => argv.clone(),
-        Cell::Agent {
-            kind,
-            args,
-            mode,
-            profile,
-            role,
-            model,
-            effort,
-            budget,
-            ..
-        } => {
-            if let Some(rimz::harness::resume::CohortSeed::Resume(agent)) = options.resume_seed {
-                return Ok(PaneCmd {
-                    argv: rimz::harness::resume::resume_command(
-                        options.rimz_bin,
-                        agent,
-                        options.channel,
-                    ),
-                });
-            }
-            if let Some(launch) = options.launch {
-                validate_agent_name(&launch.name)?;
-            }
-            rimz::harness::launch::exec_argv(
-                options.rimz_bin,
-                &rimz::harness::launch::ExecInvocation {
-                    kind: kind.as_str(),
-                    action: rimz::harness::launch::ExecAction::Launch {
-                        prompt: options.prompt,
-                        extra_args: args,
-                    },
-                    run_id: None,
-                    worktree_path: options.cleanup_worktree.then_some(options.cwd),
-                    close_pane_on_exit: !options.cleanup_worktree && !options.in_place,
-                    exit_on_run_completion: false,
-                    identity: rimz::harness::launch::ExecIdentity {
-                        name: options.launch.map(|launch| launch.name.as_str()),
-                        name_explicit: options.launch.is_some_and(|launch| launch.name_explicit),
-                        launch_id: options.launch.map(|launch| launch.agent_id.as_str()),
-                        profile: profile.as_deref(),
-                        mode: *mode,
-                        role: role.as_deref(),
-                        team: options.team,
-                        launch_group: options
-                            .launch
-                            .and_then(|launch| launch.launch.launch_group.as_deref()),
-                        launch_ordinal: options
-                            .launch
-                            .and_then(|launch| launch.launch.launch_ordinal),
-                        channel: options.channel,
-                        model: model.as_deref(),
-                        effort: effort.as_deref(),
-                        budget: budget.as_deref(),
-                    },
-                },
-            )
-        }
-    };
-    Ok(PaneCmd { argv })
-}
-
-pub(super) fn validate_agent_name(name: &str) -> Result<()> {
-    if !valid_agent_name_candidate(name) {
-        bail!("invalid agent name `{name}`; use ASCII letters, numbers, and `-`");
-    }
-    Ok(())
-}
-
-pub(super) fn valid_agent_name_candidate(name: &str) -> bool {
-    rimz::harness::petname::valid_name(name)
-        && !rimz::harness::petname::collides_with_reserved_prefix(name, rimz::agents::known_kinds())
 }
 
 #[cfg(test)]

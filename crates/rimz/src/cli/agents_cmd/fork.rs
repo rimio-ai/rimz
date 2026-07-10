@@ -44,7 +44,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let source = resolve_fork_source(&store, &workspace, &runtime, &snapshot, &args.reference)?;
     let mut seed = validate_fork_source(
         &source,
-        super::team_restore::resume_session_present,
+        rimz::harness::resume::resume_session_present,
         Path::is_dir,
     )?;
     let source_name = source.name.as_deref().unwrap_or("unnamed").to_owned();

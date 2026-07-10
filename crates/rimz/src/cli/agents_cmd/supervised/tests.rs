@@ -242,64 +242,6 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
 }
 
 #[test]
-fn transcript_cursor_skips_existing_attach_bytes_and_resets_on_path_change() {
-    use std::io::Write as _;
-
-    let dir = tempfile::tempdir().unwrap();
-    let first = dir.path().join("first.jsonl");
-    std::fs::write(
-        &first,
-        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"old\"}}\n",
-    )
-    .unwrap();
-    let mut record = run_record("codex");
-    record.transcript_path = Some(first.to_string_lossy().into_owned());
-    let mut cursor = TranscriptCursor::new(false);
-
-    assert!(
-        cursor
-            .messages(
-                record.transcript_path.as_deref(),
-                &rimz::agents::CodexAdapter
-            )
-            .is_empty(),
-        "default attach starts at the current end"
-    );
-
-    std::fs::OpenOptions::new()
-            .append(true)
-            .open(&first)
-            .unwrap()
-            .write_all(
-                b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"new\"}}\n",
-            )
-            .unwrap();
-    assert_eq!(
-        cursor.messages(
-            record.transcript_path.as_deref(),
-            &rimz::agents::CodexAdapter
-        ),
-        vec!["new"]
-    );
-
-    let second = dir.path().join("second.jsonl");
-    std::fs::write(
-        &second,
-        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"fresh\"}}\n",
-    )
-    .unwrap();
-    record.transcript_path = Some(second.to_string_lossy().into_owned());
-    assert_eq!(
-        cursor.messages(
-            record.transcript_path.as_deref(),
-            &rimz::agents::CodexAdapter
-        ),
-        vec!["fresh"],
-        "a new transcript path starts at byte zero"
-    );
-}
-
-#[test]
 fn completed_run_wakeup_reloads_terminal_record() {
     let mut fixture = RunFixture::new(RunStatus::Running);
     let run_id = fixture.run_id();

@@ -42,6 +42,7 @@ use session_record::{retire_renamed_session, session_probe_retry_timeout, sessio
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
+pub(crate) use resume::materialize_team_restore_tab;
 pub(crate) use resume::record_rebirth_boundary;
 pub(crate) use resume::session_is_healthy_live;
 pub(crate) use room_recovery::{print_reset_report, rebirth_room};

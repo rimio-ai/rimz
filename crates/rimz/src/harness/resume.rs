@@ -1,5 +1,5 @@
-//! Resume-on-rebirth planning: turn the durable agent rollup into the tabs a
-//! reborn session re-seeds.
+//! Launch and rebirth resume planning: turn the durable agent rollup into flat
+//! or team tabs a session re-seeds.
 //!
 //! When the CLI admits agent recovery for a reborn room — a machine reboot or
 //! mux crash — the agents' processes are gone, but the store remembers them.
@@ -18,8 +18,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
+
 use crate::agents::AgentState;
 use crate::agents::find_adapter;
+use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
+use crate::harness::plan::cohort_cells;
+use crate::harness::spec::LayoutSpec;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::mux::ResumeTab;
 use crate::store::runtime::AgentLiveness;
@@ -90,6 +95,18 @@ pub struct CohortResumePlan {
     pub launch_group: Option<String>,
 }
 
+/// One named-team tab selected for restore and awaiting launch materialization.
+#[derive(Clone, Debug)]
+pub struct PlannedTeamTab {
+    pub label: String,
+    pub cwd: PathBuf,
+    pub channel: Option<String>,
+    pub team: String,
+    pub layout: LayoutSpec,
+    pub cohort: CohortResumePlan,
+    pub freshest: Timestamp,
+}
+
 /// Why explicit cohort resume cannot proceed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CohortResumeErr {
@@ -115,6 +132,145 @@ impl ResumePlan {
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
     }
+}
+
+/// Plan restorable named-team tabs from prior root agents.
+pub fn plan_team_restore_tabs(
+    agents: &[AgentState],
+    teams: &TeamsConfig,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    project_root: Option<&Path>,
+    worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+) -> Vec<PlannedTeamTab> {
+    let mut groups: BTreeMap<(String, PathBuf), Vec<&AgentState>> = BTreeMap::new();
+    for agent in agents {
+        if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
+            continue;
+        }
+        let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
+            continue;
+        };
+        if !teams.0.contains_key(team) {
+            continue;
+        }
+        let Some(worktree) = normalized_agent_worktree(agent) else {
+            continue;
+        };
+        groups
+            .entry((team.to_owned(), worktree))
+            .or_default()
+            .push(agent);
+    }
+
+    let mut tabs = Vec::new();
+    for ((team, cwd), group) in groups {
+        let Ok(layout) = crate::harness::spec::resolve_team(&team, teams, profiles, commands)
+        else {
+            continue;
+        };
+        let cells = cohort_cells(&layout);
+        let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
+        let Ok(mut cohort) = plan_cohort_resume(
+            &group_agents,
+            |_| AgentLiveness::Dead,
+            &cells,
+            Some(&team),
+            |path| worktree_exists(path),
+            &session_backed,
+        ) else {
+            continue;
+        };
+        let Some(newest) = newest_agent(&group) else {
+            continue;
+        };
+        let channel = project_root
+            .and_then(|project_root| {
+                crate::harness::target::resolve_room_channel(
+                    project_root,
+                    &cwd,
+                    Some(&team),
+                    cohort.channel.as_deref(),
+                )
+            })
+            .or_else(|| cohort.channel.clone());
+        cohort.channel = channel.clone();
+        let label = channel_label(channel.as_deref(), &cwd);
+        tabs.push(PlannedTeamTab {
+            label,
+            cwd,
+            channel,
+            team,
+            layout,
+            cohort,
+            freshest: newest.last_activity,
+        });
+    }
+    tabs.sort_by(|a, b| newest_cmp(a.freshest, &a.team, b.freshest, &b.team));
+    tabs
+}
+
+/// Partition agents into planned named-team tabs and flat resume candidates.
+pub fn split_team_and_flat(
+    agents: &[AgentState],
+    teams: &TeamsConfig,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    project_root: Option<&Path>,
+    worktree_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+) -> (Vec<PlannedTeamTab>, Vec<AgentState>) {
+    let team = plan_team_restore_tabs(
+        agents,
+        teams,
+        profiles,
+        commands,
+        project_root,
+        worktree_exists,
+        session_backed,
+    );
+    let flat = agents
+        .iter()
+        .filter(|agent| {
+            !team
+                .iter()
+                .any(|planned| planned_team_matches_agent(planned, agent))
+        })
+        .cloned()
+        .collect();
+    (team, flat)
+}
+
+pub fn planned_team_matches_agent(planned: &PlannedTeamTab, agent: &AgentState) -> bool {
+    agent.team.as_deref() == Some(planned.team.as_str())
+        && normalized_agent_worktree(agent).as_deref() == Some(planned.cwd.as_path())
+}
+
+fn normalized_agent_worktree(agent: &AgentState) -> Option<PathBuf> {
+    agent
+        .worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .map(Path::new)
+        .map(crate::worktree::normalize_path_lexical)
+}
+
+fn newest_agent<'a>(agents: &[&'a AgentState]) -> Option<&'a AgentState> {
+    agents.iter().copied().min_by(|a, b| {
+        b.last_activity
+            .cmp(&a.last_activity)
+            .then_with(|| a.agent_id.cmp(&b.agent_id))
+    })
+}
+
+fn newest_cmp(
+    left: Timestamp,
+    left_tie: &str,
+    right: Timestamp,
+    right_tie: &str,
+) -> std::cmp::Ordering {
+    right.cmp(&left).then_with(|| left_tie.cmp(right_tie))
 }
 
 /// Plan the resume seeds for one reborn session from the durable agent rollup.
@@ -553,6 +709,22 @@ fn supports_agent_resume(agent: &AgentState) -> bool {
     };
     find_adapter(&agent.kind)
         .is_some_and(|adapter| adapter.resume_command(&agent.agent_id, &cwd).is_some())
+}
+
+/// A resumed agent must have a conversation on disk. Claude and Codex stamp a
+/// `transcript_path` on their first `SessionStart` hook, before any prompt, so a
+/// never-answered session carries an id and a path to a file that was never
+/// written. Require a recorded transcript to exist and be non-empty; treat an
+/// unreported path (Pi, OpenCode) as present so their resume is unchanged.
+pub fn resume_session_present(agent: &AgentState) -> bool {
+    match agent
+        .transcript_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    {
+        Some(path) => std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0),
+        None => true,
+    }
 }
 
 fn cohort_newest_cmp(a: &&AgentState, b: &&AgentState) -> std::cmp::Ordering {

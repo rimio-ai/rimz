@@ -4,17 +4,18 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::agents::AgentState;
-use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::mux::{MuxBackend, SessionHealth};
-use rimz::{RuntimePaths, StatePaths, Store};
-
-use crate::cli::agents_cmd::team_restore::{
-    PlannedTeamTab, materialize_team_restore_tab, plan_team_restore_tabs,
-    planned_team_matches_agent, resume_session_present,
+use rimz::harness::plan::{
+    LayoutPaneParams, fresh_resume_launch_requests, layout_panes_with_names,
 };
+use rimz::harness::resume::{PlannedTeamTab, resume_session_present, split_team_and_flat};
+use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::mux::{MuxBackend, ResumeTab, SessionHealth};
+use rimz::store::AgentLaunchAppend;
+use rimz::store::event::AgentLaunchState;
+use rimz::{RuntimePaths, StatePaths, Store};
 
 pub(crate) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
     let exists = backend
@@ -263,7 +264,7 @@ fn plan_agent_resume_at(
     let project_root = workspace_record
         .as_ref()
         .map(|record| record.project_root.as_path());
-    let team = plan_team_restore_tabs(
+    let (team, flat_agents) = split_team_and_flat(
         &agents,
         teams,
         profiles,
@@ -272,15 +273,6 @@ fn plan_agent_resume_at(
         |path| path.is_dir(),
         resume_session_present,
     );
-    let flat_agents = agents
-        .iter()
-        .filter(|agent| {
-            !team
-                .iter()
-                .any(|planned| planned_team_matches_agent(planned, agent))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
     let team_panes = team.iter().map(planned_team_pane_count).sum::<usize>();
     let flat = rimz::harness::resume::plan_resume(
         &flat_agents,
@@ -292,6 +284,60 @@ fn plan_agent_resume_at(
         &rimz_bin,
     );
     Ok(RoomResumePlan { flat, team })
+}
+
+pub(crate) fn materialize_team_restore_tab(
+    store: &Store,
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    teams: &rimz::config::TeamsConfig,
+    planned: &PlannedTeamTab,
+) -> Result<ResumeTab> {
+    let team_roles = teams.0.get(&planned.team).map(|team| team.roles.as_slice());
+    let launch_requests = fresh_resume_launch_requests(
+        &planned.layout,
+        &planned.cohort,
+        Some(&planned.team),
+        team_roles,
+        planned.channel.as_deref(),
+    )?;
+    let identities = if launch_requests.is_empty() {
+        Vec::new()
+    } else {
+        store.append_agent_launches_allocating(
+            &launch_requests,
+            &AgentLaunchAppend {
+                workspace_id: workspace_id.clone(),
+                session_name: session_name.to_owned(),
+                cwd: planned.cwd.clone(),
+                worktree_name: None,
+                channel: planned.channel.clone(),
+                description: None,
+                state: AgentLaunchState::Starting,
+                pane_id: None,
+            },
+        )?
+    };
+    let layout = layout_panes_with_names(
+        &planned.layout,
+        LayoutPaneParams {
+            cwd: &planned.cwd,
+            prompt: None,
+            prompt_agent_index: None,
+            cleanup_worktree: false,
+            in_place: false,
+            team: Some(&planned.team),
+            channel: planned.channel.as_deref(),
+            resume_seeds: Some(&planned.cohort.seeds),
+        },
+        &identities,
+    )
+    .context("building team restore layout")?;
+    Ok(ResumeTab {
+        label: planned.label.clone(),
+        cwd: planned.cwd.clone(),
+        layout,
+    })
 }
 
 pub(super) fn materialize_room_resume(
