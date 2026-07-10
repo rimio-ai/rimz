@@ -138,6 +138,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use clap::CommandFactory;
+    use unicode_width::UnicodeWidthStr;
 
     use crate::cli::Cli;
 
@@ -233,14 +234,22 @@ mod tests {
     }
 
     #[test]
-    fn top_level_about_lines_fit_eighty_column_help() {
-        for cmd in visible_commands(&command()).values() {
-            let about = about_line(cmd);
+    fn top_level_command_lines_fit_eighty_column_help() {
+        let source = command();
+        let visible = visible_names(&source);
+        let mut cmd = customize(source);
+        let help = cmd.render_help().to_string();
+
+        for name in visible {
+            let line = help
+                .lines()
+                .find(|line| {
+                    line.starts_with("  ") && line.split_whitespace().next() == Some(name.as_str())
+                })
+                .unwrap_or_else(|| panic!("missing visible command `{name}`"));
             assert!(
-                about.len() <= 62,
-                "`{}` about is too long for grouped help: {} chars",
-                cmd.get_name(),
-                about.len()
+                UnicodeWidthStr::width(line) <= 80,
+                "`{name}` exceeds 80 columns in grouped help: {line}"
             );
         }
     }
