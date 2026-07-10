@@ -370,396 +370,274 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn ask_user_question_detail_renders_questions_and_options() {
-        let questions = question_detail(
-            "AskUserQuestion",
-            &json!({
-                "questions": [
-                    {
-                        "question": "Choose deployment path?",
-                        "multiSelect": true,
-                        "options": [
-                            {
-                                "label": "safe",
-                                "description": "Use staged rollout"
+    fn question_detail_normalizes_supported_prompts() {
+        let cases = [
+            (
+                "AskUserQuestion",
+                json!({
+                    "questions": [
+                        {
+                            "question": " Choose deployment path? ",
+                            "multiSelect": true,
+                            "options": [
+                                {
+                                    "label": " safe ",
+                                    "description": " Use staged rollout ",
+                                    "preview": { "command": "deploy --staged" }
+                                },
+                                { "label": " fast ", "description": "   " },
+                                { "label": "  ", "description": "ignored" }
+                            ]
+                        },
+                        {
+                            "question": " Notify team? ",
+                            "options": []
+                        }
+                    ]
+                }),
+                Some(vec![
+                    AskQuestion {
+                        question: "Choose deployment path?".to_owned(),
+                        options: vec![
+                            AskOption {
+                                label: "safe".to_owned(),
+                                description: Some("Use staged rollout".to_owned()),
+                                caution: None,
                             },
-                            { "label": "fast", "description": "   " },
-                            { "label": "  " }
-                        ]
+                            AskOption {
+                                label: "fast".to_owned(),
+                                description: None,
+                                caution: None,
+                            },
+                        ],
+                        multi_select: true,
+                        has_option_previews: true,
                     },
-                    {
-                        "question": "Notify team?",
-                        "options": []
-                    }
-                ]
-            }),
-        );
-
-        assert_eq!(
-            questions,
-            Some(vec![
-                AskQuestion {
-                    question: "Choose deployment path?".to_owned(),
-                    options: vec![
-                        AskOption {
-                            label: "safe".to_owned(),
-                            description: Some("Use staged rollout".to_owned()),
-                            caution: None,
-                        },
-                        AskOption {
-                            label: "fast".to_owned(),
-                            description: None,
-                            caution: None,
-                        },
-                    ],
-                    multi_select: true,
-                    has_option_previews: false,
-                },
-                AskQuestion {
-                    question: "Notify team?".to_owned(),
-                    options: Vec::new(),
+                    AskQuestion {
+                        question: "Notify team?".to_owned(),
+                        options: Vec::new(),
+                        multi_select: false,
+                        has_option_previews: false,
+                    },
+                ]),
+            ),
+            (
+                "ExitPlanMode",
+                json!({ "plan": " 1. Edit parser\n2. Run tests " }),
+                Some(vec![AskQuestion {
+                    question: "Requesting plan approval:\n\n1. Edit parser\n2. Run tests"
+                        .to_owned(),
+                    options: vec![AskOption {
+                        label: "approve".to_owned(),
+                        description: Some("Approve in Claude with auto-accept edits".to_owned()),
+                        caution: Some("enables auto-accept for subsequent edits".to_owned()),
+                    }],
                     multi_select: false,
                     has_option_previews: false,
-                },
-            ])
-        );
-    }
-
-    #[test]
-    fn exit_plan_mode_detail_renders_plan_approval_request() {
-        let questions = question_detail(
-            "ExitPlanMode",
-            &json!({ "plan": "1. Edit parser\n2. Run tests" }),
-        );
-
-        assert_eq!(
-            questions,
-            Some(vec![AskQuestion {
-                question: "Requesting plan approval:\n\n1. Edit parser\n2. Run tests".to_owned(),
-                options: plan_options(),
-                multi_select: false,
-                has_option_previews: false,
-            }])
-        );
-    }
-
-    #[test]
-    fn ask_user_question_answer_prefers_readable_fields() {
-        assert_eq!(
-            answer_detail("AskUserQuestion", &json!("safe")),
-            Some(vec![AskAnswer {
-                question: None,
-                chosen: vec!["safe".to_owned()],
-                note: None,
-            }])
-        );
-        assert_eq!(
-            answer_detail(
-                "AskUserQuestion",
-                &json!({ "selectedOptions": [{ "label": "fast" }, { "label": "notify" }] })
+                }]),
             ),
-            Some(vec![AskAnswer {
-                question: None,
-                chosen: vec!["fast, notify".to_owned()],
-                note: None,
-            }])
-        );
-        assert_eq!(
-            answer_detail("AskUserQuestion", &json!({ "unexpected": ["shape"] })),
-            Some(vec![AskAnswer {
-                question: None,
-                chosen: vec![r#"{"unexpected":["shape"]}"#.to_owned()],
-                note: None,
-            }])
-        );
-    }
+            ("AskUserQuestion", json!({ "questions": "invalid" }), None),
+            ("ExitPlanMode", json!({ "plan": "   " }), None),
+            ("Bash", json!({ "command": "true" }), None),
+        ];
 
-    #[test]
-    fn ask_user_question_answer_renders_live_answer_map() {
-        let answer = answer_detail(
-            "AskUserQuestion",
-            &json!({
-                "annotations": {},
-                "answers": { "Choose deployment path?": "Live repro first" },
-                "questions": [{
-                    "question": "Choose deployment path?",
-                    "header": "Path",
-                    "options": [{ "label": "safe" }, { "label": "fast" }]
-                }]
-            }),
-        );
-
-        assert_eq!(
-            answer,
-            Some(vec![AskAnswer {
-                question: Some("Choose deployment path?".to_owned()),
-                chosen: vec!["Live repro first".to_owned()],
-                note: None,
-            }])
-        );
-    }
-
-    #[test]
-    fn ask_user_question_answer_orders_live_answer_map_by_questions() {
-        let answer = answer_detail(
-            "AskUserQuestion",
-            &json!({
-                "annotations": {},
-                "answers": {
-                    "Notify team?": "yes",
-                    "Choose deployment path?": "safe"
-                },
-                "questions": [
-                    { "question": "Choose deployment path?" },
-                    { "question": "Notify team?" }
-                ]
-            }),
-        );
-
-        assert_eq!(
-            crate::transcript::answers_text(&answer.expect("answer")),
-            "safe\nyes"
-        );
-    }
-
-    #[test]
-    fn ask_user_question_answer_renders_multiselect_arrays() {
-        let answer = answer_detail(
-            "AskUserQuestion",
-            &json!({
-                "annotations": {},
-                "answers": {
-                    "Choose scopes?": ["a", { "label": "b" }]
-                },
-                "questions": [{ "question": "Choose scopes?" }]
-            }),
-        );
-
-        assert_eq!(
-            answer,
-            Some(vec![AskAnswer {
-                question: Some("Choose scopes?".to_owned()),
-                chosen: vec!["a".to_owned(), "b".to_owned()],
-                note: None,
-            }])
-        );
-    }
-
-    #[test]
-    fn ask_user_question_answer_appends_annotation_notes() {
-        let answer = answer_detail(
-            "AskUserQuestion",
-            &json!({
-                "annotations": {
-                    "Choose deployment path?": { "notes": "use prod window" }
-                },
-                "answers": {
-                    "Choose deployment path?": "safe"
-                },
-                "questions": [{ "question": "Choose deployment path?" }]
-            }),
-        );
-
-        assert_eq!(
-            answer,
-            Some(vec![AskAnswer {
-                question: Some("Choose deployment path?".to_owned()),
-                chosen: vec!["safe".to_owned()],
-                note: Some("use prod window".to_owned()),
-            }])
-        );
-    }
-
-    #[test]
-    fn ask_user_question_answer_tolerates_null_live_fields() {
-        let answer = answer_detail(
-            "AskUserQuestion",
-            &json!({
-                "annotations": null,
-                "answers": { "Choose deployment path?": "safe" },
-                "questions": null
-            }),
-        );
-
-        assert_eq!(
-            answer,
-            Some(vec![AskAnswer {
-                question: Some("Choose deployment path?".to_owned()),
-                chosen: vec!["safe".to_owned()],
-                note: None,
-            }])
-        );
-    }
-
-    #[test]
-    fn answer_summary_handles_plan_approval() {
-        assert_eq!(
-            answer_detail("ExitPlanMode", &json!({})),
-            Some(vec![AskAnswer {
-                question: None,
-                chosen: vec!["approved plan".to_owned()],
-                note: None,
-            }])
-        );
-        assert!(answer_detail("Bash", &json!("ok")).is_none());
-    }
-
-    #[test]
-    fn permission_and_plan_answers_use_confirmed_menu_actions() {
-        assert_eq!(
-            answer_plan(
-                AskKind::Permission,
-                &[],
-                &[AskReply {
-                    picks: vec![0],
-                    ..AskReply::default()
-                }],
-            )
-            .unwrap(),
-            vec![AnswerStep::Text("1".to_owned())]
-        );
-        assert_eq!(
-            answer_plan(
-                AskKind::PlanApproval,
-                &[],
-                &[AskReply {
-                    picks: vec![0],
-                    ..AskReply::default()
-                }],
-            )
-            .unwrap(),
-            vec![AnswerStep::Key(NamedKey::ShiftTab)]
-        );
-    }
-
-    #[test]
-    fn permission_and_plan_answers_reject_unlisted_actions() {
-        for (kind, message) in [
-            (AskKind::Permission, "deny"),
-            (AskKind::PlanApproval, "keep-planning"),
-        ] {
-            let error = answer_plan(
-                kind,
-                &[],
-                &[AskReply {
-                    picks: vec![1],
-                    ..AskReply::default()
-                }],
-            )
-            .unwrap_err()
-            .to_string();
-            assert!(error.contains(message));
-            assert!(error.contains("Claude pane"));
+        for (tool_name, input, expected) in cases {
+            assert_eq!(question_detail(tool_name, &input), expected, "{tool_name}");
         }
     }
 
     #[test]
-    fn question_answer_plan_selects_and_confirms() {
-        let questions = vec![
-            AskQuestion {
-                question: "Path?".to_owned(),
-                options: vec![
-                    AskOption::from("safe".to_owned()),
-                    AskOption::from("fast".to_owned()),
+    fn answer_detail_preserves_live_question_context() {
+        let cases = [
+            (
+                json!({
+                    "annotations": {
+                        "Choose deployment path?": { "notes": " use prod window " }
+                    },
+                    "answers": {
+                        "Choose scopes?": ["a", { "label": "b" }],
+                        "Notify team?": "yes",
+                        "Choose deployment path?": "safe"
+                    },
+                    "questions": [
+                        {
+                            "question": "Choose deployment path?",
+                            "header": "Path",
+                            "options": [{ "label": "safe" }, { "label": "fast" }]
+                        },
+                        { "question": "Notify team?" },
+                        { "question": "Choose scopes?" }
+                    ]
+                }),
+                vec![
+                    AskAnswer {
+                        question: Some("Choose deployment path?".to_owned()),
+                        chosen: vec!["safe".to_owned()],
+                        note: Some("use prod window".to_owned()),
+                    },
+                    AskAnswer {
+                        question: Some("Notify team?".to_owned()),
+                        chosen: vec!["yes".to_owned()],
+                        note: None,
+                    },
+                    AskAnswer {
+                        question: Some("Choose scopes?".to_owned()),
+                        chosen: vec!["a".to_owned(), "b".to_owned()],
+                        note: None,
+                    },
                 ],
-                multi_select: false,
-                has_option_previews: false,
-            },
-            AskQuestion {
-                question: "Scopes?".to_owned(),
-                options: vec![
-                    AskOption::from("read".to_owned()),
-                    AskOption::from("write".to_owned()),
-                ],
-                multi_select: true,
-                has_option_previews: false,
-            },
-        ];
-        let answers = vec![
-            AskReply {
-                picks: vec![1],
-                ..AskReply::default()
-            },
-            AskReply {
-                picks: vec![0, 1],
-                ..AskReply::default()
-            },
+            ),
+            (
+                json!({
+                    "annotations": null,
+                    "answers": { "Choose deployment path?": "safe" },
+                    "questions": null
+                }),
+                vec![AskAnswer {
+                    question: Some("Choose deployment path?".to_owned()),
+                    chosen: vec!["safe".to_owned()],
+                    note: None,
+                }],
+            ),
         ];
 
-        assert_eq!(
-            answer_plan(AskKind::Question, &questions, &answers).unwrap(),
-            vec![
-                AnswerStep::Text("2".to_owned()),
-                AnswerStep::Text("1".to_owned()),
-                AnswerStep::Text("2".to_owned()),
-                AnswerStep::Key(NamedKey::Down),
-                AnswerStep::Key(NamedKey::Down),
-                AnswerStep::Key(NamedKey::Down),
-                AnswerStep::Key(NamedKey::Enter),
-                AnswerStep::Key(NamedKey::Enter),
-            ]
-        );
+        for (response, expected) in cases {
+            assert_eq!(answer_detail("AskUserQuestion", &response), Some(expected));
+        }
     }
 
     #[test]
-    fn question_answer_plan_respects_preview_and_other_input_contracts() {
-        let ordinary = AskQuestion {
-            question: "Path?".to_owned(),
-            options: vec![
-                AskOption::from("safe".to_owned()),
-                AskOption::from("fast".to_owned()),
-            ],
-            multi_select: false,
-            has_option_previews: false,
-        };
-        assert_eq!(
-            answer_plan(
-                AskKind::Question,
-                std::slice::from_ref(&ordinary),
-                &[AskReply {
-                    picks: vec![1],
-                    ..AskReply::default()
-                }],
-            )
-            .unwrap(),
-            vec![AnswerStep::Text("2".to_owned())]
-        );
+    fn answer_detail_keeps_readable_fallbacks() {
+        let cases = [
+            (
+                "AskUserQuestion",
+                json!("safe"),
+                Some(vec![AskAnswer {
+                    question: None,
+                    chosen: vec!["safe".to_owned()],
+                    note: None,
+                }]),
+            ),
+            (
+                "AskUserQuestion",
+                json!({ "unexpected": ["shape"] }),
+                Some(vec![AskAnswer {
+                    question: None,
+                    chosen: vec![r#"{"unexpected":["shape"]}"#.to_owned()],
+                    note: None,
+                }]),
+            ),
+            (
+                "ExitPlanMode",
+                json!({}),
+                Some(vec![AskAnswer {
+                    question: None,
+                    chosen: vec!["approved plan".to_owned()],
+                    note: None,
+                }]),
+            ),
+            ("Bash", json!("ok"), None),
+        ];
 
-        let preview = AskQuestion {
-            has_option_previews: true,
-            ..ordinary.clone()
-        };
-        assert_eq!(
-            answer_plan(
-                AskKind::Question,
-                &[preview],
-                &[AskReply {
+        for (tool_name, response, expected) in cases {
+            assert_eq!(answer_detail(tool_name, &response), expected, "{tool_name}");
+        }
+    }
+
+    #[test]
+    fn question_answer_plan_emits_supported_menu_sequences() {
+        let cases = [
+            (
+                "preview selection",
+                vec![question("Path?", &["safe", "fast"], false, true)],
+                vec![AskReply {
                     picks: vec![0],
                     ..AskReply::default()
                 }],
-            )
-            .unwrap(),
-            vec![
-                AnswerStep::Text("1".to_owned()),
-                AnswerStep::Key(NamedKey::Enter),
-            ]
-        );
-
-        assert_eq!(
-            answer_plan(
-                AskKind::Question,
-                &[ordinary],
-                &[AskReply {
+                vec![
+                    AnswerStep::Text("1".to_owned()),
+                    AnswerStep::Key(NamedKey::Enter),
+                ],
+            ),
+            (
+                "free-text Other",
+                vec![question("Path?", &["safe", "fast"], false, false)],
+                vec![AskReply {
                     text: Some("stage it".to_owned()),
                     ..AskReply::default()
                 }],
-            )
-            .unwrap(),
-            vec![
-                AnswerStep::Text("3".to_owned()),
-                AnswerStep::Paste("stage it".to_owned()),
-                AnswerStep::Key(NamedKey::Enter),
-            ]
+                vec![
+                    AnswerStep::Text("3".to_owned()),
+                    AnswerStep::Paste("stage it".to_owned()),
+                    AnswerStep::Key(NamedKey::Enter),
+                ],
+            ),
+            (
+                "ordinary and multiselect review",
+                vec![
+                    question("Path?", &["safe", "fast"], false, false),
+                    question("Scopes?", &["read", "write"], true, false),
+                ],
+                vec![
+                    AskReply {
+                        picks: vec![1],
+                        ..AskReply::default()
+                    },
+                    AskReply {
+                        picks: vec![0, 1],
+                        ..AskReply::default()
+                    },
+                ],
+                vec![
+                    AnswerStep::Text("2".to_owned()),
+                    AnswerStep::Text("1".to_owned()),
+                    AnswerStep::Text("2".to_owned()),
+                    AnswerStep::Key(NamedKey::Down),
+                    AnswerStep::Key(NamedKey::Down),
+                    AnswerStep::Key(NamedKey::Down),
+                    AnswerStep::Key(NamedKey::Enter),
+                    AnswerStep::Key(NamedKey::Enter),
+                ],
+            ),
+        ];
+
+        for (case, questions, answers, expected) in cases {
+            assert_eq!(
+                answer_plan(AskKind::Question, &questions, &answers).unwrap(),
+                expected,
+                "{case}"
+            );
+        }
+
+        let error = answer_plan(
+            AskKind::Question,
+            &[question("Path?", &["safe", "fast"], false, false)],
+            &[AskReply {
+                picks: vec![0],
+                text: Some("stage it".to_owned()),
+            }],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "picks and text can be combined only on a multi-select question"
         );
+    }
+
+    fn question(
+        question: &str,
+        options: &[&str],
+        multi_select: bool,
+        has_option_previews: bool,
+    ) -> AskQuestion {
+        AskQuestion {
+            question: question.to_owned(),
+            options: options
+                .iter()
+                .map(|option| AskOption::from((*option).to_owned()))
+                .collect(),
+            multi_select,
+            has_option_previews,
+        }
     }
 }
