@@ -1512,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn human_waiting_outranks_a_budget_park() {
+    fn waiting_and_interruption_outrank_a_budget_park() {
         let mut waiting = test_agent(AgentStatus::Waiting, 1_000);
         waiting.budget_park = Some(crate::harness::budget::BudgetPark {
             cap_usd: 5.0,
@@ -1524,6 +1524,9 @@ mod tests {
             resets_at: None,
         });
         assert_eq!(waiting.effective_status(), AgentStatus::Waiting);
+
+        waiting.context = Some(context_settle(None, Some(1_010)));
+        assert_eq!(waiting.effective_status(), AgentStatus::Idle);
     }
 
     #[test]
