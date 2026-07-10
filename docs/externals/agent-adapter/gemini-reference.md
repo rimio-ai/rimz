@@ -1,6 +1,6 @@
 # Gemini CLI protocol reference
 
-> RimZ does not yet ship a Gemini adapter. This document records the upstream surfaces needed to build one. The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
+> The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the landed mapping is [gemini.md](../../internals/agents/gemini.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **Gemini CLI upstream protocol surface** a RimZ adapter can bind to: command hooks, tool-confirmation notifications, session JSONL, authentication and quota state, subagents, resume behavior, and the headless stream. It mirrors Google's published documentation and the open-source `google-gemini/gemini-cli` types, with source links pinned for implementation work.
 

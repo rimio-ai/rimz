@@ -125,13 +125,18 @@ pub struct SpendCursor {
 
 /// One spend parse: the entries read past the resume point, the single
 /// workspace origin observed for that parsed slice, and the cursor the cache
-/// stores for the next pass.
+/// stores for the next pass. A parser whose append-only log contains
+/// invalidation markers can request authoritative replacement after a cold
+/// fold instead of appending a suffix to stale cached entries.
 #[derive(Debug, Default)]
 pub struct SpendParse {
     pub entries: Vec<CachedEntry>,
     pub origin: Option<PathBuf>,
     pub cursor: SpendCursor,
     pub unknown_models: BTreeMap<String, u64>,
+    /// Replace this file's cached entries and unknown-model set instead of
+    /// appending. Rewindable transcripts use this after an authoritative cold fold.
+    pub replace_entries: bool,
 }
 
 /// A single cost entry with dedup keys for cross-file deduplication.

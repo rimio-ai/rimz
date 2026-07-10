@@ -396,11 +396,29 @@ fn assert_coverage_honest(
             has_answer_plan(adapter),
             "{kind} Answer coverage must match the adapter answer planner"
         ),
-        IntegrationConcern::Compaction => assert_eq!(
-            wired,
-            observes_compaction(adapter, samples),
-            "{kind} Compaction coverage must match observed compaction lifecycle samples"
-        ),
+        IntegrationConcern::Compaction => {
+            let opener = hook_coverage_for(adapter, LifecycleSignalKind::Compacting);
+            let closer = hook_coverage_for(adapter, LifecycleSignalKind::CompactionEnded);
+            let expected = match (opener, closer) {
+                (HookCoverage::Native { .. }, HookCoverage::Native { .. }) => "wired",
+                (HookCoverage::Absent { .. }, HookCoverage::Absent { .. }) => "unsupported",
+                _ => "partial",
+            };
+            let actual = match coverage {
+                ConcernCoverage::Wired { .. } => "wired",
+                ConcernCoverage::Partial { .. } => "partial",
+                ConcernCoverage::Unsupported { .. } => "unsupported",
+            };
+            assert_eq!(
+                actual, expected,
+                "{kind} Compaction coverage must match its opener/closer hook coverage"
+            );
+            assert_eq!(
+                !matches!(coverage, ConcernCoverage::Unsupported { .. }),
+                observes_compaction(adapter, samples),
+                "{kind} Compaction coverage must match observed compaction lifecycle samples"
+            );
+        }
         IntegrationConcern::Subagents => {
             assert_eq!(
                 wired, descriptor.capabilities.subagents,
@@ -453,7 +471,8 @@ fn assert_coverage_honest(
             "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
         ),
         IntegrationConcern::AccountSpend => assert_eq!(
-            wired, descriptor.capabilities.account_spend,
+            !matches!(coverage, ConcernCoverage::Unsupported { .. }),
+            descriptor.capabilities.account_spend,
             "{kind} AccountSpend coverage must match the account_spend capability"
         ),
     }
@@ -522,24 +541,37 @@ fn assert_lifecycle_hook_honest(
             assert!(
                 samples.iter().any(|sample| {
                     sample.event_name == event
-                        && adapter
-                            .observe_lifecycle(sample.event_name, &sample.payload)
-                            .is_some_and(|obs| obs.signal.kind() == signal_kind)
+                        && sample_produces_signal(adapter, sample, signal_kind)
                 }),
                 "{kind} {signal_kind:?} native event {event} must produce the declared lifecycle signal in the corpus"
             );
         }
         HookCoverage::Derived { .. } | HookCoverage::Absent { .. } => {
             assert!(
-                !samples.iter().any(|sample| {
-                    adapter
-                        .observe_lifecycle(sample.event_name, &sample.payload)
-                        .is_some_and(|obs| obs.signal.kind() == signal_kind)
-                }),
+                !samples
+                    .iter()
+                    .any(|sample| sample_produces_signal(adapter, sample, signal_kind)),
                 "{kind} {signal_kind:?} is declared non-native but a corpus sample produces it"
             );
         }
     }
+}
+
+fn sample_produces_signal(
+    adapter: &dyn AgentAdapter,
+    sample: &ClassificationSample,
+    signal_kind: LifecycleSignalKind,
+) -> bool {
+    if signal_kind == LifecycleSignalKind::AwaitingInput {
+        return adapter.descriptor().capabilities.native_ask_ui
+            && adapter
+                .classify_hook(sample.event_name, &sample.payload)
+                .class
+                == AgentHookClass::AwaitingUser;
+    }
+    adapter
+        .observe_lifecycle(sample.event_name, &sample.payload)
+        .is_some_and(|observation| observation.signal.kind() == signal_kind)
 }
 
 fn assert_hook_matches_concern(
@@ -550,18 +582,34 @@ fn assert_hook_matches_concern(
     let kind = adapter.descriptor().kind;
     let hook = hook_coverage_for(adapter, signal_kind);
     let concern_coverage = coverage_for(adapter, concern);
-    let matches = matches!(
-        (hook, concern_coverage),
-        (HookCoverage::Native { .. }, ConcernCoverage::Wired { .. })
-            | (
-                HookCoverage::Derived { .. },
+    let matches = if concern == IntegrationConcern::Compaction {
+        matches!(
+            (hook, concern_coverage),
+            (
+                HookCoverage::Native { .. }
+                    | HookCoverage::Derived { .. }
+                    | HookCoverage::Absent { .. },
                 ConcernCoverage::Partial { .. }
-            )
-            | (
-                HookCoverage::Absent { .. },
-                ConcernCoverage::Unsupported { .. }
-            )
-    );
+            ) | (HookCoverage::Native { .. }, ConcernCoverage::Wired { .. })
+                | (
+                    HookCoverage::Absent { .. },
+                    ConcernCoverage::Unsupported { .. }
+                )
+        )
+    } else {
+        matches!(
+            (hook, concern_coverage),
+            (HookCoverage::Native { .. }, ConcernCoverage::Wired { .. })
+                | (
+                    HookCoverage::Derived { .. },
+                    ConcernCoverage::Partial { .. }
+                )
+                | (
+                    HookCoverage::Absent { .. },
+                    ConcernCoverage::Unsupported { .. }
+                )
+        )
+    };
     assert!(
         matches,
         "{kind} {signal_kind:?} hook coverage must agree with {concern:?} concern coverage"
@@ -681,6 +729,6 @@ fn installed_event_classifies(
                 && adapter
                     .classify_hook(sample.event_name, &sample.payload)
                     .class
-                    != AgentHookClass::Unknown
+                    == AgentHookClass::Lifecycle
         })
 }

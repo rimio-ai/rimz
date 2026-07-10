@@ -245,6 +245,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
                 state: None,
             },
             unknown_models: BTreeMap::new(),
+            replace_entries: false,
         };
     };
     const USAGE_MARKER: &[u8] = br#""usage":{"#;
@@ -354,6 +355,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             state: None,
         },
         unknown_models,
+        replace_entries: false,
     }
 }
 

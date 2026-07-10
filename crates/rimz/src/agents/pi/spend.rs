@@ -153,6 +153,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
                 state: serde_json::to_value(&state).ok(),
             },
             unknown_models: BTreeMap::new(),
+            replace_entries: false,
         };
     };
     let content = String::from_utf8_lossy(&content);
@@ -218,6 +219,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
             state: serde_json::to_value(&state).ok(),
         },
         unknown_models: BTreeMap::new(),
+        replace_entries: false,
     }
 }
 

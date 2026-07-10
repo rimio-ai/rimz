@@ -70,7 +70,7 @@ Hooks are how a running agent reports to the room: turn starts and ends, permiss
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # every detected agent on PATH (claude, codex, pi, opencode)
+rimz hooks install              # every detected agent on PATH (claude, codex, gemini, pi, opencode)
 rimz hooks install claude       # one agent kind
 ```
 

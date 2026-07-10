@@ -7,14 +7,20 @@
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
 use super::descriptor::AgentDescriptor;
+use super::gemini::GeminiAdapter;
 use super::opencode::OpencodeAdapter;
 use super::pi::PiAdapter;
 use super::{AgentAdapter, AgentErr, Result};
 
 /// Every wired agent, in display order. `&'static dyn` — adapters are
 /// zero-sized const values, so resolution never allocates.
-pub static ADAPTERS: &[&'static dyn AgentAdapter] =
-    &[&ClaudeAdapter, &CodexAdapter, &PiAdapter, &OpencodeAdapter];
+pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
+    &ClaudeAdapter,
+    &CodexAdapter,
+    &GeminiAdapter,
+    &PiAdapter,
+    &OpencodeAdapter,
+];
 
 /// Every built-in and valid machine-tier plugin adapter, in display order.
 pub fn all_adapters() -> impl Iterator<Item = &'static dyn AgentAdapter> {
@@ -72,13 +78,11 @@ mod tests {
 
     #[test]
     fn every_adapter_exposes_a_manual_compaction_command() {
-        // `--smart-compact` types this into the agent's composer; every wired
-        // agent supports the `/compact` slash command, so a new adapter that
-        // forgets to opt in fails here rather than silently never compacting.
+        // `--smart-compact` types this into the agent's composer. Providers
+        // name the command themselves (`/compact`, Gemini's `/compress`).
         for adapter in ADAPTERS {
-            assert_eq!(
-                adapter.compact_command(),
-                Some("/compact"),
+            assert!(
+                adapter.compact_command().is_some(),
                 "missing compact command for {}",
                 adapter.descriptor().kind
             );

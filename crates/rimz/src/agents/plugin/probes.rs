@@ -118,6 +118,7 @@ pub(super) fn spend(
             state: response.cursor,
         },
         unknown_models: Default::default(),
+        replace_entries: false,
     }
 }
 

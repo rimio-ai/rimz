@@ -211,6 +211,7 @@ pub(crate) fn parse_opencode_spend(
             state: None,
         },
         unknown_models,
+        replace_entries: false,
     }
 }
 
@@ -223,6 +224,7 @@ fn empty_parse(offset: u64) -> SpendParse {
             state: None,
         },
         unknown_models: BTreeMap::new(),
+        replace_entries: false,
     }
 }
 

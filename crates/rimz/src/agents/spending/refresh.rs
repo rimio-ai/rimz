@@ -228,7 +228,7 @@ fn fold_spending_parse_job(
     parsed: SpendParse,
 ) {
     let file_origin = job.parse_origin.clone().or(parsed.origin);
-    if job.resume.is_some() {
+    if job.resume.is_some() && !parsed.replace_entries {
         // Grown jobs are created only from an existing cache entry.
         let entry = cache
             .files
@@ -337,4 +337,69 @@ pub(crate) fn dedup_chunk(entries: &mut Vec<CachedEntry>) {
         }
     }
     *entries = deduped;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(ts_secs: u64) -> CachedEntry {
+        CachedEntry {
+            ts_secs,
+            cost_usd: 1.0,
+            input: 1,
+            output: 0,
+            cache_write: 0,
+            cache_read: 0,
+            message_id: Some(format!("m-{ts_secs}")),
+            request_id: None,
+            thread_id: None,
+            is_sidechain: false,
+            model: Some("fixture".to_owned()),
+            rolled: false,
+        }
+    }
+
+    #[test]
+    fn authoritative_parse_replaces_a_grown_files_cached_entries() {
+        let path = PathBuf::from("/tmp/rewindable.jsonl");
+        let key = path.to_string_lossy().into_owned();
+        let mut cache = SpendingDiskCache::default();
+        cache.files.insert(
+            key.clone(),
+            FileCacheEntry {
+                mtime_secs: 1,
+                len: 10,
+                cursor: SpendCursor {
+                    offset: 10,
+                    state: None,
+                },
+                origin_path: None,
+                entries: vec![entry(1)],
+                unknown_models: BTreeMap::new(),
+            },
+        );
+        let job = SpendingParseJob {
+            adapter: crate::agents::registry::ADAPTERS[0],
+            file: &path,
+            key,
+            mtime_secs: 2,
+            len: 20,
+            resume: Some(SpendCursor {
+                offset: 10,
+                state: None,
+            }),
+            parse_origin: None,
+        };
+        fold_spending_parse_job(
+            &mut cache,
+            &job,
+            SpendParse {
+                entries: vec![entry(2)],
+                replace_entries: true,
+                ..SpendParse::default()
+            },
+        );
+        assert_eq!(cache.files[&job.key].entries, vec![entry(2)]);
+    }
 }
