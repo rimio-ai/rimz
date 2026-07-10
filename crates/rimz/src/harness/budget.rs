@@ -189,10 +189,8 @@ impl FleetBudgetLedger {
             BudgetCapSource::Raised
         } else if self.override_spec.is_some() {
             BudgetCapSource::Override
-        } else if config.harness.budget.is_some() {
-            BudgetCapSource::Config
         } else {
-            BudgetCapSource::None
+            BudgetCapSource::Config
         }
     }
 }
@@ -237,10 +235,8 @@ impl AccountBudgetLedger {
             BudgetCapSource::Cleared
         } else if self.raised_cap_usd.is_some() {
             BudgetCapSource::Raised
-        } else if config.accounts.budget(kind.as_str()).is_some() {
-            BudgetCapSource::Config
         } else {
-            BudgetCapSource::None
+            BudgetCapSource::Config
         }
     }
 }
