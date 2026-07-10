@@ -12,6 +12,7 @@ use super::DispatchOutcome;
 use crate::cli::agents_cmd::TranscriptCursor;
 use crate::cli::render;
 use crate::cli::send::WaitSpec;
+use crate::cli::spinner::Spinner;
 use rimz::agents::{AgentAdapter, AgentState, AgentStatus};
 use rimz::harness::run::RunStatus;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId};
@@ -228,8 +229,10 @@ pub(super) fn wait_for_replies(
         return return_or_exit(status);
     }
 
+    let spinner = Spinner::delayed(wait_label(&legs), Duration::from_millis(500));
     let mut tick = 0_u8;
     loop {
+        spinner.set(wait_label(&legs));
         let messages = store.list_messages()?;
         let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
         if tick == 0
@@ -245,11 +248,14 @@ pub(super) fn wait_for_replies(
                 leg.done = Some(RunStatus::Failed);
                 leg.error = Some(deadlock_error(leg, &cycle));
                 if !wait.json {
+                    spinner.pause();
                     print_reply_result_for_leg(leg, total, &mut printed_block)?;
                 }
                 if wait.any {
+                    spinner.pause();
                     return finish_join(&legs, wait, Some(index));
                 }
+                spinner.resume();
             }
         }
         for index in 0..legs.len() {
@@ -258,16 +264,20 @@ pub(super) fn wait_for_replies(
             }
             if advance_leg(&mut legs[index], store, &messages, &snapshot, steer)? {
                 if !wait.json {
+                    spinner.pause();
                     print_reply_result_for_leg(&legs[index], total, &mut printed_block)?;
                 }
                 if wait.any {
+                    spinner.pause();
                     return finish_join(&legs, wait, Some(index));
                 }
+                spinner.resume();
             }
         }
 
         let statuses = legs.iter().map(|leg| leg.done).collect::<Vec<_>>();
         if let Some(status) = settled_status(&statuses, None) {
+            spinner.pause();
             if wait.json {
                 print_json_replies(&legs, None)?;
             }
@@ -292,6 +302,7 @@ pub(super) fn wait_for_replies(
                 }
                 leg.done = Some(timeout_status(leg.done));
             }
+            spinner.pause();
             if wait.json {
                 print_json_replies(&legs, None)?;
             } else {
@@ -301,6 +312,26 @@ pub(super) fn wait_for_replies(
         }
         tick = (tick + 1) % WAIT_GUARD_TICKS;
         std::thread::sleep(next_sleep(deadline));
+    }
+}
+
+fn wait_label(legs: &[Leg]) -> String {
+    let pending = legs
+        .iter()
+        .filter(|leg| leg.done.is_none())
+        .collect::<Vec<_>>();
+    if let [leg] = pending.as_slice() {
+        let phase = if matches!(
+            leg.message_status,
+            MessageStatus::Queued | MessageStatus::Claimed
+        ) {
+            "parked for next turn"
+        } else {
+            "turn running"
+        };
+        format!("waiting for {} — {phase}", leg.target.label)
+    } else {
+        format!("waiting for {}/{} replies", pending.len(), legs.len())
     }
 }
 
@@ -671,6 +702,62 @@ mod tests {
             status,
             turn_started_at: Some(Timestamp::from_second(started).unwrap()),
         })
+    }
+
+    fn leg(label: &str, status: MessageStatus, done: Option<RunStatus>) -> Leg {
+        Leg {
+            target: ReplyTarget {
+                kind: AgentKind::new_unchecked("codex"),
+                agent_id: AgentSessionId::from("session"),
+                agent_name: None,
+                label: label.to_owned(),
+                cursor: None,
+                transcript_path: None,
+            },
+            message_id: MessageId::new(),
+            phase: WaitPhase::Delivery,
+            message_status: status,
+            wait_base: 0,
+            cursor: None,
+            last_message: None,
+            transcript_path: None,
+            done,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn wait_label_names_single_leg_phase_and_multi_leg_count() {
+        assert_eq!(
+            wait_label(&[leg("@planner", MessageStatus::Queued, None)]),
+            "waiting for @planner — parked for next turn"
+        );
+        assert_eq!(
+            wait_label(&[leg("@planner", MessageStatus::Claimed, None)]),
+            "waiting for @planner — parked for next turn"
+        );
+        assert_eq!(
+            wait_label(&[leg("@planner", MessageStatus::Sent, None)]),
+            "waiting for @planner — turn running"
+        );
+        assert_eq!(
+            wait_label(&[
+                leg(
+                    "@planner",
+                    MessageStatus::Delivered,
+                    Some(RunStatus::Completed)
+                ),
+                leg("@reviewer", MessageStatus::Delivered, None),
+            ]),
+            "waiting for @reviewer — turn running"
+        );
+        assert_eq!(
+            wait_label(&[
+                leg("@planner", MessageStatus::Queued, None),
+                leg("@reviewer", MessageStatus::Sent, None),
+            ]),
+            "waiting for 2/2 replies"
+        );
     }
 
     #[test]

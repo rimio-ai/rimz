@@ -1,4 +1,7 @@
 //! TTY-gated stderr spinner for long-running human commands.
+//!
+//! `xtask/src/spinner.rs` keeps an adapted copy so contributor automation stays
+//! independent of the runtime crate.
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::{
@@ -10,6 +13,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 pub(crate) const SPINNER_TICK: Duration = Duration::from_millis(80);
+const ENV_NO_PROGRESS: &str = "RIMZ_NO_PROGRESS";
 
 pub(crate) struct Spinner {
     inner: Option<SpinnerInner>,
@@ -17,6 +21,7 @@ pub(crate) struct Spinner {
 
 struct SpinnerInner {
     label: Arc<Mutex<String>>,
+    paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -27,29 +32,32 @@ impl Spinner {
     }
 
     pub(crate) fn delayed(label: impl Into<String>, min_age: Duration) -> Self {
-        if !std::io::stderr().is_terminal() {
+        if !animation_enabled() {
             return Self { inner: None };
         }
 
         let label = Arc::new(Mutex::new(label.into()));
+        let paused = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_label = Arc::clone(&label);
+        let worker_paused = Arc::clone(&paused);
         let worker_stop = Arc::clone(&stop);
+        let started = Instant::now();
         let worker = thread::spawn(move || {
             let mut frame = 0;
-            let started = Instant::now();
             while !worker_stop.load(Ordering::Relaxed) {
-                if started.elapsed() >= min_age {
-                    let label = worker_label
-                        .lock()
-                        .map(|label| label.clone())
-                        .unwrap_or_default();
+                if started.elapsed() >= min_age
+                    && !worker_paused.load(Ordering::SeqCst)
+                    && let Ok(label) = worker_label.lock()
+                    && !worker_paused.load(Ordering::SeqCst)
+                {
+                    let elapsed = format_elapsed(started.elapsed());
                     let mut stderr = std::io::stderr().lock();
                     let _ = write!(
                         stderr,
-                        "\r{} {}\x1b[K",
+                        "\r{} {} ({elapsed})\x1b[K",
                         SPINNER_FRAMES[frame % SPINNER_FRAMES.len()],
-                        label
+                        *label
                     );
                     let _ = stderr.flush();
                     frame += 1;
@@ -61,6 +69,7 @@ impl Spinner {
         Self {
             inner: Some(SpinnerInner {
                 label,
+                paused,
                 stop,
                 worker: Some(worker),
             }),
@@ -76,11 +85,57 @@ impl Spinner {
         }
     }
 
+    pub(crate) fn pause(&self) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        inner.paused.store(true, Ordering::SeqCst);
+        let _label = inner.label.lock();
+        let _ = Self::clear();
+    }
+
+    pub(crate) fn resume(&self) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        inner.paused.store(false, Ordering::SeqCst);
+    }
+
     fn clear() -> io::Result<()> {
         let mut stderr = std::io::stderr().lock();
         write!(stderr, "\r\x1b[K")?;
         stderr.flush()?;
         Ok(())
+    }
+}
+
+fn animation_enabled() -> bool {
+    std::io::stderr().is_terminal()
+        && animation_allowed(
+            std::env::var(ENV_NO_PROGRESS).ok().as_deref(),
+            std::env::var(rimz::harness::run::ENV_AGENT_KIND)
+                .ok()
+                .as_deref(),
+            std::env::var("TERM").ok().as_deref(),
+        )
+}
+
+fn animation_allowed(
+    no_progress: Option<&str>,
+    agent_kind: Option<&str>,
+    term: Option<&str>,
+) -> bool {
+    !matches!(no_progress, Some("1") | Some("true"))
+        && !agent_kind.is_some_and(|kind| !kind.is_empty())
+        && term != Some("dumb")
+}
+
+fn format_elapsed(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m{:02}s", seconds / 60, seconds % 60)
     }
 }
 
@@ -94,5 +149,30 @@ impl Drop for Spinner {
             let _ = worker.join();
         }
         let _ = Self::clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animation_requires_an_interactive_human_environment() {
+        assert!(animation_allowed(None, None, None));
+        assert!(!animation_allowed(Some("1"), None, None));
+        assert!(!animation_allowed(Some("true"), None, None));
+        assert!(animation_allowed(Some("0"), None, None));
+        assert!(!animation_allowed(None, Some("codex"), None));
+        assert!(animation_allowed(None, Some(""), None));
+        assert!(!animation_allowed(None, None, Some("dumb")));
+        assert!(animation_allowed(None, None, Some("xterm-256color")));
+    }
+
+    #[test]
+    fn elapsed_time_uses_compact_second_and_minute_labels() {
+        assert_eq!(format_elapsed(Duration::ZERO), "0s");
+        assert_eq!(format_elapsed(Duration::from_secs(59)), "59s");
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1m00s");
+        assert_eq!(format_elapsed(Duration::from_secs(125)), "2m05s");
     }
 }
