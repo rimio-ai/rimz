@@ -11,6 +11,7 @@ fn opencode_activity_filter_and_launch_commands_build() {
     assert!(descriptor.records_activity("session_error"));
     assert!(descriptor.records_activity("SubagentStart"));
     assert!(!descriptor.records_activity("permission_ask"));
+    assert!(!descriptor.records_activity("question_ask"));
     assert!(!descriptor.records_activity("session_compacting"));
 
     assert_eq!(
@@ -199,6 +200,24 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     assert!(OpencodeAdapter.moves_on("chat_message"));
     assert!(OpencodeAdapter.moves_on("session_idle"));
     assert!(OpencodeAdapter.moves_on("session_error"));
+}
+
+#[test]
+fn opencode_observes_native_questions() {
+    let observed = OpencodeAdapter
+        .observe_lifecycle(
+            "question_ask",
+            &json!({ "session_id": "ses_1", "title": "Which database?" }),
+        )
+        .expect("question observation");
+    assert_eq!(
+        observed.signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question,
+            ask_id: None,
+            detail: Some("Which database?".to_owned()),
+        }
+    );
 }
 
 #[test]
@@ -444,6 +463,8 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("RIMZ_BIN"));
     assert!(PLUGIN_SOURCE.contains("server_url: input.serverUrl"));
     assert!(PLUGIN_SOURCE.contains("permission.ask"));
+    assert!(PLUGIN_SOURCE.contains("permission.asked"));
+    assert!(PLUGIN_SOURCE.contains("question.asked"));
     assert!(PLUGIN_SOURCE.contains("{\"status\":\"deny\"}"));
     assert!(PLUGIN_SOURCE.contains("export const RimzPlugin"));
     assert!(PLUGIN_SOURCE.contains("server: RimzPlugin"));

@@ -3,11 +3,13 @@
 //! OpenCode loads TypeScript plugins in-process inside each embedded server.
 //! Rimz ships one plugin (`plugin.ts`) that shells out to
 //! `rimz hooks feed --source opencode`, posts a Rimz-owned snake_case payload
-//! on stdin, and reads stdout only for the blocking `permission.ask` hook. The
-//! neutral path leaves OpenCode's `output.status` at `ask`, so the native TUI
-//! dialog remains the human fallback. Session end is reconstructed from pane
-//! liveness and the rollup reaper because OpenCode's `dispose` hook is
-//! server-scoped and carries no session id.
+//! on stdin. Current permission and question prompts arrive through
+//! `permission.asked` and `question.asked` bus events; the compatibility
+//! `permission.ask` hook reads stdout on older releases and leaves OpenCode's
+//! `output.status` at `ask` on the neutral path. OpenCode's native TUI remains
+//! the human fallback. Session end is reconstructed from pane liveness and the
+//! rollup reaper because OpenCode's `dispose` hook is server-scoped and carries
+//! no session id.
 
 pub(crate) mod account;
 pub(crate) mod oauth_usage;
@@ -115,8 +117,8 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::UserQuestion,
-        ConcernCoverage::Unsupported {
-            reason: "question tool has no contracted bus event in 1.15.13",
+        ConcernCoverage::Wired {
+            via: "question.asked",
         },
     ),
     (
@@ -153,7 +155,7 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::IdleNotification,
         ConcernCoverage::Partial {
-            via: "turn-end + permission.ask + stall window",
+            via: "turn-end + permission.ask/question.asked + stall window",
             gap: "no idle Notification hook; no idle-timeout nudge",
         },
     ),
@@ -224,7 +226,7 @@ const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     (
         LifecycleSignalKind::AwaitingInput,
         HookCoverage::Native {
-            event: "permission_ask",
+            event: "permission_ask/question_ask",
         },
     ),
     (
@@ -277,6 +279,7 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "session_compacted",
     "SubagentStart",
     "SubagentStop",
+    "question_ask",
 ];
 
 const WIRED_EVENTS: &[&str] = &[
@@ -290,6 +293,7 @@ const WIRED_EVENTS: &[&str] = &[
     "SubagentStart",
     "SubagentStop",
     "permission_ask",
+    "question_ask",
 ];
 
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
@@ -309,7 +313,11 @@ impl AgentAdapter for OpencodeAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
+        let ask_kind = match event_name {
+            "permission_ask" => Some(AskKind::Permission),
+            "question_ask" => Some(AskKind::Question),
+            _ => None,
+        };
         classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
     }
 
@@ -328,6 +336,12 @@ impl AgentAdapter for OpencodeAdapter {
                 json!({ "session_id": "ses_1", "tool_name": "bash" }),
                 AgentHookClass::AwaitingUser,
                 Some(AskKind::Permission),
+            ),
+            ClassificationSample::new(
+                "question_ask",
+                json!({ "session_id": "ses_1", "title": "Which database?" }),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Question),
             ),
             ClassificationSample::new(
                 "session_created",
@@ -419,7 +433,12 @@ impl AgentAdapter for OpencodeAdapter {
             "permission_ask" => LifecycleSignal::AwaitingInput {
                 kind: AskKind::Permission,
                 ask_id: None,
-                detail: None,
+                detail: parsed.title.clone(),
+            },
+            "question_ask" => LifecycleSignal::AwaitingInput {
+                kind: AskKind::Question,
+                ask_id: None,
+                detail: parsed.title.clone(),
             },
             "chat_message" => LifecycleSignal::TurnStarted,
             "session_idle" => LifecycleSignal::TurnEnded {

@@ -19,6 +19,7 @@ pub(crate) struct OpencodeHookPayload {
     )]
     pub server_url: Option<String>,
     pub prompt: Option<String>,
+    pub title: Option<String>,
     pub is_error: Option<bool>,
     pub error_message: Option<String>,
     pub error_class: Option<String>,

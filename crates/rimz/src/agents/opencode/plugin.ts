@@ -256,6 +256,42 @@ export const RimzPlugin: Plugin = async (input) => {
         return;
       }
 
+      // OpenCode's current bus publishes the question tool's native blocking
+      // prompt as `question.asked`. The legacy SDK Event union omits this
+      // member, so keep the event boundary tolerant and read the runtime wire.
+      if (type === "question.asked") {
+        const sessionID = properties.sessionID;
+        if (typeof sessionID !== "string") return;
+        const questions = Array.isArray(properties.questions) ? properties.questions : [];
+        const detail = questions
+          .map((question) => (typeof question?.question === "string" ? question.question : ""))
+          .filter(Boolean)
+          .join("\n");
+        send(base("question_ask", sessionID, {
+          title: detail || undefined,
+        }));
+        return;
+      }
+
+      // Current OpenCode publishes native permission prompts on the bus. The
+      // legacy `permission.ask` plugin hook remains below for older releases,
+      // but 1.17.18 no longer calls it from the permission service.
+      if (type === "permission.asked") {
+        const sessionID = properties.sessionID;
+        if (typeof sessionID !== "string") return;
+        const permission = typeof properties.permission === "string" ? properties.permission : undefined;
+        const patterns = Array.isArray(properties.patterns)
+          ? properties.patterns.filter((pattern) => typeof pattern === "string")
+          : [];
+        const title = [permission, patterns.join(", ")].filter(Boolean).join(": ");
+        send(base("permission_ask", sessionID, {
+          tool_name: permission,
+          permission_type: permission,
+          title: title || undefined,
+        }));
+        return;
+      }
+
       if (type === "message.updated") {
         updateGauge(properties.info);
         return;
