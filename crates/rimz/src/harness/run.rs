@@ -121,6 +121,10 @@ impl RunStatus {
             Self::TimedOut | Self::Pending | Self::Running => 124,
         }
     }
+
+    pub const fn is_retryable(self) -> bool {
+        matches!(self, Self::Failed)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -138,6 +142,8 @@ pub struct RunRecord {
     pub transcript_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_tail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_of: Option<RunId>,
     pub status: RunStatus,
     pub permission_mode: PermissionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -176,6 +182,7 @@ impl RunRecord {
             pane_id: None,
             transcript_path: None,
             failure_tail: None,
+            retry_of: None,
             status: RunStatus::Pending,
             permission_mode,
             budget: None,
@@ -190,6 +197,19 @@ impl RunRecord {
             completed_at: None,
         }
     }
+}
+
+pub fn retry_prompt(base: &str, failure_tail: Option<&str>) -> String {
+    let failure = failure_tail.map_or_else(
+        || "A previous attempt at this task failed (exit 1), but no terminal output was captured."
+            .to_owned(),
+        |tail| {
+            format!(
+                "A previous attempt at this task failed (exit 1). The tail of its terminal output:\n{tail}"
+            )
+        },
+    );
+    format!("{base}\n\n<previous-attempt-failure>\n{failure}\n</previous-attempt-failure>")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -600,8 +620,28 @@ mod tests {
         assert_eq!(RunStatus::Completed.exit_code(), 0);
         assert_eq!(RunStatus::Failed.exit_code(), 1);
         assert_eq!(RunStatus::BudgetExceeded.exit_code(), 125);
+        assert!(RunStatus::Failed.is_retryable());
+        assert!(!RunStatus::Completed.is_retryable());
+        assert!(!RunStatus::TimedOut.is_retryable());
+        assert!(!RunStatus::BudgetExceeded.is_retryable());
+        assert!(!RunStatus::Canceled.is_retryable());
         assert!(RunStatus::BudgetExceeded.is_terminal());
         assert!(RunStatus::Canceled.is_terminal());
+    }
+
+    #[test]
+    fn retry_link_round_trips_and_defaults_when_absent() {
+        let (_dir, _paths, mut record) = setup();
+        let prior = RunId::new();
+        record.retry_of = Some(prior.clone());
+
+        let mut value = serde_json::to_value(&record).unwrap();
+        let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(decoded.retry_of.as_ref(), Some(&prior));
+
+        value.as_object_mut().unwrap().remove("retry_of");
+        let decoded: RunRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.retry_of, None);
     }
 
     #[test]
@@ -821,6 +861,32 @@ mod tests {
         assert_eq!(stored.len(), FAILURE_TAIL_CAP);
         assert!(stored.starts_with('a'));
         assert!(stored.ends_with('b'));
+    }
+
+    #[test]
+    fn retry_prompt_includes_the_latest_failure_tail() {
+        let prompt = retry_prompt("fix it", Some("error: broken\nlast line"));
+
+        assert!(prompt.starts_with("fix it\n\n<previous-attempt-failure>"));
+        assert!(prompt.contains("The tail of its terminal output:\nerror: broken\nlast line"));
+        assert!(prompt.ends_with("</previous-attempt-failure>"));
+    }
+
+    #[test]
+    fn retry_prompt_explains_when_no_tail_was_captured() {
+        let prompt = retry_prompt("fix it", None);
+
+        assert!(prompt.contains("no terminal output was captured"));
+    }
+
+    #[test]
+    fn retry_prompt_recomposes_from_the_base_without_nesting() {
+        let first = retry_prompt("fix it", Some("first failure"));
+        let second = retry_prompt("fix it", Some("second failure"));
+
+        assert!(first.contains("first failure"));
+        assert!(!second.contains("first failure"));
+        assert_eq!(second.matches("<previous-attempt-failure>").count(), 1);
     }
 
     fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {

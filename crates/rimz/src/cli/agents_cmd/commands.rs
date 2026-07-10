@@ -1335,15 +1335,26 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<Optio
     Ok(record)
 }
 
+pub(super) fn validate_supervised_output(
+    args: &AgentsArgs,
+    output_format: OutputFormat,
+) -> Result<()> {
+    if args.bg && output_format == OutputFormat::StreamJson {
+        bail!("--output-format stream-json cannot be combined with --bg");
+    }
+    if args.retries.unwrap_or(0) > 0 && output_format == OutputFormat::StreamJson {
+        bail!("--retries cannot be combined with --output-format stream-json; choose text or json");
+    }
+    Ok(())
+}
+
 pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<Option<RunRecord>> {
     if args.json {
         bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
     }
     let output_format = args.output_format.unwrap_or_default();
     let input_format = args.input_format.unwrap_or_default();
-    if args.bg && output_format == OutputFormat::StreamJson {
-        bail!("--output-format stream-json cannot be combined with --bg");
-    }
+    validate_supervised_output(&args, output_format)?;
     let prompt = resolve_print_prompt(&args, input_format)?;
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
@@ -1461,194 +1472,222 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         machine_config.sidebar.focus_key_label(),
     );
 
-    let permission_mode = agent_cell.mode.unwrap_or(mode);
-    let mut record = RunRecord::new(
-        workspace.workspace_id.clone(),
-        AgentKind::new_unchecked(adapter.descriptor().kind),
-        permission_mode,
-        prompt.clone(),
-        launch.cwd.clone(),
-    );
-    record.budget = agent_cell.budget.map(ToOwned::to_owned);
-    let run_id = record.run_id.clone();
-    let launch_requests = launch_identity_requests(
-        &layout,
-        args.name.as_deref(),
-        generated_worktree_name(&launch),
-        None,
-        None,
-        room_channel.as_deref(),
-    )?;
-    let launch_requests = launch_requests
-        .into_iter()
-        .map(|mut request| {
-            request.run_id = Some(run_id.clone());
-            request
-        })
-        .collect::<Vec<_>>();
-    let mut launch_identities = store.append_agent_launches_allocating(
-        &launch_requests,
-        &AgentLaunchAppend {
-            workspace_id: workspace.workspace_id.clone(),
-            session_name: workspace.session_name.clone(),
-            cwd: launch.cwd.clone(),
-            worktree_name: launch.worktree_name.clone(),
-            channel: room_channel.clone(),
-            prompt: Some(prompt.clone()),
-            description: args.description.clone(),
-            state: rimz::store::event::AgentLaunchState::Starting,
-            pane_id: None,
-        },
-    )?;
-    let launch_identity = launch_identities
-        .pop()
-        .ok_or_else(|| anyhow::anyhow!("--print requires one agent cell"))?;
-    record.agent_name = Some(launch_identity.name.clone());
-    let pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
-        adapter,
-        run_id: &run_id,
-        agent_name: Some(&launch_identity.name),
-        agent_name_explicit: launch_identity.name_explicit,
-        agent_profile: agent_cell.profile,
-        agent_mode: agent_cell.mode,
-        agent_role: agent_cell.role,
-        agent_channel: room_channel.as_deref(),
-        agent_model: agent_cell.model,
-        agent_effort: agent_cell.effort,
-        agent_budget: agent_cell.budget,
-        launch_id: Some(&launch_identity.agent_id),
-        cwd: &launch.cwd,
-        prompt: &prompt,
-        cleanup_worktree: args.worktree.is_some() || args.from_pr.is_some(),
-        permission_args: agent_cell.args,
-        self_cleanup_on_completion: args.bg && !args.keep,
-    })?;
-    let bound = if args.bg {
-        None
-    } else {
-        Some(run_wake::bind_run(store.runtime_paths(), &run_id).context("binding run socket")?)
-    };
-    let interrupt = if args.bg {
-        None
-    } else {
-        Some(supervised::install_run_interrupt_flag()?)
-    };
-    let socket_guard = bound
-        .as_ref()
-        .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
-    rimz::harness::run::create(store.paths(), &record).context("recording run")?;
-    let target = own_pane_id(mux);
-    let direction = rimz::mux::detect_terminal_size()
-        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
-        .unwrap_or_default();
-    let open_result = match run_placement(args.new_tab, target.is_some()) {
-        RunPlacement::Split => backend.split_pane(SplitPaneOptions {
-            target_pane_id: target,
-            cwd: Some(launch.cwd.to_string_lossy().into_owned()),
-            command: Some(pane.argv.clone()),
-            env: crate::cli::agents_launch::launch_identity_env(
-                &workspace,
-                room_channel.as_deref(),
-                args.worktree.is_none() && args.from_pr.is_none(),
-            ),
-            direction,
-            focus: false,
-        }),
-        RunPlacement::Tab => backend.open_tab(&TabOptions {
-            session_name: workspace.session_name.clone(),
-            title: format!("run {}", adapter.descriptor().kind),
-            cwd: launch.cwd.clone(),
-            panes: LayoutPanes {
-                columns: vec![LayoutColumn {
-                    panes: vec![pane],
-                    stacked: false,
-                }],
-            },
-            focus: false,
-            dock_sidebar: true,
-            sidebar: crate::cli::room::build_sidebar_opts(&room, Vec::new())?,
-        }),
-    };
-    if let Err(err) = open_result {
-        let _ = rimz::harness::run::fail(store.paths(), &run_id);
-        let _ = append_launch_event(
-            &store,
-            &workspace,
-            &launch_identity,
-            LaunchEventParams {
-                cwd: &launch.cwd,
-                worktree_name: launch.worktree_name.as_deref(),
-                channel: room_channel.as_deref(),
-                prompt: Some(&prompt),
-                state: rimz::store::event::AgentLaunchState::Failed,
+    let retries = args.retries.unwrap_or(0);
+    let base_prompt = prompt.clone();
+    let mut prompt = prompt;
+    let mut retry_of = None;
+    let mut attempt = 0;
+    loop {
+        let permission_mode = agent_cell.mode.unwrap_or(mode);
+        let mut record = RunRecord::new(
+            workspace.workspace_id.clone(),
+            AgentKind::new_unchecked(adapter.descriptor().kind),
+            permission_mode,
+            prompt.clone(),
+            launch.cwd.clone(),
+        );
+        record.budget = agent_cell.budget.map(ToOwned::to_owned);
+        record.retry_of = retry_of.clone();
+        let run_id = record.run_id.clone();
+        let mut launch_requests = launch_identity_requests(
+            &layout,
+            args.name.as_deref(),
+            generated_worktree_name(&launch),
+            None,
+            None,
+            room_channel.as_deref(),
+        )?;
+        if attempt > 0 {
+            for request in &mut launch_requests {
+                if let AgentLaunchName::Explicit(name) = &request.name {
+                    request.name = AgentLaunchName::Soft(name.clone());
+                }
+            }
+        }
+        let launch_requests = launch_requests
+            .into_iter()
+            .map(|mut request| {
+                request.run_id = Some(run_id.clone());
+                request
+            })
+            .collect::<Vec<_>>();
+        let mut launch_identities = store.append_agent_launches_allocating(
+            &launch_requests,
+            &AgentLaunchAppend {
+                workspace_id: workspace.workspace_id.clone(),
+                session_name: workspace.session_name.clone(),
+                cwd: launch.cwd.clone(),
+                worktree_name: launch.worktree_name.clone(),
+                channel: room_channel.clone(),
+                prompt: Some(prompt.clone()),
+                description: args.description.clone(),
+                state: rimz::store::event::AgentLaunchState::Starting,
                 pane_id: None,
             },
-        );
-        return Err(err).context("opening run pane");
-    }
-    if args.bg {
-        #[expect(clippy::print_stdout, reason = "command result is the agent name")]
-        {
-            println!("{}", launch_identity.name);
-        }
-        return Ok(None);
-    }
-    let Some((sock, _sock_path)) = bound else {
-        bail!("blocking run did not bind its completion socket");
-    };
-    let expected = ExpectedRunFrame {
-        workspace_id: workspace.workspace_id.clone(),
-        run_id: run_id.clone(),
-    };
-    let mut record = if output_format == OutputFormat::StreamJson {
-        supervised::stream::stream_blocking_run(
-            sock,
-            expected,
-            &store,
-            &run_id,
-            adapter,
-            args.timeout,
-            interrupt
-                .as_deref()
-                .expect("blocking run has interrupt flag"),
-        )?
-    } else {
-        let outcome = supervised::wait_for_run(
-            sock,
-            expected,
-            args.timeout,
-            interrupt
-                .as_deref()
-                .expect("blocking run has interrupt flag"),
         )?;
-        supervised::terminal_record_after_wait(store.paths(), &run_id, outcome)?
-    };
-    record = record_failure_tail_before_cleanup(
-        backend.as_ref(),
-        &store,
-        &workspace.session_name,
-        record,
-    );
-    if !args.keep {
-        if record.status == RunStatus::Canceled {
-            supervised::pane::close_stopped_run_pane_after_grace(
-                backend.as_ref(),
-                &store,
-                &workspace.session_name,
-                &record,
-                supervised::pane::STOP_BACKSTOP_GRACE,
-            );
+        let launch_identity = launch_identities
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("--print requires one agent cell"))?;
+        record.agent_name = Some(launch_identity.name.clone());
+        let pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
+            adapter,
+            run_id: &run_id,
+            agent_name: Some(&launch_identity.name),
+            agent_name_explicit: launch_identity.name_explicit,
+            agent_profile: agent_cell.profile,
+            agent_mode: agent_cell.mode,
+            agent_role: agent_cell.role,
+            agent_channel: room_channel.as_deref(),
+            agent_model: agent_cell.model,
+            agent_effort: agent_cell.effort,
+            agent_budget: agent_cell.budget,
+            launch_id: Some(&launch_identity.agent_id),
+            cwd: &launch.cwd,
+            prompt: &prompt,
+            cleanup_worktree: args.worktree.is_some() || args.from_pr.is_some(),
+            permission_args: agent_cell.args,
+            self_cleanup_on_completion: args.bg && !args.keep,
+        })?;
+        let bound = if args.bg {
+            None
         } else {
-            supervised::pane::close_run_pane(
-                backend.as_ref(),
+            Some(run_wake::bind_run(store.runtime_paths(), &run_id).context("binding run socket")?)
+        };
+        let interrupt = if args.bg {
+            None
+        } else {
+            Some(supervised::install_run_interrupt_flag()?)
+        };
+        let socket_guard = bound
+            .as_ref()
+            .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
+        rimz::harness::run::create(store.paths(), &record).context("recording run")?;
+        let target = own_pane_id(mux);
+        let direction = rimz::mux::detect_terminal_size()
+            .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
+            .unwrap_or_default();
+        let open_result = match run_placement(args.new_tab, target.is_some()) {
+            RunPlacement::Split => backend.split_pane(SplitPaneOptions {
+                target_pane_id: target,
+                cwd: Some(launch.cwd.to_string_lossy().into_owned()),
+                command: Some(pane.argv.clone()),
+                env: crate::cli::agents_launch::launch_identity_env(
+                    &workspace,
+                    room_channel.as_deref(),
+                    args.worktree.is_none() && args.from_pr.is_none(),
+                ),
+                direction,
+                focus: false,
+            }),
+            RunPlacement::Tab => backend.open_tab(&TabOptions {
+                session_name: workspace.session_name.clone(),
+                title: format!("run {}", adapter.descriptor().kind),
+                cwd: launch.cwd.clone(),
+                panes: LayoutPanes {
+                    columns: vec![LayoutColumn {
+                        panes: vec![pane],
+                        stacked: false,
+                    }],
+                },
+                focus: false,
+                dock_sidebar: true,
+                sidebar: crate::cli::room::build_sidebar_opts(&room, Vec::new())?,
+            }),
+        };
+        if let Err(err) = open_result {
+            let _ = rimz::harness::run::fail(store.paths(), &run_id);
+            let _ = append_launch_event(
                 &store,
-                &workspace.session_name,
-                &record,
+                &workspace,
+                &launch_identity,
+                LaunchEventParams {
+                    cwd: &launch.cwd,
+                    worktree_name: launch.worktree_name.as_deref(),
+                    channel: room_channel.as_deref(),
+                    prompt: Some(&prompt),
+                    state: rimz::store::event::AgentLaunchState::Failed,
+                    pane_id: None,
+                },
             );
+            return Err(err).context("opening run pane");
         }
+        if args.bg {
+            #[expect(clippy::print_stdout, reason = "command result is the agent name")]
+            {
+                println!("{}", launch_identity.name);
+            }
+            return Ok(None);
+        }
+        let Some((sock, _sock_path)) = bound else {
+            bail!("blocking run did not bind its completion socket");
+        };
+        let expected = ExpectedRunFrame {
+            workspace_id: workspace.workspace_id.clone(),
+            run_id: run_id.clone(),
+        };
+        let mut record = if output_format == OutputFormat::StreamJson {
+            supervised::stream::stream_blocking_run(
+                sock,
+                expected,
+                &store,
+                &run_id,
+                adapter,
+                args.timeout,
+                interrupt
+                    .as_deref()
+                    .expect("blocking run has interrupt flag"),
+            )?
+        } else {
+            let outcome = supervised::wait_for_run(
+                sock,
+                expected,
+                args.timeout,
+                interrupt
+                    .as_deref()
+                    .expect("blocking run has interrupt flag"),
+            )?;
+            supervised::terminal_record_after_wait(store.paths(), &run_id, outcome)?
+        };
+        record = record_failure_tail_before_cleanup(
+            backend.as_ref(),
+            &store,
+            &workspace.session_name,
+            record,
+        );
+        if !args.keep {
+            if record.status == RunStatus::Canceled {
+                supervised::pane::close_stopped_run_pane_after_grace(
+                    backend.as_ref(),
+                    &store,
+                    &workspace.session_name,
+                    &record,
+                    supervised::pane::STOP_BACKSTOP_GRACE,
+                );
+            } else {
+                supervised::pane::close_run_pane(
+                    backend.as_ref(),
+                    &store,
+                    &workspace.session_name,
+                    &record,
+                );
+            }
+        }
+        drop(socket_guard);
+        if !record.status.is_retryable() || attempt == retries {
+            return Ok(Some(record));
+        }
+        let mut stderr = render::err();
+        supervised::output::print_run_forensics(&record, &mut stderr)?;
+        writeln!(
+            stderr,
+            "rimz: retrying (attempt {} of {})",
+            u64::from(attempt) + 2,
+            u64::from(retries) + 1,
+        )?;
+        prompt = rimz::harness::run::retry_prompt(&base_prompt, record.failure_tail.as_deref());
+        retry_of = Some(record.run_id.clone());
+        attempt += 1;
     }
-    drop(socket_guard);
-    Ok(Some(record))
 }
 
 fn record_failure_tail_before_cleanup(

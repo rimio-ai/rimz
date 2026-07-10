@@ -862,6 +862,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.system_prompt_file.is_some()
         || args.append_system_prompt_file.is_some()
         || args.max_turns.is_some()
+        || args.retries.is_some()
     {
         bail!("agent launch options require an agent spec");
     }

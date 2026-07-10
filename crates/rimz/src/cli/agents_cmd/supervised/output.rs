@@ -21,7 +21,7 @@ pub(crate) fn print_run_output(
     print_run_forensics(record, err)
 }
 
-pub(super) fn print_run_forensics<W: Write + ?Sized>(
+pub(crate) fn print_run_forensics<W: Write + ?Sized>(
     record: &RunRecord,
     err: &mut W,
 ) -> Result<()> {

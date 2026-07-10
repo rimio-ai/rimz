@@ -59,6 +59,12 @@ rimz agents codex "Update dependencies and run the test suite." -p --timeout 30m
 
 **Cap the dollars.** `--budget 2` records `budget_exceeded` and exits `125`, distinct from a timeout or agent failure.
 
+**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times and appends the previous attempt's captured pane tail to the original prompt in a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code. Retries work with blocking text and JSON output and refuse `--bg` and `--output-format stream-json`.
+
+```sh
+rimz agents codex "Fix the failing checks." -p --retries 1 --timeout 30m
+```
+
 ## Feed the prompt in
 
 The positional prompt is the base, and piped stdin appends to it — so build output, a diff, or a log becomes context without a temp file.

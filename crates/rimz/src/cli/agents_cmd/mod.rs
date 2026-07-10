@@ -46,7 +46,7 @@ use budget::{BudgetArgs, run_budget};
 use budget_park::{BudgetParkArgs, run_budget_park};
 pub(crate) use commands::render_agents_table;
 #[cfg(test)]
-use commands::{RunPlacement, run_placement, run_stop_should_cancel};
+use commands::{RunPlacement, run_placement, run_stop_should_cancel, validate_supervised_output};
 use commands::{
     focus_agent, list_agents, logs_agent, run_print, run_supervised, show_agent, stop_agent,
     wait_agent,
@@ -197,6 +197,9 @@ pub struct AgentsArgs {
     /// Maximum agentic turns for one supervised print-mode prompt.
     #[arg(long, value_name = "N", requires = "print")]
     max_turns: Option<u32>,
+    /// Retry a failed (exit 1) supervised run up to N more times, feeding the previous failure tail back into the prompt.
+    #[arg(long, value_name = "N", requires = "print", conflicts_with = "bg")]
+    retries: Option<u32>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     passthrough: Vec<String>,
@@ -582,6 +585,7 @@ impl AgentsArgs {
             output_format: None,
             input_format: None,
             max_turns: None,
+            retries: None,
             passthrough: Vec::new(),
         }
     }
@@ -618,6 +622,7 @@ impl AgentsArgs {
             output_format: None,
             input_format: None,
             max_turns: None,
+            retries: None,
             passthrough: Vec::new(),
         }
     }

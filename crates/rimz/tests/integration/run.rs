@@ -1,13 +1,15 @@
 use crate::common::Env;
+#[cfg(unix)]
+use crate::common::{path_with_front, write_failing_agent_shim};
 use jiff::Timestamp;
 use rimz::agents::LifecycleSignal;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewKind};
 use serde_json::json;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::process::Command;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[test]
 fn hooks_bind_and_complete_supervised_run() {
@@ -221,6 +223,220 @@ fn print_stream_json_input_refuses_a_positional_prompt() {
         "stderr should name the conflict\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_supervised_run_retries_with_failure_context() {
+    let env = Env::new();
+    let store = env.store();
+    let mut child = spawn_retrying_print(&env, "retry-success");
+
+    let mut records = wait_for_run_count(&store, &mut child, 1);
+    let mut failed = records.pop().expect("first run");
+    assert_eq!(failed.agent_name.as_deref(), Some("fixed-name"));
+    failed.status = RunStatus::Failed;
+    failed.failure_tail = Some("compiler exploded\nlast diagnostic".to_owned());
+    failed.transcript_path = Some("/tmp/attempt-one.jsonl".to_owned());
+    finish_run(&store, &mut failed);
+
+    let records = wait_for_run_count(&store, &mut child, 2);
+    let retry = records
+        .iter()
+        .find(|record| record.retry_of.as_ref() == Some(&failed.run_id))
+        .expect("retry run");
+    assert!(
+        retry
+            .agent_name
+            .as_deref()
+            .is_some_and(|name| !name.is_empty())
+    );
+    assert!(
+        retry
+            .prompt
+            .starts_with("fix it\n\n<previous-attempt-failure>")
+    );
+    assert!(retry.prompt.contains("compiler exploded\nlast diagnostic"));
+    assert_eq!(
+        retry.prompt.matches("<previous-attempt-failure>").count(),
+        1
+    );
+
+    let mut completed = retry.clone();
+    completed.status = RunStatus::Completed;
+    completed.last_message = Some("fixed".to_owned());
+    finish_run(&store, &mut completed);
+
+    let out = child.wait_with_output().expect("wait retrying print");
+    assert!(
+        out.status.success(),
+        "retrying print failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "fixed\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("rimz: run failed (exit 1)"), "{stderr}");
+    assert!(
+        stderr.contains("compiler exploded\nlast diagnostic"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("transcript: /tmp/attempt-one.jsonl"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("rimz: retrying (attempt 2 of 2)"),
+        "{stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn timed_out_supervised_run_does_not_retry() {
+    let env = Env::new();
+    let store = env.store();
+    let mut child = spawn_retrying_print(&env, "retry-timeout");
+
+    let mut records = wait_for_run_count(&store, &mut child, 1);
+    let mut timed_out = records.pop().expect("first run");
+    timed_out.status = RunStatus::TimedOut;
+    finish_run(&store, &mut timed_out);
+
+    let out = child.wait_with_output().expect("wait timed-out print");
+    assert_eq!(
+        out.status.code(),
+        Some(124),
+        "timed-out print returned wrong status\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        rimz::harness::run::list(store.paths())
+            .expect("list terminal runs")
+            .len(),
+        1
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("retrying"));
+}
+
+#[cfg(unix)]
+fn spawn_retrying_print(env: &Env, trace_name: &str) -> std::process::Child {
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(env);
+    let agent_bin = write_failing_agent_shim(env, "codex", 1);
+    let trace_log = env.project_root.join(format!("{trace_name}.log"));
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let runtime = env.runtime_paths();
+    let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        rimz::ids::SidebarInstanceId::new(),
+        MuxName::Zellij,
+        &workspace.session_name,
+        runtime.sock_dir.join("sidebar.sock"),
+        None,
+    );
+    std::fs::write(
+        runtime.heartbeat_dir.join("sidebar.retry.json"),
+        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
+    )
+    .expect("write heartbeat");
+    let mut command = env.rimz();
+    command
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "codex",
+            "fix it",
+            "-p",
+            "--retries",
+            "1",
+            "-n",
+            "fixed-name",
+        ])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.spawn().expect("spawn retrying print")
+}
+
+#[cfg(unix)]
+fn wait_for_run_count(
+    store: &rimz::Store,
+    child: &mut std::process::Child,
+    expected: usize,
+) -> Vec<RunRecord> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let records = rimz::harness::run::list(store.paths()).expect("list runs");
+        if records.len() >= expected {
+            return records;
+        }
+        if let Some(status) = child.try_wait().expect("poll supervised run") {
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+            child
+                .stdout
+                .take()
+                .expect("child stdout")
+                .read_to_string(&mut stdout)
+                .expect("read child stdout");
+            child
+                .stderr
+                .take()
+                .expect("child stderr")
+                .read_to_string(&mut stderr)
+                .expect("read child stderr");
+            panic!(
+                "supervised run exited {status} before {expected} records\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {expected} run records; saw {records:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+fn finish_run(store: &rimz::Store, record: &mut RunRecord) {
+    record.updated_at = Timestamp::now();
+    record.completed_at = Some(record.updated_at);
+    rimz::store::run_store::write(&store.paths().runs_dir, record).expect("write terminal run");
+    rimz::store::wakeup::wake_run(store.runtime_paths(), record).expect("wake run waiter");
+}
+
+#[cfg(unix)]
+fn trust_codex_hooks(env: &Env) {
+    let config = env.agent_config_path("codex");
+    let mut text = std::fs::read_to_string(&config).expect("read codex config");
+    for token in [
+        "session_start",
+        "user_prompt_submit",
+        "subagent_start",
+        "subagent_stop",
+        "stop",
+        "permission_request",
+        "pre_tool_use",
+        "post_tool_use",
+        "pre_compact",
+        "post_compact",
+    ] {
+        text.push_str(&format!(
+            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
+            config.display(),
+        ));
+    }
+    std::fs::write(&config, text).expect("write trust state");
 }
 
 #[test]

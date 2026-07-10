@@ -274,6 +274,8 @@ mod parse {
             "-p",
             "--max-turns",
             "3",
+            "--retries",
+            "2",
             "-n",
             "swift-otter",
         ])
@@ -290,6 +292,7 @@ mod parse {
             Some(Path::new("/abs/append.md"))
         );
         assert_eq!(parsed.args.max_turns, Some(3));
+        assert_eq!(parsed.args.retries, Some(2));
         assert_eq!(parsed.args.name.as_deref(), Some("swift-otter"));
 
         let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--json"])
@@ -340,6 +343,33 @@ mod parse {
         ])
         .expect("parse output-format");
         assert_eq!(parsed.args.output_format, Some(OutputFormat::StreamJson));
+
+        let err = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "--retries", "1"])
+            .expect_err("retries requires print mode");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+
+        let err =
+            AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--retries", "1", "--bg"])
+                .expect_err("retries conflicts with background mode");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz",
+            "claude",
+            "hi",
+            "-p",
+            "--retries",
+            "1",
+            "--output-format",
+            "stream-json",
+        ])
+        .expect("parse retries plus stream-json for runtime validation");
+        let err = validate_supervised_output(&parsed.args, OutputFormat::StreamJson)
+            .expect_err("retries conflicts with the stream contract");
+        assert!(
+            err.to_string().contains("choose text or json"),
+            "unexpected error: {err:#}"
+        );
 
         let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--bg"])
             .expect("parse background print run");
