@@ -40,7 +40,7 @@ ssh -S <control-sock> -o BatchMode=yes -- <host> '<PATH repair>; exec rimz remot
 
 The local probe writes one JSON line every two seconds and the remote ingest command replies with one JSON ack. RTT is an EWMA of probe send-to-ack time, seeded from the second acknowledged probe so the cold remote ingest spawn does not become the first displayed number. Loss is the probe miss percentage over the latest 30 settled probes; this measures the SSH session path rather than ICMP.
 
-The schema is versioned as `rimz.link.v1`. The remote ingest writes `<runtime>/<workspace>/link-stats.json` with temp-file-plus-rename cache semantics, including the remote `received_at_ms`, the SSH client identity, and the latest stats. The sidebar reads that file on every enrichment fold. Stats are fresh for 10 seconds, stale until 120 seconds, and ignored after that. Local rooms never have the file, so their footer is unchanged.
+The schema is versioned as `rimz.link.v1`. The remote ingest writes `<runtime>/<workspace>/link-stats.json` with temp-file-plus-rename cache semantics, including the remote `received_at_ms`, the SSH client identity, and the latest stats. The sidebar reads that file on every enrichment fold. When the probe stream ends, its ingest removes the sidecar if the client identity still names it as the last writer; the 120-second expiry covers hard drops. Stats are fresh for 10 seconds, stale until 120 seconds, and ignored after that. Local rooms never have the file, so their footer is unchanged.
 
 `RIMZ_REMOTE_PROBE_MS=0` disables probing. Probe spawn failures are best-effort; a missing or schema-skewed remote subcommand stops probing without changing the room. The main SSH session is never killed by the probe.
 

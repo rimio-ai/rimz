@@ -259,9 +259,9 @@ pub const CODEX_DAEMON_REAP_TTL: Duration = Duration::from_secs(30);
 /// viewer of the same room should not see a false hard failure.
 pub const LINK_STATS_STALE: Duration = Duration::from_secs(10);
 
-/// Link stats older than this are ignored entirely. This lets an old
-/// `rimz remote connect` publisher disappear without leaving a permanent
-/// "remote room" badge behind.
+/// Link stats older than this are ignored entirely. A cleanly ended probe
+/// stream removes its sidecar; this is the backstop for hard drops and killed
+/// publishers so they do not leave a permanent "remote room" badge behind.
 pub const LINK_STATS_EXPIRE: Duration = Duration::from_secs(120);
 
 /// Maximum age of a sidebar heartbeat before launch, election, and wakeup

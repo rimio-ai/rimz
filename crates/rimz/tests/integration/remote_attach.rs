@@ -162,7 +162,7 @@ fn is_main_invocation(argv: &[String]) -> bool {
 
 #[test]
 fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
-    use std::io::Write as _;
+    use std::io::{BufRead as _, Write as _};
 
     let env = Env::new();
     let dir = env.project_root.to_string_lossy().into_owned();
@@ -185,8 +185,26 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
             "window": 12
         }
     });
+    let stdout = child.stdout.take().expect("stdout");
+    let mut stdout = std::io::BufReader::new(stdout);
     let mut stdin = child.stdin.take().expect("stdin");
     writeln!(stdin, "{probe}").expect("write probe");
+    let mut ack = String::new();
+    stdout.read_line(&mut ack).expect("read link ack");
+    let ack: serde_json::Value = serde_json::from_str(&ack).expect("ack json");
+    assert_eq!(ack["v"], "rimz.link.v1");
+    assert_eq!(ack["seq"], 7);
+
+    let runtime = rimz::RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root)
+        .expect("runtime paths");
+    let path = rimz::remote::link::stats_path(&runtime);
+    let file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).expect("stats file json");
+    assert_eq!(file["v"], "rimz.link.v1");
+    assert_eq!(file["client"], "client-port server-port");
+    assert_eq!(file["stats"]["rtt_ms"], 42);
+    assert_eq!(file["stats"]["miss_pct"], 3);
+
     drop(stdin);
     let out = child.wait_with_output().expect("wait link-stats ingest");
     assert!(
@@ -194,19 +212,45 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
         "ingest succeeds\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ack: serde_json::Value = serde_json::from_slice(&out.stdout).expect("ack json");
-    assert_eq!(ack["v"], "rimz.link.v1");
-    assert_eq!(ack["seq"], 7);
+    assert!(!path.exists(), "clean stream end removes its sidecar");
+}
 
+#[test]
+fn link_stats_ingest_keeps_a_newer_publishers_sidecar() {
+    let env = Env::new();
     let runtime = rimz::RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root)
         .expect("runtime paths");
-    let file: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(rimz::remote::link::stats_path(&runtime)).unwrap())
-            .expect("stats file json");
-    assert_eq!(file["v"], "rimz.link.v1");
-    assert_eq!(file["client"], "client-port server-port");
-    assert_eq!(file["stats"]["rtt_ms"], 42);
-    assert_eq!(file["stats"]["miss_pct"], 3);
+    let path = rimz::remote::link::stats_path(&runtime);
+    let seeded = rimz::remote::link::LinkStatsFile::new(
+        1_000,
+        "new-client-port new-server-port".to_owned(),
+        rimz::remote::link::LinkStats::default(),
+    );
+    rimz::store::atomic::write_temp_then_rename_cache(&path, &seeded)
+        .expect("seed newer link stats");
+
+    let dir = env.project_root.to_string_lossy().into_owned();
+    let mut child = env
+        .rimz()
+        .args(["remote", "link-stats", "ingest", "--dir", &dir])
+        .env("SSH_CONNECTION", "old-client-port old-server-port")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn link-stats ingest");
+    drop(child.stdin.take());
+    let out = child.wait_with_output().expect("wait link-stats ingest");
+    assert!(
+        out.status.success(),
+        "ingest succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let remaining: rimz::remote::link::LinkStatsFile =
+        serde_json::from_slice(&std::fs::read(path).expect("read seeded stats"))
+            .expect("parse seeded stats");
+    assert_eq!(remaining, seeded);
 }
 
 #[test]

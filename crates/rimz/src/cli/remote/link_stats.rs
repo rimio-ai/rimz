@@ -1,5 +1,5 @@
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -26,6 +26,12 @@ pub(super) fn ingest(args: LinkStatsIngestArgs) -> Result<()> {
         .ensure_dirs()
         .context("preparing runtime directories for link stats")?;
     let path = rimz::remote::link::stats_path(&runtime);
+    let result = ingest_probes(&path, &client);
+    remove_stats_if_owned(&path, &client);
+    result
+}
+
+fn ingest_probes(path: &Path, client: &str) -> Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -37,20 +43,33 @@ pub(super) fn ingest(args: LinkStatsIngestArgs) -> Result<()> {
         if !probe.version_ok() {
             let mut stderr = std::io::stderr().lock();
             let _ = writeln!(stderr, "unsupported link probe schema `{}`", probe.v);
+            remove_stats_if_owned(path, client);
             std::process::exit(LINK_SCHEMA_MISMATCH_EXIT);
         }
         let file = LinkStatsFile::new(
             rimz::sidebar::timing::unix_now_ms(),
-            client.clone(),
+            client.to_owned(),
             probe.stats.clone(),
         );
-        rimz::store::atomic::write_temp_then_rename_cache(&path, &file)
+        rimz::store::atomic::write_temp_then_rename_cache(path, &file)
             .with_context(|| format!("writing {}", path.display()))?;
         serde_json::to_writer(&mut stdout, &LinkAck::new(probe.seq)).context("writing link ack")?;
         writeln!(stdout).context("writing link ack newline")?;
         stdout.flush().context("flushing link ack")?;
     }
     Ok(())
+}
+
+fn remove_stats_if_owned(path: &Path, client: &str) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    let Ok(file) = serde_json::from_slice::<LinkStatsFile>(&bytes) else {
+        return;
+    };
+    if file.client == client {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn link_stats_runtime(args: LinkStatsIngestArgs) -> Result<(rimz::RuntimePaths, String)> {
