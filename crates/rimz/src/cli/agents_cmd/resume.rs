@@ -916,6 +916,7 @@ mod tests {
                         args: None,
                     },
                 ],
+                leader: None,
                 layout: Some("planner,coder".to_owned()),
             },
         );
