@@ -27,6 +27,14 @@ fn pi_activity_filter_excludes_the_blocking_gate_and_launch_commands_build() {
         ])
     );
     assert_eq!(
+        PiAdapter.fork_command("0199aaf2", Path::new("/tmp")),
+        Some(vec![
+            "pi".to_owned(),
+            "--fork".to_owned(),
+            "0199aaf2".to_owned(),
+        ])
+    );
+    assert_eq!(
         PiAdapter.launch_command(&[], None),
         Some(vec!["pi".to_owned()])
     );

@@ -20,7 +20,7 @@ const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
 const PING_SUFFIX: &str = "ping";
 const RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES: &[&str] = &[
-    "list", "ls", "show", "stop", "focus", "wait", "term", "exec",
+    "list", "ls", "show", "stop", "focus", "fork", "wait", "term", "exec",
 ];
 pub const MAX_PROFILE_DEPTH: usize = 16;
 

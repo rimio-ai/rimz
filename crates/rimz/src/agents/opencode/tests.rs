@@ -22,6 +22,15 @@ fn opencode_activity_filter_and_launch_commands_build() {
         ])
     );
     assert_eq!(
+        OpencodeAdapter.fork_command("ses_123", Path::new("/tmp")),
+        Some(vec![
+            "opencode".to_owned(),
+            "--session".to_owned(),
+            "ses_123".to_owned(),
+            "--fork".to_owned(),
+        ])
+    );
+    assert_eq!(
         OpencodeAdapter.launch_command(&[], None),
         Some(vec!["opencode".to_owned()])
     );

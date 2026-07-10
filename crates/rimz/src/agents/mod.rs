@@ -788,6 +788,15 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// The argv that forks a prior session of this agent by `session_id`:
+    /// resume the full conversation history under a provider-assigned new
+    /// session id, leaving the source session untouched. Launched fresh in
+    /// `cwd` (the source agent's worktree). `None` when the agent has no native
+    /// fork CLI, so `rimz agents fork` refuses with the reason.
+    fn fork_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
+        None
+    }
+
     /// Extra launch argv for a supervised agent permission posture. The
     /// adapter owns provider-specific CLI flags; the CLI only chooses
     /// the posture.

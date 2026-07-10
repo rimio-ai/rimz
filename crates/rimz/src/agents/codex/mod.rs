@@ -490,6 +490,14 @@ impl AgentAdapter for CodexAdapter {
         ])
     }
 
+    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
+        Some(vec![
+            "codex".to_owned(),
+            "fork".to_owned(),
+            session_id.to_owned(),
+        ])
+    }
+
     fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
         match mode {
             PermissionMode::Yolo => vec!["--dangerously-bypass-approvals-and-sandbox".to_owned()],

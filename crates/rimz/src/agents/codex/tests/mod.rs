@@ -17,6 +17,15 @@ fn codex_commands_and_permission_args_match_run_posture() {
     assert_eq!(argv, vec!["codex", "resume", "sess-abc"]);
 
     assert_eq!(
+        CodexAdapter.fork_command("sess-abc", Path::new("/code/query-engine")),
+        Some(
+            ["codex", "fork", "sess-abc"]
+                .map(ToOwned::to_owned)
+                .to_vec()
+        )
+    );
+
+    assert_eq!(
         CodexAdapter.launch_command(&[], None),
         Some(vec!["codex".to_owned()])
     );

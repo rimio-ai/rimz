@@ -546,6 +546,15 @@ impl AgentAdapter for OpencodeAdapter {
         ])
     }
 
+    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
+        Some(vec![
+            "opencode".to_owned(),
+            "--session".to_owned(),
+            session_id.to_owned(),
+            "--fork".to_owned(),
+        ])
+    }
+
     fn compact_command(&self) -> Option<&'static str> {
         Some("/compact")
     }

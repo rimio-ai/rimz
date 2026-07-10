@@ -5,6 +5,7 @@ mod budget;
 mod budget_park;
 mod commands;
 mod exec;
+mod fork;
 mod history;
 mod launch;
 mod reconcile;
@@ -51,6 +52,7 @@ use commands::{
     wait_agent,
 };
 use exec::run_exec;
+use fork::{ForkArgs, run_fork};
 use history::history_agent;
 use launch::*;
 use refresh::{RefreshArgs, run_refresh};
@@ -305,6 +307,8 @@ enum AgentsSubcmd {
         ))]
         reference: String,
     },
+    /// Fork an agent with its full conversation history under a new session id.
+    Fork(ForkArgs),
     /// Wait for supervised runs or interactive agents; several references join.
     Wait {
         #[arg(
@@ -364,6 +368,14 @@ enum AgentsSubcmd {
 #[derive(Debug, Args)]
 struct ExecArgs {
     kind: String,
+    /// Fork a prior agent session by id: full history under a new
+    /// provider-assigned session id.
+    #[arg(
+        long,
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["resume", "prompt"]
+    )]
+    fork: Option<String>,
     /// Resume a prior agent session by id instead of launching fresh — the
     /// argv resume-on-rebirth panes run ([`rimz::harness::resume::plan_resume`]).
     #[arg(long, value_name = "SESSION_ID", conflicts_with = "prompt")]
@@ -458,6 +470,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }) => return history_agent(reference, tail, json, globals),
         Some(AgentsSubcmd::Top(args)) => return run_top(args, globals),
         Some(AgentsSubcmd::Focus { reference }) => return focus_agent(reference, globals),
+        Some(AgentsSubcmd::Fork(args)) => return run_fork(args, globals),
         Some(AgentsSubcmd::Wait {
             references,
             any,

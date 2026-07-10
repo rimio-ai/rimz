@@ -438,6 +438,15 @@ impl AgentAdapter for ClaudeAdapter {
         ])
     }
 
+    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
+        Some(vec![
+            "claude".to_owned(),
+            "--resume".to_owned(),
+            session_id.to_owned(),
+            "--fork-session".to_owned(),
+        ])
+    }
+
     fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
         match mode {
             PermissionMode::Auto => vec!["--permission-mode".to_owned(), "auto".to_owned()],

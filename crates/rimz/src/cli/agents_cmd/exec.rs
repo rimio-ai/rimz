@@ -32,26 +32,33 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
     let machine_config = crate::cli::machine_config();
     let rtk = machine_config.harness.rtk;
-    let mut argv = match args.resume.as_deref() {
-        Some(session_id) => {
+    let mut argv = match (args.fork.as_deref(), args.resume.as_deref()) {
+        (Some(session_id), _) => {
+            let cwd = std::env::current_dir().context("reading the fork pane cwd")?;
+            adapter
+                .fork_command(session_id, &cwd)
+                .ok_or_else(|| anyhow::anyhow!("agent `{}` has no fork command", args.kind))?
+        }
+        (None, Some(session_id)) => {
             let cwd = std::env::current_dir().context("reading the resume pane cwd")?;
             adapter
                 .resume_command(session_id, &cwd)
                 .ok_or_else(|| anyhow::anyhow!("agent `{}` has no resume command", args.kind))?
         }
-        None => adapter
+        (None, None) => adapter
             .launch_command(&args.extra_args, args.prompt.as_deref())
             .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?,
     };
     if args.resume.is_some() {
         argv.extend(args.extra_args.iter().cloned());
     }
-    let exec_action = match args.resume.as_deref() {
-        Some(session_id) => rimz::harness::launch::ExecAction::Resume {
+    let exec_action = match (args.fork.as_deref(), args.resume.as_deref()) {
+        (Some(session_id), _) => rimz::harness::launch::ExecAction::Fork { session_id },
+        (None, Some(session_id)) => rimz::harness::launch::ExecAction::Resume {
             session_id,
             extra_args: &args.extra_args,
         },
-        None => rimz::harness::launch::ExecAction::Launch {
+        (None, None) => rimz::harness::launch::ExecAction::Launch {
             prompt: args.prompt.as_deref(),
             extra_args: &args.extra_args,
         },
@@ -562,6 +569,9 @@ fn resolve_own_agent_end_trace(
             return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));
         }
     }
+    // A resumed pane owns the resumed session and can safely fall back to its
+    // argv id. A fork's provider-assigned id is unknown here; falling back to
+    // the source id would tombstone the original session when the fork exits.
     Ok(args.resume.as_ref().map(|session_id| {
         (
             AgentKind::new_unchecked(args.kind.clone()),

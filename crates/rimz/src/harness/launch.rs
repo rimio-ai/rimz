@@ -149,6 +149,9 @@ pub enum ExecAction<'a> {
         session_id: &'a str,
         extra_args: &'a [String],
     },
+    Fork {
+        session_id: &'a str,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,8 +172,14 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
         "exec".to_owned(),
         inv.kind.to_owned(),
     ];
-    if let ExecAction::Resume { session_id, .. } = inv.action {
-        argv.extend(["--resume".to_owned(), session_id.to_owned()]);
+    match inv.action {
+        ExecAction::Resume { session_id, .. } => {
+            argv.extend(["--resume".to_owned(), session_id.to_owned()]);
+        }
+        ExecAction::Fork { session_id } => {
+            argv.extend(["--fork".to_owned(), session_id.to_owned()]);
+        }
+        ExecAction::Launch { .. } => {}
     }
     if let Some(run_id) = inv.run_id {
         argv.extend(["--run-id".to_owned(), run_id.to_owned()]);
@@ -233,6 +242,7 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
     }
     let extra_args = match inv.action {
         ExecAction::Launch { extra_args, .. } | ExecAction::Resume { extra_args, .. } => extra_args,
+        ExecAction::Fork { .. } => &[],
     };
     if !extra_args.is_empty() {
         argv.push("--".to_owned());
@@ -798,6 +808,45 @@ mod tests {
                 "--close-pane-on-exit",
                 "--",
                 "--dangerously-skip-permissions",
+            ])
+        );
+    }
+
+    #[test]
+    fn exec_argv_renders_fork() {
+        let invocation = ExecInvocation {
+            kind: "codex",
+            action: ExecAction::Fork {
+                session_id: "session-1",
+            },
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: true,
+            exit_on_run_completion: false,
+            identity: ExecIdentity {
+                name: Some("swift-otter"),
+                profile: Some("planner"),
+                channel: Some("design"),
+                ..ExecIdentity::default()
+            },
+        };
+
+        assert_eq!(
+            exec_argv(Path::new("/bin/rimz"), &invocation),
+            argv(&[
+                "/bin/rimz",
+                "agents",
+                "exec",
+                "codex",
+                "--fork",
+                "session-1",
+                "--agent-name",
+                "swift-otter",
+                "--agent-profile",
+                "planner",
+                "--agent-channel",
+                "design",
+                "--close-pane-on-exit",
             ])
         );
     }

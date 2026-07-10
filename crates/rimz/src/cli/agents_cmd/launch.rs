@@ -722,7 +722,7 @@ fn single_pane_argv(panes: &LayoutPanes) -> Result<Vec<String>> {
 }
 
 #[cfg(unix)]
-fn exec_wrapper_in_place(
+pub(super) fn exec_wrapper_in_place(
     argv: &[String],
     env: BTreeMap<String, String>,
     cwd: &Path,
@@ -738,7 +738,7 @@ fn exec_wrapper_in_place(
 }
 
 #[cfg(not(unix))]
-fn exec_wrapper_in_place(
+pub(super) fn exec_wrapper_in_place(
     _argv: &[String],
     _env: BTreeMap<String, String>,
     _cwd: &Path,

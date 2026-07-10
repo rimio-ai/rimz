@@ -578,6 +578,14 @@ impl AgentAdapter for PiAdapter {
         ])
     }
 
+    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
+        Some(vec![
+            "pi".to_owned(),
+            "--fork".to_owned(),
+            session_id.to_owned(),
+        ])
+    }
+
     fn compact_command(&self) -> Option<&'static str> {
         Some("/compact")
     }

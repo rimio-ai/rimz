@@ -17,6 +17,15 @@ fn claude_commands_and_permission_args_match_run_posture() {
     assert_eq!(argv, vec!["claude", "--resume", "sess-123"]);
 
     assert_eq!(
+        ClaudeAdapter.fork_command("sess-123", Path::new("/code/query-engine")),
+        Some(
+            ["claude", "--resume", "sess-123", "--fork-session"]
+                .map(ToOwned::to_owned)
+                .to_vec()
+        )
+    );
+
+    assert_eq!(
         ClaudeAdapter.launch_command(&[], None),
         Some(vec!["claude".to_owned()])
     );

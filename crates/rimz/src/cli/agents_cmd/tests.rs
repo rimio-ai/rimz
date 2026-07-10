@@ -196,6 +196,27 @@ mod parse {
             })
         ));
 
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz",
+            "fork",
+            "@coder",
+            "--name",
+            "twin",
+            "--new-pane",
+            "--bg",
+        ])
+        .expect("parse fork");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Fork(ForkArgs {
+                reference,
+                name: Some(name),
+                new_pane: true,
+                new_tab: false,
+                bg: true,
+            })) if reference == "@coder" && name == "twin"
+        ));
+
         let parsed =
             AgentsHarness::try_parse_from(["rimz", "history", "@coder", "--tail", "5", "--json"])
                 .expect("parse history");
@@ -502,12 +523,34 @@ mod parse {
         assert_eq!(args.kind, "claude");
         assert_eq!(args.resume.as_deref(), Some("sess-1"));
 
+        let parsed = ExecHarness::try_parse_from(["rimz", "exec", "codex", "--fork", "sess-2"])
+            .expect("parse fork");
+        let AgentsSubcmd::Exec(args) = parsed.command else {
+            panic!("expected exec subcommand");
+        };
+        assert_eq!(args.kind, "codex");
+        assert_eq!(args.fork.as_deref(), Some("sess-2"));
+
         assert!(
             ExecHarness::try_parse_from([
                 "rimz", "exec", "claude", "--resume", "sess-1", "--prompt", "hi",
             ])
             .is_err(),
             "resume and launch prompt conflict"
+        );
+        assert!(
+            ExecHarness::try_parse_from([
+                "rimz", "exec", "codex", "--fork", "sess-2", "--resume", "sess-1",
+            ])
+            .is_err(),
+            "fork and resume conflict"
+        );
+        assert!(
+            ExecHarness::try_parse_from([
+                "rimz", "exec", "codex", "--fork", "sess-2", "--prompt", "hi",
+            ])
+            .is_err(),
+            "fork and launch prompt conflict"
         );
     }
 
@@ -2117,6 +2160,7 @@ mod automation {
 fn bare_exec_args() -> ExecArgs {
     ExecArgs {
         kind: "codex".to_owned(),
+        fork: None,
         resume: None,
         run_id: None,
         agent_name: Some("lucid-atlas".to_owned()),
