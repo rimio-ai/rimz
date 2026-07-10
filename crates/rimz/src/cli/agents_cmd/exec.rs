@@ -7,15 +7,12 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .context("resolving the agent launch workspace")?;
     let run_context = run_exec_context(&args, &workspace)?;
     let launch_identity = exec_launch_identity(&args)?;
+    let action = exec_action(&args);
     let entered_worktree = match args.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
             Ok(path) => Some(path),
             Err(err) => {
-                if let Some(identity) = launch_identity.as_ref()
-                    && launch_is_still_provisional(&workspace, identity)
-                {
-                    record_launch_failed(&workspace, identity);
-                }
+                mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
                 fail_run_on_exec_precondition(run_context.as_ref());
                 return Err(err);
             }
@@ -32,27 +29,53 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
     let machine_config = crate::cli::machine_config();
     let rtk = machine_config.harness.rtk;
-    let mut argv = match (args.fork.as_deref(), args.resume.as_deref()) {
-        (Some(session_id), _) => {
-            let cwd = std::env::current_dir().context("reading the fork pane cwd")?;
-            adapter
-                .fork_command(session_id, &cwd)
-                .ok_or_else(|| anyhow::anyhow!("agent `{}` has no fork command", args.kind))?
+    let argv = agent_argv(adapter, &args.kind, &action)?;
+    let exec_invocation = exec_invocation(&args, action);
+    let rimz_env = full_agent_launch_env(&workspace.project_root, adapter, rtk, &exec_invocation)?;
+    let argv = rimz::harness::launch::login_shell_argv(&rimz_env, &argv);
+    let (program, rest) = argv
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
+    if should_exec_agent_directly(&args) {
+        match exec_agent_command(program, rest, &rimz_env) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
+                return Err(err);
+            }
         }
-        (None, Some(session_id)) => {
-            let cwd = std::env::current_dir().context("reading the resume pane cwd")?;
-            adapter
-                .resume_command(session_id, &cwd)
-                .ok_or_else(|| anyhow::anyhow!("agent `{}` has no resume command", args.kind))?
-        }
-        (None, None) => adapter
-            .launch_command(&args.extra_args, args.prompt.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?,
-    };
-    if args.resume.is_some() || args.fork.is_some() {
-        argv.extend(args.extra_args.iter().cloned());
     }
-    let exec_action = match (args.fork.as_deref(), args.resume.as_deref()) {
+    reset_cleanup_signal_flag();
+    install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
+    install_interrupt_signal_handler().context("installing interrupt signal handler")?;
+    let mut command = Command::new(program);
+    command.args(rest);
+    command.envs(&rimz_env);
+    if let Some(path) = entered_worktree.as_deref() {
+        command.current_dir(path);
+    }
+    let child = command
+        .spawn()
+        .with_context(|| format!("running {program}"))?;
+    let monitor = if args.exit_on_run_completion {
+        run_context.as_ref()
+    } else {
+        None
+    };
+    let outcome = supervise_child(child, monitor).context("supervising agent process")?;
+    settle_after_exit(
+        &args,
+        globals,
+        &workspace,
+        run_context.as_ref(),
+        launch_identity.as_ref(),
+        entered_worktree.as_deref(),
+        outcome,
+    )
+}
+
+pub(super) fn exec_action(args: &ExecArgs) -> rimz::harness::launch::ExecAction<'_> {
+    match (args.fork.as_deref(), args.resume.as_deref()) {
         (Some(session_id), _) => rimz::harness::launch::ExecAction::Fork {
             session_id,
             extra_args: &args.extra_args,
@@ -65,10 +88,50 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             prompt: args.prompt.as_deref(),
             extra_args: &args.extra_args,
         },
-    };
-    let exec_invocation = rimz::harness::launch::ExecInvocation {
+    }
+}
+
+pub(super) fn agent_argv(
+    adapter: &dyn AgentAdapter,
+    kind: &str,
+    action: &rimz::harness::launch::ExecAction<'_>,
+) -> Result<Vec<String>> {
+    match *action {
+        rimz::harness::launch::ExecAction::Fork {
+            session_id,
+            extra_args,
+        } => {
+            let cwd = std::env::current_dir().context("reading the fork pane cwd")?;
+            let mut argv = adapter
+                .fork_command(session_id, &cwd)
+                .ok_or_else(|| anyhow::anyhow!("agent `{kind}` has no fork command"))?;
+            argv.extend(extra_args.iter().cloned());
+            Ok(argv)
+        }
+        rimz::harness::launch::ExecAction::Resume {
+            session_id,
+            extra_args,
+        } => {
+            let cwd = std::env::current_dir().context("reading the resume pane cwd")?;
+            let mut argv = adapter
+                .resume_command(session_id, &cwd)
+                .ok_or_else(|| anyhow::anyhow!("agent `{kind}` has no resume command"))?;
+            argv.extend(extra_args.iter().cloned());
+            Ok(argv)
+        }
+        rimz::harness::launch::ExecAction::Launch { prompt, extra_args } => adapter
+            .launch_command(extra_args, prompt)
+            .ok_or_else(|| anyhow::anyhow!("agent `{kind}` has no launch command")),
+    }
+}
+
+fn exec_invocation<'a>(
+    args: &'a ExecArgs,
+    action: rimz::harness::launch::ExecAction<'a>,
+) -> rimz::harness::launch::ExecInvocation<'a> {
+    rimz::harness::launch::ExecInvocation {
         kind: &args.kind,
-        action: exec_action,
+        action,
         run_id: args.run_id.as_ref().map(|run_id| run_id.as_str()),
         worktree_path: args.worktree_path.as_deref(),
         close_pane_on_exit: args.close_pane_on_exit,
@@ -88,73 +151,38 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             budget: args.agent_budget.as_deref(),
             ..rimz::harness::launch::ExecIdentity::default()
         },
-    };
-    let rimz_env = full_agent_launch_env(&workspace.project_root, adapter, rtk, &exec_invocation)?;
-    let argv = rimz::harness::launch::login_shell_argv(&rimz_env, &argv);
-    let (program, rest) = argv
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
-    if should_exec_agent_directly(&args) {
-        match exec_agent_command(program, rest, &rimz_env) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                if let Some(identity) = launch_identity.as_ref()
-                    && launch_is_still_provisional(&workspace, identity)
-                {
-                    record_launch_failed(&workspace, identity);
-                }
-                return Err(err);
-            }
-        }
     }
-    reset_cleanup_signal_flag();
-    install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
-    install_interrupt_signal_handler().context("installing interrupt signal handler")?;
-    let mut command = Command::new(program);
-    command.args(rest);
-    command.envs(&rimz_env);
-    if let Some(path) = entered_worktree.as_deref() {
-        command.current_dir(path);
-    }
-    let child = command
-        .spawn()
-        .with_context(|| format!("running {program}"))?;
-    let monitor = if args.exit_on_run_completion {
-        Some(
-            run_context
-                .as_ref()
-                .context("--exit-on-run-completion requires --run-id")?,
-        )
-    } else {
-        None
-    };
-    let outcome = supervise_child(child, monitor).context("supervising agent process")?;
-    if let Some(context) = run_context.as_ref() {
+}
+
+fn settle_after_exit(
+    args: &ExecArgs,
+    globals: &GlobalFlags,
+    workspace: &rimz::ResolvedWorkspace,
+    run_context: Option<&RunExecContext>,
+    launch_identity: Option<&LaunchIdentity>,
+    entered_worktree: Option<&Path>,
+    outcome: ExecOutcome,
+) -> ! {
+    if let Some(context) = run_context {
         fail_run_if_child_exited_first(context, globals, RUN_EXIT_TERMINAL_GRACE);
     }
-    let startup_failure = !outcome.status.success()
-        && launch_identity
-            .as_ref()
-            .is_some_and(|identity| launch_is_still_provisional(&workspace, identity));
-    if startup_failure && let Some(identity) = launch_identity.as_ref() {
-        record_launch_failed(&workspace, identity);
-    }
+    let startup_failure =
+        !outcome.status.success() && mark_launch_failed_if_provisional(workspace, launch_identity);
 
     let session_name = run_context
-        .as_ref()
         .map(|context| context.session_name.as_str())
         .unwrap_or(&workspace.session_name);
-    let abrupt = outcome.signaled || cleanup_signal_received();
+    let abrupt = outcome.abrupt || cleanup_signal_received();
     let session_accepts_close = !abrupt || session_accepts_agent_close(globals, session_name);
     let deliberate = close_is_deliberate(abrupt, session_accepts_close);
-    if deliberate && should_record_end_trace(&args) {
-        record_own_agent_end_trace(&workspace, &args);
+    if deliberate && should_record_end_trace(args) {
+        record_own_agent_end_trace(workspace, args);
     }
-    if should_drop_to_shell(&args, abrupt) {
+    if should_drop_to_shell(args, abrupt) {
         // The trace above tombstones the agent; gc reclaims any worktree later.
-        drop_to_shell_after_agent_exit(&args, &outcome.status, startup_failure);
+        drop_to_shell_after_agent_exit(args, &outcome.status, startup_failure);
     }
-    if let Some(path) = entered_worktree.as_deref()
+    if let Some(path) = entered_worktree
         && deliberate
         && let Err(err) = cleanup_worktree_via_ondisk(path, globals, !abrupt, abrupt)
     {
@@ -439,23 +467,27 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                 agent_id: AgentSessionId::from(launch_id),
                 name: name.to_owned(),
                 name_explicit: args.agent_name_explicit,
-                launch: rimz::agents::LaunchParams {
-                    profile: args.agent_profile.clone(),
-                    mode: args.agent_mode,
-                    role: args.agent_role.clone(),
-                    model: args.agent_model.clone(),
-                    effort: args.agent_effort.clone(),
-                    budget: args.agent_budget.clone(),
-                    team: args.agent_team.clone(),
-                    launch_group: args.launch_group.clone(),
-                    launch_ordinal: args.launch_ordinal,
-                    channel: args.agent_channel.clone(),
-                    kind_ordinal: None,
-                },
+                launch: launch_params(args),
                 run_id: args.run_id.clone(),
                 prompt: args.prompt.clone(),
             }))
         }
+    }
+}
+
+fn launch_params(args: &ExecArgs) -> rimz::agents::LaunchParams {
+    rimz::agents::LaunchParams {
+        profile: args.agent_profile.clone(),
+        mode: args.agent_mode,
+        role: args.agent_role.clone(),
+        model: args.agent_model.clone(),
+        effort: args.agent_effort.clone(),
+        budget: args.agent_budget.clone(),
+        team: args.agent_team.clone(),
+        launch_group: args.launch_group.clone(),
+        launch_ordinal: args.launch_ordinal,
+        channel: args.agent_channel.clone(),
+        kind_ordinal: None,
     }
 }
 
@@ -526,6 +558,20 @@ fn record_launch_failed(workspace: &rimz::ResolvedWorkspace, identity: &LaunchId
             "could not mark provisional agent launch failed",
         );
     }
+}
+
+fn mark_launch_failed_if_provisional(
+    workspace: &rimz::ResolvedWorkspace,
+    identity: Option<&LaunchIdentity>,
+) -> bool {
+    let Some(identity) = identity else {
+        return false;
+    };
+    if !launch_is_still_provisional(workspace, identity) {
+        return false;
+    }
+    record_launch_failed(workspace, identity);
+    true
 }
 
 fn record_own_agent_end_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecArgs) {
@@ -650,31 +696,22 @@ fn fail_run_on_exec_precondition(context: Option<&RunExecContext>) {
 }
 
 fn fail_run_if_nonterminal(context: &RunExecContext, reason: &'static str) {
-    match rimz::harness::run::load(&context.paths, &context.run_id) {
-        Ok(record) if record.status.is_terminal() => {}
-        Ok(_) => match rimz::harness::run::fail_if_nonterminal(&context.paths, &context.run_id) {
-            Ok(Some(record)) => {
-                if let Err(err) = rimz::store::wakeup::wake_run(&context.runtime, &record) {
-                    tracing::debug!(
-                        run_id = %context.run_id,
-                        error = %err,
-                        "could not wake supervised run waiter after agent process exit",
-                    );
-                }
+    match rimz::harness::run::fail_if_nonterminal(&context.paths, &context.run_id) {
+        Ok(Some(record)) => {
+            if let Err(err) = rimz::store::wakeup::wake_run(&context.runtime, &record) {
+                tracing::debug!(
+                    run_id = %context.run_id,
+                    error = %err,
+                    "could not wake supervised run waiter after agent process exit",
+                );
             }
-            Ok(None) => {}
-            Err(err) => tracing::debug!(
-                run_id = %context.run_id,
-                error = %err,
-                reason,
-                "could not mark supervised run failed",
-            ),
-        },
+        }
+        Ok(None) => {}
         Err(err) => tracing::debug!(
             run_id = %context.run_id,
             error = %err,
             reason,
-            "could not inspect supervised run",
+            "could not mark supervised run failed",
         ),
     }
 }
@@ -718,7 +755,7 @@ fn wait_for_terminal_run(context: &RunExecContext, cap: Duration) -> bool {
 #[derive(Debug)]
 struct ExecOutcome {
     status: ExitStatus,
-    signaled: bool,
+    abrupt: bool,
 }
 
 fn supervise_child(mut child: Child, run_monitor: Option<&RunExecContext>) -> Result<ExecOutcome> {
@@ -733,9 +770,7 @@ fn supervise_child(mut child: Child, run_monitor: Option<&RunExecContext>) -> Re
             Ok(Some(status)) => {
                 return Ok(ExecOutcome {
                     status,
-                    signaled: run_completed
-                        || signal_seen_at.is_some()
-                        || cleanup_signal_received(),
+                    abrupt: run_completed || signal_seen_at.is_some() || cleanup_signal_received(),
                 });
             }
             Ok(None) => {}

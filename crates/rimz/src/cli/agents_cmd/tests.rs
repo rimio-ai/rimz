@@ -1000,6 +1000,87 @@ mod launch_options {
 mod pane_exec {
     use super::*;
 
+    struct NoForkAdapter;
+
+    impl AgentAdapter for NoForkAdapter {
+        fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
+            rimz::agents::find_adapter("codex")
+                .expect("codex adapter")
+                .descriptor()
+        }
+
+        fn classify_hook(
+            &self,
+            event_name: &str,
+            payload: &serde_json::Value,
+        ) -> rimz::agents::ClassifiedHook {
+            rimz::agents::find_adapter("codex")
+                .expect("codex adapter")
+                .classify_hook(event_name, payload)
+        }
+
+        fn render_neutral(
+            &self,
+            event_name: &str,
+        ) -> rimz::agents::Result<Option<serde_json::Value>> {
+            rimz::agents::find_adapter("codex")
+                .expect("codex adapter")
+                .render_neutral(event_name)
+        }
+    }
+
+    #[test]
+    fn agent_argv_launch_passes_extra_args_to_adapter() {
+        let adapter = rimz::agents::find_adapter("codex").expect("codex adapter");
+        let mut args = bare_exec_args();
+        args.extra_args = vec!["--model".to_owned(), "o3".to_owned()];
+        args.prompt = Some("inspect".to_owned());
+
+        let argv = agent_argv(adapter, &args.kind, &exec_action(&args)).expect("launch argv");
+
+        assert_eq!(
+            argv,
+            adapter
+                .launch_command(&args.extra_args, args.prompt.as_deref())
+                .expect("launch command")
+        );
+    }
+
+    #[test]
+    fn agent_argv_resume_and_fork_append_extra_args() {
+        let adapter = rimz::agents::find_adapter("codex").expect("codex adapter");
+        for (fork, resume, command) in [
+            (Some("fork-id"), None, "fork"),
+            (None, Some("resume-id"), "resume"),
+        ] {
+            let mut args = bare_exec_args();
+            args.fork = fork.map(str::to_owned);
+            args.resume = resume.map(str::to_owned);
+            args.extra_args = vec!["--model".to_owned(), "o3".to_owned()];
+
+            let argv = agent_argv(adapter, &args.kind, &exec_action(&args)).expect("agent argv");
+
+            assert_eq!(
+                argv[argv.len() - args.extra_args.len()..],
+                args.extra_args,
+                "{command} extra args"
+            );
+            assert_eq!(argv[1], command);
+        }
+    }
+
+    #[test]
+    fn agent_argv_reports_missing_fork_command() {
+        let action = rimz::harness::launch::ExecAction::Fork {
+            session_id: "source-id",
+            extra_args: &[],
+        };
+
+        let err = agent_argv(&NoForkAdapter, "minimal", &action).expect_err("missing fork");
+
+        assert_eq!(err.to_string(), "agent `minimal` has no fork command");
+    }
+
     #[test]
     fn wrapper_lifetime_matrix() {
         let mut run_owned = bare_exec_args();
