@@ -19,6 +19,7 @@
 <p align="center">
   <a href="#get-started">Get started</a> ·
   <a href="#what-it-does">What it does</a> ·
+  <a href="#project-status">Status</a> ·
   <a href="#everyday-moves">Everyday moves</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#agent-compatibility-matrix">Agents</a> ·
@@ -41,6 +42,13 @@ Rimz is a realtime dashboard for harnessing agentic coding: one human and tens o
 
 Rimz stays out of your way: a single lightweight binary inside the Zellij or tmux you already run, with your keybinds intact, the agent CLIs stock, and the official web, desktop, and mobile apps untouched. The same footprint carries the primitives that **harness engineering** and **loop engineering** build on: the sidebar is the observability layer, one uniform interface reaches Claude Code, Codex, Pi, and OpenCode, a durable message system steers and queues agents, supervised runs carry exit codes into scripts and CI, and scheduled wakeups keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on those primitives.
 
+## Project status
+
+Rimz is **alpha software**, moving fast. Expect rough edges and the occasional bug, and expect the surface to shift: commands, flags, config keys, and output formats can change between releases while the design settles.
+
+It is also heavily used, on itself. Rimz is built with Rimz: the fleet behind this repository routinely runs 50–100 concurrent agents across 10–30 parallel worktrees and PRs, and a single room stays responsive with 100+ agents from multiple providers working at once. Driven through teams and loops, most of the routine engineering here — features, bug fixes, CI repair — already flows through the harness with little hand-holding.
+
+Read that as: ready for personal, daily use today; for production workflows that need a stable interface, wait for the 1.0 release.
 
 ## What it does
 
@@ -275,7 +283,7 @@ rimz hooks install              # every detected agent (claude, codex, pi, openc
 rimz doctor                     # verify backend, hooks, and room health
 ```
 
-The install is additive (your existing hooks stay), and `rimz hooks uninstall` undoes it. Rimz is pre-release: the agent adapters, both multiplexer backends, and the sidebar are implemented in-tree.
+The install is additive (your existing hooks stay), and `rimz hooks uninstall` undoes it. Rimz is pre-release ([project status](#project-status)): the agent adapters, both multiplexer backends, and the sidebar are implemented in-tree.
 
 ## Contributing
 
