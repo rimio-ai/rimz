@@ -573,7 +573,7 @@ fn build_source_file_groups(
 ) -> (Option<FileGroup>, Option<FileGroup>) {
     let (code_functions, test_functions) = functions
         .into_iter()
-        .partition(|metrics| !inline_test_marker.is_some_and(|line| metrics.start_line >= line));
+        .partition(|metrics| inline_test_marker.is_none_or(|line| metrics.start_line < line));
     (
         build_file_group(path.clone(), code_functions),
         build_file_group(path, test_functions),
