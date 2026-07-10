@@ -15,7 +15,7 @@
 #   rimz loop add sync-repo \
 #     --check './scripts/sync-repo --loop-check' \
 #     --on fail \
-#     --spec codex \
+#     --agent codex \
 #     --prompt 'Repair the scheduled repository sync, then rerun ./scripts/sync-repo --loop-check.' \
 #     --every 15m
 #
@@ -90,7 +90,7 @@ def parse_args(argv: list[str]) -> Config:
         epilog=(
             "Scheduled use: run this as a Rimz loop check with `on = \"fail\"`, "
             "for example `rimz loop add sync-repo --check './scripts/sync-repo "
-            "--loop-check' --on fail --spec codex --prompt 'Repair the scheduled "
+            "--loop-check' --on fail --agent codex --prompt 'Repair the scheduled "
             "repository sync, then rerun ./scripts/sync-repo --loop-check.' "
             "--every 15m`."
         ),
