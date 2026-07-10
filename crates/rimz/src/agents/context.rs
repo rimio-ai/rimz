@@ -7,8 +7,9 @@
 //! render-only; turn-error and turn-settle markers also feed the shared status
 //! projection so read paths agree about hookless turn ends. Each agent
 //! integration produces it from its own transport or local refresh via
-//! [`super::AgentAdapter`]; storage ([`crate::store::agent_context`]) and the
-//! snapshot fold-in are
+//! [`super::AgentAdapter`]; lifecycle hooks also keep the current turn's
+//! confirmed message openers here so an agent-authored send can retain exact
+//! reply causality. Storage ([`crate::store::agent_context`]) and the snapshot fold-in are
 //! transport-agnostic, so a new agent slots in with only a new producer — no
 //! change to this type, the sidecar, or the fold-in.
 
