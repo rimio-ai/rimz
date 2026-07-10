@@ -259,6 +259,7 @@ fn fuse(bencher: Bencher) {
             divan::black_box(rimz::sidebar::fuse::fuse(
                 &fixture.snapshot,
                 &fixture.events,
+                None,
                 fixture.now_ms,
             ));
         });

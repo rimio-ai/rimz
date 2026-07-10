@@ -73,6 +73,12 @@ pub enum SidebarEvent {
     FocusStranded {
         pane_id: PaneId,
     },
+    /// Store-less wakeup for a sidebar-initiated focus jump. The durable focus
+    /// anchor carries the intent; this event only makes peer renderers fold it
+    /// before the mux switch reveals the destination.
+    FocusIntent {
+        pane_id: PaneId,
+    },
     CommandChanged {
         pane_id: PaneId,
         command: String,
@@ -260,6 +266,7 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         SidebarEvent::FocusChanged { .. } => Some(EventKey::Focus),
         SidebarEvent::PaneOpened { command: None, .. }
         | SidebarEvent::FocusStranded { .. }
+        | SidebarEvent::FocusIntent { .. }
         | SidebarEvent::PanesChanged
         | SidebarEvent::StoreDelta { .. }
         | SidebarEvent::PaneFramePublished
@@ -297,6 +304,9 @@ mod tests {
                 command: "codex".to_owned(),
             },
             SidebarEvent::FocusStranded {
+                pane_id: pane("terminal_2"),
+            },
+            SidebarEvent::FocusIntent {
                 pane_id: pane("terminal_2"),
             },
             SidebarEvent::FocusChanged {
@@ -457,6 +467,13 @@ mod tests {
             },
             12,
             102,
+        );
+        store.append(
+            SidebarEvent::FocusIntent {
+                pane_id: pane("terminal_2"),
+            },
+            13,
+            103,
         );
         assert!(store.is_empty());
     }

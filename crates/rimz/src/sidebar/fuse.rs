@@ -1,16 +1,23 @@
-//! Pure fusion of pulled sidebar truth with realtime events.
+//! Pure fusion of pulled sidebar truth, realtime events, and pending jump intent.
 //!
-//! Pulled truth remains authoritative. Events newer than the pane frame overlay
-//! latency-sensitive topology, command, and focus changes until the next pull
-//! supersedes them.
+//! Pulled truth remains authoritative for observations. Events newer than the
+//! pane frame overlay latency-sensitive topology, command, and focus changes
+//! until the next pull supersedes them. A pending user focus intent outranks
+//! both observation channels until the mux confirms it or its anchor expires.
 
 use std::collections::HashSet;
 
 use crate::SidebarSnapshot;
 use crate::sidebar::events::EventStore;
 use crate::sidebar::events::SidebarEvent;
+use crate::sidebar::focus_anchor::FocusAnchor;
 
-pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> SidebarSnapshot {
+pub fn fuse(
+    pulled: &SidebarSnapshot,
+    events: &EventStore,
+    intent: Option<&FocusAnchor>,
+    now_ms: u64,
+) -> SidebarSnapshot {
     let baseline = pulled
         .panes_observed_at_ms
         .or(pulled.panes_produced_at_ms)
@@ -24,7 +31,7 @@ pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> Sideb
         .active(now_ms)
         .filter(|event| event.sent_at_ms > baseline || closes_carried_pane(event, &carried_panes))
         .collect::<Vec<_>>();
-    if active.is_empty() {
+    if active.is_empty() && intent.is_none() {
         return pulled.clone();
     }
 
@@ -59,7 +66,47 @@ pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> Sideb
         fused.overlay_focus(focus.1, focus.2);
     }
 
+    if let Some(intent) = intent
+        && snapshot_has_pane(&fused, &intent.pane_id)
+    {
+        fused.overlay_focus(std::slice::from_ref(&intent.pane_id), &[]);
+    }
+
     fused
+}
+
+pub fn focus_intent_confirmed(
+    pulled: &SidebarSnapshot,
+    events: &EventStore,
+    intent: &FocusAnchor,
+    now_ms: u64,
+) -> bool {
+    let pulled_confirms = pulled.focused_pane.as_ref() == Some(&intent.pane_id)
+        && pulled
+            .panes_observed_at_ms
+            .is_some_and(|observed_at_ms| observed_at_ms >= intent.stamp_ms);
+    let event_confirms = events.active(now_ms).any(|event| {
+        event.sent_at_ms >= intent.stamp_ms
+            && matches!(
+                &event.event,
+                SidebarEvent::FocusChanged { focused, .. }
+                    if matches!(focused.as_slice(), [pane] if pane == &intent.pane_id)
+            )
+    });
+
+    pulled_confirms || event_confirms
+}
+
+fn snapshot_has_pane(snapshot: &SidebarSnapshot, pane_id: &crate::ids::PaneId) -> bool {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .any(|row| {
+            row.pane
+                .as_ref()
+                .is_some_and(|pane| &pane.pane_id == pane_id)
+        })
 }
 
 fn closes_carried_pane(
@@ -150,6 +197,15 @@ mod tests {
         store.append(event, sent_at_ms, sent_at_ms);
     }
 
+    fn intent(pane_id: PaneId, stamp_ms: u64) -> FocusAnchor {
+        FocusAnchor {
+            pane_id,
+            offset: 0,
+            stamp_ms,
+            order: None,
+        }
+    }
+
     fn row_ids(snapshot: &SidebarSnapshot) -> Vec<String> {
         snapshot
             .worktree_groups
@@ -170,7 +226,7 @@ mod tests {
             SidebarEvent::PaneClosed { pane_id: focused },
         );
 
-        let fused = fuse(&snapshot, &store, 11);
+        let fused = fuse(&snapshot, &store, None, 11);
         assert!(row_ids(&fused).is_empty());
         assert_eq!(fused.focused_pane, None);
     }
@@ -188,7 +244,7 @@ mod tests {
         );
 
         assert_eq!(
-            row_ids(&fuse(&snapshot, &store, 20)),
+            row_ids(&fuse(&snapshot, &store, None, 20)),
             vec!["zellij:terminal_1"]
         );
     }
@@ -213,7 +269,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, 21);
+        let fused = fuse(&snapshot, &store, None, 21);
         assert_eq!(fused.focused_pane, Some(active));
     }
 
@@ -235,7 +291,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, 20);
+        let fused = fuse(&snapshot, &store, None, 20);
         assert!(row_ids(&fused).is_empty());
         assert_eq!(fused.truth_degraded, None);
     }
@@ -253,7 +309,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, 11);
+        let fused = fuse(&snapshot, &store, None, 11);
         let row = &fused.worktree_groups[0].rows[0];
         assert_eq!(row.id, "zellij:terminal_1");
         assert_eq!(row.name, "cargo");
@@ -273,7 +329,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, 11);
+        let fused = fuse(&snapshot, &store, None, 11);
         assert!(row_ids(&fused).is_empty());
     }
 
@@ -304,7 +360,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, 12);
+        let fused = fuse(&snapshot, &store, None, 12);
         assert_eq!(fused.focused_pane, Some(active.clone()));
         assert!(fused.viewed_panes.contains(&active));
     }
@@ -333,7 +389,7 @@ mod tests {
             },
         );
 
-        let fused = fuse(&snapshot, &store, 11);
+        let fused = fuse(&snapshot, &store, None, 11);
         assert_eq!(fused.focused_pane, Some(first));
         let focused_rows = fused
             .worktree_groups
@@ -345,5 +401,157 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(focused_rows.contains(&second));
         assert!(focused_rows.contains(&foreign));
+    }
+
+    #[test]
+    fn pending_intent_overrides_newer_pulled_focus() {
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let observed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = pulled(
+            vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
+            12,
+        );
+        snapshot.panes_observed_at_ms = Some(12);
+        snapshot.focused_pane = Some(observed);
+
+        let fused = fuse(
+            &snapshot,
+            &EventStore::default(),
+            Some(&intent(target.clone(), 11)),
+            12,
+        );
+
+        assert_eq!(fused.focused_pane, Some(target));
+    }
+
+    #[test]
+    fn pending_intent_overrides_newer_focus_event() {
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let observed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let snapshot = pulled(
+            vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
+            10,
+        );
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            12,
+            SidebarEvent::FocusChanged {
+                focused: vec![observed],
+                unfocused: Vec::new(),
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, Some(&intent(target.clone(), 11)), 12);
+
+        assert_eq!(fused.focused_pane, Some(target));
+    }
+
+    #[test]
+    fn pending_intent_without_a_row_does_not_override() {
+        let observed = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let missing = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+        snapshot.focused_pane = Some(observed.clone());
+
+        let fused = fuse(
+            &snapshot,
+            &EventStore::default(),
+            Some(&intent(missing, 11)),
+            11,
+        );
+
+        assert_eq!(fused.focused_pane, Some(observed));
+    }
+
+    #[test]
+    fn observed_pulled_focus_confirms_intent() {
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 12);
+        snapshot.panes_observed_at_ms = Some(12);
+        snapshot.focused_pane = Some(target.clone());
+
+        assert!(focus_intent_confirmed(
+            &snapshot,
+            &EventStore::default(),
+            &intent(target, 11),
+            12,
+        ));
+    }
+
+    #[test]
+    fn observed_single_focus_event_confirms_intent() {
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            12,
+            SidebarEvent::FocusChanged {
+                focused: vec![target.clone()],
+                unfocused: Vec::new(),
+            },
+        );
+
+        assert!(focus_intent_confirmed(
+            &snapshot,
+            &store,
+            &intent(target, 11),
+            12,
+        ));
+    }
+
+    #[test]
+    fn different_or_older_focus_evidence_does_not_confirm_intent() {
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let other = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = pulled(
+            vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
+            10,
+        );
+        snapshot.panes_observed_at_ms = Some(12);
+        snapshot.focused_pane = Some(other);
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            10,
+            SidebarEvent::FocusChanged {
+                focused: vec![target.clone()],
+                unfocused: Vec::new(),
+            },
+        );
+
+        assert!(!focus_intent_confirmed(
+            &snapshot,
+            &store,
+            &intent(target, 11),
+            12,
+        ));
+    }
+
+    #[test]
+    fn multi_pane_focus_dump_does_not_confirm_intent() {
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let other = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let snapshot = pulled(
+            vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
+            10,
+        );
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            12,
+            SidebarEvent::FocusChanged {
+                focused: vec![target.clone(), other],
+                unfocused: Vec::new(),
+            },
+        );
+
+        assert!(!focus_intent_confirmed(
+            &snapshot,
+            &store,
+            &intent(target, 11),
+            12,
+        ));
     }
 }

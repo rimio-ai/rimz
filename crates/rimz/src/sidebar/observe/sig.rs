@@ -299,6 +299,7 @@ fn extract_events(event_store: &EventStore, now_ms: u64) -> EventsSig {
             SidebarEvent::CommandChanged { .. }
             | SidebarEvent::FocusChanged { .. }
             | SidebarEvent::FocusStranded { .. }
+            | SidebarEvent::FocusIntent { .. }
             | SidebarEvent::PanesChanged
             | SidebarEvent::StoreDelta { .. }
             | SidebarEvent::PaneFramePublished

@@ -999,24 +999,103 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
 }
 
 #[test]
-fn focus_anchor_write_carries_current_scroll_offset() {
+fn record_focus_intent_writes_anchor_without_storing_an_overlay() {
     let ws = workspace();
     let (dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    state.last_pulled = snapshot_with_focused_pane(
+        &ws,
+        PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
+    );
     state.ui.scroll_offset = 11;
     state.ui.last_order = crate::sidebar_pane::render::FrozenOrder {
         groups: vec!["main".to_owned()],
         rows: vec!["row-2".to_owned(), "row-1".to_owned()],
         visible: HashSet::from(["row-2".to_owned()]),
     };
+    let recorded_order = state.ui.last_order.clone();
 
-    state.record_focus_anchor(&pane);
+    state
+        .record_focus_intent(
+            &config,
+            pane.clone(),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("record focus intent");
 
     let anchor = crate::sidebar::focus_anchor::load(&runtime).expect("focus anchor");
     assert_eq!(anchor.pane_id, pane);
     assert_eq!(anchor.offset, 11);
-    assert_eq!(anchor.order, Some(state.ui.last_order.clone()));
+    assert_eq!(anchor.order, Some(recorded_order));
+    assert!(crate::sidebar::focus_anchor::is_fresh(
+        anchor.stamp_ms,
+        crate::sidebar::timing::unix_now_ms(),
+    ));
+    assert!(state.event_store.is_empty());
+}
+
+#[test]
+fn confirmed_focus_intent_does_not_mask_a_later_focus_change() {
+    let ws = workspace();
+    let (dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    let first = PaneId::from_parts(crate::MuxName::Zellij, "terminal_1");
+    let target = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    let snapshot = snapshot_with_focused_pane(&ws, first.clone());
+    state.last_pulled = snapshot.clone();
+    state.current = snapshot;
+    state
+        .record_focus_intent(
+            &config,
+            target.clone(),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("record focus intent");
+    let anchor = crate::sidebar::focus_anchor::load(&runtime).expect("focus anchor");
+    let mut terminal = fixed_terminal();
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    state
+        .on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                SidebarEvent::FocusChanged {
+                    focused: vec![target],
+                    unfocused: vec![first.clone()],
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("confirming focus event");
+    assert_eq!(state.confirmed_focus_intent_ms, anchor.stamp_ms);
+
+    state
+        .on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                SidebarEvent::FocusChanged {
+                    focused: vec![first.clone()],
+                    unfocused: Vec::new(),
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("later focus event");
+
+    assert_eq!(state.current.focused_pane, Some(first));
     assert!(crate::sidebar::focus_anchor::is_fresh(
         anchor.stamp_ms,
         crate::sidebar::timing::unix_now_ms(),
@@ -1155,22 +1234,24 @@ fn external_focus_change_arms_group_reveal_once() {
 }
 
 #[test]
-fn focus_anchor_for_other_pane_leaves_scroll_untouched() {
+fn confirmed_focus_anchor_for_other_pane_leaves_scroll_untouched() {
     let ws = workspace();
     let config = serve_config(&ws);
     let (dir, mut state) = loop_state(&ws);
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let selected = PaneId::from_parts(crate::MuxName::Zellij, "terminal_2");
+    let stamp_ms = crate::sidebar::timing::unix_now_ms();
     crate::sidebar::focus_anchor::store(
         &runtime,
         &crate::sidebar::focus_anchor::FocusAnchor {
             pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_1"),
             offset: 7,
-            stamp_ms: crate::sidebar::timing::unix_now_ms(),
+            stamp_ms,
             order: None,
         },
     )
     .expect("store anchor");
+    state.confirmed_focus_intent_ms = stamp_ms;
     state.ui.scroll_offset = 3;
     let (mut fetch, _request_rx) = fetch_dispatcher();
 

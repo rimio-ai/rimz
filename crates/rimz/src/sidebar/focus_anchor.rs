@@ -1,4 +1,8 @@
-//! Runtime scroll anchor for sidebar-initiated pane jumps.
+//! Durable runtime record for sidebar-initiated pane jumps.
+//!
+//! The fusion layer trusts the intent pane until the mux confirms it or the
+//! anchor expires. Peer renderers also adopt its scroll offset and frozen row
+//! order when the jump lands.
 
 use std::collections::HashSet;
 use std::fs;

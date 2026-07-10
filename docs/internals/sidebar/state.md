@@ -4,7 +4,7 @@ This doc owns the sidebar **data plane**: the node model every renderer runs, th
 
 ## At a glance
 
-Every sidebar renderer is a **node**. A node paints from two in-memory stores — *pulled truth* and a *typed event store* — fused on every frame by a pure function. One node per workspace is elected **producer** and does all the expensive external work once; every other node consumes what it publishes.
+Every sidebar renderer is a **node**. A node paints from *pulled truth* and a *typed event store*, with a fresh durable jump intent overlaid until the mux confirms it. One node per workspace is elected **producer** and does all the expensive external work once; every other node consumes what it publishes.
 
 ```text
   store rollup (durable truth)          elected producer ── pulls ──▶ per-lane caches
@@ -12,10 +12,10 @@ Every sidebar renderer is a **node**. A node paints from two in-memory stores �
             │                                                    │
             └────────────────────┬───────────────────────────────┘
                                  ▼
-   every node:   pulled truth   +   event store (wakeup overlays)
-                                 │
-                                 ▼
-              fuse(pulled, events, now)  ──▶  SidebarSnapshot  ──▶  paint
+   every node:   pulled truth   +   event store   +   pending focus intent
+                                      │
+                                      ▼
+              fuse(pulled, events, intent, now)  ──▶  SidebarSnapshot  ──▶  paint
                     (pure: no IO, no subprocess, no clock read past `now`)
 ```
 
@@ -23,7 +23,7 @@ Durable truth is the store; everything the producer publishes is a cache that a 
 
 ## The node model
 
-A node holds two-part runtime state. **Pulled truth** is the event-fresh store rollup folded over the producer's published pane frame and enrichment caches. The **event store** is a small set of typed realtime events received since the last fold. Every paint computes `fuse(pulled, events, now)` and renders the resulting `SidebarSnapshot`, so a node's frame is a function of its two stores and one clock value.
+A node holds **pulled truth**, a small **event store** of typed realtime overlays received since the last fold, and a confirmation latch for the workspace-shared focus anchor. Every paint computes `fuse(pulled, events, pending_intent, now)` and renders the resulting `SidebarSnapshot`. The renderer loads the anchor before fusion; a fresh unconfirmed anchor is pending intent, while a confirming mux observation latches its stamp and retires it.
 
 The pane frame admits the cards; the store, sidecars, and events only enrich admitted cards. A frameless fold (CLI consumers that want rollup metadata, not a roster) sets `SidebarSnapshot::panes_produced_at_ms` to null and leaves `worktree_groups` empty.
 
@@ -61,7 +61,7 @@ Producer **enrichment lanes** fold onto the admitted cards. The fetch worker han
 
 Per-session **sidecars** (`agent_context/`, `subagent_context/`, `agent-activity/`) are the exception to producer ownership: CLI hook and statusline runs write them latest-wins, and the elder's transcript watcher refreshes Codex context between hooks ([Push channels](#push-channels)). Every node reads them fresh behind stat-gated parse caches.
 
-The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (a TTL-gated jump viewport hint that every renderer reads on focus adoption), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../diagnostics.md)). The store's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the store write tail — [store.md](../store.md) owns them.
+The remaining files are **coordination and receipts**, terse by design: `heartbeat/sidebar.<instance>.json` (election and wakeup fanout — the eldest fresh heartbeat is the producer), `sock/sidebar.<instance>.sock` (the node's wakeup datagram socket), `loop-fire.json` (elder loop-task arm/fire stamps for this room), `unread.json` and `read-marks/…` (open unread episodes and per-row read receipts that every fold reads), `focus-anchor.json` (the TTL-gated durable jump intent, viewport offset, and frozen order every renderer reads on fusion), `binding.log.jsonl` (append-only pane-bind decisions; [sidebar.md](./sidebar.md)), and `diag.log.jsonl` (typed anomaly records; [diagnostics.md](../diagnostics.md)). The store's own `snapshots/latest.json` and `snapshots/rollup.json` are state-dir files owned by the store write tail — [store.md](../store.md) owns them.
 
 Heartbeat lifecycle is bounded by TTL between session boundaries and by purge at rebirth. The renderer writes and restamps its own heartbeat, the launch gate and producer election trust fresh heartbeats while the session lives, and a birth that has proven the session absent purges heartbeat files before creating the replacement session.
 
@@ -77,7 +77,8 @@ The receive path drops an event for another workspace or session before it reach
 | --- | --- | --- | --- |
 | `PaneClosed` | `pane_id` | Delete every row bound to the pane (highest precedence) | Zellij plugin, tmux control-mode watch |
 | `CommandChanged` | `pane_id`, `command` | Overlay the command until a pull verifies the pane's row shape | Zellij plugin, tmux watch |
-| `FocusChanged` | focused / unfocused pane ids | Mirror focus bits onto every row; a single focused pane updates `SidebarSnapshot::focused_pane` and appends it to `viewed_panes`; an unfocus naming the register clears it | Zellij plugin pane-focus and tab-switch-to-work events, tmux watch (pane-active and non-stranded window switch), renderer jumps |
+| `FocusChanged` | focused / unfocused pane ids | Mirror focus bits onto every row; a single focused pane updates `SidebarSnapshot::focused_pane` and appends it to `viewed_panes`; an unfocus naming the register clears it | Zellij plugin pane-focus and tab-switch-to-work events, tmux watch (pane-active and non-stranded window switch) |
+| `FocusIntent` | target `pane_id` | Store-less nudge: fold the durable focus anchor immediately so hidden peer tabs repaint before the mux switch reveals them | renderer jumps |
 | `FocusStranded` | sidebar `pane_id` | Renderer action only, dropped past the short `FOCUS_STRANDED_EVENT_TTL` so late delivery cannot yank focus: the matching sidebar pane refocuses its held or own-view working sibling; when attached clients are viewing distinct panes, the renderer leaves focus alone because `focus-pane-id` is session-global | Zellij plugin, tmux watch on a window switch onto a stranded sidebar |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; never admits a card on its own | Zellij plugin, tmux watch |
 | `PanesChanged` | none | Nudge a producer pull — topology moved, identity unknown | tmux watch fallback, the Zellij manifest fold |
@@ -107,7 +108,9 @@ Fusion is pure over pulled truth, the event store, and `now_ms`: no IO, no subpr
 
 `SidebarSnapshot::panes_observed_at_ms.or(panes_produced_at_ms)` is the supersession baseline: an event no newer than the pane observation is skipped, because the pull already saw later pane truth. A `PaneClosed` naming a *carried* pane applies at any age — the frame held that pane on process evidence rather than seeing it, so the frame proves nothing the close could be superseded by, and the close also retires the pane's carried-truth notice.
 
-The overlays apply in precedence order. `PaneClosed` runs first and deletes rows; if it names `focused_pane`, the register clears and the renderer holds its last highlight. `PaneOpened` creates nothing; it asks the producer for a verified frame. `CommandChanged` overlays the command for non-deleted, already-admitted panes. The newest `FocusChanged` lands last: row bits mirror every listed focus mark, a single focused pane sets the session register and marks the pane viewed, and a multi-pane level dump mirrors row bits only.
+The overlays apply in precedence order. `PaneClosed` runs first and deletes rows; if it names `focused_pane`, the register clears and the renderer holds its last highlight. `PaneOpened` creates nothing; it asks the producer for a verified frame. `CommandChanged` overlays the command for non-deleted, already-admitted panes. The newest `FocusChanged` lands after those observation overlays: row bits mirror every listed focus mark, a single focused pane sets the session register and marks the pane viewed, and a multi-pane level dump mirrors row bits only.
+
+A fresh unconfirmed focus anchor lands last and overrides both the pulled register and `FocusChanged`, provided its pane still has an admitted row. A pulled pane frame confirms the intent when it observed the anchor pane focused at or after the anchor stamp; a single-focus `FocusChanged` does the same. Each renderer latches confirmation so a later genuine external focus change rules immediately instead of resurrecting the anchor after the confirming event leaves the single focus slot. An unconfirmed intent expires after `FOCUS_ANCHOR_FRESH`, returning authority to mux observations.
 
 Expired events disappear by receiver-clock TTL, and any wrong verdict from a missed event or clock skew is bounded by the next producer pull.
 
@@ -140,7 +143,7 @@ Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase c
 
 The serve loop also wakes at the renderer-local order-hold expiry to fire the releasing fold that lets rows and groups settle back to live rank after the user goes idle.
 
-The jump scroll anchor is a display-only runtime file, TTL-gated by `FOCUS_ANCHOR_FRESH`, carried renderer-to-renderer on the existing `FocusChanged` wakeup.
+The jump focus anchor is a durable runtime intent plus display anchor, TTL-gated by `FOCUS_ANCHOR_FRESH`. A store-less `FocusIntent` wakeup makes peers fold it immediately; a missed wakeup only delays the fold until another event or pull because the file remains authoritative until confirmation or expiry.
 
 An attached sidebar in an unviewed tab keeps animation suspended and repaints only when its glanceable roster/status/unread projection changes, throttled by `BACKGROUND_PAINT_MIN_INTERVAL`; turn phase, gauges, process metrics, spend, git facts, and animation phase stay off the hidden paint trigger.
 

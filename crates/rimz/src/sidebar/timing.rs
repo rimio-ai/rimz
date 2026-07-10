@@ -48,8 +48,9 @@ pub const REORDER_HOLD: Duration = Duration::from_secs(5);
 pub const SELF_CLOSE_EMPTY_CONFIRM: Duration = Duration::from_secs(5);
 
 /// How long a jump scroll anchor stays applicable. Long enough for the
-/// destination tab to refold and adopt the focus after the jump's
-/// `FocusChanged` broadcast; an older anchor is a stale jump and is ignored.
+/// destination tab to refold and adopt the focus after the jump's nudge. This
+/// also bounds how long an unconfirmed jump intent outranks observed focus; an
+/// older anchor is a stale jump and is ignored.
 pub const FOCUS_ANCHOR_FRESH: Duration = Duration::from_millis(2500);
 
 /// How long the user must stay in a tab before its unread siblings clear.

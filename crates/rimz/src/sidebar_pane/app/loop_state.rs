@@ -114,6 +114,7 @@ pub(super) struct LoopState {
     /// siblings. `None` when no dwell is pending.
     pub(super) tab_read_dwell_until: Option<Instant>,
     event_store: EventStore,
+    confirmed_focus_intent_ms: u64,
     observer: observe::Observer,
     observe_tx: SyncSender<ObserveMsg>,
     pub(super) health: Health,
@@ -206,6 +207,7 @@ impl LoopState {
             optimistic_watch_until: None,
             tab_read_dwell_until: None,
             event_store: EventStore::default(),
+            confirmed_focus_intent_ms: 0,
             observer: observe::Observer::default(),
             observe_tx,
             health: Health::default(),
@@ -407,7 +409,13 @@ impl LoopState {
                 self.last_pulled = pulled;
                 let now_ms = crate::sidebar::timing::unix_now_ms();
                 self.event_store.prune(now_ms);
-                outcome.snapshot = Ok(fuse(&self.last_pulled, &self.event_store, now_ms));
+                let intent = self.pending_focus_intent(now_ms);
+                outcome.snapshot = Ok(fuse(
+                    &self.last_pulled,
+                    &self.event_store,
+                    intent.as_ref(),
+                    now_ms,
+                ));
             }
             self.fetched_at = Instant::now();
             rejected = self.fold_outcome(config, outcome, anim_start, diag)?;
@@ -519,6 +527,29 @@ impl LoopState {
                     spawn_pane_focus(target, &config.session_name);
                 }
             }
+            SidebarEvent::FocusIntent { .. } => {
+                let now_ms = crate::sidebar::timing::unix_now_ms();
+                let intent = self.pending_focus_intent(now_ms);
+                let fused = fuse(
+                    &self.last_pulled,
+                    &self.event_store,
+                    intent.as_ref(),
+                    now_ms,
+                );
+                self.fold_outcome(
+                    config,
+                    FetchOutcome {
+                        snapshot: Ok(fused),
+                        final_for_request: false,
+                        fresh_pane_frame: false,
+                        unchanged: false,
+                        producer: self.last_known_elder,
+                    },
+                    anim_start,
+                    diag,
+                )?;
+                self.next_frame = Instant::now();
+            }
             // An overlay event fuses into the in-memory state and paints this
             // frame. A topology overlay also asks the producer to verify with a
             // real pull, which supersedes the overlay once its fresh frame
@@ -532,7 +563,13 @@ impl LoopState {
                     if own.is_some_and(|pane| unfocused.contains(pane)));
                 let now_ms = crate::sidebar::timing::unix_now_ms();
                 self.event_store.append(event, sent_at_ms, now_ms);
-                let fused = fuse(&self.last_pulled, &self.event_store, now_ms);
+                let intent = self.pending_focus_intent(now_ms);
+                let fused = fuse(
+                    &self.last_pulled,
+                    &self.event_store,
+                    intent.as_ref(),
+                    now_ms,
+                );
                 self.fold_outcome(
                     config,
                     FetchOutcome {
@@ -667,12 +704,11 @@ impl LoopState {
             order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
         }
         if let Some(pane) = applied.focused {
-            // A jump writes the scroll anchor, then broadcasts the focus intent
-            // so peer tabs adopt the anchor offset and repaint while still
-            // hidden. The mux focus switch fires last, so the destination tab
-            // is already at the synced offset when it becomes visible. The
-            // producer pull verifies the optimistic focus on the next wakeup.
-            self.record_focus_anchor(&pane);
+            // A jump records and broadcasts the focus intent so peer tabs
+            // adopt the anchor offset and repaint while still hidden. The mux
+            // focus switch fires last, so the destination tab is already at
+            // the synced offset when it becomes visible. The producer pull
+            // verifies the optimistic focus on the next wakeup.
             self.record_focus_intent(config, pane.clone(), anim_start, diag)?;
             spawn_pane_focus(pane, &config.session_name);
         }
@@ -1296,18 +1332,6 @@ impl LoopState {
         Ok(applied.rejected)
     }
 
-    fn record_focus_anchor(&self, pane: &PaneId) {
-        let anchor = crate::sidebar::focus_anchor::FocusAnchor {
-            pane_id: pane.clone(),
-            offset: self.ui.scroll_offset,
-            stamp_ms: crate::sidebar::timing::unix_now_ms(),
-            order: Some(self.ui.last_order.clone()),
-        };
-        if let Err(err) = crate::sidebar::focus_anchor::store(self.read_marks.runtime(), &anchor) {
-            debug!(error = %err, "focus anchor write failed");
-        }
-    }
-
     fn apply_focus_anchor(&mut self) {
         let Some(selected) = self.ui.selected_pane.clone() else {
             return;
@@ -1337,6 +1361,20 @@ impl LoopState {
         }
     }
 
+    fn pending_focus_intent(&mut self, now_ms: u64) -> Option<FocusAnchor> {
+        let anchor = crate::sidebar::focus_anchor::load(self.read_marks.runtime())?;
+        if !crate::sidebar::focus_anchor::is_fresh(anchor.stamp_ms, now_ms)
+            || anchor.stamp_ms <= self.confirmed_focus_intent_ms
+        {
+            return None;
+        }
+        if focus_intent_confirmed(&self.last_pulled, &self.event_store, &anchor, now_ms) {
+            self.confirmed_focus_intent_ms = anchor.stamp_ms;
+            return None;
+        }
+        Some(anchor)
+    }
+
     fn record_focus_intent(
         &mut self,
         config: &ServeConfig,
@@ -1345,12 +1383,22 @@ impl LoopState {
         diag: &crate::diag::DiagSink,
     ) -> Result<()> {
         let now_ms = crate::sidebar::timing::unix_now_ms();
-        let event = SidebarEvent::FocusChanged {
-            focused: vec![pane.clone()],
-            unfocused: Vec::new(),
+        let anchor = FocusAnchor {
+            pane_id: pane.clone(),
+            offset: self.ui.scroll_offset,
+            stamp_ms: now_ms,
+            order: Some(self.ui.last_order.clone()),
         };
-        self.event_store.append(event.clone(), now_ms, now_ms);
-        let fused = fuse(&self.last_pulled, &self.event_store, now_ms);
+        if let Err(err) = crate::sidebar::focus_anchor::store(self.read_marks.runtime(), &anchor) {
+            debug!(error = %err, "focus anchor write failed");
+        }
+        let intent = self.pending_focus_intent(now_ms);
+        let fused = fuse(
+            &self.last_pulled,
+            &self.event_store,
+            intent.as_ref(),
+            now_ms,
+        );
         self.fold_outcome(
             config,
             FetchOutcome {
@@ -1368,10 +1416,12 @@ impl LoopState {
             && let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
                 &runtime,
                 Some(&config.session_name),
-                event,
+                SidebarEvent::FocusIntent {
+                    pane_id: pane.clone(),
+                },
             )
         {
-            debug!(pane = %pane, error = %err, "renderer focus event broadcast failed");
+            debug!(pane = %pane, error = %err, "renderer focus intent broadcast failed");
         }
         Ok(())
     }
