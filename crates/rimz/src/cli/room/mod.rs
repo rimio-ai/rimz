@@ -1131,6 +1131,104 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Room resources prepared for one supervised run.
+pub(crate) struct RunRoom {
+    backend: Box<dyn MuxBackend>,
+    mux: MuxName,
+    mux_config: rimz::config::MultiplexerConfig,
+    width: SidebarWidth,
+    detected_size: Option<(u16, u16)>,
+}
+
+impl RunRoom {
+    pub(crate) fn backend(&self) -> &dyn MuxBackend {
+        self.backend.as_ref()
+    }
+
+    pub(crate) fn mux(&self) -> MuxName {
+        self.mux
+    }
+
+    pub(crate) fn target<'a>(
+        &'a self,
+        workspace: &'a rimz::ResolvedWorkspace,
+        cwd: &'a Path,
+    ) -> RoomTarget<'a> {
+        RoomTarget {
+            workspace_id: &workspace.workspace_id,
+            project_root: &workspace.project_root,
+            session_name: &workspace.session_name,
+            cwd,
+            mux_config: &self.mux_config,
+            width: self.width,
+            detected_size: self.detected_size,
+            refresh_ms: None,
+        }
+    }
+}
+
+/// Birth a room for a supervised run and return its mux resources.
+///
+/// This sequence skips incarnation inspection, resume planning, and remote
+/// control; it records the rebirth boundary itself before launching the
+/// sidebar and presence plugin.
+pub(crate) fn birth_room_for_run(
+    workspace: &rimz::ResolvedWorkspace,
+    cwd: &Path,
+    machine_config: &rimz::config::MachineConfig,
+    mux_override: Option<MuxName>,
+) -> Result<RunRoom> {
+    let mux = rimz::mux::auto_detect_backend(mux_override)?;
+    let backend = rimz::mux::backend_for(mux);
+    let mux_config = rimz::config::MultiplexerConfig::from(machine_config);
+    let width = SidebarWidth::from_config(&machine_config.theme.display);
+    let detected_size = rimz::mux::detect_terminal_size();
+    let was_live = backend.list_sessions()?.contains(&workspace.session_name);
+    if !was_live {
+        purge_rebirth_heartbeats_for_workspace(&workspace.workspace_id);
+    }
+    backend.ensure_session(&SessionOptions {
+        session_name: workspace.session_name.clone(),
+        workspace_id: workspace.workspace_id.clone(),
+        project_root: workspace.project_root.clone(),
+        cwd: cwd.to_path_buf(),
+        config: mux_config.clone(),
+        detected_size,
+        truecolor: rimz::tui::truecolor(),
+    })?;
+    if !was_live {
+        record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
+    }
+    register_focus_key(backend.as_ref(), machine_config);
+    let room = RoomTarget {
+        workspace_id: &workspace.workspace_id,
+        project_root: &workspace.project_root,
+        session_name: &workspace.session_name,
+        cwd,
+        mux_config: &mux_config,
+        width,
+        detected_size: if was_live { None } else { detected_size },
+        refresh_ms: None,
+    };
+    launch_sidebar_for_workspace(backend.as_ref(), &room, None, !was_live, &[]);
+    gate_room_before_attach(backend.as_ref(), &room, None, &[])?;
+    ensure_presence_plugin(
+        backend.as_ref(),
+        &workspace.session_name,
+        &workspace.workspace_id,
+        &mux_config.zellij,
+        machine_config.web.enabled,
+        machine_config.sidebar.focus_key_label(),
+    );
+    Ok(RunRoom {
+        backend,
+        mux,
+        mux_config,
+        width,
+        detected_size: if was_live { None } else { detected_size },
+    })
+}
+
 pub(crate) fn purge_rebirth_heartbeats_for_workspace(workspace_id: &WorkspaceId) {
     match RuntimePaths::for_workspace(workspace_id.clone()) {
         Ok(runtime) => rimz::sidebar::purge_rebirth_heartbeats(&runtime),
