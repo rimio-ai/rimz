@@ -18,6 +18,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MessageId};
 use rimz::message::{MessageRecord, MessageStatus};
 
 const POLL: Duration = Duration::from_millis(500);
+const WAIT_GUARD_TICKS: u8 = 10;
 
 pub(super) struct ReplyTarget {
     kind: AgentKind,
@@ -193,6 +194,7 @@ pub(super) fn wait_for_replies(
     steer: bool,
     wait: WaitSpec,
     deadline: Option<Instant>,
+    caller_identity: Option<(AgentKind, String)>,
 ) -> Result<()> {
     if legs.is_empty() {
         bail!("--wait requires at least one dispatched message");
@@ -226,9 +228,30 @@ pub(super) fn wait_for_replies(
         return return_or_exit(status);
     }
 
+    let mut tick = 0_u8;
     loop {
         let messages = store.list_messages()?;
-        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+        let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+        if tick == 0
+            && let Some((self_kind, self_name)) = caller_identity.as_ref()
+        {
+            snapshot = snapshot
+                .with_agent_context(rimz::store::agent_context::read_all(store.runtime_paths()));
+            let history = store.list_message_history()?;
+            let deadlocked =
+                deadlocked_legs(&legs, &messages, &history, &snapshot, self_kind, self_name);
+            for (index, cycle) in deadlocked {
+                let leg = &mut legs[index];
+                leg.done = Some(RunStatus::Failed);
+                leg.error = Some(deadlock_error(leg, &cycle));
+                if !wait.json {
+                    print_reply_result_for_leg(leg, total, &mut printed_block)?;
+                }
+                if wait.any {
+                    return finish_join(&legs, wait, Some(index));
+                }
+            }
+        }
         for index in 0..legs.len() {
             if legs[index].done.is_some() {
                 continue;
@@ -272,12 +295,65 @@ pub(super) fn wait_for_replies(
             if wait.json {
                 print_json_replies(&legs, None)?;
             } else {
-                print_timeout(&legs, &unfinished)?;
+                print_timeout(&legs, &unfinished, wait)?;
             }
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
+        tick = (tick + 1) % WAIT_GUARD_TICKS;
         std::thread::sleep(next_sleep(deadline));
     }
+}
+
+fn deadlocked_legs(
+    legs: &[Leg],
+    live: &[MessageRecord],
+    history: &[MessageRecord],
+    snapshot: &rimz::SidebarSnapshot,
+    self_kind: &AgentKind,
+    self_name: &str,
+) -> Vec<(usize, Vec<rimz::message::wait_guard::WaitCycleHop>)> {
+    legs.iter()
+        .enumerate()
+        .filter(|(_, leg)| leg.done.is_none())
+        .filter_map(|(index, leg)| {
+            let target = snapshot
+                .agents
+                .iter()
+                .find(|agent| leg.target.matches(agent))?;
+            let cycle = rimz::message::wait_guard::wait_cycle(
+                live,
+                history,
+                &snapshot.agents,
+                self_kind,
+                self_name,
+                target,
+            )?;
+            (rimz::message::wait_guard::youngest_wait_message(&cycle, &leg.message_id)
+                == leg.message_id)
+                .then_some((index, cycle))
+        })
+        .collect()
+}
+
+fn deadlock_error(leg: &Leg, cycle: &[rimz::message::wait_guard::WaitCycleHop]) -> String {
+    let action = "aborted this wait — your message stays queued and delivers at the turn boundary";
+    let Some(first) = cycle.first() else {
+        return format!("deadlock: {} is your own agent; {action}", leg.target.label);
+    };
+    let chain = (cycle.len() > 1).then(|| {
+        let mut handles = cycle
+            .iter()
+            .map(|hop| hop.handle.as_str())
+            .collect::<Vec<_>>();
+        handles.push("you");
+        format!(" ({} reply-wait chain)", handles.join(" → "))
+    });
+    format!(
+        "deadlock: {} ({}) is waiting on your reply{}; {action}",
+        first.handle,
+        first.message_id,
+        chain.as_deref().unwrap_or_default()
+    )
 }
 
 fn advance_leg(
@@ -512,17 +588,22 @@ fn print_json_replies(legs: &[Leg], winner: Option<usize>) -> Result<()> {
     Ok(())
 }
 
-fn print_timeout(legs: &[Leg], unfinished: &[usize]) -> Result<()> {
+fn print_timeout(legs: &[Leg], unfinished: &[usize], wait: WaitSpec) -> Result<()> {
     let mut err = render::err();
+    let hint = if wait.mode.uses_agent_default() {
+        " (default 1h for agent callers; use --wait=<duration> to change)"
+    } else {
+        ""
+    };
     if legs.len() == 1 {
-        writeln!(err, "rimz: wait timed out")?;
+        writeln!(err, "rimz: wait timed out{hint}")?;
     } else {
         let labels = unfinished
             .iter()
             .map(|index| legs[*index].target.label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        writeln!(err, "rimz: wait timed out for {labels}")?;
+        writeln!(err, "rimz: wait timed out for {labels}{hint}")?;
     }
     err.flush()?;
     Ok(())

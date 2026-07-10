@@ -10,6 +10,8 @@ use clap::Args;
 use rimz::ids::AgentKind;
 use rimz::message::{AutoCompact, MessageSender};
 
+const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
+
 /// The flags shared by immediate and parked message delivery.
 #[derive(Debug, Args)]
 pub(crate) struct SendFlags {
@@ -49,7 +51,8 @@ pub(crate) struct SendFlags {
     #[arg(long)]
     pub(crate) no_from: bool,
     /// Wait for the target agents' replies and print or gather their final messages.
-    /// Bare `--wait` has no deadline; use `--wait=5m` to bound the whole wait.
+    /// Bare `--wait` has no deadline for humans and a 1h deadline for agent callers;
+    /// use `--wait=5m` to set the whole wait explicitly.
     #[arg(long, value_name = "DURATION", num_args = 0..=1, require_equals = true, value_parser = parse_wait_duration)]
     pub(crate) wait: Option<Option<Duration>>,
     /// Emit replies as one JSON map keyed by agent handle. Requires `--wait`.
@@ -66,6 +69,7 @@ pub(crate) enum ReplyWait {
     Off,
     Indefinite,
     Deadline(Duration),
+    DefaultDeadline(Duration),
 }
 
 impl ReplyWait {
@@ -76,8 +80,12 @@ impl ReplyWait {
     pub(crate) fn deadline_from(self, started: Instant) -> Option<Instant> {
         match self {
             Self::Off | Self::Indefinite => None,
-            Self::Deadline(duration) => Some(started + duration),
+            Self::Deadline(duration) | Self::DefaultDeadline(duration) => Some(started + duration),
         }
+    }
+
+    pub(crate) fn uses_agent_default(self) -> bool {
+        matches!(self, Self::DefaultDeadline(_))
     }
 }
 
@@ -186,9 +194,21 @@ pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSe
     }
 }
 
-pub(crate) fn reply_wait(wait: Option<Option<Duration>>) -> ReplyWait {
+pub(crate) fn agent_caller() -> bool {
+    env_string(rimz::harness::run::ENV_AGENT_KIND).is_some()
+}
+
+pub(crate) fn agent_caller_identity() -> Option<(AgentKind, String)> {
+    Some((
+        AgentKind::new_unchecked(env_string(rimz::harness::run::ENV_AGENT_KIND)?),
+        env_string(rimz::harness::run::ENV_AGENT_NAME)?,
+    ))
+}
+
+pub(crate) fn reply_wait(wait: Option<Option<Duration>>, agent_caller: bool) -> ReplyWait {
     match wait {
         None => ReplyWait::Off,
+        Some(None) if agent_caller => ReplyWait::DefaultDeadline(AGENT_WAIT_DEADLINE),
         Some(None) => ReplyWait::Indefinite,
         Some(Some(duration)) => ReplyWait::Deadline(duration),
     }
@@ -280,10 +300,14 @@ mod tests {
 
     #[test]
     fn resolves_reply_wait_modes() {
-        assert_eq!(reply_wait(None), ReplyWait::Off);
-        assert_eq!(reply_wait(Some(None)), ReplyWait::Indefinite);
+        assert_eq!(reply_wait(None, false), ReplyWait::Off);
+        assert_eq!(reply_wait(Some(None), false), ReplyWait::Indefinite);
         assert_eq!(
-            reply_wait(Some(Some(Duration::from_secs(5)))),
+            reply_wait(Some(None), true),
+            ReplyWait::DefaultDeadline(Duration::from_secs(3600))
+        );
+        assert_eq!(
+            reply_wait(Some(Some(Duration::from_secs(5))), true),
             ReplyWait::Deadline(Duration::from_secs(5))
         );
     }

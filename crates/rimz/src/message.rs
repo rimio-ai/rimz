@@ -9,6 +9,7 @@ pub mod deliver;
 pub mod dispatch;
 pub(crate) mod fire;
 pub mod send;
+pub mod wait_guard;
 
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentState, AgentStatus};
@@ -285,6 +286,9 @@ pub struct MessageRecord {
     /// Background orchestration traffic never earns a dollar-budget waiver.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automated: bool,
+    /// The CLI that created this record is waiting for the receiver's reply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reply_wait: bool,
     #[serde(default)]
     pub body: MessageBody,
     pub text: String,
@@ -386,6 +390,7 @@ impl MessageRecord {
             channel: None,
             sender: MessageSender::Human,
             automated: false,
+            reply_wait: false,
             body: MessageBody::Prompt,
             text,
             enter,
@@ -409,7 +414,8 @@ impl MessageRecord {
         }
     }
 
-    /// Fresh `Queued` copy of a terminal record for `message requeue`.
+    /// Fresh `Queued` copy of a terminal record for `message requeue`. The
+    /// reply-wait stamp resets because a requeue has no waiting CLI behind it.
     pub fn requeue_from(record: &MessageRecord) -> MessageRecord {
         Self::new_for_card(
             record.workspace_id.clone(),
@@ -451,6 +457,12 @@ impl MessageRecord {
     #[must_use]
     pub fn with_automated(mut self, automated: bool) -> Self {
         self.automated = automated;
+        self
+    }
+
+    #[must_use]
+    pub fn with_reply_wait(mut self, reply_wait: bool) -> Self {
+        self.reply_wait = reply_wait;
         self
     }
 

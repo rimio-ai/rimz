@@ -240,6 +240,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     })
     .with_in_reply_to(vec![message_id(7), message_id(8)])
     .with_automated(true)
+    .with_reply_wait(true)
     .with_body(MessageBody::Command)
     .with_force(true)
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
@@ -270,6 +271,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
         "channel",
         "sender",
         "automated",
+        "reply_wait",
         "body",
         "force",
         "pane_id",
@@ -294,6 +296,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     assert_eq!(legacy.channel, None);
     assert_eq!(legacy.sender, MessageSender::Human);
     assert!(!legacy.automated);
+    assert!(!legacy.reply_wait);
     assert_eq!(legacy.body, MessageBody::Prompt);
     assert!(!legacy.force);
     assert_eq!(legacy.pane_id, None);
@@ -330,6 +333,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     .with_sender(agent_sender("reviewer", Some("docs")))
     .with_in_reply_to(vec![message_id(7), message_id(8)])
     .with_automated(true)
+    .with_reply_wait(true)
     .with_body(MessageBody::Command)
     .with_force(true)
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
@@ -376,6 +380,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     assert_eq!(requeued.auto_compact, original.auto_compact);
     assert_eq!(requeued.in_reply_to, original.in_reply_to);
     assert!(requeued.automated);
+    assert!(!requeued.reply_wait);
     let mut expected_after = original.after.clone();
     for condition in &mut expected_after {
         condition.met_at = None;

@@ -111,7 +111,7 @@ Give a percentage of the window (`70%`) or an occupied-token count (`120000` or 
 Add `--wait` to ask one agent or scatter the same question across a fan-out and gather the replies from their existing contexts. RimZ parks or sends each durable prompt normally, waits through every reply turn, and exits after the join settles:
 
 ```sh
-rimz message @coder --wait "did the migration land? one line"       # one bare reply, no deadline
+rimz message @coder --wait "did the migration land? one line"       # one bare reply; humans have no default deadline
 rimz message @all --wait --json "status? one line"                   # one handle-keyed reply map
 rimz message --all @reviewer --wait --any "first verdict?"           # return on the first terminal turn
 rimz message @codex --wait=5m "open the PR"                          # total delivery + turn deadline
@@ -119,6 +119,8 @@ rimz message --steer @claude --wait "answer from this turn"         # the live t
 ```
 
 A one-agent text wait keeps the compact output: the final assistant message alone on stdout. A fan-out text wait streams labeled blocks in completion order; failed legs write forensics to stderr while the remaining legs keep gathering. `--json` buffers one uniform map for either arity: `{"@coder":{"status":"completed","reply":"landed","message_id":"msg_…"}}`; non-reply failures also carry `error`.
+
+Agent-to-agent waits detect mutual and multi-agent reply cycles before they can hang: RimZ refuses or aborts the youngest wait, names the blocking handle and message, and leaves parked text queued to deliver at the next turn boundary. A bare agent-authored `--wait` has a one-hour default deadline as a backstop; use `--wait=<duration>` to choose another bound, while a human's bare wait remains indefinite.
 
 The gathered join exits 0 only when every leg completes and otherwise uses the first non-completed leg's status in target order; a deadline exits 124 after classifying unfinished legs as `timed_out`. `--any` returns on the first terminal leg regardless of success or failure, emits only that winner, and leaves every other delivered message in flight. `Waiting` and `Paused` remain inside a reply turn, so use `--wait=<duration>` when a script needs a bound.
 

@@ -1624,6 +1624,66 @@ fn steer_wait_conflicts_with_no_enter() {
 }
 
 #[test]
+fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_role_agent(&env, "claude", "sess-coder", "coder", true, None);
+    register_role_agent(&env, "claude", "sess-reviewer", "reviewer", true, None);
+    let snapshot = env.store().snapshot().expect("snapshot");
+    let coder = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.role.as_deref() == Some("coder"))
+        .expect("coder card");
+    let existing = MessageRecord::new(
+        snapshot.workspace_id.clone(),
+        coder,
+        "answer the review".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_address(Some("@coder".to_owned()))
+    .with_sender(MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("reviewer-agent".to_owned()),
+        profile: None,
+        role: Some("reviewer".to_owned()),
+        channel: None,
+    })
+    .with_reply_wait(true);
+    let existing_id = existing.message_id.clone();
+    env.store()
+        .queue_message(&existing, "rimz-test")
+        .expect("seed reviewer wait");
+
+    let out = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_NAME", "coder-agent")
+        .args([
+            "message",
+            "@reviewer",
+            "--no-from",
+            "--wait=1s",
+            "counter-question",
+        ])
+        .output()
+        .expect("cycle guard");
+
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--wait would deadlock")
+            && stderr.contains("@reviewer")
+            && stderr.contains(existing_id.as_str()),
+        "stderr names the blocking wait: {stderr}"
+    );
+    let messages = env.store().list_messages().expect("messages");
+    assert_eq!(messages.len(), 1, "the counter-wait was not enqueued");
+    assert_eq!(messages[0].message_id, existing_id);
+}
+
+#[test]
 fn steer_wait_times_out_without_turn_started_ack() {
     let env = Env::new();
     env.install_agent_hooks("claude");

@@ -30,6 +30,7 @@ pub(super) fn message_add(
         json,
         any,
     } = send;
+    let agent_caller = send::agent_caller();
     if schedule.is_some() && create {
         bail!("--schedule needs an existing agent; remove --create");
     }
@@ -37,7 +38,7 @@ pub(super) fn message_add(
         bail!("--after needs an existing recipient; remove --create");
     }
     let wait = send::WaitSpec {
-        mode: send::reply_wait(wait),
+        mode: send::reply_wait(wait, agent_caller),
         any,
         json,
     };
@@ -93,8 +94,9 @@ pub(super) fn steer_message(
         json,
         any,
     } = send;
+    let agent_caller = send::agent_caller();
     let wait = send::WaitSpec {
-        mode: send::reply_wait(wait),
+        mode: send::reply_wait(wait, agent_caller),
         any,
         json,
     };
@@ -239,7 +241,9 @@ pub(super) fn dispatch_message(
         MessageDispatchMode::Boundary => {
             pending = store.list_messages()?;
             let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-            if (!spec.after.is_empty() || matches!(sender, MessageSender::Agent { .. }))
+            if (!spec.after.is_empty()
+                || matches!(sender, MessageSender::Agent { .. })
+                || send::agent_caller())
                 && let Ok(runtime) =
                     rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
             {
@@ -302,6 +306,7 @@ pub(super) fn dispatch_message(
     if spec.auto_compact.is_some()
         || !spec.after.is_empty()
         || matches!(sender, MessageSender::Agent { .. })
+        || send::agent_caller()
     {
         if agent_context.is_none()
             && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
@@ -499,9 +504,15 @@ pub(super) fn dispatch_resolved_message(
         };
         return Err(crate::cli::ambiguous_fanout(verb, &target, &labels));
     }
+    let caller_identity = send::agent_caller_identity();
     let reply_targets = if spec.wait.is_on() {
         let mut reply_targets = Vec::with_capacity(targets.len());
         let mut checked_kinds = BTreeSet::new();
+        let guard_records = if caller_identity.is_some() {
+            Some((store.list_messages()?, store.list_message_history()?))
+        } else {
+            None
+        };
         for resolved in &targets {
             let label = resolved.label(snapshot);
             let identity = resolved.agent().ok_or_else(|| {
@@ -547,6 +558,19 @@ pub(super) fn dispatch_resolved_message(
                     );
                 }
             }
+            if let (Some((self_kind, self_name)), Some((live, history))) =
+                (caller_identity.as_ref(), guard_records.as_ref())
+                && let Some(cycle) = rimz::message::wait_guard::wait_cycle(
+                    live,
+                    history,
+                    &snapshot.agents,
+                    self_kind,
+                    self_name,
+                    agent,
+                )
+            {
+                return Err(wait_cycle_error(&cycle, &label));
+            }
             reply_targets.push(reply::ReplyTarget::new(agent, label, adapter));
         }
         Some(reply_targets)
@@ -574,6 +598,7 @@ pub(super) fn dispatch_resolved_message(
             scope_channel: channel.as_deref(),
             sender,
             automated: spec.automated,
+            reply_wait: spec.wait.is_on(),
             in_reply_to: &in_reply_to,
         },
         &targets,
@@ -610,6 +635,7 @@ pub(super) fn dispatch_resolved_message(
             matches!(mode, MessageDispatchMode::Steer),
             spec.wait,
             spec.wait.deadline_from(wait_started),
+            caller_identity,
         );
     }
     report_dispatch(
@@ -621,6 +647,33 @@ pub(super) fn dispatch_resolved_message(
         targets.len(),
         &result.outcomes,
         &result.compacted,
+    )
+}
+
+fn wait_cycle_error(
+    cycle: &[rimz::message::wait_guard::WaitCycleHop],
+    target: &str,
+) -> anyhow::Error {
+    let fix = "finish your turn to answer it, or resend without --wait or with --wait=<duration>";
+    let Some(first) = cycle.first() else {
+        return anyhow::anyhow!("--wait would deadlock: {target} is your own agent; {fix}");
+    };
+    if cycle.len() == 1 {
+        return anyhow::anyhow!(
+            "--wait would deadlock: {} is waiting on your reply ({}); {fix}",
+            first.handle,
+            first.message_id
+        );
+    }
+    let mut chain = cycle
+        .iter()
+        .map(|hop| hop.handle.as_str())
+        .collect::<Vec<_>>();
+    chain.push("you");
+    anyhow::anyhow!(
+        "--wait would deadlock: {} is an active reply-wait chain ({}); {fix}",
+        chain.join(" → "),
+        first.message_id
     )
 }
 
