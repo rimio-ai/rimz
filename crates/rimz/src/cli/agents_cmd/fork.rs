@@ -116,12 +116,18 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let launch = launches
         .first()
         .context("agent fork produced no launch identity")?;
+    let permission_args = launch
+        .launch
+        .mode
+        .map(|mode| adapter.permission_args(mode))
+        .unwrap_or_default();
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
         &rimz::harness::launch::ExecInvocation {
             kind: seed.kind.as_str(),
             action: rimz::harness::launch::ExecAction::Fork {
                 session_id: seed.source_session_id.as_str(),
+                extra_args: &permission_args,
             },
             run_id: None,
             worktree_path: None,
@@ -132,6 +138,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 name_explicit: launch.name_explicit,
                 launch_id: Some(launch.agent_id.as_str()),
                 profile: launch.launch.profile.as_deref(),
+                mode: launch.launch.mode,
                 channel: channel.as_deref(),
                 ..rimz::harness::launch::ExecIdentity::default()
             },
@@ -288,6 +295,7 @@ fn validate_fork_source(
         cwd,
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
+            mode: agent.mode,
             channel: agent.channel.clone(),
             ..rimz::agents::LaunchParams::default()
         },
@@ -367,12 +375,17 @@ mod tests {
         agent.channel = Some("auth".to_owned());
         agent.team = Some("forge".to_owned());
         agent.role = Some("coder".to_owned());
+        agent.mode = Some(rimz::harness::run::PermissionMode::Yolo);
 
         let seed = validate_fork_source(&agent, |_| true, |_| true).expect("valid fork");
 
         assert_eq!(seed.source_session_id, AgentSessionId::from("session-1"));
         assert_eq!(seed.cwd, PathBuf::from("/repo/worktree"));
         assert_eq!(seed.launch.profile.as_deref(), Some("planner"));
+        assert_eq!(
+            seed.launch.mode,
+            Some(rimz::harness::run::PermissionMode::Yolo)
+        );
         assert_eq!(seed.launch.channel.as_deref(), Some("auth"));
         assert_eq!(seed.launch.team, None);
         assert_eq!(seed.launch.role, None);

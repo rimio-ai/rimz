@@ -49,11 +49,14 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .launch_command(&args.extra_args, args.prompt.as_deref())
             .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?,
     };
-    if args.resume.is_some() {
+    if args.resume.is_some() || args.fork.is_some() {
         argv.extend(args.extra_args.iter().cloned());
     }
     let exec_action = match (args.fork.as_deref(), args.resume.as_deref()) {
-        (Some(session_id), _) => rimz::harness::launch::ExecAction::Fork { session_id },
+        (Some(session_id), _) => rimz::harness::launch::ExecAction::Fork {
+            session_id,
+            extra_args: &args.extra_args,
+        },
         (None, Some(session_id)) => rimz::harness::launch::ExecAction::Resume {
             session_id,
             extra_args: &args.extra_args,

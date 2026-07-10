@@ -151,6 +151,7 @@ pub enum ExecAction<'a> {
     },
     Fork {
         session_id: &'a str,
+        extra_args: &'a [String],
     },
 }
 
@@ -176,7 +177,7 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
         ExecAction::Resume { session_id, .. } => {
             argv.extend(["--resume".to_owned(), session_id.to_owned()]);
         }
-        ExecAction::Fork { session_id } => {
+        ExecAction::Fork { session_id, .. } => {
             argv.extend(["--fork".to_owned(), session_id.to_owned()]);
         }
         ExecAction::Launch { .. } => {}
@@ -241,8 +242,9 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
         argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
     }
     let extra_args = match inv.action {
-        ExecAction::Launch { extra_args, .. } | ExecAction::Resume { extra_args, .. } => extra_args,
-        ExecAction::Fork { .. } => &[],
+        ExecAction::Launch { extra_args, .. }
+        | ExecAction::Resume { extra_args, .. }
+        | ExecAction::Fork { extra_args, .. } => extra_args,
     };
     if !extra_args.is_empty() {
         argv.push("--".to_owned());
@@ -814,10 +816,12 @@ mod tests {
 
     #[test]
     fn exec_argv_renders_fork() {
+        let extra_args = argv(&["--dangerously-bypass-approvals-and-sandbox"]);
         let invocation = ExecInvocation {
             kind: "codex",
             action: ExecAction::Fork {
                 session_id: "session-1",
+                extra_args: &extra_args,
             },
             run_id: None,
             worktree_path: None,
@@ -826,6 +830,7 @@ mod tests {
             identity: ExecIdentity {
                 name: Some("swift-otter"),
                 profile: Some("planner"),
+                mode: Some(crate::harness::run::PermissionMode::Yolo),
                 channel: Some("design"),
                 ..ExecIdentity::default()
             },
@@ -844,9 +849,13 @@ mod tests {
                 "swift-otter",
                 "--agent-profile",
                 "planner",
+                "--agent-mode",
+                "yolo",
                 "--agent-channel",
                 "design",
                 "--close-pane-on-exit",
+                "--",
+                "--dangerously-bypass-approvals-and-sandbox",
             ])
         );
     }
