@@ -522,23 +522,8 @@ impl LoopState {
             SidebarEvent::PaneFramePublished => {
                 fetch.request(FetchRequest::pane_frame_published(), true);
             }
-            SidebarEvent::Notify {
-                title,
-                body,
-                panes,
-                recheck_unread,
-                notification_kind,
-            } => {
-                self.handle_notification(
-                    config,
-                    terminal,
-                    title,
-                    body,
-                    panes,
-                    recheck_unread,
-                    notification_kind,
-                    diag,
-                );
+            event @ SidebarEvent::Notify { .. } => {
+                self.handle_notification(config, terminal, event, diag);
             }
             SidebarEvent::FocusStranded { pane_id } => {
                 self.handle_focus_stranded(config, pane_id, sent_at_ms, anim_start, diag)?;
@@ -547,15 +532,7 @@ impl LoopState {
                 self.fold_fused_now(config, anim_start, diag)?;
             }
             event if event.is_overlay() => {
-                self.handle_overlay_event(
-                    config,
-                    fetch,
-                    event,
-                    sent_at_ms,
-                    requests_verification,
-                    anim_start,
-                    diag,
-                )?;
+                self.handle_overlay_event(config, fetch, event, sent_at_ms, anim_start, diag)?;
             }
             // Identity-free nudges — `StoreDelta`, `PanesChanged`, a
             // `PaneOpened` without a command: nothing to fuse, so refetch,
@@ -578,13 +555,20 @@ impl LoopState {
         &mut self,
         config: &ServeConfig,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-        title: String,
-        body: String,
-        panes: Vec<PaneId>,
-        recheck_unread: bool,
-        notification_kind: Option<String>,
+        event: SidebarEvent,
         diag: &crate::diag::DiagSink,
     ) {
+        // `on_event` calls this helper only from the typed notification arm.
+        let SidebarEvent::Notify {
+            title,
+            body,
+            panes,
+            recheck_unread,
+            notification_kind,
+        } = event
+        else {
+            unreachable!("notification helper received a non-notification event");
+        };
         let kind =
             notification_kind
                 .as_deref()
@@ -640,7 +624,6 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         event: SidebarEvent,
         sent_at_ms: u64,
-        requests_verification: bool,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<()> {
@@ -654,6 +637,7 @@ impl LoopState {
             if own.is_some_and(|pane| focused.contains(pane)));
         let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { unfocused, .. }
             if own.is_some_and(|pane| unfocused.contains(pane)));
+        let requests_verification = event.requests_producer_verification();
         let now_ms = crate::sidebar::timing::unix_now_ms();
         self.event_store.append(event, sent_at_ms, now_ms);
         self.fold_fused_now(config, anim_start, diag)?;
