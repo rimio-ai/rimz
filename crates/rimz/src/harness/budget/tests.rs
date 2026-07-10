@@ -35,6 +35,43 @@ fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
 }
 
 #[test]
+fn spend_summary_uses_ledger_cap_window_and_park_projection() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let mut state = agent(7.25, AgentStatus::Idle, None);
+    state.budget = Some("9".to_owned());
+    let mut ledger = BudgetLedger::new("5/day".parse().expect("spec"));
+    ledger.raised_cap_usd = Some(6.0);
+    ledger.day_baseline = Some(DayBaseline {
+        date: "2026-06-01".parse().expect("date"),
+        cost_usd: 2.0,
+    });
+    write_ledger(&runtime, &state.kind, &state.agent_id, &ledger).expect("write ledger");
+
+    assert_eq!(
+        spend_summary(&runtime, &state, Some(100.0)).as_deref(),
+        Some("$5.25 of $6.00/day"),
+        "ledger spec and observed agent cost take precedence"
+    );
+
+    state.budget_park = Some(BudgetPark {
+        cap_usd: 4.0,
+        spend_usd: 4.5,
+        window: BudgetWindow::Day,
+        at: Timestamp::from_second(100).expect("timestamp"),
+        scope: BudgetScope::Fleet,
+        account_kind: None,
+        resets_at: None,
+    });
+    assert_eq!(
+        spend_summary(&runtime, &state, None).as_deref(),
+        Some("$4.50 of $4.00/day")
+    );
+}
+
+#[test]
 fn absolute_budget_parks_and_one_human_delivery_waives_one_turn() {
     let zone = TimeZone::UTC;
     let now = Timestamp::from_second(200).expect("timestamp");

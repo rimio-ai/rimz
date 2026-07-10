@@ -132,6 +132,19 @@ pub struct BudgetPark {
 }
 
 impl BudgetPark {
+    pub fn summary(&self) -> String {
+        format!(
+            "${:.2} of ${:.2}{}",
+            self.spend_usd,
+            self.cap_usd,
+            if self.window == BudgetWindow::Day {
+                "/day"
+            } else {
+                ""
+            }
+        )
+    }
+
     pub fn label(&self) -> String {
         let prefix = match self.scope {
             BudgetScope::Agent => "budget".to_owned(),
@@ -143,16 +156,7 @@ impl BudgetPark {
                     .map_or("provider", AgentKind::as_str)
             ),
         };
-        format!(
-            "{prefix}: ${:.2} of ${:.2}{}",
-            self.spend_usd,
-            self.cap_usd,
-            if self.window == BudgetWindow::Day {
-                "/day"
-            } else {
-                ""
-            }
-        )
+        format!("{prefix}: {}", self.summary())
     }
 }
 
@@ -337,6 +341,39 @@ pub fn total_cost_usd(agent: &AgentState) -> Option<f64> {
         .as_ref()?
         .total_cost_usd
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
+}
+
+/// Current spend and effective cap for one agent's inspection surface.
+pub fn spend_summary(
+    runtime: &RuntimePaths,
+    agent: &AgentState,
+    session_cost: Option<f64>,
+) -> Option<String> {
+    if let Some(park) = agent.budget_park.as_ref() {
+        return Some(park.summary());
+    }
+    let ledger = read_ledger(runtime, &agent.kind, &agent.agent_id);
+    let launched = agent
+        .budget
+        .as_deref()
+        .and_then(|raw| raw.parse::<BudgetSpec>().ok());
+    let spec = ledger.as_ref().map(|ledger| ledger.spec).or(launched)?;
+    let cap = ledger
+        .as_ref()
+        .map_or(Some(spec.cap_usd), BudgetLedger::effective_cap_usd)?;
+    let total = total_cost_usd(agent).or(session_cost).unwrap_or(0.0);
+    let spend = ledger.as_ref().map_or_else(
+        || BudgetLedger::new(spec).spend_usd(total),
+        |ledger| ledger.spend_usd(total),
+    );
+    Some(format!(
+        "${spend:.2} of ${cap:.2}{}",
+        if spec.window == BudgetWindow::Day {
+            "/day"
+        } else {
+            ""
+        }
+    ))
 }
 
 /// Pure budget decision plus day/waiver bookkeeping. The caller owns IO.
