@@ -34,11 +34,13 @@ pub(super) fn project_display_status(
             continue;
         };
         let mut status = agent.status;
+        let waiting_interrupted = status == AgentStatus::Waiting
+            && crate::agents::is_turn_interrupted(status, agent.context.as_ref(), last_activity);
         // An interruption marker proves Esc cancelled the native prompt.
         // Otherwise a human-blocked prompt outranks every derived state, while
         // a later activity heartbeat means it was answered in the pane.
         if status == AgentStatus::Waiting {
-            if crate::agents::is_turn_interrupted(status, agent.context.as_ref(), last_activity) {
+            if waiting_interrupted {
                 status = AgentStatus::Idle;
             } else if source_agent.is_some_and(AgentState::is_awaiting_input) {
                 continue;
@@ -68,7 +70,7 @@ pub(super) fn project_display_status(
             last_activity,
             turn_started_at,
         );
-        let projected = if budget_park.is_some() {
+        let projected = if budget_park.is_some() && !waiting_interrupted {
             AgentStatus::Paused
         } else if let Some((error, class)) = turn_error
             .map(|error| (error, effective_turn_error_class(error)))

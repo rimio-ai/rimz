@@ -694,6 +694,8 @@ mod tests {
             detect_turn_interrupted(INTERRUPTED_ENTRY),
             Some("2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap())
         );
+        // Verbatim content-block shape observed in Claude's transcript JSONL;
+        // this is a text block, distinct from the Messages API wire shape.
         let tool_use = r#"{"type":"user","timestamp":"2026-06-04T03:02:00.000Z","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
         assert_eq!(
             detect_turn_interrupted(tool_use),
