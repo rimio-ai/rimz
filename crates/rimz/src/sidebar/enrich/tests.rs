@@ -76,6 +76,7 @@ fn write_worktree_marker(path: &Path, name: &str) {
         name: name.to_owned(),
         branch: name.to_owned(),
         base_branch: Some("main".to_owned()),
+        from_pr: None,
         base_ref: "HEAD".to_owned(),
         repo_root: path.to_path_buf(),
         worktree_path: path.to_path_buf(),

@@ -702,6 +702,7 @@ mod tests {
             name: "demo".to_owned(),
             branch: "scratch".to_owned(),
             base_branch: Some("main".to_owned()),
+            from_pr: None,
             base_ref: "base".to_owned(),
             repo_root: PathBuf::from("/repo"),
             worktree_path: PathBuf::from("/repo-worktrees/demo"),

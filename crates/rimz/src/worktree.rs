@@ -20,7 +20,7 @@ mod include;
 mod link;
 
 const MARKER_FILE: &str = "rimz-worktree.json";
-const MARKER_VERSION: u32 = 3;
+const MARKER_VERSION: u32 = 4;
 const LANDED_BASE_SCAN_CAP: u32 = 500;
 const PR_HEAD_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTO_ADJECTIVES: &[&str] = &[
@@ -87,6 +87,8 @@ pub struct WorktreeMarker {
     pub branch: String,
     #[serde(default)]
     pub base_branch: Option<String>,
+    #[serde(default)]
+    pub from_pr: Option<u64>,
     pub base_ref: String,
     pub repo_root: PathBuf,
     pub worktree_path: PathBuf,
@@ -216,6 +218,7 @@ pub fn create(
         base_branch,
         base_ref,
         &checkout_base_ref,
+        None,
     )
 }
 
@@ -267,6 +270,7 @@ pub fn create_from_pr(
             branch,
             pr_head.clone(),
             pr_head.as_str(),
+            pr.number,
         );
     }
 
@@ -331,10 +335,17 @@ pub fn create_from_pr(
                 base_branch,
                 base_ref,
                 &remote_ref,
+                Some(pr.number),
             ),
-            LocalPrBranch::Existing => {
-                add_existing_and_seed(repo_root, name, path, branch, base_branch, base_ref)
-            }
+            LocalPrBranch::Existing => add_existing_and_seed(
+                repo_root,
+                name,
+                path,
+                branch,
+                base_branch,
+                base_ref,
+                Some(pr.number),
+            ),
         };
     }
 
@@ -381,6 +392,7 @@ pub fn create_from_pr(
         branch.clone(),
         pr_head.clone(),
         pr_head.as_str(),
+        pr.number,
     )?;
     let remote_key = format!("branch.{branch}.remote");
     git_run(
@@ -415,6 +427,7 @@ fn add_pr_worktree(
     branch: String,
     pr_head: String,
     checkout_ref: &str,
+    pr_number: u64,
 ) -> Result<CreatedWorktree> {
     let base_branch = trunk_ref(repo_root);
     let base_ref_name = base_branch.as_deref().unwrap_or("origin/HEAD");
@@ -428,6 +441,7 @@ fn add_pr_worktree(
         base_branch,
         base_ref,
         checkout_ref,
+        Some(pr_number),
     )
 }
 
@@ -854,6 +868,7 @@ fn add_and_seed(
     base_branch: Option<String>,
     base_ref: String,
     checkout_ref: &str,
+    from_pr: Option<u64>,
 ) -> Result<CreatedWorktree> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -870,7 +885,15 @@ fn add_and_seed(
             checkout_ref,
         ],
     )?;
-    finish_worktree(repo_root, name, path, branch, base_branch, base_ref)
+    finish_worktree(
+        repo_root,
+        name,
+        path,
+        branch,
+        base_branch,
+        base_ref,
+        from_pr,
+    )
 }
 
 fn add_tracking_and_seed(
@@ -881,6 +904,7 @@ fn add_tracking_and_seed(
     base_branch: Option<String>,
     base_ref: String,
     remote_ref: &str,
+    from_pr: Option<u64>,
 ) -> Result<CreatedWorktree> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -898,7 +922,15 @@ fn add_tracking_and_seed(
             remote_ref,
         ],
     )?;
-    finish_worktree(repo_root, name, path, branch, base_branch, base_ref)
+    finish_worktree(
+        repo_root,
+        name,
+        path,
+        branch,
+        base_branch,
+        base_ref,
+        from_pr,
+    )
 }
 
 fn add_existing_and_seed(
@@ -908,6 +940,7 @@ fn add_existing_and_seed(
     branch: String,
     base_branch: Option<String>,
     base_ref: String,
+    from_pr: Option<u64>,
 ) -> Result<CreatedWorktree> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -917,7 +950,15 @@ fn add_existing_and_seed(
         repo_root,
         ["worktree", "add", path_arg.as_str(), branch.as_str()],
     )?;
-    finish_worktree(repo_root, name, path, branch, base_branch, base_ref)
+    finish_worktree(
+        repo_root,
+        name,
+        path,
+        branch,
+        base_branch,
+        base_ref,
+        from_pr,
+    )
 }
 
 fn finish_worktree(
@@ -927,12 +968,14 @@ fn finish_worktree(
     branch: String,
     base_branch: Option<String>,
     base_ref: String,
+    from_pr: Option<u64>,
 ) -> Result<CreatedWorktree> {
     let marker = WorktreeMarker {
         version: MARKER_VERSION,
         name: name.clone(),
         branch: branch.clone(),
         base_branch: base_branch.clone(),
+        from_pr,
         base_ref: base_ref.clone(),
         repo_root: repo_root.to_path_buf(),
         worktree_path: path.clone(),
@@ -1484,6 +1527,26 @@ branch refs/heads/swift-otter
 
         assert_eq!(marker.version, 2);
         assert_eq!(marker.base_branch, None);
+        assert_eq!(marker.from_pr, None);
+    }
+
+    #[test]
+    fn marker_v3_json_parses_without_pr_provenance() {
+        let raw = r#"{
+            "version": 3,
+            "name": "demo",
+            "branch": "demo",
+            "base_branch": "main",
+            "base_ref": "0123456789abcdef0123456789abcdef01234567",
+            "repo_root": "/repo",
+            "worktree_path": "/repo-worktrees/demo",
+            "created_at": "2026-06-10T00:00:00Z"
+        }"#;
+
+        let marker: WorktreeMarker = serde_json::from_str(raw).expect("marker");
+
+        assert_eq!(marker.version, 3);
+        assert_eq!(marker.from_pr, None);
     }
 
     #[test]
@@ -1499,6 +1562,7 @@ branch refs/heads/swift-otter
             name: "feature".to_owned(),
             branch: "feature".to_owned(),
             base_branch: Some("main".to_owned()),
+            from_pr: None,
             base_ref: "HEAD".to_owned(),
             repo_root: dir.path().to_path_buf(),
             worktree_path: worktree.clone(),

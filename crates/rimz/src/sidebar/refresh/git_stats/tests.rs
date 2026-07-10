@@ -68,6 +68,7 @@ fn write_rimz_worktree_marker_named(repo: &GitFixture, name: &str, base_ref: &st
         name: name.to_owned(),
         branch: "feature".to_owned(),
         base_branch: Some("main".to_owned()),
+        from_pr: None,
         base_ref: base_ref.to_owned(),
         repo_root: repo.path().to_path_buf(),
         worktree_path: repo.path().to_path_buf(),
