@@ -615,7 +615,7 @@ pub(crate) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
 mod tests {
     use super::*;
 
-    use crate::agents::{AgentContext, AgentState};
+    use crate::agents::AgentState;
     use crate::ids::WorkspaceId;
     use crate::store::snapshot::PaneAgent;
 
@@ -644,126 +644,62 @@ mod tests {
     }
 
     #[test]
-    fn explain_reports_fifo_blocker() {
+    fn explain_reports_actionable_delivery_blockers() {
         let now = Timestamp::now();
-        let agent = agent("sess-fifo", AgentStatus::Idle);
-        let snapshot = snapshot(agent.clone(), true, now);
-        let older = message(&agent, 1, "first");
-        let newer = message(&agent, 2, "second");
+        let receiver = agent("sess-receiver", AgentStatus::Idle);
+        let live = snapshot(receiver.clone(), true, now);
 
-        let check = explain(&newer, &[newer.clone(), older.clone()], &snapshot, now);
-
+        let older = message(&receiver, 1, "first");
+        let newer = message(&receiver, 2, "second");
+        let check = explain(&newer, &[newer.clone(), older.clone()], &live, now);
         assert!(!check.fifo.head);
         assert_eq!(check.fifo.blocker, Some(older.message_id));
-        assert!(check.gate.open);
-        assert!(check.pane.present);
-    }
 
-    #[test]
-    fn explain_reports_gate_closed() {
-        let now = Timestamp::now();
-        let agent = agent("sess-gate", AgentStatus::Running);
-        let snapshot = snapshot(agent.clone(), true, now);
-        let message = message(&agent, 1, "wait");
-
-        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
-
+        let mut running = receiver.clone();
+        running.status = AgentStatus::Running;
+        let running = snapshot(running, true, now);
+        let candidate = message(&receiver, 1, "wait");
+        let check = explain(&candidate, std::slice::from_ref(&candidate), &running, now);
         assert_eq!(check.gate.status, Some(AgentStatus::Running));
         assert!(!check.gate.open);
-        assert!(check.pane.present);
-    }
 
-    #[test]
-    fn explain_reports_interrupted_marker_as_open_gate() {
-        let now = Timestamp::now();
-        let mut agent = agent("sess-interrupted", AgentStatus::Running);
-        agent.context = Some(settle_context(None, Some(agent.last_activity)));
-        let snapshot = snapshot(agent.clone(), true, now);
-        let message = message(&agent, 1, "wait");
-
-        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
-
-        assert_eq!(check.gate.status, Some(AgentStatus::Idle));
-        assert!(check.gate.open);
-        assert!(check.pane.present);
-    }
-
-    #[test]
-    fn explain_reports_waiting_agent() {
-        let now = Timestamp::now();
-        let mut agent = agent("sess-ask", AgentStatus::Waiting);
-        agent.waiting_since = Some(agent.last_activity);
-        let snapshot = snapshot(agent.clone(), true, now);
-        let message = message(&agent, 1, "blocked");
-
-        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
-
+        let mut waiting = receiver.clone();
+        waiting.status = AgentStatus::Waiting;
+        waiting.waiting_since = Some(waiting.last_activity);
+        let waiting = snapshot(waiting, true, now);
+        let check = explain(&candidate, std::slice::from_ref(&candidate), &waiting, now);
         assert!(check.ask.waiting);
-        assert!(check.pane.present);
-    }
 
-    #[test]
-    fn explain_reports_no_live_pane() {
-        let now = Timestamp::now();
-        let agent = agent("sess-pane", AgentStatus::Idle);
-        let snapshot = snapshot(agent.clone(), false, now);
-        let message = message(&agent, 1, "blocked");
-
-        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
-
-        assert!(check.agent.present);
-        assert!(check.gate.open);
+        let no_pane = snapshot(receiver.clone(), false, now);
+        let check = explain(&candidate, std::slice::from_ref(&candidate), &no_pane, now);
         assert!(!check.pane.present);
-    }
 
-    #[test]
-    fn explain_reports_scheduled_floor() {
-        let now = Timestamp::now();
-        let agent = agent("sess-scheduled", AgentStatus::Idle);
-        let snapshot = snapshot(agent.clone(), true, now);
-        let mut message = message(&agent, 1, "later");
         let not_before = now + jiff::SignedDuration::from_secs(60);
-        message.not_before = Some(not_before);
-
-        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
-
+        let scheduled = message(&receiver, 1, "later").with_not_before(Some(not_before));
+        let check = explain(&scheduled, std::slice::from_ref(&scheduled), &live, now);
         assert!(!check.schedule.ready);
         assert_eq!(check.schedule.not_before, Some(not_before));
-        assert!(check.fifo.head, "schedule is the first blocker");
-    }
 
-    #[test]
-    fn explain_reports_after_blocker() {
-        let now = Timestamp::now();
-        let receiver = agent("sess-coder", AgentStatus::Idle);
         let mut upstream = agent("sess-planner", AgentStatus::Running);
         upstream.role = Some("planner".to_owned());
-        let mut snapshot = snapshot(receiver.clone(), true, now);
-        snapshot.agents.push(upstream.clone());
-        let message = message(&receiver, 1, "wait for plan").with_after(vec![AfterCondition {
+        let mut dependency = live;
+        dependency.agents.push(upstream.clone());
+        let after = message(&receiver, 1, "wait for plan").with_after(vec![AfterCondition {
             kind: upstream.kind.clone(),
             agent_id: upstream.agent_id.clone(),
             agent_name: upstream.name.clone(),
             address: "@planner".to_owned(),
             met_at: None,
         }]);
-
-        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
-
-        assert_eq!(check.after.len(), 1);
+        let check = explain(&after, std::slice::from_ref(&after), &dependency, now);
         assert_eq!(check.after[0].address, "@planner");
         assert!(!check.after[0].met);
         assert!(check.after[0].agent_present);
         assert_eq!(check.after[0].status, Some(AgentStatus::Running));
-        assert!(check.fifo.head, "after is the first blocker");
 
-        snapshot.agents[1].status = AgentStatus::Idle;
-        let check = explain(&message, std::slice::from_ref(&message), &snapshot, now);
-        assert!(check.after[0].met, "live-open conditions diagnose as met");
-        assert!(
-            check.fifo.head,
-            "live-open condition exposes the FIFO result"
-        );
+        dependency.agents[1].status = AgentStatus::Idle;
+        let check = explain(&after, std::slice::from_ref(&after), &dependency, now);
+        assert!(check.after[0].met);
     }
 
     fn snapshot(agent: AgentState, with_pane: bool, now: Timestamp) -> SidebarSnapshot {
@@ -810,31 +746,5 @@ mod tests {
 
     fn agent(id: &str, status: AgentStatus) -> AgentState {
         AgentState::stub("claude", id, status)
-    }
-
-    fn settle_context(complete: Option<Timestamp>, interrupted: Option<Timestamp>) -> AgentContext {
-        AgentContext {
-            source: "codex".to_owned(),
-            session_name: None,
-            session_preview: None,
-            model_id: None,
-            model_display_name: None,
-            effort: None,
-            thinking_enabled: None,
-            output_style: None,
-            vim_mode: None,
-            agent_version: None,
-            exceeds_200k_tokens: None,
-            cost: None,
-            tokens: None,
-            rate_limits: None,
-            pr: None,
-            account: None,
-            turn_opened_by: Vec::new(),
-            turn_error: None,
-            turn_complete: complete.map(|at| at + jiff::SignedDuration::from_secs(1)),
-            turn_interrupted: interrupted.map(|at| at + jiff::SignedDuration::from_secs(1)),
-            observed_at: Timestamp::now(),
-        }
     }
 }

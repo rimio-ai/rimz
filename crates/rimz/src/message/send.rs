@@ -436,7 +436,6 @@ pub fn latest_terminal_message_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     use crate::agents::AgentStatus;
     use crate::ids::WorkspaceId;
@@ -501,25 +500,20 @@ mod tests {
     }
 
     #[test]
-    fn pacer_sleeps_after_first_tick() {
+    fn pacer_skips_first_write_and_honors_configured_interval() {
         let mut pacer = Pacer::new(Duration::from_millis(40));
+        let mut sleeps = Vec::new();
 
-        assert!(!pacer.tick_with(|_| panic!("first tick must not sleep")));
+        assert!(!pacer.tick_with(|duration| sleeps.push(duration)));
+        assert!(sleeps.is_empty());
+        assert!(pacer.tick_with(|duration| sleeps.push(duration)));
+        assert_eq!(sleeps, vec![Duration::from_millis(40)]);
 
-        let second = Instant::now();
-        pacer.tick();
-        assert!(
-            second.elapsed() >= Duration::from_millis(40),
-            "second tick should sleep at least the configured interval"
-        );
-    }
-
-    #[test]
-    fn zero_interval_pacer_never_sleeps() {
-        let mut pacer = Pacer::new(Duration::ZERO);
-
+        let mut zero = Pacer::new(Duration::ZERO);
+        let mut zero_sleeps = Vec::new();
         for _ in 0..4 {
-            assert!(!pacer.tick_with(|_| panic!("zero interval must not sleep")));
+            assert!(!zero.tick_with(|duration| zero_sleeps.push(duration)));
         }
+        assert!(zero_sleeps.is_empty());
     }
 }

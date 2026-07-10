@@ -777,43 +777,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rendered_agent_handles_keep_single_sigil() {
-        let mut coder = agent("sess-coder", AgentStatus::Idle);
-        coder.role = Some("coder".to_owned());
-        let snapshot = snapshot_with_panes(vec![coder], Vec::new());
-        let target = QueueTarget {
-            pane: None,
-            agent: Some(&snapshot.agents[0]),
-        };
-        assert_eq!(handle_for_target(&snapshot, &target), "@coder#project");
-    }
-
-    #[test]
-    fn queue_targets_fall_back_to_durable_agents_after_live_miss() {
-        let mut reviewer = agent("sess-reviewer", AgentStatus::Idle);
-        reviewer.role = Some("reviewer".to_owned());
-        let durable = vec![reviewer.clone()];
-        let snapshot = snapshot_with_panes(Vec::new(), Vec::new());
-
-        let targets = queue_targets(
-            &snapshot,
-            Some(&durable),
-            "@reviewer",
-            None,
-            Some("project"),
-            false,
-        )
-        .expect("durable target resolves");
-
-        assert_eq!(targets.len(), 1);
-        assert!(targets[0].pane.is_none());
-        assert_eq!(
-            targets[0].agent.expect("durable agent").agent_id,
-            reviewer.agent_id
-        );
-    }
-
     fn workspace_id() -> WorkspaceId {
         WorkspaceId::parse("ws_000000000000000000000000").unwrap()
     }

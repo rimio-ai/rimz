@@ -66,23 +66,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn due_stamp_wakes() {
+    fn wake_decision_fires_only_for_due_stamp() {
         let now = Timestamp::from_second(100).unwrap();
-        assert!(should_wake(Some(now), now));
-        assert!(should_wake(Some(Timestamp::from_second(99).unwrap()), now));
-    }
-
-    #[test]
-    fn future_stamp_waits() {
-        let now = Timestamp::from_second(100).unwrap();
-        assert!(!should_wake(
-            Some(Timestamp::from_second(101).unwrap()),
-            now
-        ));
-    }
-
-    #[test]
-    fn missing_stamp_waits() {
-        assert!(!should_wake(None, Timestamp::from_second(100).unwrap()));
+        let cases = [
+            (None, false),
+            (Some(Timestamp::from_second(99).unwrap()), true),
+            (Some(Timestamp::from_second(100).unwrap()), true),
+            (Some(Timestamp::from_second(101).unwrap()), false),
+        ];
+        for (stamp, expected) in cases {
+            assert_eq!(should_wake(stamp, now), expected, "{stamp:?}");
+        }
     }
 }

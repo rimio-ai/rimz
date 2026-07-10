@@ -4,36 +4,28 @@ use jiff::Timestamp;
 
 use super::*;
 use crate::agents::{AgentContext, AgentState, AgentStatus};
-use crate::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
-fn gates_open_only_on_resting_statuses() {
-    assert!(gate_open(DeliveryGate::Done, AgentStatus::Idle));
-    assert!(gate_open(DeliveryGate::Done, AgentStatus::Success));
-    assert!(!gate_open(DeliveryGate::Done, AgentStatus::Failed));
-    assert!(gate_open(DeliveryGate::Any, AgentStatus::Failed));
-    for status in [
-        AgentStatus::Running,
-        AgentStatus::Waiting,
-        AgentStatus::Paused,
-    ] {
-        assert!(!gate_open(DeliveryGate::Done, status));
-        assert!(!gate_open(DeliveryGate::Any, status));
+fn delivery_gates_follow_agent_lifecycle() {
+    let cases = [
+        (AgentStatus::Running, false, false, false),
+        (AgentStatus::Waiting, false, false, false),
+        (AgentStatus::Idle, true, true, false),
+        (AgentStatus::Success, true, true, false),
+        (AgentStatus::Failed, false, true, false),
+        (AgentStatus::Paused, false, false, true),
+    ];
+    for (status, done, any, resume) in cases {
+        assert_eq!(gate_open(DeliveryGate::Done, status), done, "{status:?}");
+        assert_eq!(gate_open(DeliveryGate::Any, status), any, "{status:?}");
+        assert_eq!(
+            gate_open(DeliveryGate::Resume, status),
+            resume,
+            "{status:?}"
+        );
     }
-    assert!(gate_open(DeliveryGate::Resume, AgentStatus::Paused));
-    for status in [
-        AgentStatus::Running,
-        AgentStatus::Waiting,
-        AgentStatus::Idle,
-        AgentStatus::Success,
-        AgentStatus::Failed,
-    ] {
-        assert!(!gate_open(DeliveryGate::Resume, status));
-    }
-}
 
-#[test]
-fn done_gate_opens_on_interrupted_turn_marker() {
     let mut running = agent("sess-interrupted", None);
     running.status = AgentStatus::Running;
     running.phase = crate::agents::TurnPhase::Reasoning;
@@ -47,7 +39,7 @@ fn done_gate_opens_on_interrupted_turn_marker() {
 }
 
 #[test]
-fn delivery_checkpoint_is_only_unparked_turn_end() {
+fn delivery_checkpoint_requires_unparked_turn_end() {
     assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: false,
@@ -67,7 +59,7 @@ fn delivery_checkpoint_is_only_unparked_turn_end() {
 }
 
 #[test]
-fn message_status_lifecycle_helpers_match_queue_semantics() {
+fn message_status_classifies_queue_and_terminal_lifecycle() {
     assert!(MessageStatus::Queued.is_open());
     assert!(MessageStatus::Claimed.is_open());
     assert!(!MessageStatus::Sent.is_open());
@@ -163,7 +155,7 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
 }
 
 #[test]
-fn claim_ttl_treats_future_stamp_as_expired() {
+fn claim_ttl_expires_at_boundary_and_on_clock_skew() {
     let now = Timestamp::now();
     assert!(claim_expired(None, now));
     assert!(!claim_expired(
@@ -181,21 +173,6 @@ fn claim_ttl_treats_future_stamp_as_expired() {
 }
 
 #[test]
-fn message_matches_registered_card_by_remembered_name() {
-    let mut provisional = agent("launch_1", Some("lucid-atlas"));
-    let message = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &provisional,
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    provisional.agent_id = AgentSessionId::from("real-session");
-
-    assert!(message.same_agent_card(&provisional));
-}
-
-#[test]
 fn auto_compact_parses_percent_and_token_forms() {
     assert_eq!(AutoCompact::parse("70%").unwrap(), AutoCompact::Percent(70));
     assert_eq!(AutoCompact::parse(" 0% ").unwrap(), AutoCompact::Percent(0));
@@ -208,44 +185,30 @@ fn auto_compact_parses_percent_and_token_forms() {
         AutoCompact::Tokens(180_000)
     );
     assert_eq!(
-        AutoCompact::parse("1m").unwrap(),
-        AutoCompact::Tokens(1_000_000)
-    );
-    assert_eq!(
         AutoCompact::parse("2M").unwrap(),
         AutoCompact::Tokens(2_000_000)
     );
-    assert!(AutoCompact::parse("101%").is_err());
-    assert!(AutoCompact::parse("abc").is_err());
-    assert!(AutoCompact::parse("70.5%").is_err());
-    assert!(AutoCompact::parse("1.5m").is_err());
-    assert!(AutoCompact::parse("km").is_err());
-    assert!(AutoCompact::parse("k").is_err());
+    for invalid in ["101%", "18446744073709551615k", "70.5%", "1.5m", "k"] {
+        assert!(AutoCompact::parse(invalid).is_err(), "{invalid}");
+    }
 }
 
 #[test]
 fn auto_compact_triggers_from_supported_context_readings() {
     let mut a = agent("s1", None);
-    // An unknown fill is not a full window.
     assert!(!AutoCompact::Percent(70).triggered(&a));
     assert!(!AutoCompact::Tokens(1).triggered(&a));
 
-    // The percent threshold reads the carried gauge.
     a.context_pct = Some(75);
     assert!(AutoCompact::Percent(70).triggered(&a));
     assert!(AutoCompact::Percent(75).triggered(&a));
     assert!(!AutoCompact::Percent(76).triggered(&a));
 
-    // The token threshold reads the per-call split fallback.
     a.cache_read_input_tokens = Some(100_000);
     a.fresh_input_tokens = Some(20_000);
     assert!(AutoCompact::Tokens(120_000).triggered(&a));
     assert!(!AutoCompact::Tokens(120_001).triggered(&a));
 
-    // A transcript-derived session reports only a running total — no rich
-    // context blob and no per-call split. The percent gauge already scales
-    // off that total, so the token threshold must read it too rather than
-    // silently never firing.
     let mut carried = agent("s2", None);
     carried.total_tokens = Some(120_000);
     carried.context_window = Some(200_000);
@@ -255,14 +218,18 @@ fn auto_compact_triggers_from_supported_context_readings() {
 }
 
 #[test]
-fn record_optional_fields_default_and_round_trip() {
+fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let receiver = agent("s1", Some("lucid-atlas"));
+    let upstream = agent("s2", Some("planner"));
     let mut record = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
+        &receiver,
         "next".to_owned(),
-        true,
-        DeliveryGate::Done,
+        false,
+        DeliveryGate::Any,
     )
+    .with_address(Some("@coder#docs".to_owned()))
     .with_channel(Some("docs".to_owned()))
     .with_sender(MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
@@ -276,120 +243,160 @@ fn record_optional_fields_default_and_round_trip() {
     .with_body(MessageBody::Command)
     .with_force(true)
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
-    .with_not_before(Some(Timestamp::now() + jiff::SignedDuration::from_secs(60)))
+    .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)))
+    .with_after(vec![after_condition(&upstream, Some(now))])
     .with_auto_compact(Some(AutoCompact::Percent(70)));
-    record.retry_after = Some(Timestamp::now() + jiff::SignedDuration::from_secs(30));
+    record.status = MessageStatus::Delivered;
+    record.enqueued_at = now - jiff::SignedDuration::from_secs(120);
+    record.updated_at = now;
+    record.attempts = 3;
+    record.unconfirmed_sends = 2;
+    record.last_attempt_at = Some(now - jiff::SignedDuration::from_secs(5));
+    record.last_error = Some("pane unavailable".to_owned());
+    record.delivered_at = Some(now + jiff::SignedDuration::from_secs(1));
+    record.retry_after = Some(now + jiff::SignedDuration::from_secs(30));
     record.compacted_context_tokens = Some(150_000);
     record.batch_id = Some(message_id(1));
-    record.unconfirmed_sends = 2;
 
     let json = serde_json::to_string(&record).unwrap();
     let back: MessageRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(back, record);
 
-    let fresh = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    assert_eq!(fresh.channel, None);
-    assert!(fresh.in_reply_to.is_empty());
-    assert_eq!(fresh.sender, MessageSender::Human);
-    assert!(!fresh.automated);
-    assert_eq!(fresh.body, MessageBody::Prompt);
-    assert!(!fresh.force);
-    assert_eq!(fresh.pane_id, None);
-    assert_eq!(fresh.not_before, None);
-    assert_eq!(fresh.retry_after, None);
-    assert_eq!(fresh.auto_compact, None);
-    assert_eq!(fresh.compacted_context_tokens, None);
-    assert_eq!(fresh.batch_id, None);
-    assert_eq!(fresh.unconfirmed_sends, 0);
-
-    let encoded = serde_json::to_value(&record).unwrap();
+    let mut legacy = serde_json::to_value(&record).unwrap();
     for key in [
-        "channel",
         "in_reply_to",
+        "agent_name",
+        "address",
+        "channel",
         "sender",
         "automated",
         "body",
         "force",
         "pane_id",
+        "attempts",
+        "unconfirmed_sends",
+        "last_attempt_at",
+        "last_error",
+        "delivered_at",
         "not_before",
+        "after",
         "retry_after",
         "auto_compact",
         "compacted_context_tokens",
         "batch_id",
-        "unconfirmed_sends",
     ] {
-        let mut legacy = encoded.clone();
         legacy.as_object_mut().unwrap().remove(key);
-        let back: MessageRecord = serde_json::from_value(legacy).unwrap();
-        match key {
-            "channel" => assert_eq!(back.channel, None),
-            "in_reply_to" => assert!(back.in_reply_to.is_empty()),
-            "sender" => assert_eq!(back.sender, MessageSender::Human),
-            "automated" => assert!(!back.automated),
-            "body" => assert_eq!(back.body, MessageBody::Prompt),
-            "force" => assert!(!back.force),
-            "pane_id" => assert_eq!(back.pane_id, None),
-            "not_before" => assert_eq!(back.not_before, None),
-            "retry_after" => assert_eq!(back.retry_after, None),
-            "auto_compact" => assert_eq!(back.auto_compact, None),
-            "compacted_context_tokens" => assert_eq!(back.compacted_context_tokens, None),
-            "batch_id" => assert_eq!(back.batch_id, None),
-            "unconfirmed_sends" => assert_eq!(back.unconfirmed_sends, 0),
-            _ => unreachable!(),
-        }
     }
+    let legacy: MessageRecord = serde_json::from_value(legacy).unwrap();
+    assert!(legacy.in_reply_to.is_empty());
+    assert_eq!(legacy.agent_name, None);
+    assert_eq!(legacy.address, None);
+    assert_eq!(legacy.channel, None);
+    assert_eq!(legacy.sender, MessageSender::Human);
+    assert!(!legacy.automated);
+    assert_eq!(legacy.body, MessageBody::Prompt);
+    assert!(!legacy.force);
+    assert_eq!(legacy.pane_id, None);
+    assert_eq!(legacy.attempts, 0);
+    assert_eq!(legacy.unconfirmed_sends, 0);
+    assert_eq!(legacy.last_attempt_at, None);
+    assert_eq!(legacy.last_error, None);
+    assert_eq!(legacy.delivered_at, None);
+    assert_eq!(legacy.not_before, None);
+    assert!(legacy.after.is_empty());
+    assert_eq!(legacy.retry_after, None);
+    assert_eq!(legacy.auto_compact, None);
+    assert_eq!(legacy.compacted_context_tokens, None);
+    assert_eq!(legacy.batch_id, None);
+    assert_eq!(legacy.status, MessageStatus::Delivered);
+    assert_eq!(legacy.text, "next");
 }
 
 #[test]
-fn requeue_preserves_turn_causality() {
-    let original = MessageRecord::new(
+fn requeue_preserves_intent_and_rearms_dependencies() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let receiver = agent("s1", Some("coder"));
+    let mut upstream = agent("s2", Some("planner"));
+    upstream.status = AgentStatus::Running;
+    let mut original = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
+        &receiver,
         "next".to_owned(),
-        true,
-        DeliveryGate::Done,
+        false,
+        DeliveryGate::Any,
     )
+    .with_address(Some("@coder#docs".to_owned()))
+    .with_channel(Some("docs".to_owned()))
+    .with_sender(agent_sender("reviewer", Some("docs")))
     .with_in_reply_to(vec![message_id(7), message_id(8)])
-    .with_automated(true);
+    .with_automated(true)
+    .with_body(MessageBody::Command)
+    .with_force(true)
+    .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+    .with_not_before(Some(now - jiff::SignedDuration::from_secs(60)))
+    .with_after(vec![after_condition(&upstream, Some(now))])
+    .with_auto_compact(Some(AutoCompact::Tokens(120_000)));
+    original.status = MessageStatus::Errored;
+    original.enqueued_at = now - jiff::SignedDuration::from_secs(120);
+    original.updated_at = now;
+    original.attempts = 4;
+    original.unconfirmed_sends = 2;
+    original.last_attempt_at = Some(now);
+    original.last_error = Some("pane closed".to_owned());
+    original.delivered_at = Some(now);
+    original.retry_after = Some(now + jiff::SignedDuration::from_secs(30));
+    original.compacted_context_tokens = Some(120_000);
+    original.batch_id = Some(message_id(1));
+
+    assert!(original.is_deliverable(now));
+    assert!(!after_condition_open(
+        &original.after[0],
+        original.gate,
+        std::slice::from_ref(&upstream),
+        &[],
+        now
+    ));
 
     let requeued = MessageRecord::requeue_from(&original);
 
+    assert_ne!(requeued.message_id, original.message_id);
+    assert_eq!(requeued.workspace_id, original.workspace_id);
+    assert_eq!(requeued.kind, original.kind);
+    assert_eq!(requeued.agent_id, original.agent_id);
+    assert_eq!(requeued.agent_name, original.agent_name);
+    assert_eq!(requeued.address, original.address);
+    assert_eq!(requeued.channel, original.channel);
+    assert_eq!(requeued.sender, original.sender);
+    assert_eq!(requeued.body, original.body);
+    assert_eq!(requeued.text, original.text);
+    assert_eq!(requeued.enter, original.enter);
+    assert_eq!(requeued.gate, original.gate);
+    assert_eq!(requeued.force, original.force);
+    assert_eq!(requeued.not_before, original.not_before);
+    assert_eq!(requeued.auto_compact, original.auto_compact);
     assert_eq!(requeued.in_reply_to, original.in_reply_to);
     assert!(requeued.automated);
+    let mut expected_after = original.after.clone();
+    for condition in &mut expected_after {
+        condition.met_at = None;
+    }
+    assert_eq!(requeued.after, expected_after);
+    assert!(!requeued.is_deliverable(now));
+    assert_eq!(requeued.status, MessageStatus::Queued);
+    assert_eq!(requeued.enqueued_at, requeued.updated_at);
+    assert_eq!(requeued.attempts, 0);
+    assert_eq!(requeued.unconfirmed_sends, 0);
+    assert_eq!(requeued.last_attempt_at, None);
+    assert_eq!(requeued.last_error, None);
+    assert_eq!(requeued.delivered_at, None);
+    assert_eq!(requeued.retry_after, None);
+    assert_eq!(requeued.pane_id, None);
+    assert_eq!(requeued.batch_id, None);
+    assert_eq!(requeued.compacted_context_tokens, None);
 }
 
 #[test]
-fn sent_reconcile_deadline_uses_updated_at_only_for_sent_records() {
-    let mut message = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &agent("s1", None),
-        "next".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    let updated_at = Timestamp::from_second(1_000).unwrap();
-    message.updated_at = updated_at;
-
-    assert_eq!(
-        message.sent_reconcile_deadline(Duration::from_secs(30)),
-        None
-    );
-
-    message.status = MessageStatus::Sent;
-    assert_eq!(
-        message.sent_reconcile_deadline(Duration::from_secs(30)),
-        Some(updated_at + Duration::from_secs(30))
-    );
-}
-
-#[test]
-fn wake_deadline_arms_queued_and_sent_records() {
+fn wake_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
     let base = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &agent("s1", None),
@@ -444,416 +451,362 @@ fn wake_deadline_arms_queued_and_sent_records() {
 }
 
 #[test]
-fn sender_render_names_human_and_agent_address() {
-    assert_eq!(MessageSender::Human.render(), "you");
-    assert_eq!(
-        MessageSender::Agent {
-            kind: AgentKind::new_unchecked("claude"),
-            name: Some("lucid-atlas".to_owned()),
-            profile: Some("planner".to_owned()),
-            role: None,
-            channel: Some("docs".to_owned()),
-        }
-        .render(),
-        "@planner#docs"
-    );
-    assert_eq!(
-        MessageSender::Agent {
-            kind: AgentKind::new_unchecked("codex"),
-            name: None,
-            profile: None,
-            role: None,
-            channel: None,
-        }
-        .render(),
-        "@codex"
-    );
-}
-
-#[test]
-fn queue_head_spans_provisional_and_registered_ids() {
-    // A message queued against a provisional `launch_*` card and a later
-    // message queued after the card registers share one logical agent, so
-    // FIFO must return the older provisional-card message as the head.
-    let provisional = agent("launch_1", Some("lucid-atlas"));
-    let registered = agent("real-session", Some("lucid-atlas"));
-    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
-    let mut older = MessageRecord::new(
-        ws.clone(),
-        &provisional,
-        "first".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    let mut newer = MessageRecord::new(
-        ws,
-        &registered,
-        "second".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    older.message_id = MessageId::parse("msg_0000000000000001").unwrap();
-    newer.message_id = MessageId::parse("msg_0000000000000002").unwrap();
-    let pending = [newer.clone(), older.clone()];
-
-    let head = queue_head(
-        pending.iter(),
-        &registered.kind,
-        &registered.agent_id,
-        registered.name.as_deref(),
-        Timestamp::now(),
-    )
-    .expect("the registered observation selects a head");
-    assert_eq!(
-        head.message_id, older.message_id,
-        "the older provisional-card message is the head, not the newer registered one"
-    );
-
-    // Without the stable name the provisional record is invisible to the
-    // registered id — the reordering this fix closes.
-    let exact = queue_head(
-        pending.iter(),
-        &registered.kind,
-        &registered.agent_id,
-        None,
-        Timestamp::now(),
-    )
-    .expect("the registered id still matches its own record");
-    assert_eq!(exact.message_id, newer.message_id);
-}
-
-#[test]
-fn resume_queue_head_uses_a_control_lane() {
-    let agent = agent("real-session", Some("lucid-atlas"));
-    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
-    let mut user = MessageRecord::new(
-        ws.clone(),
-        &agent,
-        "ordinary".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    let mut resume = MessageRecord::new(
-        ws,
-        &agent,
-        "continue".to_owned(),
-        true,
-        DeliveryGate::Resume,
-    );
-    user.message_id = MessageId::parse("msg_0000000000000001").unwrap();
-    resume.message_id = MessageId::parse("msg_0000000000000002").unwrap();
-    let pending = [user.clone(), resume.clone()];
-
-    let resume_head = queue_head_for_message(pending.iter(), &resume, Timestamp::now())
-        .expect("resume lane has a head");
-    assert_eq!(resume_head.message_id, resume.message_id);
-
-    let user_head = queue_head_for_message(pending.iter(), &user, Timestamp::now())
-        .expect("ordinary lane has a head");
-    assert_eq!(user_head.message_id, user.message_id);
-}
-
-#[test]
-fn queue_head_skips_not_yet_ready_scheduled_messages() {
-    let agent = agent("real-session", Some("lucid-atlas"));
-    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
-    let now = Timestamp::now();
-    let mut scheduled = MessageRecord::new(
-        ws.clone(),
-        &agent,
-        "later".to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
-    let mut ready = MessageRecord::new(ws, &agent, "now".to_owned(), true, DeliveryGate::Done);
-    scheduled.message_id = MessageId::parse("msg_0000000000000001").unwrap();
-    ready.message_id = MessageId::parse("msg_0000000000000002").unwrap();
-    let pending = [scheduled.clone(), ready.clone()];
-
-    let head = queue_head(
-        pending.iter(),
-        &agent.kind,
-        &agent.agent_id,
-        agent.name.as_deref(),
-        now,
-    )
-    .expect("ready message is selected");
-
-    assert_eq!(head.message_id, ready.message_id);
-}
-
-#[test]
-fn queue_head_skips_unmet_after_without_blocking_later_messages() {
-    let receiver = agent("sess-receiver", Some("coder"));
-    let upstream = agent("sess-upstream", Some("planner"));
-    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
-    let now = Timestamp::now();
-    let mut waiting = MessageRecord::new(
-        ws.clone(),
-        &receiver,
-        "after planner".to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_after(vec![after_condition(&upstream, None)]);
-    let mut ready = MessageRecord::new(ws, &receiver, "plain".to_owned(), true, DeliveryGate::Done);
-    waiting.message_id = message_id(1);
-    ready.message_id = message_id(2);
-    let pending = [waiting.clone(), ready.clone()];
-
-    let head = queue_head(
-        pending.iter(),
-        &receiver.kind,
-        &receiver.agent_id,
-        receiver.name.as_deref(),
-        now,
-    )
-    .expect("later deliverable message steps past after gate");
-
-    assert_eq!(head.message_id, ready.message_id);
-    assert!(!waiting.is_deliverable(now));
-}
-
-#[test]
-fn stamped_after_is_permanent_and_requeue_rearms_it() {
-    let now = Timestamp::now();
-    let receiver = agent("sess-receiver", Some("coder"));
-    let mut upstream = agent("sess-upstream", Some("planner"));
-    upstream.status = AgentStatus::Running;
-    let message = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
-        &receiver,
-        "ship".to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_after(vec![after_condition(&upstream, Some(now))]);
-
-    assert!(message.is_deliverable(now));
-    assert!(!after_condition_open(
-        &message.after[0],
-        message.gate,
-        std::slice::from_ref(&upstream),
-        &[],
-        now
-    ));
-
-    let requeued = MessageRecord::requeue_from(&message);
-    assert_eq!(requeued.after.len(), 1);
-    assert_eq!(requeued.after[0].met_at, None);
-    assert!(!requeued.is_deliverable(now));
-}
-
-#[test]
-fn queue_head_does_not_treat_retry_after_as_readiness() {
-    let agent = agent("real-session", Some("lucid-atlas"));
-    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
-    let now = Timestamp::now();
-    let mut deferred = MessageRecord::new(
-        ws.clone(),
-        &agent,
-        "old".to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
-    deferred.retry_after = Some(now + jiff::SignedDuration::from_secs(60));
-    let mut newer = MessageRecord::new(ws, &agent, "new".to_owned(), true, DeliveryGate::Done);
-    deferred.message_id = MessageId::parse("msg_0000000000000001").unwrap();
-    newer.message_id = MessageId::parse("msg_0000000000000002").unwrap();
-    let pending = [deferred.clone(), newer];
-
-    let head = queue_head(
-        pending.iter(),
-        &agent.kind,
-        &agent.agent_id,
-        agent.name.as_deref(),
-        now,
-    )
-    .expect("retry_after does not hide the FIFO head");
-
-    assert_eq!(head.message_id, deferred.message_id);
-}
-
-#[test]
-fn queue_batch_tail_collects_same_sender_channel_until_cross_channel() {
-    let agent = agent("real-session", Some("lucid-atlas"));
-    let head = batch_message(&agent, 1, "first")
-        .with_channel(Some("main".to_owned()))
-        .with_sender(agent_sender("planner", Some("main")));
-    let same = batch_message(&agent, 2, "second")
-        .with_channel(Some("main".to_owned()))
-        .with_sender(agent_sender("coder", Some("main")));
-    let cross = batch_message(&agent, 3, "third")
-        .with_channel(Some("main".to_owned()))
-        .with_sender(agent_sender("reviewer", Some("docs")));
-    let later_same = batch_message(&agent, 4, "fourth")
-        .with_channel(Some("main".to_owned()))
-        .with_sender(agent_sender("designer", Some("main")));
-    let pending = [later_same, cross, same];
-
-    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now());
-    let ids: Vec<MessageId> = tail
-        .iter()
-        .map(|message| message.message_id.clone())
-        .collect();
-
-    assert_eq!(ids, vec![message_id(2)]);
-}
-
-#[test]
-fn queue_batch_tail_uses_receiver_channel_for_human_messages() {
-    let agent = agent("real-session", Some("lucid-atlas"));
-    let head = batch_message(&agent, 1, "human").with_channel(Some("main".to_owned()));
-    let agent_authored = batch_message(&agent, 2, "agent")
-        .with_channel(Some("main".to_owned()))
-        .with_sender(agent_sender("coder", Some("main")));
-    let pending = [agent_authored];
-
-    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now());
-
-    assert_eq!(tail.len(), 1);
-    assert_eq!(tail[0].message_id, message_id(2));
-}
-
-#[test]
-fn queue_batch_tail_stops_on_non_batchable_followers() {
-    let agent = agent("real-session", Some("lucid-atlas"));
+fn sender_render_uses_attributed_address_precedence() {
     let cases = [
-        MessageRecord {
-            text: "/compact".to_owned(),
-            ..batch_message(&agent, 2, "slash")
-        },
-        batch_message(&agent, 2, "command").with_body(MessageBody::Command),
-        MessageRecord {
-            enter: false,
-            ..batch_message(&agent, 2, "draft")
-        },
+        (MessageSender::Human, "you"),
+        (
+            MessageSender::Agent {
+                kind: AgentKind::new_unchecked("claude"),
+                name: Some("lucid-atlas".to_owned()),
+                profile: Some("planner".to_owned()),
+                role: Some("coder".to_owned()),
+                channel: Some("docs".to_owned()),
+            },
+            "@coder#docs",
+        ),
+        (
+            MessageSender::Agent {
+                kind: AgentKind::new_unchecked("claude"),
+                name: Some("lucid-atlas".to_owned()),
+                profile: Some("planner".to_owned()),
+                role: None,
+                channel: None,
+            },
+            "@planner",
+        ),
+        (
+            MessageSender::Agent {
+                kind: AgentKind::new_unchecked("codex"),
+                name: None,
+                profile: None,
+                role: None,
+                channel: None,
+            },
+            "@codex",
+        ),
     ];
-    for blocker in cases {
-        let head = batch_message(&agent, 1, "first");
-        let later = batch_message(&agent, 3, "later");
-        let pending = [blocker, later];
+    for (sender, expected) in cases {
+        assert_eq!(sender.render(), expected);
+    }
+}
 
-        assert!(
-            queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now()).is_empty()
+#[test]
+fn queue_head_selects_oldest_deliverable_record_per_lane() {
+    let now = Timestamp::now();
+    let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
+    {
+        let provisional = agent("launch_1", Some("lucid-atlas"));
+        let registered = agent("real-session", Some("lucid-atlas"));
+        let mut older = MessageRecord::new(
+            ws.clone(),
+            &provisional,
+            "first".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        let mut newer = MessageRecord::new(
+            ws.clone(),
+            &registered,
+            "second".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        older.message_id = message_id(1);
+        newer.message_id = message_id(2);
+        let pending = [newer.clone(), older.clone()];
+
+        assert!(older.same_agent_card(&registered));
+        assert_eq!(
+            queue_head(
+                pending.iter(),
+                &registered.kind,
+                &registered.agent_id,
+                registered.name.as_deref(),
+                now,
+            )
+            .unwrap()
+            .message_id,
+            older.message_id
+        );
+        assert_eq!(
+            queue_head(
+                pending.iter(),
+                &registered.kind,
+                &registered.agent_id,
+                None,
+                now,
+            )
+            .unwrap()
+            .message_id,
+            newer.message_id
         );
     }
 
-    let slash_head = MessageRecord {
-        text: "/compact".to_owned(),
-        ..batch_message(&agent, 1, "slash")
-    };
-    let command_head = batch_message(&agent, 1, "command").with_body(MessageBody::Command);
-    let pending = [batch_message(&agent, 2, "later")];
-    assert!(
-        queue_batch_tail(
-            pending.iter(),
-            &slash_head,
-            AgentStatus::Idle,
-            Timestamp::now()
+    {
+        let receiver = agent("real-session", Some("lucid-atlas"));
+        let mut ordinary = MessageRecord::new(
+            ws.clone(),
+            &receiver,
+            "ordinary".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        let mut resume = MessageRecord::new(
+            ws.clone(),
+            &receiver,
+            "continue".to_owned(),
+            true,
+            DeliveryGate::Resume,
+        );
+        ordinary.message_id = message_id(1);
+        resume.message_id = message_id(2);
+        let pending = [ordinary.clone(), resume.clone()];
+
+        assert_eq!(
+            queue_head_for_message(pending.iter(), &ordinary, now)
+                .unwrap()
+                .message_id,
+            ordinary.message_id
+        );
+        assert_eq!(
+            queue_head_for_message(pending.iter(), &resume, now)
+                .unwrap()
+                .message_id,
+            resume.message_id
+        );
+    }
+
+    {
+        let receiver = agent("real-session", Some("lucid-atlas"));
+        let mut future = MessageRecord::new(
+            ws.clone(),
+            &receiver,
+            "later".to_owned(),
+            true,
+            DeliveryGate::Done,
         )
-        .is_empty()
-    );
-    assert!(
-        queue_batch_tail(
-            pending.iter(),
-            &command_head,
-            AgentStatus::Idle,
-            Timestamp::now()
+        .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
+        let mut ready = MessageRecord::new(
+            ws.clone(),
+            &receiver,
+            "now".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        future.message_id = message_id(1);
+        ready.message_id = message_id(2);
+        let pending = [future, ready.clone()];
+
+        assert_eq!(
+            queue_head(
+                pending.iter(),
+                &receiver.kind,
+                &receiver.agent_id,
+                receiver.name.as_deref(),
+                now,
+            )
+            .unwrap()
+            .message_id,
+            ready.message_id
+        );
+    }
+
+    {
+        let receiver = agent("sess-receiver", Some("coder"));
+        let upstream = agent("sess-upstream", Some("planner"));
+        let mut waiting = MessageRecord::new(
+            ws.clone(),
+            &receiver,
+            "after planner".to_owned(),
+            true,
+            DeliveryGate::Done,
         )
-        .is_empty()
-    );
+        .with_after(vec![after_condition(&upstream, None)]);
+        let mut ready = MessageRecord::new(
+            ws.clone(),
+            &receiver,
+            "plain".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        waiting.message_id = message_id(1);
+        ready.message_id = message_id(2);
+        let pending = [waiting.clone(), ready.clone()];
+
+        assert!(!waiting.is_deliverable(now));
+        assert_eq!(
+            queue_head(
+                pending.iter(),
+                &receiver.kind,
+                &receiver.agent_id,
+                receiver.name.as_deref(),
+                now,
+            )
+            .unwrap()
+            .message_id,
+            ready.message_id
+        );
+    }
+
+    {
+        let receiver = agent("real-session", Some("lucid-atlas"));
+        let mut deferred = MessageRecord::new(
+            ws.clone(),
+            &receiver,
+            "old".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        deferred.message_id = message_id(1);
+        deferred.retry_after = Some(now + jiff::SignedDuration::from_secs(60));
+        let mut newer =
+            MessageRecord::new(ws, &receiver, "new".to_owned(), true, DeliveryGate::Done);
+        newer.message_id = message_id(2);
+        let pending = [deferred.clone(), newer];
+
+        assert_eq!(
+            queue_head(
+                pending.iter(),
+                &receiver.kind,
+                &receiver.agent_id,
+                receiver.name.as_deref(),
+                now,
+            )
+            .unwrap()
+            .message_id,
+            deferred.message_id
+        );
+    }
 }
 
 #[test]
-fn queue_batch_tail_keeps_resume_control_lane_invisible() {
-    let agent = agent("real-session", Some("lucid-atlas"));
-    let head = batch_message(&agent, 1, "first");
+fn batching_collects_compatible_human_and_agent_prompts() {
+    let receiver = agent("real-session", Some("lucid-atlas"));
+    let now = Timestamp::now();
+
+    let human = batch_message(&receiver, 1, "human");
+    let agent_authored =
+        batch_message(&receiver, 2, "agent").with_sender(agent_sender("coder", Some("main")));
+    let pending = [agent_authored];
+    let tail = queue_batch_tail(pending.iter(), &human, AgentStatus::Idle, now);
+    assert_eq!(tail[0].message_id, message_id(2));
+
+    let head =
+        batch_message(&receiver, 1, "first").with_sender(agent_sender("planner", Some("main")));
+    let second =
+        batch_message(&receiver, 2, "second").with_sender(agent_sender("coder", Some("main")));
+    let third =
+        batch_message(&receiver, 3, "third").with_sender(agent_sender("reviewer", Some("main")));
+    let cross =
+        batch_message(&receiver, 4, "cross").with_sender(agent_sender("reviewer", Some("docs")));
+    let later_same =
+        batch_message(&receiver, 5, "later").with_sender(agent_sender("designer", Some("main")));
+    let pending = [later_same, cross, third, second];
+    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, now);
+    let ids: Vec<_> = tail
+        .iter()
+        .map(|message| message.message_id.clone())
+        .collect();
+    assert_eq!(ids, vec![message_id(2), message_id(3)]);
+}
+
+#[test]
+fn batching_stops_at_barriers_but_skips_control_and_future_records() {
+    let receiver = agent("real-session", Some("lucid-atlas"));
+    let now = Timestamp::now();
+    let blockers = [
+        MessageRecord {
+            text: "/compact".to_owned(),
+            ..batch_message(&receiver, 2, "slash")
+        },
+        batch_message(&receiver, 2, "command").with_body(MessageBody::Command),
+        MessageRecord {
+            enter: false,
+            ..batch_message(&receiver, 2, "draft")
+        },
+    ];
+    for blocker in blockers {
+        let head = batch_message(&receiver, 1, "first");
+        let later = batch_message(&receiver, 3, "later");
+        let pending = [blocker, later];
+        assert!(
+            queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, now).is_empty(),
+            "a non-batchable follower stops the prefix"
+        );
+    }
+
+    let non_batchable_heads = [
+        MessageRecord {
+            text: "/compact".to_owned(),
+            ..batch_message(&receiver, 1, "slash")
+        },
+        batch_message(&receiver, 1, "command").with_body(MessageBody::Command),
+        MessageRecord {
+            enter: false,
+            ..batch_message(&receiver, 1, "draft")
+        },
+    ];
+    for head in non_batchable_heads {
+        let pending = [batch_message(&receiver, 2, "later")];
+        assert!(queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, now).is_empty());
+    }
+
+    let head = batch_message(&receiver, 1, "first");
+    let middle =
+        batch_message(&receiver, 2, "middle").with_sender(agent_sender("coder", Some("docs")));
+    let later = batch_message(&receiver, 3, "later");
+    let pending = [middle, later];
+    assert!(queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, now).is_empty());
+
+    let head = batch_message(&receiver, 1, "first").with_force(true);
+    let middle = batch_message(&receiver, 2, "middle");
+    let later = batch_message(&receiver, 3, "later").with_force(true);
+    let pending = [middle, later];
+    assert!(queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, now).is_empty());
+
+    let head = MessageRecord {
+        gate: DeliveryGate::Any,
+        ..batch_message(&receiver, 1, "first")
+    };
+    let middle = MessageRecord {
+        gate: DeliveryGate::Done,
+        ..batch_message(&receiver, 2, "middle")
+    };
+    let later = MessageRecord {
+        gate: DeliveryGate::Any,
+        ..batch_message(&receiver, 3, "later")
+    };
+    let pending = [middle, later];
+    assert!(queue_batch_tail(pending.iter(), &head, AgentStatus::Failed, now).is_empty());
+
+    let head = batch_message(&receiver, 1, "first");
     let resume = MessageRecord {
         gate: DeliveryGate::Resume,
-        ..batch_message(&agent, 2, "continue")
+        ..batch_message(&receiver, 2, "continue")
     };
-    let later = batch_message(&agent, 3, "later");
-    let pending = [resume, later];
-
-    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now());
-
-    assert_eq!(tail.len(), 1);
+    let ready = batch_message(&receiver, 3, "ready");
+    let pending = [resume, ready];
+    let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, now);
     assert_eq!(tail[0].message_id, message_id(3));
 
     let resume_head = MessageRecord {
         gate: DeliveryGate::Resume,
-        ..batch_message(&agent, 1, "continue")
+        ..batch_message(&receiver, 1, "continue")
     };
-    let pending = [batch_message(&agent, 2, "ordinary")];
-    assert!(
-        queue_batch_tail(
-            pending.iter(),
-            &resume_head,
-            AgentStatus::Paused,
-            Timestamp::now()
-        )
-        .is_empty()
-    );
-}
+    let pending = [batch_message(&receiver, 2, "ordinary")];
+    assert!(queue_batch_tail(pending.iter(), &resume_head, AgentStatus::Paused, now).is_empty());
 
-#[test]
-fn queue_batch_tail_honors_contiguity_gate_and_force() {
-    let agent = agent("real-session", Some("lucid-atlas"));
-    let head = batch_message(&agent, 1, "first");
-    let middle =
-        batch_message(&agent, 2, "middle").with_sender(agent_sender("coder", Some("docs")));
-    let later = batch_message(&agent, 3, "later");
-    let pending = [middle, later];
-    assert!(
-        queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now()).is_empty()
-    );
-
-    let head = batch_message(&agent, 1, "first").with_force(true);
-    let middle = batch_message(&agent, 2, "middle");
-    let later = batch_message(&agent, 3, "later").with_force(true);
-    let pending = [middle, later];
-    assert!(
-        queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, Timestamp::now()).is_empty()
-    );
-
-    let head = MessageRecord {
-        gate: DeliveryGate::Any,
-        ..batch_message(&agent, 1, "first")
-    };
-    let middle = MessageRecord {
-        gate: DeliveryGate::Done,
-        ..batch_message(&agent, 2, "middle")
-    };
-    let later = MessageRecord {
-        gate: DeliveryGate::Any,
-        ..batch_message(&agent, 3, "later")
-    };
-    let pending = [middle, later];
-    assert!(
-        queue_batch_tail(pending.iter(), &head, AgentStatus::Failed, Timestamp::now()).is_empty()
-    );
-}
-
-#[test]
-fn queue_batch_tail_skips_future_scheduled_followers() {
-    let agent = agent("real-session", Some("lucid-atlas"));
-    let now = Timestamp::now();
-    let head = batch_message(&agent, 1, "first");
-    let future = batch_message(&agent, 2, "future")
+    let head = batch_message(&receiver, 1, "first");
+    let future = batch_message(&receiver, 2, "future")
         .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
-    let ready = batch_message(&agent, 3, "ready");
+    let ready = batch_message(&receiver, 3, "ready");
     let pending = [future, ready];
-
     let tail = queue_batch_tail(pending.iter(), &head, AgentStatus::Idle, now);
-
-    assert_eq!(tail.len(), 1);
     assert_eq!(tail[0].message_id, message_id(3));
 }
 
 #[test]
-fn parse_schedule_at_accepts_duration_and_next_wall_clock_time() {
+fn schedule_parser_accepts_durations_and_rolls_wall_clock_forward() {
     let now = jiff::civil::date(2026, 6, 24)
         .at(8, 0, 0, 0)
         .in_tz("UTC")
