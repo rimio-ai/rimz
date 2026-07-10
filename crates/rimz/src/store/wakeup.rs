@@ -11,10 +11,10 @@
 //!   heartbeat directory and post a typed `StoreDelta` event to each fresh
 //!   socket.
 //!
-//! Per the docs: "Sidebar wakeups are latency, not truth." Per-target send
+//! Per the docs: "Sidebar wakeups are latency, not truth." Sends are
+//! non-blocking, so a full receiver queue drops the wakeup. Per-target send
 //! failures are absorbed (logged at `debug`); only directory-read failures
-//! propagate. Stale heartbeats (older than [`SIDEBAR_HEARTBEAT_TTL`]) are
-//! skipped.
+//! propagate. Stale heartbeats (older than [`SIDEBAR_HEARTBEAT_TTL`]) are skipped.
 
 use std::fs;
 use std::io;
@@ -247,7 +247,13 @@ fn send_datagrams_with<'a>(
 
 fn sender_socket() -> Option<UnixDatagram> {
     match UnixDatagram::unbound() {
-        Ok(sender) => Some(sender),
+        Ok(sender) => match sender.set_nonblocking(true) {
+            Ok(()) => Some(sender),
+            Err(e) => {
+                debug!(error = %e, "wakeup: making sender socket non-blocking failed");
+                None
+            }
+        },
         Err(e) => {
             debug!(error = %e, "wakeup: creating sender socket failed");
             None
@@ -258,6 +264,9 @@ fn sender_socket() -> Option<UnixDatagram> {
 fn send_datagram_with(sender: &UnixDatagram, payload: &[u8], target: &Path) {
     match sender.send_to(payload, target) {
         Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+            debug!(?target, "wakeup: receiver queue full; dropping wakeup");
+        }
         Err(e) => {
             debug!(
                 ?target,

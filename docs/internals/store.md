@@ -84,7 +84,7 @@ The coroner also writes `last-death.json` beside the workspace store for cheap `
 
 ## Wakeups
 
-After every write, the writer wakes live consumers off-lock: it walks fresh sidebar heartbeats (TTL ~5s) and sends each a `store_delta` wakeup datagram, and a completing run pings its waiter's [run socket](./harness/harness.md#supervised-runs). The envelope and its event taxonomy live in [state.md → event taxonomy](./sidebar/state.md#event-taxonomy) and [`sidebar/events.rs`](../../crates/rimz/src/sidebar/events.rs).
+After every write, the writer wakes live consumers off-lock: it walks fresh sidebar heartbeats (TTL ~5s) and sends each a `store_delta` wakeup datagram, and a completing run pings its waiter's [run socket](./harness/harness.md#supervised-runs). The send is non-blocking, so a full receiver queue drops the datagram. The envelope and its event taxonomy live in [state.md → event taxonomy](./sidebar/state.md#event-taxonomy) and [`sidebar/events.rs`](../../crates/rimz/src/sidebar/events.rs).
 
 A wakeup carries latency, not truth: the consumer folds the log tail from its own cursor, and the published checkpoint is a catch-up accelerator it can skip. A missed wakeup is closed by the next sidebar tick (`--tick-seconds`, default 1s) ([`wakeup.rs`](../../crates/rimz/src/store/wakeup.rs)).
 

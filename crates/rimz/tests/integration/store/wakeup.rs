@@ -6,6 +6,42 @@ use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::{MuxName, SidebarInstanceId};
 
 #[test]
+fn wake_sidebars_drops_datagrams_when_receiver_queue_is_full() {
+    use std::os::unix::net::UnixDatagram;
+
+    let h = crate::common::Harness::new();
+    if h.skip_if_sandboxed() {
+        return;
+    }
+
+    let sock_path = h.runtime_paths.sock_dir.join("sidebar.full.sock");
+    let recv = UnixDatagram::bind(&sock_path).expect("bind full receiver");
+    recv.set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set read timeout");
+    let hb = SidebarHeartbeat::new(
+        h.workspace_id.clone(),
+        SidebarInstanceId::new(),
+        MuxName::Tmux,
+        "rimz-test-full",
+        sock_path,
+        None,
+    );
+    std::fs::write(
+        h.runtime_paths.heartbeat_dir.join("sidebar.full.json"),
+        serde_json::to_vec(&hb).expect("serialize full hb"),
+    )
+    .expect("write full hb");
+
+    for _ in 0..2_000 {
+        rimz::store::wakeup::wake_sidebars(&h.runtime_paths).expect("wake sidebars");
+    }
+
+    let mut buf = [0u8; 4096];
+    let received = recv.recv(&mut buf).expect("receiver holds sent prefix");
+    assert!(received > 0);
+}
+
+#[test]
 fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protocol() {
     use std::os::unix::net::UnixDatagram;
 
