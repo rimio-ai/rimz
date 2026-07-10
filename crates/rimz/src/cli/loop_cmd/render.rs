@@ -531,10 +531,22 @@ fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
         LoopRunResult::Overlapped => "overlapped".to_owned(),
         LoopRunResult::CheckSkipped => check_skipped_label(record).to_owned(),
     };
+    let (glyph, style) = match record.result {
+        LoopRunResult::CheckSkipped => check_skip_display(record.check.as_ref()),
+        result => (loop_result_glyph(result), loop_result_style(result)),
+    };
     RunStatusDisplay {
-        glyph: loop_result_glyph(record.result),
+        glyph,
         label,
-        style: loop_result_style(record.result),
+        style,
+    }
+}
+
+pub(super) fn check_skip_display(check: Option<&CheckRecord>) -> (&'static str, anstyle::Style) {
+    match check {
+        Some(check) if check.timed_out => ("○", ui::palette::WARN),
+        Some(check) if check.code == Some(0) => ("✓", ui::palette::GOOD),
+        _ => ("○", ui::palette::MUTED),
     }
 }
 
@@ -576,9 +588,8 @@ pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
         | LoopRunResult::Canceled
         | LoopRunResult::TargetGone
         | LoopRunResult::Overlapped
-        | LoopRunResult::SkippedWindow
         | LoopRunResult::BudgetSkipped => ui::palette::WARN,
-        LoopRunResult::CheckSkipped => ui::palette::MUTED,
+        LoopRunResult::SkippedWindow | LoopRunResult::CheckSkipped => ui::palette::MUTED,
     }
 }
 
@@ -965,15 +976,34 @@ mod tests {
             output: "ok".to_owned(),
         });
         let status = run_status(&skipped);
-        assert_eq!(status.glyph, "○");
+        assert_eq!(status.glyph, "✓");
         assert_eq!(status.label, "check passed");
+        assert_eq!(status.style, ui::palette::GOOD);
 
         skipped.check = Some(CheckRecord {
             code: Some(1),
             timed_out: false,
             output: "not yet".to_owned(),
         });
-        assert_eq!(run_status(&skipped).label, "check failed");
+        let status = run_status(&skipped);
+        assert_eq!(status.glyph, "○");
+        assert_eq!(status.label, "check failed");
+        assert_eq!(status.style, ui::palette::MUTED);
+
+        skipped.check = Some(CheckRecord {
+            code: None,
+            timed_out: true,
+            output: "too slow".to_owned(),
+        });
+        let status = run_status(&skipped);
+        assert_eq!(status.glyph, "○");
+        assert_eq!(status.label, "check timed out");
+        assert_eq!(status.style, ui::palette::WARN);
+
+        assert_eq!(
+            loop_result_style(LoopRunResult::SkippedWindow),
+            ui::palette::MUTED
+        );
     }
 
     #[test]

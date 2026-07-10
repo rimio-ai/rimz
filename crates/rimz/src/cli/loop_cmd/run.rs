@@ -738,19 +738,29 @@ fn write_check_skipped_summary(
         .map(check_result_label)
         .unwrap_or_else(|| "check skipped".to_owned());
     let check_duration_ms = outcome.check_duration_ms.unwrap_or(duration_ms);
-    let line = format!(
-        "{label} in {} — {}",
-        render::format_duration_ms(check_duration_ms),
-        render::check_skip_decision(entry)
-    );
+    let duration = render::format_duration_ms(check_duration_ms);
+    let (glyph, style) = render::check_skip_display(outcome.check.as_ref());
     if mode == LoopRunMode::Manual {
+        write!(
+            out,
+            "{}",
+            ui::paint(style, &format!("{glyph} {label} in {duration}"))
+        )?;
         writeln!(
             out,
             "{}",
-            ui::paint(ui::palette::MUTED, &format!("○ {line}"))
+            ui::paint(
+                ui::palette::MUTED,
+                &format!(" — {}", render::check_skip_decision(entry))
+            )
         )
     } else {
-        writeln!(out, "loop `{name}`: {line}")
+        write!(out, "loop `{name}`: {}", ui::paint(style, &label))?;
+        writeln!(
+            out,
+            " in {duration} — {}",
+            render::check_skip_decision(entry)
+        )
     }
 }
 
@@ -928,9 +938,21 @@ mod tests {
         keep: bool,
         outcome: &RunOutcome,
     ) -> String {
+        anstream::adapter::strip_str(&raw_summary(name, entry, duration_ms, mode, keep, outcome))
+            .to_string()
+    }
+
+    fn raw_summary(
+        name: &str,
+        entry: &TaskEntry,
+        duration_ms: u64,
+        mode: LoopRunMode,
+        keep: bool,
+        outcome: &RunOutcome,
+    ) -> String {
         let mut out = Vec::new();
         write_run_summary(&mut out, name, entry, duration_ms, mode, keep, outcome).unwrap();
-        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+        String::from_utf8(out).unwrap()
     }
 
     #[test]
@@ -977,8 +999,24 @@ mod tests {
                 false,
                 &spawn,
             ),
-            "○ check passed (exit 0) in 4.4s — codex not started; fires when the check fails\n"
+            "✓ check passed (exit 0) in 4.4s — codex not started; fires when the check fails\n"
         );
+        let raw = raw_summary(
+            "watchdog",
+            &entry,
+            9_000,
+            LoopRunMode::Manual,
+            false,
+            &spawn,
+        );
+        assert!(raw.contains(&ui::paint(
+            ui::palette::GOOD,
+            "✓ check passed (exit 0) in 4.4s"
+        )));
+        assert!(raw.contains(&ui::paint(
+            ui::palette::MUTED,
+            " — codex not started; fires when the check fails"
+        )));
 
         let mut wake = RunOutcome::new(LoopRunResult::CheckSkipped);
         wake.check = Some(CheckRecord {
