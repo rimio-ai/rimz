@@ -205,15 +205,18 @@ pub(super) fn wait_for_replies(
         bail!(error);
     }
     let mut printed_block = false;
+    if wait.any
+        && let Some(winner) = legs.iter().position(|leg| leg.done.is_some())
+    {
+        if !wait.json {
+            print_reply_result_for_leg(&legs[winner], total, &mut printed_block)?;
+        }
+        return finish_join(&legs, wait, Some(winner));
+    }
     for leg in legs.iter().filter(|leg| leg.done.is_some()) {
         if !wait.json {
             print_reply_result_for_leg(leg, total, &mut printed_block)?;
         }
-    }
-    if wait.any
-        && let Some(winner) = legs.iter().position(|leg| leg.done.is_some())
-    {
-        return finish_join(&legs, wait, Some(winner));
     }
     if let Some(status) = settled_status(&legs.iter().map(|leg| leg.done).collect::<Vec<_>>(), None)
     {

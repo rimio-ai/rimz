@@ -2017,6 +2017,58 @@ fn message_wait_json_keeps_the_uniform_map_for_one_target() {
 }
 
 #[test]
+fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let first = env.runtime_root.join("message-wait-timeout-first.jsonl");
+    let second = env.runtime_root.join("message-wait-timeout-second.jsonl");
+    std::fs::write(&first, "").expect("seed first transcript");
+    std::fs::write(&second, "").expect("seed second transcript");
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-timeout-first",
+        "feature-timeout-first",
+        &first,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-timeout-second",
+        "feature-timeout-second",
+        &second,
+        &[("ZELLIJ_PANE_ID", "4")],
+    );
+
+    let trace_log = env.project_root.join("zellij-wait-timeout-fanout.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@all", "--wait=0s", "--json", "status?"])
+        .output()
+        .expect("fanout wait deadline");
+
+    assert_eq!(out.status.code(), Some(124));
+    let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
+    assert_eq!(replies.as_object().unwrap().len(), 2);
+    for label in [
+        "@claude#feature-timeout-first",
+        "@claude#feature-timeout-second",
+    ] {
+        assert_eq!(replies[label]["status"], "timed_out");
+        assert!(replies[label]["reply"].is_null());
+    }
+    assert!(out.stderr.is_empty());
+    assert_eq!(
+        env.read_events()
+            .iter()
+            .filter(|event| event.method == "message.timed_out")
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn message_wait_rejects_conflicts_pane_targets_and_missing_hooks() {
     let env = Env::new();
     for args in [
