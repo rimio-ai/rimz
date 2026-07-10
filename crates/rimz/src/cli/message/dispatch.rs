@@ -402,7 +402,7 @@ pub(super) fn dispatch_resolved_message(
                 rimz::agents::hook_trust_fix(agent.kind.as_str())
             );
         }
-        Some(reply::ReplyTarget::new(agent, label))
+        Some(reply::ReplyTarget::new(agent, label, adapter))
     } else {
         None
     };

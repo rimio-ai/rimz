@@ -21,17 +21,18 @@ pub(super) struct ReplyTarget {
     agent_id: AgentSessionId,
     agent_name: Option<String>,
     label: String,
-    transcript_path: Option<String>,
+    cursor: Option<TranscriptCursor>,
 }
 
 impl ReplyTarget {
-    pub(super) fn new(agent: &AgentState, label: String) -> Self {
+    pub(super) fn new(agent: &AgentState, label: String, adapter: &dyn AgentAdapter) -> Self {
+        let transcript_path = agent.transcript_path.clone();
         Self {
             kind: agent.kind.clone(),
             agent_id: agent.agent_id.clone(),
             agent_name: agent.name.clone(),
             label,
-            transcript_path: agent.transcript_path.clone(),
+            cursor: Some(anchored_cursor(transcript_path.as_deref(), adapter)),
         }
     }
 
@@ -129,7 +130,7 @@ fn step_reply(turn_started_at: Option<Timestamp>, card: CardView) -> Step {
 pub(super) fn wait_for_reply(
     store: &rimz::Store,
     session_name: &str,
-    target: ReplyTarget,
+    mut target: ReplyTarget,
     steer: bool,
     outcomes: &[DispatchOutcome],
     mut wait_base: u64,
@@ -148,7 +149,8 @@ pub(super) fn wait_for_reply(
     let adapter = rimz::agents::find_adapter(target.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", target.kind))?;
     let mut cursor = (initial_status == MessageStatus::Sent)
-        .then(|| anchored_cursor(target.transcript_path.as_deref(), adapter));
+        .then(|| target.cursor.take())
+        .flatten();
     let mut phase = WaitPhase::Delivery;
     let mut message_status = initial_status;
     let mut last_message = None;
@@ -308,6 +310,38 @@ mod tests {
             status,
             turn_started_at: Some(Timestamp::from_second(started).unwrap()),
         })
+    }
+
+    #[test]
+    fn reply_target_anchors_transcript_before_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"old answer\"}]}}\n",
+        )
+        .unwrap();
+        let mut agent = rimz::testkit::agent_state("claude", "sess-reply", Timestamp::UNIX_EPOCH);
+        agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        let adapter = rimz::agents::find_adapter("claude").unwrap();
+        let mut target = ReplyTarget::new(&agent, "@claude".to_owned(), adapter);
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        writeln!(
+            file,
+            "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"fresh answer\"}}]}}}}"
+        )
+        .unwrap();
+
+        let messages = target
+            .cursor
+            .as_mut()
+            .unwrap()
+            .messages(agent.transcript_path.as_deref(), adapter);
+        assert_eq!(messages, ["fresh answer"]);
     }
 
     #[test]
