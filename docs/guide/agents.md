@@ -112,10 +112,11 @@ One more suffix sits outside permissions: `-ping` opens the agent at its lowest 
 
 ## Compose a layout
 
-Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell, a profile, a configured command, or `term` for a plain shell. An optional trailing prompt broadcasts to every agent cell in the layout.
+Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell, a profile, a configured command, or `term` for a plain shell; suffix an agent cell with `:role` to give it an ad-hoc role handle. An optional trailing prompt broadcasts to every agent cell in the layout.
 
 ```sh
 rimz agents claude,codex                     # two agents, side by side
+rimz agents claude:planner,codex:coder -w feat-x   # ad-hoc role handles, no agents.toml
 rimz agents claude,codex+term                # Claude | Codex tiled over a shell
 rimz agents claude/codex/term                # one stack of three rows
 rimz agents 'vim,codex+term'                 # your editor beside an agent stacked over a shell
@@ -128,7 +129,7 @@ Add `-w` and the whole layout lands in an isolated Git worktree, the pattern for
 
 ## Handles, in brief
 
-Every agent answers to a handle: `@claude` names a kind, `@planner` a profile, `forge.reviewer` one role of a team. Rimz gives each bare launch a stable pet name too (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes the handle to one channel — every worktree gets one, and named channels and teams have their own — defaulting to the one you are standing in.
+Every agent answers to a handle: `@claude` names a kind, `@planner` names a profile or an inline `cell:planner` role, and `forge.reviewer` names one role of a team. Rimz gives each bare launch a stable pet name too (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes the handle to one channel — every worktree gets one, and named channels and teams have their own — defaulting to the one you are standing in.
 
 ```sh
 rimz agents focus @claude-2#feat-a   # jump to a specific agent's pane

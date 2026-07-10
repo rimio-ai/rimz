@@ -418,12 +418,18 @@ fn spec_references_repo_profile(
         });
         return role_refs_repo_profile || layout_refs_repo_profile;
     }
-    layout_tokens(spec)
-        .any(|token| repo_profiles.contains(token) && !machine_cell_word(token, profiles, commands))
+    layout_tokens(spec).any(|token| {
+        let cell = if machine_cell_word(token, profiles, commands) {
+            token
+        } else {
+            token.split_once(':').map_or(token, |(cell, _)| cell)
+        };
+        repo_profiles.contains(cell) && !machine_cell_word(cell, profiles, commands)
+    })
 }
 
 fn layout_tokens(raw: &str) -> impl Iterator<Item = &str> {
-    raw.split([',', '+'])
+    raw.split([',', '+', '/'])
         .map(str::trim)
         .filter(|token| !token.is_empty())
 }

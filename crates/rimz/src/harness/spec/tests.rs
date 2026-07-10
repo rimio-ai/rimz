@@ -107,6 +107,123 @@ fn parses_columns_and_tiled_rows() {
 }
 
 #[test]
+fn parses_inline_roles_on_agent_cells() {
+    let spec = parse_layout_spec("claude:planner,codex:coder", &no_profiles(), &no_commands())
+        .expect("parse inline roles");
+
+    assert!(matches!(
+        &spec.columns[0].rows[0],
+        Cell::Agent { kind, role, profile, .. }
+            if kind.as_str() == "claude"
+                && role.as_deref() == Some("planner")
+                && profile.is_none()
+    ));
+    assert!(matches!(
+        &spec.columns[1].rows[0],
+        Cell::Agent { kind, role, profile, .. }
+            if kind.as_str() == "codex"
+                && role.as_deref() == Some("coder")
+                && profile.is_none()
+    ));
+}
+
+#[test]
+fn inline_roles_compose_with_resolution_profiles_and_modes() {
+    let profiles = profiles([("planner", profile("claude"))]);
+    let teams = TeamsConfig::default();
+
+    let single = resolve_spec(Some("claude:planner"), &profiles, &no_commands(), &teams)
+        .expect("resolve single inline role");
+    assert!(matches!(
+        &single.columns[0].rows[0],
+        Cell::Agent { role, profile, .. }
+            if role.as_deref() == Some("planner") && profile.is_none()
+    ));
+
+    let profile_role = parse_layout_spec("planner:lead", &profiles, &no_commands())
+        .expect("parse profiled inline role");
+    assert!(matches!(
+        &profile_role.columns[0].rows[0],
+        Cell::Agent { role, profile, .. }
+            if role.as_deref() == Some("lead") && profile.as_deref() == Some("planner")
+    ));
+
+    let mode_role = parse_layout_spec("claude-auto:coder", &profiles, &no_commands())
+        .expect("parse mode inline role");
+    assert!(matches!(
+        &mode_role.columns[0].rows[0],
+        Cell::Agent { mode, role, .. }
+            if *mode == Some(PermissionMode::Auto) && role.as_deref() == Some("coder")
+    ));
+
+    let role_named_like_profile = parse_layout_spec("codex:planner", &profiles, &no_commands())
+        .expect("inline role is a pure label");
+    assert!(matches!(
+        &role_named_like_profile.columns[0].rows[0],
+        Cell::Agent { kind, role, profile, .. }
+            if kind.as_str() == "codex"
+                && role.as_deref() == Some("planner")
+                && profile.is_none()
+    ));
+}
+
+#[test]
+fn inline_roles_reject_invalid_ambiguous_duplicate_and_command_labels() {
+    let commands = commands([("logs", "tail -f rimz.log")]);
+
+    assert_eq!(
+        parse_layout_spec("term:x", &no_profiles(), &commands),
+        Err(LayoutErr::RoleOnCommandCell {
+            cell: "term".to_owned(),
+            role: "x".to_owned(),
+        })
+    );
+    assert_eq!(
+        parse_layout_spec("logs:x", &no_profiles(), &commands),
+        Err(LayoutErr::RoleOnCommandCell {
+            cell: "logs".to_owned(),
+            role: "x".to_owned(),
+        })
+    );
+    assert!(matches!(
+        parse_layout_spec("claude:codex", &no_profiles(), &commands),
+        Err(LayoutErr::InlineRoleShadowsAddress { name, .. }) if name == "codex"
+    ));
+    for role in ["all", "claude-2"] {
+        assert!(matches!(
+            parse_layout_spec(&format!("claude:{role}"), &no_profiles(), &commands),
+            Err(LayoutErr::InlineRoleShadowsAddress { name, .. }) if name == role
+        ));
+    }
+    assert_eq!(
+        parse_layout_spec("claude:x,codex:x", &no_profiles(), &commands),
+        Err(LayoutErr::DuplicateInlineRole {
+            role: "x".to_owned(),
+        })
+    );
+    for role in ["", "bad role"] {
+        assert_eq!(
+            parse_layout_spec(&format!("claude:{role}"), &no_profiles(), &commands),
+            Err(LayoutErr::InvalidInlineRole {
+                name: role.to_owned(),
+            })
+        );
+    }
+}
+
+#[test]
+fn exact_command_name_with_colon_wins_over_inline_role_syntax() {
+    let commands = commands([("logs:tail", "tail -f rimz.log")]);
+
+    assert_eq!(
+        parse_layout_spec("logs:tail", &no_profiles(), &commands),
+        Ok(LayoutSpec::single(Cell::Command {
+            argv: vec!["tail".to_owned(), "-f".to_owned(), "rimz.log".to_owned()],
+        }))
+    );
+}
+
+#[test]
 fn parses_stacked_columns_and_rejects_mixed_row_operators() {
     let spec = parse_layout_spec("claude/codex", &no_profiles(), &no_commands()).expect("parse");
     assert_eq!(spec.columns.len(), 1);
@@ -142,6 +259,18 @@ fn known_spec_token_recognizes_valid_slash_layouts_only() {
     ));
     assert!(!is_known_spec_token(
         "https://example.invalid",
+        &profiles,
+        &commands,
+        &teams
+    ));
+    assert!(is_known_spec_token(
+        "claude:planner",
+        &profiles,
+        &commands,
+        &teams
+    ));
+    assert!(!is_known_spec_token(
+        "claude: fix the bug",
         &profiles,
         &commands,
         &teams
@@ -1161,6 +1290,26 @@ fn team_layout_can_stack_roles() {
     assert_eq!(spec.columns.len(), 1);
     assert!(spec.columns[0].stacked);
     assert_eq!(spec.columns[0].rows.len(), 2);
+}
+
+#[test]
+fn team_layout_does_not_accept_inline_role_suffixes() {
+    let profiles = profiles([("planner-profile", profile("claude"))]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team_with_layout(
+            vec![role("planner", "planner-profile")],
+            "planner,claude:helper",
+        ),
+    )]));
+
+    assert_eq!(
+        resolve_spec(Some("review"), &profiles, &no_commands(), &teams),
+        Err(LayoutErr::UnknownRoleInLayout {
+            team: "review".to_owned(),
+            role: "claude:helper".to_owned(),
+        })
+    );
 }
 
 #[test]

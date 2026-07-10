@@ -361,6 +361,22 @@ fn untrusted_repo_profile_reference_is_detected_inside_requested_shape() {
             ..
         })
     ));
+    for spec in ["planner:lead", "codex/planner:lead"] {
+        assert!(matches!(
+            block_untrusted_profile_reference(
+                Some(spec),
+                &profiles,
+                &commands,
+                &teams,
+                project.path(),
+                config.path(),
+            ),
+            Err(EffectiveConfigErr::Blocked {
+                state: "untrusted",
+                ..
+            })
+        ));
+    }
     block_untrusted_profile_reference(
         Some("claude"),
         &profiles,
@@ -370,6 +386,20 @@ fn untrusted_repo_profile_reference_is_detected_inside_requested_shape() {
         config.path(),
     )
     .expect("repo profile named like a built-in kind stays inert for the built-in launch");
+
+    let commands = CommandsConfig(BTreeMap::from([(
+        "planner:lead".to_owned(),
+        "true".to_owned(),
+    )]));
+    block_untrusted_profile_reference(
+        Some("planner:lead"),
+        &profiles,
+        &commands,
+        &teams,
+        project.path(),
+        config.path(),
+    )
+    .expect("exact machine command with a colon stays launchable");
 }
 
 #[test]

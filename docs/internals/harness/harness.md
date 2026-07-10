@@ -36,13 +36,14 @@ reach a member by @handle#channel, then:
 
 ### The layout IR
 
-`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL, and both compile to the same backend-neutral panes. The inline grammar is compact: commas split columns, plus signs tile rows within a column, slashes stack rows within a column on Zellij, and each cell is a built-in `term`, an agent kind, a virtual `<kind>-<mode>` / `<kind>-ping` variant (`claude-auto`, `codex-yolo`), a configured profile, or a configured command ([configuration.md](../../guide/configuration.md#agent-profiles-commands-and-teams)). A named team is an ordered role list that opens as one side-by-side column per role unless it declares its own `layout`, which uses the same grammar and resolves declared role names before falling through to roleless cells. A named team also accepts `<team>.<role>` to launch one declared role with its team identity; that single role places like any single-agent launch ([placement](#backend-shape-and-placement)).
+`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL, and both compile to the same backend-neutral panes. The inline grammar is compact: commas split columns, plus signs tile rows within a column, slashes stack rows within a column on Zellij, and each cell is a built-in `term`, an agent kind, a virtual `<kind>-<mode>` / `<kind>-ping` variant (`claude-auto`, `codex-yolo`), a configured profile, or a configured command ([configuration.md](../../guide/configuration.md#agent-profiles-commands-and-teams)). An agent cell may carry an ad-hoc role as `<cell>:<role>`; inline roles follow team-role name and address rules, stay unique within the spec, and apply only to agent cells. A named team is an ordered role list that opens as one side-by-side column per role unless it declares its own `layout`, which uses the row and column grammar and resolves declared role names before falling through to roleless cells; team layout strings keep roles in the team's declared role list and do not accept the inline suffix. A named team also accepts `<team>.<role>` to launch one declared role with its team identity; that single role places like any single-agent launch ([placement](#backend-shape-and-placement)).
 
 ```text
 claude,codex+term      → Claude left; Codex tiled over a shell right
 claude/codex/term      → two agents plus a shell in one Zellij stack; tmux tiles them
 vim,htop+zsh           → raw command panes
 claude-auto,codex-yolo → agent cells with adapter-owned permission posture
+claude:planner,codex:coder → agent cells with ad-hoc `@planner` and `@coder` handles
 ```
 
 Stacks are presentation only: Zellij renders a native stack with one expanded pane, while tmux keeps the same cells as tiled rows because it has no native stack.

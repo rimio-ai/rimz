@@ -2,7 +2,8 @@
 //!
 //! Commas split columns, plus signs tile rows within a column, slashes stack
 //! rows within a column, and each cell is a profile, a command, or a built-in
-//! cell. Named teams compile to one column per role unless they declare an
+//! cell. Agent cells optionally carry a `:role` suffix for an ad-hoc role
+//! handle. Named teams compile to one column per role unless they declare an
 //! explicit role-first layout shape. Built-ins provide `term`, every registered
 //! agent kind, and `<kind>-<mode>` / `<kind>-ping` virtual variants; per-machine
 //! `[agents.profiles]` entries can specialize agent cells and `[agents.commands]`
@@ -88,10 +89,10 @@ pub enum Cell {
         /// `RIMZ_AGENT_PROFILE` for sender attribution from that pane. `None`
         /// for a bare built-in kind or virtual variant without an override.
         profile: Option<String>,
-        /// The role this cell holds inside a named `[agents.teams]` launch. It
-        /// is stamped onto the launch event so a team member answers to
-        /// `@<role>`; the wrapper also keeps `RIMZ_AGENT_ROLE` for sender
-        /// attribution from that pane.
+        /// The role this cell holds inside a named `[agents.teams]` launch or
+        /// an inline layout spec. It is stamped onto the launch event so the
+        /// agent answers to `@<role>`; the wrapper also keeps
+        /// `RIMZ_AGENT_ROLE` for sender attribution from that pane.
         role: Option<String>,
         /// The launch model selected by the profile, role, CLI override, or
         /// adapter default.
@@ -242,6 +243,20 @@ pub enum LayoutErr {
         name: String,
         reason: &'static str,
     },
+    #[error(
+        "invalid inline role name `{name}`; roles cannot be empty or contain whitespace, `,`, `+`, `/`, `:`, or `#`"
+    )]
+    InvalidInlineRole { name: String },
+    #[error(
+        "inline role name `{name}` clashes with the agent-address grammar ({reason}); rename it so `@{name}` is unambiguous"
+    )]
+    InlineRoleShadowsAddress { name: String, reason: &'static str },
+    #[error("duplicate inline role `{role}` in layout spec")]
+    DuplicateInlineRole { role: String },
+    #[error(
+        "layout cell `{cell}` cannot have inline role `{role}`; roles apply only to agent cells"
+    )]
+    RoleOnCommandCell { cell: String, role: String },
     #[error(
         "invalid command name `{name}`; commands cannot be empty or contain whitespace, `,`, `+`, or `/`"
     )]
@@ -676,6 +691,7 @@ pub fn is_known_spec_token(
         && (spec_team(raw, teams).is_some()
             || raw == "peer"
             || is_cell_word(raw, profiles, commands)
+            || (raw.contains(':') && parse_layout_spec_validated(raw, profiles, commands).is_ok())
             || (raw.contains([',', '+', '/'])
                 && parse_layout_spec_validated(raw, profiles, commands).is_ok()))
 }
@@ -690,12 +706,35 @@ fn parse_layout_spec_validated(
         return Err(LayoutErr::Empty);
     }
 
+    let mut seen_roles = BTreeSet::new();
     let mut columns = Vec::new();
     for column_raw in raw.split(',') {
         let (cell_names, stacked) = split_column_rows(raw, column_raw)?;
         let mut rows = Vec::new();
-        for cell_name in cell_names {
-            rows.push(parse_cell(cell_name, profiles, commands)?);
+        for raw_cell in cell_names {
+            let (cell_name, role) = split_inline_role(raw_cell, profiles, commands);
+            if let Some(role) = role {
+                validate_inline_role(role)?;
+                if !seen_roles.insert(role.to_owned()) {
+                    return Err(LayoutErr::DuplicateInlineRole {
+                        role: role.to_owned(),
+                    });
+                }
+            }
+            let mut cell = parse_cell(cell_name, profiles, commands)?;
+            if let Some(role) = role {
+                let Cell::Agent {
+                    role: cell_role, ..
+                } = &mut cell
+                else {
+                    return Err(LayoutErr::RoleOnCommandCell {
+                        cell: cell_name.to_owned(),
+                        role: role.to_owned(),
+                    });
+                };
+                *cell_role = Some(role.to_owned());
+            }
+            rows.push(cell);
         }
         columns.push(Column { rows, stacked });
     }
@@ -727,7 +766,11 @@ fn split_column_rows<'a>(layout_raw: &str, column_raw: &'a str) -> Result<(Vec<&
 }
 
 fn is_inline_spec(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
-    raw.contains([',', '+', '/']) || is_cell_word(raw, profiles, commands)
+    if raw.contains([',', '+', '/']) || is_cell_word(raw, profiles, commands) {
+        return true;
+    }
+    let (cell, role) = split_inline_role(raw, profiles, commands);
+    role.is_some() && is_cell_word(cell, profiles, commands)
 }
 
 fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
@@ -737,6 +780,39 @@ fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig)
         || crate::agents::find_adapter(raw).is_some()
         || virtual_agent_shape(raw)
         || virtual_ping_shape(raw)
+}
+
+fn split_inline_role<'a>(
+    raw: &'a str,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> (&'a str, Option<&'a str>) {
+    if is_cell_word(raw, profiles, commands) {
+        return (raw, None);
+    }
+    raw.split_once(':')
+        .map_or((raw, None), |(cell, role)| (cell, Some(role)))
+}
+
+fn validate_inline_role(name: &str) -> Result<()> {
+    if invalid_role_name(name) {
+        return Err(LayoutErr::InvalidInlineRole {
+            name: name.to_owned(),
+        });
+    }
+    if let Some(reason) = address_grammar_clash(name) {
+        return Err(LayoutErr::InlineRoleShadowsAddress {
+            name: name.to_owned(),
+            reason,
+        });
+    }
+    if crate::agents::find_adapter(name).is_some() {
+        return Err(LayoutErr::InlineRoleShadowsAddress {
+            name: name.to_owned(),
+            reason: "it is a built-in kind handle like `@claude`",
+        });
+    }
+    Ok(())
 }
 
 fn parse_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> Result<Cell> {

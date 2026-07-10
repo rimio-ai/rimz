@@ -139,6 +139,7 @@ rimz agents codex --from-pr 42                 # worktree checked out from a pul
 **Combine models as teams.** A named [team](./docs/guide/teams.md) in `agents.toml` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. Rimz is built this way; `examples/teams/` ships the `forge` team it uses.
 
 ```sh
+rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without agents.toml
 rimz agents forge -w feat-complex   # planner, coder, reviewer on one feature
 ```
 

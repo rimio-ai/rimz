@@ -1,6 +1,6 @@
 # Teams
 
-A team launches several agents as one unit, each in a named role with its own context window, model, and instructions, cooperating over messages in a shared channel. Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
+A team launches several agents as one unit, each in a named role with its own context window, model, and instructions, cooperating over messages in a shared channel. Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./agents.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
 
 ```sh
 rimz agents forge -w feat-complex         # planner, coder, reviewer on one feature
@@ -57,7 +57,7 @@ The planner comes back to you at its design gates; the sidebar lifts the whole t
 
 ## Define your own team
 
-A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a list of roles, each bound to a profile, with an optional `layout` in the same grammar inline specs use (commas split columns, plus signs tile rows, slashes stack them):
+A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a list of roles, each bound to a profile, with an optional `layout` using the same row and column operators as inline specs (commas split columns, plus signs tile rows, slashes stack them). Its cells name declared roles or roleless cells, while ad-hoc `cell:role` suffixes stay exclusive to inline specs:
 
 ```toml
 [agents.teams.forge]

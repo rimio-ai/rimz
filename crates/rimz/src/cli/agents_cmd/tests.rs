@@ -1242,12 +1242,12 @@ mod identity {
         .unwrap();
         assert_eq!(requests[0].launch.launch_ordinal, Some(1));
 
-        let inline = LayoutSpec {
-            columns: vec![Column {
-                rows: vec![agent_cell_with_role(None), agent_cell_with_role(None)],
-                stacked: false,
-            }],
-        };
+        let inline = rimz::harness::spec::parse_layout_spec(
+            "claude:planner,codex:coder",
+            &rimz::config::ProfilesConfig::default(),
+            &rimz::config::CommandsConfig::default(),
+        )
+        .expect("inline role layout");
         let requests = launch_identity_requests(&inline, None, None, None, None, None).unwrap();
         let group = requests[0]
             .launch
@@ -1258,6 +1258,8 @@ mod identity {
         assert_eq!(requests[1].launch.launch_group.as_deref(), Some(group));
         assert_eq!(requests[0].launch.launch_ordinal, Some(0));
         assert_eq!(requests[1].launch.launch_ordinal, Some(1));
+        assert_eq!(requests[0].launch.role.as_deref(), Some("planner"));
+        assert_eq!(requests[1].launch.role.as_deref(), Some("coder"));
 
         let single = LayoutSpec::single(agent_cell_with_role(None));
         let requests = launch_identity_requests(&single, None, None, None, None, None).unwrap();
