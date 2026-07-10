@@ -190,14 +190,14 @@ pub(crate) fn read_piped_text_prompt() -> Result<Option<String>> {
 }
 
 #[cfg(unix)]
-fn stdin_data_ready(fd: std::os::fd::BorrowedFd<'_>, deadline: Duration) -> bool {
+fn stdin_data_ready(fd: std::os::fd::BorrowedFd<'_>, timeout: Duration) -> bool {
     use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
     let mut fds = [PollFd::new(fd, PollFlags::POLLIN)];
-    let Ok(timeout) = PollTimeout::try_from(deadline) else {
+    let Ok(poll_timeout) = PollTimeout::try_from(timeout) else {
         return true;
     };
-    !matches!(poll(&mut fds, timeout), Ok(0))
+    !matches!(poll(&mut fds, poll_timeout), Ok(0))
 }
 
 #[cfg(not(unix))]
