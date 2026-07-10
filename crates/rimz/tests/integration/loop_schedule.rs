@@ -807,7 +807,14 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
             "fix it",
         ],
     );
-    loop_ok(&env, &["loop", "run", "broken"]);
+    let fire_stdout = loop_ok(&env, &["loop", "fire", "broken"]);
+    assert!(
+        fire_stdout.contains("  │ boom")
+            && fire_stdout.contains("✗ check failed (exit 1)")
+            && fire_stdout.contains("→ waking @claude#project")
+            && fire_stdout.contains("✓ delivered to @claude#project"),
+        "manual fire should connect the tripped check to delivery: {fire_stdout}"
+    );
     let messages = env.store().list_pending_messages().expect("messages");
     assert_eq!(messages.len(), 1);
     assert!(messages[0].text.contains("fix it"));
