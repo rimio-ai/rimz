@@ -339,14 +339,7 @@ fn execute_attempt(
         .as_ref()
         .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
     rimz::harness::run::create(prepared.store.paths(), &record).context("recording run")?;
-    open_attempt_pane(
-        prepared,
-        room,
-        args,
-        &run_id,
-        &launch_identity,
-        &pane,
-    )?;
+    open_attempt_pane(prepared, room, args, &run_id, &launch_identity, &pane)?;
     if args.bg {
         #[expect(clippy::print_stdout, reason = "command result is the agent name")]
         {
