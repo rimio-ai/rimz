@@ -13,7 +13,7 @@ use crate::sidebar_pane::render::fmt::{
     dollars2, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    mana_bar_spans, mana_style, pace_ratio, pace_style, token_breakdown_spans,
+    mana_bar_spans, mana_style, pace_reading, pace_style, token_breakdown_spans,
     unknown_mana_bar_spans,
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
@@ -1226,8 +1226,9 @@ fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -
 /// One metered budget bar row: the window's label (`5h`/`7d`/`30d`), the draining
 /// mana bar (filled = remaining), and the `↻ <reset>` countdown right-aligned in
 /// the value column. The reset marker is toned by burn pace when the window
-/// carries enough timing data; the countdown text stays in the neutral soft
-/// tier. The label mirrors its bar's remaining-budget tone. `force_exhausted`
+/// carries enough timing data, cooling toward green only once the early-window
+/// gate has elapsed; the countdown text stays in the neutral soft tier. The
+/// label mirrors its bar's remaining-budget tone. `force_exhausted`
 /// paints the row as fully spent — red, no countdown — regardless of the window's
 /// own reading (a longer spent window gates it). A window with no usage
 /// percentage paints as an unknown dim track, preserving the label but claiming
@@ -1283,13 +1284,13 @@ fn metered_bar_row(
             .zip(window.duration_mins)
             .zip(window.resets_at)
             .and_then(|((used, mins), at)| {
-                pace_ratio(
+                pace_reading(
                     used,
                     SignedDuration::from_secs(i64::from(mins) * 60),
                     at.duration_since(now),
                 )
             })
-            .map(|ratio| pace_style(theme, ratio, &zones.burn_rate))
+            .map(|reading| pace_style(theme, reading, &zones.burn_rate))
             .unwrap_or_else(|| theme.body())
     };
     let mut spans = vec![
@@ -1324,9 +1325,9 @@ fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'stati
     spans
 }
 
-/// The fixed-width reset value column. Only the reset marker carries a hot
-/// pace tone; the countdown text stays at the neutral soft tier in a fixed
-/// six-cell slot.
+/// The fixed-width reset value column. Only the reset marker carries a pace
+/// tone; the countdown text stays at the neutral soft tier in a fixed six-cell
+/// slot.
 fn reset_value_spans(
     theme: &Theme,
     countdown: Option<&str>,

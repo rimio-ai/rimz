@@ -129,7 +129,7 @@ card_density = "auto"
 provider_tabs = "auto"
 ```
 
-Two nested tables set the meter color stops. The **context meter** (`[theme.display.context_meter]`) warms a card's context read from green: each stop names a fill percentage *and* an absolute token count, and severity is the worse of the two, so a large-window model calm by percentage still warms by sheer volume. The **budget bar** (`[theme.display.budget_bar]`) names the *remaining* budget percent at which the draining bar reaches each warm stop, and its nested `[theme.display.budget_bar.burn_rate]` colors the reset marker by pace (`100` = on-pace, `200` = twice as fast as the window can sustain). The shipped numbers are in the template.
+Two nested tables set the meter color stops. The **context meter** (`[theme.display.context_meter]`) warms a card's context read from green: each stop names a fill percentage *and* an absolute token count, and severity is the worse of the two, so a large-window model calm by percentage still warms by sheer volume. The **budget bar** (`[theme.display.budget_bar]`) names the *remaining* budget percent at which the draining bar reaches each warm stop, and its nested `[theme.display.budget_bar.burn_rate]` colors the reset marker by pace (`100` = on-pace, `200` = twice as fast as the window can sustain); `green = 67` starts the cool under-pace tail and `deep_green = 33` saturates it once enough of the window has elapsed. The shipped numbers are in the template.
 
 ```toml
 [theme.display.context_meter]

@@ -207,9 +207,9 @@ pub struct ContextBand {
 /// brimming window; each field names the *remaining* budget (in percent) at
 /// which the bar reaches that warm stop, with the spans between them
 /// interpolated. The nested burn-rate fields color the reset marker by burn
-/// rate against elapsed window time once pace leaves the sustainable floor. A
-/// fully spent window's full-width red track is a shape rule independent of
-/// these stops.
+/// rate against elapsed window time once pace leaves the sustainable floor in
+/// either direction. A fully spent window's full-width red track is a shape
+/// rule independent of these stops.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BudgetBarConfig {
@@ -235,14 +235,19 @@ impl Default for BudgetBarConfig {
     }
 }
 
-/// `[theme.display.budget_bar.burn_rate]`: reset-marker warm-tail control
-/// points by burn rate. Values are percentages of even pace: `100` means budget
-/// use matches elapsed window time, `200` means it is burning twice as fast as
-/// the reset can sustain. A sustainable pace keeps the marker at the soft tier;
-/// past `yellow` it slides the warm tail gold -> amber -> red.
+/// `[theme.display.budget_bar.burn_rate]`: reset-marker pace control points.
+/// Values are percentages of even pace: `100` means budget use matches elapsed
+/// window time, `200` means it is burning twice as fast as the reset can
+/// sustain. The marker slides gold -> amber -> red past `yellow`; below `green`
+/// it cools from the soft tier toward green, saturating at `deep_green` once the
+/// renderer's elapsed-share gate admits the cool signal.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BudgetBurnRateConfig {
+    /// Pace % below which the marker leaves the soft tier toward green.
+    pub green: u16,
+    /// Pace % at which the marker reaches full green, staying green below it.
+    pub deep_green: u16,
     /// Pace % at which the marker leaves the soft tier for warn (gold).
     pub yellow: u16,
     /// Pace % at which the marker reaches caution (amber).
@@ -254,6 +259,8 @@ pub struct BudgetBurnRateConfig {
 impl Default for BudgetBurnRateConfig {
     fn default() -> Self {
         Self {
+            green: 67,
+            deep_green: 33,
             yellow: 100,
             amber: 150,
             red: 200,

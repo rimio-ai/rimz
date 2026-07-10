@@ -388,10 +388,10 @@ fn mana_style_honours_custom_and_misordered_zones() {
 }
 
 #[test]
-fn pace_ratio_reads_burn_against_elapsed_window_and_edges() {
+fn pace_reading_reads_burn_and_raw_elapsed_window_edges() {
     let secs = SignedDuration::from_secs;
-    let ratio = |used, duration, until_reset| {
-        pace_ratio(used, secs(duration), secs(until_reset)).expect("pace ratio")
+    let reading = |used, duration, until_reset| {
+        pace_reading(used, secs(duration), secs(until_reset)).expect("pace reading")
     };
     let assert_close = |actual: f64, expected: f64| {
         assert!(
@@ -400,31 +400,42 @@ fn pace_ratio_reads_burn_against_elapsed_window_and_edges() {
         );
     };
 
-    assert_close(ratio(50, 5 * 3_600, 4 * 3_600), 2.5);
-    assert_close(ratio(50, 7 * 86_400, 6 * 86_400), 3.5);
-    assert_close(ratio(20, 5 * 3_600, 4 * 3_600), 1.0);
-    assert_close(ratio(0, 5 * 3_600, 4 * 3_600), 0.0);
-    assert_close(ratio(10, 5 * 3_600, 5 * 3_600 - 60), 2.0);
+    let five_hour = reading(50, 5 * 3_600, 4 * 3_600);
+    assert_close(five_hour.ratio, 2.5);
+    assert_close(five_hour.elapsed_share, 0.2);
+    let seven_day = reading(50, 7 * 86_400, 6 * 86_400);
+    assert_close(seven_day.ratio, 3.5);
+    assert_close(seven_day.elapsed_share, 1.0 / 7.0);
+    assert_close(reading(20, 5 * 3_600, 4 * 3_600).ratio, 1.0);
+    assert_close(reading(0, 5 * 3_600, 4 * 3_600).ratio, 0.0);
+    let floored = reading(10, 5 * 3_600, 5 * 3_600 - 60);
+    assert_close(floored.ratio, 2.0);
+    assert_close(floored.elapsed_share, 1.0 / 300.0);
 
-    assert_eq!(pace_ratio(50, secs(0), secs(0)), None);
-    assert_eq!(pace_ratio(50, secs(5 * 3_600), secs(5 * 3_600)), None);
-    assert_eq!(pace_ratio(50, secs(5 * 3_600), secs(5 * 3_600 + 60)), None);
-    let overdue = pace_ratio(40, secs(5 * 3_600), secs(-3_600)).expect("overdue pace");
-    assert!(
-        (overdue - 0.4).abs() < 0.000_1,
-        "overdue windows clamp to full elapsed: {overdue}"
+    assert_eq!(pace_reading(50, secs(0), secs(0)), None);
+    assert_eq!(pace_reading(50, secs(5 * 3_600), secs(5 * 3_600)), None);
+    assert_eq!(
+        pace_reading(50, secs(5 * 3_600), secs(5 * 3_600 + 60)),
+        None
     );
+    let overdue = pace_reading(40, secs(5 * 3_600), secs(-3_600)).expect("overdue pace");
+    assert_close(overdue.ratio, 0.4);
+    assert_close(overdue.elapsed_share, 1.0);
 }
 
 #[test]
 fn pace_style_floors_then_climbs_the_warm_tail() {
     let lit = Theme::fixed(false);
     let defaults = BudgetBurnRateConfig::default();
-    let fg = |ratio| pace_style(&lit, ratio, &defaults).fg;
+    let reading = |ratio| PaceReading {
+        ratio,
+        elapsed_share: 1.0,
+    };
+    let fg = |ratio| pace_style(&lit, reading(ratio), &defaults).fg;
     // Sustainable pace rests at the soft tier; the warm tail starts only past the
     // yellow threshold, reaching caution at amber and alarm at red (and beyond).
     assert_eq!(
-        pace_style(&lit, 1.0, &defaults),
+        pace_style(&lit, reading(1.0), &defaults),
         lit.body(),
         "even pace rests soft"
     );
@@ -445,10 +456,11 @@ fn pace_style_floors_then_climbs_the_warm_tail() {
         yellow: 80,
         amber: 120,
         red: 160,
+        ..defaults
     };
-    let fg_tuned = |ratio| pace_style(&lit, ratio, &tuned).fg;
+    let fg_tuned = |ratio| pace_style(&lit, reading(ratio), &tuned).fg;
     assert_eq!(
-        pace_style(&lit, 0.8, &tuned),
+        pace_style(&lit, reading(0.8), &tuned),
         lit.body(),
         "yellow stop still rests"
     );
@@ -461,17 +473,64 @@ fn pace_style_floors_then_climbs_the_warm_tail() {
         yellow: 200,
         amber: 150,
         red: 100,
+        ..defaults
     };
     assert_eq!(
-        pace_style(&lit, 1.2, &misordered).fg,
+        pace_style(&lit, reading(1.2), &misordered).fg,
         Some(lit.warm_heat_tone(1.0))
     );
-    assert_eq!(pace_style(&lit, 0.9, &misordered), lit.body());
+    assert_eq!(pace_style(&lit, reading(0.9), &misordered), lit.body());
 
     // NO_COLOR drops the hue; the marker recedes to the soft tier like its
     // countdown, and the shape carries the pace.
     let plain = Theme::fixed(true);
-    assert_eq!(pace_style(&plain, 2.5, &defaults), plain.body());
+    assert_eq!(pace_style(&plain, reading(2.5), &defaults), plain.body());
+}
+
+#[test]
+fn pace_style_greens_deep_underspend_after_the_early_window_gate() {
+    let lit = Theme::fixed(false);
+    let defaults = BudgetBurnRateConfig::default();
+    let reading = |ratio, elapsed_share| PaceReading {
+        ratio,
+        elapsed_share,
+    };
+    let fg = |ratio| pace_style(&lit, reading(ratio, 0.4), &defaults).fg;
+
+    assert_eq!(pace_style(&lit, reading(1.0, 1.0), &defaults), lit.body());
+    assert_eq!(pace_style(&lit, reading(0.67, 1.0), &defaults), lit.body());
+    assert_eq!(
+        fg(0.66),
+        Some(lit.calm_tone(1.0 / 34.0)),
+        "the cool tail starts just below green"
+    );
+    assert_eq!(fg(0.33), Some(lit.calm_tone(1.0)));
+    assert_eq!(fg(0.0), Some(lit.calm_tone(1.0)));
+
+    for ratio in [0.0, 0.2, 0.33, 0.66] {
+        assert_eq!(
+            pace_style(&lit, reading(ratio, 0.399), &defaults),
+            lit.body(),
+            "fresh window suppresses a {ratio}x cool signal"
+        );
+    }
+
+    let misordered = BudgetBurnRateConfig {
+        green: 20,
+        deep_green: 80,
+        ..defaults
+    };
+    assert_eq!(
+        pace_style(&lit, reading(0.5, 1.0), &misordered).fg,
+        Some(lit.calm_tone(1.0)),
+        "misordered cool stops degrade greenest-first"
+    );
+
+    let plain = Theme::fixed(true);
+    assert_eq!(
+        pace_style(&plain, reading(0.2, 1.0), &defaults),
+        plain.body()
+    );
 }
 
 #[test]

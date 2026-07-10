@@ -435,6 +435,13 @@ impl Theme {
         self.heat_tone(mapped)
     }
 
+    /// The cool tail for `amount` ∈ `[0, 1]`: resting soft at `0.0` through
+    /// to full `good` green at `1.0`, the under-pace mirror of
+    /// [`warm_heat_tone`](Self::warm_heat_tone).
+    pub(super) fn calm_tone(&self, amount: f32) -> Color {
+        rgb_color(ramp_tone(&self.palette.calm_ramp, amount), self.depth)
+    }
+
     /// Money tone: the fixed dollar green emitted like any identity tone —
     /// true RGB at truecolor depth, nearest xterm bucket at indexed depth.
     pub(crate) fn money_tone(&self) -> Color {

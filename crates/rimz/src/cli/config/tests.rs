@@ -41,6 +41,8 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "theme.display.budget_bar.yellow",
     "theme.display.budget_bar.amber",
     "theme.display.budget_bar.red",
+    "theme.display.budget_bar.burn_rate.green",
+    "theme.display.budget_bar.burn_rate.deep_green",
     "theme.display.budget_bar.burn_rate.yellow",
     "theme.display.budget_bar.burn_rate.amber",
     "theme.display.budget_bar.burn_rate.red",

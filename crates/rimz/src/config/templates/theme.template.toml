@@ -54,7 +54,10 @@
 ## red = 10
 
 [theme.display.budget_bar.burn_rate]
-# Reset-marker burn-rate zones, as percent of even pace (100 = on-pace).
+# Reset-marker burn-rate zones, as percent of even pace (100 = on-pace). Deep
+# underspend cools toward green once enough of the window has elapsed.
+## green = 67
+## deep_green = 33
 ## yellow = 100
 ## amber = 150
 ## red = 200

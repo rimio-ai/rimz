@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::labels::mana_style;
 
 /// Every provider bar — `5h`, `7d` across blocks, and the API spend row —
 /// shares one front (bar-start) column and one end (bar-end) column, so the
@@ -194,6 +195,49 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
         "spent exactly halfway through the window burns 2x — the red pace stop"
     );
     assert_eq!(reset_time_style(&rows[0]), Some(theme.body()));
+}
+
+#[test]
+fn provider_reset_marker_greens_only_mature_underspend() {
+    let theme = Theme::fixed(false);
+    let now = fixed_now();
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
+    panel.windows = vec![
+        RateLimitWindow {
+            used_percentage: Some(10),
+            resets_at: Some(now + Duration::from_secs(3 * 3_600)),
+            duration_mins: Some(5 * 60),
+            ..Default::default()
+        },
+        RateLimitWindow {
+            used_percentage: Some(10),
+            resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+            duration_mins: Some(5 * 60),
+            ..Default::default()
+        },
+    ];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2);
+    let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
+    assert!(has_reset);
+    assert_eq!(label_fg, mana_style(&theme, 90, &Default::default()).fg);
+    assert_eq!(
+        glyph_fg, label_fg,
+        "the bar keeps its remaining-budget tone"
+    );
+    assert_eq!(
+        reset_marker_fg(&rows[0]),
+        Some(theme.calm_tone(1.0)),
+        "0.25x pace after two hours reaches full green"
+    );
+    assert_eq!(reset_time_style(&rows[0]), Some(theme.body()));
+    assert_eq!(
+        reset_marker_style(&rows[1]),
+        Some(theme.body()),
+        "0.5x pace after one hour stays soft before the elapsed-share gate"
+    );
+    assert_eq!(reset_time_style(&rows[1]), Some(theme.body()));
 }
 
 #[test]

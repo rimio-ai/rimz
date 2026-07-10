@@ -1098,11 +1098,13 @@ fn display_enums_lists_and_nested_bands_parse() {
     );
     assert_eq!(
         (
+            defaults.budget_bar.burn_rate.green,
+            defaults.budget_bar.burn_rate.deep_green,
             defaults.budget_bar.burn_rate.yellow,
             defaults.budget_bar.burn_rate.amber,
             defaults.budget_bar.burn_rate.red
         ),
-        (100, 150, 200)
+        (67, 33, 100, 150, 200)
     );
     assert_eq!(
         (
@@ -1125,6 +1127,8 @@ fn display_enums_lists_and_nested_bands_parse() {
              [theme.display.budget_bar]\n\
              red = 20\n\
              [theme.display.budget_bar.burn_rate]\n\
+             green = 60\n\
+             deep_green = 25\n\
              red = 300\n\
              [theme.display.highlight_steps]\n\
              band = 10\n",
@@ -1155,11 +1159,15 @@ fn display_enums_lists_and_nested_bands_parse() {
     );
     assert_eq!(
         (
+            display.budget_bar.burn_rate.green,
+            display.budget_bar.burn_rate.deep_green,
             display.budget_bar.burn_rate.yellow,
             display.budget_bar.burn_rate.amber,
             display.budget_bar.burn_rate.red
         ),
         (
+            60,
+            25,
             defaults.budget_bar.burn_rate.yellow,
             defaults.budget_bar.burn_rate.amber,
             300

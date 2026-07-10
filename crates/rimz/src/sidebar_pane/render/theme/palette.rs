@@ -1,8 +1,8 @@
 //! Layer 2 — palette resolution: the scheme's raw tones (Layer 1) derived
-//! into the depth-resolved semantic slots the renderer paints, plus the heat
-//! ramp and the fresh-input expense tone. Component tokens (Layer 3) and the
-//! Theme facade read these slots; this is the one place depth quantization and
-//! slot overrides are applied.
+//! into the depth-resolved semantic slots the renderer paints, plus the
+//! heat/calm ramps and the fresh-input expense tone. Component tokens (Layer 3)
+//! and the Theme facade read these slots; this is the one place depth
+//! quantization and slot overrides are applied.
 
 use crate::config::{
     AnimationColor, ColorDepth, PaletteRole, ThemeColor, ThemeConfig, nearest_xterm_index,
@@ -48,6 +48,7 @@ pub(crate) struct Palette {
     depth: ColorDepth,
     raw: RawPalette,
     pub(super) heat_ramp: [(u8, u8, u8); HEAT_RAMP_STOPS],
+    pub(super) calm_ramp: [(u8, u8, u8); 2],
     pub(super) good: Color,
     pub(super) warn: Color,
     pub(super) caution: Color,
@@ -86,6 +87,10 @@ impl Palette {
             derived_rgb_slot(theme.caution, tones.caution, &raw),
             derived_rgb_slot(theme.alarm, tones.alarm, &raw),
         ];
+        let calm_ramp = [
+            derived_rgb_slot(theme.body, tones.body, &raw),
+            derived_rgb_slot(theme.good, tones.good, &raw),
+        ];
         // `alarm` (stop 3) is the ramp's reddest tone; the input read must read
         // redder still. Take it directly, enrich its chroma in place (a rotation
         // of zero holds the hue), then deepen its lightness — a hotter red on the
@@ -101,6 +106,7 @@ impl Palette {
             depth,
             raw,
             heat_ramp,
+            calm_ramp,
             good: slot(theme.good, tones.good),
             warn: slot(theme.warn, tones.warn),
             caution: slot(theme.caution, tones.caution),
