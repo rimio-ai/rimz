@@ -230,6 +230,7 @@ pub(super) fn dispatch_message(
     let channel = current_channel(&workspace);
     let sender = send::sender_from_env(channel.as_deref(), spec.no_from);
     let mut pending = Vec::new();
+    let mut agent_context = None;
     let rollup_only = match mode {
         MessageDispatchMode::Steer => false,
         MessageDispatchMode::Boundary => {
@@ -239,8 +240,9 @@ pub(super) fn dispatch_message(
                 && let Ok(runtime) =
                     rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
             {
-                snapshot =
-                    snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
+                let records = rimz::store::agent_context::read_all(&runtime);
+                snapshot = snapshot.with_agent_context(records.clone());
+                agent_context = Some(records);
             }
             let rollup_only = message_dispatch::rollup_targets_all_park_without_live(
                 &snapshot,
@@ -294,12 +296,18 @@ pub(super) fn dispatch_message(
     // Smart compaction reads context fill. Immediate message sends share the
     // live path, so fold the disposable context sidecars before any send-now
     // decision that might compact first.
-    if (spec.auto_compact.is_some()
+    if spec.auto_compact.is_some()
         || !spec.after.is_empty()
-        || matches!(sender, MessageSender::Agent { .. }))
-        && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        || matches!(sender, MessageSender::Agent { .. })
     {
-        snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
+        if agent_context.is_none()
+            && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        {
+            agent_context = Some(rimz::store::agent_context::read_all(&runtime));
+        }
+        if let Some(records) = agent_context {
+            snapshot = snapshot.with_agent_context(records);
+        }
     }
     let durable_agents = message_dispatch::durable_target_agents(&store)?;
     let Some(targets) = resolve_message_targets(
