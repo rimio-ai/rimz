@@ -141,8 +141,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "complexity",
-        summary: "Rank Rust source and test files by cyclomatic/cognitive complexity.",
-        runs: "rust-code-analysis-cli metrics over every tracked .rs file; prints top-N source and test files by complexity",
+        summary: "Rank per-function complexity targets grouped by Rust source file.",
+        runs: "rust-code-analysis-cli metrics over every tracked .rs file; prints top-N file groups above refactor thresholds, or the versioned top-N agent contract with --json",
     },
     TaskInfo {
         name: "invariants",

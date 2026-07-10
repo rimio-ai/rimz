@@ -227,7 +227,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 Three deserve a note:
 
-- `cargo xtask complexity [N]` ranks tracked `.rs` files by cyclomatic/cognitive complexity via `rust-code-analysis-cli` (`cargo install rust-code-analysis-cli --locked`); a local report, not part of any gate.
+- `cargo xtask complexity [N] [--json]` measures tracked source functions against cyclomatic, cognitive, and SLOC refactor thresholds via `rust-code-analysis-cli` (`cargo install rust-code-analysis-cli --locked`), groups actionable functions by file, and emits either a ranked local report or the versioned top-N JSON agent contract with its untruncated total; it remains outside every gate.
 - `cargo xtask install-dev` is the contributor opt-in to [off-box reporting](../internals/diagnostics.md#off-box-error-reporting): it installs the optimized `profiling` host profile with `--features sentry`, line tables, frame pointers, and v0 symbol names, so dogfooding sessions stay profilable and default to the `development` Sentry environment.
 - `cargo xtask profile-build` writes the same optimized `target/profiling/rimz` without installing it.
 
