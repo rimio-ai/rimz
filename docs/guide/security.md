@@ -22,7 +22,7 @@ Inside a workspace, plenty already runs as you: hooks, postinstall scripts, gene
 
 A cloned repository can ship a `.rimz/config.toml` that names agents, profiles, teams, loop tasks, hooks, and environment variables, and any of those can run a command. So Rimz keeps the whole file inert until you trust the workspace: on an untrusted clone it reads only structural metadata, and nothing the file declares can launch.
 
-A first interactive `rimz start` in an untrusted workspace offers the grant; declining it leaves the workspace inert and suppresses the prompt until `.rimz/config.toml` changes.
+A first interactive `rimz start` in an untrusted workspace offers the grant, and the interactive `rimz loop fire` and project-task edit surfaces offer it inline with the surface diff when their trust gate is closed. Declining leaves the workspace inert; only the first-start prompt stays suppressed until `.rimz/config.toml` changes.
 
 `rimz trust grant` pins a single hash over every command-running field in that config. Each later read re-hashes the live file. Edit one of those fields, or let an agent in the room edit the file, and the hash drifts: the workspace flips to `stale`, command execution turns back off, and `rimz trust status` prints a field-level diff of what changed before you re-grant. There is no background sweep. `rimz trust status` and `rimz doctor` both re-hash on the spot.
 

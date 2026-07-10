@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use std::io::Write;
+use std::path::Path;
 
 use super::GlobalFlags;
 use crate::cli::render;
@@ -80,18 +81,15 @@ fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
         }
         return Ok(());
     }
-    let banner = match report.state {
-        TrustState::NoConfig => "no project config",
-        TrustState::Untrusted => "untrusted",
-        TrustState::Trusted => "trusted",
-        TrustState::Stale => "stale (executable surface drifted since last grant)",
-    };
     let mut out = render::out();
     writeln!(
         out,
         "{} {}",
         render::paint(render::palette::MUTED, "trust:"),
-        render::paint(render::status::trust(report.state), banner),
+        render::paint(
+            render::status::trust(report.state),
+            trust_banner(report.state)
+        ),
     )?;
     let mut kv = render::KeyVals::new().indent(2);
     kv.push(
@@ -127,6 +125,53 @@ fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
     }
     kv.render(&mut out)?;
     render_surface_diff(&mut out, report.surface_diff.as_deref())
+}
+
+fn trust_banner(state: TrustState) -> &'static str {
+    match state {
+        TrustState::NoConfig => "no project config",
+        TrustState::Untrusted => "untrusted",
+        TrustState::Trusted => "trusted",
+        TrustState::Stale => "stale (executable surface drifted since last grant)",
+    }
+}
+
+/// Show the executable-surface change on stderr and offer to grant it inline.
+/// Returns whether the project is trusted when the offer finishes.
+pub(crate) fn offer_inline_grant(project_root: &Path, question: &str) -> Result<bool> {
+    let report = trust::status(project_root).context("reading trust state")?;
+    let mut out = render::err();
+    writeln!(
+        out,
+        "{} {}",
+        render::paint(render::palette::MUTED, "trust:"),
+        render::paint(
+            render::status::trust(report.state),
+            trust_banner(report.state)
+        ),
+    )?;
+    writeln!(out, "  config: {}", report.config_path.display())?;
+    render_surface_diff(&mut out, report.surface_diff.as_deref())?;
+    drop(out);
+
+    if report.state == TrustState::Trusted {
+        return Ok(true);
+    }
+    if report.state == TrustState::NoConfig || !crate::cli::confirm(question)? {
+        return Ok(false);
+    }
+
+    let granted = trust::grant(project_root).context("granting trust")?;
+    if granted.state != TrustState::Trusted {
+        return Ok(false);
+    }
+    writeln!(
+        render::err(),
+        "{} {}",
+        render::paint(render::palette::MUTED, "trust:"),
+        render::paint(render::status::trust(granted.state), "granted"),
+    )?;
+    Ok(true)
 }
 
 fn render_surface_diff(

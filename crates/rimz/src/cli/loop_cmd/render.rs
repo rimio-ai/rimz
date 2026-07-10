@@ -17,6 +17,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
+    let mut blocked_count = 0;
     let mut groups: BTreeMap<PathBuf, Vec<(&String, &TaskEntry, TaskSource)>> = BTreeMap::new();
     for (name, (entry, source)) in &tasks {
         let root = entry.resolved_root();
@@ -39,6 +40,8 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         .right(&[6])
         .indent(2);
         for (name, entry, source) in entries {
+            let blocked_state = blocked_project_state(source);
+            blocked_count += usize::from(blocked_state.is_some());
             let parsed = schedule::parse_schedule(name, entry);
             let when = match &parsed {
                 Ok(schedule) => schedule.describe(),
@@ -46,27 +49,30 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
             };
             let window_reset = window_reset_for(entry);
             let pause = pause_entries.get(name);
-            let next = match pause.filter(|entry| pauses::is_active(entry, now)) {
-                Some(PauseEntry { until: None }) => ui::cell("paused").fg(ui::palette::MUTED),
-                Some(PauseEntry { until: Some(until) }) => {
-                    ui::cell(format!("paused · {}", ui::rel_until(*until, now)))
-                        .fg(ui::palette::MUTED)
-                }
-                None => parsed
-                    .ok()
-                    .and_then(|parsed| {
-                        next_fire_text(
-                            name,
-                            &parsed.schedule,
-                            &stamps,
-                            pause,
-                            &now_zoned,
-                            now,
-                            window_reset,
-                        )
-                    })
-                    .map(ui::cell)
-                    .unwrap_or_else(|| ui::cell("-").dash()),
+            let next = match blocked_state {
+                Some(state) => blocked_next_cell(state),
+                None => match pause.filter(|entry| pauses::is_active(entry, now)) {
+                    Some(PauseEntry { until: None }) => ui::cell("paused").fg(ui::palette::MUTED),
+                    Some(PauseEntry { until: Some(until) }) => {
+                        ui::cell(format!("paused · {}", ui::rel_until(*until, now)))
+                            .fg(ui::palette::MUTED)
+                    }
+                    None => parsed
+                        .ok()
+                        .and_then(|parsed| {
+                            next_fire_text(
+                                name,
+                                &parsed.schedule,
+                                &stamps,
+                                pause,
+                                &now_zoned,
+                                now,
+                                window_reset,
+                            )
+                        })
+                        .map(ui::cell)
+                        .unwrap_or_else(|| ui::cell("-").dash()),
+                },
             };
             let (last, status) = stats
                 .get(name)
@@ -81,7 +87,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
             table.row([
                 ui::cell(name.as_str()).fg(ui::palette::ACCENT),
                 ui::cell(task_subject(entry)),
-                ui::cell(source_label(source)),
+                source_cell(source),
                 ui::cell(when),
                 last,
                 status,
@@ -91,7 +97,43 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         }
         table.render(&mut out)?;
     }
+    if blocked_count > 0 {
+        writeln!(out)?;
+        write_blocked_footer(&mut out, blocked_count)?;
+    }
     Ok(())
+}
+
+fn blocked_project_state(source: TaskSource) -> Option<TrustState> {
+    match source {
+        TaskSource::Project { state } if state != TrustState::Trusted => Some(state),
+        _ => None,
+    }
+}
+
+fn blocked_next_cell(state: TrustState) -> ui::Cell {
+    ui::cell("blocked · trust").fg(ui::status::trust(state))
+}
+
+fn source_cell(source: TaskSource) -> ui::Cell {
+    let cell = ui::cell(source_label(source));
+    match blocked_project_state(source) {
+        Some(state) => cell.fg(ui::status::trust(state)),
+        None => cell,
+    }
+}
+
+fn write_blocked_footer(out: &mut impl Write, count: usize) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}",
+        ui::paint(
+            ui::palette::WARN,
+            &format!(
+                "{count} task(s) blocked by project trust — review with `rimz trust`, approve with `rimz trust grant`"
+            )
+        )
+    )
 }
 
 pub(super) fn room_open(root: &Path) -> bool {
@@ -377,6 +419,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .map(rimz::harness::schedule::last_stamps)
         .unwrap_or_default();
     let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
+    let blocked_state = blocked_project_state(source);
     let parsed = schedule::parse_schedule(&args.name, &entry);
     let schedule_text = match &parsed {
         Ok(parsed) => parsed.describe(),
@@ -387,17 +430,21 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let active_pause = pause.as_ref().filter(|entry| pauses::is_active(entry, now));
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let window_reset = window_reset_for(&entry);
-    let next = parsed.as_ref().ok().and_then(|parsed| {
-        next_fire_text(
-            &args.name,
-            &parsed.schedule,
-            &stamps,
-            pause.as_ref(),
-            &now_zoned,
-            now,
-            window_reset,
-        )
-    });
+    let next = if blocked_state.is_none() {
+        parsed.as_ref().ok().and_then(|parsed| {
+            next_fire_text(
+                &args.name,
+                &parsed.schedule,
+                &stamps,
+                pause.as_ref(),
+                &now_zoned,
+                now,
+                window_reset,
+            )
+        })
+    } else {
+        None
+    };
     let records = run_log::task_records(&state_home(), &args.name);
 
     let mut out = ui::out();
@@ -407,16 +454,23 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         ui::paint(ui::palette::ACCENT.bold(), &args.name),
         ui::paint(schedule_style(parsed.as_ref()), &schedule_text)
     )?;
-    match active_pause {
-        Some(PauseEntry { until: None }) => write!(out, " · paused")?,
-        Some(PauseEntry { until: Some(until) }) => {
-            write!(out, " · paused, resumes {}", pause_until_text(*until, now))?
-        }
-        None => {
-            if let Some(next) = next {
-                write!(out, " · next {next}")?;
+    match blocked_state {
+        Some(state) => write!(
+            out,
+            " · next {}",
+            ui::paint(ui::status::trust(state), "blocked · trust")
+        )?,
+        None => match active_pause {
+            Some(PauseEntry { until: None }) => write!(out, " · paused")?,
+            Some(PauseEntry { until: Some(until) }) => {
+                write!(out, " · paused, resumes {}", pause_until_text(*until, now))?
             }
-        }
+            None => {
+                if let Some(next) = next {
+                    write!(out, " · next {next}")?;
+                }
+            }
+        },
     }
     writeln!(out)?;
     if matches!(active_pause, Some(PauseEntry { until: None })) {
@@ -429,6 +483,12 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     }
     kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
     kv.push("source", ui::cell(source_detail(source, &entry)));
+    if let Some(state) = blocked_state {
+        kv.push(
+            "will not fire",
+            ui::cell(blocked_notice(state)).fg(ui::status::trust(state)),
+        );
+    }
     if let Some(budget) = budget_label(&entry) {
         kv.push("budget", ui::cell(budget));
     }
@@ -501,6 +561,13 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         render_record_detail(&mut out, &entry, failure, "LAST FAILURE", now)?;
     }
     Ok(())
+}
+
+fn blocked_notice(state: TrustState) -> String {
+    format!(
+        "project trust is {} — review with `rimz trust`, approve with `rimz trust grant`",
+        state.as_str()
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1184,6 +1251,28 @@ mod tests {
                 "state — {}",
                 ui::home_relative(instances::path(&state_home()).to_string_lossy().as_ref())
             )
+        );
+    }
+
+    #[test]
+    fn blocked_project_rendering_names_the_gate_and_fix() {
+        let mut table = ui::Table::new(["NEXT"]);
+        table.row([blocked_next_cell(TrustState::Stale)]);
+        let mut out = Vec::new();
+        table.render(&mut out).unwrap();
+        write_blocked_footer(&mut out, 2).unwrap();
+
+        let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert!(out.contains("blocked · trust"), "{out}");
+        assert!(
+            out.contains(
+                "2 task(s) blocked by project trust — review with `rimz trust`, approve with `rimz trust grant`"
+            ),
+            "{out}"
+        );
+        assert_eq!(
+            blocked_notice(TrustState::Untrusted),
+            "project trust is untrusted — review with `rimz trust`, approve with `rimz trust grant`"
         );
     }
 

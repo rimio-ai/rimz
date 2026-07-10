@@ -281,16 +281,10 @@ impl LaunchAgents {
         {
             return Ok(());
         }
-        let fix = match self.state {
-            TrustState::Stale => {
-                "the executable surface changed since the grant; review it and rerun `rimz trust grant`"
-            }
-            _ => "run `rimz trust grant` to apply them",
-        };
         Err(EffectiveConfigErr::Blocked {
             path: self.config_path.clone(),
             state: self.state.as_str(),
-            fix,
+            fix: trust::blocked_fix(self.state),
         })
     }
 }

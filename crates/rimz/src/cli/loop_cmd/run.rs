@@ -28,6 +28,27 @@ struct RunDisposition {
     mode: LoopRunMode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectTrustDecision {
+    Proceed,
+    Prompt,
+    Refuse,
+}
+
+fn project_trust_decision(
+    state: TrustState,
+    mode: LoopRunMode,
+    is_tty: bool,
+) -> ProjectTrustDecision {
+    if state == TrustState::Trusted {
+        ProjectTrustDecision::Proceed
+    } else if mode == LoopRunMode::Manual && is_tty {
+        ProjectTrustDecision::Prompt
+    } else {
+        ProjectTrustDecision::Refuse
+    }
+}
+
 impl RunOutcome {
     fn new(result: LoopRunResult) -> Self {
         Self {
@@ -56,7 +77,19 @@ pub(super) fn run_one(
 ) -> Result<()> {
     let (entry, source) = load_runnable_task(name, globals)?
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
-    block_untrusted_project_task(name, &entry, source)?;
+    if let TaskSource::Project { state } = source {
+        match project_trust_decision(state, mode, std::io::stdin().is_terminal()) {
+            ProjectTrustDecision::Proceed => {}
+            ProjectTrustDecision::Prompt => {
+                if !crate::cli::trust::offer_inline_grant(&entry.root, "grant trust and fire?")? {
+                    block_untrusted_project_task(name, &entry, source)?;
+                }
+            }
+            ProjectTrustDecision::Refuse => {
+                block_untrusted_project_task(name, &entry, source)?;
+            }
+        }
+    }
     task_action(name, &entry)?;
     let started = Instant::now();
     if mode == LoopRunMode::Manual {
@@ -929,6 +962,28 @@ pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_tty_prompts_for_blocked_project_trust() {
+        for state in [TrustState::Untrusted, TrustState::Stale] {
+            assert_eq!(
+                project_trust_decision(state, LoopRunMode::Manual, true),
+                ProjectTrustDecision::Prompt
+            );
+            assert_eq!(
+                project_trust_decision(state, LoopRunMode::Manual, false),
+                ProjectTrustDecision::Refuse
+            );
+            assert_eq!(
+                project_trust_decision(state, LoopRunMode::Scheduled, true),
+                ProjectTrustDecision::Refuse
+            );
+        }
+        assert_eq!(
+            project_trust_decision(TrustState::Trusted, LoopRunMode::Manual, true),
+            ProjectTrustDecision::Proceed
+        );
+    }
 
     fn spawn_entry(check: bool, on: CheckOn) -> TaskEntry {
         TaskEntry {

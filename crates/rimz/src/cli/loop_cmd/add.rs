@@ -241,6 +241,9 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     if cleared_pause {
         writeln!(out, "pause: cleared")?;
     }
+    if args.project {
+        finish_project_mutation(&mut out, &project_root, true)?;
+    }
     write_add_feedback(&mut out, &args.name, &entry, &parsed)?;
     writeln!(
         out,
@@ -249,9 +252,6 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     )?;
     if !render::room_open(&entry.root) {
         writeln!(out, "no room is open there; start one with `rimz start`")?;
-    }
-    if args.project {
-        write_project_trust_note(&mut out, &project_root)?;
     }
     Ok(())
 }
@@ -265,7 +265,7 @@ pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
                 pauses::remove(name)?;
                 let mut out = ui::out();
                 writeln!(out, "removed loop task `{name}`")?;
-                write_project_trust_note(&mut out, &entry.root)?;
+                finish_project_mutation(&mut out, &entry.root, false)?;
                 return Ok(());
             }
             removed
@@ -302,7 +302,7 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
                     pauses::rename(name, new_name)?;
                     let mut out = ui::out();
                     writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
-                    write_project_trust_note(&mut out, &entry.root)?;
+                    finish_project_mutation(&mut out, &entry.root, false)?;
                     return Ok(());
                 }
                 false

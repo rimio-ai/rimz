@@ -100,6 +100,16 @@ impl TrustState {
     }
 }
 
+/// Human fix lines for a blocked trust state, shared by every trust-gated refusal.
+pub fn blocked_fix(state: TrustState) -> &'static str {
+    match state {
+        TrustState::Stale => {
+            "the executable surface changed since your last grant\nreview the change with `rimz trust`, then approve with `rimz trust grant`"
+        }
+        _ => "review the project config with `rimz trust`, then approve with `rimz trust grant`",
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TrustReport {
     pub state: TrustState,
@@ -958,6 +968,12 @@ mod tests {
         birth_prompt_with_roots(project_root, config_root)
             .expect("birth prompt")
             .is_some()
+    }
+
+    #[test]
+    fn blocked_fix_distinguishes_stale_from_untrusted() {
+        assert!(blocked_fix(TrustState::Stale).contains("since your last grant\n"));
+        assert!(blocked_fix(TrustState::Untrusted).starts_with("review the project config"));
     }
 
     #[test]

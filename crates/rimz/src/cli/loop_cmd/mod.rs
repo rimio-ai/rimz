@@ -17,7 +17,7 @@
 //! in [`rimz::harness::schedule::instances`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -49,7 +49,7 @@ use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::atomic::write_bytes_atomically;
 use rimz::store::paths::{RuntimePaths, StatePaths, agents_home, config_home, state_home};
-use rimz::trust::TrustState;
+use rimz::trust::{self, TrustState};
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
@@ -361,13 +361,13 @@ fn preflight_kind(kind: &str) -> Result<()> {
         find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     if !adapter.hooks_installed() {
         bail!(
-            "{kind} hooks are not installed, so the task cannot report completion; run `rimz hooks install {kind}`"
+            "{kind} hooks are not installed, so a scheduled turn cannot report completion\ninstall them with `rimz hooks install {kind}`"
         );
     }
     let untrusted = adapter.untrusted_installed_hooks();
     if !untrusted.is_empty() {
         bail!(
-            "{kind} hooks are installed but not trusted ({}); {}",
+            "{kind} hooks are installed but not trusted ({}), so a scheduled turn cannot report completion\n{}",
             untrusted.join(", "),
             hook_trust_fix(kind)
         );
@@ -495,21 +495,28 @@ fn validate_machine_loop_stores() -> Result<()> {
     Ok(())
 }
 
-fn project_trust_fix(state: TrustState) -> &'static str {
-    match state {
-        TrustState::Stale => {
-            "the executable surface changed since the grant; review it and rerun `rimz trust grant`"
+fn finish_project_mutation(
+    out: &mut impl Write,
+    project_root: &Path,
+    task_added: bool,
+) -> Result<()> {
+    if std::io::stdin().is_terminal()
+        && crate::cli::trust::offer_inline_grant(project_root, "grant trust now?")?
+    {
+        if task_added {
+            writeln!(out, "trust: granted — task fires on schedule")?;
         }
-        _ => "run `rimz trust grant` to apply it",
+        return Ok(());
     }
-}
-
-fn write_project_trust_note(out: &mut impl Write, project_root: &Path) -> std::io::Result<()> {
+    let state = trust::status(project_root)
+        .context("reading trust state after project task change")?
+        .state;
     writeln!(
         out,
-        "project config changed: review {} and run `rimz trust grant` to apply project tasks",
-        project_config_path(project_root).display()
-    )
+        "trust: {} — project tasks stay inert until you run `rimz trust grant` (review with `rimz trust`)",
+        state.as_str()
+    )?;
+    Ok(())
 }
 
 fn block_untrusted_project_task(name: &str, entry: &TaskEntry, source: TaskSource) -> Result<()> {
@@ -520,10 +527,10 @@ fn block_untrusted_project_task(name: &str, entry: &TaskEntry, source: TaskSourc
         return Ok(());
     }
     bail!(
-        "loop task `{name}` is configured in {path} but the project is {state}; {fix}",
+        "loop task `{name}` is blocked — project trust is {state}\nconfigured in {path}\n{fix}",
         path = project_config_path(&entry.root).display(),
         state = state.as_str(),
-        fix = project_trust_fix(state),
+        fix = trust::blocked_fix(state),
     )
 }
 

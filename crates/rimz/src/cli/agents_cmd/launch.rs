@@ -753,7 +753,7 @@ pub(super) fn agent_launch_env(
     project_root: &Path,
     kind: &str,
 ) -> Result<BTreeMap<String, String>> {
-    use rimz::trust::{AgentEnv, TrustState};
+    use rimz::trust::AgentEnv;
     match rimz::trust::agent_env(project_root, kind)? {
         AgentEnv::Apply(env) => {
             validate_agent_launch_env(kind, &env)?;
@@ -761,16 +761,11 @@ pub(super) fn agent_launch_env(
         }
         AgentEnv::Unconfigured => Ok(BTreeMap::new()),
         AgentEnv::Blocked(state) => {
-            let fix = match state {
-                TrustState::Stale => {
-                    "the executable surface changed since the grant; review it and rerun `rimz trust grant`"
-                }
-                _ => "run `rimz trust grant` to apply it",
-            };
             bail!(
                 "agent `{kind}` env is configured in {root}/.rimz/config.toml but the project is {state}; {fix}",
                 root = project_root.display(),
                 state = state.as_str(),
+                fix = rimz::trust::blocked_fix(state),
             )
         }
     }

@@ -242,7 +242,12 @@ fn loop_project_tasks_list_and_refuse_until_trusted() {
 
     let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
-        stdout.contains("repo-check") && stdout.contains("project · untrusted"),
+        stdout.contains("repo-check")
+            && stdout.contains("project · untrusted")
+            && stdout.contains("blocked · trust")
+            && stdout.contains("1 task(s) blocked by project trust")
+            && stdout.contains("review with `rimz trust`")
+            && stdout.contains("approve with `rimz trust grant`"),
         "project task should stay visible with trust state: {stdout}"
     );
     let stdout = loop_ok(&env, &["loop", "show", "repo-check"]);
@@ -254,10 +259,22 @@ fn loop_project_tasks_list_and_refuse_until_trusted() {
         }),
         "project task show should name the defining file: {stdout}"
     );
+    assert!(
+        stdout.contains("next blocked · trust")
+            && stdout.contains("will not fire:")
+            && stdout.contains("project trust is untrusted")
+            && stdout.contains("review with `rimz trust`")
+            && stdout.contains("approve with `rimz trust grant`"),
+        "project task show should explain the trust block: {stdout}"
+    );
 
     let (_stdout, stderr) = loop_fail(&env, &["loop", "run", "repo-check"]);
     assert!(
-        stderr.contains("project is untrusted") && stderr.contains("rimz trust grant"),
+        stderr.contains("loop task `repo-check` is blocked — project trust is untrusted")
+            && stderr.contains("configured in")
+            && stderr.contains(".rimz/config.toml")
+            && stderr.contains("review the project config with `rimz trust`")
+            && stderr.contains("approve with `rimz trust grant`"),
         "project task should refuse before trust grant: {stderr}"
     );
 
@@ -596,10 +613,11 @@ fn loop_pause_accepts_untrusted_project_task_as_local_state() {
         stdout.lines().any(|line| {
             line.trim_start().starts_with("repo-check")
                 && line.contains("project · untrusted")
-                && line.contains("paused")
+                && line.contains("blocked · trust")
         }),
-        "untrusted project task should stay visible and paused: {stdout}"
+        "project trust should be the stronger visible block: {stdout}"
     );
+    assert!(read_loop_pauses(&env).contains_key("repo-check"));
 }
 
 #[test]
