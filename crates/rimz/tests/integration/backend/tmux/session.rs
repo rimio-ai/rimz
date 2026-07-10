@@ -1,0 +1,198 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
+use super::support::*;
+
+#[test]
+fn ensure_session_applies_room_contract() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    assert_eq!(
+        server.backend.list_sessions().expect("empty list_sessions"),
+        Vec::<String>::new(),
+        "a fresh private socket starts with no sessions",
+    );
+    let cwd = TempDir::new().expect("cwd tempdir");
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            truecolor: true,
+            ..session_opts(
+                "rimz-options",
+                WorkspaceId::from_project_root(cwd.path()),
+                cwd.path(),
+                cwd.path(),
+                None,
+            )
+        })
+        .expect("ensure");
+    assert_eq!(server.show_option(&["-s"], "escape-time"), "0");
+    assert_eq!(server.show_option(&["-s"], "extended-keys"), "on");
+    let terminal_features = server.show_option(&["-s"], "terminal-features");
+    assert!(
+        terminal_features.contains("extkeys"),
+        "extkeys terminal-feature lets Alt+Enter reach agents as CSI-u",
+    );
+    assert!(
+        terminal_features.contains("sync"),
+        "sync terminal-feature lets tmux forward atomic redraws for flicker-free pets and TUIs",
+    );
+    let root_keys = server.list_keys("root");
+    assert!(
+        root_keys
+            .lines()
+            .any(|line| line.contains("S-Enter") && line.contains("[13;2u")),
+        "S-Enter must inject CSI-u soft newline: {root_keys}"
+    );
+    assert!(
+        root_keys
+            .lines()
+            .any(|line| line.contains("M-Enter") && line.contains("[13;3u")),
+        "M-Enter must inject CSI-u soft newline: {root_keys}"
+    );
+    assert_eq!(server.show_option(&["-t", "rimz-options"], "mouse"), "on");
+    assert_eq!(
+        server.show_option(&["-w", "-t", "rimz-options"], "allow-passthrough"),
+        "on",
+    );
+    let listed = server.backend.list_sessions().expect("list_sessions");
+    assert!(
+        listed.iter().any(|s| s == "rimz-options"),
+        "expected `rimz-options` in {listed:?}",
+    );
+    let expected = cwd.path().display().to_string();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut current = server.pane_current_path("rimz-options");
+    while current != expected && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+        current = server.pane_current_path("rimz-options");
+    }
+    assert_eq!(current, expected);
+    let pin = show_session_environment(&server, "rimz-options", rimz::workspace::ENV_WORKSPACE_ID);
+    assert_eq!(
+        pin,
+        format!(
+            "{}={}",
+            rimz::workspace::ENV_WORKSPACE_ID,
+            WorkspaceId::from_project_root(cwd.path()),
+        ),
+    );
+    let root = show_session_environment(&server, "rimz-options", rimz::workspace::ENV_PROJECT_ROOT);
+    assert_eq!(
+        root,
+        format!(
+            "{}={}",
+            rimz::workspace::ENV_PROJECT_ROOT,
+            cwd.path().display(),
+        ),
+    );
+    assert_eq!(
+        show_session_environment(&server, "rimz-options", "COLORTERM"),
+        "COLORTERM=truecolor",
+    );
+}
+
+/// `focus_pane` lands cross-window: tmux's `select-pane` activates within its
+/// window only, so the backend batches `select-window` (a pane id resolves as
+/// a window target to the window holding it) before `select-pane`. The
+/// session's current window must follow the jump.
+
+#[test]
+fn list_panes_metadata_and_cross_window_focus_round_trip() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-jump");
+    // A second window, opened without focus so the first stays current.
+    server.tmux(&["new-window", "-d", "-t", "rimz-jump", "-n", "second", "sh"]);
+    let target = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-jump".to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes
+        .into_iter()
+        .find(|pane| pane.view_name.as_deref() == Some("second"))
+        .expect("the second window's pane");
+    let window = target
+        .view_id
+        .clone()
+        .expect("tmux panes carry a window id");
+    assert_eq!(target.pane_id.mux(), MuxName::Tmux);
+    assert!(target.pane_id.raw().starts_with('%'));
+    assert_eq!(target.session_name, "rimz-jump");
+    assert_eq!(target.view_name.as_deref(), Some("second"));
+    assert_eq!(target.command.as_deref(), Some("sh"));
+    assert!(target.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()));
+    assert_ne!(
+        server.display("rimz-jump", "#{window_id}"),
+        window,
+        "the second window must start out not current",
+    );
+    server
+        .backend
+        .focus_pane(&target.pane_id, None)
+        .expect("focus_pane");
+    assert_eq!(
+        server.display("rimz-jump", "#{window_id}"),
+        window,
+        "a cross-window jump must switch the session's current window",
+    );
+    assert_eq!(
+        server.display("rimz-jump", "#{pane_id}"),
+        target.pane_id.raw(),
+        "and land on the target pane",
+    );
+}
+
+#[test]
+fn client_view_tracks_attached_client() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("focus");
+    let pane_id = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("focus".to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes[0]
+        .pane_id
+        .clone();
+    // No client attached: list-clients is empty, so the focus set is too.
+    let detached = server
+        .backend
+        .client_view(ClientFocusOptions {
+            session_name: Some("focus".to_owned()),
+            ..Default::default()
+        })
+        .map(|view| view.viewed_panes)
+        .expect("client_view detached");
+    assert!(
+        detached.is_empty(),
+        "a detached session focuses no client panes: {detached:?}",
+    );
+    // Attach a client; its focused pane is the session's lone pane.
+    let _client = AttachedTmuxClient::attach(&server.socket, "focus", 200, 50);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let focused = loop {
+        let panes = server
+            .backend
+            .client_view(ClientFocusOptions {
+                session_name: Some("focus".to_owned()),
+                ..Default::default()
+            })
+            .map(|view| view.viewed_panes)
+            .expect("client_view attached");
+        if !panes.is_empty() || Instant::now() >= deadline {
+            break panes;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(
+        focused,
+        vec![pane_id],
+        "an attached client focuses the session's lone pane: {focused:?}",
+    );
+}
