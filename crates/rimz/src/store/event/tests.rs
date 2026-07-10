@@ -385,7 +385,9 @@ fn unresolved_message_event_preserves_raw_target() {
         12,
         "receiver not found".to_owned(),
     );
-    assert_eq!(params_value(&event)["address"], "@reviwer#docs");
+    let params = params_value(&event);
+    assert_eq!(params["address"], "@reviwer#docs");
+    assert!(params.get("sender").is_none());
 
     let EventKind::Message { method, payload } = event.kind() else {
         panic!("unresolved message decodes to its typed kind");
