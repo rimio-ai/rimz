@@ -10,19 +10,37 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::store::atomic::{Result, write_temp_then_rename_cache};
+use crate::store::atomic::{AtomicErr, write_temp_then_rename_cache};
+use crate::store::lock::{LockErr, WorkspaceLock};
 use crate::store::paths::state_home;
 
 const NAME: &str = "loop-pauses.json";
+const LOCK_NAME: &str = "loop-pauses.lock";
+
+#[derive(Debug, thiserror::Error)]
+pub enum PauseError {
+    #[error(transparent)]
+    Lock(#[from] LockErr),
+    #[error(transparent)]
+    Write(#[from] AtomicErr),
+}
+
+type Result<T> = std::result::Result<T, PauseError>;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PauseEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strikes: Option<u32>,
 }
 
 pub fn path(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join(NAME)
+}
+
+fn lock_path(state_root: &Path) -> PathBuf {
+    state_root.join("rimz").join(LOCK_NAME)
 }
 
 pub fn load() -> BTreeMap<String, PauseEntry> {
@@ -31,6 +49,10 @@ pub fn load() -> BTreeMap<String, PauseEntry> {
 
 pub fn set(name: &str, entry: PauseEntry) -> Result<()> {
     set_in(&state_home(), name, entry)
+}
+
+pub fn set_if_inactive(name: &str, entry: PauseEntry, now: Timestamp) -> Result<bool> {
+    set_if_inactive_in(&state_home(), name, entry, now)
 }
 
 pub fn remove(name: &str) -> Result<bool> {
@@ -68,12 +90,34 @@ fn load_from(state_root: &Path) -> BTreeMap<String, PauseEntry> {
 }
 
 fn set_in(state_root: &Path, name: &str, entry: PauseEntry) -> Result<()> {
+    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
     let mut pauses = load_from(state_root);
     pauses.insert(name.to_owned(), entry);
-    write_temp_then_rename_cache(&path(state_root), &pauses)
+    write_temp_then_rename_cache(&path(state_root), &pauses)?;
+    Ok(())
+}
+
+fn set_if_inactive_in(
+    state_root: &Path,
+    name: &str,
+    entry: PauseEntry,
+    now: Timestamp,
+) -> Result<bool> {
+    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
+    let mut pauses = load_from(state_root);
+    if pauses
+        .get(name)
+        .is_some_and(|current| is_active(current, now))
+    {
+        return Ok(false);
+    }
+    pauses.insert(name.to_owned(), entry);
+    write_temp_then_rename_cache(&path(state_root), &pauses)?;
+    Ok(true)
 }
 
 fn remove_from(state_root: &Path, name: &str) -> Result<bool> {
+    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
     let mut pauses = load_from(state_root);
     let removed = pauses.remove(name).is_some();
     if removed {
@@ -83,6 +127,7 @@ fn remove_from(state_root: &Path, name: &str) -> Result<bool> {
 }
 
 fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
+    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
     let mut pauses = load_from(state_root);
     let Some(entry) = pauses.remove(old) else {
         return Ok(false);
@@ -93,6 +138,7 @@ fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
 }
 
 fn prune_orphans_in(state_root: &Path, known: &BTreeSet<String>) -> Result<usize> {
+    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
     let mut pauses = load_from(state_root);
     let before = pauses.len();
     pauses.retain(|name, _| known.contains(name));
@@ -126,6 +172,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let entry = PauseEntry {
             until: Some(ts(20)),
+            strikes: Some(3),
         };
 
         set_in(dir.path(), "nightly", entry).expect("set");
@@ -138,6 +185,27 @@ mod tests {
         assert!(remove_from(dir.path(), "weekly").expect("remove"));
         assert!(!remove_from(dir.path(), "weekly").expect("remove absent"));
         assert!(load_from(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn conditional_set_preserves_an_active_pause() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manual = PauseEntry {
+            until: Some(ts(20)),
+            strikes: None,
+        };
+        let automatic = PauseEntry {
+            until: None,
+            strikes: Some(3),
+        };
+        set_in(dir.path(), "nightly", manual).expect("manual pause");
+
+        assert!(
+            !set_if_inactive_in(dir.path(), "nightly", automatic, ts(10)).expect("active pause")
+        );
+        assert_eq!(load_from(dir.path()).get("nightly"), Some(&manual));
+        assert!(set_if_inactive_in(dir.path(), "nightly", automatic, ts(20)).expect("ended pause"));
+        assert_eq!(load_from(dir.path()).get("nightly"), Some(&automatic));
     }
 
     #[test]
@@ -164,26 +232,36 @@ mod tests {
         assert!(is_active(&PauseEntry::default(), ts(10)));
         assert!(is_active(
             &PauseEntry {
-                until: Some(ts(11))
+                until: Some(ts(11)),
+                strikes: None,
             },
             ts(10)
         ));
         assert!(!is_active(
             &PauseEntry {
-                until: Some(ts(10))
+                until: Some(ts(10)),
+                strikes: None,
             },
             ts(10)
         ));
-        assert!(!is_active(&PauseEntry { until: Some(ts(9)) }, ts(10)));
+        assert!(!is_active(
+            &PauseEntry {
+                until: Some(ts(9)),
+                strikes: None,
+            },
+            ts(10)
+        ));
     }
 
     #[test]
     fn ended_pause_advances_the_effective_stamp() {
         let ended = PauseEntry {
             until: Some(ts(20)),
+            strikes: None,
         };
         let active = PauseEntry {
             until: Some(ts(40)),
+            strikes: None,
         };
 
         assert_eq!(effective_last_fire(ts(10), Some(&ended), ts(30)), ts(20));

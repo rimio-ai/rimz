@@ -20,6 +20,7 @@ pub mod instances;
 pub mod pauses;
 pub mod run_log;
 pub mod runner;
+pub mod strikes;
 
 pub use fire::last_stamps;
 
@@ -649,6 +650,7 @@ mod tests {
             check: None,
             verify: None,
             max_attempts: None,
+            max_strikes: None,
             on: None,
             root: PathBuf::from("/home/me/app"),
             worktree: None,

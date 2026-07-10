@@ -13,6 +13,7 @@ use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::schedule::instances;
 use rimz::harness::schedule::pauses::{self, PauseEntry};
 use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
+use rimz::harness::schedule::strikes;
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::MessageStatus;
 
@@ -180,16 +181,20 @@ fn loop_add_round_trips_verify_completion_rule() {
             "cargo xtask gate",
             "--max-attempts",
             "4",
+            "--max-strikes",
+            "5",
         ],
     );
 
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(config.contains("verify = \"cargo xtask gate\""), "{config}");
     assert!(config.contains("max-attempts = 4"), "{config}");
+    assert!(config.contains("max-strikes = 5"), "{config}");
     let loop_config: LoopConfig = toml::from_str(&config).expect("parse loop config");
     let task = loop_config.tasks.0.get("verified").expect("verified task");
     assert_eq!(task.verify.as_deref(), Some("cargo xtask gate"));
     assert_eq!(task.max_attempts, Some(4));
+    assert_eq!(task.max_strikes, Some(5));
 
     let shown = loop_ok(&env, &["loop", "show", "verified"]);
     assert!(
@@ -534,7 +539,10 @@ fn loop_pause_renders_and_persists_indefinite_and_timed_state() {
     );
     assert_eq!(
         read_loop_pauses(&env).get("nightly"),
-        Some(&PauseEntry { until: None })
+        Some(&PauseEntry {
+            until: None,
+            strikes: None,
+        })
     );
     let stdout = loop_ok(&env, &["loop", "list"]);
     assert!(
@@ -599,6 +607,105 @@ fn loop_fire_runs_paused_task_and_resume_is_idempotent() {
         stdout.contains("loop `probe`: not paused"),
         "repeated resume should be a successful no-op: {stdout}"
     );
+}
+
+#[test]
+fn loop_repeated_broken_deliveries_auto_pause_notify_and_resume() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-strikes", "feature-loop");
+    let notify_log = env.project_root.join("loop-paused-notify.log");
+    let config_path = env.config_root().join("rimz").join("config.toml");
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("mkdir config parent");
+    std::fs::write(
+        config_path,
+        format!(
+            "[notifications]\ncommand = '''printf '%s|%s\\n' \"$RIMZ_NOTIFY_KIND\" \"$RIMZ_NOTIFY_TITLE\" >> '{}' '''\n",
+            notify_log.display()
+        ),
+    )
+    .expect("write notification config");
+
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "watchdog",
+            "--wake",
+            "@claude",
+            "--every",
+            "15m",
+            "--check",
+            "printf broken; exit 1",
+            "--prompt",
+            "fix it",
+        ],
+    );
+
+    loop_ok(&env, &["loop", "run", "watchdog"]);
+    let show = loop_ok(&env, &["loop", "show", "watchdog"]);
+    assert!(show.contains("strikes: 1/3"), "{show}");
+
+    loop_ok(&env, &["loop", "run", "watchdog"]);
+    let third = loop_ok(&env, &["loop", "run", "watchdog"]);
+    assert!(
+        third.contains("loop `watchdog`: paused after 3 consecutive failed fires"),
+        "{third}"
+    );
+    assert_eq!(
+        read_loop_pauses(&env).get("watchdog"),
+        Some(&PauseEntry {
+            until: None,
+            strikes: Some(3),
+        })
+    );
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(list.contains("paused · 3 strikes"), "{list}");
+    let show = loop_ok(&env, &["loop", "show", "watchdog"]);
+    assert!(
+        show.contains("paused after 3 strikes — resume with `rimz loop resume watchdog`"),
+        "{show}"
+    );
+
+    let fire = loop_ok(&env, &["loop", "fire", "watchdog"]);
+    assert!(
+        fire.contains("task is paused; firing anyway") && fire.contains("delivered"),
+        "{fire}"
+    );
+    assert_eq!(read_loop_strikes(&env).get("watchdog"), Some(&4));
+    assert_eq!(
+        read_loop_pauses(&env)
+            .get("watchdog")
+            .and_then(|pause| pause.strikes),
+        Some(3),
+        "an active pause should not be replaced or notified twice"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let notification = loop {
+        let text = std::fs::read_to_string(&notify_log).unwrap_or_default();
+        if text.contains("loop_paused|Rimz: loop watchdog paused") {
+            break text;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "loop-paused notification was not delivered: {text}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert_eq!(notification.lines().count(), 1, "{notification}");
+
+    let resumed = loop_ok(&env, &["loop", "resume", "watchdog"]);
+    assert!(resumed.contains("loop `watchdog`: resumed"), "{resumed}");
+    assert!(!read_loop_strikes(&env).contains_key("watchdog"));
+    assert!(
+        read_loop_pauses(&env)
+            .get("watchdog")
+            .is_some_and(|pause| pause.until.is_some() && pause.strikes.is_none())
+    );
+    assert!(!loop_ok(&env, &["loop", "list"]).contains("paused ·"));
 }
 
 #[test]
@@ -1815,6 +1922,14 @@ fn read_loop_pauses(env: &Env) -> BTreeMap<String, PauseEntry> {
         return BTreeMap::new();
     };
     serde_json::from_str(&text).expect("loop pauses")
+}
+
+fn read_loop_strikes(env: &Env) -> BTreeMap<String, u32> {
+    let path = strikes::path(&env.state_root());
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_str(&text).expect("loop strikes")
 }
 
 fn write_loop_instances(env: &Env, tasks: Tasks) {

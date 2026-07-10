@@ -52,11 +52,18 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
             let next = match blocked_state {
                 Some(state) => blocked_next_cell(state),
                 None => match pause.filter(|entry| pauses::is_active(entry, now)) {
-                    Some(PauseEntry { until: None }) => ui::cell("paused").fg(ui::palette::MUTED),
-                    Some(PauseEntry { until: Some(until) }) => {
-                        ui::cell(format!("paused · {}", ui::rel_until(*until, now)))
-                            .fg(ui::palette::MUTED)
-                    }
+                    Some(PauseEntry {
+                        until: None,
+                        strikes: Some(strikes),
+                    }) => ui::cell(format!("paused · {strikes} strikes")).fg(ui::palette::MUTED),
+                    Some(PauseEntry {
+                        until: None,
+                        strikes: None,
+                    }) => ui::cell("paused").fg(ui::palette::MUTED),
+                    Some(PauseEntry {
+                        until: Some(until), ..
+                    }) => ui::cell(format!("paused · {}", ui::rel_until(*until, now)))
+                        .fg(ui::palette::MUTED),
                     None => parsed
                         .ok()
                         .and_then(|parsed| {
@@ -433,6 +440,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let now = Timestamp::now();
     let pause = pauses::load().remove(&args.name);
     let active_pause = pause.as_ref().filter(|entry| pauses::is_active(entry, now));
+    let strike_count = strikes::load().get(&args.name).copied().unwrap_or(0);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let window_reset = window_reset_for(&entry);
     let next = if blocked_state.is_none() {
@@ -466,10 +474,21 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             ui::paint(ui::status::trust(state), "blocked · trust")
         )?,
         None => match active_pause {
-            Some(PauseEntry { until: None }) => write!(out, " · paused")?,
-            Some(PauseEntry { until: Some(until) }) => {
-                write!(out, " · paused, resumes {}", pause_until_text(*until, now))?
-            }
+            Some(PauseEntry {
+                until: None,
+                strikes: Some(strikes),
+            }) => write!(
+                out,
+                " · paused after {strikes} strikes — resume with `rimz loop resume {}`",
+                args.name
+            )?,
+            Some(PauseEntry {
+                until: None,
+                strikes: None,
+            }) => write!(out, " · paused")?,
+            Some(PauseEntry {
+                until: Some(until), ..
+            }) => write!(out, " · paused, resumes {}", pause_until_text(*until, now))?,
             None => {
                 if let Some(next) = next {
                     write!(out, " · next {next}")?;
@@ -478,7 +497,13 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         },
     }
     writeln!(out)?;
-    if matches!(active_pause, Some(PauseEntry { until: None })) {
+    if matches!(
+        active_pause,
+        Some(PauseEntry {
+            until: None,
+            strikes: None,
+        })
+    ) {
         writeln!(out, "  resume with `rimz loop resume {}`", args.name)?;
     }
     let mut kv = ui::KeyVals::new().indent(2);
@@ -508,6 +533,15 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     }
     if let Some(spend) = spend_label(&entry, &records, &now_zoned) {
         kv.push("spend", ui::cell(spend));
+    }
+    if active_pause.is_none()
+        && strike_count > 0
+        && let Some(max) = strikes::threshold(&entry)
+    {
+        kv.push(
+            "strikes",
+            ui::cell(format!("{strike_count}/{max}")).fg(ui::palette::MUTED),
+        );
     }
     kv.render(&mut out)?;
 

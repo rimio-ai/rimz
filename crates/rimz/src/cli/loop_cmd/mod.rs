@@ -42,6 +42,7 @@ use rimz::harness::schedule::{
     self,
     instances::{self, TaskSource},
     pauses::{self, PauseEntry},
+    strikes,
 };
 use rimz::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use rimz::ids::WorkspaceId;
@@ -127,6 +128,9 @@ struct AddArgs {
     /// Total agent turns allowed while making --verify pass.
     #[arg(long, value_name = "N", requires = "verify")]
     max_attempts: Option<u32>,
+    /// Auto-pause after N consecutive failed fires; default 3, 0 disables.
+    #[arg(long, value_name = "N")]
+    max_strikes: Option<u32>,
     /// Guard polarity for --check: fail wakes on non-zero exit, success wakes on zero exit.
     #[arg(long, value_name = "fail|success")]
     on: Option<String>,
@@ -460,7 +464,9 @@ pub(super) fn load_all_tasks(
 
 pub(crate) fn prune_orphan_pauses(globals: &GlobalFlags) -> Result<usize> {
     let known: BTreeSet<_> = load_all_tasks(globals)?.into_keys().collect();
-    pauses::prune_orphans(&known).map_err(Into::into)
+    let pauses = pauses::prune_orphans(&known)?;
+    let strikes = strikes::prune_orphans(&known)?;
+    Ok(pauses + strikes)
 }
 
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<(TaskEntry, TaskSource)>> {
@@ -714,6 +720,9 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
     }
     if let Some(max_attempts) = entry.max_attempts {
         table["max-attempts"] = value(i64::from(max_attempts));
+    }
+    if let Some(max_strikes) = entry.max_strikes {
+        table["max-strikes"] = value(i64::from(max_strikes));
     }
     if let Some(on) = entry.on {
         table["on"] = value(match on {

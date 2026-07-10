@@ -108,7 +108,9 @@ A fire leaves two things behind: whatever the task did (one transient supervised
 
 ## Built-in recovery
 
-Two settings keep a live agent working through the interruptions that would otherwise park it (stop it mid-task and leave it waiting for someone to resume it). Both are off by default, and each switches on with one `rimz config set`.
+**Repeated failures pause the task.** Three consecutive failed fires auto-pause any task indefinitely, display `paused · 3 strikes` in `rimz loop list`, and fire notification handlers with kind `loop_paused`. A completed or delivered turn still counts when its check shows the world remains broken; a healthy check or successful turn resets the counter. Inspect with `rimz loop show`, then use `rimz loop resume <name>` to clear the strikes and re-arm the schedule. Set `--max-strikes <N>` per task to change the threshold, or `--max-strikes 0` to disable auto-pause; `rimz loop fire` remains available while paused for a manual test.
+
+Two opt-in settings keep a live agent working through the interruptions that would otherwise park it (stop it mid-task and leave it waiting for someone to resume it). Both are off by default, and each switches on with one `rimz config set`.
 
 ```sh
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
@@ -140,7 +142,7 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 
 Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
 
-The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--timeout` caps each wait and verify command, and `--verify` with `--max-attempts` defines when the task is done. Inspect, test, and manage tasks with the rest of the surface:
+The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. Inspect, test, and manage tasks with the rest of the surface:
 
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run
@@ -152,7 +154,7 @@ rimz loop resume pr-watch
 rimz loop remove pr-watch
 ```
 
-Pause holds the elder's clock without deleting the task, and `--for` resumes it automatically. The schedule continues from the resume moment instead of replaying missed fires. Pause state belongs to one machine, so pausing a project task affects only your machine; `rimz loop fire` still runs a paused task for testing.
+Pause holds the elder's clock without deleting the task, and `--for` resumes it automatically. The schedule continues from the resume moment instead of replaying missed fires. Pause state belongs to one machine, so pausing a project task affects only your machine; an auto-pause adds its strike reason, and `rimz loop resume` clears that counter. `rimz loop fire` still runs a paused task for testing.
 
 Run mechanics (exit codes, output formats, `wait --stream`) are in [scripting.md](./scripting.md), and every flag is in the [loop CLI reference](../reference/cli/loop.md).
 

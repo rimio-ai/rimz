@@ -110,7 +110,7 @@ pub(super) fn run_one(
     if let Some(gate) =
         run_log::daily_budget_gate(&state_home(), name, &entry, &now).map_err(anyhow::Error::msg)?
     {
-        return finish_budget_skip(name, mode, started, now.timestamp(), gate.reason());
+        return finish_budget_skip(name, &entry, mode, started, now.timestamp(), gate.reason());
     }
     let config = MachineConfig::load_lenient();
     if let Some((kind, workspace_id)) = task_scope_target(&entry)?
@@ -121,28 +121,32 @@ pub(super) fn run_one(
             now.timestamp(),
         )
     {
-        return finish_budget_skip(name, mode, started, now.timestamp(), reason);
+        return finish_budget_skip(name, &entry, mode, started, now.timestamp(), reason);
     }
     let _run_lock = match acquire_run_lock(name, &entry) {
         Ok(Some(guard)) => guard,
         Ok(None) => {
             let duration_ms = elapsed_ms(started);
-            run_log::append(&LoopRunRecord {
-                task: name.to_owned(),
-                at: Timestamp::now(),
-                result: LoopRunResult::Overlapped,
-                mode: Some(mode),
-                duration_ms: Some(duration_ms),
-                error: None,
-                check: None,
-                run_id: None,
-                transcript_path: None,
-                last_message: None,
-                target: None,
-                cost_usd: None,
-                input_tokens: None,
-                output_tokens: None,
-            });
+            record_run(
+                name,
+                &entry,
+                LoopRunRecord {
+                    task: name.to_owned(),
+                    at: Timestamp::now(),
+                    result: LoopRunResult::Overlapped,
+                    mode: Some(mode),
+                    duration_ms: Some(duration_ms),
+                    error: None,
+                    check: None,
+                    run_id: None,
+                    transcript_path: None,
+                    last_message: None,
+                    target: None,
+                    cost_usd: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                },
+            );
             if mode == LoopRunMode::Manual {
                 write_manual_verdict(
                     &mut ui::out(),
@@ -158,7 +162,7 @@ pub(super) fn run_one(
             return Ok(());
         }
         Err(err) => {
-            append_error_record(name, mode, started, &err);
+            append_error_record(name, &entry, mode, started, &err);
             return Err(err);
         }
     };
@@ -166,7 +170,7 @@ pub(super) fn run_one(
         Ok(outcome) => {
             let duration_ms = elapsed_ms(started);
             let record = loop_record(name, mode, duration_ms, &outcome);
-            run_log::append(&record);
+            record_run(name, &entry, record);
             print_run_summary(name, &entry, duration_ms, mode, keep, &outcome)?;
             if let Some(code) = outcome.exit_code {
                 std::process::exit(code);
@@ -174,7 +178,7 @@ pub(super) fn run_one(
             Ok(())
         }
         Err(err) => {
-            append_error_record(name, mode, started, &err);
+            append_error_record(name, &entry, mode, started, &err);
             Err(err)
         }
     }
@@ -199,27 +203,32 @@ fn task_scope_target(
 
 fn finish_budget_skip(
     name: &str,
+    entry: &TaskEntry,
     mode: LoopRunMode,
     started: Instant,
     at: Timestamp,
     reason: String,
 ) -> Result<()> {
-    run_log::append(&LoopRunRecord {
-        task: name.to_owned(),
-        at,
-        result: LoopRunResult::BudgetSkipped,
-        mode: Some(mode),
-        duration_ms: Some(elapsed_ms(started)),
-        error: Some(reason.clone()),
-        check: None,
-        run_id: None,
-        transcript_path: None,
-        last_message: None,
-        target: None,
-        cost_usd: None,
-        input_tokens: None,
-        output_tokens: None,
-    });
+    record_run(
+        name,
+        entry,
+        LoopRunRecord {
+            task: name.to_owned(),
+            at,
+            result: LoopRunResult::BudgetSkipped,
+            mode: Some(mode),
+            duration_ms: Some(elapsed_ms(started)),
+            error: Some(reason.clone()),
+            check: None,
+            run_id: None,
+            transcript_path: None,
+            last_message: None,
+            target: None,
+            cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
+        },
+    );
     if mode == LoopRunMode::Manual {
         write_manual_verdict(
             &mut ui::out(),
@@ -232,26 +241,113 @@ fn finish_budget_skip(
     Ok(())
 }
 
-fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &anyhow::Error) {
+fn append_error_record(
+    name: &str,
+    entry: &TaskEntry,
+    mode: LoopRunMode,
+    started: Instant,
+    err: &anyhow::Error,
+) {
     let duration_ms = elapsed_ms(started);
     let error = format!("{err:#}");
-    run_log::append(&LoopRunRecord {
-        task: name.to_owned(),
-        at: Timestamp::now(),
-        result: LoopRunResult::Errored,
-        mode: Some(mode),
-        duration_ms: Some(duration_ms),
-        error: Some(error.clone()),
-        check: None,
-        run_id: None,
-        transcript_path: None,
-        last_message: None,
-        target: None,
-        cost_usd: None,
-        input_tokens: None,
-        output_tokens: None,
-    });
+    record_run(
+        name,
+        entry,
+        LoopRunRecord {
+            task: name.to_owned(),
+            at: Timestamp::now(),
+            result: LoopRunResult::Errored,
+            mode: Some(mode),
+            duration_ms: Some(duration_ms),
+            error: Some(error.clone()),
+            check: None,
+            run_id: None,
+            transcript_path: None,
+            last_message: None,
+            target: None,
+            cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
+        },
+    );
     tracing::warn!(task = name, error = %error, "loop task run failed");
+}
+
+fn record_run(name: &str, entry: &TaskEntry, record: LoopRunRecord) {
+    run_log::append(&record);
+    let signal = strikes::classify(&record);
+    let count = match strikes::note(name, signal) {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::warn!(task = name, error = %err, "loop strike state update failed");
+            return;
+        }
+    };
+    let Some(max) = strikes::threshold(entry) else {
+        return;
+    };
+    if signal != strikes::Signal::Strike || count < max {
+        return;
+    }
+    let now = Timestamp::now();
+    match pauses::set_if_inactive(
+        name,
+        PauseEntry {
+            until: None,
+            strikes: Some(count),
+        },
+        now,
+    ) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(err) => {
+            tracing::warn!(task = name, error = %err, "loop auto-pause state update failed");
+            return;
+        }
+    }
+
+    let _ = writeln!(
+        ui::out(),
+        "loop `{name}`: paused after {count} consecutive failed fires; resume with `rimz loop resume {name}`"
+    );
+    notify_loop_paused(name, entry, count);
+}
+
+fn notify_loop_paused(name: &str, entry: &TaskEntry, count: u32) {
+    let notification = rimz::sidebar::notify::Notification {
+        agents: Vec::new(),
+        notification_kind: rimz::sidebar::notify::NotificationKind::LoopPaused,
+        title: format!("Rimz: loop {name} paused"),
+        body: format!(
+            "{count} consecutive failed fires; inspect with `rimz loop show {name}`, resume with `rimz loop resume {name}`"
+        ),
+        unread_count: None,
+    };
+    let prefs = MachineConfig::load_lenient().notifications.clone();
+    rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
+
+    let workspace_id = WorkspaceId::from_project_root(&entry.resolved_root());
+    let runtime = match RuntimePaths::for_workspace(workspace_id) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            tracing::debug!(task = name, error = %err, "loop auto-pause runtime unavailable");
+            return;
+        }
+    };
+    let notification_kind = notification.kind_env().to_owned();
+    if let Err(err) = rimz::store::wakeup::broadcast_sidebar_event(
+        &runtime,
+        None,
+        rimz::sidebar::events::SidebarEvent::Notify {
+            title: notification.title,
+            body: notification.body,
+            panes: Vec::new(),
+            recheck_unread: false,
+            notification_kind: Some(notification_kind),
+        },
+    ) {
+        tracing::debug!(task = name, error = %err, "loop auto-pause notification broadcast failed");
+    }
 }
 
 fn write_manual_header(out: &mut impl Write, name: &str, entry: &TaskEntry) -> std::io::Result<()> {

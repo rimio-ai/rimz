@@ -444,7 +444,13 @@ mod tests {
         let prior = seconds_before(now.timestamp(), 600);
         let tasks = BTreeMap::from([("daily".to_owned(), task("/repo", "5m"))]);
         let state = BTreeMap::from([("daily".to_owned(), prior)]);
-        let pauses = BTreeMap::from([("daily".to_owned(), PauseEntry::default())]);
+        let pauses = BTreeMap::from([(
+            "daily".to_owned(),
+            PauseEntry {
+                until: None,
+                strikes: Some(3),
+            },
+        )]);
 
         let (actions, next) = plan(&tasks, &state, &pauses, &now, &BTreeMap::new());
 
@@ -474,6 +480,7 @@ mod tests {
             "daily".to_owned(),
             PauseEntry {
                 until: Some(pause_end),
+                strikes: None,
             },
         )]);
 
@@ -503,6 +510,7 @@ mod tests {
             "daily".to_owned(),
             PauseEntry {
                 until: Some(zdt(2026, 6, 24, 7, 30, 0).timestamp()),
+                strikes: None,
             },
         )]);
 

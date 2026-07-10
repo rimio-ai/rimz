@@ -50,6 +50,8 @@ pub struct TaskEntry {
     pub verify: Option<String>,
     #[serde(rename = "max-attempts", skip_serializing_if = "Option::is_none")]
     pub max_attempts: Option<u32>,
+    #[serde(rename = "max-strikes", skip_serializing_if = "Option::is_none")]
+    pub max_strikes: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on: Option<CheckOn>,
     pub root: PathBuf,
@@ -204,6 +206,7 @@ mod tests {
             check: Some("cargo test".to_owned()),
             verify: Some("cargo xtask gate".to_owned()),
             max_attempts: Some(4),
+            max_strikes: Some(5),
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
             every: Some("reset".to_owned()),

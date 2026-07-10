@@ -154,6 +154,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 check,
                 verify: args.verify,
                 max_attempts: args.max_attempts,
+                max_strikes: args.max_strikes,
                 on,
                 root: project_root.clone(),
                 worktree: args.worktree,
@@ -179,6 +180,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 check,
                 verify: None,
                 max_attempts: None,
+                max_strikes: args.max_strikes,
                 on,
                 root: project_root.clone(),
                 worktree: None,
@@ -202,6 +204,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             check,
             verify: None,
             max_attempts: None,
+            max_strikes: args.max_strikes,
             on,
             root: project_root.clone(),
             worktree: None,
@@ -244,10 +247,11 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         config_set_entry(&args.name, &entry)?;
     }
     let cleared_pause = pauses::remove(&args.name)?;
+    let cleared_strikes = strikes::clear(&args.name)?;
 
     let mut out = ui::out();
     writeln!(out, "added loop task `{}`", args.name)?;
-    if cleared_pause {
+    if cleared_pause || cleared_strikes {
         writeln!(out, "pause: cleared")?;
     }
     if args.project {
@@ -272,6 +276,7 @@ pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
             let removed = remove_loaded_task(name, &entry, source)?;
             if removed && matches!(source, TaskSource::Project { .. }) {
                 pauses::remove(name)?;
+                strikes::clear(name)?;
                 let mut out = ui::out();
                 writeln!(out, "removed loop task `{name}`")?;
                 finish_project_mutation(&mut out, &entry.root, false)?;
@@ -284,6 +289,7 @@ pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
     let mut out = ui::out();
     if removed {
         pauses::remove(name)?;
+        strikes::clear(name)?;
         writeln!(out, "removed loop task `{name}`")?;
     } else {
         writeln!(out, "no loop task named `{name}`")?;
@@ -309,6 +315,7 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
                 let renamed = project_config_rename(&entry.root, name, new_name)?;
                 if renamed {
                     pauses::rename(name, new_name)?;
+                    strikes::rename(name, new_name)?;
                     let mut out = ui::out();
                     writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
                     finish_project_mutation(&mut out, &entry.root, false)?;
@@ -322,6 +329,7 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
     let mut out = ui::out();
     if renamed {
         pauses::rename(name, new_name)?;
+        strikes::rename(name, new_name)?;
         writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
     } else {
         writeln!(out, "no loop task named `{name}`")?;
@@ -346,7 +354,13 @@ pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
                 .context("resolving --for against the current clock")
         })
         .transpose()?;
-    pauses::set(&args.name, PauseEntry { until })?;
+    pauses::set(
+        &args.name,
+        PauseEntry {
+            until,
+            strikes: None,
+        },
+    )?;
 
     let mut out = ui::out();
     match until {
@@ -378,8 +392,12 @@ pub(super) fn resume(name: &str, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
 
-    let resumed = PauseEntry { until: Some(now) };
+    let resumed = PauseEntry {
+        until: Some(now),
+        strikes: None,
+    };
     pauses::set(name, resumed)?;
+    strikes::clear(name)?;
     let mut out = ui::out();
     write!(out, "loop `{name}`: resumed")?;
     if let Some(next) = render::task_next_fire_text(name, &entry, Some(&resumed), now) {
