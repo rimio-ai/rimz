@@ -13,6 +13,7 @@
 //! built-in [`registry::ADAPTERS`] table with validated process plugins.
 
 pub mod account;
+pub mod amp;
 pub mod claude;
 pub mod codex;
 #[cfg(test)]
@@ -105,6 +106,7 @@ pub use transcript::{TranscriptMessage, TranscriptRole};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;
 
+pub use amp::AmpAdapter;
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 pub use copilot::CopilotAdapter;

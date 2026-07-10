@@ -55,20 +55,20 @@ fn tabbed_dashboard_shows_every_provider_past_the_cap() {
     let agents = vec![
         agent("claude", "c1", AgentStatus::Idle, 10),
         agent("codex", "x1", AgentStatus::Idle, 20),
-        agent("pi", "p1", AgentStatus::Idle, 30),
-        agent("opencode", "o1", AgentStatus::Idle, 40),
+        agent("amp", "a1", AgentStatus::Idle, 30),
+        agent("pi", "p1", AgentStatus::Idle, 40),
+        agent("opencode", "o1", AgentStatus::Idle, 50),
     ];
     let mut snapshot = room(agents);
-    // Default `auto` tabs at four providers; a tight cap must not trim them.
+    // Default `auto` tabs at five providers; a tight cap must not trim them.
     snapshot.theme.display.max_provider_blocks = 2;
     let snapshot =
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
 
-    // Painted in the registry's display order, not alphabetically — pi before
-    // opencode.
+    // Painted in the registry's display order, not alphabetically.
     assert_eq!(
         provider_kinds(&snapshot),
-        vec!["claude", "codex", "pi", "opencode"]
+        vec!["claude", "codex", "amp", "pi", "opencode"]
     );
 }
 

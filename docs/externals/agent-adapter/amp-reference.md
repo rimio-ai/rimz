@@ -1,6 +1,6 @@
 # Amp CLI protocol reference
 
-> No RimZ Amp adapter exists yet. This document records the latest upstream surface needed to build one; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
+> RimZ's landed mapping is [amp.md](../../internals/agents/amp.md). This document records the upstream surface behind it; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **Amp CLI upstream protocol surface** relevant to RimZ: the Plugin API lifecycle and decision seam, thread identity and state, transcript access, tool classification, execute-mode JSONL, permissions, configuration and trust, authentication and usage, remote control, runners, and launch modes. It is an implementation research record, not a claim that RimZ currently supports Amp.
 

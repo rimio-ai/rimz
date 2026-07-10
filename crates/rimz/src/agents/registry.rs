@@ -4,6 +4,7 @@
 //! them through [`all_adapters`]. Every behavioral dispatch site resolves
 //! through this module, so no consumer grows a per-agent match arm.
 
+use super::amp::AmpAdapter;
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
 use super::copilot::CopilotAdapter;
@@ -21,6 +22,7 @@ use super::{AgentAdapter, AgentErr, Result};
 pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &ClaudeAdapter,
     &CodexAdapter,
+    &AmpAdapter,
     &CopilotAdapter,
     &GeminiAdapter,
     &PiAdapter,
@@ -91,6 +93,11 @@ mod tests {
         // Cursor's `/summarize`), so a new adapter that forgets to opt in fails
         // here rather than silently never compacting.
         for adapter in ADAPTERS {
+            // Amp compacts automatically and exposes no manual compact command;
+            // see docs/externals/agent-adapter/amp-reference.md.
+            if adapter.descriptor().kind == "amp" {
+                continue;
+            }
             let command = adapter.compact_command().unwrap_or_else(|| {
                 panic!("missing compact command for {}", adapter.descriptor().kind)
             });

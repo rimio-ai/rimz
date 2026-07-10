@@ -56,7 +56,7 @@ Install is the visible security step ([model.md → Hook install](../internals/a
 
 ## Step 6 — Wire launch, resume, and presets
 
-From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (a registry test requires every adapter to answer `/compact`-style smart compaction), `ping_args` (returning `Some` is what lights up `<kind>-ping`), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping.
+From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command or a documented registry exception when the agent only compacts automatically), `ping_args` (returning `Some` is what lights up `<kind>-ping`), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping.
 
 ## Step 7 — Wire context enrichment
 

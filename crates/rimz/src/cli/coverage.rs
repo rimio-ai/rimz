@@ -348,7 +348,8 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor", "droid", "kiro"
+                "claude", "codex", "amp", "copilot", "gemini", "pi", "opencode", "cursor", "droid",
+                "kiro"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -376,6 +377,22 @@ mod tests {
             ["plan", "answer", "bg"]
         );
         assert!(cell_detail(&matrix, row(&matrix, "end"), "codex").contains("SessionEnd"));
+
+        let amp = agent_cells(&matrix, "amp");
+        assert_eq!(count(&amp, MatrixCellState::Ok), 3);
+        assert_eq!(count(&amp, MatrixCellState::Partial), 2);
+        assert_eq!(count(&amp, MatrixCellState::Absent), 11);
+        assert_eq!(
+            agent_labels(&matrix, "amp", MatrixCellState::Partial),
+            ["end", "idle"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "amp", MatrixCellState::Absent),
+            [
+                "plan", "ask", "answer", "compact", "sub", "bg", "usage", "live$", "rich", "spend",
+                "remote"
+            ]
+        );
 
         let copilot = agent_cells(&matrix, "copilot");
         assert_eq!(count(&copilot, MatrixCellState::Ok), 5);
@@ -470,7 +487,8 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor", "droid", "kiro"
+                "claude", "codex", "amp", "copilot", "gemini", "pi", "opencode", "cursor", "droid",
+                "kiro"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -481,6 +499,7 @@ mod tests {
             [
                 MatrixCellState::Ok,      // claude
                 MatrixCellState::Partial, // codex
+                MatrixCellState::Partial, // amp
                 MatrixCellState::Ok,      // copilot
                 MatrixCellState::Ok,      // gemini
                 MatrixCellState::Ok,      // pi
@@ -498,6 +517,7 @@ mod tests {
             [
                 MatrixCellState::Ok,     // claude
                 MatrixCellState::Ok,     // codex
+                MatrixCellState::Absent, // amp
                 MatrixCellState::Absent, // copilot
                 MatrixCellState::Absent, // gemini
                 MatrixCellState::Absent, // pi

@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ watches the coding agents you already run — Claude Code, Codex, Copilot, Gemini CLI, Pi, OpenCode, Cursor, Droid, and Kiro — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
+RimZ watches the coding agents you already run — Claude Code, Codex, Amp, Copilot, Gemini CLI, Pi, OpenCode, Cursor, Droid, and Kiro — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
 
 The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
@@ -21,6 +21,7 @@ This page is the annotated read of that command.
 | --- | :---: | --- | --- |
 | Claude Code | ✅ stable | 16 wired | hooks · statusline · `.jsonl` transcripts · `claude --resume` |
 | Codex | ✅ stable | 11 wired · 2 derived · 3 unsupported | hooks + `notify` · app-server · rollout `.jsonl` · `codex resume` |
+| Amp | alpha | 3 wired · 2 derived · 11 unsupported | plugin API · `amp threads continue` |
 | Copilot | alpha | 5 wired · 2 derived · 9 unsupported | command hooks · `copilot --resume` |
 | Gemini CLI | beta | 7 wired · 4 derived · 5 unsupported | hooks · session `.jsonl` · `gemini --resume` |
 | Pi | beta | 7 wired · 3 derived · 6 unsupported | extension API · session `.jsonl` · `pi --session` |
@@ -50,6 +51,7 @@ One row per agent, so a new agent adds exactly one line:
 | --- | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: |
 | Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Codex | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Gemini | ✓ | ✓ | ✓ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✗ | ✓ | ◐ | ✗ |
 | Pi | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
@@ -94,6 +96,21 @@ Codex is a full integration with one structural difference: since 0.137 its hook
 - **Install target:** `~/.codex/config.toml`.
 
 Mapping detail: [codex.md](../internals/agents/codex.md); upstream protocol: [codex-reference.md](../externals/agent-adapter/codex-reference.md).
+
+### Amp
+
+Amp reports through a RimZ-authored observation-only **plugin**. One Amp CLI can keep several threads active, so the plugin forwards only the focused thread and lets the existing same-pane supersession rules rotate the card when focus changes.
+
+- **Reports:** thread registration, turn boundaries, every completed tool, file-edit proof, mode/model, effort, and Amp-native permission waits.
+- **Two derived cells (◐):** `end` — Amp has no session-end event, so pane liveness and the rollup reaper remove the card; `idle` — turn-end, `awaiting-approval`, and the stall window cover attention without a notification event.
+- **Eleven unsupported cells (✗):** plan approval, user questions, external answers, compaction, subagents, background parking, context usage, realtime cost, rich context, account spend, and remote-control readiness have no stable interactive machine surface.
+- **Blocking asks:** entering Amp's `awaiting-approval` thread state raises a waiting row with no prompt detail. Answer in Amp's own UI; `rimz answer` is unsupported because the state carries no resolver, and the plugin does not join the undocumented `tool.call` decision chain.
+- **Resume:** `amp threads continue <T-id>` reopens a thread. Amp exposes no fork command or manual compaction command.
+- **Permission modes:** all four RimZ postures pass no extra flag. Amp runs tools by default; approval policy remains in Amp settings or user plugins. Profiles map `model` to Amp's mode dial (`--mode`) and `effort` to `--effort`.
+- **Account:** presence-only detection checks `~/.local/share/amp/secrets.json` without reading secret material. Amp's human-readable usage output does not feed spend or balance bars.
+- **Install target:** `~/.config/amp/plugins/rimz.ts`.
+
+Mapping detail: [amp.md](../internals/agents/amp.md); upstream protocol: [amp-reference.md](../externals/agent-adapter/amp-reference.md).
 
 ### Copilot
 
@@ -206,6 +223,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Codex | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
+| Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Gemini | `SessionStart` | `BeforeAgent` | `AfterAgent` | `AfterTool` | `Notification` | ✗ | ✗ | `PreCompress` | ◐ derived | `SessionEnd` | ◐ derived |
 | Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | ✗ | ✗ | ✗ | `session_before_compact` | `session_compact` | `session_shutdown` | ◐ derived |
@@ -214,7 +232,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 
-`lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
+`lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, Amp, OpenCode, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
 ## Versions
 
@@ -228,7 +246,7 @@ Installing an agent's hooks edits that agent's own config — the install target
 
 ## Agents not yet supported
 
-An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Amp or Kiro land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
+An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Kimi or Qwen land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
 
 ## See also
 

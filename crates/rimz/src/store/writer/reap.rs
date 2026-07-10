@@ -107,12 +107,13 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{LaunchParams, SessionOrigin};
+    use crate::agents::{AgentAdapter, AmpAdapter, LaunchParams, SessionOrigin};
     use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
     use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
     use crate::store::event::EventKind;
     use crate::store::event_log;
     use crate::store::paths::RuntimePaths;
+    use serde_json::json;
 
     fn store() -> (tempfile::TempDir, Store, WorkspaceId) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -167,6 +168,28 @@ mod tests {
             "rimz-test",
             "codex",
             "SessionStart",
+            &observation,
+        )
+    }
+
+    fn amp_focus_lifecycle(
+        workspace_id: &WorkspaceId,
+        agent_id: &str,
+        pane_id: &str,
+    ) -> EventEnvelope {
+        let mut observation = AmpAdapter
+            .observe_lifecycle(
+                "session_start",
+                &json!({ "session_id": agent_id, "cwd": "/repo" }),
+            )
+            .expect("Amp session start observation");
+        observation.agent_pid = Some(std::process::id());
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane_id));
+        EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            "rimz-test",
+            "amp",
+            "session_start",
             &observation,
         )
     }
@@ -271,6 +294,50 @@ mod tests {
             store.reap_dead_sessions().expect("reap again"),
             0,
             "second pass is idempotent and subagents are not reaped independently"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn amp_focus_switch_retires_then_revives_threads_in_one_pane() {
+        let (_dir, store, workspace_id) = store();
+        let now = Timestamp::now();
+        let mut thread_a = amp_focus_lifecycle(&workspace_id, "T-a", "%1");
+        thread_a.timestamp = now - Duration::from_secs(2);
+        let mut thread_b = amp_focus_lifecycle(&workspace_id, "T-b", "%1");
+        thread_b.timestamp = now - Duration::from_secs(1);
+        for event in [thread_a, thread_b] {
+            event_log::append(&store.paths().events_log, &event).expect("append focus event");
+        }
+
+        assert_eq!(store.reap_dead_sessions().expect("reap thread A"), 1);
+        let after_a_to_b = store
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("projection after A to B");
+        assert_eq!(
+            after_a_to_b
+                .agents
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            ["T-b"]
+        );
+
+        let mut thread_a = amp_focus_lifecycle(&workspace_id, "T-a", "%1");
+        thread_a.timestamp = Timestamp::now() + Duration::from_secs(1);
+        event_log::append(&store.paths().events_log, &thread_a).expect("append switch-back event");
+
+        assert_eq!(store.reap_dead_sessions().expect("reap thread B"), 1);
+        let after_b_to_a = store
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("projection after B to A");
+        assert_eq!(
+            after_b_to_a
+                .agents
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            ["T-a"]
         );
     }
 
