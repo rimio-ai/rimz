@@ -36,8 +36,8 @@ pub struct PrHead {
     pub repo_full_name: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TeaPrCandidate {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrCandidate {
     pub number: u64,
     pub state: WorktreePrState,
 }
@@ -302,29 +302,36 @@ pub(crate) fn remote_host(remote_url: &str) -> &str {
         .trim()
 }
 
-pub fn parse_gh_pr_state_json(raw: &str) -> Result<Option<WorktreePrState>, String> {
+pub fn parse_gh_pr_state_json(raw: &str) -> Result<Option<PrCandidate>, String> {
     #[derive(Deserialize)]
     struct Pull {
+        number: u64,
         state: String,
     }
 
     let pulls: Vec<Pull> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     Ok(pulls
         .into_iter()
-        .filter_map(|pull| parse_pr_state(&pull.state))
-        .fold(None, prefer_pr_state))
+        .filter_map(|pull| {
+            Some(PrCandidate {
+                number: pull.number,
+                state: parse_pr_state(&pull.state)?,
+            })
+        })
+        .fold(None, |current, next| Some(prefer_candidate(current, next))))
 }
 
-pub fn parse_gh_pr_list_states(raw: &str) -> Result<BTreeMap<String, WorktreePrState>, String> {
+pub fn parse_gh_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>, String> {
     #[derive(Deserialize)]
     struct Pull {
+        number: u64,
         state: String,
         #[serde(rename = "headRefName")]
         head_ref_name: String,
     }
 
     let pulls: Vec<Pull> = serde_json::from_str(raw).map_err(|err| err.to_string())?;
-    let mut states = BTreeMap::new();
+    let mut links = BTreeMap::new();
     for pull in pulls {
         let branch = pull.head_ref_name.trim();
         let Some(state) = parse_pr_state(&pull.state) else {
@@ -333,14 +340,19 @@ pub fn parse_gh_pr_list_states(raw: &str) -> Result<BTreeMap<String, WorktreePrS
         if branch.is_empty() {
             continue;
         }
-        if let Some(preferred) = prefer_pr_state(states.get(branch).copied(), state) {
-            states.insert(branch.to_owned(), preferred);
-        }
+        let candidate = PrCandidate {
+            number: pull.number,
+            state,
+        };
+        links.insert(
+            branch.to_owned(),
+            prefer_candidate(links.get(branch).copied(), candidate),
+        );
     }
-    Ok(states)
+    Ok(links)
 }
 
-pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<TeaPrCandidate>, String> {
+pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<PrCandidate>, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let pulls = value
         .as_array()
@@ -349,20 +361,20 @@ pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<TeaPrCan
         .iter()
         .filter(|pull| pr_head_matches(pull, branch))
         .filter_map(|pull| {
-            Some(TeaPrCandidate {
+            Some(PrCandidate {
                 number: pr_number(pull)?,
                 state: pr_state_from_value(pull)?,
             })
         })
-        .fold(None, prefer_tea_candidate))
+        .fold(None, |current, next| Some(prefer_candidate(current, next))))
 }
 
-pub fn parse_tea_pr_list_states(raw: &str) -> Result<BTreeMap<String, WorktreePrState>, String> {
+pub fn parse_tea_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let pulls = value
         .as_array()
         .ok_or_else(|| "tea PR list output must be a JSON array".to_owned())?;
-    let mut states = BTreeMap::new();
+    let mut links = BTreeMap::new();
     for pull in pulls {
         let Some(branch) = pr_head_branch(pull) else {
             continue;
@@ -370,11 +382,16 @@ pub fn parse_tea_pr_list_states(raw: &str) -> Result<BTreeMap<String, WorktreePr
         let Some(state) = pr_state_from_value(pull) else {
             continue;
         };
-        if let Some(preferred) = prefer_pr_state(states.get(&branch).copied(), state) {
-            states.insert(branch, preferred);
-        }
+        let Some(number) = pr_number(pull) else {
+            continue;
+        };
+        let candidate = PrCandidate { number, state };
+        links.insert(
+            branch.clone(),
+            prefer_candidate(links.get(&branch).copied(), candidate),
+        );
     }
-    Ok(states)
+    Ok(links)
 }
 
 pub fn parse_tea_pr_detail_json(raw: &str) -> Result<Option<WorktreePrState>, String> {
@@ -434,27 +451,14 @@ fn parse_pr_state(raw: &str) -> Option<WorktreePrState> {
     }
 }
 
-fn prefer_pr_state(
-    current: Option<WorktreePrState>,
-    next: WorktreePrState,
-) -> Option<WorktreePrState> {
-    Some(match current {
-        Some(current) if pr_state_rank(current) >= pr_state_rank(next) => current,
-        _ => next,
-    })
-}
-
-fn prefer_tea_candidate(
-    current: Option<TeaPrCandidate>,
-    next: TeaPrCandidate,
-) -> Option<TeaPrCandidate> {
+fn prefer_candidate(current: Option<PrCandidate>, next: PrCandidate) -> PrCandidate {
     let Some(current) = current else {
-        return Some(next);
+        return next;
     };
     if pr_state_rank(next.state) > pr_state_rank(current.state) {
-        Some(next)
+        next
     } else {
-        Some(current)
+        current
     }
 }
 
@@ -756,22 +760,28 @@ bbb\trefs/heads/same-tip
                 r#"[{"number":1,"state":"CLOSED"},{"number":2,"state":"OPEN"}]"#
             )
             .unwrap(),
-            Some(WorktreePrState::Open)
+            Some(PrCandidate {
+                number: 2,
+                state: WorktreePrState::Open,
+            })
         );
         assert_eq!(
             parse_gh_pr_state_json(
                 r#"[{"number":1,"state":"OPEN"},{"number":2,"state":"MERGED"}]"#
             )
             .unwrap(),
-            Some(WorktreePrState::Merged)
+            Some(PrCandidate {
+                number: 2,
+                state: WorktreePrState::Merged,
+            })
         );
         assert_eq!(parse_gh_pr_state_json("[]").unwrap(), None);
         assert!(parse_gh_pr_state_json("{").is_err());
     }
 
     #[test]
-    fn parses_gh_pr_list_states_by_head_branch_with_priority() {
-        let states = parse_gh_pr_list_states(
+    fn parses_gh_pr_list_links_by_head_branch_with_priority() {
+        let links = parse_gh_pr_list_links(
             r#"[
                 {"number":1,"state":"CLOSED","headRefName":"feature"},
                 {"number":2,"state":"OPEN","headRefName":"feature"},
@@ -780,9 +790,21 @@ bbb\trefs/heads/same-tip
         )
         .unwrap();
 
-        assert_eq!(states.get("feature"), Some(&WorktreePrState::Open));
-        assert_eq!(states.get("other"), Some(&WorktreePrState::Open));
-        assert!(parse_gh_pr_list_states("{").is_err());
+        assert_eq!(
+            links.get("feature"),
+            Some(&PrCandidate {
+                number: 2,
+                state: WorktreePrState::Open,
+            })
+        );
+        assert_eq!(
+            links.get("other"),
+            Some(&PrCandidate {
+                number: 3,
+                state: WorktreePrState::Open,
+            })
+        );
+        assert!(parse_gh_pr_list_links("{").is_err());
     }
 
     #[test]
@@ -793,7 +815,7 @@ bbb\trefs/heads/same-tip
         ]"#;
         assert_eq!(
             parse_tea_pr_list_json(list, "feature").unwrap(),
-            Some(TeaPrCandidate {
+            Some(PrCandidate {
                 number: 7,
                 state: WorktreePrState::Closed,
             })
@@ -808,8 +830,8 @@ bbb\trefs/heads/same-tip
     }
 
     #[test]
-    fn parses_tea_pr_list_states_by_head_branch() {
-        let states = parse_tea_pr_list_states(
+    fn parses_tea_pr_list_links_by_head_branch() {
+        let links = parse_tea_pr_list_links(
             r#"[
                 {"index": 7, "head": {"label": "me:feature"}, "state": "closed"},
                 {"index": 8, "head": {"branch": "feature"}, "state": "open"},
@@ -818,9 +840,21 @@ bbb\trefs/heads/same-tip
         )
         .unwrap();
 
-        assert_eq!(states.get("feature"), Some(&WorktreePrState::Open));
-        assert_eq!(states.get("other"), Some(&WorktreePrState::Open));
-        assert!(parse_tea_pr_list_states("{}").is_err());
+        assert_eq!(
+            links.get("feature"),
+            Some(&PrCandidate {
+                number: 8,
+                state: WorktreePrState::Open,
+            })
+        );
+        assert_eq!(
+            links.get("other"),
+            Some(&PrCandidate {
+                number: 9,
+                state: WorktreePrState::Open,
+            })
+        );
+        assert!(parse_tea_pr_list_links("{}").is_err());
     }
 
     #[test]

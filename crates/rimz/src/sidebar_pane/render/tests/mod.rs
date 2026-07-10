@@ -345,6 +345,15 @@ fn group_lines(
     theme: &Theme,
     selected_index: usize,
 ) -> Vec<Line<'static>> {
+    group_lines_at_width(snapshot, theme, selected_index, 54)
+}
+
+fn group_lines_at_width(
+    snapshot: &SidebarSnapshot,
+    theme: &Theme,
+    selected_index: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut row_index = 0;
     let mut lines = Vec::new();
     let mut map = Vec::new();
@@ -354,7 +363,7 @@ fn group_lines(
         &snapshot.worktree_groups[0],
         &snapshot.providers,
         snapshot.now,
-        54,
+        width,
         &snapshot.theme.display.context_meter,
         snapshot.theme.display.card_density,
         None,

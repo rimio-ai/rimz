@@ -12,7 +12,7 @@ use crate::agents::AgentAccount;
 use crate::agents::AgentState;
 use crate::agents::spending::{SpendingCaches, SpendingWalker};
 use crate::config::MachineConfig;
-use crate::{RuntimePaths, SidebarSnapshot, WorktreePrState};
+use crate::{RuntimePaths, SidebarSnapshot};
 
 pub mod accounts;
 pub mod credits;
@@ -32,7 +32,7 @@ pub use credits::{
 };
 pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
 pub use live_spend::{apply_live_day_spend, apply_live_today_spend};
-pub use pr::PrStateCache;
+pub use pr::{PrLink, PrStateCache};
 pub use rate_limits::{drop_kind_rate_limits, merge_account_rate_limits};
 pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,
@@ -53,7 +53,7 @@ use super::timing::unix_now_ms;
 pub struct RefreshedLanes {
     pub spending: SpendingCaches,
     pub accounts: BTreeMap<String, AgentAccount>,
-    pub pr_states: BTreeMap<String, WorktreePrState>,
+    pub pr_states: BTreeMap<String, PrLink>,
 }
 
 pub fn refresh_heavy_lanes(

@@ -154,6 +154,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: None,
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/mux".to_owned(),
@@ -171,6 +172,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: None,
             pr_state: None,
+            pr_number: None,
         },
     ];
     snapshot.value_tally = Some(spend_tally(9.42, 712_000, 8));
@@ -459,6 +461,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/pricing-refresh".to_owned(),
@@ -476,6 +479,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_number: Some(91),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/zellij-health".to_owned(),
@@ -493,6 +497,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: None,
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/mux-merge".to_owned(),
@@ -510,6 +515,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(true),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
             pr_state: Some(rimz::WorktreePrState::Merged),
+            pr_number: Some(91),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/theme-tune".to_owned(),
@@ -527,6 +533,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_number: Some(91),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/observer-lag".to_owned(),
@@ -550,6 +557,7 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
+            pr_number: None,
         },
     ];
     let mut codex_panel = provider_panel(
@@ -904,6 +912,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: None,
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/rollout-guard".to_owned(),
@@ -921,6 +930,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_number: Some(91),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/ci-retry".to_owned(),
@@ -938,6 +948,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/token-budget".to_owned(),
@@ -955,6 +966,7 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_number: Some(91),
         },
     ];
     let mut codex_panel = provider_panel(
@@ -1276,6 +1288,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_number: Some(91),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/pricing-refresh".to_owned(),
@@ -1293,6 +1306,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: None,
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/cost-caps".to_owned(),
@@ -1310,6 +1324,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_number: Some(91),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/usage-alerts".to_owned(),
@@ -1327,6 +1342,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/credit-store".to_owned(),
@@ -1344,6 +1360,7 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             landed: Some(true),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
             pr_state: Some(rimz::WorktreePrState::Merged),
+            pr_number: Some(91),
         },
     ];
     let mut codex_panel = provider_panel(
@@ -1632,6 +1649,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: None,
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/remote-link".to_owned(),
@@ -1649,6 +1667,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/edge-cache".to_owned(),
@@ -1666,6 +1685,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
+            pr_number: Some(91),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/network-check".to_owned(),
@@ -1683,6 +1703,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
+            pr_number: None,
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/browser-reach".to_owned(),
@@ -1700,6 +1721,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: Some(rimz::WorktreePrState::Closed),
+            pr_number: Some(91),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/stats-relay".to_owned(),
@@ -1717,6 +1739,7 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Pristine),
             pr_state: None,
+            pr_number: None,
         },
     ];
     snapshot.providers = vec![

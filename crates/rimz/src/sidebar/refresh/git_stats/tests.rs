@@ -59,16 +59,25 @@ fn runtime_for(path: &Path) -> (tempfile::TempDir, crate::RuntimePaths) {
 }
 
 fn write_rimz_worktree_marker(repo: &GitFixture, base_ref: &str) {
-    write_rimz_worktree_marker_named(repo, "feature", base_ref);
+    write_rimz_worktree_marker_with_pr(repo, "feature", base_ref, None);
 }
 
 fn write_rimz_worktree_marker_named(repo: &GitFixture, name: &str, base_ref: &str) {
+    write_rimz_worktree_marker_with_pr(repo, name, base_ref, None);
+}
+
+fn write_rimz_worktree_marker_with_pr(
+    repo: &GitFixture,
+    name: &str,
+    base_ref: &str,
+    from_pr: Option<u64>,
+) {
     let marker = crate::worktree::WorktreeMarker {
         version: 1,
         name: name.to_owned(),
         branch: "feature".to_owned(),
         base_branch: Some("main".to_owned()),
-        from_pr: None,
+        from_pr,
         base_ref: base_ref.to_owned(),
         repo_root: repo.path().to_path_buf(),
         worktree_path: repo.path().to_path_buf(),
@@ -79,6 +88,16 @@ fn write_rimz_worktree_marker_named(repo: &GitFixture, name: &str, base_ref: &st
         &marker,
     )
     .unwrap();
+}
+
+#[test]
+fn from_pr_marker_stamps_the_diff_cache_entry() {
+    let repo = GitFixture::init(&["init", "-q"]);
+    write_rimz_worktree_marker_with_pr(&repo, "feature", "HEAD", Some(69));
+
+    let entry = refresh_entry(repo.path_str(), None, DueFacts::all(), None);
+
+    assert_eq!(entry.from_pr, Some(69));
 }
 
 fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
@@ -98,6 +117,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         landed: None,
         trunk_sync: None,
         pr_state: None,
+        pr_number: None,
     }
 }
 

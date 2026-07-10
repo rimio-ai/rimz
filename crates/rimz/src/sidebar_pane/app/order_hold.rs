@@ -173,6 +173,7 @@ mod tests {
             landed: None,
             trunk_sync: None,
             pr_state: None,
+            pr_number: None,
         }
     }
 

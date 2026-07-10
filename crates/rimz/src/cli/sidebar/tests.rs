@@ -453,7 +453,7 @@ fn gallery_shimmer_leads_are_waiting_asks() {
 fn gallery_fixture_frames_render_decisive_markers() {
     assert_fixture_frame_contains(
         SidebarFixtureState::Cockpit,
-        &["stabilize render diff", "cargo nextest"],
+        &["#91", "stabilize render diff", "cargo nextest"],
     );
     assert_fixture_frame_lacks(SidebarFixtureState::Cockpit, &["away", "pnpm serve"]);
     assert_fixture_frame_contains(

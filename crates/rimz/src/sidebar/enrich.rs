@@ -18,7 +18,7 @@ use crate::store::snapshot::{
 };
 use crate::{
     RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
-    SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync,
+    SidebarWorktreeKind, WorktreeTrunkSync,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -31,6 +31,7 @@ use super::refresh::git_stats::{
     DiffStatsCache, DiffStatsCacheEntry, git_backed_worktree_path, read_diff_stats_cache,
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
+use super::refresh::pr::PrLink;
 use super::refresh::pr::read_pr_state_cache;
 use super::refresh::rate_limits::apply_rate_limit_cache;
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
@@ -119,6 +120,7 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         let Some(entry) = cache.entries.get(&path).cloned() else {
             continue;
         };
+        group.pr_number = entry.from_pr;
         if let Some(stats) = entry.stats() {
             group.diff_added = Some(stats.added);
             group.diff_removed = Some(stats.removed);
@@ -161,15 +163,15 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
     }
 }
 
-pub fn project_pr_state_map(
-    snapshot: &mut SidebarSnapshot,
-    states: &BTreeMap<String, WorktreePrState>,
-) {
+pub fn project_pr_state_map(snapshot: &mut SidebarSnapshot, states: &BTreeMap<String, PrLink>) {
     for group in &mut snapshot.worktree_groups {
         let Some(path) = git_backed_worktree_path(group) else {
             continue;
         };
-        group.pr_state = states.get(&path).copied();
+        group.pr_state = states.get(&path).map(|link| link.state);
+        if let Some(number) = states.get(&path).and_then(|link| link.number) {
+            group.pr_number = Some(number);
+        }
     }
 }
 

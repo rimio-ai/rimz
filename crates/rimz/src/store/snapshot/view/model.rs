@@ -144,6 +144,10 @@ pub struct SidebarWorktreeGroup {
     /// Best-effort pull-request state for this worktree's branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_state: Option<WorktreePrState>,
+    /// Best-effort linked pull-request number: the forge-resolved PR for the
+    /// branch, else the worktree marker's `--from-pr` provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

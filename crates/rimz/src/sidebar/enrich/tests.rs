@@ -4,6 +4,7 @@ use crate::agents::{AgentState, AgentStatus, TurnPhase};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
 use crate::sidebar::refresh::AccountsCache;
+use crate::sidebar::refresh::PrLink;
 use crate::sidebar::refresh::git_stats::{
     DiffStatsCache, DiffStatsCacheEntry, focused_worktree_paths, hot_worktree_paths,
     needed_worktree_paths,
@@ -156,20 +157,27 @@ fn pr_state_projection_uses_the_given_map() {
         Timestamp::now(),
     );
     snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())];
+    snapshot.worktree_groups[0].pr_number = Some(69);
 
     let mut states = BTreeMap::new();
     states.insert(
         worktree.display().to_string(),
-        crate::WorktreePrState::Closed,
+        PrLink {
+            state: crate::WorktreePrState::Closed,
+            number: Some(91),
+        },
     );
     project_pr_state_map(&mut snapshot, &states);
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
         Some(crate::WorktreePrState::Closed)
     );
+    assert_eq!(snapshot.worktree_groups[0].pr_number, Some(91));
 
+    snapshot.worktree_groups[0].pr_number = Some(69);
     project_pr_state_map(&mut snapshot, &BTreeMap::new());
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
+    assert_eq!(snapshot.worktree_groups[0].pr_number, Some(69));
 }
 
 #[test]
@@ -188,7 +196,10 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
     let mut states = BTreeMap::new();
     states.insert(
         worktree.display().to_string(),
-        crate::WorktreePrState::Merged,
+        PrLink {
+            state: crate::WorktreePrState::Merged,
+            number: Some(91),
+        },
     );
     project_pr_state_map(&mut snapshot, &states);
     assert_eq!(
@@ -212,7 +223,10 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
     let mut states = BTreeMap::new();
     states.insert(
         worktree.display().to_string(),
-        crate::WorktreePrState::Merged,
+        PrLink {
+            state: crate::WorktreePrState::Merged,
+            number: Some(91),
+        },
     );
     project_pr_state_map(&mut snapshot, &states);
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
@@ -234,12 +248,14 @@ fn diff_projection_keeps_worktree_channel_label_and_uses_live_branch() {
     let mut cache = DiffStatsCache::default();
     let mut entry = diff_entry(true, true, Some(true), 0, 0);
     entry.branch = Some("main".to_owned());
+    entry.from_pr = Some(69);
     cache.entries.insert(worktree.display().to_string(), entry);
 
     project_diff_stats(&mut snapshot, &cache);
 
     let group = &snapshot.worktree_groups[0];
     assert_eq!(group.label, "codex-resets");
+    assert_eq!(group.pr_number, Some(69));
     assert_eq!(
         group.trunk_sync, None,
         "trunk detection uses the live branch, not the channel label"
@@ -1047,6 +1063,7 @@ fn config_fold_stamps_agent_context_severity() {
         landed: None,
         trunk_sync: None,
         pr_state: None,
+        pr_number: None,
     }];
 
     stamp_context_severity(&mut groups, &crate::config::ContextMeterConfig::default());

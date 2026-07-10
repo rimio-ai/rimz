@@ -57,7 +57,7 @@ A row of zeros with no unread count means nothing needs you, so you can skip the
 
 ### The agent cards
 
-The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation, so each group reads as one bounded block, and the group header carries the work's git story: commits ahead and behind the trunk, lines added and removed (uncommitted and untracked work counts too), and a marker for where the work stands, from a plain branch through an open, merged, or closed pull request. Panes outside every project checkout fold into a dim `external` divider at the very bottom.
+The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation, so each group reads as one bounded block, and the group header names a linked pull request (`#91`) beside the worktree name while carrying the work's git story on the right: commits ahead and behind the trunk, lines added and removed (uncommitted and untracked work counts too), and a marker for where the work stands, from a plain branch through an open, merged, or closed pull request. Panes outside every project checkout fold into a dim `external` divider at the very bottom.
 
 Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) decides the order), and a busy worktree caps at six rows with a `+K more` line that only ever hides idle agents and quiet shells, never anything that might need you.
 

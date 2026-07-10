@@ -265,10 +265,12 @@ Worktrees stack as bounded blocks under quiet neutral headings, so the names org
 
 The worktree header carries the worktree's git story on the right: local reconciling (`⟳`) takes the top marker, then a forge PR verdict — merged (`✓`), closed (`✕`), or open (`⊙`) — outranks the local trunk verdict: merged (`✓`), pristine (`≡`), or plain branch (`⑂`). Diverged and reconciling worktrees show the `⇡`/`⇣` commit delta against the trunk, then the total diff, then the marker; pristine, merged, and PR-clean worktrees collapse to the marker alone. The `+/-` churn counts committed, staged, unstaged, and untracked file content, so work `git diff` cannot see still reads as work. The trunk worktree itself wears no pristine/merged verdict — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../guide/configuration.md#sidebar-rendering)).
 
-A worktree channel leads with the fork (`⑂`) or merge (`⮌`) glyph like a worktree pod and carries the same right-pinned git story: commit delta, churn, and the PR or merge glyph. A plain named or directory lane with no git story keeps the `# name` header.
+A linked pull request shows its `#N` beside the worktree name in the cool link tone: identity stays beside the name while the verdict stays on the right marker.
+
+A worktree channel leads with the fork (`⑂`) or merge (`⮌`) glyph like a worktree pod, shows a linked PR's `#N` beside the channel name, and carries the same right-pinned git story: commit delta, churn, and the PR or merge glyph. A plain named or directory lane with no git story keeps the `# name` header.
 
 ```
-▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23  ⊙ main    ← diverged with an open PR
+▎⑂ feature-migration #91 ┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23  ⊙ main    ← diverged with an open PR
 ▎⑂ fresh-fork ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← pristine: no worktree-owned commits
 ▎⮌ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← merged: safe to remove
 ```

@@ -486,7 +486,8 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 WorktreePristine | WindowSmall => p.faint,
                 WorktreeMerged | ProcMem | CacheRead => p.good,
                 WorktreeReconciling | Compaction => p.warn,
-                WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => p.cool,
+                WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu
+                | WindowLarge => p.cool,
                 SubagentHeader | RemoteControl | ProcIo | CacheWrite => p.meta,
                 Input => p.expense,
                 WorktreePrClosed | WindowMedium | UnknownBrand => p.muted,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::theme::Component;
 
 #[test]
 fn render_directory_room_root_pod_is_name_only() {
@@ -119,6 +120,29 @@ fn render_worktree_channel_uses_fork_glyph_before_git_facts() {
 }
 
 #[test]
+fn render_worktree_channel_carries_pr_badge() {
+    let mut design = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/worktrees/codex-resets"),
+        Some("codex-resets"),
+        Some("reset flow"),
+    );
+    design.channel = Some("codex-resets".to_owned());
+    let mut snapshot = snapshot_with(vec![design]);
+    snapshot.worktree_groups[0].worktree_backed = true;
+    snapshot.worktree_groups[0].pr_number = Some(91);
+
+    let rendered = snapshot_to_screen(&snapshot, 44, 14);
+
+    assert!(
+        rendered.contains("⑂ codex-resets #91"),
+        "worktree-backed channel names its linked PR:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_worktree_channel_leads_with_fork_glyph() {
     let mut design = agent(
         "claude-1",
@@ -165,6 +189,59 @@ fn pristine_worktree_with_pr_state(pr_state: Option<crate::WorktreePrState>) -> 
     snapshot.worktree_groups[0].trunk_sync = Some(crate::WorktreeTrunkSync::Pristine);
     snapshot.worktree_groups[0].pr_state = pr_state;
     snapshot
+}
+
+#[test]
+fn render_pr_badge_keeps_identity_style_across_states() {
+    let theme = Theme::fixed(false);
+    for pr_state in [
+        None,
+        Some(crate::WorktreePrState::Open),
+        Some(crate::WorktreePrState::Merged),
+        Some(crate::WorktreePrState::Closed),
+    ] {
+        let mut snapshot = pristine_worktree_with_pr_state(pr_state);
+        snapshot.worktree_groups[0].pr_number = Some(91);
+        let lines = group_lines(&snapshot, &theme, 0);
+        let header = &lines[0];
+        let name = header
+            .spans
+            .iter()
+            .find(|span| span.content.contains("feature-migration"))
+            .expect("worktree name span");
+        let badge = header
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == " #91")
+            .expect("PR badge span");
+
+        assert!(name.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(
+            badge.style,
+            theme.styled(Component::WorktreePrBadge, Modifier::empty())
+        );
+        assert!(!badge.style.add_modifier.contains(Modifier::BOLD));
+    }
+}
+
+#[test]
+fn render_pr_badge_yields_to_the_name_at_extreme_width() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = pristine_worktree_with_pr_state(None);
+    snapshot.worktree_groups[0].pr_number = Some(91);
+
+    let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
+    let text = header
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(!text.contains("#91"), "badge drops first: {text:?}");
+    assert!(
+        text.contains('…'),
+        "the clipped name keeps the label slot: {text:?}"
+    );
 }
 
 #[test]

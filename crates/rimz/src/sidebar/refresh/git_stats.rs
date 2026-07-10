@@ -106,6 +106,9 @@ pub struct DiffStatsCacheEntry {
     /// first-parent chain. `None` means the checkout is unmarked or unreadable.
     #[serde(default)]
     pub did_work: Option<bool>,
+    /// Pull-request provenance stamped by `worktree create --from-pr`.
+    #[serde(default)]
+    pub from_pr: Option<u64>,
     /// Whether git reports an in-progress rebase, merge, or cherry-pick in the
     /// worktree. `None` means the probe could not inspect git paths.
     #[serde(default)]
@@ -416,6 +419,7 @@ struct CommitFacts {
     trunk: Option<String>,
     landed: Option<bool>,
     did_work: Option<bool>,
+    from_pr: Option<u64>,
 }
 
 #[derive(Default)]
@@ -523,6 +527,12 @@ fn refresh_entry(
         entry.merge_in_progress = local.merge_in_progress;
     }
     if due.commit {
+        // Read marker provenance even when git ancestry facts are reusable so
+        // entries written before `from_pr` existed upgrade on their next tick.
+        let marker = worktree::read_marker_from_checkout_metadata(worktree)
+            .ok()
+            .flatten();
+        entry.from_pr = marker.as_ref().and_then(|marker| marker.from_pr);
         let reuse = refs
             .as_ref()
             .zip(prior)
@@ -534,12 +544,14 @@ fn refresh_entry(
                 trunk.as_deref(),
                 entry.clean,
                 head.head_sha.as_deref(),
+                marker.as_ref(),
             );
             entry.commits = commit.commits;
             entry.behind = commit.behind;
             entry.trunk = commit.trunk;
             entry.landed = commit.landed;
             entry.did_work = commit.did_work;
+            entry.from_pr = commit.from_pr;
         }
     }
     if let Some(refs) = refs {
@@ -624,6 +636,7 @@ fn refresh_commit_facts(
     trunk: Option<&str>,
     clean: Option<bool>,
     head_sha: Option<&str>,
+    marker: Option<&worktree::WorktreeMarker>,
 ) -> CommitFacts {
     let (commits, behind) = base
         .zip(trunk)
@@ -641,25 +654,23 @@ fn refresh_commit_facts(
         }
         _ => None,
     };
-    let did_work = worktree::read_marker_for_worktree(worktree)
-        .ok()
-        .flatten()
-        .and_then(|marker| {
-            let head = head_sha?;
-            Some(if head == marker.base_ref.as_str() {
-                false
-            } else if let Some(trunk) = trunk {
-                !worktree::on_trunk_first_parent(worktree, trunk, head)
-            } else {
-                true
-            })
-        });
+    let did_work = marker.and_then(|marker| {
+        let head = head_sha?;
+        Some(if head == marker.base_ref.as_str() {
+            false
+        } else if let Some(trunk) = trunk {
+            !worktree::on_trunk_first_parent(worktree, trunk, head)
+        } else {
+            true
+        })
+    });
     CommitFacts {
         commits,
         behind,
         trunk: trunk.map(ToOwned::to_owned),
         landed,
         did_work,
+        from_pr: marker.and_then(|marker| marker.from_pr),
     }
 }
 

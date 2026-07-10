@@ -1,6 +1,6 @@
-//! Worktree group composition: the bold pod header with its right-pinned git
-//! story, the dim `external` divider, and the row roster with its parallel
-//! hit-test map entries.
+//! Worktree group composition: the bold pod header with its linked-PR identity
+//! and right-pinned git story, the dim `external` divider, and the row roster
+//! with its parallel hit-test map entries.
 
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::{
@@ -167,9 +167,10 @@ fn group_header(
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's git story pins right: live local reconciling leads, then a
-    // PR verdict, then the local trunk verdict; diverged/reconciling keeps the
-    // `⇡/⇣` commit delta and `+/-` churn before the marker.
+    // The worktree's PR identity follows its name in a steady link tone. Its git
+    // story pins right: live local reconciling leads, then a PR verdict, then
+    // the local trunk verdict; diverged/reconciling keeps the `⇡/⇣` commit delta
+    // and `+/-` churn before the marker.
     // A marker-backed channel leads with the same fork/merge glyph as a
     // worktree pod and carries this same right-pinned story; only plain lanes
     // keep the `#` label.
@@ -186,7 +187,14 @@ fn group_header(
         _ => group_git_spans(theme, group),
     };
     let right_width = spans_width(&right);
-    let label_width = cw.saturating_sub(right_width + 1).max(1);
+    let badge = group
+        .pr_number
+        .map(|number| format!(" #{number}"))
+        .filter(|badge| cw.saturating_sub(right_width.saturating_add(1)) > text_width(badge));
+    let badge_width = badge.as_deref().map(text_width).unwrap_or_default();
+    let label_width = cw
+        .saturating_sub(right_width.saturating_add(1).saturating_add(badge_width))
+        .max(1);
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
         SidebarWorktreeKind::Channel if !group.worktree_backed => {
@@ -209,7 +217,7 @@ fn group_header(
     // right-pinned stats, with plain space filling the gap. Sized to land the line
     // exactly on the content width — a space frames the dotted run from the text
     // on each side it touches.
-    let middle = cw.saturating_sub(text_width(&left) + right_width);
+    let middle = cw.saturating_sub(text_width(&left) + badge_width + right_width);
     let fill = if sealed {
         match (right.is_empty(), middle) {
             (false, m) if m >= 2 => {
@@ -232,13 +240,17 @@ fn group_header(
     } else {
         theme.faint()
     };
-    let mut spans = vec![
-        Span::styled(
-            left,
-            theme.styled(Component::WorktreeHeader, Modifier::BOLD),
-        ),
-        Span::styled(fill, fill_style),
-    ];
+    let mut spans = vec![Span::styled(
+        left,
+        theme.styled(Component::WorktreeHeader, Modifier::BOLD),
+    )];
+    if let Some(badge) = badge {
+        spans.push(Span::styled(
+            badge,
+            theme.styled(Component::WorktreePrBadge, Modifier::empty()),
+        ));
+    }
+    spans.push(Span::styled(fill, fill_style));
     spans.extend(right);
     Line::from(spans)
 }

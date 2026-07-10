@@ -217,7 +217,13 @@ fn read_published_snapshot_folds_caches_without_forking() {
     );
     atomic::write_temp_then_rename_cache(&runtime.diff_stats_path(), &diff).unwrap();
     let mut pr = PrStateCache::default();
-    pr.states.insert(wt.clone(), crate::WorktreePrState::Open);
+    pr.states.insert(
+        wt.clone(),
+        crate::sidebar::refresh::pr::PrLink {
+            state: crate::WorktreePrState::Open,
+            number: Some(91),
+        },
+    );
     atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &pr).unwrap();
 
     let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
@@ -259,6 +265,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
         Some(crate::WorktreePrState::Open),
         "the PR state projects from cache with no forge CLI fork"
     );
+    assert_eq!(group.pr_number, Some(91));
     // The own (sidebar) pane is excluded; the sibling renders as a row.
     assert!(
         snapshot

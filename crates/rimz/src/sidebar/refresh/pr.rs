@@ -1,4 +1,4 @@
-//! Producer-only pull-request status enrichment.
+//! Producer-only pull-request link enrichment.
 //!
 //! The probe shells out to the repo's forge CLI on a long TTL, publishes
 //! `pr-state.json`, and lets consumers project the cached map without forking.
@@ -32,9 +32,9 @@ const UNSUPPORTED_REPO_KEY: &str = "<unsupported>";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PrStateCache {
-    /// PR state by absolute worktree path.
+    /// PR link by absolute worktree path.
     #[serde(default)]
-    pub states: BTreeMap<String, crate::WorktreePrState>,
+    pub states: BTreeMap<String, PrLink>,
     /// Probe freshness by origin repo key.
     #[serde(default)]
     pub repos: BTreeMap<String, RepoProbe>,
@@ -47,6 +47,13 @@ pub struct PrStateCache {
     /// before shelling out for branch/remote metadata.
     #[serde(default)]
     pub path_repos: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrLink {
+    pub state: WorktreePrState,
+    #[serde(default)]
+    pub number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,7 +94,7 @@ fn pr_state_failure_ttl(consecutive_failures: u32, cap: Duration) -> Duration {
 pub(crate) fn produce_pr_states(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-) -> BTreeMap<String, WorktreePrState> {
+) -> BTreeMap<String, PrLink> {
     let path = runtime.pr_state_path();
     let cache = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
@@ -471,31 +478,35 @@ fn reconcile_target_bookkeeping(
 }
 
 struct AssignedStates {
-    states: BTreeMap<String, WorktreePrState>,
+    states: BTreeMap<String, PrLink>,
     transitions: Vec<Target>,
 }
 
 fn assign_states(
     targets: &[Target],
-    open_map: &BTreeMap<String, WorktreePrState>,
-    prior: &BTreeMap<String, WorktreePrState>,
+    open_map: &BTreeMap<String, forge::PrCandidate>,
+    prior: &BTreeMap<String, PrLink>,
 ) -> AssignedStates {
     let mut states = BTreeMap::new();
     let mut transitions = Vec::new();
     for target in targets {
-        if open_map.contains_key(&target.branch) {
-            states.insert(target.path.clone(), WorktreePrState::Open);
+        if let Some(candidate) = open_map.get(&target.branch) {
+            states.insert(
+                target.path.clone(),
+                PrLink {
+                    state: WorktreePrState::Open,
+                    number: Some(candidate.number),
+                },
+            );
             continue;
         }
-        match prior.get(&target.path) {
-            Some(WorktreePrState::Merged) => {
-                states.insert(target.path.clone(), WorktreePrState::Merged);
+        if let Some(link) = prior.get(&target.path).copied() {
+            match link.state {
+                WorktreePrState::Merged | WorktreePrState::Closed => {
+                    states.insert(target.path.clone(), link);
+                }
+                WorktreePrState::Open => transitions.push(target.clone()),
             }
-            Some(WorktreePrState::Open) => transitions.push(target.clone()),
-            Some(WorktreePrState::Closed) => {
-                states.insert(target.path.clone(), WorktreePrState::Closed);
-            }
-            None => {}
         }
     }
     AssignedStates {
@@ -573,14 +584,14 @@ fn active_repo_keys(cache: &PrStateCache) -> BTreeSet<String> {
 struct RepoGroupProbe {
     repo_key: String,
     targets: Vec<Target>,
-    states: BTreeMap<String, WorktreePrState>,
+    states: BTreeMap<String, PrLink>,
     ok: bool,
 }
 
 fn probe_repo_group(
     repo_key: &str,
     group: &RepoGroup,
-    prior: &BTreeMap<String, WorktreePrState>,
+    prior: &BTreeMap<String, PrLink>,
 ) -> RepoGroupProbe {
     let open_map = match query_open_prs(group) {
         Some(open_map) => open_map,
@@ -600,8 +611,8 @@ fn probe_repo_group(
         let result = probe_transition(&target);
         if !result.ok {
             ok = false;
-            if let Some(state) = prior.get(&target.path).copied() {
-                states.insert(target.path.clone(), state);
+            if let Some(link) = prior.get(&target.path).copied() {
+                states.insert(target.path.clone(), link);
             }
             continue;
         }
@@ -619,20 +630,20 @@ fn probe_repo_group(
 
 fn carry_prior_states(
     targets: &[Target],
-    prior: &BTreeMap<String, WorktreePrState>,
-) -> BTreeMap<String, WorktreePrState> {
+    prior: &BTreeMap<String, PrLink>,
+) -> BTreeMap<String, PrLink> {
     targets
         .iter()
         .filter_map(|target| {
             prior
                 .get(&target.path)
                 .copied()
-                .map(|state| (target.path.clone(), state))
+                .map(|link| (target.path.clone(), link))
         })
         .collect()
 }
 
-fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, WorktreePrState>> {
+fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, forge::PrCandidate>> {
     let output = match group.forge_cli {
         ForgeCli::Gh => command_stdout(
             &group.worktree,
@@ -643,7 +654,7 @@ fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, WorktreePrState>
                 "--state",
                 "open",
                 "--json",
-                "state,headRefName",
+                "number,state,headRefName",
                 "--limit",
                 "500",
             ],
@@ -655,8 +666,8 @@ fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, WorktreePrState>
         )?,
     };
     match group.forge_cli {
-        ForgeCli::Gh => forge::parse_gh_pr_list_states(&output),
-        ForgeCli::Tea => forge::parse_tea_pr_list_states(&output),
+        ForgeCli::Gh => forge::parse_gh_pr_list_links(&output),
+        ForgeCli::Tea => forge::parse_tea_pr_list_links(&output),
     }
     .map_err(|err| {
         tracing::debug!(error = %err, "forge PR open-set parse failed");
@@ -666,7 +677,7 @@ fn query_open_prs(group: &RepoGroup) -> Option<BTreeMap<String, WorktreePrState>
 }
 
 struct ProbeState {
-    state: Option<WorktreePrState>,
+    state: Option<PrLink>,
     ok: bool,
 }
 
@@ -698,7 +709,13 @@ fn probe_github(worktree: &Path, branch: &str) -> ProbeState {
         };
     };
     match forge::parse_gh_pr_state_json(&output) {
-        Ok(state) => ProbeState { state, ok: true },
+        Ok(candidate) => ProbeState {
+            state: candidate.map(|candidate| PrLink {
+                state: candidate.state,
+                number: Some(candidate.number),
+            }),
+            ok: true,
+        },
         Err(err) => {
             tracing::debug!(error = %err, "github PR state parse failed");
             ProbeState {
@@ -746,13 +763,19 @@ fn probe_tea(worktree: &Path, branch: &str, remote: &str) -> ProbeState {
             && let Ok(Some(WorktreePrState::Merged)) = forge::parse_tea_pr_detail_json(&output)
         {
             return ProbeState {
-                state: Some(WorktreePrState::Merged),
+                state: Some(PrLink {
+                    state: WorktreePrState::Merged,
+                    number: Some(candidate.number),
+                }),
                 ok: true,
             };
         }
     }
     ProbeState {
-        state: Some(candidate.state),
+        state: Some(PrLink {
+            state: candidate.state,
+            number: Some(candidate.number),
+        }),
         ok: true,
     }
 }
@@ -879,25 +902,58 @@ mod tests {
             target("/repo/none", "none"),
         ];
         let mut open_map = BTreeMap::new();
-        open_map.insert("open".to_owned(), WorktreePrState::Open);
+        open_map.insert(
+            "open".to_owned(),
+            forge::PrCandidate {
+                number: 91,
+                state: WorktreePrState::Open,
+            },
+        );
         let mut prior = BTreeMap::new();
-        prior.insert("/repo/merged".to_owned(), WorktreePrState::Merged);
-        prior.insert("/repo/transition".to_owned(), WorktreePrState::Open);
-        prior.insert("/repo/closed".to_owned(), WorktreePrState::Closed);
+        prior.insert(
+            "/repo/merged".to_owned(),
+            PrLink {
+                state: WorktreePrState::Merged,
+                number: Some(80),
+            },
+        );
+        prior.insert(
+            "/repo/transition".to_owned(),
+            PrLink {
+                state: WorktreePrState::Open,
+                number: Some(81),
+            },
+        );
+        prior.insert(
+            "/repo/closed".to_owned(),
+            PrLink {
+                state: WorktreePrState::Closed,
+                number: Some(82),
+            },
+        );
 
         let assigned = assign_states(&targets, &open_map, &prior);
 
         assert_eq!(
             assigned.states.get("/repo/open"),
-            Some(&WorktreePrState::Open)
+            Some(&PrLink {
+                state: WorktreePrState::Open,
+                number: Some(91),
+            })
         );
         assert_eq!(
             assigned.states.get("/repo/merged"),
-            Some(&WorktreePrState::Merged)
+            Some(&PrLink {
+                state: WorktreePrState::Merged,
+                number: Some(80),
+            })
         );
         assert_eq!(
             assigned.states.get("/repo/closed"),
-            Some(&WorktreePrState::Closed)
+            Some(&PrLink {
+                state: WorktreePrState::Closed,
+                number: Some(82),
+            })
         );
         assert!(!assigned.states.contains_key("/repo/none"));
         assert_eq!(
@@ -911,8 +967,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_cache_reads_states_and_leaves_repos_due() {
-        let cache: PrStateCache = serde_json::from_str(
+    fn legacy_cache_defaults_and_leaves_repos_due() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pr-state.json");
+        std::fs::write(
+            &path,
             r#"{
                 "refreshed_at_ms": 1000,
                 "ok": true,
@@ -921,9 +980,10 @@ mod tests {
             }"#,
         )
         .unwrap();
+        let cache = read_pr_state_cache(&path);
         let groups = group_targets(vec![target("/repo/a", "a")]);
 
-        assert_eq!(cache.states.get("/repo/a"), Some(&WorktreePrState::Open));
+        assert!(cache.states.is_empty());
         assert!(cache.repos.is_empty());
         assert!(cache.head_seen.is_empty());
         assert!(
@@ -1017,9 +1077,13 @@ mod tests {
     #[test]
     fn unsupported_reconcile_drops_state_and_marks_head_seen() {
         let mut cache = PrStateCache::default();
-        cache
-            .states
-            .insert("/repo/a".to_owned(), WorktreePrState::Open);
+        cache.states.insert(
+            "/repo/a".to_owned(),
+            PrLink {
+                state: WorktreePrState::Open,
+                number: Some(91),
+            },
+        );
         cache
             .path_repos
             .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());

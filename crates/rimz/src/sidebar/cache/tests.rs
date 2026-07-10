@@ -292,15 +292,16 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     assert_eq!(populated.clean, Some(true));
     assert_eq!(populated.landed, Some(true));
 
-    // An old producer's cache entry predates the `clean` and `landed` columns; the serde
-    // default reads it back as "not probed" (`None`), never a landed marker it
-    // can't prove.
+    // An old producer's cache entry predates the `clean`, `landed`, and
+    // `from_pr` columns; serde defaults read them back as "not probed" (`None`),
+    // never facts it cannot prove.
     let legacy: DiffStatsCacheEntry = serde_json::from_str(
             r#"{"refreshed_at_ms":1000,"added":0,"removed":0,"commits":0,"behind":3,"trunk":"main","branch":"feat"}"#,
         )
         .unwrap();
     assert_eq!(legacy.clean, None);
     assert_eq!(legacy.landed, None);
+    assert_eq!(legacy.from_pr, None);
     assert_eq!(legacy.stats(), Some(DiffStats::default()));
     assert!(
         !legacy.commit_fresh_for(1_000, DIFF_STATS_TTL),
