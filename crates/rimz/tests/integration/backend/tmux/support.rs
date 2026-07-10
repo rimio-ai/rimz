@@ -206,23 +206,18 @@ impl TmuxServer {
     }
     pub(super) fn supports_floating_panes(&self) -> bool {
         let raw = self.stdout(&["-V"]);
-        let Some(version) = raw.strip_prefix("tmux ") else {
-            return false;
-        };
-        let mut parts = version.split('.');
-        let major = parts.next().and_then(|part| part.parse::<u32>().ok());
-        let minor = parts.next().and_then(|part| {
-            part.chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>()
-                .parse::<u32>()
-                .ok()
-        });
-        matches!((major, minor), (Some(major), Some(minor)) if (major, minor) >= (3, 7))
+        let mut parts = raw.split([' ', '.']).skip(1);
+        let version = (
+            parts.next().and_then(|part| part.parse::<u32>().ok()),
+            parts.next().and_then(|part| {
+                part.trim_end_matches(|ch: char| !ch.is_ascii_digit())
+                    .parse::<u32>()
+                    .ok()
+            }),
+        );
+        matches!(version, (Some(major), Some(minor)) if (major, minor) >= (3, 7))
     }
-    /// Wait until some pane in `session` reports `command` as its current
-    /// command — an `exec`'d pane needs a tick before `pane_current_command`
-    /// settles off the launching shell.
+    /// Wait until an exec'd pane reports the settled current command.
     pub(super) fn wait_for_pane_command(&self, session: &str, command: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -277,11 +272,8 @@ impl TmuxServer {
             thread::sleep(Duration::from_millis(25));
         }
     }
-    /// Live geometry for every pane in `target` (a `session:window` address),
-    /// polling until at least `want` panes are present or the budget elapses.
-    /// Reads the left edge, top edge, size, and current path per pane —
-    /// enough to assert the imperative `open_tab` builder's column/row
-    /// placement.
+    /// Poll live pane geometry in `target` until `want` panes arrive or the budget elapses.
+    /// Captures placement and cwd for layout assertions.
     pub(super) fn wait_for_panes(&self, target: &str, want: usize) -> Vec<PaneGeom> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
