@@ -12,7 +12,8 @@ use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
 /// Project each agent row's *displayed* status from its raw lifecycle status,
-/// liveness, live subagents, turn-error marker, and provider budget windows.
+/// liveness, parked phase, live subagents, turn-error marker, and provider
+/// budget windows.
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     agents: &[AgentState],
@@ -115,7 +116,13 @@ pub(super) fn project_display_status(
             AgentStatus::Idle
         } else {
             let stalled = crate::agents::is_stalled(status, last_activity, now, stalled_after_secs);
-            if stalled && rate_limit_kinds.spent.contains(row_name.as_str()) {
+            if stalled && agent.phase == TurnPhase::Parked {
+                // A clean end parked on background work that has gone quiet
+                // past the stall window: the turn's success verdict was
+                // earned, the chore is just still humming. Reawakened activity
+                // re-runs the row.
+                AgentStatus::Success
+            } else if stalled && rate_limit_kinds.spent.contains(row_name.as_str()) {
                 AgentStatus::Paused
             } else if stalled {
                 AgentStatus::Failed
@@ -126,7 +133,7 @@ pub(super) fn project_display_status(
         agent.status = projected;
         if projected != AgentStatus::Running {
             // Phase is a head on Running — the reduced state's invariant — so a
-            // Failed/Paused override drops it.
+            // projection to a resting or attention status drops it.
             agent.phase = TurnPhase::Idle;
         }
     }

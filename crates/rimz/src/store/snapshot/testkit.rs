@@ -150,6 +150,8 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
 pub(super) trait AgentStateFx: Sized {
     /// Stamp the tmux pane this agent claims.
     fn in_pane(self, raw: &str) -> Self;
+    /// Park the running turn on background work.
+    fn parked(self) -> Self;
     fn worktree(self, path: &str) -> Self;
     fn branch(self, branch: &str) -> Self;
     /// Pin `last_activity`/`last_seen` to `secs` before the [`epoch`] — the
@@ -179,6 +181,11 @@ pub(super) trait AgentStateFx: Sized {
 impl AgentStateFx for AgentState {
     fn in_pane(mut self, raw: &str) -> Self {
         self.pane = Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, raw)));
+        self
+    }
+
+    fn parked(mut self) -> Self {
+        self.phase = lifecycle::TurnPhase::Parked;
         self
     }
 

@@ -55,15 +55,38 @@ fn configured_stall_window_controls_running_attention_escalation() {
     );
 }
 
+#[test]
+fn quiet_parked_agent_settles_after_the_stall_window() {
+    let project = |age_secs| {
+        let session = agent("claude", "live-claude", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .parked()
+            .active_ago(age_secs);
+        room(vec![session]).with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
+    };
+
+    let fresh = project(default_stall_secs() - 1);
+    let fresh_row = &fresh.worktree_groups[0].rows[0];
+    assert_eq!(fresh_row.status(), Some(AgentStatus::Running));
+    assert_eq!(fresh_row.phase(), TurnPhase::Parked);
+
+    let quiet = project(default_stall_secs());
+    let quiet_row = &quiet.worktree_groups[0].rows[0];
+    assert_eq!(quiet_row.status(), Some(AgentStatus::Success));
+    assert_eq!(quiet_row.phase(), TurnPhase::Idle);
+}
+
 // ── The precedence ladder, pinned as an ordering ─────────────────────────────
 //
 // docs/internals/agents/model.md commits to a strict order among the derived display
 // states: a human-blocked `waiting` outranks them all, then a paused-class
 // marker, then the live-subagent exemption, then a failed marker, then settled
-// completion/interruption markers, then the stalled-running fallback (paused
-// when the kind's window is spent, failed otherwise). The single-cause cases
-// each prove one rung; this grid pins the error/stall order by stacking causes,
-// and the turn_complete/turn_interrupted modules pin the settle rungs.
+// completion/interruption markers, then the stalled parked settle, then the
+// stalled-running fallback (paused when the kind's window is spent, failed
+// otherwise). The single-cause cases each prove one rung; this grid pins the
+// error/stall order by stacking causes, and the turn_complete/turn_interrupted
+// modules pin the settle rungs.
 #[test]
 fn displayed_status_precedence_ladder_holds() {
     for rung in displayed_status_rungs() {
@@ -172,6 +195,30 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
             budget_windows: Vec::new(),
             expect: AgentStatus::Failed,
             expect_error_label: true,
+        },
+        StatusRung {
+            name: "failed marker beats parked settle",
+            agent: agent("claude", "root", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .parked()
+                .active_ago(stalled_secs)
+                .turn_error(10, "API Error: Bad Request"),
+            with_live_child: false,
+            budget_windows: Vec::new(),
+            expect: AgentStatus::Failed,
+            expect_error_label: true,
+        },
+        StatusRung {
+            name: "parked settle beats stalled spent fallback",
+            agent: agent("claude", "root", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .parked()
+                .active_ago(stalled_secs)
+                .limits(spent_windows()),
+            with_live_child: false,
+            budget_windows: spent_windows(),
+            expect: AgentStatus::Success,
+            expect_error_label: false,
         },
         StatusRung {
             name: "stalled spent fallback pauses",
