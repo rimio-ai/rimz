@@ -43,7 +43,7 @@ pub(super) struct DisplayEntry {
 
 pub(super) fn entries_for_view(view: &RenderedChat) -> Vec<DisplayEntry> {
     let mut entries = assemble_threads(&view.entries, view.archive_prefix, view.flat);
-    keep_last(&mut entries, view.last);
+    keep_last_blocks(&mut entries, view.last);
     entries
 }
 
@@ -85,6 +85,7 @@ pub(super) fn assemble_threads(
     }
 
     let mut components = Components::new(entries.len());
+    let mut latest_opener = HashMap::<AgentKey, usize>::new();
     for (index, entry) in entries.iter().enumerate() {
         for parent in &entry.chat.reply_to {
             if let Some(parent_index) = by_message_id.get(parent).copied()
@@ -92,6 +93,19 @@ pub(super) fn assemble_threads(
             {
                 components.union(index, parent_index);
             }
+        }
+        match entry.kind {
+            TranscriptKind::Prompt | TranscriptKind::Message => {
+                latest_opener.insert(entry.agent.clone(), index);
+            }
+            TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
+                if entry.chat.reply_to.is_empty() =>
+            {
+                if let Some(opener) = latest_opener.get(&entry.agent).copied() {
+                    components.union(index, opener);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -130,9 +144,24 @@ pub(super) fn assemble_threads(
     display
 }
 
-/// A causal `reply_to` edge joins a thread only when it continues the
-/// conversation: a turn's output pairs with the message that opened the turn,
-/// and a sent message continues the thread only as a reply back to its
+pub(super) fn keep_last_blocks(entries: &mut Vec<DisplayEntry>, last: Option<usize>) {
+    let Some(last) = last else {
+        return;
+    };
+    let len = entries.len();
+    let mut drop = len.saturating_sub(last);
+    while drop > 0 && drop < len && !entries[drop].lane.is_margin() {
+        drop -= 1;
+    }
+    if drop > 0 {
+        entries.drain(..drop);
+    }
+}
+
+/// A turn output without recorded linkage joins its agent's latest opener.
+/// Otherwise, a causal `reply_to` edge joins a thread only when it continues
+/// the conversation: a turn's output pairs with the message that opened the
+/// turn, and a sent message continues the thread only as a reply back to its
 /// parent's sender. A hand-off to a third party roots a new exchange.
 fn thread_edge(parent: &RenderEntry, child: &RenderEntry) -> bool {
     match child.kind {

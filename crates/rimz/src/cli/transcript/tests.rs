@@ -307,6 +307,43 @@ fn thread_assembly_unions_multi_parent_turns_and_orphans_stay_flat() {
 }
 
 #[test]
+fn unlinked_turn_outputs_join_the_latest_opener_for_their_agent() {
+    let mut other_agent_output = assistant_entry("2026-06-28T04:04:00Z", "other agent");
+    other_agent_output.agent = agent_key_for("codex", "sess-2");
+    let entries = vec![
+        entry("2026-06-28T04:00:00Z", "first prompt"),
+        assistant_entry("2026-06-28T04:01:00Z", "first reply"),
+        entry("2026-06-28T04:02:00Z", "second prompt"),
+        ask_entry("2026-06-28T04:03:00Z", "second output"),
+        other_agent_output,
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert_eq!(
+        display
+            .iter()
+            .map(|entry| entry.entry.chat.text.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "first prompt",
+            "first reply",
+            "second prompt",
+            "second output",
+            "other agent"
+        ]
+    );
+    assert!(display[0].lane.is_margin());
+    assert!(!display[1].lane.is_margin());
+    assert!(display[2].lane.is_margin());
+    assert!(!display[3].lane.is_margin());
+    assert!(display[4].lane.is_margin());
+    assert_eq!(display[0].block, display[1].block);
+    assert_eq!(display[2].block, display[3].block);
+    assert_ne!(display[0].block, display[2].block);
+}
+
+#[test]
 fn flat_and_last_apply_to_display_order() {
     let entries = vec![
         linked(entry("2026-06-28T04:00:00Z", "root a"), Some(1), &[]),
@@ -332,13 +369,23 @@ fn flat_and_last_apply_to_display_order() {
     );
 
     let mut threaded = assemble_threads(&entries, 0, false);
-    keep_last(&mut threaded, Some(3));
+    keep_last_blocks(&mut threaded, Some(3));
     assert_eq!(
         threaded
             .iter()
             .map(|entry| entry.entry.chat.text.as_str())
             .collect::<Vec<_>>(),
-        vec!["reply a", "root b", "reply b"]
+        vec!["root a", "reply a", "root b", "reply b"]
+    );
+
+    let mut boundary_tail = assemble_threads(&entries, 0, false);
+    keep_last_blocks(&mut boundary_tail, Some(2));
+    assert_eq!(
+        boundary_tail
+            .iter()
+            .map(|entry| entry.entry.chat.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["root b", "reply b"]
     );
 
     let view = RenderedChat {
@@ -357,7 +404,7 @@ fn flat_and_last_apply_to_display_order() {
             .iter()
             .map(|entry| entry.text.as_str())
             .collect::<Vec<_>>(),
-        vec!["root b", "reply a", "reply b"],
+        vec!["root a", "root b", "reply a", "reply b"],
         "JSON selection returns the display tail in chronological order"
     );
 }

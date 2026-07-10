@@ -378,13 +378,3 @@ pub(super) fn channel_matches(entry_channel: Option<&str>, filter: Option<&str>)
 pub(super) fn entry_key(entry: &TranscriptEntry) -> AgentKey {
     (entry.kind.clone(), entry.agent_id.clone())
 }
-
-pub(super) fn keep_last<T>(items: &mut Vec<T>, last: Option<usize>) {
-    let Some(last) = last else {
-        return;
-    };
-    let drop = items.len().saturating_sub(last);
-    if drop > 0 {
-        items.drain(..drop);
-    }
-}

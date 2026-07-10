@@ -127,7 +127,7 @@ mod thread;
 use chat::{format_marker_when, render_entry_for_log_entry};
 use scope::{
     build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_matches_focus,
-    keep_last, live_boundary, live_root_agents, resolve_scope,
+    live_boundary, live_root_agents, resolve_scope,
 };
 use thread::entries_for_view;
 #[cfg(test)]
