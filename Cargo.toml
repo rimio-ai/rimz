@@ -96,7 +96,7 @@ unicode-width = "0.2"
 # making it direct lets the user-visible security diff use the library rather
 # than a hand-rolled approximation.
 # Held on 2.x because `insta` still requires `similar ^2`; bump with insta to avoid a duplicate tree entry.
-similar = "2"
+similar = { version = "2", features = ["unicode"] }
 
 # HTTP — pricing refresh: the runtime LiteLLM/models.dev fetch and the
 # release-time generated snapshot both GET static JSON documents. `ureq` is a

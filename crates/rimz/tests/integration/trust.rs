@@ -134,7 +134,7 @@ fn trust_status_shows_stale_field_diff() {
         .assert()
         .success()
         .stdout(contains("trust: stale"))
-        .stdout(contains("changed hooks[0].command"))
+        .stdout(contains("~ hooks[0].command"))
         .stdout(contains("rimz hooks claude"))
         .stdout(contains("rimz hooks codex"));
 }
