@@ -338,6 +338,43 @@ fn context_tail_maps_usage_zero_unreadable_and_model_windows() {
 }
 
 #[test]
+fn live_cost_covers_messages_before_the_context_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session-2026-06-02T10-00-12345678.jsonl");
+    let pricing = dir.path().join("pricing.json");
+    let padding = "x".repeat(70 * 1024);
+    std::fs::write(
+        &transcript,
+        format!(
+            "{{\"sessionId\":\"12345678-abcd\"}}\n\
+             {{\"id\":\"early\",\"timestamp\":\"2026-06-02T10:00:00Z\",\"type\":\"gemini\",\"model\":\"gemini-3-pro-preview\",\"tokens\":{{\"input\":1000,\"output\":100,\"total\":1100}}}}\n\
+             {{\"id\":\"padding\",\"type\":\"user\",\"content\":{padding:?}}}\n\
+             {{\"id\":\"latest\",\"timestamp\":\"2026-06-02T10:01:00Z\",\"type\":\"gemini\",\"model\":\"gemini-3-pro-preview\",\"tokens\":{{\"input\":10,\"output\":1,\"total\":11}}}}"
+        ),
+    )
+    .unwrap();
+    let path = transcript.to_string_lossy().into_owned();
+    let prices = pricing::cached_book(&pricing);
+    let expected = spend::parse_gemini_spend(&transcript, None, &prices)
+        .entries
+        .iter()
+        .map(|entry| entry.cost_usd)
+        .sum::<f64>();
+    let refresh = refresh_transcript_context(&LocalContextRefreshCtx {
+        agent_id: "12345678-abcd",
+        model_hint: None,
+        prior_transcript_path: Some(&path),
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing,
+    })
+    .unwrap();
+    assert_eq!(
+        refresh.cost.and_then(|cost| cost.total_cost_usd),
+        Some(expected)
+    );
+}
+
+#[test]
 fn session_transcript_matches_only_the_first_eight_id_characters() {
     let files = vec![
         PathBuf::from("session-2026-06-02T10-00-deadbeef.jsonl"),

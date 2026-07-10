@@ -52,10 +52,7 @@ pub(super) fn parse_gemini_spend(
     prices: &PriceBook,
 ) -> SpendParse {
     let Ok(text) = std::fs::read_to_string(path) else {
-        return SpendParse {
-            replace_entries: true,
-            ..SpendParse::default()
-        };
+        return SpendParse::default();
     };
     let folded = fold_transcript(&text);
     let mut entries = Vec::new();
@@ -139,6 +136,13 @@ mod tests {
         let files = session_files_under(dir.path());
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|path| !path.ends_with("child.jsonl")));
+    }
+
+    #[test]
+    fn unreadable_transcript_is_not_an_authoritative_empty_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let parsed = parse_gemini_spend(dir.path(), None, &PriceBook::embedded());
+        assert!(!parsed.replace_entries);
     }
 
     #[test]

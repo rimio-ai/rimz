@@ -743,24 +743,11 @@ fn refresh_transcript_context(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalC
         current_usage,
     });
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
-    let cost_usd: f64 = folded
-        .messages
+    let cost_usd = spend::parse_gemini_spend(&path, None, &prices)
+        .entries
         .iter()
-        .filter(|message| message.kind.as_deref() == Some("gemini"))
-        .filter_map(|message| {
-            let model = message.model.as_deref()?;
-            let usage = message.tokens.as_ref()?;
-            let cached = usage.cached.unwrap_or(0);
-            let input = usage.input.unwrap_or(0).saturating_sub(cached);
-            let output = usage
-                .output
-                .unwrap_or(0)
-                .saturating_add(usage.thoughts.unwrap_or(0));
-            prices
-                .price(model)
-                .map(|price| price.cost(input, output, 0, 0, cached, false))
-        })
-        .sum();
+        .map(|entry| entry.cost_usd)
+        .sum::<f64>();
     Some(LocalContextRefresh {
         model_id,
         effort: None,
