@@ -30,6 +30,14 @@ pub struct PrTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrHead {
+    pub branch: String,
+    pub owner: Option<String>,
+    pub repo_full_name: Option<String>,
+    pub cross_repo: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeaPrCandidate {
     pub number: u64,
     pub state: WorktreePrState,
@@ -119,6 +127,154 @@ pub fn remote_repo_slug(remote_url: &str) -> Option<String> {
     let owner = segments.next()?;
     let repo = segments.next()?;
     (!owner.is_empty() && !repo.is_empty() && segments.next().is_none()).then(|| slug.to_owned())
+}
+
+/// Find a pull-request head and the remote branches which point at it from one
+/// `git ls-remote` response.
+pub fn pr_head_branches(output: &str, pr_ref: &str) -> Option<(String, Vec<String>)> {
+    let refs = output
+        .lines()
+        .filter_map(|line| line.split_once(char::is_whitespace))
+        .map(|(sha, ref_name)| (ref_name.trim(), sha.trim()))
+        .filter(|(ref_name, sha)| !ref_name.is_empty() && !sha.is_empty())
+        .collect::<BTreeMap<_, _>>();
+    let pr_sha = refs.get(pr_ref)?.to_string();
+    let branches = refs
+        .iter()
+        .filter_map(|(ref_name, sha)| {
+            (*sha == pr_sha)
+                .then(|| ref_name.strip_prefix("refs/heads/"))
+                .flatten()
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+    Some((pr_sha, branches))
+}
+
+pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
+    #[derive(Deserialize)]
+    struct Pull {
+        #[serde(rename = "headRefName")]
+        head_ref_name: String,
+        #[serde(rename = "headRepository")]
+        head_repository: Option<Repository>,
+        #[serde(rename = "headRepositoryOwner")]
+        head_repository_owner: Option<Owner>,
+        #[serde(rename = "isCrossRepository")]
+        is_cross_repository: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct Repository {
+        name: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Owner {
+        login: String,
+    }
+
+    let pull: Pull = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    let branch = required_json_text(&pull.head_ref_name, "gh PR head branch")?;
+    let owner = pull
+        .head_repository_owner
+        .and_then(|owner| nonempty(owner.login));
+    let repo_full_name = owner
+        .as_deref()
+        .zip(
+            pull.head_repository
+                .and_then(|repo| nonempty(repo.name))
+                .as_deref(),
+        )
+        .map(|(owner, repo)| format!("{owner}/{repo}"));
+    Ok(PrHead {
+        branch,
+        owner,
+        repo_full_name,
+        cross_repo: pull.is_cross_repository,
+    })
+}
+
+pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
+    let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    let branch = pr_head_branch(&value)
+        .ok_or_else(|| "tea PR output has no usable head branch".to_owned())?;
+    let head = value.get("head");
+    let label = head.and_then(|head| {
+        head.as_str().or_else(|| {
+            head.as_object()
+                .and_then(|object| object.get("label"))
+                .and_then(Value::as_str)
+        })
+    });
+    let label_owner = label
+        .and_then(|label| label.trim().rsplit_once(':'))
+        .and_then(|(owner, _)| nonempty(owner));
+    let repo_full_name = head
+        .and_then(|head| head.get("repo"))
+        .and_then(|repo| repo.get("full_name"))
+        .and_then(Value::as_str)
+        .and_then(nonempty);
+    let base_repo = value
+        .get("base")
+        .and_then(|base| base.get("repo"))
+        .and_then(|repo| repo.get("full_name"))
+        .and_then(Value::as_str)
+        .and_then(nonempty);
+    let cross_repo = repo_full_name
+        .as_deref()
+        .zip(base_repo.as_deref())
+        .is_some_and(|(head, base)| head != base)
+        || label_owner.is_some();
+    let owner = label_owner.or_else(|| {
+        repo_full_name
+            .as_deref()
+            .and_then(|repo| repo.split_once('/'))
+            .and_then(|(owner, _)| nonempty(owner))
+    });
+    Ok(PrHead {
+        branch,
+        owner,
+        repo_full_name,
+        cross_repo,
+    })
+}
+
+/// Build a sibling repository URL while preserving the origin's transport.
+pub fn sibling_repo_url(origin_url: &str, repo_full_name: &str) -> Option<String> {
+    let origin = origin_url.trim().trim_end_matches('/');
+    let repo = repo_full_name.trim().trim_matches('/');
+    if origin.is_empty() || repo.is_empty() || repo.split('/').any(|segment| segment.is_empty()) {
+        return None;
+    }
+    let suffix = if origin.ends_with(".git") { ".git" } else { "" };
+
+    if let Some((scheme, rest)) = origin.split_once("://") {
+        let (authority, _) = rest.split_once('/')?;
+        if scheme.is_empty() || authority.is_empty() {
+            return None;
+        }
+        return Some(format!("{scheme}://{authority}/{repo}{suffix}"));
+    }
+
+    if let Some((authority, _)) = origin.split_once(':') {
+        if authority.is_empty() || authority.contains('/') {
+            return None;
+        }
+        return Some(format!("{authority}:{repo}{suffix}"));
+    }
+
+    let (authority, _) = origin.split_once('/')?;
+    (!authority.is_empty()).then(|| format!("{authority}/{repo}{suffix}"))
+}
+
+fn required_json_text(raw: &str, label: &str) -> Result<String, String> {
+    nonempty(raw).ok_or_else(|| format!("{label} is empty"))
+}
+
+fn nonempty(raw: impl AsRef<str>) -> Option<String> {
+    let raw = raw.as_ref().trim();
+    (!raw.is_empty()).then(|| raw.to_owned())
 }
 
 impl Forge {
@@ -503,6 +659,115 @@ mod tests {
         ] {
             assert_eq!(remote_repo_slug(remote), None, "{remote}");
         }
+    }
+
+    #[test]
+    fn resolves_pr_head_branches_from_ls_remote() {
+        let raw = "\
+aaa\trefs/heads/main
+bbb\trefs/heads/feature
+bbb\trefs/pull/7/head
+bbb\trefs/heads/same-tip
+";
+        assert_eq!(
+            pr_head_branches(raw, "refs/pull/7/head"),
+            Some((
+                "bbb".to_owned(),
+                vec!["feature".to_owned(), "same-tip".to_owned()]
+            ))
+        );
+        assert_eq!(pr_head_branches(raw, "refs/pull/8/head"), None);
+        assert_eq!(
+            pr_head_branches("bbb\trefs/pull/7/head\n", "refs/pull/7/head"),
+            Some(("bbb".to_owned(), Vec::new()))
+        );
+    }
+
+    #[test]
+    fn parses_gh_pr_heads() {
+        assert_eq!(
+            parse_gh_pr_view_json(
+                r#"{
+                    "headRefName":"feature",
+                    "headRepository":{"name":"repo"},
+                    "headRepositoryOwner":{"login":"org"},
+                    "isCrossRepository":false
+                }"#
+            )
+            .unwrap(),
+            PrHead {
+                branch: "feature".to_owned(),
+                owner: Some("org".to_owned()),
+                repo_full_name: Some("org/repo".to_owned()),
+                cross_repo: false,
+            }
+        );
+        assert_eq!(
+            parse_gh_pr_view_json(
+                r#"{
+                    "headRefName":"fork-work",
+                    "headRepository":{"name":"fork"},
+                    "headRepositoryOwner":{"login":"alice"},
+                    "isCrossRepository":true
+                }"#
+            )
+            .unwrap()
+            .repo_full_name
+            .as_deref(),
+            Some("alice/fork")
+        );
+    }
+
+    #[test]
+    fn parses_tea_pr_heads() {
+        assert_eq!(
+            parse_tea_pr_head_json(
+                r#"{
+                    "head":{"label":"alice:feature","repo":{"full_name":"alice/fork"}},
+                    "base":{"repo":{"full_name":"org/repo"}}
+                }"#
+            )
+            .unwrap(),
+            PrHead {
+                branch: "feature".to_owned(),
+                owner: Some("alice".to_owned()),
+                repo_full_name: Some("alice/fork".to_owned()),
+                cross_repo: true,
+            }
+        );
+        assert_eq!(
+            parse_tea_pr_head_json(r#"{"head":{"ref":"feature","repo":{"full_name":"org/repo"}}}"#)
+                .unwrap(),
+            PrHead {
+                branch: "feature".to_owned(),
+                owner: Some("org".to_owned()),
+                repo_full_name: Some("org/repo".to_owned()),
+                cross_repo: false,
+            }
+        );
+    }
+
+    #[test]
+    fn builds_sibling_repo_urls() {
+        for (origin, expected) in [
+            (
+                "https://github.com/org/repo.git",
+                "https://github.com/alice/fork.git",
+            ),
+            (
+                "ssh://git@host:2222/org/repo.git",
+                "ssh://git@host:2222/alice/fork.git",
+            ),
+            ("git@host:org/repo.git", "git@host:alice/fork.git"),
+            ("host/org/repo", "host/alice/fork"),
+        ] {
+            assert_eq!(
+                sibling_repo_url(origin, "alice/fork").as_deref(),
+                Some(expected),
+                "{origin}"
+            );
+        }
+        assert_eq!(sibling_repo_url("/tmp/origin.git", "alice/fork"), None);
     }
 
     #[test]

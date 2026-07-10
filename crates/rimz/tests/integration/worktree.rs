@@ -253,14 +253,29 @@ fn worktree_new_from_pr_fetches_github_style_ref() {
         .args(["worktree", "new", "--from-pr", "1"])
         .assert()
         .success()
-        .stdout(contains("created pr-1"));
+        .stdout(contains("created pr-1"))
+        .stdout(contains("branch : feature"));
 
     let path = env.home_root.join("project-worktrees").join("pr-1");
     assert_eq!(
         git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
-        "pr-1"
+        "feature"
     );
     assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    assert_eq!(
+        git_stdout(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "origin/feature"
+    );
+    commit_file(&path, "pushed.txt", "pushed\n", "push from PR worktree");
+    git(&path, &["push"]);
+    assert_eq!(
+        git_stdout(
+            &env.home_root.join("origin.git"),
+            &["rev-parse", "refs/heads/feature"]
+        ),
+        git_stdout(&path, &["rev-parse", "HEAD"]),
+        "plain push advances the PR head branch"
+    );
     let marker = rimz::worktree::read_marker_for_worktree(&path)
         .expect("read marker")
         .expect("marker");
@@ -285,14 +300,218 @@ fn worktree_new_from_pr_url_fetches_gitlab_ref() {
         ])
         .assert()
         .success()
-        .stdout(contains("created pr-1"));
+        .stdout(contains("created pr-1"))
+        .stdout(contains("branch : feature"));
 
     let path = env.home_root.join("project-worktrees").join("pr-1");
     assert_eq!(
         git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
-        "pr-1"
+        "feature"
     );
     assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    assert_eq!(
+        git_stdout(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "origin/feature"
+    );
+    commit_file(
+        &path,
+        "gitlab-push.txt",
+        "pushed\n",
+        "push GitLab PR worktree",
+    );
+    git(&path, &["push"]);
+    assert_eq!(
+        git_stdout(
+            &env.home_root.join("origin.git"),
+            &["rev-parse", "refs/heads/feature"]
+        ),
+        git_stdout(&path, &["rev-parse", "HEAD"])
+    );
+}
+
+#[test]
+fn worktree_new_from_pr_adopts_matching_local_branch() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
+    git(&env.project_root, &["branch", "feature", pr_head.as_str()]);
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .assert()
+        .success();
+
+    let path = env.home_root.join("project-worktrees/pr-1");
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    assert_eq!(
+        git_stdout(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "origin/feature"
+    );
+}
+
+#[test]
+fn worktree_new_from_pr_fast_forwards_ancestor_local_branch() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
+    git(&env.project_root, &["branch", "feature", trunk.as_str()]);
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .assert()
+        .success();
+
+    let path = env.home_root.join("project-worktrees/pr-1");
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+}
+
+#[test]
+fn worktree_new_from_pr_refuses_diverged_local_branch() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    publish_pr_ref(&env, "refs/pull/1/head");
+    git(&env.project_root, &["checkout", "-b", "feature"]);
+    commit_file(&env.project_root, "local.txt", "local\n", "diverge locally");
+    git(&env.project_root, &["checkout", "main"]);
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .assert()
+        .failure()
+        .stderr(contains("local PR branch `feature` conflicts"))
+        .stderr(contains("diverged"));
+}
+
+#[test]
+fn worktree_new_from_pr_refuses_branch_checked_out_elsewhere() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
+    git(&env.project_root, &["branch", "feature", pr_head.as_str()]);
+    let other = env.home_root.join("other-feature");
+    git(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            other.to_str().expect("utf8 worktree"),
+            "feature",
+        ],
+    );
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .assert()
+        .failure()
+        .stderr(contains("local PR branch `feature` conflicts"))
+        .stderr(contains("checked out at"));
+}
+
+#[test]
+fn worktree_new_from_fork_pr_requires_cli_or_explicit_branch() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (pr_head, _) = publish_pr_ref_without_branch(&env, "refs/pull/1/head");
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .assert()
+        .failure()
+        .stderr(contains("could not resolve the head branch of PR #1"))
+        .stderr(contains("install/log in to gh or tea"))
+        .stderr(contains("--branch <name>"));
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1", "--branch", "review-1"])
+        .assert()
+        .success()
+        .stdout(contains("branch : review-1"));
+    let path = env.home_root.join("project-worktrees/pr-1");
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    assert!(
+        !git_succeeds(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "explicit review branch has no upstream"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_from_fork_pr_tracks_fork_from_gh() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (_pr_head, _) = publish_pr_ref_without_branch(&env, "refs/pull/1/head");
+    configure_github_origin_rewrite(&env);
+    let shim_dir = write_gh_pr_head_shim(&env);
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
+        .assert()
+        .success()
+        .stdout(contains("branch : feature"))
+        .stdout(contains(
+            "pushes : https://github.com/alice/fork.git refs/heads/feature",
+        ));
+
+    let path = env.home_root.join("project-worktrees/pr-1");
+    assert_eq!(
+        git_stdout(&path, &["config", "--get", "branch.feature.remote"]),
+        "https://github.com/alice/fork.git"
+    );
+    assert_eq!(
+        git_stdout(&path, &["config", "--get", "branch.feature.merge"]),
+        "refs/heads/feature"
+    );
+    commit_file(&path, "fork-push.txt", "pushed\n", "push fork PR worktree");
+    git(&path, &["push"]);
+    assert_eq!(
+        git_stdout(
+            &env.home_root.join("origin.git"),
+            &["rev-parse", "refs/heads/feature"]
+        ),
+        git_stdout(&path, &["rev-parse", "HEAD"])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_from_fork_pr_prefixes_local_branch_collision() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    publish_pr_ref_without_branch(&env, "refs/pull/1/head");
+    configure_github_origin_rewrite(&env);
+    git(&env.project_root, &["branch", "feature", "main"]);
+    let shim_dir = write_gh_pr_head_shim(&env);
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
+        .assert()
+        .success()
+        .stdout(contains("branch : alice/feature"))
+        .stdout(contains(
+            "push   : git push https://github.com/alice/fork.git HEAD:feature",
+        ));
+
+    let path = env.home_root.join("project-worktrees/pr-1");
+    assert_eq!(
+        git_stdout(&path, &["config", "--get", "branch.alice/feature.merge"]),
+        "refs/heads/feature"
+    );
 }
 
 #[test]
@@ -1073,6 +1292,14 @@ fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageI
 }
 
 fn publish_pr_ref(env: &Env, remote_ref: &str) -> (String, String) {
+    publish_pr_ref_inner(env, remote_ref, true)
+}
+
+fn publish_pr_ref_without_branch(env: &Env, remote_ref: &str) -> (String, String) {
+    publish_pr_ref_inner(env, remote_ref, false)
+}
+
+fn publish_pr_ref_inner(env: &Env, remote_ref: &str, publish_branch: bool) -> (String, String) {
     init_repo(&env.project_root);
     let remote = env.home_root.join("origin.git");
     let remote_arg = remote.to_str().expect("utf8 remote path");
@@ -1086,9 +1313,56 @@ fn publish_pr_ref(env: &Env, remote_ref: &str) -> (String, String) {
     let pr_head = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
     let refspec = format!("{pr_head}:{remote_ref}");
     git(&env.project_root, &["push", "origin", refspec.as_str()]);
+    if publish_branch {
+        git(&env.project_root, &["push", "origin", "feature"]);
+    }
     git(&env.project_root, &["checkout", "main"]);
+    git(&env.project_root, &["branch", "-D", "feature"]);
 
     (pr_head, trunk)
+}
+
+#[cfg(unix)]
+fn configure_github_origin_rewrite(env: &Env) {
+    let remote = env.home_root.join("origin.git");
+    let remote = remote.to_str().expect("utf8 remote path");
+    git(
+        &env.project_root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/org/repo.git",
+        ],
+    );
+    for url in [
+        "https://github.com/org/repo.git",
+        "https://github.com/alice/fork.git",
+    ] {
+        let key = format!("url.{remote}.insteadOf");
+        git(&env.project_root, &["config", "--add", key.as_str(), url]);
+    }
+}
+
+#[cfg(unix)]
+fn write_gh_pr_head_shim(env: &Env) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = env.home_root.join("forge-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir forge bin");
+    let shim = dir.join("gh");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\n\
+         printf '%s\\n' '{\"headRefName\":\"feature\",\"headRepository\":{\"name\":\"fork\"},\"headRepositoryOwner\":{\"login\":\"alice\"},\"isCrossRepository\":true}'\n",
+    )
+    .expect("write gh shim");
+    let mut perms = std::fs::metadata(&shim)
+        .expect("gh shim metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod gh shim");
+    dir
 }
 
 fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {

@@ -5,13 +5,13 @@
 ```sh
 rimz worktree new cli-docs --base head                  # branch cli-docs from HEAD
 rimz worktree new experiment --base fresh --branch spike/experiment
-rimz worktree new --from-pr 42                           # branch pr-42 from the PR head
+rimz worktree new --from-pr 42                           # check out the PR head branch as pr-42
 rimz worktree list --json
 rimz worktree remove cli-docs                            # refuses if dirty or not landed
 rimz worktree remove experiment --force                  # remove anyway
 ```
 
-`new` creates a marked worktree under the configured [`[agents.worktree] dir`](../../guide/configuration.md#worktrees). `--base head` branches from `HEAD`, `--base fresh` from the configured fresh base, and any other value is a Git ref. `--from-pr <number|url>` fetches the pull request head through `origin` and creates a `pr-<N>` branch unless `--branch` names it (GitHub/Gitea/Forgejo use `refs/pull/<N>/head`, GitLab `refs/merge-requests/<N>/head`).
+`new` creates a marked worktree under the configured [`[agents.worktree] dir`](../../guide/configuration.md#worktrees). `--base head` branches from `HEAD`, `--base fresh` from the configured fresh base, and any other value is a Git ref. `--from-pr <number|url>` resolves the pull request's head branch, checks it out with upstream tracking, and names the worktree `pr-<N>` by default (GitHub/Gitea/Forgejo use `refs/pull/<N>/head`, GitLab `refs/merge-requests/<N>/head`). `--branch <name>` opts out of head-branch resolution and creates a review-only local branch at the fetched pull-request head. Rimz stops with recovery guidance when the head branch is unavailable or conflicts with a local branch.
 
 `list` reads only and shows RimZ-owned worktrees as the channels they are: name, display branch, the `@kind` handles working there, a dirty marker, the landed signal, and the path.
 

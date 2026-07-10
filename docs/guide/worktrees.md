@@ -44,7 +44,7 @@ A branch-style name with a `/` names the branch directly and maps to `-` for the
 
 ### From a pull request
 
-`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree, so you can review, test, or fix a PR in isolation and push back to its branch.
+`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree on the pull request's own head branch. Same-repository branches track `origin`; fork branches pull from and push to the fork, so a plain `git push` updates the pull request while the worktree, channel, and tab keep the `pr-<N>` name.
 
 ```sh
 rimz agents claude --from-pr 42               # review PR 42 in its own tree

@@ -155,6 +155,13 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                 println!("created {}", created.name);
                 println!("  path   : {}", created.path.display());
                 println!("  branch : {}", created.branch);
+                if let Some((remote, merge_ref)) = fork_push_destination(&created) {
+                    println!("  pushes : {remote} {merge_ref}");
+                    if merge_ref.strip_prefix("refs/heads/") != Some(created.branch.as_str()) {
+                        let head = merge_ref.strip_prefix("refs/heads/").unwrap_or(&merge_ref);
+                        println!("  push   : git push {remote} HEAD:{head}");
+                    }
+                }
                 if let Some(base_branch) = created.base_branch.as_deref() {
                     println!("  base branch: {base_branch}");
                 }
@@ -275,6 +282,30 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
         }
         WorktreeSubcmd::Cleanup(_) => unreachable!("cleanup returned before workspace resolution"),
     }
+}
+
+fn fork_push_destination(created: &rimz::worktree::CreatedWorktree) -> Option<(String, String)> {
+    let remote_key = format!("branch.{}.remote", created.branch);
+    let remote = git_config_value(&created.path, &remote_key)?;
+    if matches!(remote.as_str(), "origin" | ".") {
+        return None;
+    }
+    let merge_key = format!("branch.{}.merge", created.branch);
+    let merge_ref = git_config_value(&created.path, &merge_key)?;
+    Some((remote, merge_ref))
+}
+
+fn git_config_value(worktree: &Path, key: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["config", "--get", key])
+        .current_dir(worktree)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!value.is_empty()).then_some(value)
 }
 
 fn parse_base(raw: &str) -> std::result::Result<WorktreeBase, String> {
