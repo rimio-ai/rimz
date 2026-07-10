@@ -46,6 +46,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let Cell::Agent {
         args: extra_args,
         mode,
+        budget,
         ..
     } = &mut cell
     else {
@@ -53,6 +54,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     };
     let extra_args = std::mem::take(extra_args);
     let mode = *mode;
+    let budget = budget.clone();
 
     // Fail at the entry point if this project's configured launch environment
     // is not trusted, before the old pane is touched.
@@ -111,6 +113,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
             // One-off model and effort flags were not durable launch identity.
             model: None,
             effort: None,
+            budget: budget.as_deref(),
         },
     };
     let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation);
@@ -217,6 +220,7 @@ fn restart_cell(
         mode,
         profile,
         role,
+        budget,
         ..
     } = &mut cell
     else {
@@ -240,6 +244,7 @@ fn restart_cell(
     *mode = replayed_mode;
     *profile = agent.profile.clone();
     *role = agent.role.clone();
+    *budget = agent.budget.clone();
     Ok(cell)
 }
 
