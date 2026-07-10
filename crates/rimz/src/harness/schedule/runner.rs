@@ -60,7 +60,6 @@ pub struct CheckOutcome {
     code: Option<i32>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckEcho {
     Capture,
     Stream { prefix: String },
