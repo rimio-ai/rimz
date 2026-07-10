@@ -280,7 +280,8 @@ pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<BodyFilter>) ->
     }
 }
 
-const WORKTREE_ROW_CAP: usize = 6;
+/// Maximum calm rows painted before overflow moves behind `+K more`.
+pub const WORKTREE_ROW_CAP: usize = 6;
 
 /// The rows a worktree group paints and the selection model can browse.
 ///
@@ -314,16 +315,25 @@ pub(crate) fn group_visible_rows<'a>(
         return group.rows.iter().collect();
     }
 
-    let process_is_only_live_member = group.rows.iter().map(row_band).min() == Some(0)
-        && group
-            .rows
+    capped_visible_rows(&group.rows, held)
+}
+
+/// The rows that survive the calm-tail cap for one worktree group's roster.
+///
+/// See [`group_visible_rows`] for the full selection model; this is the
+/// no-filter, no-expand branch, shared with the sidebar fixture so the
+/// visibility rule has one home.
+pub fn capped_visible_rows<'a>(
+    rows: &'a [SidebarRow],
+    held: Option<&HashSet<String>>,
+) -> Vec<&'a SidebarRow> {
+    let process_is_only_live_member = rows.iter().map(row_band).min() == Some(0)
+        && rows
             .iter()
             .filter(|row| row_band(row) == 0)
             .all(SidebarRow::is_process);
     let liveness_process_id = if process_is_only_live_member {
-        group
-            .rows
-            .iter()
+        rows.iter()
             .find(|row| row.is_process() && row_band(row) == 0)
             .map(|row| row.id.as_str())
     } else {
@@ -331,7 +341,7 @@ pub(crate) fn group_visible_rows<'a>(
     };
 
     let mut visible = Vec::new();
-    for row in &group.rows {
+    for row in rows {
         if row.unread
             || row
                 .status()

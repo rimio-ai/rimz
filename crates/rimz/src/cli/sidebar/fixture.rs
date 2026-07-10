@@ -73,42 +73,51 @@ fn fixture_now() -> Result<jiff::Timestamp> {
 
 fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
     let claude = agent_row(
-        "agent:claude:auth",
-        "claude",
-        "terminal_21",
-        "/srv/code/query-engine",
-        "feature/auth-router",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "port auth watcher",
-        "Opus 4.8",
-        Some((341_700, 12.40)),
+        AgentRowSpec {
+            id: "agent:claude:auth",
+            name: "claude",
+            pane: "terminal_21",
+            cwd: "/srv/code/query-engine",
+            branch: "feature/auth-router",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "port auth watcher",
+            model: "Opus 4.8",
+            context: Some((341_700, 12.40)),
+            ..AgentRowSpec::default()
+        },
         now,
     );
     let codex = agent_row(
-        "agent:codex:pricing",
-        "codex",
-        "terminal_22",
-        "/srv/code/query-engine/.rimz/worktrees/pricing",
-        "pricing-refresh",
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::TurnPhase::Idle,
-        "approve pricing cache write",
-        "GPT-5.5",
-        Some((193_480, 4.36)),
+        AgentRowSpec {
+            id: "agent:codex:pricing",
+            name: "codex",
+            pane: "terminal_22",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/pricing",
+            branch: "pricing-refresh",
+            status: rimz::agents::AgentStatus::Waiting,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "approve pricing cache write",
+            model: "GPT-5.5",
+            context: Some((193_480, 4.36)),
+            ..AgentRowSpec::default()
+        },
         now,
     );
     let pi = agent_row(
-        "agent:pi:mux",
-        "pi",
-        "terminal_23",
-        "/srv/code/query-engine/.rimz/worktrees/mux",
-        "zellij-health",
-        rimz::agents::AgentStatus::Failed,
-        rimz::agents::TurnPhase::Idle,
-        "debug zellij health probe",
-        "GPT-5.5",
-        Some((258_610, 2.18)),
+        AgentRowSpec {
+            id: "agent:pi:mux",
+            name: "pi",
+            pane: "terminal_23",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/mux",
+            branch: "zellij-health",
+            status: rimz::agents::AgentStatus::Failed,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "debug zellij health probe",
+            model: "GPT-5.5",
+            context: Some((258_610, 2.18)),
+            ..AgentRowSpec::default()
+        },
         now,
     );
     let process = rimz::SidebarRow {
@@ -186,78 +195,78 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
     snapshot.worktree_roots = vec![PathBuf::from("/srv/code/flightdeck")];
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    let claude = agent_row_with(
-        "agent:claude:main",
-        "claude",
-        "terminal_31",
-        "/srv/code/query-engine",
-        "main",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "stabilize render diff",
-        "Opus 4.8",
-        Some((247_310, 8.64)),
-        now,
-        AgentRowOptions {
+    let claude = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:main",
+            name: "claude",
+            pane: "terminal_31",
+            cwd: "/srv/code/query-engine",
+            branch: "main",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "stabilize render diff",
+            model: "Opus 4.8",
+            context: Some((247_310, 8.64)),
             age_secs: Some(45),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let opencode = agent_row_with(
-        "agent:opencode:main",
-        "opencode",
-        "terminal_32",
-        "/srv/code/query-engine",
-        "main",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Reasoning,
-        "trace tmux layout parity",
-        "GPT-5.5",
-        Some((103_970, 3.07)),
         now,
-        AgentRowOptions {
+    );
+    let opencode = agent_row(
+        AgentRowSpec {
+            id: "agent:opencode:main",
+            name: "opencode",
+            pane: "terminal_32",
+            cwd: "/srv/code/query-engine",
+            branch: "main",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Reasoning,
+            task: "trace tmux layout parity",
+            model: "GPT-5.5",
+            context: Some((103_970, 3.07)),
             age_secs: Some(4 * 60),
             compaction_count: 1,
             sub_agents: Some(Vec::new()),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let compacting = agent_row_with(
-        "agent:claude:compacting",
-        "claude",
-        "terminal_38",
-        "/srv/code/query-engine",
-        "main",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Reasoning,
-        "compact provider trace",
-        "Opus 4.8",
-        Some((797_420, 28.90)),
         now,
-        AgentRowOptions {
+    );
+    let compacting = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:compacting",
+            name: "claude",
+            pane: "terminal_38",
+            cwd: "/srv/code/query-engine",
+            branch: "main",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Reasoning,
+            task: "compact provider trace",
+            model: "Opus 4.8",
+            context: Some((797_420, 28.90)),
             age_secs: Some(8 * 60),
             compacting: true,
             compaction_count: 3,
             sub_agents: Some(Vec::new()),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let idle = agent_row_with(
-        "agent:pi:idle",
-        "pi",
-        "terminal_39",
-        "/srv/code/query-engine",
-        "main",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "park sidebar notes",
-        "GPT-5.5",
-        None,
         now,
-        AgentRowOptions {
+    );
+    let idle = agent_row(
+        AgentRowSpec {
+            id: "agent:pi:idle",
+            name: "pi",
+            pane: "terminal_39",
+            cwd: "/srv/code/query-engine",
+            branch: "main",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "park sidebar notes",
+            model: "GPT-5.5",
+            context: None,
             age_secs: Some(65 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     let process = rimz::SidebarRow {
         id: "process:cargo-nextest".to_owned(),
@@ -285,164 +294,164 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             ..rimz::ProcessCard::default()
         }),
     };
-    let codex = agent_row_with(
-        "agent:codex:pricing",
-        "codex",
-        "terminal_09",
-        "/srv/code/query-engine/.rimz/worktrees/pricing-refresh",
-        "pricing-refresh",
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::TurnPhase::Idle,
-        "approve pricing cache write",
-        "GPT-5.5",
-        Some((158_210, 4.82)),
-        now,
-        AgentRowOptions {
+    let codex = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:pricing",
+            name: "codex",
+            pane: "terminal_09",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/pricing-refresh",
+            branch: "pricing-refresh",
+            status: rimz::agents::AgentStatus::Waiting,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "approve pricing cache write",
+            model: "GPT-5.5",
+            context: Some((158_210, 4.82)),
             age_secs: Some(18 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut pi = agent_row_with(
-        "agent:pi:zellij",
-        "pi",
-        "terminal_35",
-        "/srv/code/query-engine/.rimz/worktrees/zellij-health",
-        "zellij-health",
-        rimz::agents::AgentStatus::Failed,
-        rimz::agents::TurnPhase::Idle,
-        "debug zellij health probe",
-        "GPT-5.5",
-        Some((228_540, 5.76)),
         now,
-        AgentRowOptions {
+    );
+    let mut pi = agent_row(
+        AgentRowSpec {
+            id: "agent:pi:zellij",
+            name: "pi",
+            pane: "terminal_35",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/zellij-health",
+            branch: "zellij-health",
+            status: rimz::agents::AgentStatus::Failed,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "debug zellij health probe",
+            model: "GPT-5.5",
+            context: Some((228_540, 5.76)),
             age_secs: Some(42 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut success = agent_row_with(
-        "agent:claude:mux-merge",
-        "claude",
-        "terminal_36",
-        "/srv/code/query-engine/.rimz/worktrees/mux-merge",
-        "mux-merge",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "land tmux hook fix",
-        "Opus 4.8",
-        Some((132_770, 2.41)),
         now,
-        AgentRowOptions {
+    );
+    let mut success = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:mux-merge",
+            name: "claude",
+            pane: "terminal_36",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/mux-merge",
+            branch: "mux-merge",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "land tmux hook fix",
+            model: "Opus 4.8",
+            context: Some((132_770, 2.41)),
             age_secs: Some(2 * 60 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     success.unread = true;
-    let mut paused = agent_row_with(
-        "agent:claude:mux-merge-paused",
-        "claude",
-        "terminal_37",
-        "/srv/code/query-engine/.rimz/worktrees/mux-merge",
-        "mux-merge",
-        rimz::agents::AgentStatus::Paused,
-        rimz::agents::TurnPhase::Idle,
-        "holding the tmux hook fix mid-land",
-        "Opus 4.8",
-        Some((469_180, 15.38)),
-        now,
-        AgentRowOptions {
+    let mut paused = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:mux-merge-paused",
+            name: "claude",
+            pane: "terminal_37",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/mux-merge",
+            branch: "mux-merge",
+            status: rimz::agents::AgentStatus::Paused,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "holding the tmux hook fix mid-land",
+            model: "Opus 4.8",
+            context: Some((469_180, 15.38)),
             age_secs: Some(75 * 60),
             turn_error_label: Some("API Error: Overloaded".to_owned()),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     paused.unread = true;
     pi.unread = true;
-    let mut opencode_theme = agent_row_with(
-        "agent:opencode:theme",
-        "opencode",
-        "terminal_40",
-        "/srv/code/query-engine/.rimz/worktrees/theme-tune",
-        "theme-tune",
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::TurnPhase::Idle,
-        "pick gallery color ramp",
-        "GPT-5.5",
-        Some((42_130, 0.68)),
-        now,
-        AgentRowOptions {
+    let mut opencode_theme = agent_row(
+        AgentRowSpec {
+            id: "agent:opencode:theme",
+            name: "opencode",
+            pane: "terminal_40",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/theme-tune",
+            branch: "theme-tune",
+            status: rimz::agents::AgentStatus::Waiting,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "pick gallery color ramp",
+            model: "GPT-5.5",
+            context: Some((42_130, 0.68)),
             age_secs: Some(60 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let claude_theme = agent_row_with(
-        "agent:claude:theme",
-        "claude",
-        "terminal_46",
-        "/srv/code/query-engine/.rimz/worktrees/theme-tune",
-        "theme-tune",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "verify 256-color fallback",
-        "Opus 4.8",
-        Some((314_260, 6.95)),
         now,
-        AgentRowOptions {
+    );
+    let claude_theme = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:theme",
+            name: "claude",
+            pane: "terminal_46",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/theme-tune",
+            branch: "theme-tune",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "verify 256-color fallback",
+            model: "Opus 4.8",
+            context: Some((314_260, 6.95)),
             age_secs: Some(6 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let pi_observer = agent_row_with(
-        "agent:claude:observer",
-        "claude",
-        "terminal_47",
-        "/srv/code/query-engine/.rimz/worktrees/observer-lag",
-        "observer-lag",
-        rimz::agents::AgentStatus::Paused,
-        rimz::agents::TurnPhase::Idle,
-        "frozen on the stale-pane triage",
-        "Opus 4.8",
-        Some((853_690, 29.84)),
         now,
-        AgentRowOptions {
+    );
+    let pi_observer = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:observer",
+            name: "claude",
+            pane: "terminal_47",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/observer-lag",
+            branch: "observer-lag",
+            status: rimz::agents::AgentStatus::Paused,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "frozen on the stale-pane triage",
+            model: "Opus 4.8",
+            context: Some((853_690, 29.84)),
             age_secs: Some(93 * 60),
             turn_error_label: Some("API Error: Overloaded".to_owned()),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     opencode_theme.unread = true;
-    let codex_observer = agent_row_with(
-        "agent:codex:observer",
-        "codex",
-        "terminal_48",
-        "/srv/code/query-engine/.rimz/worktrees/observer-lag",
-        "observer-lag",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "triage stale pane sample",
-        "GPT-5.5",
-        Some((185_730, 3.83)),
-        now,
-        AgentRowOptions {
+    let codex_observer = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:observer",
+            name: "codex",
+            pane: "terminal_48",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/observer-lag",
+            branch: "observer-lag",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "triage stale pane sample",
+            model: "GPT-5.5",
+            context: Some((185_730, 3.83)),
             age_secs: Some(54 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let claude_budget_idle = agent_row_with(
-        "agent:claude:budget-idle",
-        "claude",
-        "terminal_49",
-        "/srv/code/query-engine/.rimz/worktrees/observer-lag",
-        "observer-lag",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "hold perf notes",
-        "Opus 4.8",
-        None,
         now,
-        AgentRowOptions {
+    );
+    let claude_budget_idle = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:budget-idle",
+            name: "claude",
+            pane: "terminal_49",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/observer-lag",
+            branch: "observer-lag",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "hold perf notes",
+            model: "Opus 4.8",
+            context: None,
             age_secs: Some(3 * 60 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     snapshot.worktree_groups = vec![
         rimz::SidebarWorktreeGroup {
@@ -618,282 +627,296 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     snapshot.worktree_roots = vec![PathBuf::from("/srv/code/huddle")];
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    let coder = agent_row_with(
-        "agent:codex:coder",
-        "codex",
-        "terminal_41",
-        "/srv/code/query-engine/.rimz/worktrees/auth-router",
-        "feature/auth-router",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "wire auth router migration",
-        "GPT-5.5",
-        Some((207_110, 11.84)),
-        now,
-        AgentRowOptions {
+    let coder = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:coder",
+            name: "codex",
+            pane: "terminal_41",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/auth-router",
+            branch: "feature/auth-router",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "wire auth router migration",
+            model: "GPT-5.5",
+            context: Some((207_110, 11.84)),
             handle: Some("coder".to_owned()),
             launch_group: Some("auth-router-team".to_owned()),
             launch_ordinal: Some(1),
             sub_agents: Some(vec![
                 sub_agent(
-                    "child:general:test",
-                    "general-purpose",
-                    rimz::agents::AgentStatus::Running,
-                    rimz::agents::TurnPhase::Acting,
-                    Some("run focused nextest"),
-                    Some("Sonnet 4.6"),
-                    None,
-                    Some(23_500),
-                    Some(210),
+                    SubAgentSpec {
+                        id: "child:general:test",
+                        name: "general-purpose",
+                        status: rimz::agents::AgentStatus::Running,
+                        phase: rimz::agents::TurnPhase::Acting,
+                        task: Some("run focused nextest"),
+                        model: Some("Sonnet 4.6"),
+                        description: None,
+                        total_tokens: Some(23_500),
+                        elapsed_secs: Some(210),
+                    },
                     now,
                 ),
                 sub_agent(
-                    "child:general:review",
-                    "general-purpose",
-                    rimz::agents::AgentStatus::Success,
-                    rimz::agents::TurnPhase::Idle,
-                    Some("review migration contract"),
-                    Some("Sonnet 4.6"),
-                    None,
-                    Some(14_800),
-                    Some(260),
+                    SubAgentSpec {
+                        id: "child:general:review",
+                        name: "general-purpose",
+                        status: rimz::agents::AgentStatus::Success,
+                        phase: rimz::agents::TurnPhase::Idle,
+                        task: Some("review migration contract"),
+                        model: Some("Sonnet 4.6"),
+                        description: None,
+                        total_tokens: Some(14_800),
+                        elapsed_secs: Some(260),
+                    },
                     now,
                 ),
             ]),
             age_secs: Some(70),
             compaction_count: 2,
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let planner = agent_row_with(
-        "agent:claude:planner",
-        "claude",
-        "terminal_42",
-        "/srv/code/query-engine/.rimz/worktrees/auth-router",
-        "feature/auth-router",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "plan router cutover",
-        "Opus 4.8",
-        Some((183_450, 14.72)),
         now,
-        AgentRowOptions {
+    );
+    let planner = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:planner",
+            name: "claude",
+            pane: "terminal_42",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/auth-router",
+            branch: "feature/auth-router",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "plan router cutover",
+            model: "Opus 4.8",
+            context: Some((183_450, 14.72)),
             handle: Some("planner".to_owned()),
             launch_group: Some("auth-router-team".to_owned()),
             launch_ordinal: Some(0),
             age_secs: Some(22 * 60),
             sub_agents: Some(vec![
                 sub_agent(
-                    "child:explore:routes",
-                    "Explore",
-                    rimz::agents::AgentStatus::Success,
-                    rimz::agents::TurnPhase::Idle,
-                    Some("map route ownership"),
-                    Some("Haiku"),
-                    Some("trace handler graph"),
-                    Some(20_100),
-                    Some(420),
+                    SubAgentSpec {
+                        id: "child:explore:routes",
+                        name: "Explore",
+                        status: rimz::agents::AgentStatus::Success,
+                        phase: rimz::agents::TurnPhase::Idle,
+                        task: Some("map route ownership"),
+                        model: Some("Haiku"),
+                        description: Some("trace handler graph"),
+                        total_tokens: Some(20_100),
+                        elapsed_secs: Some(420),
+                    },
                     now,
                 ),
                 sub_agent(
-                    "child:explore:middleware",
-                    "Explore",
-                    rimz::agents::AgentStatus::Success,
-                    rimz::agents::TurnPhase::Idle,
-                    Some("prove middleware order"),
-                    Some("Haiku"),
-                    Some("exercise auth edge cases"),
-                    Some(18_700),
-                    Some(390),
+                    SubAgentSpec {
+                        id: "child:explore:middleware",
+                        name: "Explore",
+                        status: rimz::agents::AgentStatus::Success,
+                        phase: rimz::agents::TurnPhase::Idle,
+                        task: Some("prove middleware order"),
+                        model: Some("Haiku"),
+                        description: Some("exercise auth edge cases"),
+                        total_tokens: Some(18_700),
+                        elapsed_secs: Some(390),
+                    },
                     now,
                 ),
                 sub_agent(
-                    "child:explore:docs",
-                    "Explore",
-                    rimz::agents::AgentStatus::Success,
-                    rimz::agents::TurnPhase::Idle,
-                    Some("summarize docs drift"),
-                    Some("Haiku"),
-                    None,
-                    Some(11_400),
-                    Some(360),
+                    SubAgentSpec {
+                        id: "child:explore:docs",
+                        name: "Explore",
+                        status: rimz::agents::AgentStatus::Success,
+                        phase: rimz::agents::TurnPhase::Idle,
+                        task: Some("summarize docs drift"),
+                        model: Some("Haiku"),
+                        description: None,
+                        total_tokens: Some(11_400),
+                        elapsed_secs: Some(360),
+                    },
                     now,
                 ),
                 sub_agent(
-                    "child:plan:rollout",
-                    "Plan",
-                    rimz::agents::AgentStatus::Success,
-                    rimz::agents::TurnPhase::Idle,
-                    Some("sequence rollout guard"),
-                    Some("Haiku"),
-                    Some("write migration runbook"),
-                    Some(9_900),
-                    Some(300),
+                    SubAgentSpec {
+                        id: "child:plan:rollout",
+                        name: "Plan",
+                        status: rimz::agents::AgentStatus::Success,
+                        phase: rimz::agents::TurnPhase::Idle,
+                        task: Some("sequence rollout guard"),
+                        model: Some("Haiku"),
+                        description: Some("write migration runbook"),
+                        total_tokens: Some(9_900),
+                        elapsed_secs: Some(300),
+                    },
                     now,
                 ),
                 sub_agent(
-                    "child:plan:review",
-                    "Plan",
-                    rimz::agents::AgentStatus::Success,
-                    rimz::agents::TurnPhase::Idle,
-                    Some("stage review gates"),
-                    Some("Haiku"),
-                    Some("split blocking checks"),
-                    Some(8_700),
-                    Some(240),
+                    SubAgentSpec {
+                        id: "child:plan:review",
+                        name: "Plan",
+                        status: rimz::agents::AgentStatus::Success,
+                        phase: rimz::agents::TurnPhase::Idle,
+                        task: Some("stage review gates"),
+                        model: Some("Haiku"),
+                        description: Some("split blocking checks"),
+                        total_tokens: Some(8_700),
+                        elapsed_secs: Some(240),
+                    },
                     now,
                 ),
             ]),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let reviewer = agent_row_with(
-        "agent:pi:reviewer",
-        "pi",
-        "terminal_43",
-        "/srv/code/query-engine/.rimz/worktrees/auth-router",
-        "feature/auth-router",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "review auth router diff",
-        "GPT-5.5",
-        None,
         now,
-        AgentRowOptions {
+    );
+    let reviewer = agent_row(
+        AgentRowSpec {
+            id: "agent:pi:reviewer",
+            name: "pi",
+            pane: "terminal_43",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/auth-router",
+            branch: "feature/auth-router",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "review auth router diff",
+            model: "GPT-5.5",
+            context: None,
             handle: Some("reviewer".to_owned()),
             launch_group: Some("auth-router-team".to_owned()),
             launch_ordinal: Some(2),
             age_secs: Some(9 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let rollout_coder = agent_row_with(
-        "agent:codex:rollout-coder",
-        "codex",
-        "terminal_44",
-        "/srv/code/query-engine/.rimz/worktrees/rollout-guard",
-        "rollout-guard",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "patch rollout smoke harness",
-        "GPT-5.5",
-        Some((142_260, 2.93)),
         now,
-        AgentRowOptions {
+    );
+    let rollout_coder = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:rollout-coder",
+            name: "codex",
+            pane: "terminal_44",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/rollout-guard",
+            branch: "rollout-guard",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "patch rollout smoke harness",
+            model: "GPT-5.5",
+            context: Some((142_260, 2.93)),
             handle: Some("coder".to_owned()),
             age_secs: Some(5 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut rollout_reviewer = agent_row_with(
-        "agent:claude:rollout-reviewer",
-        "claude",
-        "terminal_45",
-        "/srv/code/query-engine/.rimz/worktrees/rollout-guard",
-        "rollout-guard",
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::TurnPhase::Idle,
-        "approve staged migration",
-        "Opus 4.8",
-        Some((347_890, 9.04)),
         now,
-        AgentRowOptions {
+    );
+    let mut rollout_reviewer = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:rollout-reviewer",
+            name: "claude",
+            pane: "terminal_45",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/rollout-guard",
+            branch: "rollout-guard",
+            status: rimz::agents::AgentStatus::Waiting,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "approve staged migration",
+            model: "Opus 4.8",
+            context: Some((347_890, 9.04)),
             handle: Some("reviewer".to_owned()),
             age_secs: Some(52 * 60),
             compaction_count: 1,
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     rollout_reviewer.unread = true;
-    let mut ci_failed = agent_row_with(
-        "agent:codex:ci",
-        "codex",
-        "terminal_48",
-        "/srv/code/query-engine/.rimz/worktrees/ci-retry",
-        "ci-retry",
-        rimz::agents::AgentStatus::Failed,
-        rimz::agents::TurnPhase::Idle,
-        "fix flaky hook replay",
-        "GPT-5.5",
-        Some((167_440, 4.58)),
-        now,
-        AgentRowOptions {
+    let mut ci_failed = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:ci",
+            name: "codex",
+            pane: "terminal_48",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/ci-retry",
+            branch: "ci-retry",
+            status: rimz::agents::AgentStatus::Failed,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "fix flaky hook replay",
+            model: "GPT-5.5",
+            context: Some((167_440, 4.58)),
             age_secs: Some(44 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     ci_failed.unread = true;
-    let pi_paused = agent_row_with(
-        "agent:claude:ci-paused",
-        "claude",
-        "terminal_49",
-        "/srv/code/query-engine/.rimz/worktrees/ci-retry",
-        "ci-retry",
-        rimz::agents::AgentStatus::Paused,
-        rimz::agents::TurnPhase::Idle,
-        "parked mid hook-replay repair",
-        "Opus 4.8",
-        Some((823_560, 26.75)),
-        now,
-        AgentRowOptions {
+    let pi_paused = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:ci-paused",
+            name: "claude",
+            pane: "terminal_49",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/ci-retry",
+            branch: "ci-retry",
+            status: rimz::agents::AgentStatus::Paused,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "parked mid hook-replay repair",
+            model: "Opus 4.8",
+            context: Some((823_560, 26.75)),
             age_secs: Some(86 * 60),
             turn_error_label: Some("API Error: Overloaded".to_owned()),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let architect_tokens = agent_row_with(
-        "agent:claude:token-budget",
-        "claude",
-        "terminal_50",
-        "/srv/code/query-engine/.rimz/worktrees/token-budget",
-        "token-budget",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "model OAuth token budget",
-        "Opus 4.8",
-        Some((74_330, 1.26)),
         now,
-        AgentRowOptions {
+    );
+    let architect_tokens = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:token-budget",
+            name: "claude",
+            pane: "terminal_50",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/token-budget",
+            branch: "token-budget",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "model OAuth token budget",
+            model: "Opus 4.8",
+            context: Some((74_330, 1.26)),
             handle: Some("architect".to_owned()),
             age_secs: Some(12 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let opencode_tokens = agent_row_with(
-        "agent:opencode:token-budget",
-        "opencode",
-        "terminal_56",
-        "/srv/code/query-engine/.rimz/worktrees/token-budget",
-        "token-budget",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "land budget doc example",
-        "GPT-5.5",
-        Some((33_210, 0.54)),
         now,
-        AgentRowOptions {
+    );
+    let opencode_tokens = agent_row(
+        AgentRowSpec {
+            id: "agent:opencode:token-budget",
+            name: "opencode",
+            pane: "terminal_56",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/token-budget",
+            branch: "token-budget",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "land budget doc example",
+            model: "GPT-5.5",
+            context: Some((33_210, 0.54)),
             handle: Some("developer".to_owned()),
             age_secs: Some(49 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let sre_tokens = agent_row_with(
-        "agent:codex:token-budget",
-        "codex",
-        "terminal_57",
-        "/srv/code/query-engine/.rimz/worktrees/token-budget",
-        "token-budget",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "wait for spend review",
-        "GPT-5.5",
-        None,
         now,
-        AgentRowOptions {
+    );
+    let sre_tokens = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:token-budget",
+            name: "codex",
+            pane: "terminal_57",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/token-budget",
+            branch: "token-budget",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "wait for spend review",
+            model: "GPT-5.5",
+            context: None,
             handle: Some("sre".to_owned()),
             age_secs: Some(104 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     snapshot.worktree_groups = vec![
         rimz::SidebarWorktreeGroup {
@@ -1034,40 +1057,40 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
     snapshot.worktree_roots = vec![PathBuf::from("/srv/code/abacus")];
     snapshot.theme.style = Some(rimz::config::ThemeStyle::Modern);
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    let mut opencode = agent_row_with(
-        "agent:opencode:economy",
-        "opencode",
-        "terminal_51",
-        "/srv/code/query-engine",
-        "main",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "rebalance metered sessions",
-        "GPT-5.5",
-        Some((175_350, 7.44)),
-        now,
-        AgentRowOptions {
+    let mut opencode = agent_row(
+        AgentRowSpec {
+            id: "agent:opencode:economy",
+            name: "opencode",
+            pane: "terminal_51",
+            cwd: "/srv/code/query-engine",
+            branch: "main",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "rebalance metered sessions",
+            model: "GPT-5.5",
+            context: Some((175_350, 7.44)),
             age_secs: Some(55),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     opencode.unread = true;
-    let mut claude = agent_row_with(
-        "agent:claude:economy",
-        "claude",
-        "terminal_52",
-        "/srv/code/query-engine",
-        "main",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Reasoning,
-        "audit provider spend",
-        "Opus 4.8",
-        Some((296_430, 12.62)),
-        now,
-        AgentRowOptions {
+    let mut claude = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:economy",
+            name: "claude",
+            pane: "terminal_52",
+            cwd: "/srv/code/query-engine",
+            branch: "main",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Reasoning,
+            task: "audit provider spend",
+            model: "Opus 4.8",
+            context: Some((296_430, 12.62)),
             age_secs: Some(6 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     claude.unread = true;
     let pnpm = rimz::SidebarRow {
@@ -1096,180 +1119,180 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             ..rimz::ProcessCard::default()
         }),
     };
-    let codex = agent_row_with(
-        "agent:codex:economy",
-        "codex",
-        "terminal_53",
-        "/srv/code/query-engine/.rimz/worktrees/pricing-refresh",
-        "pricing-refresh",
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::TurnPhase::Idle,
-        "approve price snapshot",
-        "GPT-5.5",
-        Some((118_620, 3.29)),
-        now,
-        AgentRowOptions {
+    let codex = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:economy",
+            name: "codex",
+            pane: "terminal_53",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/pricing-refresh",
+            branch: "pricing-refresh",
+            status: rimz::agents::AgentStatus::Waiting,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "approve price snapshot",
+            model: "GPT-5.5",
+            context: Some((118_620, 3.29)),
             age_secs: Some(14 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut pi = agent_row_with(
-        "agent:pi:budget",
-        "pi",
-        "terminal_54",
-        "/srv/code/query-engine/.rimz/worktrees/cost-caps",
-        "cost-caps",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "publish budget notes",
-        "GPT-5.5",
-        Some((96_840, 1.74)),
         now,
-        AgentRowOptions {
+    );
+    let mut pi = agent_row(
+        AgentRowSpec {
+            id: "agent:pi:budget",
+            name: "pi",
+            pane: "terminal_54",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/cost-caps",
+            branch: "cost-caps",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "publish budget notes",
+            model: "GPT-5.5",
+            context: Some((96_840, 1.74)),
             age_secs: Some(31 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     pi.unread = true;
-    let codex_idle = agent_row_with(
-        "agent:codex:budget",
-        "codex",
-        "terminal_55",
-        "/srv/code/query-engine/.rimz/worktrees/cost-caps",
-        "cost-caps",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "hold weekly spend cap",
-        "GPT-5.5",
-        None,
-        now,
-        AgentRowOptions {
+    let codex_idle = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:budget",
+            name: "codex",
+            pane: "terminal_55",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/cost-caps",
+            branch: "cost-caps",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "hold weekly spend cap",
+            model: "GPT-5.5",
+            context: None,
             age_secs: Some(83 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let opencode_limit = agent_row_with(
-        "agent:opencode:limit",
-        "opencode",
-        "terminal_56",
-        "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
-        "usage-alerts",
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::TurnPhase::Idle,
-        "approve burst throttle",
-        "GPT-5.5",
-        Some((216_700, 5.18)),
         now,
-        AgentRowOptions {
+    );
+    let opencode_limit = agent_row(
+        AgentRowSpec {
+            id: "agent:opencode:limit",
+            name: "opencode",
+            pane: "terminal_56",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
+            branch: "usage-alerts",
+            status: rimz::agents::AgentStatus::Waiting,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "approve burst throttle",
+            model: "GPT-5.5",
+            context: Some((216_700, 5.18)),
             age_secs: Some(19 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut pi_limit = agent_row_with(
-        "agent:claude:limit-paused",
-        "claude",
-        "terminal_57",
-        "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
-        "usage-alerts",
-        rimz::agents::AgentStatus::Paused,
-        rimz::agents::TurnPhase::Idle,
-        "staged the budget-alert fix, idling",
-        "Opus 4.8",
-        Some((856_120, 29.36)),
         now,
-        AgentRowOptions {
+    );
+    let mut pi_limit = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:limit-paused",
+            name: "claude",
+            pane: "terminal_57",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
+            branch: "usage-alerts",
+            status: rimz::agents::AgentStatus::Paused,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "staged the budget-alert fix, idling",
+            model: "Opus 4.8",
+            context: Some((856_120, 29.36)),
             age_secs: Some(2 * 60 * 60),
             turn_error_label: Some("API Error: rate limit exceeded".to_owned()),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     pi_limit.unread = true;
-    let claude_limit = agent_row_with(
-        "agent:claude:limit",
-        "claude",
-        "terminal_58",
-        "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
-        "usage-alerts",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "repair budget alert webhook",
-        "Opus 4.8",
-        Some((372_640, 8.91)),
-        now,
-        AgentRowOptions {
+    let claude_limit = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:limit",
+            name: "claude",
+            pane: "terminal_58",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
+            branch: "usage-alerts",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "repair budget alert webhook",
+            model: "Opus 4.8",
+            context: Some((372_640, 8.91)),
             age_secs: Some(48 * 60),
             compacting: true,
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let codex_credit = agent_row_with(
-        "agent:codex:credits",
-        "codex",
-        "terminal_59",
-        "/srv/code/query-engine/.rimz/worktrees/credit-store",
-        "credit-store",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "fold extra-credit API",
-        "GPT-5.5",
-        Some((158_930, 2.67)),
         now,
-        AgentRowOptions {
+    );
+    let codex_credit = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:credits",
+            name: "codex",
+            pane: "terminal_59",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/credit-store",
+            branch: "credit-store",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "fold extra-credit API",
+            model: "GPT-5.5",
+            context: Some((158_930, 2.67)),
             age_secs: Some(7 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let opencode_credit = agent_row_with(
-        "agent:opencode:credits",
-        "opencode",
-        "terminal_60",
-        "/srv/code/query-engine/.rimz/worktrees/credit-store",
-        "credit-store",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "land credit store docs",
-        "GPT-5.5",
-        Some((29_250, 0.42)),
         now,
-        AgentRowOptions {
+    );
+    let opencode_credit = agent_row(
+        AgentRowSpec {
+            id: "agent:opencode:credits",
+            name: "opencode",
+            pane: "terminal_60",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/credit-store",
+            branch: "credit-store",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "land credit store docs",
+            model: "GPT-5.5",
+            context: Some((29_250, 0.42)),
             age_secs: Some(55 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut claude_credit = agent_row_with(
-        "agent:claude:credits",
-        "claude",
-        "terminal_66",
-        "/srv/code/query-engine/.rimz/worktrees/credit-store",
-        "credit-store",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "summarize metered tradeoffs",
-        "Opus 4.8",
-        Some((165_880, 4.08)),
         now,
-        AgentRowOptions {
+    );
+    let mut claude_credit = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:credits",
+            name: "claude",
+            pane: "terminal_66",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/credit-store",
+            branch: "credit-store",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "summarize metered tradeoffs",
+            model: "Opus 4.8",
+            context: Some((165_880, 4.08)),
             age_secs: Some(71 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     claude_credit.unread = true;
-    let pi_credit_idle = agent_row_with(
-        "agent:pi:credits",
-        "pi",
-        "terminal_67",
-        "/srv/code/query-engine/.rimz/worktrees/credit-store",
-        "credit-store",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "watch credit refill",
-        "GPT-5.5",
-        None,
-        now,
-        AgentRowOptions {
+    let pi_credit_idle = agent_row(
+        AgentRowSpec {
+            id: "agent:pi:credits",
+            name: "pi",
+            pane: "terminal_67",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/credit-store",
+            branch: "credit-store",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "watch credit refill",
+            model: "GPT-5.5",
+            context: None,
             age_secs: Some(3 * 60 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     snapshot.worktree_groups = vec![
         rimz::SidebarWorktreeGroup {
@@ -1421,216 +1444,216 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     snapshot.project_root = Some(PathBuf::from("/srv/code/farlink"));
     snapshot.worktree_roots = vec![PathBuf::from("/srv/code/farlink")];
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
-    let mut claude = agent_row_with(
-        "agent:claude:reach",
-        "claude",
-        "terminal_61",
-        "/srv/code/query-engine",
-        "main",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "verify remote attach",
-        "Opus 4.8",
-        Some((333_710, 13.56)),
-        now,
-        AgentRowOptions {
+    let mut claude = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:reach",
+            name: "claude",
+            pane: "terminal_61",
+            cwd: "/srv/code/query-engine",
+            branch: "main",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "verify remote attach",
+            model: "Opus 4.8",
+            context: Some((333_710, 13.56)),
             age_secs: Some(35),
             compaction_count: 2,
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     claude.unread = true;
-    let mut codex = agent_row_with(
-        "agent:codex:reach",
-        "codex",
-        "terminal_62",
-        "/srv/code/query-engine/.rimz/worktrees/remote-link",
-        "remote-link",
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::TurnPhase::Idle,
-        "approve SSH link retry",
-        "GPT-5.5",
-        Some((153_560, 3.71)),
-        now,
-        AgentRowOptions {
+    let mut codex = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:reach",
+            name: "codex",
+            pane: "terminal_62",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/remote-link",
+            branch: "remote-link",
+            status: rimz::agents::AgentStatus::Waiting,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "approve SSH link retry",
+            model: "GPT-5.5",
+            context: Some((153_560, 3.71)),
             age_secs: Some(11 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     codex.unread = true;
-    let pi = agent_row_with(
-        "agent:pi:reach",
-        "pi",
-        "terminal_63",
-        "/srv/code/query-engine/.rimz/worktrees/remote-link",
-        "remote-link",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Reasoning,
-        "trace ControlMaster jitter",
-        "GPT-5.5",
-        Some((185_910, 4.44)),
-        now,
-        AgentRowOptions {
+    let pi = agent_row(
+        AgentRowSpec {
+            id: "agent:pi:reach",
+            name: "pi",
+            pane: "terminal_63",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/remote-link",
+            branch: "remote-link",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Reasoning,
+            task: "trace ControlMaster jitter",
+            model: "GPT-5.5",
+            context: Some((185_910, 4.44)),
             age_secs: Some(19 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut opencode = agent_row_with(
-        "agent:opencode:edge-cache",
-        "opencode",
-        "terminal_67",
-        "/srv/code/query-engine/.rimz/worktrees/edge-cache",
-        "edge-cache",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "land offline cache probe",
-        "GPT-5.5",
-        Some((61_170, 0.91)),
         now,
-        AgentRowOptions {
+    );
+    let mut opencode = agent_row(
+        AgentRowSpec {
+            id: "agent:opencode:edge-cache",
+            name: "opencode",
+            pane: "terminal_67",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/edge-cache",
+            branch: "edge-cache",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "land offline cache probe",
+            model: "GPT-5.5",
+            context: Some((61_170, 0.91)),
             age_secs: Some(46 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     opencode.unread = true;
-    let claude_idle = agent_row_with(
-        "agent:claude:edge-cache",
-        "claude",
-        "terminal_68",
-        "/srv/code/query-engine/.rimz/worktrees/edge-cache",
-        "edge-cache",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "wait for laptop reconnect",
-        "Opus 4.8",
-        None,
-        now,
-        AgentRowOptions {
+    let claude_idle = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:edge-cache",
+            name: "claude",
+            pane: "terminal_68",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/edge-cache",
+            branch: "edge-cache",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "wait for laptop reconnect",
+            model: "Opus 4.8",
+            context: None,
             age_secs: Some(94 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let pi_netcheck = agent_row_with(
-        "agent:pi:netcheck",
-        "pi",
-        "terminal_64",
-        "/srv/code/query-engine/.rimz/worktrees/network-check",
-        "network-check",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "debug jump-host DNS",
-        "GPT-5.5",
-        Some((251_620, 6.24)),
         now,
-        AgentRowOptions {
+    );
+    let pi_netcheck = agent_row(
+        AgentRowSpec {
+            id: "agent:pi:netcheck",
+            name: "pi",
+            pane: "terminal_64",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/network-check",
+            branch: "network-check",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "debug jump-host DNS",
+            model: "GPT-5.5",
+            context: Some((251_620, 6.24)),
             age_secs: Some(51 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let claude_netcheck_paused = agent_row_with(
-        "agent:claude:netcheck-paused",
-        "claude",
-        "terminal_65",
-        "/srv/code/query-engine/.rimz/worktrees/network-check",
-        "network-check",
-        rimz::agents::AgentStatus::Paused,
-        rimz::agents::TurnPhase::Idle,
-        "halfway through the jump-host DNS fix",
-        "Opus 4.8",
-        Some((414_390, 10.76)),
         now,
-        AgentRowOptions {
+    );
+    let claude_netcheck_paused = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:netcheck-paused",
+            name: "claude",
+            pane: "terminal_65",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/network-check",
+            branch: "network-check",
+            status: rimz::agents::AgentStatus::Paused,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "halfway through the jump-host DNS fix",
+            model: "Opus 4.8",
+            context: Some((414_390, 10.76)),
             age_secs: Some(73 * 60),
             turn_error_label: Some("API Error: rate limit exceeded".to_owned()),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut claude_netcheck = agent_row_with(
-        "agent:claude:netcheck",
-        "claude",
-        "terminal_66",
-        "/srv/code/query-engine/.rimz/worktrees/network-check",
-        "network-check",
-        rimz::agents::AgentStatus::Waiting,
-        rimz::agents::TurnPhase::Idle,
-        "approve firewall rule change",
-        "Opus 4.8",
-        Some((236_510, 6.88)),
         now,
-        AgentRowOptions {
+    );
+    let mut claude_netcheck = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:netcheck",
+            name: "claude",
+            pane: "terminal_66",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/network-check",
+            branch: "network-check",
+            status: rimz::agents::AgentStatus::Waiting,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "approve firewall rule change",
+            model: "Opus 4.8",
+            context: Some((236_510, 6.88)),
             age_secs: Some(24 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     claude_netcheck.unread = true;
-    let codex_web = agent_row_with(
-        "agent:codex:web",
-        "codex",
-        "terminal_69",
-        "/srv/code/query-engine/.rimz/worktrees/browser-reach",
-        "browser-reach",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Acting,
-        "exercise browser handoff",
-        "GPT-5.5",
-        Some((129_080, 2.36)),
-        now,
-        AgentRowOptions {
+    let codex_web = agent_row(
+        AgentRowSpec {
+            id: "agent:codex:web",
+            name: "codex",
+            pane: "terminal_69",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/browser-reach",
+            branch: "browser-reach",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Acting,
+            task: "exercise browser handoff",
+            model: "GPT-5.5",
+            context: Some((129_080, 2.36)),
             age_secs: Some(8 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let mut pi_web = agent_row_with(
-        "agent:pi:web",
-        "pi",
-        "terminal_70",
-        "/srv/code/query-engine/.rimz/worktrees/browser-reach",
-        "browser-reach",
-        rimz::agents::AgentStatus::Success,
-        rimz::agents::TurnPhase::Idle,
-        "document OAuth browser path",
-        "GPT-5.5",
-        Some((50_190, 0.73)),
         now,
-        AgentRowOptions {
+    );
+    let mut pi_web = agent_row(
+        AgentRowSpec {
+            id: "agent:pi:web",
+            name: "pi",
+            pane: "terminal_70",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/browser-reach",
+            branch: "browser-reach",
+            status: rimz::agents::AgentStatus::Success,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "document OAuth browser path",
+            model: "GPT-5.5",
+            context: Some((50_190, 0.73)),
             age_secs: Some(64 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     pi_web.unread = true;
-    let opencode_stats = agent_row_with(
-        "agent:opencode:stats",
-        "opencode",
-        "terminal_71",
-        "/srv/code/query-engine/.rimz/worktrees/stats-relay",
-        "stats-relay",
-        rimz::agents::AgentStatus::Running,
-        rimz::agents::TurnPhase::Reasoning,
-        "profile stats relay latency",
-        "GPT-5.5",
-        Some((85_470, 1.58)),
-        now,
-        AgentRowOptions {
+    let opencode_stats = agent_row(
+        AgentRowSpec {
+            id: "agent:opencode:stats",
+            name: "opencode",
+            pane: "terminal_71",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/stats-relay",
+            branch: "stats-relay",
+            status: rimz::agents::AgentStatus::Running,
+            phase: rimz::agents::TurnPhase::Reasoning,
+            task: "profile stats relay latency",
+            model: "GPT-5.5",
+            context: Some((85_470, 1.58)),
             age_secs: Some(13 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
-    );
-    let claude_stats_idle = agent_row_with(
-        "agent:claude:stats",
-        "claude",
-        "terminal_72",
-        "/srv/code/query-engine/.rimz/worktrees/stats-relay",
-        "stats-relay",
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        "hold remote stats notes",
-        "Opus 4.8",
-        None,
         now,
-        AgentRowOptions {
+    );
+    let claude_stats_idle = agent_row(
+        AgentRowSpec {
+            id: "agent:claude:stats",
+            name: "claude",
+            pane: "terminal_72",
+            cwd: "/srv/code/query-engine/.rimz/worktrees/stats-relay",
+            branch: "stats-relay",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "hold remote stats notes",
+            model: "Opus 4.8",
+            context: None,
             age_secs: Some(2 * 60 * 60),
-            ..AgentRowOptions::default()
+            ..AgentRowSpec::default()
         },
+        now,
     );
     snapshot.worktree_groups = vec![
         rimz::SidebarWorktreeGroup {
@@ -1789,38 +1812,19 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
     snapshot.today_spend_live_usd = Some(204.0);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn agent_row(
-    id: &str,
-    name: &str,
-    pane_raw: &str,
-    cwd: &str,
-    branch: &str,
+struct AgentRowSpec<'a> {
+    id: &'a str,
+    name: &'a str,
+    pane: &'a str,
+    cwd: &'a str,
+    branch: &'a str,
     status: rimz::agents::AgentStatus,
     phase: rimz::agents::TurnPhase,
-    task: &str,
-    model: &str,
+    task: &'a str,
+    model: &'a str,
+    /// Live context-window tokens for the bar/breakdown and cumulative session
+    /// cost in USD. Fill is a snapshot; cost is independent lifetime spend.
     context: Option<(u64, f64)>,
-    now: jiff::Timestamp,
-) -> rimz::SidebarRow {
-    agent_row_with(
-        id,
-        name,
-        pane_raw,
-        cwd,
-        branch,
-        status,
-        phase,
-        task,
-        model,
-        context,
-        now,
-        AgentRowOptions::default(),
-    )
-}
-
-#[derive(Default)]
-struct AgentRowOptions {
     handle: Option<String>,
     launch_group: Option<String>,
     launch_ordinal: Option<u32>,
@@ -1832,41 +1836,51 @@ struct AgentRowOptions {
     compaction_count: u32,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn agent_row_with(
-    id: &str,
-    name: &str,
-    pane_raw: &str,
-    cwd: &str,
-    branch: &str,
-    status: rimz::agents::AgentStatus,
-    phase: rimz::agents::TurnPhase,
-    task: &str,
-    model: &str,
-    context: Option<(u64, f64)>,
-    now: jiff::Timestamp,
-    options: AgentRowOptions,
-) -> rimz::SidebarRow {
-    let is_idle = status == rimz::agents::AgentStatus::Idle;
-    // context = (live context-window tokens for the bar/breakdown, cumulative
-    // session cost in USD). The two are independent: fill is a snapshot, cost is
-    // lifetime spend and does not track the current fill.
+impl Default for AgentRowSpec<'_> {
+    fn default() -> Self {
+        Self {
+            id: "",
+            name: "",
+            pane: "",
+            cwd: "",
+            branch: "",
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            task: "",
+            model: "",
+            context: None,
+            handle: None,
+            launch_group: None,
+            launch_ordinal: None,
+            sub_agents: None,
+            age_secs: None,
+            account_sub_provider: None,
+            turn_error_label: None,
+            compacting: false,
+            compaction_count: 0,
+        }
+    }
+}
+
+fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarRow {
+    let is_idle = spec.status == rimz::agents::AgentStatus::Idle;
     let (context_pct, context_window, total_tokens, cost_usd) = if is_idle {
         (None, None, None, None)
     } else {
-        context.map_or((None, None, None, None), |(total, cost)| {
-            let window = context_window_for_kind(name);
-            let used = total.min(window - 1);
-            let pct = used.saturating_mul(100).div_euclid(window).min(100) as u8;
-            (Some(pct), Some(window), Some(used), Some(cost))
-        })
+        spec.context
+            .map_or((None, None, None, None), |(total, cost)| {
+                let window = context_window_for_kind(spec.name);
+                let used = total.min(window - 1);
+                let pct = used.saturating_mul(100).div_euclid(window).min(100) as u8;
+                (Some(pct), Some(window), Some(used), Some(cost))
+            })
     };
-    let activity_at = options.age_secs.map_or(now, |secs| {
+    let activity_at = spec.age_secs.map_or(now, |secs| {
         now - std::time::Duration::from_secs(secs.max(0) as u64)
     });
-    let account_sub_provider = options
+    let account_sub_provider = spec
         .account_sub_provider
-        .or_else(|| openai_sub_provider(name));
+        .or_else(|| openai_sub_provider(spec.name));
     // Cache-heavy, realistic split: the first three fields sum to the window fill,
     // with cache_read taking the remainder for an exact sum; output rides separately
     // and lands in the window next turn. Fresh input is a small slice of the cached
@@ -1874,21 +1888,25 @@ fn agent_row_with(
     // is implicit, so those cards carry none.
     let split = total_tokens.map(|tokens| {
         let fresh_input = tokens / 25;
-        let cache_write = if name == "claude" { tokens / 10 } else { 0 };
+        let cache_write = if spec.name == "claude" {
+            tokens / 10
+        } else {
+            0
+        };
         let cache_read = tokens - cache_write - fresh_input;
         let output = tokens / 8;
         (cache_read, cache_write, fresh_input, output)
     });
     let mut card = rimz::AgentCard {
-        status,
-        phase,
-        task: (!is_idle).then(|| task.to_owned()),
-        model: Some(model.to_owned()),
+        status: spec.status,
+        phase: spec.phase,
+        task: (!is_idle).then(|| spec.task.to_owned()),
+        model: Some(spec.model.to_owned()),
         effort: Some("xhigh".to_owned()),
-        handle: options.handle,
+        handle: spec.handle,
         team: None,
-        launch_group: options.launch_group,
-        launch_ordinal: options.launch_ordinal,
+        launch_group: spec.launch_group,
+        launch_ordinal: spec.launch_ordinal,
 
         context_pct,
         context_window,
@@ -1905,30 +1923,40 @@ fn agent_row_with(
             )
         }),
         registered_at: Some(activity_at),
-        compacting: options.compacting,
-        compaction_count: options.compaction_count,
+        compacting: spec.compacting,
+        compaction_count: spec.compaction_count,
         ..rimz::AgentCard::default()
     };
     if !is_idle && (cost_usd.is_some() || account_sub_provider.is_some()) {
-        card.context = Some(agent_context(name, now, cost_usd, account_sub_provider));
+        card.context = Some(agent_context(
+            spec.name,
+            now,
+            cost_usd,
+            account_sub_provider,
+        ));
     }
-    card.turn_error_label = options
-        .turn_error_label
-        .or_else(|| (status == rimz::agents::AgentStatus::Failed).then(|| "API error".to_owned()));
-    match options.sub_agents {
+    card.turn_error_label = spec.turn_error_label.or_else(|| {
+        (spec.status == rimz::agents::AgentStatus::Failed).then(|| "API error".to_owned())
+    });
+    match spec.sub_agents {
         Some(sub_agents) => card.sub_agents = sub_agents,
-        None if status == rimz::agents::AgentStatus::Running => {
+        None if spec.status == rimz::agents::AgentStatus::Running => {
             card.sub_agents = default_sub_agents(now);
         }
         None => {}
     }
 
     rimz::SidebarRow {
-        id: id.to_owned(),
-        name: name.to_owned(),
-        pane: Some(pane_ref(pane_raw, name, cwd, status.is_attention())),
-        worktree_path: Some(cwd.to_owned()),
-        worktree_branch: Some(branch.to_owned()),
+        id: spec.id.to_owned(),
+        name: spec.name.to_owned(),
+        pane: Some(pane_ref(
+            spec.pane,
+            spec.name,
+            spec.cwd,
+            spec.status.is_attention(),
+        )),
+        worktree_path: Some(spec.cwd.to_owned()),
+        worktree_branch: Some(spec.branch.to_owned()),
         channel: None,
         unread: false,
         inactive: false,
@@ -1989,59 +2017,63 @@ fn agent_context(
 fn default_sub_agents(now: jiff::Timestamp) -> Vec<rimz::SidebarSubAgent> {
     vec![
         sub_agent(
-            "child:explore",
-            "Explore",
-            rimz::agents::AgentStatus::Success,
-            rimz::agents::TurnPhase::Idle,
-            Some("check unsafe edges"),
-            Some("Haiku"),
-            Some("audit auth watcher changes"),
-            Some(22_400),
-            Some(320),
+            SubAgentSpec {
+                id: "child:explore",
+                name: "Explore",
+                status: rimz::agents::AgentStatus::Success,
+                phase: rimz::agents::TurnPhase::Idle,
+                task: Some("check unsafe edges"),
+                model: Some("Haiku"),
+                description: Some("audit auth watcher changes"),
+                total_tokens: Some(22_400),
+                elapsed_secs: Some(320),
+            },
             now,
         ),
         sub_agent(
-            "child:plan",
-            "Plan",
-            rimz::agents::AgentStatus::Running,
-            rimz::agents::TurnPhase::Reasoning,
-            Some("run focused nextest"),
-            Some("Haiku"),
-            None,
-            Some(18_900),
-            Some(180),
+            SubAgentSpec {
+                id: "child:plan",
+                name: "Plan",
+                status: rimz::agents::AgentStatus::Running,
+                phase: rimz::agents::TurnPhase::Reasoning,
+                task: Some("run focused nextest"),
+                model: Some("Haiku"),
+                description: None,
+                total_tokens: Some(18_900),
+                elapsed_secs: Some(180),
+            },
             now,
         ),
     ]
 }
 
-#[allow(clippy::too_many_arguments)]
-fn sub_agent(
-    id: &str,
-    name: &str,
+struct SubAgentSpec<'a> {
+    id: &'a str,
+    name: &'a str,
     status: rimz::agents::AgentStatus,
     phase: rimz::agents::TurnPhase,
-    task: Option<&str>,
-    model: Option<&str>,
-    description: Option<&str>,
+    task: Option<&'a str>,
+    model: Option<&'a str>,
+    description: Option<&'a str>,
     total_tokens: Option<u64>,
     elapsed_secs: Option<i64>,
-    now: jiff::Timestamp,
-) -> rimz::SidebarSubAgent {
-    let registered_at = elapsed_secs.map_or(now, |secs| {
+}
+
+fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> rimz::SidebarSubAgent {
+    let registered_at = spec.elapsed_secs.map_or(now, |secs| {
         now - std::time::Duration::from_secs(secs.max(0) as u64)
     });
     rimz::SidebarSubAgent {
-        id: id.to_owned(),
-        name: name.to_owned(),
-        status,
-        phase,
-        task: task.map(ToOwned::to_owned),
-        model: model.map(ToOwned::to_owned),
+        id: spec.id.to_owned(),
+        name: spec.name.to_owned(),
+        status: spec.status,
+        phase: spec.phase,
+        task: spec.task.map(ToOwned::to_owned),
+        model: spec.model.map(ToOwned::to_owned),
         effort: Some("xhigh".to_owned()),
-        description: description.map(ToOwned::to_owned),
-        total_tokens,
-        elapsed_secs,
+        description: spec.description.map(ToOwned::to_owned),
+        total_tokens: spec.total_tokens,
+        elapsed_secs: spec.elapsed_secs,
         started_at: Some(registered_at),
         last_activity: now,
         registered_at: Some(registered_at),
@@ -2070,16 +2102,14 @@ fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::P
     }
 }
 
-const FIXTURE_WORKTREE_ROW_CAP: usize = 6;
-
 fn with_overflow(
     mut rows: Vec<rimz::SidebarRow>,
     hidden: usize,
     now: jiff::Timestamp,
 ) -> Vec<rimz::SidebarRow> {
-    let visible = capped_visible_count(&rows);
+    let visible = rimz::sidebar_pane::render::capped_visible_rows(&rows, None).len();
     let base_hidden = rows.len().saturating_sub(visible);
-    let fillers_kept = FIXTURE_WORKTREE_ROW_CAP.saturating_sub(visible);
+    let fillers_kept = rimz::sidebar_pane::render::WORKTREE_ROW_CAP.saturating_sub(visible);
     let filler_count = hidden.saturating_sub(base_hidden) + fillers_kept;
     let path = rows
         .first()
@@ -2099,67 +2129,28 @@ fn with_overflow(
         })
         .unwrap_or_else(|| "group".to_owned());
     rows.extend((0..filler_count).map(|index| {
-        let mut row = agent_row_with(
-            &format!("agent:fixture-overflow:{seed}:{index}"),
-            "codex",
-            &format!("overflow_{seed}_{index}"),
-            &path,
-            &branch,
-            rimz::agents::AgentStatus::Idle,
-            rimz::agents::TurnPhase::Idle,
-            "queued background follow-up",
-            "GPT-5.1-Codex",
-            None,
-            now,
-            AgentRowOptions {
+        let mut row = agent_row(
+            AgentRowSpec {
+                id: &format!("agent:fixture-overflow:{seed}:{index}"),
+                name: "codex",
+                pane: &format!("overflow_{seed}_{index}"),
+                cwd: &path,
+                branch: &branch,
+                status: rimz::agents::AgentStatus::Idle,
+                phase: rimz::agents::TurnPhase::Idle,
+                task: "queued background follow-up",
+                model: "GPT-5.1-Codex",
+                context: None,
                 age_secs: Some(24 * 60 * 60 + i64::try_from(index).unwrap_or_default()),
-                ..AgentRowOptions::default()
+                ..AgentRowSpec::default()
             },
+            now,
         );
         row.inactive = true;
         row.archived = true;
         row
     }));
     rows
-}
-
-fn capped_visible_count(rows: &[rimz::SidebarRow]) -> usize {
-    let process_is_only_live_member = rows.iter().map(row_band).min() == Some(0)
-        && rows
-            .iter()
-            .filter(|row| row_band(row) == 0)
-            .all(rimz::SidebarRow::is_process);
-    let liveness_process_id = if process_is_only_live_member {
-        rows.iter()
-            .find(|row| row.is_process() && row_band(row) == 0)
-            .map(|row| row.id.as_str())
-    } else {
-        None
-    };
-    let mut visible = 0;
-    for row in rows {
-        if row.unread
-            || row
-                .status()
-                .is_some_and(|status| status != rimz::agents::AgentStatus::Idle)
-            || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
-            || liveness_process_id == Some(row.id.as_str())
-            || visible < FIXTURE_WORKTREE_ROW_CAP
-        {
-            visible += 1;
-        }
-    }
-    visible
-}
-
-fn row_band(row: &rimz::SidebarRow) -> u8 {
-    if row.archived {
-        2
-    } else if row.inactive {
-        1
-    } else {
-        0
-    }
 }
 
 fn move_fixture_overflow_to_tail(rows: &mut Vec<rimz::SidebarRow>) {
