@@ -100,7 +100,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.bstr]]
 version = "1.12.3"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.by_address]]
 version = "1.2.1"
