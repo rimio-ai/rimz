@@ -235,7 +235,7 @@ pub(super) fn dispatch_message(
         MessageDispatchMode::Boundary => {
             pending = store.list_messages()?;
             let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-            if !spec.after.is_empty()
+            if (!spec.after.is_empty() || matches!(sender, MessageSender::Agent { .. }))
                 && let Ok(runtime) =
                     rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
             {
@@ -294,7 +294,9 @@ pub(super) fn dispatch_message(
     // Smart compaction reads context fill. Immediate message sends share the
     // live path, so fold the disposable context sidecars before any send-now
     // decision that might compact first.
-    if (spec.auto_compact.is_some() || !spec.after.is_empty())
+    if (spec.auto_compact.is_some()
+        || !spec.after.is_empty()
+        || matches!(sender, MessageSender::Agent { .. }))
         && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
     {
         snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
@@ -551,6 +553,7 @@ pub(super) fn dispatch_resolved_message(
     } else {
         None
     };
+    let in_reply_to = sender_turn_opened_by(snapshot, sender);
     let result = message_dispatch::dispatch_for_targets(
         DispatchContext {
             workspace,
@@ -559,6 +562,7 @@ pub(super) fn dispatch_resolved_message(
             pending: matches!(mode, MessageDispatchMode::Boundary).then_some(&mut pending),
             scope_channel: channel.as_deref(),
             sender,
+            in_reply_to: &in_reply_to,
         },
         &targets,
         &text,
@@ -606,6 +610,23 @@ pub(super) fn dispatch_resolved_message(
         &result.outcomes,
         &result.compacted,
     )
+}
+
+fn sender_turn_opened_by(snapshot: &SidebarSnapshot, sender: &MessageSender) -> Vec<MessageId> {
+    let MessageSender::Agent {
+        kind,
+        name: Some(name),
+        ..
+    } = sender
+    else {
+        return Vec::new();
+    };
+    snapshot
+        .root_agents()
+        .find(|agent| agent.kind == *kind && agent.name.as_deref() == Some(name))
+        .and_then(|agent| agent.context.as_ref())
+        .map(|context| context.turn_opened_by.clone())
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy)]
@@ -738,5 +759,45 @@ pub(super) fn print_compacted_if_needed(label: &str, compacted: &[String]) {
         {
             println!("compacted {label}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_sender_inherits_exact_named_sessions_turn_openers() {
+        let now = Timestamp::UNIX_EPOCH;
+        let opener = MessageId::parse("msg_0123456789abcdef").unwrap();
+        let mut agent = AgentState::stub("codex", "sess-1", rimz::agents::AgentStatus::Running);
+        agent.name = Some("coder".to_owned());
+        let mut context = rimz::store::agent_context::empty_context("codex", now);
+        context.turn_opened_by = vec![opener.clone()];
+        agent.context = Some(context);
+        let snapshot = SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/replies")),
+            vec![agent],
+            now,
+        );
+
+        let sender = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: Some("coder".to_owned()),
+            profile: None,
+            role: None,
+            channel: Some("chat".to_owned()),
+        };
+        assert_eq!(sender_turn_opened_by(&snapshot, &sender), vec![opener]);
+
+        let unnamed = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: None,
+            profile: None,
+            role: None,
+            channel: Some("chat".to_owned()),
+        };
+        assert!(sender_turn_opened_by(&snapshot, &unnamed).is_empty());
+        assert!(sender_turn_opened_by(&snapshot, &MessageSender::Human).is_empty());
     }
 }

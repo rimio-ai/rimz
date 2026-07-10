@@ -495,6 +495,8 @@ fn record_sent_then_turn_start_confirms_delivery() {
             "session",
         )
         .unwrap()
+        .into_iter()
+        .next()
         .expect("delivered");
     assert_eq!(delivered.status, MessageStatus::Delivered);
     assert!(delivered.delivered_at.is_some());
@@ -551,6 +553,8 @@ fn confirmation_matches_message_body() {
             "session",
         )
         .unwrap()
+        .into_iter()
+        .next()
         .expect("command delivered");
     assert_eq!(delivered_command.message_id, command.message_id);
 
@@ -587,10 +591,15 @@ fn confirmation_delivers_all_members_with_shared_batch_id() {
             MessageBody::Prompt,
             "session",
         )
-        .unwrap()
-        .expect("delivered");
+        .unwrap();
 
-    assert_eq!(delivered.message_id, first.message_id);
+    assert_eq!(
+        delivered
+            .iter()
+            .map(|message| message.message_id.clone())
+            .collect::<Vec<_>>(),
+        vec![first.message_id.clone(), second.message_id.clone()]
+    );
     let messages = store.list_messages().unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].message_id, unrelated.message_id);
@@ -621,8 +630,7 @@ fn confirmation_without_batch_id_delivers_only_oldest() {
             MessageBody::Prompt,
             "session",
         )
-        .unwrap()
-        .expect("delivered");
+        .unwrap();
 
     let messages = store.list_messages().unwrap();
     assert_eq!(messages.len(), 1);

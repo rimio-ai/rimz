@@ -466,7 +466,7 @@ impl Store {
         agent_name: Option<&str>,
         body: MessageBody,
         session_name: &str,
-    ) -> Result<Option<MessageRecord>> {
+    ) -> Result<Vec<MessageRecord>> {
         self.commit(PublishPolicy::Skip, |txn| {
             let messages = message_store::list(&txn.paths.messages_dir)?;
             let Some(oldest) = messages
@@ -479,7 +479,7 @@ impl Store {
                 .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
                 .cloned()
             else {
-                return Ok(None);
+                return Ok(Vec::new());
             };
             let now = Timestamp::now();
             let delivered = self.update_messages_locked(txn, session_name, now, |message| {
@@ -500,9 +500,7 @@ impl Store {
                     reason: None,
                 }
             })?;
-            Ok(delivered
-                .into_iter()
-                .find(|message| message.message_id == oldest.message_id))
+            Ok(delivered)
         })
     }
 

@@ -116,6 +116,7 @@ pub(super) fn record_conversation(
     event_name: &str,
     payload: &Value,
     recorded: &RecordedLifecycle,
+    delivered: &[rimz::message::MessageRecord],
 ) -> rimz::transcript::Result<()> {
     let observation = &recorded.observation;
     if observation.parent_agent_id.is_some() {
@@ -152,6 +153,9 @@ pub(super) fn record_conversation(
 
     match &observation.signal {
         LifecycleSignal::TurnStarted => {
+            let mut entries = Vec::new();
+            let mut matched_ids = Vec::new();
+            let mut delivered_cursor = 0;
             if let Some(prompt) = observation
                 .prompt
                 .as_deref()
@@ -163,17 +167,38 @@ pub(super) fn record_conversation(
                     if segment.is_empty() {
                         continue;
                     }
-                    let entry = if let Some((sender, body)) =
+                    let (mut entry, delivered_text) = if let Some((sender, body)) =
                         rimz::harness::target::parse_sender_prefix(segment)
                     {
+                        let delivered_text = body.clone();
                         let mut entry = entry_base(rimz::transcript::TranscriptKind::Message, body);
                         entry.from = Some(sender);
-                        entry
+                        (entry, delivered_text)
                     } else {
-                        entry_base(rimz::transcript::TranscriptKind::Prompt, segment.to_owned())
+                        (
+                            entry_base(
+                                rimz::transcript::TranscriptKind::Prompt,
+                                segment.to_owned(),
+                            ),
+                            segment.to_owned(),
+                        )
                     };
-                    rimz::transcript::append(store.paths(), &entry)?;
+                    if let Some((offset, message)) = delivered[delivered_cursor..]
+                        .iter()
+                        .enumerate()
+                        .find(|(_, message)| message.text == delivered_text)
+                    {
+                        entry.message_id = Some(message.message_id.clone());
+                        entry.reply_to = message.in_reply_to.clone();
+                        matched_ids.push(message.message_id.clone());
+                        delivered_cursor += offset + 1;
+                    }
+                    entries.push(entry);
                 }
+            }
+            replace_turn_opened_by(store, agent, &agent_id, matched_ids);
+            for entry in entries {
+                rimz::transcript::append(store.paths(), &entry)?;
             }
         }
         LifecycleSignal::TurnEnded { .. } => {
@@ -182,10 +207,9 @@ pub(super) fn record_conversation(
                 .map(|message| message.trim().to_owned())
                 .filter(|message| !message.is_empty())
             {
-                rimz::transcript::append(
-                    store.paths(),
-                    &entry_base(rimz::transcript::TranscriptKind::Assistant, message),
-                )?;
+                let mut entry = entry_base(rimz::transcript::TranscriptKind::Assistant, message);
+                entry.reply_to = turn_opened_by(store, agent, &agent_id);
+                rimz::transcript::append(store.paths(), &entry)?;
             }
         }
         LifecycleSignal::AwaitingInput { ask_id, .. } => {
@@ -203,11 +227,47 @@ pub(super) fn record_conversation(
             let mut entry = entry_base(rimz::transcript::TranscriptKind::Ask, last);
             entry.id = ask_id.clone();
             entry.questions = questions;
+            entry.reply_to = turn_opened_by(store, agent, &agent_id);
             rimz::transcript::append(store.paths(), &entry)?;
         }
         _ => {}
     }
     Ok(())
+}
+
+fn replace_turn_opened_by(
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    agent_id: &rimz::ids::AgentSessionId,
+    message_ids: Vec<rimz::ids::MessageId>,
+) {
+    if let Err(err) = rimz::store::agent_context::merge_turn_opened_by(
+        store.runtime_paths(),
+        agent.descriptor().kind,
+        agent_id.as_str(),
+        message_ids,
+    ) {
+        warn!(
+            agent = agent.descriptor().kind,
+            agent_id = %agent_id,
+            error = %err,
+            "lifecycle: failed to record turn message causality",
+        );
+    }
+}
+
+fn turn_opened_by(
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    agent_id: &rimz::ids::AgentSessionId,
+) -> Vec<rimz::ids::MessageId> {
+    rimz::store::agent_context::read_one(
+        store.runtime_paths(),
+        agent.descriptor().kind,
+        agent_id.as_str(),
+    )
+    .map(|record| record.context.turn_opened_by)
+    .unwrap_or_default()
 }
 
 pub(super) fn turn_error_refresh_event(event_name: &str) -> bool {

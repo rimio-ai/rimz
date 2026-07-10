@@ -7,29 +7,33 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     agent: &dyn AgentAdapter,
     recorded: &RecordedLifecycle,
     session_name: &str,
-) {
+) -> Vec<rimz::message::MessageRecord> {
     let body = match recorded.observation.signal {
         LifecycleSignal::TurnStarted => rimz::message::MessageBody::Prompt,
         LifecycleSignal::Compacting => rimz::message::MessageBody::Command,
-        _ => return,
+        _ => return Vec::new(),
     };
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
-        return;
+        return Vec::new();
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
-    if let Err(err) = store.confirm_delivered_for_card(
+    match store.confirm_delivered_for_card(
         &kind,
         agent_id,
         recorded.observation.agent_name.as_deref(),
         body,
         session_name,
     ) {
-        warn!(
-            agent = agent.descriptor().kind,
-            agent_id = %agent_id,
-            error = %err,
-            "lifecycle: failed to confirm sent message delivery",
-        );
+        Ok(delivered) => delivered,
+        Err(err) => {
+            warn!(
+                agent = agent.descriptor().kind,
+                agent_id = %agent_id,
+                error = %err,
+                "lifecycle: failed to confirm sent message delivery",
+            );
+            Vec::new()
+        }
     }
 }
 

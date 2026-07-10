@@ -72,9 +72,11 @@ pub(super) fn handle_lifecycle_hook(
     }
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(store, agent, event_name, payload, recorded);
-        if let Err(err) =
-            record_conversation(workspace, store, agent, event_name, payload, recorded)
-        {
+        let delivered =
+            confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
+        if let Err(err) = record_conversation(
+            workspace, store, agent, event_name, payload, recorded, &delivered,
+        ) {
             warn!(
                 agent = agent.descriptor().kind,
                 event = %event_name,
@@ -82,7 +84,6 @@ pub(super) fn handle_lifecycle_hook(
                 "lifecycle: failed to record transcript entry",
             );
         }
-        confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
         if recorded.observation.signal == LifecycleSignal::Ended
             && let Some(agent_id) = agent_id
         {
@@ -631,5 +632,147 @@ mod tests {
     fn test_agent() -> AgentState {
         let now = jiff::Timestamp::now();
         rimz::testkit::agent_state("claude", "sess-1", now)
+    }
+
+    fn test_workspace() -> ResolvedWorkspace {
+        ResolvedWorkspace {
+            workspace_id: workspace_id(),
+            project_root: std::path::PathBuf::from("/tmp/hooks-test"),
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: std::path::PathBuf::from("/tmp/hooks-test/chat"),
+            worktree_branch: None,
+            session_name: "session".to_owned(),
+            mux_hint: None,
+        }
+    }
+
+    fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
+        RecordedLifecycle {
+            model_hint: None,
+            observation: AgentLifecycleObservation::new(
+                Some(rimz::ids::AgentSessionId::from("sess-1")),
+                signal,
+            ),
+            appended_lifecycle: false,
+            waiting_cleared: false,
+        }
+    }
+
+    #[test]
+    fn conversation_entries_follow_confirmed_message_turn_causality() {
+        let (_dir, store) = test_store();
+        let workspace = test_workspace();
+        let agent_state = test_agent();
+        let parent = rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
+        let first = rimz::message::MessageRecord::new(
+            workspace_id(),
+            &agent_state,
+            "first".to_owned(),
+            true,
+            rimz::message::DeliveryGate::Done,
+        )
+        .with_in_reply_to(vec![parent.clone()]);
+        let second = rimz::message::MessageRecord::new(
+            workspace_id(),
+            &agent_state,
+            "second".to_owned(),
+            true,
+            rimz::message::DeliveryGate::Done,
+        );
+        let mut started = recorded(LifecycleSignal::TurnStarted);
+        started.observation.prompt =
+            Some("from @planner: first\n\nfrom @reviewer: second".to_owned());
+
+        record_conversation(
+            &workspace,
+            &store,
+            &rimz::agents::ClaudeAdapter,
+            "UserPromptSubmit",
+            &serde_json::json!({}),
+            &started,
+            &[first.clone(), second.clone()],
+        )
+        .unwrap();
+
+        let entries = rimz::transcript::read_all(store.paths()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].message_id.as_ref(), Some(&first.message_id));
+        assert_eq!(entries[0].reply_to, vec![parent]);
+        assert_eq!(entries[1].message_id.as_ref(), Some(&second.message_id));
+        assert_eq!(
+            rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "sess-1")
+                .unwrap()
+                .context
+                .turn_opened_by,
+            vec![first.message_id.clone(), second.message_id.clone()]
+        );
+
+        record_conversation(
+            &workspace,
+            &store,
+            &rimz::agents::ClaudeAdapter,
+            "Stop",
+            &serde_json::json!({ "last_assistant_message": "done" }),
+            &recorded(LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            }),
+            &[],
+        )
+        .unwrap();
+        let entries = rimz::transcript::read_all(store.paths()).unwrap();
+        assert_eq!(
+            entries.last().unwrap().reply_to,
+            vec![first.message_id.clone(), second.message_id.clone()]
+        );
+
+        let ask_id = rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap();
+        record_conversation(
+            &workspace,
+            &store,
+            &rimz::agents::ClaudeAdapter,
+            "PreToolUse",
+            &serde_json::json!({
+                "tool_name": "AskUserQuestion",
+                "tool_input": { "questions": [{ "question": "Ship?" }] }
+            }),
+            &recorded(LifecycleSignal::AwaitingInput {
+                kind: rimz::agents::AskKind::Question,
+                ask_id: Some(ask_id),
+                detail: None,
+            }),
+            &[],
+        )
+        .unwrap();
+        let entries = rimz::transcript::read_all(store.paths()).unwrap();
+        assert_eq!(
+            entries.last().unwrap().reply_to,
+            vec![first.message_id, second.message_id]
+        );
+
+        let mut hand_typed = recorded(LifecycleSignal::TurnStarted);
+        hand_typed.observation.prompt = Some("typed directly".to_owned());
+        record_conversation(
+            &workspace,
+            &store,
+            &rimz::agents::ClaudeAdapter,
+            "UserPromptSubmit",
+            &serde_json::json!({}),
+            &hand_typed,
+            &[],
+        )
+        .unwrap();
+        let context =
+            rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "sess-1")
+                .unwrap();
+        assert!(context.context.turn_opened_by.is_empty());
+        assert_eq!(
+            rimz::transcript::read_all(store.paths())
+                .unwrap()
+                .last()
+                .unwrap()
+                .message_id,
+            None
+        );
     }
 }

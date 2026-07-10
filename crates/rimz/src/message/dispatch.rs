@@ -110,6 +110,7 @@ pub struct DispatchContext<'a> {
     pub pending: Option<&'a mut Vec<MessageRecord>>,
     pub scope_channel: Option<&'a str>,
     pub sender: &'a MessageSender,
+    pub in_reply_to: &'a [MessageId],
 }
 
 pub type Result<T> = std::result::Result<T, DispatchErr>;
@@ -478,7 +479,8 @@ pub fn dispatch_for_targets(
                     auto_compact: mode.auto_compact(),
                     after: mode.after().to_vec(),
                 },
-            );
+            )
+            .with_in_reply_to(ctx.in_reply_to.to_vec());
             let message_id = message.message_id.clone();
             ctx.store
                 .queue_message(&message, &ctx.workspace.session_name)?;
@@ -560,6 +562,7 @@ pub fn dispatch_for_targets(
         .with_address(Some(handle.clone()))
         .with_channel(crate::harness::target::agent_channel(agent))
         .with_sender(ctx.sender.clone())
+        .with_in_reply_to(ctx.in_reply_to.to_vec())
         .with_auto_compact(mode.auto_compact())
         .with_not_before(mode.not_before())
         .with_after(mode.after().to_vec());
