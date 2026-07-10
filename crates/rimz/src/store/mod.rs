@@ -161,6 +161,7 @@ pub struct AgentLaunchRequest {
     pub name: AgentLaunchName,
     pub launch: LaunchParams,
     pub run_id: Option<RunId>,
+    pub prompt: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -171,6 +172,7 @@ pub struct AgentLaunchIdentity {
     pub name_explicit: bool,
     pub launch: LaunchParams,
     pub run_id: Option<RunId>,
+    pub prompt: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,7 +182,6 @@ pub struct AgentLaunchAppend {
     pub cwd: PathBuf,
     pub worktree_name: Option<String>,
     pub channel: Option<String>,
-    pub prompt: Option<String>,
     pub description: Option<String>,
     pub state: AgentLaunchState,
     pub pane_id: Option<PaneId>,

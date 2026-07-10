@@ -286,6 +286,7 @@ fn append_fresh_launch(
         agent.team.as_deref(),
         None,
         agent.channel.as_deref(),
+        None,
     )?;
     let request = requests
         .first_mut()
@@ -308,7 +309,6 @@ fn append_fresh_launch(
             cwd: cwd.to_path_buf(),
             worktree_name: agent.worktree_branch.clone(),
             channel: agent.channel.clone(),
-            prompt: None,
             description: None,
             state: rimz::store::event::AgentLaunchState::Starting,
             pane_id: None,
@@ -336,7 +336,6 @@ fn mark_fresh_failed(
             cwd,
             worktree_name: None,
             channel: identity.launch.channel.as_deref(),
-            prompt: None,
             state: rimz::store::event::AgentLaunchState::Failed,
             pane_id: None,
         },

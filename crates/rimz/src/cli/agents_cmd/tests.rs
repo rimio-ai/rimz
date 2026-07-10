@@ -891,6 +891,7 @@ mod placement {
             "solo".to_owned(),
             rimz::config::Team {
                 roles: vec![role_binding("planner")],
+                leader: None,
                 layout: None,
             },
         )]));
@@ -1266,6 +1267,7 @@ mod identity {
             Some("forge"),
             None,
             Some("design"),
+            Some(("draft it", 0)),
         )
         .unwrap();
         assert_eq!(requests.len(), 1);
@@ -1281,19 +1283,22 @@ mod identity {
         assert_eq!(requests[0].launch.effort.as_deref(), Some("high"));
         assert_eq!(requests[0].launch.team.as_deref(), Some("forge"));
         assert_eq!(requests[0].launch.channel.as_deref(), Some("design"));
+        assert_eq!(requests[0].prompt.as_deref(), Some("draft it"));
 
         let requests =
-            launch_identity_requests(&layout, None, Some("my_feature"), None, None, None).unwrap();
+            launch_identity_requests(&layout, None, Some("my_feature"), None, None, None, None)
+                .unwrap();
         assert_eq!(
             requests[0].name,
             AgentLaunchName::Soft("my_feature".to_owned())
         );
 
-        let requests = launch_identity_requests(&layout, None, None, None, None, None).unwrap();
+        let requests =
+            launch_identity_requests(&layout, None, None, None, None, None, None).unwrap();
         assert_eq!(requests[0].name, AgentLaunchName::Mint);
 
         assert!(
-            launch_identity_requests(&layout, Some("my_feature"), None, None, None, None)
+            launch_identity_requests(&layout, Some("my_feature"), None, None, None, None, None)
                 .unwrap_err()
                 .to_string()
                 .contains("invalid agent name")
@@ -1325,6 +1330,7 @@ mod identity {
             Some("forge"),
             Some(&team_roles),
             None,
+            Some(("implement", 1)),
         )
         .unwrap();
         assert_eq!(requests[0].launch.role.as_deref(), Some("coder"));
@@ -1333,6 +1339,9 @@ mod identity {
         assert_eq!(requests[1].launch.launch_ordinal, Some(0));
         assert_eq!(requests[2].launch.role, None);
         assert_eq!(requests[2].launch.launch_ordinal, None);
+        assert_eq!(requests[0].prompt, None);
+        assert_eq!(requests[1].prompt.as_deref(), Some("implement"));
+        assert_eq!(requests[2].prompt, None);
         assert!(
             requests
                 .iter()
@@ -1347,6 +1356,7 @@ mod identity {
             Some("forge"),
             Some(&team_roles),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(requests[0].launch.launch_ordinal, Some(1));
@@ -1357,7 +1367,8 @@ mod identity {
             &rimz::config::CommandsConfig::default(),
         )
         .expect("inline role layout");
-        let requests = launch_identity_requests(&inline, None, None, None, None, None).unwrap();
+        let requests =
+            launch_identity_requests(&inline, None, None, None, None, None, None).unwrap();
         let group = requests[0]
             .launch
             .launch_group
@@ -1371,7 +1382,8 @@ mod identity {
         assert_eq!(requests[1].launch.role.as_deref(), Some("coder"));
 
         let single = LayoutSpec::single(agent_cell_with_role(None));
-        let requests = launch_identity_requests(&single, None, None, None, None, None).unwrap();
+        let requests =
+            launch_identity_requests(&single, None, None, None, None, None, None).unwrap();
         assert_eq!(requests[0].launch.launch_group, None);
         assert_eq!(requests[0].launch.launch_ordinal, None);
     }
@@ -1379,6 +1391,57 @@ mod identity {
 
 mod pane_exec {
     use super::*;
+
+    #[test]
+    fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
+        let layout = LayoutSpec {
+            columns: vec![
+                Column {
+                    rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))],
+                    stacked: false,
+                },
+                Column {
+                    rows: vec![
+                        Cell::shell(),
+                        Cell::agent(AgentKind::new_unchecked("codex")),
+                    ],
+                    stacked: false,
+                },
+            ],
+        };
+        let identity = |kind: &str, name: &str| LaunchIdentity {
+            kind: AgentKind::new_unchecked(kind),
+            agent_id: AgentSessionId::from(format!("launch_{name}")),
+            name: name.to_owned(),
+            name_explicit: false,
+            launch: rimz::agents::LaunchParams::default(),
+            run_id: None,
+            prompt: None,
+        };
+        let panes = layout_panes_with_names(
+            &layout,
+            LayoutPaneParams {
+                cwd: Path::new("/tmp/project"),
+                prompt: Some("lead this"),
+                prompt_agent_index: Some(1),
+                cleanup_worktree: false,
+                in_place: false,
+                team: None,
+                channel: None,
+                resume_seeds: None,
+            },
+            &[identity("claude", "first"), identity("codex", "leader")],
+        )
+        .expect("layout panes");
+
+        assert!(
+            !panes.columns[0].panes[0]
+                .argv
+                .iter()
+                .any(|arg| arg == "--prompt")
+        );
+        assert_arg_pair(&panes.columns[1].panes[1].argv, "--prompt", "lead this");
+    }
 
     #[test]
     fn pane_command_stamps_cli_identity_and_close_policy() {
@@ -1405,6 +1468,7 @@ mod pane_exec {
                 ..rimz::agents::LaunchParams::default()
             },
             run_id: None,
+            prompt: None,
         };
 
         let pane = pane_cmd_with_name(

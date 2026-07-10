@@ -22,6 +22,18 @@ pub(super) fn launch_layout(
         interactive_permission_mode_from_flags(args.ask, args.yolo)?,
         args.name.as_deref(),
     )?;
+    let prompt = args
+        .prompt
+        .as_deref()
+        .filter(|prompt| !prompt.trim().is_empty());
+    let prompt_agent_index = prompt
+        .map(|_| {
+            rimz::harness::spec::prompt_leader(
+                &layout,
+                team_name.as_deref().and_then(|name| teams.0.get(name)),
+            )
+        })
+        .transpose()?;
     for kind in layout.agent_kinds() {
         agent_launch_env(&workspace.project_root, kind)?;
     }
@@ -143,6 +155,7 @@ pub(super) fn launch_layout(
             .and_then(|name| teams.0.get(name))
             .map(|team| team.roles.as_slice()),
         room_channel.as_deref(),
+        prompt.zip(prompt_agent_index),
     )?;
     let launch_identities = store.append_agent_launches_allocating(
         &launch_requests,
@@ -152,7 +165,6 @@ pub(super) fn launch_layout(
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
             channel: room_channel.clone(),
-            prompt: args.prompt.clone(),
             description: args.description.clone(),
             state: rimz::store::event::AgentLaunchState::Starting,
             pane_id: None,
@@ -186,7 +198,8 @@ pub(super) fn launch_layout(
         &layout,
         LayoutPaneParams {
             cwd: &cwd,
-            prompt: args.prompt.as_deref(),
+            prompt,
+            prompt_agent_index,
             cleanup_worktree: worktree_launch,
             in_place,
             team: team_name.as_deref(),
@@ -255,7 +268,6 @@ pub(super) fn launch_layout(
                 cwd: &cwd,
                 worktree_name: worktree_name.as_deref(),
                 channel: room_channel.as_deref(),
-                prompt: args.prompt.as_deref(),
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
@@ -356,7 +368,6 @@ fn launch_resume_layout(
             cwd: cwd.clone(),
             worktree_name: None,
             channel: channel.clone(),
-            prompt: None,
             description: None,
             state: rimz::store::event::AgentLaunchState::Starting,
             pane_id: None,
@@ -385,6 +396,7 @@ fn launch_resume_layout(
         LayoutPaneParams {
             cwd: &cwd,
             prompt: None,
+            prompt_agent_index: None,
             cleanup_worktree: false,
             in_place,
             team: team_name.as_deref(),
@@ -444,7 +456,6 @@ fn launch_resume_layout(
                 cwd: &cwd,
                 worktree_name: None,
                 channel: channel.as_deref(),
-                prompt: None,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
@@ -548,7 +559,8 @@ pub(super) fn fresh_resume_launch_requests(
     team_roles: Option<&[rimz::config::RoleBinding]>,
     channel: Option<&str>,
 ) -> Result<Vec<AgentLaunchRequest>> {
-    let mut requests = launch_identity_requests(layout, None, None, team, team_roles, channel)?;
+    let mut requests =
+        launch_identity_requests(layout, None, None, team, team_roles, channel, None)?;
     if team.is_none() {
         for request in &mut requests {
             if request.launch.launch_group.is_some()
@@ -1148,6 +1160,7 @@ pub(super) fn launch_identity_requests(
     team: Option<&str>,
     team_roles: Option<&[rimz::config::RoleBinding]>,
     channel: Option<&str>,
+    prompt: Option<(&str, usize)>,
 ) -> Result<Vec<AgentLaunchRequest>> {
     let agent_cells: Vec<&Cell> = layout.agent_cells().collect();
     let agent_count = agent_cells.len();
@@ -1205,6 +1218,9 @@ pub(super) fn launch_identity_requests(
                 kind_ordinal: None,
             },
             run_id: None,
+            prompt: prompt
+                .filter(|(_, leader_index)| *leader_index == index)
+                .map(|(prompt, _)| prompt.to_owned()),
         });
     }
     Ok(requests)
@@ -1274,8 +1290,9 @@ pub(super) fn append_launch_event(
             runtime_owner,
             worktree_path: Some(params.cwd.to_string_lossy().into_owned()),
             worktree_branch: params.worktree_name.map(ToOwned::to_owned),
-            prompt: params
+            prompt: identity
                 .prompt
+                .as_deref()
                 .filter(|prompt| !prompt.trim().is_empty())
                 .map(ToOwned::to_owned),
             description: None,
@@ -1301,6 +1318,8 @@ pub(super) fn layout_panes_with_names(
                 .rows
                 .iter()
                 .map(|cell| {
+                    let cell_agent_index =
+                        matches!(cell, Cell::Agent { .. }).then_some(agent_index);
                     let (resume_seed, launch) = if matches!(cell, Cell::Agent { .. }) {
                         let resume_seed = params
                             .resume_seeds
@@ -1333,7 +1352,9 @@ pub(super) fn layout_panes_with_names(
                         PaneCmdOptions {
                             rimz_bin: &rimz_bin,
                             cwd: params.cwd,
-                            prompt: params.prompt,
+                            prompt: (params.prompt_agent_index == cell_agent_index)
+                                .then_some(params.prompt)
+                                .flatten(),
                             cleanup_worktree: params.cleanup_worktree,
                             in_place: params.in_place,
                             team: params.team,
@@ -1357,6 +1378,7 @@ pub(super) fn layout_panes_with_names(
 pub(super) struct LayoutPaneParams<'a> {
     pub cwd: &'a Path,
     pub prompt: Option<&'a str>,
+    pub prompt_agent_index: Option<usize>,
     pub cleanup_worktree: bool,
     pub in_place: bool,
     pub team: Option<&'a str>,

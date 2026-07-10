@@ -50,6 +50,7 @@
 layout = "claude,codex"
 
 ## [agents.teams.review]
+## leader = "planner"  # role that receives the launch prompt; default: the first role
 ## layout = "planner+reviewer,coder+term"
 ## [[agents.teams.review.roles]]
 ## role = "planner"

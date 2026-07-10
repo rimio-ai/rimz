@@ -98,6 +98,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             .map_or(AgentLaunchName::Mint, AgentLaunchName::Explicit),
         launch: seed.launch.clone(),
         run_id: None,
+        prompt: None,
     };
     let launches = store.append_agent_launches_allocating(
         &[request],
@@ -107,7 +108,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             cwd: seed.cwd.clone(),
             worktree_name: None,
             channel: channel.clone(),
-            prompt: None,
             description: None,
             state: rimz::store::event::AgentLaunchState::Starting,
             pane_id: None,
@@ -217,7 +217,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 cwd: &seed.cwd,
                 worktree_name: None,
                 channel: channel.as_deref(),
-                prompt: None,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },

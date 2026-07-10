@@ -14,7 +14,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 if let Some(identity) = launch_identity.as_ref()
                     && launch_is_still_provisional(&workspace, identity)
                 {
-                    record_launch_failed(&workspace, identity, args.prompt.as_deref());
+                    record_launch_failed(&workspace, identity);
                 }
                 fail_run_on_exec_precondition(run_context.as_ref());
                 return Err(err);
@@ -26,7 +26,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         record_own_run_pane(context);
     }
     if let Some(identity) = launch_identity.as_ref() {
-        record_own_launch_pane(&workspace, identity, args.prompt.as_deref());
+        record_own_launch_pane(&workspace, identity);
     }
     let adapter = rimz::agents::find_adapter(&args.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
@@ -101,7 +101,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 if let Some(identity) = launch_identity.as_ref()
                     && launch_is_still_provisional(&workspace, identity)
                 {
-                    record_launch_failed(&workspace, identity, args.prompt.as_deref());
+                    record_launch_failed(&workspace, identity);
                 }
                 return Err(err);
             }
@@ -137,7 +137,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .as_ref()
             .is_some_and(|identity| launch_is_still_provisional(&workspace, identity));
     if startup_failure && let Some(identity) = launch_identity.as_ref() {
-        record_launch_failed(&workspace, identity, args.prompt.as_deref());
+        record_launch_failed(&workspace, identity);
     }
 
     let session_name = run_context
@@ -453,6 +453,7 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                     kind_ordinal: None,
                 },
                 run_id: args.run_id.clone(),
+                prompt: args.prompt.clone(),
             }))
         }
     }
@@ -474,11 +475,7 @@ fn record_own_run_pane(context: &RunExecContext) {
     }
 }
 
-fn record_own_launch_pane(
-    workspace: &rimz::ResolvedWorkspace,
-    identity: &LaunchIdentity,
-    prompt: Option<&str>,
-) {
+fn record_own_launch_pane(workspace: &rimz::ResolvedWorkspace, identity: &LaunchIdentity) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
     };
@@ -492,7 +489,6 @@ fn record_own_launch_pane(
                 cwd: &cwd,
                 worktree_name: None,
                 channel: identity.launch.channel.as_deref(),
-                prompt,
                 state: rimz::store::event::AgentLaunchState::Bound,
                 pane_id: Some(pane_id.clone()),
             },
@@ -508,11 +504,7 @@ fn record_own_launch_pane(
     }
 }
 
-fn record_launch_failed(
-    workspace: &rimz::ResolvedWorkspace,
-    identity: &LaunchIdentity,
-    prompt: Option<&str>,
-) {
+fn record_launch_failed(workspace: &rimz::ResolvedWorkspace, identity: &LaunchIdentity) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
     if let Err(err) = open_store(workspace).and_then(|store| {
         append_launch_event(
@@ -523,7 +515,6 @@ fn record_launch_failed(
                 cwd: &cwd,
                 worktree_name: None,
                 channel: identity.launch.channel.as_deref(),
-                prompt,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },

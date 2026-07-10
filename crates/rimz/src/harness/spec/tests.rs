@@ -51,6 +51,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
 fn team(roles: Vec<RoleBinding>) -> Team {
     Team {
         roles,
+        leader: None,
         layout: None,
     }
 }
@@ -58,6 +59,7 @@ fn team(roles: Vec<RoleBinding>) -> Team {
 fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
     Team {
         roles,
+        leader: None,
         layout: Some(layout.to_owned()),
     }
 }
@@ -1406,6 +1408,107 @@ fn team_layout_validation_requires_each_role_exactly_once() {
         validate_config(&profiles, &no_commands(), &unknown),
         Err(LayoutErr::UnknownRoleInLayout { role, .. }) if role == "ghost"
     ));
+}
+
+#[test]
+fn team_leader_validation_accepts_one_target_and_rejects_missing_or_ambiguous_targets() {
+    let profiles = profiles([("planner", profile("claude")), ("coder", profile("codex"))]);
+    let mut unknown_role = team(vec![role("planner", "planner"), role("coder", "coder")]);
+    unknown_role.leader = Some("reviewer".to_owned());
+    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), unknown_role)]));
+    assert_eq!(
+        validate_config(&profiles, &no_commands(), &teams),
+        Err(LayoutErr::UnknownLeaderRole {
+            team: "forge".to_owned(),
+            leader: "reviewer".to_owned(),
+            valid_roles: "planner, coder".to_owned(),
+        })
+    );
+
+    let layout_only = |leader: &str, layout: &str| Team {
+        roles: Vec::new(),
+        leader: Some(leader.to_owned()),
+        layout: Some(layout.to_owned()),
+    };
+    let unique = TeamsConfig(BTreeMap::from([(
+        "pair".to_owned(),
+        layout_only("claude", "claude,codex"),
+    )]));
+    validate_config(&no_profiles(), &no_commands(), &unique).expect("unique layout leader");
+
+    let missing = TeamsConfig(BTreeMap::from([(
+        "pair".to_owned(),
+        layout_only("pi", "claude,codex"),
+    )]));
+    assert!(matches!(
+        validate_config(&no_profiles(), &no_commands(), &missing),
+        Err(LayoutErr::UnknownLeaderRole { leader, .. }) if leader == "pi"
+    ));
+
+    let ambiguous = TeamsConfig(BTreeMap::from([(
+        "pair".to_owned(),
+        layout_only("claude", "claude,claude"),
+    )]));
+    assert_eq!(
+        validate_config(&no_profiles(), &no_commands(), &ambiguous),
+        Err(LayoutErr::AmbiguousPromptLeader {
+            token: "claude".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn prompt_leader_resolves_team_roles_and_safe_first_cells() {
+    let profiles = profiles([("planner", profile("claude")), ("coder", profile("codex"))]);
+    let no_commands_config = no_commands();
+    let mut configured = team_with_layout(
+        vec![role("planner", "planner"), role("coder", "coder")],
+        "coder,planner",
+    );
+    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), configured.clone())]));
+    let layout =
+        resolve_spec(Some("forge"), &profiles, &no_commands_config, &teams).expect("team layout");
+    assert_eq!(prompt_leader(&layout, Some(&configured)), Ok(1));
+
+    configured.leader = Some("coder".to_owned());
+    assert_eq!(prompt_leader(&layout, Some(&configured)), Ok(0));
+
+    let launch_commands = commands([("vim", "vim")]);
+    let single = parse_layout_spec("vim,codex+term", &profiles, &launch_commands)
+        .expect("one agent among command cells");
+    assert_eq!(prompt_leader(&single, None), Ok(0));
+
+    let roleless = Team {
+        roles: Vec::new(),
+        leader: None,
+        layout: Some("claude,codex".to_owned()),
+    };
+    let pair =
+        parse_layout_spec("claude,codex", &no_profiles(), &no_commands_config).expect("pair");
+    assert_eq!(prompt_leader(&pair, Some(&roleless)), Ok(0));
+    assert_eq!(prompt_leader(&pair, None), Ok(0));
+}
+
+#[test]
+fn prompt_leader_refuses_ambiguous_or_missing_first_targets() {
+    let profiles = no_profiles();
+    let commands = no_commands();
+    let ambiguous = parse_layout_spec("claude,claude", &profiles, &commands).expect("ambiguous");
+    assert_eq!(
+        prompt_leader(&ambiguous, None),
+        Err(LayoutErr::AmbiguousPromptLeader {
+            token: "claude".to_owned(),
+        })
+    );
+
+    let role = parse_layout_spec("claude:lead,claude", &profiles, &commands).expect("role leader");
+    assert_eq!(prompt_leader(&role, None), Ok(0));
+
+    let command_only = parse_layout_spec("term", &profiles, &commands).expect("command only");
+    assert_eq!(
+        prompt_leader(&command_only, None),
+        Err(LayoutErr::NoPromptTarget)
+    );
 }
 
 #[test]

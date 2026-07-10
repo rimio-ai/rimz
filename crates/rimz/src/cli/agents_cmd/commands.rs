@@ -1582,6 +1582,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             None,
             None,
             room_channel.as_deref(),
+            Some((&prompt, 0)),
         )?;
         if attempt > 0 {
             for request in &mut launch_requests {
@@ -1605,7 +1606,6 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
                 cwd: launch.cwd.clone(),
                 worktree_name: launch.worktree_name.clone(),
                 channel: room_channel.clone(),
-                prompt: Some(prompt.clone()),
                 description: args.description.clone(),
                 state: rimz::store::event::AgentLaunchState::Starting,
                 pane_id: None,
@@ -1690,7 +1690,6 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
                     cwd: &launch.cwd,
                     worktree_name: launch.worktree_name.as_deref(),
                     channel: room_channel.as_deref(),
-                    prompt: Some(&prompt),
                     state: rimz::store::event::AgentLaunchState::Failed,
                     pane_id: None,
                 },

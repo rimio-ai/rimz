@@ -64,14 +64,14 @@ The scaffold contains the manifest, setup guide, canonical forwarding shim, and 
 
 ### Launch a layout
 
-A `<SPEC>` is a shape, and the optional `PROMPT` broadcasts to every agent cell in it.
+A `<SPEC>` is a shape, and the optional `PROMPT` goes to exactly one leader: a named team's configured `leader` role, its first declared role by default, or otherwise the first agent cell. A repeated first cell must have an inline role to make the target unambiguous; use `rimz message @all` after launch for a broadcast.
 
 ```sh
 rimz agents peer                                    # built-in claude,codex side by side
 rimz agents claude,codex+term                       # Claude | Codex tiled over a shell
 rimz agents claude/codex/term                       # one Zellij stack; tmux tiles rows
-rimz agents claude,codex --channel=design "Draft the API shape."
-rimz agents claude,codex --worktree=cli-docs "Review the CLI docs."
+rimz agents claude,codex --channel=design "Draft the API shape."  # prompt Claude, the first cell
+rimz agents claude,codex --worktree=cli-docs "Review the CLI docs." # prompt Claude, the first cell
 rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
 rimz agents forge.planner                            # re-add one role of team forge

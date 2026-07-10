@@ -144,7 +144,6 @@ pub(crate) fn materialize_team_restore_tab(
                 cwd: planned.cwd.clone(),
                 worktree_name: None,
                 channel: planned.channel.clone(),
-                prompt: None,
                 description: None,
                 state: AgentLaunchState::Starting,
                 pane_id: None,
@@ -156,6 +155,7 @@ pub(crate) fn materialize_team_restore_tab(
         LayoutPaneParams {
             cwd: &planned.cwd,
             prompt: None,
+            prompt_agent_index: None,
             cleanup_worktree: false,
             in_place: false,
             team: Some(&planned.team),
@@ -285,6 +285,7 @@ mod tests {
                         args: None,
                     },
                 ],
+                leader: None,
                 layout: Some("planner,coder".to_owned()),
             },
         );

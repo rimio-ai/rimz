@@ -81,7 +81,6 @@ struct LaunchEventParams<'a> {
     cwd: &'a Path,
     worktree_name: Option<&'a str>,
     channel: Option<&'a str>,
-    prompt: Option<&'a str>,
     state: rimz::store::event::AgentLaunchState,
     pane_id: Option<rimz::ids::PaneId>,
 }
@@ -97,7 +96,8 @@ pub struct AgentsArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
     )]
     spec: Option<String>,
-    /// Prompt broadcast to every launched agent cell.
+    /// Prompt delivered to the layout's leader agent (a team's `leader` role,
+    /// defaulting to its first role; otherwise the first agent cell).
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
     /// Seed the agent card's description line until the agent names its own session.

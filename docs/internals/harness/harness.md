@@ -48,7 +48,7 @@ claude:planner,codex:coder → agent cells with ad-hoc `@planner` and `@coder` h
 
 Stacks are presentation only: Zellij renders a native stack with one expanded pane, while tmux keeps the same cells as tiled rows because it has no native stack.
 
-The compile target is the seam the whole harness hangs off. Each cell becomes a `LayoutPanes` entry: an agent cell compiles to the exec-wrapper argv (below), a command cell to its raw argv, and an empty argv reserves the pane for the user's shell. Team and multi-cell launches stamp each member's cohort and order (`launch_group`/`launch_ordinal`, exported as `RIMZ_LAUNCH_GROUP`/`RIMZ_LAUNCH_ORDINAL`) so the sidebar keeps the cards in definition order.
+The compile target is the seam the whole harness hangs off. Each cell becomes a `LayoutPanes` entry: an agent cell compiles to the exec-wrapper argv (below), a command cell to its raw argv, and an empty argv reserves the pane for the user's shell. A trailing launch prompt is attached to one agent identity and wrapper argv: a named team's configured `leader` role, its first declared role by default, or otherwise the first unambiguous agent cell. Team and multi-cell launches stamp each member's cohort and order (`launch_group`/`launch_ordinal`, exported as `RIMZ_LAUNCH_GROUP`/`RIMZ_LAUNCH_ORDINAL`) so the sidebar keeps the cards in definition order.
 
 ### The exec wrapper
 

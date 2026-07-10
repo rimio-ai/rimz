@@ -451,6 +451,7 @@ fn allocate_agent_launch_identities(
             name_explicit,
             launch: request.launch.clone(),
             run_id: request.run_id.clone(),
+            prompt: request.prompt.clone(),
         });
     }
     Ok(identities)
@@ -508,7 +509,7 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
             runtime_owner,
             worktree_path: Some(append.cwd.to_string_lossy().into_owned()),
             worktree_branch: append.worktree_name.clone(),
-            prompt: append
+            prompt: identity
                 .prompt
                 .as_deref()
                 .filter(|prompt| !prompt.trim().is_empty())
@@ -777,6 +778,7 @@ mod tests {
             name: AgentLaunchName::Explicit("lucid-atlas".to_owned()),
             launch: LaunchParams::default(),
             run_id: None,
+            prompt: None,
         };
         let prefix = AgentLaunchRequest {
             kind: AgentKind::new_unchecked("claude"),
@@ -784,6 +786,7 @@ mod tests {
             name: AgentLaunchName::Explicit("prefix".to_owned()),
             launch: LaunchParams::default(),
             run_id: None,
+            prompt: None,
         };
 
         assert!(allocate_agent_launch_identities(&[duplicate], &agents).is_err());
@@ -803,6 +806,7 @@ mod tests {
             name: AgentLaunchName::Soft("lucid-atlas".to_owned()),
             launch: LaunchParams::default(),
             run_id: None,
+            prompt: None,
         };
 
         let identities = allocate_agent_launch_identities(&[request], &agents).unwrap();
@@ -841,6 +845,7 @@ mod tests {
             name,
             launch: LaunchParams::default(),
             run_id: None,
+            prompt: None,
         }
     }
 

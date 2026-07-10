@@ -185,6 +185,43 @@ fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
 
 #[cfg(unix)]
 #[test]
+fn ambiguous_prompt_leader_refuses_before_side_effects() {
+    let env = Env::new();
+
+    env.rimz()
+        .args(["agents", "claude,claude", "do the thing"])
+        .assert()
+        .failure()
+        .stderr(contains("this layout has several `claude` cells"))
+        .stderr(contains("give the leader a role (`claude:lead,claude`)"));
+
+    assert!(
+        !env.state_path_for(&env.project_root).events_log.exists(),
+        "an ambiguous leader must not append launch events",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn prompt_without_an_agent_cell_refuses_before_side_effects() {
+    let env = Env::new();
+
+    env.rimz()
+        .args(["agents", "term", "do the thing"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "this layout has no agent cell to receive a prompt",
+        ));
+
+    assert!(
+        !env.state_path_for(&env.project_root).events_log.exists(),
+        "a missing prompt target must not append launch events",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn resume_with_empty_store_refuses_before_mux_probe() {
     let env = Env::new();
 

@@ -128,7 +128,7 @@ One more suffix sits outside permissions: `-ping` opens the agent at its lowest 
 
 ## Compose a layout
 
-Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell, a profile, a configured command, or `term` for a plain shell; suffix an agent cell with `:role` to give it an ad-hoc role handle. An optional trailing prompt broadcasts to every agent cell in the layout.
+Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell, a profile, a configured command, or `term` for a plain shell; suffix an agent cell with `:role` to give it an ad-hoc role handle. An optional trailing prompt goes to one leader: a named team's configured `leader` role, its first declared role by default, or otherwise the first agent cell. Give a repeated first cell an inline role to make that target unambiguous; use `rimz message @all` after launch when every agent needs the same text.
 
 ```sh
 rimz agents claude,codex                     # two agents, side by side
@@ -136,7 +136,7 @@ rimz agents claude:planner,codex:coder -w feat-x   # ad-hoc role handles, no age
 rimz agents claude,codex+term                # Claude | Codex tiled over a shell
 rimz agents claude/codex/term                # one stack of three rows
 rimz agents 'vim,codex+term'                 # your editor beside an agent stacked over a shell
-rimz agents claude,codex "Draft the API shape."   # one prompt to both agents
+rimz agents claude,codex "Draft the API shape."   # the prompt lands on the first cell, Claude
 ```
 
 Quote a spec whenever it contains a `+`, a space, or anything your shell would otherwise expand. Profiles and kinds compose the same way, so `rimz agents planner,coder+reviewer` lays out three of your presets. The full grammar and how cells compile to panes is [harness.md → The layout IR](../internals/harness/harness.md#the-layout-ir).

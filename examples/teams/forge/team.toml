@@ -22,6 +22,8 @@ effort = "xhigh"
 args = "--model opus --strict-mcp-config --tools 'Bash,Read,Edit,Write,WebFetch,WebSearch,Skill'"
 
 [agents.teams.forge]
+# Seed new work with the planner; the roles hand it through the loop from there.
+leader = "planner"
 layout = "planner,coder+reviewer"
 
 [[agents.teams.forge.roles]]

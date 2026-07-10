@@ -185,6 +185,20 @@ pub enum LayoutErr {
         role: String,
         valid_roles: String,
     },
+    #[error(
+        "team `{team}` leader `{leader}` is not a declared role; declared roles: {valid_roles}"
+    )]
+    UnknownLeaderRole {
+        team: String,
+        leader: String,
+        valid_roles: String,
+    },
+    #[error(
+        "the launch prompt goes to the leader — the first agent cell — but this layout has several `{token}` cells; give the leader a role (`{token}:lead,{token}`), set `leader` on a named team, or launch without a prompt and `rimz message` the right agent"
+    )]
+    AmbiguousPromptLeader { token: String },
+    #[error("this layout has no agent cell to receive a prompt")]
+    NoPromptTarget,
     #[error("invalid team name `{name}`; team names cannot contain `.` or `/`")]
     InvalidTeamName { name: String },
     #[error(
@@ -412,6 +426,64 @@ pub fn resolve_team(
         })
         .collect();
     Ok(LayoutSpec { columns })
+}
+
+/// Resolve the one agent cell that receives a trailing launch prompt.
+pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> {
+    let agent_cells = layout.agent_cells().collect::<Vec<_>>();
+    match agent_cells.as_slice() {
+        [] => return Err(LayoutErr::NoPromptTarget),
+        [_] => return Ok(0),
+        _ => {}
+    }
+
+    if let Some(team) = team {
+        if let Some(leader) = team.leader.as_deref() {
+            let index = if team.roles.is_empty() {
+                agent_cells
+                    .iter()
+                    .position(|cell| prompt_leader_token(cell) == Some(leader))
+            } else {
+                agent_cells.iter().position(
+                    |cell| matches!(cell, Cell::Agent { role: Some(role), .. } if role == leader),
+                )
+            };
+            // Team validation proves a configured leader is present exactly once.
+            return Ok(index.expect("validated team leader is placed in the resolved layout"));
+        }
+        if let Some(first_role) = team.roles.first() {
+            // Team validation proves every declared role is placed exactly once.
+            return Ok(agent_cells
+                .iter()
+                .position(|cell| {
+                    matches!(cell, Cell::Agent { role: Some(role), .. } if role == &first_role.role)
+                })
+                .expect("validated first team role is placed in the resolved layout"));
+        }
+    }
+
+    let first = agent_cells[0];
+    if matches!(first, Cell::Agent { role: Some(_), .. }) {
+        return Ok(0);
+    }
+    let token = prompt_leader_token(first).expect("agent cells have a profile or kind token");
+    if agent_cells
+        .iter()
+        .skip(1)
+        .any(|cell| prompt_leader_token(cell) == Some(token))
+    {
+        return Err(LayoutErr::AmbiguousPromptLeader {
+            token: token.to_owned(),
+        });
+    }
+    Ok(0)
+}
+
+fn prompt_leader_token(cell: &Cell) -> Option<&str> {
+    match cell {
+        Cell::Agent { kind, profile, .. } => Some(profile.as_deref().unwrap_or(kind.as_str())),
+        Cell::Command { .. } => None,
+    }
 }
 
 fn resolve_team_role(
@@ -1161,9 +1233,51 @@ fn validate_team(
         apply_role_overrides(&mut resolved, binding);
         render_profile_args(&binding.profile, &resolved)?;
     }
-    if let Some(layout) = team.layout.as_deref() {
+    if let Some(leader) = team.leader.as_deref()
+        && !team.roles.is_empty()
+        && !team.roles.iter().any(|binding| binding.role == leader)
+    {
+        return Err(LayoutErr::UnknownLeaderRole {
+            team: name.to_owned(),
+            leader: leader.to_owned(),
+            valid_roles: valid_team_roles(team),
+        });
+    }
+    let parsed_layout = if let Some(layout) = team.layout.as_deref() {
         let role_cells = team_role_cells(name, team, profiles)?;
-        parse_team_layout(name, layout, &role_cells, profiles, commands)?;
+        Some(parse_team_layout(
+            name,
+            layout,
+            &role_cells,
+            profiles,
+            commands,
+        )?)
+    } else {
+        None
+    };
+    if let Some(leader) = team.leader.as_deref()
+        && team.roles.is_empty()
+        && let Some(layout) = parsed_layout.as_ref()
+    {
+        match layout
+            .agent_cells()
+            .filter(|cell| prompt_leader_token(cell) == Some(leader))
+            .count()
+        {
+            1 => {}
+            0 => {
+                return Err(LayoutErr::UnknownLeaderRole {
+                    team: name.to_owned(),
+                    leader: leader.to_owned(),
+                    valid_roles: valid_team_roles(team),
+                });
+            }
+            _ => {
+                return Err(LayoutErr::AmbiguousPromptLeader {
+                    token: leader.to_owned(),
+                });
+            }
+        }
     }
     Ok(())
 }

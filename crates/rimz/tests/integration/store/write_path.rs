@@ -186,6 +186,7 @@ fn launch_allocation_reuses_name_after_stale_rollup_converges() {
             ..rimz::agents::LaunchParams::default()
         },
         run_id: None,
+        prompt: Some("boot".to_owned()),
     };
     let append = AgentLaunchAppend {
         workspace_id: h.workspace_id.clone(),
@@ -193,7 +194,6 @@ fn launch_allocation_reuses_name_after_stale_rollup_converges() {
         cwd: h.store.paths().root.clone(),
         worktree_name: Some("main".to_owned()),
         channel: None,
-        prompt: Some("boot".to_owned()),
         description: None,
         state: AgentLaunchState::Bound,
         pane_id: None,
@@ -217,6 +217,7 @@ fn launch_allocation_reuses_name_after_stale_rollup_converges() {
         .expect("launched card is visible");
     assert_eq!(card.name.as_deref(), Some(launched.name.as_str()));
     assert_eq!(card.role.as_deref(), Some("coder"));
+    assert_eq!(card.prompt.as_deref(), Some("boot"));
 }
 
 #[test]

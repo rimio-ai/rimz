@@ -45,6 +45,7 @@ fn default_machine_teams() -> TeamsConfig {
         "peer".to_owned(),
         Team {
             roles: Vec::new(),
+            leader: None,
             layout: Some("claude,codex".to_owned()),
         },
     )]))
@@ -115,6 +116,8 @@ pub struct TeamsConfig(pub BTreeMap<String, Team>);
 pub struct Team {
     #[serde(default)]
     pub roles: Vec<RoleBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<String>,
 }
