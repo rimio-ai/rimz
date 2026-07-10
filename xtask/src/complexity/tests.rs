@@ -65,36 +65,115 @@ fn group(path: &str, score: f64) -> FileGroup {
 }
 
 #[test]
-fn parse_complexity_args_accepts_top_n_and_json_in_either_order() {
+fn parse_complexity_args_accepts_top_filter_and_json_in_any_order() {
     assert_eq!(
         parse_complexity_args(&[]).unwrap(),
-        ComplexityArgs {
+        Some(ComplexityArgs {
             top_n: DEFAULT_TOP_N,
+            filter: SectionFilter::Both,
+            path: None,
             json: false,
-        }
+        })
     );
     assert_eq!(
-        parse_complexity_args(&["5".to_owned(), "--json".to_owned()]).unwrap(),
-        ComplexityArgs {
+        parse_complexity_args(&[
+            "--tests".to_owned(),
+            "--top".to_owned(),
+            "5".to_owned(),
+            "--path".to_owned(),
+            "crates/rimz/src/message".to_owned(),
+            "--json".to_owned(),
+        ])
+        .unwrap(),
+        Some(ComplexityArgs {
             top_n: 5,
+            filter: SectionFilter::Tests,
+            path: Some(PathBuf::from("crates/rimz/src/message")),
             json: true,
-        }
+        })
     );
     assert_eq!(
-        parse_complexity_args(&["--json".to_owned(), "7".to_owned()]).unwrap(),
-        ComplexityArgs {
+        parse_complexity_args(&[
+            "--json".to_owned(),
+            "--top".to_owned(),
+            "7".to_owned(),
+            "--code".to_owned(),
+        ])
+        .unwrap(),
+        Some(ComplexityArgs {
             top_n: 7,
+            filter: SectionFilter::Code,
+            path: None,
             json: true,
-        }
+        })
     );
 }
 
 #[test]
-fn parse_complexity_args_rejects_zero_duplicates_and_unknowns() {
-    assert!(parse_complexity_args(&["0".to_owned()]).is_err());
-    assert!(parse_complexity_args(&["3".to_owned(), "4".to_owned()]).is_err());
+fn parse_complexity_args_detects_help_anywhere() {
+    assert_eq!(parse_complexity_args(&["-h".to_owned()]).unwrap(), None);
+    assert_eq!(
+        parse_complexity_args(&["--top".to_owned(), "5".to_owned(), "--help".to_owned(),]).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn parse_complexity_args_rejects_invalid_values_duplicates_and_unknowns() {
+    assert!(parse_complexity_args(&["--top".to_owned(), "0".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--top".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--top".to_owned(), "many".to_owned()]).is_err());
+    assert!(
+        parse_complexity_args(&[
+            "--top".to_owned(),
+            "3".to_owned(),
+            "--top".to_owned(),
+            "4".to_owned(),
+        ])
+        .is_err()
+    );
+    assert!(parse_complexity_args(&["5".to_owned()]).is_err());
     assert!(parse_complexity_args(&["--json".to_owned(), "--json".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--code".to_owned(), "--code".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--tests".to_owned(), "--tests".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--code".to_owned(), "--tests".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--path".to_owned()]).is_err());
+    assert!(
+        parse_complexity_args(&[
+            "--path".to_owned(),
+            "src".to_owned(),
+            "--path".to_owned(),
+            "tests".to_owned(),
+        ])
+        .is_err()
+    );
     assert!(parse_complexity_args(&["--gate".to_owned()]).is_err());
+}
+
+#[test]
+fn path_scope_matches_directories_files_and_component_boundaries() {
+    let root = Path::new("/repo");
+
+    assert!(path_is_in_scope(
+        root,
+        Path::new("/repo/crates/rimz/src/message/send.rs"),
+        Path::new("crates/rimz/src/message")
+    ));
+    assert!(path_is_in_scope(
+        root,
+        Path::new("/repo/crates/rimz/src/message.rs"),
+        Path::new("crates/rimz/src/message.rs")
+    ));
+    assert!(!path_is_in_scope(
+        root,
+        Path::new("/repo/crates/rimz/src/message2/send.rs"),
+        Path::new("crates/rimz/src/message")
+    ));
+    assert!(path_is_in_scope(
+        root,
+        Path::new("/repo/crates/rimz/src/message/send.rs"),
+        Path::new("crates/rimz/src/message/")
+    ));
 }
 
 #[test]
@@ -198,29 +277,50 @@ fn inline_test_marker_finds_inline_and_sibling_test_modules() {
 }
 
 #[test]
-fn build_file_group_excludes_inline_tests_and_warn_only_files() {
-    let group = build_file_group(
-        PathBuf::from("src/example.rs"),
-        vec![
-            function_metrics("live", 10, 16, 16, 1),
-            function_metrics("near", 20, 11, 1, 1),
-            function_metrics("test", 40, 30, 60, 120),
-        ],
-        Some(30),
-    )
-    .unwrap();
-
-    assert_eq!(group.offenders.len(), 1);
-    assert_eq!(group.offenders[0].metrics.name, "live");
-    assert_eq!(group.near, vec![function_metrics("near", 20, 11, 1, 1)]);
+fn build_file_group_excludes_warn_only_files() {
     assert!(
         build_file_group(
             PathBuf::from("src/near.rs"),
             vec![function_metrics("near", 1, 11, 1, 1)],
-            None,
         )
         .is_none()
     );
+}
+
+#[test]
+fn source_file_groups_partition_inline_tests_under_the_same_path() {
+    let path = PathBuf::from("src/example.rs");
+    let (code_group, test_group) = build_source_file_groups(
+        path.clone(),
+        vec![
+            function_metrics("live", 10, 16, 16, 1),
+            function_metrics("live_near", 20, 11, 1, 1),
+            function_metrics("test", 40, 30, 60, 120),
+            function_metrics("test_near", 50, 11, 1, 1),
+        ],
+        Some(30),
+    );
+    let code_group = code_group.unwrap();
+    let test_group = test_group.unwrap();
+
+    assert_eq!(code_group.path, path);
+    assert_eq!(test_group.path, path);
+    assert_eq!(code_group.offenders[0].metrics.name, "live");
+    assert_eq!(code_group.near[0].name, "live_near");
+    assert_eq!(test_group.offenders[0].metrics.name, "test");
+    assert_eq!(test_group.near[0].name, "test_near");
+}
+
+#[test]
+fn source_file_groups_without_inline_tests_build_only_code() {
+    let (code_group, test_group) = build_source_file_groups(
+        PathBuf::from("src/example.rs"),
+        vec![function_metrics("live", 10, 16, 16, 1)],
+        None,
+    );
+
+    assert!(code_group.is_some());
+    assert!(test_group.is_none());
 }
 
 #[test]
@@ -256,7 +356,7 @@ fn split_first_starts_above_five_offenders() {
         .map(|line| function_metrics(&format!("f{line}"), line, 16, 16, 1))
         .collect();
     assert!(
-        build_file_group(PathBuf::from("six.rs"), functions, None)
+        build_file_group(PathBuf::from("six.rs"), functions)
             .unwrap()
             .split_first
     );
@@ -265,7 +365,7 @@ fn split_first_starts_above_five_offenders() {
         .map(|line| function_metrics(&format!("f{line}"), line, 16, 16, 1))
         .collect();
     assert!(
-        !build_file_group(PathBuf::from("five.rs"), functions, None)
+        !build_file_group(PathBuf::from("five.rs"), functions)
             .unwrap()
             .split_first
     );
@@ -273,7 +373,7 @@ fn split_first_starts_above_five_offenders() {
 
 #[test]
 fn complexity_json_has_versioned_truncated_shape_and_rounded_scores() {
-    let files = vec![
+    let code_files = vec![
         FileGroup {
             path: PathBuf::from("src/example.rs"),
             score: 2.666,
@@ -287,17 +387,53 @@ fn complexity_json_has_versioned_truncated_shape_and_rounded_scores() {
         },
         group("src/second.rs", 1.0),
     ];
-    let value = serde_json::to_value(complexity_json(&files, 1)).unwrap();
+    let test_files = vec![
+        group("tests/integration.rs", 4.0),
+        group("src/example/tests.rs", 2.0),
+    ];
+    let value = serde_json::to_value(complexity_json(
+        &code_files,
+        &test_files,
+        1,
+        SectionFilter::Both,
+    ))
+    .unwrap();
 
-    assert_eq!(value["version"], 1);
+    assert_eq!(value["version"], 2);
     assert_eq!(value["thresholds"]["warn"]["cognitive"], 15.0);
-    assert_eq!(value["total_files"], 2);
-    assert_eq!(value["files"].as_array().unwrap().len(), 1);
-    assert_eq!(value["files"][0]["path"], "src/example.rs");
-    assert_eq!(value["files"][0]["score"], 2.7);
-    assert_eq!(value["files"][0]["offenders"][0]["severity"], "high");
-    assert_eq!(value["files"][0]["offenders"][0]["score"], 2.7);
-    assert_eq!(value["files"][0]["near"][0]["name"], "near");
+    assert_eq!(value["code"]["total_files"], 2);
+    assert_eq!(value["code"]["files"].as_array().unwrap().len(), 1);
+    assert_eq!(value["code"]["files"][0]["path"], "src/example.rs");
+    assert_eq!(value["code"]["files"][0]["score"], 2.7);
+    assert_eq!(
+        value["code"]["files"][0]["offenders"][0]["severity"],
+        "high"
+    );
+    assert_eq!(value["code"]["files"][0]["offenders"][0]["score"], 2.7);
+    assert_eq!(value["code"]["files"][0]["near"][0]["name"], "near");
+    assert_eq!(value["tests"]["total_files"], 2);
+    assert_eq!(value["tests"]["files"].as_array().unwrap().len(), 1);
+    assert_eq!(value["tests"]["files"][0]["path"], "tests/integration.rs");
+
+    let code_only = serde_json::to_value(complexity_json(
+        &code_files,
+        &test_files,
+        1,
+        SectionFilter::Code,
+    ))
+    .unwrap();
+    assert!(code_only.get("code").is_some());
+    assert!(code_only.get("tests").is_none());
+
+    let tests_only = serde_json::to_value(complexity_json(
+        &code_files,
+        &test_files,
+        1,
+        SectionFilter::Tests,
+    ))
+    .unwrap();
+    assert!(tests_only.get("code").is_none());
+    assert!(tests_only.get("tests").is_some());
 }
 
 #[test]
@@ -307,75 +443,6 @@ fn is_test_file_classifies_conventional_paths() {
         "crates/rimz/tests/integration/backend/zellij.rs"
     )));
     assert!(!is_test_file(Path::new("crates/rimz/src/worktree.rs")));
-}
-
-#[test]
-fn worst_space_selects_function_or_closure_descendant() {
-    let root = space(
-        "crate",
-        "unit",
-        1,
-        40,
-        30,
-        40,
-        vec![
-            space("module", "mod", 2, 30, 25, 30, vec![]),
-            space("small", "function", 4, 4, 3, 4, vec![]),
-            space(
-                "outer",
-                "function",
-                10,
-                8,
-                4,
-                8,
-                vec![space("inner", "closure", 12, 12, 9, 4, vec![])],
-            ),
-        ],
-    );
-
-    assert_eq!(
-        worst_space(&root),
-        Some(WorstSpace {
-            name: "inner".to_owned(),
-            start_line: 12,
-            cyclomatic: 12.0,
-            cognitive: 9.0,
-        })
-    );
-}
-
-#[test]
-fn top_complexity_sorts_and_truncates_by_cyclomatic_then_cognitive() {
-    let files = vec![
-        FileComplexity {
-            path: PathBuf::from("a.rs"),
-            sloc: 10.0,
-            cyclomatic: 5.0,
-            cognitive: 3.0,
-            worst: None,
-        },
-        FileComplexity {
-            path: PathBuf::from("b.rs"),
-            sloc: 10.0,
-            cyclomatic: 8.0,
-            cognitive: 2.0,
-            worst: None,
-        },
-        FileComplexity {
-            path: PathBuf::from("c.rs"),
-            sloc: 10.0,
-            cyclomatic: 8.0,
-            cognitive: 6.0,
-            worst: None,
-        },
-    ];
-
-    let paths = top_complexity(files, 2)
-        .into_iter()
-        .map(|file| file.path)
-        .collect::<Vec<_>>();
-
-    assert_eq!(paths, vec![PathBuf::from("c.rs"), PathBuf::from("b.rs")]);
 }
 
 #[test]
@@ -408,13 +475,4 @@ fn complexity_json_deserializes_trimmed_rust_code_analysis_report() {
 
     assert_eq!(report.metrics.cyclomatic.sum, 9.0);
     assert_eq!(functions, vec![function_metrics("parse", 5, 7, 4, 8)]);
-    assert_eq!(
-        worst_space(&report),
-        Some(WorstSpace {
-            name: "parse".to_owned(),
-            start_line: 5,
-            cyclomatic: 7.0,
-            cognitive: 4.0,
-        })
-    );
 }
