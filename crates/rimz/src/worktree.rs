@@ -1550,6 +1550,36 @@ branch refs/heads/swift-otter
     }
 
     #[test]
+    fn pr_worktree_marker_records_pr_number() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("repo dir");
+        git_run(&repo, ["init"]).expect("git init");
+        git_run(&repo, ["config", "user.email", "rimz@example.test"]).expect("git email");
+        git_run(&repo, ["config", "user.name", "Rimz Test"]).expect("git name");
+        git_run(&repo, ["commit", "--allow-empty", "-m", "base"]).expect("initial commit");
+        let head = git_stdout(&repo, ["rev-parse", "HEAD"]).expect("head");
+        let path = dir.path().join("review-69");
+
+        add_pr_worktree(
+            &repo,
+            "review-69".to_owned(),
+            path.clone(),
+            "review-69".to_owned(),
+            head.clone(),
+            &head,
+            69,
+        )
+        .expect("PR worktree");
+
+        let marker = read_marker_for_worktree(&path)
+            .expect("read marker")
+            .expect("marker");
+        assert_eq!(marker.version, 4);
+        assert_eq!(marker.from_pr, Some(69));
+    }
+
+    #[test]
     fn checkout_metadata_marker_reader_follows_relative_gitdir_file() {
         let dir = tempfile::tempdir().unwrap();
         let worktree = dir.path().join("wt");

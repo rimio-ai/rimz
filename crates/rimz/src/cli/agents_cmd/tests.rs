@@ -237,6 +237,38 @@ mod parse {
         ));
 
         let parsed =
+            AgentsHarness::try_parse_from(["rimz", "resume", "#docs"]).expect("parse resume");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Resume {
+                scope: Some(scope),
+                from_pr: None,
+                bg: false,
+            }) if scope == "#docs"
+        ));
+
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz",
+            "resume",
+            "--from-pr",
+            "https://github.com/rimz/rimz/pull/69",
+            "--bg",
+        ])
+        .expect("parse PR resume");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Resume {
+                scope: None,
+                from_pr: Some(rimz::forge::PrTarget { number: 69, .. }),
+                bg: true,
+            })
+        ));
+
+        assert!(
+            AgentsHarness::try_parse_from(["rimz", "resume", "#docs", "--from-pr", "69",]).is_err()
+        );
+
+        let parsed =
             AgentsHarness::try_parse_from(["rimz", "refresh", "@codex"]).expect("parse refresh");
         assert!(matches!(
             parsed.args.command,

@@ -12,6 +12,7 @@ mod reconcile;
 mod refresh;
 mod refresh_usage;
 mod restart;
+mod resume;
 mod supervised;
 pub(crate) mod team_restore;
 mod top;
@@ -58,6 +59,7 @@ use launch::*;
 use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
 use restart::restart_agent;
+use resume::resume_lane;
 pub(crate) use supervised::stream::TranscriptCursor;
 use top::{TopArgs, run_top};
 
@@ -354,6 +356,22 @@ enum AgentsSubcmd {
     },
     /// Stop an agent and relaunch it in place, resuming its session.
     Restart { reference: String },
+    /// Resume a lane's closed agents where they left off.
+    Resume {
+        /// Lane to resume: `#channel`, worktree, branch, or directory name.
+        #[arg(
+            value_name = "SCOPE",
+            conflicts_with = "from_pr",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::scope_names)
+        )]
+        scope: Option<String>,
+        /// Resume the lane developed from this pull request (number or URL).
+        #[arg(long, value_name = "PR", value_parser = parse_pr)]
+        from_pr: Option<rimz::forge::PrTarget>,
+        /// Open without focusing the resumed tab.
+        #[arg(long)]
+        bg: bool,
+    },
     /// Force-refresh agent-card context from local transcripts and helpers.
     Refresh(RefreshArgs),
     /// Inspect or change one agent's dollar cap.
@@ -492,6 +510,9 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(AgentsSubcmd::Stop { reference, all }) => return stop_agent(reference, all, globals),
         Some(AgentsSubcmd::Restart { reference }) => return restart_agent(reference, globals),
+        Some(AgentsSubcmd::Resume { scope, from_pr, bg }) => {
+            return resume_lane(scope, from_pr, bg, globals);
+        }
         Some(AgentsSubcmd::Refresh(args)) => return run_refresh(args, globals),
         None => {}
     }
