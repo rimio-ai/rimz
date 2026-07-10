@@ -207,16 +207,7 @@ fn lifecycle_hooks_are_complete_and_honest() {
             LifecycleSignalKind::SubagentStopped,
             IntegrationConcern::Subagents,
         );
-        assert_hook_matches_concern(
-            *adapter,
-            LifecycleSignalKind::Compacting,
-            IntegrationConcern::Compaction,
-        );
-        assert_hook_matches_concern(
-            *adapter,
-            LifecycleSignalKind::CompactionEnded,
-            IntegrationConcern::Compaction,
-        );
+        assert_compaction_hooks_match_concern(*adapter);
     }
 }
 
@@ -319,16 +310,7 @@ setup-doc = "README.md"
         LifecycleSignalKind::SubagentStopped,
         IntegrationConcern::Subagents,
     );
-    assert_hook_matches_concern(
-        adapter,
-        LifecycleSignalKind::Compacting,
-        IntegrationConcern::Compaction,
-    );
-    assert_hook_matches_concern(
-        adapter,
-        LifecycleSignalKind::CompactionEnded,
-        IntegrationConcern::Compaction,
-    );
+    assert_compaction_hooks_match_concern(adapter);
 }
 
 fn corpus(adapter: &dyn AgentAdapter) -> Vec<ClassificationSample> {
@@ -362,11 +344,9 @@ fn assert_coverage_honest(
 ) {
     let descriptor = adapter.descriptor();
     let kind = descriptor.kind;
-    // `Partial` and `Unsupported` both assert no native signal carries the
-    // concern, so both read as `!wired` here: the equality below forbids
-    // declaring either when a native backing actually exists (that must be
-    // `Wired`). Whether a partial's derivation truly reconstructs the behaviour
-    // is editorial, like the via/reason text, and is not checked mechanically.
+    // `Partial` and `Unsupported` generally assert no native signal carries
+    // the concern. Compaction is the multi-signal exception: a partial can
+    // combine a native opening edge with a derived close, cross-checked below.
     let wired = coverage.is_wired();
     match concern {
         IntegrationConcern::TurnLifecycle => assert_eq!(
@@ -616,6 +596,26 @@ fn assert_hook_matches_concern(
     assert!(
         matches,
         "{kind} {signal_kind:?} hook coverage must agree with {concern:?} concern coverage"
+    );
+}
+
+fn assert_compaction_hooks_match_concern(adapter: &dyn AgentAdapter) {
+    let opening = hook_coverage_for(adapter, LifecycleSignalKind::Compacting);
+    let closing = hook_coverage_for(adapter, LifecycleSignalKind::CompactionEnded);
+    let concern = coverage_for(adapter, IntegrationConcern::Compaction);
+    let matches = match (opening, closing) {
+        (HookCoverage::Native { .. }, HookCoverage::Native { .. }) => {
+            matches!(concern, ConcernCoverage::Wired { .. })
+        }
+        (HookCoverage::Absent { .. }, HookCoverage::Absent { .. }) => {
+            matches!(concern, ConcernCoverage::Unsupported { .. })
+        }
+        _ => matches!(concern, ConcernCoverage::Partial { .. }),
+    };
+    assert!(
+        matches,
+        "{} compaction hook pair must agree with Compaction concern coverage",
+        adapter.descriptor().kind
     );
 }
 

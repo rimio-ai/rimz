@@ -18,6 +18,7 @@ pub mod codex;
 #[cfg(test)]
 pub(crate) mod conformance;
 pub mod context;
+pub mod copilot;
 pub mod credits;
 pub mod cursor;
 pub mod descriptor;
@@ -104,6 +105,7 @@ pub(crate) use transcript_fs::read_transcript_tail;
 
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
+pub use copilot::CopilotAdapter;
 pub use cursor::CursorAdapter;
 pub use gemini::GeminiAdapter;
 pub use opencode::OpencodeAdapter;

@@ -1,6 +1,6 @@
 # The agent model
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The per-provider native mappings (which native event means what for each agent) live in the adapter docs ([claude.md](./claude.md), [codex.md](./codex.md), [gemini.md](./gemini.md), [pi.md](./pi.md), [opencode.md](./opencode.md), [cursor.md](./cursor.md)); the account, balance, spend, and pricing model is [providers.md](./providers.md).
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The per-provider native mappings (which native event means what for each agent) live in the adapter docs ([claude.md](./claude.md), [codex.md](./codex.md), [copilot.md](./copilot.md), [gemini.md](./gemini.md), [pi.md](./pi.md), [opencode.md](./opencode.md), [cursor.md](./cursor.md)); the account, balance, spend, and pricing model is [providers.md](./providers.md).
 
 This doc owns how a running agent is *modeled*: the adapter boundary that produces the model's input, the fold that reduces it to one state per agent, and the live-context read path that enriches it. The model is a three-stage pipeline:
 
@@ -16,7 +16,7 @@ An adapter *produces* an [`AgentLifecycleObservation`](../../../crates/rimz/src/
 
 Four nouns carry the model:
 
-- An **agent kind** is a wired integration (`claude`, `codex`, `gemini`, `pi`, `opencode`, `cursor`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
+- An **agent kind** is a wired integration (`claude`, `codex`, `copilot`, `gemini`, `pi`, `opencode`, `cursor`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
 - An **agent instance** is presence: a live local pane running a known agent right now, read from the multiplexer every tick.
 - A **session** is identity: the id the agent's own hooks report, keyed `(kind, agent_id)`, where every durable fact attaches.
 - The **rollup entry** is the one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session that store replay derives: the durable record the sidebar enriches and renders.
@@ -173,7 +173,7 @@ Each rung reads enrichment plus liveness, and each leaves `snapshot.agents` hold
 
 An agent reaches the sidebar as an **agent instance**: a live local pane running a known agent command or hosting one live agent CLI under its pane root, bound one-to-one to its pane id, `pane_pid`, and process-start. A **session** binds to it, and the instance exits when its pane reverts to a shell. The instance exists before any session id is known, and the lifecycle's one hard problem is joining the two. The join turns on two independent axes: how the hook reports its identity, and where the agent runs.
 
-**Hook identity: stamped or daemon-routed.** A **standalone** agent runs in its pane, so the hook is a descendant of it and reads the pane env and pid directly: it **stamps** the pane id onto the session. A **daemon-routed** agent runs through a background daemon, so the hook fires from the *daemon* (no pane env, the daemon's shared pid) and the session is **unstamped**. Claude is standalone; Codex 0.137+ daemon-routes its hooks through the shared app-server, so in-pane Codex sessions are unstamped and bind through the recovery ladder below ([codex.md](./codex.md#session-registration-and-launch-quirks)); Pi and interactive OpenCode run in-process in the pane and are standalone.
+**Hook identity: stamped or daemon-routed.** A **standalone** agent runs in its pane, so the hook is a descendant of it and reads the pane env and pid directly: it **stamps** the pane id onto the session. A **daemon-routed** agent runs through a background daemon, so the hook fires from the *daemon* (no pane env, the daemon's shared pid) and the session is **unstamped**. Claude and Copilot are standalone; Codex 0.137+ daemon-routes its hooks through the shared app-server, so in-pane Codex sessions are unstamped and bind through the recovery ladder below ([codex.md](./codex.md#session-registration-and-launch-quirks)); Pi and interactive OpenCode run in-process in the pane and are standalone.
 
 **Presence: in-pane or remote.** Orthogonal to hook identity is where the agent actually runs:
 
@@ -263,7 +263,7 @@ Installing hooks edits the agent's own config, so it is a security surface, neve
 
 **What install wires.** Every event the state machine needs (the turn-boundary signals) plus the high-frequency per-tool events that keep enrichment and audit depth current. The single source of truth for the wired set is each adapter's `INSTALLED_EVENTS`-style constant, not restated here. Install detection requires the full canonical set, so an under-wired config re-offers the idempotent merge. Per-tool payload *content* is gated by `[privacy] payload_mode` ([configuration.md](../../guide/configuration.md#sidecars-and-privacy)); the gate strips content, never whether a transition is observed.
 
-**The installed config shape.** Claude and Codex have no wildcard event key, so install writes one block per wired event; Pi and OpenCode instead own one whole integration file (see [pi.md](./pi.md), [opencode.md](./opencode.md)). Inside that shape it stays minimal:
+**The installed config shape.** Claude and Codex have no wildcard event key, so install writes one block per wired event; Copilot, Pi, and OpenCode instead own one whole integration file (see [copilot.md](./copilot.md), [pi.md](./pi.md), [opencode.md](./opencode.md)). Inside that shape it stays minimal:
 
 - **One command for every event**: `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`, with no `--event`. The helper reads the event from the payload's `hook_event_name`.
 - **Idempotent, self-healing reclaim.** Install reclaims every rimz-owned entry by the stable command substring `rimz hooks feed --source <agent>`, then rewrites the canonical set, so duplicate or stale blocks never accumulate. User-authored hooks are untouched.
@@ -308,7 +308,7 @@ The sidecar lives wholly off the durable path (store first; sidebar wakeups are 
 
 ## Adding an agent
 
-Claude, Codex, Gemini, Pi, OpenCode, and Cursor are compiled-in integrations because Rimz owns their hook installers and provider-specific enrichment. A third-party agent normally ships a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, native shim, and optional probes, with no Rimz source change. A new built-in remains appropriate when Rimz must own a native config migration or a protocol surface that the canonical wire cannot express; it lands as one directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md), one `registry::ADAPTERS` line, conformance coverage, and its adapter doc. The step-by-step sequence — from protocol reference to landed adapter, with the deliverables checklist — is [agent-adapters.md](../../contributing/agent-adapters.md); this section owns the model-level recipe it orders.
+Claude, Codex, Copilot, Gemini, Pi, OpenCode, and Cursor are compiled-in integrations because Rimz owns their hook installers and provider-specific enrichment. A third-party agent normally ships a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, native shim, and optional probes, with no Rimz source change. A new built-in remains appropriate when Rimz must own a native config migration or a protocol surface that the canonical wire cannot express; it lands as one directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md), one `registry::ADAPTERS` line, conformance coverage, and its adapter doc. The step-by-step sequence — from protocol reference to landed adapter, with the deliverables checklist — is [agent-adapters.md](../../contributing/agent-adapters.md); this section owns the model-level recipe it orders.
 
 The descriptor carries two declared matrices, both conformance-checked and both printed by `rimz coverage` (wired green, partial yellow, unsupported/absent dim, so absences are visible at a glance):
 

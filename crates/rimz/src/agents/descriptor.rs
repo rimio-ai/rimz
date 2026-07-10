@@ -537,6 +537,25 @@ mod tests {
                 .windows_defer_to_fresh_realtime
         );
 
+        let copilot = crate::agents::registry::descriptor_by_kind("copilot").unwrap();
+        assert!(!copilot.capabilities.remote_control.pane_sessions);
+        assert!(!copilot.capabilities.remote_control.background_sessions);
+        assert!(!copilot.capabilities.rich_context);
+        assert!(!copilot.capabilities.transcript_tail_context);
+        assert!(!copilot.capabilities.daemon_hooked_sessions);
+        assert!(
+            !copilot
+                .capabilities
+                .realtime_usage
+                .covers_account_while_live
+        );
+        assert!(
+            !copilot
+                .capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
+
         let gemini = crate::agents::registry::descriptor_by_kind("gemini").unwrap();
         assert!(!gemini.capabilities.remote_control.pane_sessions);
         assert!(!gemini.capabilities.remote_control.background_sessions);

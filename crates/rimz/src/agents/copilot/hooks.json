@@ -1,0 +1,15 @@
+{"_rimz_managed": "RimZ-owned hook file — edits are overwritten by rimz hooks install",
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event sessionStart","timeoutSec":30}],
+    "userPromptSubmitted": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event userPromptSubmitted","timeoutSec":30}],
+    "preToolUse": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event preToolUse","timeoutSec":30}],
+    "postToolUse": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event postToolUse","timeoutSec":30}],
+    "postToolUseFailure": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event postToolUseFailure","timeoutSec":30}],
+    "permissionRequest": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event permissionRequest","timeoutSec":30}],
+    "agentStop": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event agentStop","timeoutSec":30}],
+    "preCompact": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event preCompact","timeoutSec":30}],
+    "errorOccurred": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event errorOccurred","timeoutSec":30}],
+    "sessionEnd": [{"type":"command","bash":"RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source copilot --event sessionEnd","timeoutSec":30}]
+  }
+}

@@ -1,6 +1,6 @@
 # GitHub Copilot CLI protocol reference
 
-> No RimZ Copilot adapter exists yet. This document records the upstream surface needed to build one; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
+> RimZ ships a hooks-first Copilot adapter documented in [copilot.md](../../internals/agents/copilot.md). This reference retains the live-verification and enrichment gaps that bound the current integration; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **GitHub Copilot CLI upstream protocol surface** relevant to RimZ — lifecycle hooks and their decision channel, session identity and persistence, the statusline command, OpenTelemetry, programmatic and ACP modes, authentication, remote control, configuration, and permission modes. It is an implementation research record, not a claim that RimZ currently supports Copilot.
 
