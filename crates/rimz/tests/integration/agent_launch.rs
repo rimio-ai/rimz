@@ -79,7 +79,7 @@ fn bashrc_path_reaches_the_spawned_agent() {
 
 #[cfg(unix)]
 #[test]
-fn adapter_pin_overrides_shell_rc_env() {
+fn adapter_preserves_agent_view_shell_env() {
     let env = Env::new();
     let shell = write_fake_login_shell(
         &env,
@@ -94,14 +94,14 @@ fn adapter_pin_overrides_shell_rc_env() {
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert_success_within_timeout("claude adapter pin launch");
+        .assert_success_within_timeout("claude agent-view env launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
         dumped
             .lines()
-            .any(|line| line == "CLAUDE_CODE_DISABLE_AGENT_VIEW=1"),
-        "claude launch env misses the built-in pin after shell rc:\n{dumped}"
+            .any(|line| line == "CLAUDE_CODE_DISABLE_AGENT_VIEW=0"),
+        "claude launch env did not preserve the shell value:\n{dumped}"
     );
 }
 

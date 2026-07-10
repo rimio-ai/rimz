@@ -205,12 +205,11 @@ fn untrusted_agent_env_refuses_the_launch() {
         .stderr(contains("rimz trust grant"));
 }
 
-/// The Claude launch pin is an adapter built-in, applied over project config:
-/// a trusted workspace declaring the var cannot switch the pane back into the
-/// agents dashboard the integration cannot drive.
+/// Agent-view policy belongs to Claude Code and remains a normal trusted
+/// project launch setting.
 #[cfg(unix)]
 #[test]
-fn builtin_claude_launch_env_overrides_project_config() {
+fn trusted_claude_agent_view_env_reaches_the_process() {
     let env = Env::new();
     env.write_config(
         &env.project_root,
@@ -231,15 +230,15 @@ fn builtin_claude_launch_env_overrides_project_config() {
     assert!(
         dumped
             .lines()
-            .any(|line| line == "CLAUDE_CODE_DISABLE_AGENT_VIEW=1"),
-        "claude launch env misses the built-in pin:\n{dumped}"
+            .any(|line| line == "CLAUDE_CODE_DISABLE_AGENT_VIEW=0"),
+        "claude launch env misses the trusted project value:\n{dumped}"
     );
 }
 
 /// A resumed agent funnels through the same exec wrapper as a fresh launch:
 /// the pane runs `rimz agents exec <kind> --resume <id>`, so trusted project
-/// env and the adapter's built-in pins reach the resumed process, and the
-/// child receives the adapter's own resume argv.
+/// env reaches the resumed process, and the child receives the adapter's own
+/// resume argv.
 #[cfg(unix)]
 #[test]
 fn resumed_agent_env_funnels_through_the_exec_wrapper() {
@@ -267,12 +266,6 @@ fn resumed_agent_env_funnels_through_the_exec_wrapper() {
     assert!(
         dumped.lines().any(|line| line == "RIMZ_TEST_INJECTED=yes"),
         "resumed agent env misses the trusted project var:\n{dumped}"
-    );
-    assert!(
-        dumped
-            .lines()
-            .any(|line| line == "CLAUDE_CODE_DISABLE_AGENT_VIEW=1"),
-        "resumed agent env misses the built-in pin:\n{dumped}"
     );
 }
 

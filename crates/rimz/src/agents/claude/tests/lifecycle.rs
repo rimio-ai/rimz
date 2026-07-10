@@ -83,39 +83,22 @@ fn subagent_and_foreign_identity_boundaries_are_preserved() {
     assert_eq!(start.task.as_deref(), Some("Explore"));
     assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
 
-    for (payload, expected_error) in [
-        (
-            json!({
-                "session_id": "sess-parent",
-                "agent_id": "child-1",
-                "agent_type": "Explore",
-            }),
-            false,
-        ),
-        (
-            json!({
-                "session_id": "sess-parent",
-                "agent_id": "child-1",
-                "agent_type": "Explore",
-                "exit_code": 1,
-            }),
-            true,
-        ),
-    ] {
-        let stop = ClaudeAdapter
-            .observe_lifecycle("SubagentStop", &payload)
-            .unwrap();
-        assert_eq!(stop.agent_id.as_deref(), Some("child-1"));
-        assert_eq!(
-            stop.signal,
-            LifecycleSignal::SubagentStopped {
-                errored: expected_error
-            },
-            "{payload}"
-        );
-        assert_eq!(stop.task.as_deref(), Some("Explore"));
-        assert_eq!(stop.parent_agent_id.as_deref(), Some("sess-parent"));
-    }
+    let stop_payload = json!({
+        "session_id": "sess-parent",
+        "agent_id": "child-1",
+        "agent_type": "Explore",
+        "last_assistant_message": "Analysis complete",
+    });
+    let stop = ClaudeAdapter
+        .observe_lifecycle("SubagentStop", &stop_payload)
+        .unwrap();
+    assert_eq!(stop.agent_id.as_deref(), Some("child-1"));
+    assert_eq!(
+        stop.signal,
+        LifecycleSignal::SubagentStopped { errored: false }
+    );
+    assert_eq!(stop.task.as_deref(), Some("Explore"));
+    assert_eq!(stop.parent_agent_id.as_deref(), Some("sess-parent"));
 
     let root = ClaudeAdapter
         .observe_lifecycle("UserPromptSubmit", &json!({ "session_id": "sess-root" }))
@@ -343,6 +326,19 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+            },
+        ),
+        (
+            "scheduled wakeup",
+            json!({
+                "session_id": "sess-1",
+                "session_crons": [
+                    { "id": "cron-1", "schedule": "0 9 * * 1-5", "recurring": true, "prompt": "Check the build" }
+                ]
+            }),
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: true,
             },
         ),
         (

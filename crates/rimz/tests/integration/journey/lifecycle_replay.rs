@@ -366,10 +366,7 @@ fn subagent_child_row_appears_and_clears() {
             "subagent start renders the child under the selected parent:\n{screen}"
         );
 
-        room.agent_hook(
-            agent.source(),
-            &subagent_stop(agent.session(), &child_id, false),
-        );
+        room.agent_hook(agent.source(), &subagent_stop(agent.session(), &child_id));
         let screen = room.wait_for(|s| s.contains("✓ review"), SETTLE);
         assert!(
             screen.contains("✓ review"),

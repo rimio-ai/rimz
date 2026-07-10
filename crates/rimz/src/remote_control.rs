@@ -27,9 +27,9 @@
 //! skips that inert host so the room still starts, and `rimz doctor` surfaces
 //! the install fix. Claude has version- and settings-gated preconditions: old
 //! binaries lack remote control, `disableRemoteControl` blocks the surface,
-//! newer agent-view settings can kill the host, and API-key auth disables
-//! remote control on affected releases. Those installed-but-blocked cases stay
-//! fail-fast at `rimz start`.
+//! and incompatible authentication or API endpoints disable remote control on
+//! affected releases. Those installed-but-blocked cases stay fail-fast at
+//! `rimz start`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -68,19 +68,10 @@ pub fn claude_command() -> Vec<String> {
     ]
 }
 
-/// The daemon-host Claude argv. Pane launches deliberately set
-/// [`claude_rc::DISABLE_AGENT_VIEW_ENV`] so a plain `claude` opens the classic
-/// REPL, but the remote-control host needs the agent-view supervisor on newer
-/// Claude Code builds. `env -u` unsets only that key while preserving the rest
-/// of the inherited environment.
+/// The daemon-host Claude argv. Server mode is independent of agent view, so
+/// it uses the same direct command documented by Claude Code.
 pub fn claude_host_argv() -> Vec<String> {
-    let mut argv = vec![
-        "env".to_owned(),
-        "-u".to_owned(),
-        claude_rc::DISABLE_AGENT_VIEW_ENV.to_owned(),
-    ];
-    argv.extend(claude_command());
-    argv
+    claude_command()
 }
 
 /// The Codex remote-control argv (program first), invoked through `bin` — the
@@ -183,12 +174,6 @@ pub enum PreflightError {
     ClaudeTooOld { found: CliVersion },
     /// Claude's own settings explicitly disable remote control.
     ClaudeRemoteControlDisabled { settings_path: PathBuf },
-    /// Newer Claude Code hosts remote control through the agent-view surface,
-    /// and that surface is disabled in settings.
-    ClaudeAgentViewDisabled {
-        settings_path: PathBuf,
-        found: CliVersion,
-    },
     /// Claude Code disables remote control when API-key auth is active on
     /// affected versions.
     ClaudeAuthConflict {
@@ -213,6 +198,8 @@ pub enum ClaudeAuthConflictSource {
     AuthTokenEnv,
     ApiKeyHelperSetting,
     SettingsEnv,
+    EndpointEnv,
+    SettingsEndpoint,
 }
 
 impl std::fmt::Display for ClaudeAuthConflictSource {
@@ -224,6 +211,14 @@ impl std::fmt::Display for ClaudeAuthConflictSource {
             Self::SettingsEnv => write!(
                 f,
                 "ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN in Claude settings env"
+            ),
+            Self::EndpointEnv => write!(
+                f,
+                "a custom Anthropic endpoint or third-party provider in the launch environment"
+            ),
+            Self::SettingsEndpoint => write!(
+                f,
+                "a custom Anthropic endpoint or third-party provider in Claude settings env"
             ),
         }
     }
@@ -261,23 +256,11 @@ impl std::fmt::Display for PreflightError {
                  `[remote_control] claude = false` to disable the Claude host.",
                 settings_path.display(),
             ),
-            Self::ClaudeAgentViewDisabled {
-                settings_path,
-                found,
-            } => write!(
-                f,
-                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
-                 `disableAgentView: true` in {} blocks the remote-control host on Claude \
-                 Code {found}.\n\n\
-                 Remove that setting or set it to false, then re-run, or set \
-                 `[remote_control] claude = false` to disable the Claude host.",
-                settings_path.display(),
-            ),
             Self::ClaudeAuthConflict { sources } => write!(
                 f,
                 "Claude remote-control is enabled (`[remote_control] claude = true`) but \
-                 Claude Code disables remote control when API-key auth is active on this \
-                 version. Conflicting source(s): {}.\n\n\
+                 Claude Code disables remote control with the configured authentication \
+                 or API endpoint on this version. Conflicting source(s): {}.\n\n\
                  Remove those auth sources and use a claude.ai login for remote control, \
                  then re-run, or set `[remote_control] claude = false` to disable the \
                  Claude host.",
@@ -351,6 +334,7 @@ pub fn preflight_claude(config: &RemoteControlConfig) -> Result<(), PreflightErr
         settings,
         env_var_present("ANTHROPIC_API_KEY"),
         env_var_present("ANTHROPIC_AUTH_TOKEN"),
+        claude_rc::launch_endpoint_conflict(),
     )
 }
 
@@ -375,6 +359,7 @@ pub(crate) fn claude_preflight_decision(
     settings: claude_rc::ClaudeRcSettings,
     env_api_key: bool,
     env_auth_token: bool,
+    env_endpoint_conflict: bool,
 ) -> Result<(), PreflightError> {
     if !claude_enabled || !claude_present {
         return Ok(());
@@ -392,13 +377,6 @@ pub(crate) fn claude_preflight_decision(
     if found < claude_rc::MIN_REMOTE_CONTROL {
         return Err(PreflightError::ClaudeTooOld { found });
     }
-    if found >= claude_rc::AGENT_VIEW_HOSTS_RC_SINCE && settings.disable_agent_view {
-        return Err(PreflightError::ClaudeAgentViewDisabled {
-            settings_path,
-            found,
-        });
-    }
-
     let mut sources = Vec::new();
     if env_api_key {
         sources.push(ClaudeAuthConflictSource::ApiKeyEnv);
@@ -412,7 +390,18 @@ pub(crate) fn claude_preflight_decision(
     if settings.env_auth_conflict {
         sources.push(ClaudeAuthConflictSource::SettingsEnv);
     }
-    if found >= claude_rc::AUTH_ENV_BLOCKS_RC_SINCE && !sources.is_empty() {
+    if found < claude_rc::AUTH_ENV_BLOCKS_RC_SINCE {
+        sources.clear();
+    }
+    if found >= claude_rc::CUSTOM_ENDPOINT_BLOCKS_RC_SINCE {
+        if env_endpoint_conflict {
+            sources.push(ClaudeAuthConflictSource::EndpointEnv);
+        }
+        if settings.env_endpoint_conflict {
+            sources.push(ClaudeAuthConflictSource::SettingsEndpoint);
+        }
+    }
+    if !sources.is_empty() {
         return Err(PreflightError::ClaudeAuthConflict { sources });
     }
 

@@ -46,6 +46,9 @@ impl CompactTrigger {
 #[serde(default)]
 pub struct HookEventCommon {
     pub session_id: Option<String>,
+    /// Claude Code v2.1.196+ correlates hook callbacks for one user prompt with
+    /// this UUID. Other adapters and pre-prompt events leave it absent.
+    pub prompt_id: Option<String>,
     pub transcript_path: Option<String>,
     pub cwd: Option<String>,
     pub hook_event_name: Option<String>,
@@ -58,9 +61,14 @@ pub struct HookEventCommon {
 #[serde(default)]
 pub struct BackgroundTask {
     pub id: Option<String>,
+    pub r#type: Option<String>,
     pub status: Option<String>,
     pub description: Option<String>,
     pub command: Option<String>,
+    pub agent_type: Option<String>,
+    pub server: Option<String>,
+    pub tool: Option<String>,
+    pub name: Option<String>,
 }
 
 #[cfg(test)]

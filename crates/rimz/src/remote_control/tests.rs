@@ -32,17 +32,9 @@ fn claude_command_uses_worktree_spawn() {
 }
 
 #[test]
-fn claude_host_argv_unsets_the_agent_view_pin() {
+fn claude_host_argv_uses_the_documented_server_command() {
     let argv = claude_host_argv();
-    assert_eq!(
-        &argv[..4],
-        ["env", "-u", claude_rc::DISABLE_AGENT_VIEW_ENV, "claude"]
-    );
-    assert_eq!(&argv[4..], ["remote-control", "--spawn", "worktree"]);
-    assert!(
-        !argv.iter().any(|arg| arg.contains("=1")),
-        "the host argv must not set the pane-only agent-view kill switch"
-    );
+    assert_eq!(argv, ["claude", "remote-control", "--spawn", "worktree"]);
     assert!(command_is_host(&argv.join(" ")));
 }
 
@@ -146,6 +138,7 @@ fn claude_decision(
         settings,
         env_api_key,
         env_auth_token,
+        false,
     )
 }
 
@@ -159,10 +152,6 @@ fn only_codex_standalone_missing_is_an_uninstalled_host() {
         },
         PreflightError::ClaudeRemoteControlDisabled {
             settings_path: settings_path(),
-        },
-        PreflightError::ClaudeAgentViewDisabled {
-            settings_path: settings_path(),
-            found: CliVersion::new(2, 1, 173),
         },
         PreflightError::ClaudeAuthConflict {
             sources: vec![ClaudeAuthConflictSource::ApiKeyEnv],
@@ -184,7 +173,8 @@ fn claude_preflight_preserves_off_and_absent_binary_skip() {
             settings_path(),
             claude_settings(),
             true,
-            true
+            true,
+            false,
         )
         .is_ok()
     );
@@ -196,7 +186,8 @@ fn claude_preflight_preserves_off_and_absent_binary_skip() {
             settings_path(),
             claude_settings(),
             true,
-            true
+            true,
+            false,
         )
         .is_ok()
     );
@@ -224,22 +215,6 @@ fn claude_preflight_blocks_old_versions_and_disabled_settings() {
 }
 
 #[test]
-fn claude_preflight_agent_view_gate_starts_at_2_1_173() {
-    let settings = claude_rc::ClaudeRcSettings {
-        disable_agent_view: true,
-        ..claude_settings()
-    };
-    assert!(claude_decision(v(172), settings.clone(), false, false).is_ok());
-    assert_eq!(
-        claude_decision(v(173), settings, false, false),
-        Err(PreflightError::ClaudeAgentViewDisabled {
-            settings_path: settings_path(),
-            found: CliVersion::new(2, 1, 173),
-        }),
-    );
-}
-
-#[test]
 fn claude_preflight_auth_conflict_gate_starts_at_2_1_157() {
     let settings = claude_rc::ClaudeRcSettings {
         api_key_helper: true,
@@ -261,9 +236,47 @@ fn claude_preflight_auth_conflict_gate_starts_at_2_1_157() {
 }
 
 #[test]
+fn claude_preflight_custom_endpoint_gate_starts_at_2_1_196() {
+    let settings = claude_rc::ClaudeRcSettings {
+        env_endpoint_conflict: true,
+        ..claude_settings()
+    };
+    assert!(
+        claude_preflight_decision(
+            true,
+            true,
+            v(195),
+            settings_path(),
+            settings.clone(),
+            false,
+            false,
+            true,
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        claude_preflight_decision(
+            true,
+            true,
+            v(196),
+            settings_path(),
+            settings,
+            false,
+            false,
+            true,
+        ),
+        Err(PreflightError::ClaudeAuthConflict {
+            sources: vec![
+                ClaudeAuthConflictSource::EndpointEnv,
+                ClaudeAuthConflictSource::SettingsEndpoint,
+            ],
+        }),
+    );
+}
+
+#[test]
 fn claude_preflight_unknown_version_applies_only_settings_independent_gate() {
     let settings = claude_rc::ClaudeRcSettings {
-        disable_agent_view: true,
         api_key_helper: true,
         ..claude_settings()
     };

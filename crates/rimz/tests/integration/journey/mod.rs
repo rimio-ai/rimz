@@ -694,14 +694,14 @@ pub fn subagent_start(session_id: &str, child_id: &str) -> Value {
     })
 }
 
-pub fn subagent_stop(session_id: &str, child_id: &str, errored: bool) -> Value {
+pub fn subagent_stop(session_id: &str, child_id: &str) -> Value {
     json!({
         "hook_event_name": "SubagentStop",
         "session_id": session_id,
         "agent_id": child_id,
         "agent_type": "review",
         "subagent_type": "review",
-        "exit_code": if errored { 1 } else { 0 },
+        "last_assistant_message": "review complete",
     })
 }
 

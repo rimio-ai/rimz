@@ -1,7 +1,7 @@
 //! Claude Code remote-control settings and version gates.
 //!
-//! This module owns upstream facts so the pane launch pin, daemon host strip,
-//! `rimz start` preflight, doctor, and sidebar badge all read one source.
+//! This module owns upstream facts so `rimz start` preflight, doctor, and the
+//! sidebar badge all read one source.
 
 use serde_json::{Map, Value};
 use std::path::PathBuf;
@@ -10,23 +10,27 @@ use crate::agents::version::{CliVersion, probe_cli_version};
 
 use super::install::{claude_settings_path, read_existing_json};
 
-pub(crate) const DISABLE_AGENT_VIEW_ENV: &str = "CLAUDE_CODE_DISABLE_AGENT_VIEW";
-
 pub(crate) const MIN_REMOTE_CONTROL: CliVersion = CliVersion::new(2, 1, 51);
 pub(crate) const AUTH_ENV_BLOCKS_RC_SINCE: CliVersion = CliVersion::new(2, 1, 157);
-pub(crate) const AGENT_VIEW_HOSTS_RC_SINCE: CliVersion = CliVersion::new(2, 1, 173);
+pub(crate) const CUSTOM_ENDPOINT_BLOCKS_RC_SINCE: CliVersion = CliVersion::new(2, 1, 196);
 
 const FALLBACK_SETTINGS_PATH: &str = "~/.claude/settings.json";
 const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
+const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
+const THIRD_PARTY_PROVIDER_VARS: [&str; 3] = [
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ClaudeRcSettings {
     pub disable_remote_control: bool,
     pub remote_control_at_startup: bool,
-    pub disable_agent_view: bool,
     pub api_key_helper: bool,
     pub env_auth_conflict: bool,
+    pub env_endpoint_conflict: bool,
 }
 
 pub(crate) fn read_rc_settings() -> (PathBuf, ClaudeRcSettings) {
@@ -64,10 +68,6 @@ pub(crate) fn rc_settings_from(root: &Map<String, Value>) -> ClaudeRcSettings {
             .get("remoteControlAtStartup")
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        disable_agent_view: root
-            .get("disableAgentView")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
         api_key_helper: root.get("apiKeyHelper").is_some_and(setting_value_present),
         env_auth_conflict: root
             .get("env")
@@ -79,6 +79,10 @@ pub(crate) fn rc_settings_from(root: &Map<String, Value>) -> ClaudeRcSettings {
                         .get(ANTHROPIC_AUTH_TOKEN)
                         .is_some_and(setting_value_present)
             }),
+        env_endpoint_conflict: root
+            .get("env")
+            .and_then(Value::as_object)
+            .is_some_and(endpoint_conflict_in),
     }
 }
 
@@ -117,6 +121,35 @@ fn setting_value_present(value: &Value) -> bool {
     }
 }
 
+pub(crate) fn launch_endpoint_conflict() -> bool {
+    std::env::var(ANTHROPIC_BASE_URL)
+        .ok()
+        .is_some_and(|value| endpoint_is_conflicting(&value))
+        || THIRD_PARTY_PROVIDER_VARS
+            .iter()
+            .any(|key| env_value_present(key))
+}
+
+fn endpoint_conflict_in(env: &Map<String, Value>) -> bool {
+    env.get(ANTHROPIC_BASE_URL)
+        .and_then(Value::as_str)
+        .is_some_and(endpoint_is_conflicting)
+        || THIRD_PARTY_PROVIDER_VARS
+            .iter()
+            .any(|key| env.get(*key).is_some_and(setting_value_present))
+}
+
+fn is_anthropic_api_url(value: &str) -> bool {
+    matches!(
+        value.trim().trim_end_matches('/'),
+        "https://api.anthropic.com"
+    )
+}
+
+fn endpoint_is_conflicting(value: &str) -> bool {
+    !value.trim().is_empty() && !is_anthropic_api_url(value)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -132,23 +165,31 @@ mod tests {
         let parsed = settings(json!({
             "disableRemoteControl": true,
             "remoteControlAtStartup": true,
-            "disableAgentView": true
         }));
         assert!(parsed.disable_remote_control);
         assert!(parsed.remote_control_at_startup);
-        assert!(parsed.disable_agent_view);
 
         // An apiKeyHelper or an env auth token (either key) is an auth conflict.
         assert!(settings(json!({ "apiKeyHelper": "op read key" })).api_key_helper);
         assert!(settings(json!({ "env": { "ANTHROPIC_API_KEY": "sk-ant" } })).env_auth_conflict);
         assert!(settings(json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "token" } })).env_auth_conflict);
+        assert!(
+            settings(json!({ "env": { "ANTHROPIC_BASE_URL": "https://gateway.example" } }))
+                .env_endpoint_conflict
+        );
+        assert!(
+            settings(json!({ "env": { "CLAUDE_CODE_USE_BEDROCK": "1" } })).env_endpoint_conflict
+        );
+        assert!(
+            !settings(json!({ "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com/" } }))
+                .env_endpoint_conflict
+        );
 
         // Falsey, empty, and empty-env values read as the default (nothing set).
         assert_eq!(
             settings(json!({
                 "disableRemoteControl": false,
                 "remoteControlAtStartup": false,
-                "disableAgentView": false,
                 "apiKeyHelper": "",
                 "env": { "ANTHROPIC_API_KEY": "" }
             })),

@@ -227,11 +227,11 @@ mod tests {
         assert!(hosts(&claude_only, false, false).is_empty());
         let claude = hosts(&claude_only, true, false);
         assert_eq!(claude.len(), 1);
-        assert_eq!(claude[0].argv[0], "env");
+        assert_eq!(claude[0].argv[0], "claude");
         assert_eq!(
             claude[0].argv,
             rimz::remote_control::claude_host_argv(),
-            "the daemon host unsets the pane-only Claude agent-view pin"
+            "the daemon host uses Claude's documented server command"
         );
         assert_eq!(claude[0].cwd.as_path(), project);
 
@@ -241,7 +241,7 @@ mod tests {
         };
         let pair = hosts(&both, true, true);
         assert_eq!(pair.len(), 2);
-        assert_eq!(pair[0].argv[0], "env");
+        assert_eq!(pair[0].argv[0], "claude");
         assert_eq!(pair[1].argv[0], "/usr/bin/rimz");
         assert!(pair[1].argv.iter().any(|arg| arg == "app-server"));
     }

@@ -4,8 +4,8 @@
 //! ExitPlanMode`, `PreToolUse: AskUserQuestion`) and the lifecycle events
 //! (`SessionStart` registers idle, `UserPromptSubmit` moves to running with
 //! the prompt as task, `Stop` completes the turn — success, or failed on an
-//! error signal, or back to running when the payload's `background_tasks`
-//! still has work in flight, `SessionEnd` exits, `Notification` silent);
+//! error signal, or back to running when `background_tasks` or `session_crons`
+//! still has work pending, `SessionEnd` exits, `Notification` silent);
 //! renders the Claude-shaped `hookSpecificOutput` / `updatedInput` decision
 //! payload and the silent neutral fallback. Context budget is read from the
 //! transcript tail.
@@ -187,7 +187,7 @@ const CLAUDE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::BackgroundParking,
         ConcernCoverage::Wired {
-            via: "Stop.background_tasks",
+            via: "Stop.background_tasks/session_crons",
         },
     ),
     (
@@ -502,13 +502,6 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         Some(super::positional_prompt_argv("claude", extra_args, prompt))
-    }
-
-    fn launch_env(&self) -> Vec<(&'static str, &'static str)> {
-        // Claude Code ≥2.1.173 opens its agents dashboard by default; the
-        // Rimz pane contract (hooks, transcript tail, message sends)
-        // drives the classic interactive REPL.
-        vec![(remote_control::DISABLE_AGENT_VIEW_ENV, "1")]
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
@@ -971,7 +964,7 @@ impl ClaudeLifecycleParts {
         let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
         let pending_background = stop
             .as_ref()
-            .map(|p| pending_background_tasks(&p.background_tasks))
+            .map(|p| pending_background_work(&p.background_tasks, &p.session_crons))
             .unwrap_or_default();
         Self {
             session_start,
@@ -1008,13 +1001,9 @@ fn map_claude_lifecycle_signal(
         }
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
-        "SubagentStop" => Some(LifecycleSignal::SubagentStopped {
-            errored: parts
-                .subagent_stop
-                .as_ref()
-                .and_then(|p| p.exit_code)
-                .is_some_and(|code| code != 0),
-        }),
+        // The published SubagentStop payload has no outcome or exit-code
+        // field, so close the bracket without inventing an error state.
+        "SubagentStop" => Some(LifecycleSignal::SubagentStopped { errored: false }),
         "Stop" => Some(LifecycleSignal::TurnEnded {
             errored: stop_payload_errored(payload),
             parked_on_background: !parts.pending_background.is_empty(),
@@ -1157,17 +1146,17 @@ fn claude_effort(payload: &Value, parts: &ClaudeLifecycleParts) -> Option<String
         .or_else(|| optional_payload_string(payload, &["thinking_level"]))
 }
 
-/// In-flight background tasks from a typed Claude `Stop` payload
-/// (`background_tasks`, Claude Code v2.1.145+), as display labels. A `Stop`
-/// with pending background work is the main thread parking, not a turn end —
-/// it reawakens when the work reports back — so the row must stay live. Each
-/// in-flight entry's label is its `description`, else `command`, else `id`; an
-/// entry with a terminal `status` (`completed`/`failed`) is no longer in
-/// flight and is skipped. An all-terminal or empty slice yields an empty vec:
-/// a genuine turn end. Older Claude builds omit the field entirely, which
-/// degrades to the same empty vec via the typed struct's `Vec::default()`.
-fn pending_background_tasks(tasks: &[BackgroundTask]) -> Vec<String> {
-    tasks
+/// Pending work from a typed Claude `Stop` payload (`background_tasks` and
+/// `session_crons`, Claude Code v2.1.145+), as display labels. Pending work
+/// means the main thread parked and will reawaken, so the row stays live.
+/// Terminal background entries are skipped; every scheduled wakeup remains
+/// pending until Claude removes it from the array. Older builds omit both
+/// fields, which degrades to a genuine turn end through `Vec::default()`.
+fn pending_background_work(
+    tasks: &[BackgroundTask],
+    crons: &[payloads::SessionCron],
+) -> Vec<String> {
+    let mut pending = tasks
         .iter()
         .filter(|task| {
             task.status
@@ -1181,7 +1170,15 @@ fn pending_background_tasks(tasks: &[BackgroundTask]) -> Vec<String> {
                 .unwrap_or("background task")
                 .to_owned()
         })
-        .collect()
+        .collect::<Vec<_>>();
+    pending.extend(crons.iter().map(|cron| {
+        [&cron.prompt, &cron.schedule, &cron.id]
+            .into_iter()
+            .find_map(|opt| opt.as_deref().filter(|label| !label.is_empty()))
+            .unwrap_or("scheduled wakeup")
+            .to_owned()
+    }));
+    pending
 }
 
 /// Context-window usage derived from a Claude transcript tail. Carries the
