@@ -103,16 +103,27 @@ fn cohort_members<'a>(
         .iter()
         .filter(|agent| {
             agent.parent_agent_id.is_none()
-                && !agent.agent_id.is_empty()
                 && agent.worktree_path.as_deref().is_some_and(|path| {
                     rimz::worktree::normalize_path_lexical(Path::new(path)) == target
                 })
         })
         .collect::<Vec<_>>();
-    rimz::harness::resume::match_cohort(&candidates, cells, team)
-        .into_iter()
-        .flatten()
-        .collect()
+    match team {
+        Some(team) => candidates
+            .into_iter()
+            .filter(|agent| agent.team.as_deref() == Some(team))
+            .collect(),
+        None => {
+            let candidates = candidates
+                .into_iter()
+                .filter(|agent| !agent.agent_id.is_empty())
+                .collect::<Vec<_>>();
+            rimz::harness::resume::match_cohort(&candidates, cells, None)
+                .into_iter()
+                .flatten()
+                .collect()
+        }
+    }
 }
 
 fn cohort_subject(spec_display: &str, team: Option<&str>) -> String {
@@ -302,6 +313,42 @@ mod tests {
             ["planner", "coder"]
         );
         assert!(unrelated_members.is_empty());
+    }
+
+    #[test]
+    fn cohort_members_keep_all_named_team_roles_for_partial_specs() {
+        let mut planner = test_agent_kind("claude", "planner");
+        planner.worktree_path = Some("/code/feature".to_owned());
+        planner.team = Some("forge".to_owned());
+        planner.role = Some("planner".to_owned());
+        let mut reviewer = test_agent_kind("codex", "reviewer");
+        reviewer.worktree_path = Some("/code/feature".to_owned());
+        reviewer.team = Some("forge".to_owned());
+        reviewer.role = Some("reviewer".to_owned());
+        let mut unrelated = test_agent_kind("pi", "unrelated");
+        unrelated.worktree_path = Some("/code/feature".to_owned());
+        unrelated.team = Some("other".to_owned());
+        unrelated.role = Some("reviewer".to_owned());
+        let agents = vec![planner, reviewer, unrelated];
+        let reviewer_cell = rimz::harness::resume::CohortCell {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            role: Some("reviewer".to_owned()),
+        };
+
+        let members = cohort_members(
+            &agents,
+            Path::new("/code/feature"),
+            &[reviewer_cell],
+            Some("forge"),
+        );
+
+        assert_eq!(
+            members
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            ["planner", "reviewer"]
+        );
     }
 
     fn test_agent(id: &str) -> AgentState {
