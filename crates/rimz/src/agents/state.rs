@@ -612,12 +612,11 @@ pub fn is_turn_complete(
             .is_some_and(|at| at > last_activity)
 }
 
-/// Whether a `running` agent's latest turn was interrupted with no `Stop` hook
-/// to record it — the rollout-tail marker (`AgentContext::turn_interrupted`,
-/// folded in via the context sidecar) postdates the agent's `last_activity`.
-/// Codex writes `turn_aborted` for Esc and `/clear` of a running turn, leaving
-/// the lifecycle row falsely `running`; this settles the row to `idle` instead
-/// of letting the stall window misread an at-rest interruption as failed.
+/// Whether a `running` or `waiting` agent's latest turn was interrupted with no
+/// `Stop` hook to record it — the provider marker
+/// (`AgentContext::turn_interrupted`, folded in via the context sidecar)
+/// postdates the agent's `last_activity`. This settles a falsely active row to
+/// `idle`, including a native ask that Esc cancelled without a lifecycle hook.
 /// Self-clearing like [`is_turn_complete`]: any newer hook event advances
 /// `last_activity` past the marker. A Rimz-derived projection over enrichment,
 /// never a status the agent reports.
@@ -626,7 +625,7 @@ pub fn is_turn_interrupted(
     context: Option<&AgentContext>,
     last_activity: Timestamp,
 ) -> bool {
-    status == AgentStatus::Running
+    matches!(status, AgentStatus::Running | AgentStatus::Waiting)
         && context
             .and_then(|context| context.turn_interrupted)
             .is_some_and(|at| at > last_activity)
@@ -1088,6 +1087,11 @@ impl AgentState {
         if self.budget_park.is_some() && self.status != AgentStatus::Waiting {
             return AgentStatus::Paused;
         }
+        if self.status == AgentStatus::Waiting
+            && is_turn_interrupted(self.status, self.context.as_ref(), self.last_activity)
+        {
+            return AgentStatus::Idle;
+        }
         if self.status != AgentStatus::Running {
             return self.status;
         }
@@ -1530,6 +1534,14 @@ mod tests {
         let mut interrupted = test_agent(AgentStatus::Running, 1_000);
         interrupted.context = Some(context_settle(None, Some(1_010)));
         assert_eq!(interrupted.effective_status(), AgentStatus::Idle);
+
+        let mut interrupted_waiting = test_agent(AgentStatus::Waiting, 1_000);
+        interrupted_waiting.context = Some(context_settle(None, Some(1_010)));
+        assert_eq!(interrupted_waiting.effective_status(), AgentStatus::Idle);
+
+        let mut stale_waiting = test_agent(AgentStatus::Waiting, 1_000);
+        stale_waiting.context = Some(context_settle(None, Some(990)));
+        assert_eq!(stale_waiting.effective_status(), AgentStatus::Waiting);
 
         let mut stale = test_agent(AgentStatus::Running, 1_000);
         stale.context = Some(context_settle(Some(990), Some(990)));

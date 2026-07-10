@@ -34,15 +34,19 @@ pub(super) fn project_display_status(
             continue;
         };
         let mut status = agent.status;
-        // A human-blocked native prompt outranks every derived state. A later
-        // activity heartbeat means the prompt was answered in the pane.
+        // An interruption marker proves Esc cancelled the native prompt.
+        // Otherwise a human-blocked prompt outranks every derived state, while
+        // a later activity heartbeat means it was answered in the pane.
         if status == AgentStatus::Waiting {
-            if source_agent.is_some_and(AgentState::is_awaiting_input) {
+            if crate::agents::is_turn_interrupted(status, agent.context.as_ref(), last_activity) {
+                status = AgentStatus::Idle;
+            } else if source_agent.is_some_and(AgentState::is_awaiting_input) {
                 continue;
+            } else {
+                agent.status = AgentStatus::Running;
+                agent.phase = TurnPhase::Reasoning;
+                status = AgentStatus::Running;
             }
-            agent.status = AgentStatus::Running;
-            agent.phase = TurnPhase::Reasoning;
-            status = AgentStatus::Running;
         }
         let effective_status = source_agent
             .map(AgentState::effective_status)
@@ -103,9 +107,9 @@ pub(super) fn project_display_status(
             AgentStatus::Success
         } else if crate::agents::is_turn_interrupted(status, agent.context.as_ref(), last_activity)
         {
-            // A turn interrupted without a `Stop` hook (Codex Esc or `/clear`
-            // mid-turn) is at rest with no result, so settle to idle before the
-            // stall window can misread it as failed.
+            // A turn or native ask interrupted without a `Stop` hook is at rest
+            // with no result, so settle to idle before the stall window can
+            // misread it as failed.
             AgentStatus::Idle
         } else {
             let stalled = crate::agents::is_stalled(status, last_activity, now, stalled_after_secs);

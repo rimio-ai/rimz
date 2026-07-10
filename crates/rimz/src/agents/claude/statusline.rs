@@ -197,6 +197,11 @@ pub(crate) fn cap_turn_error_label(text: &str) -> Option<String> {
     Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
 }
 
+enum RestingTurnOutcome {
+    Interrupted(Timestamp),
+    Died(AgentTurnError),
+}
+
 /// Detect a turn that died on a provider API error with no `Stop` hook to
 /// record it. Claude aborts such a turn by writing an `assistant` transcript
 /// entry flagged `isApiErrorMessage: true` (followed by a `system` /
@@ -210,6 +215,24 @@ pub(crate) fn cap_turn_error_label(text: &str) -> Option<String> {
 /// Non-conversation records (`system`, `file-history-snapshot`, `summary`),
 /// sidechain replay, and unparseable lines are passed over, never decisive.
 pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
+    match detect_resting_turn_outcome(tail) {
+        Some(RestingTurnOutcome::Died(error)) => Some(error),
+        Some(RestingTurnOutcome::Interrupted(_)) | None => None,
+    }
+}
+
+/// Detect a turn interrupted without a `Stop` hook from Claude's transcript
+/// tail. Esc writes a `user` entry beginning with `[Request interrupted by
+/// user` for both ordinary and tool-use interruptions. The entry's timestamp
+/// anchors the same self-clear guard the display projection uses for Codex.
+pub(crate) fn detect_turn_interrupted(tail: &str) -> Option<Timestamp> {
+    match detect_resting_turn_outcome(tail) {
+        Some(RestingTurnOutcome::Interrupted(at)) => Some(at),
+        Some(RestingTurnOutcome::Died(_)) | None => None,
+    }
+}
+
+fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
     for line in tail.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
@@ -241,11 +264,17 @@ pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
             && value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
         {
             let label = turn_error_label(&value);
-            return Some(AgentTurnError {
+            return Some(RestingTurnOutcome::Died(AgentTurnError {
                 class: TurnErrorClass::classify_label(label.as_deref()),
                 at,
                 label,
-            });
+            }));
+        }
+        if entry_type == Some("user")
+            && conversation_text(&value)
+                .is_some_and(|text| text.starts_with("[Request interrupted by user"))
+        {
+            return Some(RestingTurnOutcome::Interrupted(at));
         }
         return None;
     }
@@ -642,6 +671,7 @@ mod tests {
     const TURN_DURATION_ENTRY: &str =
         r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-06-04T02:56:32.923Z"}"#;
     const NORMAL_ASSISTANT_ENTRY: &str = r#"{"type":"assistant","timestamp":"2026-06-04T03:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#;
+    const INTERRUPTED_ENTRY: &str = r#"{"type":"user","timestamp":"2026-06-04T03:01:00.000Z","message":{"role":"user","content":"[Request interrupted by user]"}}"#;
 
     #[test]
     fn verified_incident_shape_marks_turn_error() {
@@ -656,6 +686,44 @@ mod tests {
         );
         assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
         assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
+    }
+
+    #[test]
+    fn interruption_sentinels_mark_the_turn_at_rest() {
+        assert_eq!(
+            detect_turn_interrupted(INTERRUPTED_ENTRY),
+            Some("2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap())
+        );
+        let tool_use = r#"{"type":"user","timestamp":"2026-06-04T03:02:00.000Z","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
+        assert_eq!(
+            detect_turn_interrupted(tool_use),
+            Some("2026-06-04T03:02:00Z".parse::<Timestamp>().unwrap())
+        );
+    }
+
+    #[test]
+    fn resting_turn_scan_lets_the_newest_conversation_entry_decide() {
+        assert!(detect_turn_interrupted(API_ERROR_ENTRY).is_none());
+        assert!(detect_turn_error(API_ERROR_ENTRY).is_some());
+
+        assert!(detect_turn_interrupted(NORMAL_ASSISTANT_ENTRY).is_none());
+        assert!(detect_turn_error(INTERRUPTED_ENTRY).is_none());
+
+        let ordinary_user = r#"{"type":"user","timestamp":"2026-06-04T03:03:00.000Z","message":{"content":"keep going"}}"#;
+        let tail = format!("{INTERRUPTED_ENTRY}\n{ordinary_user}\n");
+        assert!(detect_turn_interrupted(&tail).is_none());
+    }
+
+    #[test]
+    fn resting_turn_scan_skips_sidechain_and_nonconversation_records() {
+        let sidechain = r#"{"type":"user","isSidechain":true,"timestamp":"2026-06-04T03:02:00.000Z","message":{"content":"[Request interrupted by user]"}}"#;
+        let tail = format!(
+            "{INTERRUPTED_ENTRY}\n{{\"type\":\"system\",\"timestamp\":\"2026-06-04T03:01:01.000Z\"}}\n{sidechain}\n"
+        );
+        assert!(detect_turn_interrupted(&tail).is_some());
+
+        let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{sidechain}\nnot-json\n");
+        assert!(detect_turn_interrupted(&tail).is_none());
     }
 
     #[test]

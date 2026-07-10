@@ -29,6 +29,28 @@ fn interrupted_turn_settles_running_to_idle_before_stall() {
 }
 
 #[test]
+fn interrupted_native_ask_settles_waiting_to_idle() {
+    let session = agent("claude", "claude-ask", AgentStatus::Waiting, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(60)
+        .turn_interrupted(10);
+
+    let snapshot = room_with_agent_panes(vec![session]);
+    let row = row(&snapshot, "claude-ask");
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Idle),
+        "Esc-cancelling Claude's native ask clears false attention"
+    );
+    assert_eq!(
+        rollup_agent(&snapshot, "claude-ask").status,
+        AgentStatus::Waiting,
+        "the transcript marker refines only the display projection"
+    );
+}
+
+#[test]
 fn interruption_before_last_activity_leaves_row_running() {
     // A newer prompt advanced `last_activity` past the abort marker, so the
     // stale marker belongs to a prior turn and must not settle fresh work.

@@ -116,6 +116,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     // schema); the adapter reads its own tail off the payload's transcript
     // path. The handler owns the merge — adapters stay pure mappers.
     context.turn_error = agent.observe_turn_error(&payload);
+    context.turn_interrupted = agent.observe_turn_interrupted(&payload);
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let runtime =
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;

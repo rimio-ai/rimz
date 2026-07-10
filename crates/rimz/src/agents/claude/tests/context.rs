@@ -92,6 +92,34 @@ fn observe_turn_error_reads_the_tail_from_the_payload_path() {
 }
 
 #[test]
+fn observe_turn_interrupted_reads_the_tail_from_the_payload_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            "{\"type\":\"user\",\"timestamp\":\"2026-06-04T03:01:00.000Z\",",
+            "\"message\":{\"content\":\"[Request interrupted by user]\"}}\n",
+            "{\"type\":\"system\",\"subtype\":\"turn_duration\"}\n",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ClaudeAdapter.observe_turn_interrupted(&json!({
+            "session_id": "sess-1",
+            "transcript_path": transcript.to_str().unwrap(),
+        })),
+        Some("2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap())
+    );
+    assert!(
+        ClaudeAdapter
+            .observe_turn_interrupted(&json!({ "session_id": "sess-1" }))
+            .is_none()
+    );
+}
+
+#[test]
 fn stop_failure_hook_maps_to_turn_error_marker() {
     let marker = |error: &str| {
         ClaudeAdapter

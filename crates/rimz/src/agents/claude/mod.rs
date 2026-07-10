@@ -779,6 +779,12 @@ impl AgentAdapter for ClaudeAdapter {
         statusline::detect_turn_error(&tail)
     }
 
+    fn observe_turn_interrupted(&self, payload: &Value) -> Option<Timestamp> {
+        let path = optional_payload_string(payload, &["transcript_path"])?;
+        let tail = read_transcript_tail(Path::new(&path))?;
+        statusline::detect_turn_interrupted(&tail)
+    }
+
     fn observe_turn_error_from_hook(
         &self,
         event_name: &str,

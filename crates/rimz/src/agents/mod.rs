@@ -521,6 +521,14 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Detect a provider turn-interruption marker from local transcript or
+    /// rollout evidence. The marker is display-only enrichment: it rides the
+    /// context sidecar and settles a falsely active row when it postdates the
+    /// latest lifecycle activity.
+    fn observe_turn_interrupted(&self, _payload: &Value) -> Option<Timestamp> {
+        None
+    }
+
     /// Detect a turn-error marker directly from a hook payload that carries the
     /// provider's native failure certificate. This is the precise sibling of
     /// [`observe_turn_error`](Self::observe_turn_error), which recovers the same
