@@ -1,6 +1,6 @@
 # The agent model
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The per-provider native mappings (which native event means what for each agent) live in the adapter docs ([claude.md](./claude.md), [codex.md](./codex.md), [gemini.md](./gemini.md), [pi.md](./pi.md), [opencode.md](./opencode.md)); the account, balance, spend, and pricing model is [providers.md](./providers.md).
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The per-provider native mappings (which native event means what for each agent) live in the adapter docs ([claude.md](./claude.md), [codex.md](./codex.md), [gemini.md](./gemini.md), [pi.md](./pi.md), [opencode.md](./opencode.md), [cursor.md](./cursor.md)); the account, balance, spend, and pricing model is [providers.md](./providers.md).
 
 This doc owns how a running agent is *modeled*: the adapter boundary that produces the model's input, the fold that reduces it to one state per agent, and the live-context read path that enriches it. The model is a three-stage pipeline:
 
@@ -16,7 +16,7 @@ An adapter *produces* an [`AgentLifecycleObservation`](../../../crates/rimz/src/
 
 Four nouns carry the model:
 
-- An **agent kind** is a wired integration (`claude`, `codex`, `gemini`, `pi`, `opencode`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
+- An **agent kind** is a wired integration (`claude`, `codex`, `gemini`, `pi`, `opencode`, `cursor`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
 - An **agent instance** is presence: a live local pane running a known agent right now, read from the multiplexer every tick.
 - A **session** is identity: the id the agent's own hooks report, keyed `(kind, agent_id)`, where every durable fact attaches.
 - The **rollup entry** is the one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session that store replay derives: the durable record the sidebar enriches and renders.
@@ -308,11 +308,11 @@ The sidecar lives wholly off the durable path (store first; sidebar wakeups are 
 
 ## Adding an agent
 
-Claude, Codex, Gemini, Pi, and OpenCode are compiled-in integrations because Rimz owns their hook installers and provider-specific enrichment. A third-party agent normally ships a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, native shim, and optional probes, with no Rimz source change. A new built-in remains appropriate when Rimz must own a native config migration or a protocol surface that the canonical wire cannot express; it lands as one directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md), one `registry::ADAPTERS` line, conformance coverage, and its adapter doc. The step-by-step sequence — from protocol reference to landed adapter, with the deliverables checklist — is [agent-adapters.md](../../contributing/agent-adapters.md); this section owns the model-level recipe it orders.
+Claude, Codex, Gemini, Pi, OpenCode, and Cursor are compiled-in integrations because Rimz owns their hook installers and provider-specific enrichment. A third-party agent normally ships a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, native shim, and optional probes, with no Rimz source change. A new built-in remains appropriate when Rimz must own a native config migration or a protocol surface that the canonical wire cannot express; it lands as one directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md), one `registry::ADAPTERS` line, conformance coverage, and its adapter doc. The step-by-step sequence — from protocol reference to landed adapter, with the deliverables checklist — is [agent-adapters.md](../../contributing/agent-adapters.md); this section owns the model-level recipe it orders.
 
 The descriptor carries two declared matrices, both conformance-checked and both printed by `rimz coverage` (wired green, partial yellow, unsupported/absent dim, so absences are visible at a glance):
 
-- The **`coverage`** table declares every `IntegrationConcern` as `Wired { via }`, `Partial { via, gap }` (no native signal, the behaviour reconstructed by derivation, the gap named), or `Unsupported { reason }`. Codex and OpenCode use partial `end` and `idle`: no per-session end or idle hook exists, yet pane liveness plus the reaper reconstruct end, and turn boundaries plus the ask path plus the stall window cover the attention slice of idle. Pi and OpenCode use partial `live$`.
+- The **`coverage`** table declares every `IntegrationConcern` as `Wired { via }`, `Partial { via, gap }` (native coverage is incomplete, the remaining behaviour reconstructed by derivation, the gap named), or `Unsupported { reason }`. Codex and OpenCode use partial `end` and `idle`: no per-session end or idle hook exists, yet pane liveness plus the reaper reconstruct end, and turn boundaries plus the ask path plus the stall window cover the attention slice of idle. Cursor uses partial `compact`: `preCompact` opens natively and the next lifecycle signal derives the close. Pi and OpenCode use partial `live$`.
 - The **`lifecycle_hooks`** table declares every `LifecycleSignalKind` as `Native { event }`, `Derived { via, gap }`, or `Absent { reason }`.
 
 The hook mapping has four jobs: route each native event to a channel, map lifecycle events to observations, render the agent's neutral no-op, and put tool-name vocabularies in the descriptor. The context read path adds two more; either alone is valid:

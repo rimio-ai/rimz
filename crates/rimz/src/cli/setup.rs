@@ -128,7 +128,10 @@ impl SetupReport {
                 let descriptor = agent.descriptor();
                 DetectedAgent {
                     name: descriptor.kind,
-                    on_path: which::which(descriptor.kind).is_ok(),
+                    on_path: descriptor
+                        .bin_names
+                        .iter()
+                        .any(|name| which::which(name).is_ok()),
                     binary: rimz::agents::locate_binary(descriptor),
                     hook_install: descriptor.capabilities.hook_install,
                     hooks_installed: agent.hooks_installed(),

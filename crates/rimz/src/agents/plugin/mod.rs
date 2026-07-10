@@ -518,6 +518,7 @@ fn build_descriptor(
         default_context_window: None,
         default_model: None,
         process_names: leak_strings(&manifest.process_names),
+        bin_names: leak_strings(std::slice::from_ref(&manifest.kind)),
         extra_bin_dirs: &[],
         activity_events: leak_slice(activity_events),
         hook_install_unavailable: Some(hook_reason),

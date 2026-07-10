@@ -167,7 +167,8 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     let classified = agent.classify_hook(&event_name, &payload);
 
     if classified.class != AgentHookClass::AwaitingUser {
-        return handle_lifecycle_hook(&workspace, &store, agent, &event_name, &payload, globals);
+        handle_lifecycle_hook(&workspace, &store, agent, &event_name, &payload, globals)?;
+        return emit_neutral(agent, &event_name);
     }
 
     if agent.descriptor().capabilities.native_ask_ui {

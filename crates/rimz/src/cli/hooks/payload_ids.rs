@@ -17,25 +17,29 @@ pub(super) fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
     }
 }
 
-/// The agent session id from a hook payload (`agent_id`, then `session_id`).
-/// Empty ids are filtered out.
+/// The agent session id from a hook payload (`agent_id`, `session_id`, then
+/// Cursor's `conversation_id`). Empty ids are filtered out.
 pub(super) fn payload_agent_id(payload: &Value) -> Option<&str> {
-    ["agent_id", "session_id"].into_iter().find_map(|key| {
-        payload
-            .get(key)
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())
-    })
+    ["agent_id", "session_id", "conversation_id"]
+        .into_iter()
+        .find_map(|key| {
+            payload
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+        })
 }
 
 /// The sidecar key for local context enrichment. Root sessions file context
-/// under `session_id`; child-specific `agent_id`s are lifecycle identities, not
-/// Codex rollout files.
+/// under `session_id` (or Cursor's `conversation_id`); child-specific
+/// `agent_id`s are lifecycle identities, not Codex rollout files.
 pub(super) fn payload_context_agent_id(payload: &Value) -> Option<&str> {
-    ["session_id", "agent_id"].into_iter().find_map(|key| {
-        payload
-            .get(key)
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())
-    })
+    ["session_id", "agent_id", "conversation_id"]
+        .into_iter()
+        .find_map(|key| {
+            payload
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+        })
 }

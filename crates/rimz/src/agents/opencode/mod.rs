@@ -82,6 +82,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     default_context_window: None,
     default_model: None,
     process_names: &["opencode", "bun"],
+    bin_names: &["opencode"],
     extra_bin_dirs: &[".opencode/bin"],
     activity_events: &[
         "session_created",

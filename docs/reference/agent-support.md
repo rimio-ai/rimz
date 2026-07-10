@@ -1,8 +1,8 @@
 # Agent support
 
-RimZ watches the coding agents you already run — Claude Code, Codex, Gemini CLI, Pi, and OpenCode — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
+RimZ watches the coding agents you already run — Claude Code, Codex, Gemini CLI, Pi, OpenCode, and Cursor — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
 
-The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in the same way. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
+The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
 Third-party agents use the same boundary through a machine-tier process plugin. Its manifest derives the same matrices and its shim speaks the [canonical agent plugin protocol](./agent-plugins.md); feature status is bundle-specific rather than assigned a RimZ release tier.
 
@@ -24,6 +24,7 @@ This page is the annotated read of that command.
 | Gemini CLI | beta | 7 wired · 4 derived · 5 unsupported | hooks · session `.jsonl` · `gemini --resume` |
 | Pi | beta | 7 wired · 3 derived · 6 unsupported | extension API · session `.jsonl` · `pi --session` |
 | OpenCode | alpha | 8 wired · 3 derived · 5 unsupported | plugin API · session `.jsonl` + SQLite |
+| Cursor | alpha | 4 wired · 2 derived · 10 unsupported | command hooks · opaque transcript metadata · `agent --resume` |
 | Third-party plugin | bundle-defined | derived by `rimz coverage` | canonical event shim · optional executable probes |
 
 What the tiers promise:
@@ -32,30 +33,30 @@ What the tiers promise:
 - **beta** — the integration is complete and in daily use, with a handful of fields reconstructed by derivation rather than pushed natively. Expect correct routing and state, and a rougher edge on enrichment.
 - **alpha** — the integration works and reports live state, with the widest set of derived cells. Use it, and expect the surface to keep filling in as the agent exposes more.
 
-Every tier delivers the core promise: the agent appears in the sidebar, its blocking questions route to your keyboard, and you answer in its own UI. The tier grades how much of the enrichment around that is native versus derived.
+Every tier delivers the core promise where the agent exposes the required local signals. Cursor appears and reports work, but its stock local hooks cannot report that a native question is open, so it intentionally has no waiting row or ask routing.
 
 ## The coverage matrix
 
-`rimz coverage` scores each agent against sixteen product concerns. A cell reads **wired** (✓, a native signal carries it directly), **partial** (◐, no native signal, so RimZ reconstructs the behaviour from other state), or **unsupported** (✗, unreachable from the agent's current protocol). A partial cell still shows you a live figure — it trades a native push for a derivation, and the command names the exact gap that derivation leaves.
+`rimz coverage` scores each agent against sixteen product concerns. A cell reads **wired** (✓, native signals carry the full concern), **partial** (◐, native coverage is incomplete and RimZ reconstructs the rest from another signal or state), or **unsupported** (✗, unreachable from the agent's current protocol). A partial cell still shows you a live figure, and the command names the exact gap that derivation leaves.
 
-| Concern | Claude | Codex | Gemini | Pi | OpenCode | What it drives |
-| --- | :--: | :--: | :--: | :--: | :--: | --- |
-| `turn` | ✓ | ✓ | ✓ | ✓ | ✓ | live status — session start and every turn boundary |
-| `perm` | ✓ | ✓ | ✓ | ✓ | ✓ | permission prompts routed to your keyboard |
-| `plan` | ✓ | ✗ | ✓ | ✗ | ✗ | a plan-approval gate raises a waiting row |
-| `ask` | ✓ | ✓ | ✓ | ✗ | ✓ | the agent's ask-the-user tool raises a waiting row |
-| `answer` | ✓ | ✗ | ✗ | ✗ | ✗ | structured answers drive supported native prompt actions |
-| `compact` | ✓ | ✓ | ◐ | ✓ | ✓ | context compaction shows on the card |
-| `sub` | ✓ | ✓ | ✗ | ✗ | ✓ | the subagent tree renders as nested rows |
-| `bg` | ✓ | ✗ | ✗ | ✗ | ✗ | a turn parked on background work stays tracked |
-| `end` | ✓ | ◐ | ✓ | ✓ | ◐ | the card tombstones when the session closes |
-| `idle` | ✓ | ◐ | ◐ | ◐ | ◐ | an idle nudge when the agent goes quiet on you |
-| `usage` | ✓ | ✓ | ✓ | ✓ | ✓ | context-window fill and token counts |
-| `live$` | ✓ | ✓ | ◐ | ◐ | ◐ | the live dollar figure on the card |
-| `rich` | ✓ | ✓ | ✗ | ◐ | ✓ | provider extras — official model labels, account windows |
-| `install` | ✓ | ✓ | ✓ | ✓ | ✓ | RimZ can install the reporting hooks |
-| `spend` | ✓ | ✓ | ◐ | ✓ | ✓ | account spend for the [token-insight](../guide/insight.md) dashboard |
-| `remote` | ✓ | ✓ | ✗ | ✗ | ✗ | drive or spawn a session with no local pane |
+| Concern | Claude | Codex | Gemini | Pi | OpenCode | Cursor | What it drives |
+| --- | :--: | :--: | :--: | :--: | :--: | :--: | --- |
+| `turn` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | live status — session start and every turn boundary |
+| `perm` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | permission prompts routed to your keyboard |
+| `plan` | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ | a plan-approval gate raises a waiting row |
+| `ask` | ✓ | ✓ | ✓ | ✗ | ✓ | ✗ | the agent's ask-the-user tool raises a waiting row |
+| `answer` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | structured answers drive supported native prompt actions |
+| `compact` | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | context compaction shows on the card |
+| `sub` | ✓ | ✓ | ✗ | ✗ | ✓ | ✗ | the subagent tree renders as nested rows |
+| `bg` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | a turn parked on background work stays tracked |
+| `end` | ✓ | ◐ | ✓ | ✓ | ◐ | ✓ | the card tombstones when the session closes |
+| `idle` | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ | an idle nudge when the agent goes quiet on you |
+| `usage` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | context-window fill and token counts |
+| `live$` | ✓ | ✓ | ◐ | ◐ | ◐ | ✗ | the live dollar figure on the card |
+| `rich` | ✓ | ✓ | ✗ | ◐ | ✓ | ✗ | provider extras — official model labels, account windows |
+| `install` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RimZ can install the reporting hooks |
+| `spend` | ✓ | ✓ | ◐ | ✓ | ✓ | ✗ | account spend for the [token-insight](../guide/insight.md) dashboard |
+| `remote` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | drive or spawn a session with no local pane |
 
 <sub>✓ wired · ◐ partial (derived) · ✗ unsupported. Run `rimz coverage` for the live grid with the exact reason printed on every ◐ and ✗ cell.</sub>
 
@@ -137,23 +138,38 @@ OpenCode reports through a RimZ-authored **plugin** that maintains its context g
 
 Mapping detail: [opencode.md](../internals/agents/opencode.md); upstream protocol: [opencode-reference.md](../externals/agent-adapter/opencode-reference.md).
 
+### Cursor
+
+Cursor reports through its native command hooks and runs standalone in its pane. RimZ discovers `cursor-agent` before `agent`; it never probes `cursor`, which is the IDE executable.
+
+- **Reports:** session start and end, turn boundaries, mutating tool completion, compaction start, and the context gauge carried by `preCompact`.
+- **Two derived cells (◐):** `compact` — `preCompact` opens the bracket and the next lifecycle signal closes it because Cursor exposes no post-compaction event; `idle` — reconstructed from turn boundaries and the stall window without an idle notification.
+- **Ten unsupported cells (✗):** every ask/answer concern, subagents, background parking, realtime cost, rich context, account spend, and remote control. Cursor's local hook catalog has no permission, question, or plan-approval event, so RimZ never paints a false waiting row; answer the native prompt in Cursor's pane.
+- **Context and transcript:** `preCompact` supplies context percentage and window size. Cursor publishes a transcript path but no transcript schema, so RimZ carries the path as metadata and does not parse it.
+- **Resume and fork:** `agent --resume <id>` reopens a conversation; Cursor exposes `/fork` interactively but no CLI-by-id fork surface.
+- **Permission modes:** Ask uses Cursor's default; Plan passes `--mode=plan`; Auto passes `--auto-review`; Yolo passes `--force --sandbox disabled`. Neutral-hook behavior under each posture remains a live-verification item.
+- **Cost and account:** no documented machine-readable token, dollar, quota, or account schema exists, so the adapter does not scrape the terminal or guess at opaque JSON.
+- **Install target:** `~/.cursor/hooks.json`, merged additively; every installed lifecycle hook returns neutral `{}` JSON.
+
+Mapping detail: [cursor.md](../internals/agents/cursor.md); upstream protocol: [cursor-reference.md](../externals/agent-adapter/cursor-reference.md).
+
 ## The lifecycle hook surface
 
 Under the concern matrix sits the raw event surface: the eleven lifecycle signals RimZ folds into every agent's state machine, and the native event each agent fires for each one. `rimz coverage` prints this as its second grid, the hooks matrix; here it is with the native event names in place.
 
-| Signal | Claude | Codex | Gemini | Pi | OpenCode |
-| --- | --- | --- | --- | --- | --- |
-| `registered` | `SessionStart` | `SessionStart` | `SessionStart` | `session_start` | `session_created` |
-| `turn_started` | `UserPromptSubmit` | `UserPromptSubmit` | `BeforeAgent` | `before_agent_start` | `chat_message` |
-| `turn_ended` | `Stop` | `Stop` | `AfterAgent` | `agent_settled` (`agent_end` before Pi 0.80.4) | `session_idle` |
-| `tool_used` | `PostToolUse` | `PostToolUse` | `AfterTool` | `tool_execution_end` | `tool_after` |
-| `awaiting_input` | `PermissionRequest` | `PermissionRequest` | `Notification` | ✗ | `permission_ask` |
-| `subagent_started` | `SubagentStart` | `SubagentStart` | ✗ | ✗ | `SubagentStart` |
-| `subagent_stopped` | `SubagentStop` | `SubagentStop` | ✗ | ✗ | `SubagentStop` |
-| `compacting` | `PreCompact` | `PreCompact` | `PreCompress` | `session_before_compact` | `session_compacting` |
-| `compaction_ended` | `PostCompact` | `PostCompact` | ◐ derived | `session_compact` | `session_compacted` |
-| `ended` | `SessionEnd` | ◐ derived | `SessionEnd` | `session_shutdown` | ◐ derived |
-| `lost` | ◐ derived | ◐ derived | ◐ derived | ◐ derived | ◐ derived |
+| Signal | Claude | Codex | Gemini | Pi | OpenCode | Cursor |
+| --- | --- | --- | --- | --- | --- | --- |
+| `registered` | `SessionStart` | `SessionStart` | `SessionStart` | `session_start` | `session_created` | `sessionStart` |
+| `turn_started` | `UserPromptSubmit` | `UserPromptSubmit` | `BeforeAgent` | `before_agent_start` | `chat_message` | `beforeSubmitPrompt` |
+| `turn_ended` | `Stop` | `Stop` | `AfterAgent` | `agent_settled` (`agent_end` before Pi 0.80.4) | `session_idle` | `stop` |
+| `tool_used` | `PostToolUse` | `PostToolUse` | `AfterTool` | `tool_execution_end` | `tool_after` | `postToolUse` |
+| `awaiting_input` | `PermissionRequest` | `PermissionRequest` | `Notification` | ✗ | `permission_ask` | ✗ |
+| `subagent_started` | `SubagentStart` | `SubagentStart` | ✗ | ✗ | `SubagentStart` | ✗ |
+| `subagent_stopped` | `SubagentStop` | `SubagentStop` | ✗ | ✗ | `SubagentStop` | ✗ |
+| `compacting` | `PreCompact` | `PreCompact` | `PreCompress` | `session_before_compact` | `session_compacting` | `preCompact` |
+| `compaction_ended` | `PostCompact` | `PostCompact` | ◐ derived | `session_compact` | `session_compacted` | ◐ derived |
+| `ended` | `SessionEnd` | ◐ derived | `SessionEnd` | `session_shutdown` | ◐ derived | `sessionEnd` |
+| `lost` | ◐ derived | ◐ derived | ◐ derived | ◐ derived | ◐ derived | ◐ derived |
 
 `lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
@@ -169,7 +185,7 @@ Installing an agent's hooks edits that agent's own config — the install target
 
 ## Agents not yet supported
 
-An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Cursor or Copilot land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
+An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Copilot or Amp land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
 
 ## See also
 

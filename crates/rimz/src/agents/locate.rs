@@ -27,8 +27,10 @@ fn probe_descriptor_version_with_locator(
 /// leaves the agent off `$PATH` yet present; this finds it. Returns the absolute
 /// path, or `None` when the binary is nowhere Rimz knows to look.
 pub fn locate_binary(descriptor: &AgentDescriptor) -> Option<PathBuf> {
-    if let Ok(path) = which::which(descriptor.kind) {
-        return Some(path);
+    for name in descriptor.bin_names {
+        if let Ok(path) = which::which(name) {
+            return Some(path);
+        }
     }
     let home = PathBuf::from(std::env::var_os("HOME").filter(|value| !value.is_empty())?);
     binary_in_install_dirs(descriptor, &home)
@@ -39,8 +41,10 @@ pub fn locate_binary(descriptor: &AgentDescriptor) -> Option<PathBuf> {
 /// the descriptor's [`extra_bin_dirs`](AgentDescriptor::extra_bin_dirs).
 fn binary_in_install_dirs(descriptor: &AgentDescriptor, home: &Path) -> Option<PathBuf> {
     descriptor.extra_bin_dirs.iter().find_map(|dir| {
-        let candidate = home.join(dir).join(descriptor.kind);
-        candidate.is_file().then_some(candidate)
+        descriptor.bin_names.iter().find_map(|name| {
+            let candidate = home.join(dir).join(name);
+            candidate.is_file().then_some(candidate)
+        })
     })
 }
 

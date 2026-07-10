@@ -1,4 +1,19 @@
 use super::*;
+
+#[test]
+fn cursor_compatibility_hooks_are_quarantined() {
+    let cursor = json!({ "cursor_version": "1.7.0", "conversation_id": "conv-1" });
+    assert_eq!(
+        ClaudeAdapter.classify_hook("PostToolUse", &cursor).class,
+        AgentHookClass::Unknown
+    );
+    assert_eq!(
+        ClaudeAdapter
+            .classify_hook("PostToolUse", &json!({ "session_id": "sess-1" }))
+            .class,
+        AgentHookClass::Lifecycle
+    );
+}
 use crate::agents::AgentHookClass;
 
 #[test]

@@ -19,6 +19,7 @@ pub mod codex;
 pub(crate) mod conformance;
 pub mod context;
 pub mod credits;
+pub mod cursor;
 pub mod descriptor;
 pub mod gemini;
 pub(crate) mod hook_types;
@@ -103,6 +104,7 @@ pub(crate) use transcript_fs::read_transcript_tail;
 
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
+pub use cursor::CursorAdapter;
 pub use gemini::GeminiAdapter;
 pub use opencode::OpencodeAdapter;
 pub use pi::PiAdapter;

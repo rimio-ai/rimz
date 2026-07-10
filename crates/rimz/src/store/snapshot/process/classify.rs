@@ -166,9 +166,12 @@ pub(crate) fn command_agent_kind_with_comm(
 
 fn command_agent_kind_from_program(program: EffectiveProgram<'_>) -> Option<&'static str> {
     let label = basename(program.program);
-    crate::agents::known_kinds().find(|kind| {
-        program_names_kind(label, kind)
-            || (program.from_launcher && agent_script_path_names_kind(program.program, kind))
+    crate::agents::all_adapters().find_map(|adapter| {
+        let descriptor = adapter.descriptor();
+        (descriptor.launches_as(label)
+            || (program.from_launcher
+                && agent_script_path_names_kind(program.program, descriptor.kind)))
+        .then_some(descriptor.kind)
     })
 }
 
@@ -217,6 +220,12 @@ mod tests {
             "codex-aarch64-apple-darwin"
         );
         assert_eq!(command_agent_kind("claude"), Some("claude"));
+        assert_eq!(command_agent_kind("agent"), Some("cursor"));
+        assert_eq!(command_agent_kind("cursor-agent"), Some("cursor"));
+        assert_eq!(
+            command_agent_kind("/home/me/.local/bin/agent"),
+            Some("cursor")
+        );
         // A JS launcher runs its script, so `node …/codex` is codex — the script
         // is the program, unlike npm's install *target*.
         assert_eq!(command_agent_kind("node /usr/bin/codex"), Some("codex"));

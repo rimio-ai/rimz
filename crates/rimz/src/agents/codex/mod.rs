@@ -235,6 +235,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // Codex commonly runs as a `node` bundle, so PID attribution accepts the
     // launcher process name beside its own.
     process_names: &["codex", "node"],
+    bin_names: &["codex"],
     extra_bin_dirs: &[],
     // Codex hooks ride Claude-style event names; `PreToolUse` (races the
     // blocking ask) and `Notification` (idle) are deliberately absent.

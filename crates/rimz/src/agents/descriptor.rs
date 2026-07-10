@@ -56,8 +56,12 @@ pub struct AgentDescriptor {
     /// plus any launcher (`node` for a JS bundle). Drives the PID-attribution
     /// `/proc` walk.
     pub process_names: &'static [&'static str],
+    /// `$PATH` probe names in preference order. Most agents expose the bare
+    /// kind; Cursor ships its CLI as `cursor-agent`/`agent` while `cursor` is
+    /// the IDE.
+    pub bin_names: &'static [&'static str],
     /// Well-known install directories, relative to `$HOME`, where this agent's
-    /// binary (named [`kind`](Self::kind)) lives when its installer has not put
+    /// binary lives when its installer has not put
     /// it on `$PATH` — OpenCode's installer drops `opencode` in `~/.opencode/bin`
     /// and edits a shell rc the daemon never sources. Searched after `$PATH` by
     /// [`locate_binary`](super::locate_binary); empty for an agent that only
@@ -228,8 +232,9 @@ integration_concerns! {
 pub enum ConcernCoverage {
     /// A native signal carries the concern directly; `via` names it.
     Wired { via: &'static str },
-    /// No native signal, but Rimz reconstructs the behaviour from other state:
-    /// `via` is the derivation, `gap` what the reconstruction still lacks.
+    /// Native coverage is incomplete, but Rimz reconstructs the behaviour from
+    /// another signal or state: `via` is the combined path, `gap` what it still
+    /// lacks.
     Partial {
         via: &'static str,
         gap: &'static str,
@@ -381,6 +386,14 @@ impl AgentDescriptor {
     /// kind under a target-triple release-binary suffix.
     pub fn runs_as(&self, name: &str) -> bool {
         self.process_names.contains(&name) || program_names_kind(name, self.kind)
+    }
+
+    /// Whether a command basename launches this agent. This is distinct from
+    /// [`runs_as`](Self::runs_as): a resolved executable may expose a provider-
+    /// independent name (`agent` for Cursor) while its kernel `comm` names the
+    /// runtime instead.
+    pub fn launches_as(&self, name: &str) -> bool {
+        self.bin_names.contains(&name) || program_names_kind(name, self.kind)
     }
 
     /// Whether a tool-use payload names a workspace-mutating tool. The tool
@@ -565,6 +578,23 @@ mod tests {
         );
         assert!(
             !opencode
+                .capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
+
+        let cursor = crate::agents::registry::descriptor_by_kind("cursor").unwrap();
+        assert!(!cursor.capabilities.remote_control.pane_sessions);
+        assert!(!cursor.capabilities.remote_control.background_sessions);
+        assert!(!cursor.capabilities.rich_context);
+        assert!(!cursor.capabilities.transcript_tail_context);
+        assert!(!cursor.capabilities.daemon_hooked_sessions);
+        assert!(cursor.capabilities.context_usage);
+        assert!(!cursor.capabilities.account_spend);
+        assert!(!cursor.capabilities.subagents);
+        assert!(!cursor.capabilities.realtime_usage.covers_account_while_live);
+        assert!(
+            !cursor
                 .capabilities
                 .realtime_usage
                 .windows_defer_to_fresh_realtime

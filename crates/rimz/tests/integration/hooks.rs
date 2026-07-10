@@ -120,6 +120,59 @@ fn session_start_hooks_write_lifecycle_rows() {
 }
 
 #[test]
+fn cursor_lifecycle_hook_writes_state_and_returns_json_neutral() {
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "sessionStart",
+        "conversation_id": "conv-cursor-01",
+        "session_id": "conv-cursor-01",
+        "cursor_version": "1.7.0",
+        "model_id": "cursor/model"
+    }))
+    .expect("payload");
+    let output = env.run_hook("cursor", &payload);
+    assert!(
+        output.status.success(),
+        "cursor stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
+
+    let snapshot = env.snapshot_json();
+    let agents = snapshot["agents"].as_array().expect("agents array");
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["kind"], "cursor");
+    assert_eq!(agents[0]["agent_id"], "conv-cursor-01");
+    assert_eq!(agents[0]["status"], "idle");
+    assert_eq!(agents[0]["model"], "cursor/model");
+}
+
+#[test]
+fn cursor_progress_hook_touches_activity_by_conversation_id() {
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "postToolUse",
+        "conversation_id": "conv-cursor-progress",
+        "cursor_version": "1.7.0",
+        "tool_name": "Read",
+        "duration": 12,
+    }))
+    .expect("payload");
+    let output = env.run_hook("cursor", &payload);
+    assert!(
+        output.status.success(),
+        "cursor stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
+
+    let touches = rimz::agent_activity::read_all(&env.runtime_paths());
+    assert_eq!(touches.len(), 1, "progress hook writes one heartbeat");
+    assert_eq!(touches[0].kind.as_str(), "cursor");
+    assert_eq!(touches[0].agent_id.as_str(), "conv-cursor-progress");
+}
+
+#[test]
 fn internal_app_server_hook_is_suppressed_and_records_nothing() {
     // A `codex app-server` that Rimz cold-spawns for read-only enrichment fires
     // its own `SessionStart` hook on startup. The internal-app-server marker

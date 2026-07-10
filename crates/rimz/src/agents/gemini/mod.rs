@@ -97,6 +97,7 @@ static GEMINI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     default_context_window: Some(GEMINI_CONTEXT_WINDOW),
     default_model: None,
     process_names: &["gemini", "node"],
+    bin_names: &["gemini"],
     extra_bin_dirs: &[],
     activity_events: &["SessionStart", "BeforeAgent", "AfterAgent", "AfterTool"],
     hook_install_unavailable: None,

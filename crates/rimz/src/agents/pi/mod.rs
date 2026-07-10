@@ -115,6 +115,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     default_context_window: None,
     default_model: None,
     process_names: &["pi"],
+    bin_names: &["pi"],
     extra_bin_dirs: &[],
     // Pi's progress-proving events, in its own wire vocabulary. The blocking
     // `tool_call` is excluded like Claude's `PreToolUse`: it fires while the

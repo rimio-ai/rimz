@@ -347,7 +347,7 @@ mod tests {
         let matrix = collect_coverage();
         assert_eq!(
             matrix.agents,
-            ["claude", "codex", "gemini", "pi", "opencode"]
+            ["claude", "codex", "gemini", "pi", "opencode", "cursor"]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
 
@@ -404,6 +404,21 @@ mod tests {
             agent_labels(&matrix, "pi", MatrixCellState::Absent),
             ["plan", "ask", "answer", "sub", "bg", "remote"]
         );
+
+        let cursor = agent_cells(&matrix, "cursor");
+        assert_eq!(count(&cursor, MatrixCellState::Ok), 4);
+        assert_eq!(count(&cursor, MatrixCellState::Partial), 2);
+        assert_eq!(count(&cursor, MatrixCellState::Absent), 10);
+        assert_eq!(
+            agent_labels(&matrix, "cursor", MatrixCellState::Partial),
+            ["compact", "idle"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "cursor", MatrixCellState::Absent),
+            [
+                "perm", "plan", "ask", "answer", "sub", "bg", "live$", "rich", "spend", "remote"
+            ]
+        );
     }
 
     #[test]
@@ -423,7 +438,7 @@ mod tests {
         let matrix = collect_hook_matrix();
         assert_eq!(
             matrix.agents,
-            ["claude", "codex", "gemini", "pi", "opencode"]
+            ["claude", "codex", "gemini", "pi", "opencode", "cursor"]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
 
@@ -435,7 +450,8 @@ mod tests {
                 MatrixCellState::Partial,
                 MatrixCellState::Ok,
                 MatrixCellState::Ok,
-                MatrixCellState::Partial
+                MatrixCellState::Partial,
+                MatrixCellState::Ok
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -448,7 +464,8 @@ mod tests {
                 MatrixCellState::Ok,
                 MatrixCellState::Absent,
                 MatrixCellState::Absent,
-                MatrixCellState::Ok
+                MatrixCellState::Ok,
+                MatrixCellState::Absent
             ]
         );
     }

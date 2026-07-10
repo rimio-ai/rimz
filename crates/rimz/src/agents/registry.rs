@@ -6,6 +6,7 @@
 
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
+use super::cursor::CursorAdapter;
 use super::descriptor::AgentDescriptor;
 use super::gemini::GeminiAdapter;
 use super::opencode::OpencodeAdapter;
@@ -20,6 +21,7 @@ pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &GeminiAdapter,
     &PiAdapter,
     &OpencodeAdapter,
+    &CursorAdapter,
 ];
 
 /// Every built-in and valid machine-tier plugin adapter, in display order.
@@ -78,14 +80,15 @@ mod tests {
 
     #[test]
     fn every_adapter_exposes_a_manual_compaction_command() {
-        // `--smart-compact` types this into the agent's composer. Providers
-        // name the command themselves (`/compact`, Gemini's `/compress`).
+        // `--smart-compact` types this into the agent's composer; every wired
+        // agent exposes a slash command (`/compact`, Gemini's `/compress`,
+        // Cursor's `/summarize`), so a new adapter that forgets to opt in fails
+        // here rather than silently never compacting.
         for adapter in ADAPTERS {
-            assert!(
-                adapter.compact_command().is_some(),
-                "missing compact command for {}",
-                adapter.descriptor().kind
-            );
+            let command = adapter.compact_command().unwrap_or_else(|| {
+                panic!("missing compact command for {}", adapter.descriptor().kind)
+            });
+            assert!(!command.is_empty() && command.starts_with('/'));
         }
     }
 

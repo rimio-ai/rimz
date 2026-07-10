@@ -59,11 +59,11 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, RootIdentity,
-    SessionOrigin, SubagentIdentity, SubagentObservation, TranscriptMessage, classify_agent_hook,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, AgentTurnError,
+    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
+    RootIdentity, SessionOrigin, SubagentIdentity, SubagentObservation, TranscriptMessage,
+    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::harness::run::PermissionMode;
@@ -124,6 +124,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     default_context_window: Some(200_000),
     default_model: None,
     process_names: &["claude"],
+    bin_names: &["claude"],
     extra_bin_dirs: &[],
     // `PreToolUse` (races the blocking ask) and `Notification` (idle) are
     // deliberately absent.
@@ -505,6 +506,16 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+        // Cursor can execute Claude-compatible third-party hook commands with
+        // Cursor-shaped payloads. Drop those before they can double-record or
+        // be misparsed; `cursor_version` is Cursor's common-input discriminator.
+        if payload.get("cursor_version").is_some() {
+            return ClassifiedHook {
+                class: AgentHookClass::Unknown,
+                ask_kind: None,
+                event_name: event_name.to_owned(),
+            };
+        }
         let ask_kind = match event_name {
             "PermissionRequest" => self
                 .descriptor()

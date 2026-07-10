@@ -1,6 +1,6 @@
 # Cursor CLI protocol reference
 
-> No RimZ Cursor adapter exists yet. This document records the upstream surface needed to build one; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
+> This document records the upstream surface behind RimZ's Cursor adapter; the implemented mapping and explicit deferrals are in [cursor.md](../../internals/agents/cursor.md), the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **Cursor CLI upstream protocol surface** relevant to RimZ — local hooks and their decision channel, conversation identity, context and subagent payloads, interactive and headless launch modes, stream JSON, ACP, authentication, configuration, permissions, and the documented local-state boundary. It is an implementation research record, not a claim that RimZ currently supports Cursor.
 
@@ -449,7 +449,33 @@ agent --api-key … -p "task"
 
 `NO_OPEN_BROWSER=1 agent login` prints the login URL instead of opening a browser. Current releases also support a QR-code login flow for remote terminals.
 
-`agent status --format json` and `agent about --format json` are the documented machine-readable probes. The docs say status reports authentication, account information, and endpoint configuration, but publish no JSON schema, exit-code table, latency contract, or distinction between browser credentials and API-key auth. Capture golden success, logged-out, expired, API-key, service-account, proxy, and server-error responses before implementing `probe_account`.
+`agent status --format json` and `agent about --format json` are the documented machine-readable probes. The docs say status reports authentication, account information, and endpoint configuration, but publish no JSON schema, exit-code table, latency contract, or distinction between browser credentials and API-key auth. The installed `2026.07.09-a3815c0` build produces the following logged-out `status` fixture; capture golden success, expired, API-key, service-account, proxy, and server-error responses before implementing `probe_account`.
+
+```json
+{
+  "status": "unauthenticated",
+  "isAuthenticated": false,
+  "hasAccessToken": false,
+  "hasRefreshToken": false,
+  "message": "Not logged in"
+}
+```
+
+The same build produces this logged-out `about --format json` shape — the first captured account schema, and a candidate `probe_account` source once the logged-in arm is captured. `subscriptionTier` is the plan-label field (`null` logged out), `userEmail` the account identity (`null` logged out), `cliVersion` the version input, and `model` the configured default (`"Auto"` here). Capture the logged-in success, API-key, and service-account arms before wiring it, because the tier string values, the `userEmail` shape, and whether `subscriptionTier` stays a scalar are all still unverified.
+
+```json
+{
+  "cliVersion": "2026.07.09-a3815c0",
+  "model": "Auto",
+  "subscriptionTier": null,
+  "osPlatform": "linux",
+  "osArch": "x64",
+  "userEmail": null,
+  "terminalProgram": "unknown",
+  "shell": "zsh",
+  "lastRequestId": null
+}
+```
 
 Cursor does not document the credential file or secure-store schema. Treat browser credentials as opaque and use the CLI probe; never read or copy secrets directly. The changelog documents `AGENT_CLI_CREDENTIAL_STORE=file` for sandboxed environments, where credentials are stored unencrypted in an owner-only file, but does not publish that file's schema or path.
 
@@ -462,6 +488,8 @@ The documented hook wire has no per-turn input/output/cache token counts, dollar
 The CLI changelog mentions a human `/usage` display, while the current slash-command reference does not list a machine-readable usage command or schema. Do not scrape the TUI or undocumented output.
 
 Before implementing provider spend, look for a newly documented JSON command or official account API and capture its account scoping, timezone, reset windows, included usage, on-demand spend, and model prices. Until then a Cursor adapter reports context only and leaves spend, budget windows, and live cost unsupported. The general model catalog and pricing page is an index, not a per-account usage feed.
+
+Two adjacent surfaces exist but do not fill the stock per-user CLI gap. The team [Admin API](https://cursor.com/docs/account/teams/admin-api) exposes usage events with `inputTokens`, `outputTokens`, `cacheWriteTokens`, and `cacheReadTokens`, but it is team-admin-scoped behind an admin token rather than a per-user CLI credential. Including token counts in `--output-format stream-json` remains an open upstream feature request as of the 2026-07 refresh, so the headless transport still carries no usage.
 
 ## CLI configuration, modes, and permissions
 
@@ -487,7 +515,7 @@ Relevant global fields include `model`, `maxMode`, `approvalMode` (`allowlist`, 
 | Plan | `--plan` or `--mode=plan` | plans and asks clarifying questions before coding |
 | Ask | `--mode=ask` | read-only exploration |
 
-Permission-related launch flags are `--force` / `--yolo`, `--sandbox enabled|disabled`, `--approve-mcps`, `--trust`, and current `--auto-review` support described in the changelog. RimZ's future `-ask`, `-auto`, `-plan`, and `-yolo` mapping needs live CLI fixtures because sandbox, allowlist, auto-review, and unrestricted are separate axes rather than one linear permission enum.
+Permission-related launch flags are `--force` / `--yolo`, `--sandbox enabled|disabled`, `--approve-mcps`, `--trust`, and `--auto-review`. The installed 2026.07.09 help confirms all of these flags. RimZ maps Ask to the default, Plan to `--mode=plan`, Auto to the classifier-backed `--auto-review`, and Yolo to `--force --sandbox disabled`; neutral-hook behavior still needs live fixtures because sandbox, allowlist, auto-review, and unrestricted are separate axes rather than one linear permission enum.
 
 ### Permission tokens
 
@@ -538,7 +566,7 @@ Before declaring Cursor supported:
 - The published `subagentStop` payload omits the unique `subagent_id` provided at start.
 - Transcript paths are exposed but the transcript format and enablement contract are unpublished.
 - Local CLI chat storage and fork lineage have no official schema.
-- Status/about JSON commands exist but their response schemas are unpublished.
+- Status/about JSON commands exist and their logged-out arms are now captured, but the logged-in `about` schema (tier strings, `userEmail` shape) is still unverified.
 - Hooks and headless output expose no token usage, spend, balance, quota, or rate-limit reset.
 - Hook parallel-response merge details, command-shell rules, stdout limits, and timeout defaults are unpublished.
 - Third-party compatibility may execute existing Claude hooks in Cursor, while the official docs do not define input-payload translation or a source discriminator.
