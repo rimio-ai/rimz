@@ -54,6 +54,32 @@ pub struct LoopRunRecord {
     pub output_tokens: Option<u64>,
 }
 
+impl LoopRunRecord {
+    pub fn new(
+        task: impl Into<String>,
+        result: LoopRunResult,
+        mode: LoopRunMode,
+        duration_ms: u64,
+    ) -> Self {
+        Self {
+            task: task.into(),
+            at: Timestamp::now(),
+            result,
+            mode: Some(mode),
+            duration_ms: Some(duration_ms),
+            error: None,
+            check: None,
+            run_id: None,
+            transcript_path: None,
+            last_message: None,
+            target: None,
+            cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopRunMode {

@@ -1147,17 +1147,24 @@ fn write_run_links(
 }
 
 fn record_spend_label(record: &LoopRunRecord) -> Option<String> {
-    let mut segments = record
-        .cost_usd
+    spend_segments(record.cost_usd, record.input_tokens, record.output_tokens)
+}
+
+pub(super) fn spend_segments(
+    cost_usd: Option<f64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+) -> Option<String> {
+    let mut segments = cost_usd
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
         .map(|cost| format!("${cost:.2}"))
         .into_iter()
         .collect::<Vec<_>>();
     let mut tokens = Vec::new();
-    if let Some(input) = record.input_tokens {
+    if let Some(input) = input_tokens {
         tokens.push(format!("↘ {}", ui::compact_count(input)));
     }
-    if let Some(output) = record.output_tokens {
+    if let Some(output) = output_tokens {
         tokens.push(format!("↗ {}", ui::compact_count(output)));
     }
     if !tokens.is_empty() {
