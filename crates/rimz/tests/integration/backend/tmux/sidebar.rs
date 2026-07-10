@@ -128,23 +128,29 @@ fn sidebar_birth_and_first_attach_preserve_work_shell_contract() {
         birth_pid,
         "first human attach respawns the birth work shell",
     );
-    let final_width = server
-        .display(session, "#{window_width}")
-        .parse::<u64>()
-        .expect("window width");
     let deadline = Instant::now() + Duration::from_secs(5);
-    let work_geom = loop {
+    let (sidebar_geom, work_geom, final_width) = loop {
         let attached = server.wait_for_panes(session, 2);
+        let sidebar = attached
+            .iter()
+            .find(|pane| pane.id == sidebar.pane_id.raw())
+            .expect("attached sidebar geometry");
         let work = attached
-            .into_iter()
+            .iter()
             .find(|pane| pane.id == work_id)
             .expect("attached work geometry");
-        if work.width == final_width - sidebar_cols - 1 || Instant::now() >= deadline {
-            break work;
+        let width = server
+            .display(session, "#{window_width}")
+            .parse::<u64>()
+            .expect("window width");
+        if sidebar.width + work.width + 1 == width || Instant::now() >= deadline {
+            break (sidebar.clone(), work.clone(), width);
         }
         thread::sleep(Duration::from_millis(25));
     };
-    assert_eq!(work_geom.width, final_width - sidebar_cols - 1);
+    assert_eq!(sidebar_geom.left, 0);
+    assert_eq!(work_geom.left, sidebar_geom.width + 1);
+    assert_eq!(sidebar_geom.width + work_geom.width + 1, final_width);
     assert_eq!(server.display(session, "#{pane_id}"), work_id);
 }
 

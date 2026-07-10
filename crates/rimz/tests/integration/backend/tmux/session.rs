@@ -103,17 +103,24 @@ fn list_panes_metadata_and_cross_window_focus_round_trip() {
     server.ensure_with_shell("rimz-jump");
     // A second window, opened without focus so the first stays current.
     server.tmux(&["new-window", "-d", "-t", "rimz-jump", "-n", "second", "sh"]);
-    let target = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("rimz-jump".to_owned()),
-            ..Default::default()
-        })
-        .expect("list_panes")
-        .panes
-        .into_iter()
-        .find(|pane| pane.view_name.as_deref() == Some("second"))
-        .expect("the second window's pane");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let target = loop {
+        let pane = server
+            .backend
+            .list_panes(PaneListOptions {
+                session_name: Some("rimz-jump".to_owned()),
+                ..Default::default()
+            })
+            .expect("list_panes")
+            .panes
+            .into_iter()
+            .find(|pane| pane.view_name.as_deref() == Some("second"))
+            .expect("the second window's pane");
+        if pane.command.as_deref() == Some("sh") || Instant::now() >= deadline {
+            break pane;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
     let window = target
         .view_id
         .clone()

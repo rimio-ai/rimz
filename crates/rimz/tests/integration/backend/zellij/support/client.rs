@@ -4,8 +4,10 @@ use std::time::{Duration, Instant};
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{ClientFocusOptions, MuxBackend, ZellijBackend};
 
+use crate::common::CommandTimeoutExt;
+
 use super::panes::list_panes;
-use super::session::SPAWN_TIMEOUT;
+use super::session::{SPAWN_TIMEOUT, scoped_zellij};
 
 fn viewed_panes(backend: &ZellijBackend, session: &str) -> Result<Vec<PaneId>, String> {
     backend
@@ -89,6 +91,7 @@ pub(in crate::backend::zellij) fn focus_nonplugin_pane_until(
     let backend = ZellijBackend::with_runtime_dir(xdg);
     let mut last_focused = None;
     let mut last_error = String::new();
+    let mut attempts = 0;
     loop {
         if let Err(err) = backend.focus_pane(&pane_id, Some(session)) {
             last_error = err.to_string();
@@ -101,6 +104,19 @@ pub(in crate::backend::zellij) fn focus_nonplugin_pane_until(
                 }
             }
             Err(err) => last_error = err,
+        }
+        attempts += 1;
+        // Zellij can acknowledge a direct focus action without applying it under load;
+        // bounded rotation supplies a second public action path before the deadline.
+        if attempts % 5 == 0 {
+            match scoped_zellij(xdg)
+                .args(["--session", session, "action", "focus-next-pane"])
+                .bounded_output()
+            {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => last_error = String::from_utf8_lossy(&output.stderr).into_owned(),
+                Err(err) => last_error = err.to_string(),
+            }
         }
         if Instant::now() >= deadline {
             panic!(
