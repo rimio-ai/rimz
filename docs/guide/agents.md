@@ -266,6 +266,32 @@ Two everyday tasks have their own guides, with the depth this page leaves out:
 
 The complete `rimz agents` surface, every verb and flag, is the [agent-control reference](../reference/cli/agents.md).
 
+## Answer asks from your phone
+
+Claude Code and Codex each ship **remote control** (`claude remote-control` and `codex remote-control`), which links a machine to your account so the provider's official mobile app can see and drive the sessions on it. The feature is entirely the provider's; what the room adds is the remembering: the bridge only helps if it is already up when an agent stops to ask, on every machine you work from, and starting infrastructure with the room is exactly a room's job.
+
+Two toggles in your per-machine `config.toml` opt in. Both are off by default; Rimz links your account and starts a remote-control host only after you switch it on:
+
+```sh
+rimz config set remote_control.claude true
+rimz config set remote_control.codex true
+```
+
+With a toggle on, every `rimz start` brings up the provider's own command, and this is exactly what runs:
+
+- **Claude.** `claude remote-control --spawn worktree` runs as a long-lived pane in the room's background `rimzd` tab, from the project root, so a session you start from the phone is carved into its own on-demand worktree instead of touching your checkout. While the host is up, the Claude block on the [provider dashboard](./sidebar.md#the-provider-dashboard) wears a `⇅ rc` flag.
+- **Codex.** `codex remote-control start` runs once, detached: it brings up Codex's per-user app-server daemon with remote control enabled and returns. The daemon is one per machine, shared by every room, and is the same daemon Codex's own TUI already routes through.
+
+The payoff is one session, continuous across surfaces: you start the turn at the terminal, the ask catches you on the phone through the provider's own app, and your answer lands in the same session on your machine. By the time you sit back down, the turn has moved on as if you had answered in the pane, with nothing to hand off and nothing to resume. A fleet that runs while you commute, cook, or sleep stays a fleet you can unblock.
+
+The Rimz toggle covers the machine-level Claude host; Claude's own `remoteControlAtStartup: true` (in `~/.claude/settings.json`) additionally makes every session you type into a pane reachable from the app, and Rimz lights the `⇅ rc` flag for that setting too.
+
+Preconditions check both ways at start. An enabled host whose agent is missing is skipped so the room still opens; Codex remote control boots from Codex's managed standalone install, so a `codex` merely on `PATH` is skipped and `rimz doctor` prints the install fix. An installed host with a fixable misconfiguration (a Claude older than remote control, `disableRemoteControl` set, API-key auth on releases where it disables the surface) refuses at `rimz start` with the fix spelled out, so an enabled toggle always means a working bridge.
+
+Undo is the same toggle: set it back to `false` and the next room start leaves that host down. The Claude host is an ordinary pane you can close right now, and the Codex daemon is the provider's own per-user daemon, managed by `codex` itself. One known gap: a session you spawn from the phone runs headless in its worktree with no local pane, and the sidebar does not yet render these remote agents.
+
+Key detail and the daemon-view placement live in [configuration → remote control](./configuration.md#remote-control); which providers carry the surface is the `remote` row of the [coverage matrix](../reference/agent-support.md#the-coverage-matrix).
+
 ## See also
 
 - [Worktrees](./worktrees.md) — isolate a layout on its own branch so several agents run in parallel.

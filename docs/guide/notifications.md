@@ -31,6 +31,8 @@ A `when` clause narrows a handler; its present conditions all have to match, and
 
 Handlers live in per-machine config and stay outside project trust, because they are personal routing that often carries host-specific push credentials — a cloned repository never brings its own ([security](./security.md)). The payoff of the phone route: a failing migration at 3 a.m. becomes a push notification, you open the room from wherever you are ([remote](./remote.md), [web](./web.md)), answer in the agent's own UI, and the pipeline is green by morning.
 
+For Claude and Codex, [remote control](./agents.md#answer-asks-from-your-phone) closes the same loop through the provider's own app: the room starts the official mobile bridge on your opt-in, the ask pushes to your phone, and you answer the native prompt right there, with no handler to write and no reattach.
+
 ## Handlers that act, not just alert
 
 A handler fires with the pane and root in hand, and everything it might do next is a public Rimz command. That makes a handler a place to clear the routine prompt you have already approved eight times today, composed from the room's own primitives:
@@ -46,6 +48,7 @@ A handler can match the prompt against patterns your script owns and answer only
 ## See also
 
 - [Sidebar](./sidebar.md) — the unread inbox and attention ranking these notifications mirror.
+- [Agents → answer asks from your phone](./agents.md#answer-asks-from-your-phone): the provider's own mobile push-and-answer bridge, started with the room.
 - [Loops and schedules](./loops.md) — the other half of unattended work: schedules, watchdogs, and the permission posture.
 - [Remote](./remote.md) and [web](./web.md) — answering from another machine or a phone once the push lands.
 - [Troubleshooting](./troubleshooting.md#notifications-dont-fire) — when no desktop banner appears.
