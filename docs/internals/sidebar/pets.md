@@ -61,7 +61,7 @@ Any pet-action change plays `jumping` once before switching to the new steady tr
 
 The built-in catalog follows the Codex/petdex sheet rows: row 0 `idle` (6 frames), row 1 `run-right` (8), row 2 `run-left` (8), row 3 `waving` (4), row 4 `jumping` (5), row 5 `failed` (8), row 6 `waiting` (6), row 7 `running` (6), and row 8 `review` (6). The shipped animation tracks are `idle`, `thinking`, `running`, `waiting`, `review`, `ask`, `jumping`, and `failed`; `thinking` composes repeated `run-left` and `run-right` rows, while `ask` composes the `waving` and `waiting` rows.
 
-Captions are canned renderer strings. They read action transitions only, and `[theme.pets] voice = false` disables them.
+Captions are canned renderer strings: each action owns a pool of a hundred-plus glanceable lines, and a transition draws one by the frame phase so repeats vary. `pool[0]` is the plain default in the table above. Captions read action transitions only, and `[theme.pets] voice = false` disables them; `voice.rs` tests enforce the pool contract (size, width, uniqueness).
 
 ## Cell art
 

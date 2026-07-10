@@ -29,11 +29,11 @@ voice = true
 | `pet` | which pet: a built-in id, a [petdex](#petdex) pet, an HTTPS URL, or a local sheet path |
 | `glyphs` | render tier: `auto`, `pixel`, or `sextant` |
 | `cell_aspect` | optional terminal cell height/width ratio for sextant aspect correction |
-| `voice` | canned captions on pet-action changes |
+| `voice` | one-line captions on pet-action changes, drawn from each state's pool |
 
 ## What the pet does
 
-The pet acts out the selected card, one steady animation per state: it waves when an agent waits on your answer, paces while one reasons, runs while the work moves, has a rough patch when a turn fails, and rests when everything is caught up. Any state change lands with a small jump first, so motion in the corner of your eye means the room changed. A one-line caption under the sprite names the moment (`someone needs you`, `thinking it through`, `all caught up`); `voice = false` keeps the animation and hides the captions.
+The pet acts out the selected card, one steady animation per state: it waves when an agent waits on your answer, paces while one reasons, runs while the work moves, has a rough patch when a turn fails, and rests when everything is caught up. Any state change lands with a small jump first, so motion in the corner of your eye means the room changed. A one-line caption under the sprite names the moment (`someone needs you`, `thinking it through`, `all caught up`), drawn from a pool of a hundred-plus lines per state so the pet rarely repeats itself; `voice = false` keeps the animation and hides the captions.
 
 ## Choosing a pet
 
