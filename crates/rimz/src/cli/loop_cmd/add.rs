@@ -130,10 +130,7 @@ fn resolve_add_action(
         None => None,
     };
     let mut action = match (target, resolved) {
-        (Some(target), resolved) => {
-            reject_delivery_spawn_flags(args)?;
-            AddTaskAction::Deliver { target, resolved }
-        }
+        (Some(target), resolved) => AddTaskAction::Deliver { target, resolved },
         (None, Some(resolved)) => {
             let is_ping = args
                 .agent
@@ -148,18 +145,19 @@ fn resolve_add_action(
                 mode: None,
             }
         }
-        (None, None) => {
-            reject_check_only_agent_flags(args)?;
-            AddTaskAction::CheckOnly
-        }
+        (None, None) => AddTaskAction::CheckOnly,
     };
     if args.every.as_deref() == Some("reset")
         && !matches!(action, AddTaskAction::Spawn { is_ping: true, .. })
     {
         bail!("--every reset only applies to a `<kind>-ping` agent task");
     }
-    if let AddTaskAction::Spawn { mode, .. } = &mut action {
-        *mode = args.mode.as_deref().map(parse_mode).transpose()?;
+    match &mut action {
+        AddTaskAction::Spawn { mode, .. } => {
+            *mode = args.mode.as_deref().map(parse_mode).transpose()?;
+        }
+        AddTaskAction::Deliver { .. } => reject_delivery_spawn_flags(args)?,
+        AddTaskAction::CheckOnly => reject_check_only_agent_flags(args)?,
     }
     Ok(action)
 }
