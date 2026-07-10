@@ -86,11 +86,11 @@ pub(super) fn resume_lane(
     let projection = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
-    let worktrees = local_worktrees(&workspace)?;
 
     if scope.is_none() && from_pr.is_none() && workspace.worktree_root == workspace.project_root {
         return list_resumable_lanes(&projection.agents, &workspace.project_root);
     }
+    let worktrees = local_worktrees(&workspace)?;
 
     let lane = match (scope.as_deref(), from_pr) {
         (_, Some(pr)) => resolve_pr_lane(pr.number, &worktrees)?,
@@ -784,6 +784,22 @@ mod tests {
             resolve_pr_lane(42, &worktrees).unwrap().worktree_name,
             "pr-42"
         );
+    }
+
+    #[test]
+    fn bare_resume_inside_a_worktree_resolves_that_lane() {
+        let worktrees = vec![worktree("docs", "feat/docs", None)];
+
+        let lane = resolve_cwd_lane(
+            Path::new("/repo-worktrees/docs"),
+            Path::new("/repo"),
+            &[],
+            &worktrees,
+        )
+        .expect("cwd lane");
+
+        assert_eq!(lane.path, PathBuf::from("/repo-worktrees/docs"));
+        assert_eq!(lane.worktree_name, "docs");
     }
 
     #[test]
