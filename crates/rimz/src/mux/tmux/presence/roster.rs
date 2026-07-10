@@ -739,6 +739,35 @@ mod tests {
     }
 
     #[test]
+    fn layout_change_closes_tiled_pane_while_preserving_floating_sibling() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), false), true);
+        roster.apply(sub("%2", "@1", Some("claude"), false), true);
+        roster.apply(floating_sub("%3", "@1", Some("codex")), true);
+        // The tiled `%2` drops out of the layout and closes; the floating `%3`
+        // is absent from the layout string too but must survive, so the event
+        // names only `%2` and appends a nudge for the floating-pane poll.
+        assert_eq!(
+            roster.apply(
+                ControlLine::LayoutChange {
+                    window: "@1".to_owned(),
+                    panes: vec!["%1".to_owned()],
+                },
+                false,
+            ),
+            vec![
+                SidebarEvent::PaneClosed {
+                    pane_id: pane_id("%2"),
+                },
+                SidebarEvent::PanesChanged,
+            ],
+        );
+        assert!(roster.panes.contains_key("%1"));
+        assert!(!roster.panes.contains_key("%2"));
+        assert!(roster.panes.contains_key("%3"));
+    }
+
+    #[test]
     fn nudge_falls_back_to_panes_changed() {
         let mut roster = PresenceRoster::default();
         assert_eq!(
