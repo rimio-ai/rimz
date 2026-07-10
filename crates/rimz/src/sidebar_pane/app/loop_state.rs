@@ -9,15 +9,16 @@ use super::paint::FramePainter;
 use super::remind::RemindState;
 use super::selection::{reconcile_selection, row_index_of_pane};
 use super::state::{
-    ApplyOutcome, FetchDiagnostics, ReadClear, apply_manual_unread_guard, compute_next_state,
-    emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row, read_receipts_for_all,
-    read_receipts_for_tab, row_id_of_pane, session_focus_baseline, set_rows_unread,
+    ApplyOutcome, FetchDiagnostics, ReadClear, RenderState, apply_manual_unread_guard,
+    compute_next_state, emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row,
+    read_receipts_for_all, read_receipts_for_tab, row_id_of_pane, session_focus_baseline,
+    set_rows_unread,
 };
 use super::*;
 use crate::diag::record::RendererExitCause;
 use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::observe::writer::{RoleCache, crosscheck_enabled};
-use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
+use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pets::PetRenderCaps;
 
@@ -382,41 +383,66 @@ impl LoopState {
         if saw_final {
             fetch.mark_request_complete();
         }
-        let mut rejected = false;
-        if let Some(mut outcome) = latest {
-            self.last_known_elder = outcome.producer;
-            if outcome.unchanged {
-                self.fetched_at = Instant::now();
-            } else {
-                let snapshot_ok = outcome.snapshot.is_ok();
-                let fresh_pane_frame = outcome.fresh_pane_frame;
-                if let Ok(pulled) = outcome.snapshot {
-                    self.last_pulled = pulled;
-                    let now_ms = crate::sidebar::timing::unix_now_ms();
-                    self.event_store.prune(now_ms);
-                    outcome.snapshot = Ok(self.fused_snapshot(now_ms));
-                }
-                self.fetched_at = Instant::now();
-                rejected = self.fold_outcome(config, outcome, anim_start, diag)?;
-                if snapshot_ok {
-                    self.last_self_close_check = Instant::now();
-                }
-                if !self.should_exit
-                    && !rejected
-                    && !self.self_close.confirming_empty()
-                    && (fresh_pane_frame
-                        || self
-                            .paint_hold
-                            .releases_on_stamp(self.current.panes_observed_at_ms))
-                {
-                    // The snapshot folded a post-signal pane frame. Its own-view
-                    // verdict has decided the resize-grow case: exit without
-                    // painting when alone, or release the hold and paint at the new
-                    // size when siblings remain.
-                    self.paint_hold.release();
-                }
-            }
+        let rejected = match latest {
+            Some(outcome) => self.apply_latest_snapshot(config, outcome, anim_start, diag)?,
+            None => false,
+        };
+        self.finish_snapshot_requests(fetch, saw_final, rejected);
+        Ok(())
+    }
+
+    fn apply_latest_snapshot(
+        &mut self,
+        config: &ServeConfig,
+        mut outcome: FetchOutcome,
+        anim_start: Instant,
+        diag: &crate::diag::DiagSink,
+    ) -> Result<bool> {
+        self.last_known_elder = outcome.producer;
+        if outcome.unchanged {
+            self.fetched_at = Instant::now();
+            return Ok(false);
         }
+        let snapshot_ok = outcome.snapshot.is_ok();
+        let fresh_pane_frame = outcome.fresh_pane_frame;
+        if let Ok(pulled) = outcome.snapshot {
+            self.last_pulled = pulled;
+            let now_ms = crate::sidebar::timing::unix_now_ms();
+            self.event_store.prune(now_ms);
+            outcome.snapshot = Ok(self.fused_snapshot(now_ms));
+        }
+        self.fetched_at = Instant::now();
+        let rejected = self.fold_outcome(config, outcome, anim_start, diag)?;
+        if snapshot_ok {
+            self.last_self_close_check = Instant::now();
+        }
+        self.release_paint_hold_after_snapshot(rejected, fresh_pane_frame);
+        Ok(rejected)
+    }
+
+    fn release_paint_hold_after_snapshot(&mut self, rejected: bool, fresh_pane_frame: bool) {
+        if !self.should_exit
+            && !rejected
+            && !self.self_close.confirming_empty()
+            && (fresh_pane_frame
+                || self
+                    .paint_hold
+                    .releases_on_stamp(self.current.panes_observed_at_ms))
+        {
+            // The snapshot folded a post-signal pane frame. Its own-view
+            // verdict has decided the resize-grow case: exit without
+            // painting when alone, or release the hold and paint at the new
+            // size when siblings remain.
+            self.paint_hold.release();
+        }
+    }
+
+    fn finish_snapshot_requests(
+        &mut self,
+        fetch: &mut FetchDispatcher,
+        saw_final: bool,
+        rejected: bool,
+    ) {
         if !self.should_exit
             && saw_final
             && let Some(request) = fetch.take_pending()
@@ -429,7 +455,6 @@ impl LoopState {
         if !self.should_exit && saw_final && rejected {
             fetch.request(FetchRequest::default(), false);
         }
-        Ok(())
     }
 
     /// Fuse the last pulled snapshot with the overlay event store and any
@@ -504,76 +529,33 @@ impl LoopState {
                 recheck_unread,
                 notification_kind,
             } => {
-                let kind = notification_kind.as_deref().unwrap_or(if recheck_unread {
-                    "agent"
-                } else {
-                    "link"
-                });
-                match emit_terminal_notification(
+                self.handle_notification(
                     config,
                     terminal,
-                    &self.current,
-                    BellNotice {
-                        title: &title,
-                        body: &body,
-                        panes: &panes,
-                        recheck_unread,
-                        kind,
-                    },
+                    title,
+                    body,
+                    panes,
+                    recheck_unread,
+                    notification_kind,
                     diag,
-                ) {
-                    Ok(true) => self.remind.note_ring(crate::sidebar::timing::unix_now_ms()),
-                    Ok(false) => {}
-                    Err(err) => debug!(error = %err, "terminal notification emit failed"),
-                }
+                );
             }
             SidebarEvent::FocusStranded { pane_id } => {
-                let now_ms = crate::sidebar::timing::unix_now_ms();
-                let own_pane = crate::mux::own_pane_id(config.mux);
-                if let Some(target) = focus_stranded_target(
-                    &self.current,
-                    &self.ui,
-                    &pane_id,
-                    own_pane.as_ref(),
-                    sent_at_ms,
-                    now_ms,
-                ) {
-                    // Match sidebar jumps: broadcast the intent before the mux
-                    // switch so peer tabs repaint while still hidden.
-                    self.record_focus_intent(config, target.clone(), anim_start, diag)?;
-                    spawn_pane_focus(target, &config.session_name);
-                }
+                self.handle_focus_stranded(config, pane_id, sent_at_ms, anim_start, diag)?;
             }
             SidebarEvent::FocusIntent { .. } => {
                 self.fold_fused_now(config, anim_start, diag)?;
             }
-            // An overlay event fuses into the in-memory state and paints this
-            // frame. A topology overlay also asks the producer to verify with a
-            // real pull, which supersedes the overlay once its fresh frame
-            // folds in. A resize-grow paint hold stays held until a pulled
-            // sibling-count verdict releases it.
             event if event.is_overlay() => {
-                let own = self.own_pane.as_ref();
-                let own_focused = matches!(&event, SidebarEvent::FocusChanged { focused, .. }
-                    if own.is_some_and(|pane| focused.contains(pane)));
-                let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { unfocused, .. }
-                    if own.is_some_and(|pane| unfocused.contains(pane)));
-                let now_ms = crate::sidebar::timing::unix_now_ms();
-                self.event_store.append(event, sent_at_ms, now_ms);
-                self.fold_fused_now(config, anim_start, diag)?;
-                if !self.should_exit && (requests_verification || own_focused) {
-                    self.request_now_merging_pending(
-                        fetch,
-                        FetchRequest::producer_fresh_panes(),
-                        true,
-                    );
-                }
-                if own_focused {
-                    self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
-                } else if own_unfocused {
-                    self.optimistic_watch_until = None;
-                    self.ui.help_visible = false;
-                }
+                self.handle_overlay_event(
+                    config,
+                    fetch,
+                    event,
+                    sent_at_ms,
+                    requests_verification,
+                    anim_start,
+                    diag,
+                )?;
             }
             // Identity-free nudges — `StoreDelta`, `PanesChanged`, a
             // `PaneOpened` without a command: nothing to fuse, so refetch,
@@ -590,6 +572,101 @@ impl LoopState {
             }
         }
         Ok(LoopFlow::Continue)
+    }
+
+    fn handle_notification(
+        &mut self,
+        config: &ServeConfig,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        title: String,
+        body: String,
+        panes: Vec<PaneId>,
+        recheck_unread: bool,
+        notification_kind: Option<String>,
+        diag: &crate::diag::DiagSink,
+    ) {
+        let kind =
+            notification_kind
+                .as_deref()
+                .unwrap_or(if recheck_unread { "agent" } else { "link" });
+        match emit_terminal_notification(
+            config,
+            terminal,
+            &self.current,
+            BellNotice {
+                title: &title,
+                body: &body,
+                panes: &panes,
+                recheck_unread,
+                kind,
+            },
+            diag,
+        ) {
+            Ok(true) => self.remind.note_ring(crate::sidebar::timing::unix_now_ms()),
+            Ok(false) => {}
+            Err(err) => debug!(error = %err, "terminal notification emit failed"),
+        }
+    }
+
+    fn handle_focus_stranded(
+        &mut self,
+        config: &ServeConfig,
+        pane_id: PaneId,
+        sent_at_ms: u64,
+        anim_start: Instant,
+        diag: &crate::diag::DiagSink,
+    ) -> Result<()> {
+        let now_ms = crate::sidebar::timing::unix_now_ms();
+        let own_pane = crate::mux::own_pane_id(config.mux);
+        if let Some(target) = focus_stranded_target(
+            &self.current,
+            &self.ui,
+            &pane_id,
+            own_pane.as_ref(),
+            sent_at_ms,
+            now_ms,
+        ) {
+            // Match sidebar jumps: broadcast the intent before the mux
+            // switch so peer tabs repaint while still hidden.
+            self.record_focus_intent(config, target.clone(), anim_start, diag)?;
+            spawn_pane_focus(target, &config.session_name);
+        }
+        Ok(())
+    }
+
+    fn handle_overlay_event(
+        &mut self,
+        config: &ServeConfig,
+        fetch: &mut FetchDispatcher,
+        event: SidebarEvent,
+        sent_at_ms: u64,
+        requests_verification: bool,
+        anim_start: Instant,
+        diag: &crate::diag::DiagSink,
+    ) -> Result<()> {
+        // An overlay event fuses into the in-memory state and paints this
+        // frame. A topology overlay also asks the producer to verify with a
+        // real pull, which supersedes the overlay once its fresh frame
+        // folds in. A resize-grow paint hold stays held until a pulled
+        // sibling-count verdict releases it.
+        let own = self.own_pane.as_ref();
+        let own_focused = matches!(&event, SidebarEvent::FocusChanged { focused, .. }
+            if own.is_some_and(|pane| focused.contains(pane)));
+        let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { unfocused, .. }
+            if own.is_some_and(|pane| unfocused.contains(pane)));
+        let now_ms = crate::sidebar::timing::unix_now_ms();
+        self.event_store.append(event, sent_at_ms, now_ms);
+        self.fold_fused_now(config, anim_start, diag)?;
+        if !self.should_exit && (requests_verification || own_focused) {
+            self.request_now_merging_pending(fetch, FetchRequest::producer_fresh_panes(), true);
+        }
+        if own_focused {
+            self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
+        } else if own_unfocused {
+            self.optimistic_watch_until = None;
+            self.ui.help_visible = false;
+        }
+        Ok(())
     }
 
     pub(super) fn on_resize(
@@ -924,6 +1001,31 @@ impl LoopState {
         active: bool,
     ) -> Result<()> {
         let now = Instant::now();
+        let paint_blocked = self.prepare_paint(terminal, now);
+        let watched = self.watched();
+        let background_key = self.background_paint_due(now, watched);
+        let foreground = self.foreground_paint_due(now, active, watched);
+        // Once the tab has emptied, never paint again. A grow resize also
+        // defers its paint until the sibling-count verdict releases the hold.
+        if !self.should_exit
+            && !self.self_close.confirming_empty()
+            && !paint_blocked
+            && (foreground || background_key.is_some())
+        {
+            self.paint_now(terminal, anim_start, now, background_key)?;
+        } else if !active && !self.dirty {
+            // Idle re-arm only: with a fold pending, the armed boundary must
+            // hold so a paint already due within one frame is not pushed out.
+            self.next_frame = now + animation_frame(&self.current);
+        }
+        Ok(())
+    }
+
+    fn prepare_paint(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        now: Instant,
+    ) -> bool {
         if self.dirty {
             let dirty_deadline = now + animation_frame(&self.current);
             if self.next_frame > dirty_deadline {
@@ -944,23 +1046,12 @@ impl LoopState {
         if hold_was_engaged && !paint_blocked {
             debug!("resize paint hold expired");
         }
-        // Once the tab has emptied, never paint again. A grow resize also
-        // defers its paint until the sibling-count verdict releases the hold.
-        let watched = self.watched();
-        let background_key = self.background_paint_due(now, watched);
-        let paintable = (active && watched) || (self.dirty && self.dirty_paintable(watched));
-        if !self.should_exit
-            && !self.self_close.confirming_empty()
-            && !paint_blocked
-            && ((paintable && now >= self.next_frame) || background_key.is_some())
-        {
-            self.paint_now(terminal, anim_start, now, background_key)?;
-        } else if !active && !self.dirty {
-            // Idle re-arm only: with a fold pending, the armed boundary must
-            // hold so a paint already due within one frame is not pushed out.
-            self.next_frame = now + animation_frame(&self.current);
-        }
-        Ok(())
+        paint_blocked
+    }
+
+    fn foreground_paint_due(&self, now: Instant, active: bool, watched: bool) -> bool {
+        ((active && watched) || (self.dirty && self.dirty_paintable(watched)))
+            && now >= self.next_frame
     }
 
     /// Whether an off-screen dirty frame earns a background paint: content key
@@ -1049,47 +1140,106 @@ impl LoopState {
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<ApplyOutcome> {
+        let (prev_good, rejected, now) = self.commit_fetch(config, outcome, diag);
+        let prev_selected = self.ui.selected_pane.clone();
+        let (focused_pane, cleared) = self.sweep_read_receipts(now, diag);
+        self.reconcile_selection_and_order(
+            &prev_good,
+            prev_selected,
+            focused_pane,
+            cleared,
+            now.as_millisecond(),
+        );
+        self.fold_spend_rolls(anim_start);
+        Ok(self.exit_verdict(config, rejected))
+    }
+
+    fn exit_verdict(&mut self, config: &ServeConfig, rejected: bool) -> ApplyOutcome {
+        // A renderer degraded this long is non-functional and, with a now-stale
+        // heartbeat, unreachable by `rimz reload` — so it gives up rather than
+        // lingering as a zombie showing a frozen frame. Exiting closes its
+        // `close_on_exit` pane; reload/attach recovery then rebuilds a current
+        // sidebar against the live panes.
+        if degraded_too_long(&self.health, Timestamp::now()) {
+            warn!(
+                target: SIDEBAR_HEALTH_TARGET,
+                session = %config.session_name,
+                reason = self.health.alert.as_ref().map(|alert| alert.reason.as_str()),
+                "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
+            );
+            return ApplyOutcome {
+                should_exit: true,
+                tab_emptied: false,
+                rejected,
+            };
+        }
+
+        // Own-view (sibling count) rides in on the snapshot — the producer computes
+        // it from the same pane list it already enumerated. Presence publication and
+        // the poll backstop feed this latch; resize only decides whether to hold a
+        // grown-width paint while the fresh fold is pending.
+        if self_close_decision(
+            &mut self.self_close,
+            self.current
+                .own_view
+                .as_ref()
+                .map(|view| view.sibling_count),
+            Instant::now(),
+        ) {
+            debug!(
+                session = %config.session_name,
+                "sidebar tab emptied; exiting so the pane closes itself",
+            );
+            return ApplyOutcome {
+                should_exit: true,
+                tab_emptied: true,
+                rejected,
+            };
+        }
+        ApplyOutcome {
+            should_exit: false,
+            tab_emptied: false,
+            rejected,
+        }
+    }
+
+    fn commit_fetch(
+        &mut self,
+        config: &ServeConfig,
+        outcome: FetchOutcome,
+        diag: &crate::diag::DiagSink,
+    ) -> (SidebarSnapshot, bool, Timestamp) {
         let is_elder = !diag.is_enabled()
             || RuntimePaths::for_workspace(config.workspace_id.clone())
                 .ok()
                 .map(|rt| crosscheck_enabled(self.elder_role.current(&rt, &config.instance_id)))
                 .unwrap_or(true);
-        let own_pane = self.own_pane.as_ref();
-        let last_snapshot = &mut self.last_snapshot;
-        let current = &mut self.current;
-        let health = &mut self.health;
-        let gate = &mut self.gate;
-        let self_close = &mut self.self_close;
-        let ui = &mut self.ui;
-        let read_marks = &mut self.read_marks;
-        let tab_read_dwell = &mut self.tab_read_dwell_until;
-
         // The gate compares the incoming snapshot against the last frame we actually
         // committed; `current` still holds it until we overwrite it below.
         let fetch_was_ok = outcome.snapshot.is_ok();
         let fetch_failure = outcome.snapshot.as_ref().err().cloned();
         let final_for_request = outcome.final_for_request;
-        let prev_good = current.clone();
-        let prev_health = health.clone();
-        let prev_gate = gate.clone();
+        let prev_good = self.current.clone();
+        let prev_health = self.health.clone();
+        let prev_gate = self.gate.clone();
         let mut computed = compute_next_state(
             &config.workspace_id,
             None,
             outcome.snapshot,
-            last_snapshot.take(),
-            health,
+            self.last_snapshot.take(),
+            &self.health,
         );
         if fetch_was_ok && !final_for_request {
             // A fast-lane frame inside an open fetch cycle is paintable data, not a
             // health verdict. Let the final produce outcome recover or extend the
             // refresh episode so a repeated produce failure is not masked by the
             // frameless/status-only fast fold that precedes it.
-            computed.health = health.clone();
+            computed.health = self.health.clone();
         }
         let incoming_snapshot = computed.snapshot.clone();
         let now = Timestamp::now();
         let (state, next_gate, rejected, released_via_escape_hatch) =
-            apply_gate(computed, fetch_was_ok, &prev_good, gate, now);
+            apply_gate(computed, fetch_was_ok, &prev_good, &self.gate, now);
         emit_diagnostics(
             diag,
             FetchDiagnostics {
@@ -1107,8 +1257,13 @@ impl LoopState {
                 now,
             },
         );
-        *gate = next_gate;
-        ui.gate_notice = gate.rule.map(|rule| render::GateNotice { rule });
+        self.install_fetch_state(state, next_gate);
+        (prev_good, rejected, now)
+    }
+
+    fn install_fetch_state(&mut self, state: RenderState, next_gate: GateState) {
+        self.gate = next_gate;
+        self.ui.gate_notice = self.gate.rule.map(|rule| render::GateNotice { rule });
         if let Some(alert) = state
             .health
             .alert
@@ -1117,62 +1272,98 @@ impl LoopState {
         {
             warn!(target: SIDEBAR_HEALTH_TARGET, reason = %alert.reason, "sidebar refresh degraded");
         }
-        *last_snapshot = state.last_snapshot;
-        *health = state.health;
-        *current = state.snapshot;
-        let prev_selected = ui.selected_pane.clone();
-        let focused_pane = session_focus_baseline(current, own_pane);
-        let viewing_register_pane = current
+        self.last_snapshot = state.last_snapshot;
+        self.health = state.health;
+        self.current = state.snapshot;
+    }
+
+    fn sweep_read_receipts(
+        &mut self,
+        now: Timestamp,
+        diag: &crate::diag::DiagSink,
+    ) -> (Option<PaneId>, bool) {
+        let focused_pane = session_focus_baseline(&self.current, self.own_pane.as_ref());
+        let viewing_register_pane = self
+            .current
             .focused_pane
             .as_ref()
-            .is_some_and(|pane| current.viewed_panes.contains(pane));
+            .is_some_and(|pane| self.current.viewed_panes.contains(pane));
         let focused_row_id = focused_pane
             .as_ref()
             .filter(|_| viewing_register_pane)
-            .and_then(|pane| row_id_of_pane(current, pane));
-        let marks = read_marks.load_merged();
-        let live: HashSet<String> = current
+            .and_then(|pane| row_id_of_pane(&self.current, pane));
+        let marks = self.read_marks.load_merged();
+        let live: HashSet<String> = self
+            .current
             .worktree_groups
             .iter()
             .flat_map(|group| group.rows.iter())
             .map(|row| row.id.clone())
             .collect();
         let mut clear = read_receipt_for_row(
-            current,
+            &self.current,
             focused_row_id.as_deref(),
             UnreadClearCause::Focus,
             &marks,
             now,
         );
-        if let (Some(view), Some(own_pane)) = (current.own_view.as_ref(), own_pane) {
-            let now_viewing = own_tab_viewed(current, view, own_pane);
-            let switched_in = ui.viewing_own_tab == Some(false) && now_viewing;
-            ui.viewing_own_tab = Some(now_viewing);
-            if !now_viewing {
-                // Left the tab: a scan, not a read. Drop the pending sweep.
-                *tab_read_dwell = None;
-            } else if switched_in {
-                *tab_read_dwell = Some(Instant::now() + TAB_READ_DWELL);
-            }
-            if now_viewing && tab_read_dwell.is_some_and(|until| Instant::now() >= until) {
-                *tab_read_dwell = None;
-                clear.merge(read_receipts_for_tab(
-                    current,
-                    &view.working_pane_ids,
-                    focused_row_id.as_deref(),
-                    &marks,
-                    now,
-                ));
-            }
-        }
-        apply_manual_unread_guard(ui, focused_row_id.as_deref(), &mut clear);
-        read_marks.observe_fold(clear.ids.clone(), now.as_millisecond(), &live);
-        set_rows_unread(current, &clear.ids, false);
+        self.sweep_tab_read_receipts(focused_row_id.as_deref(), &marks, now, &mut clear);
+        apply_manual_unread_guard(&mut self.ui, focused_row_id.as_deref(), &mut clear);
+        self.read_marks
+            .observe_fold(clear.ids.clone(), now.as_millisecond(), &live);
+        set_rows_unread(&mut self.current, &clear.ids, false);
         emit_unread_cleared_trace(diag, &clear.trace);
+        (focused_pane, !clear.ids.is_empty())
+    }
+
+    fn sweep_tab_read_receipts(
+        &mut self,
+        focused_row_id: Option<&str>,
+        marks: &ReadMarks,
+        now: Timestamp,
+        clear: &mut ReadClear,
+    ) {
+        let (Some(view), Some(own_pane)) = (self.current.own_view.as_ref(), self.own_pane.as_ref())
+        else {
+            return;
+        };
+        let now_viewing = own_tab_viewed(&self.current, view, own_pane);
+        let switched_in = self.ui.viewing_own_tab == Some(false) && now_viewing;
+        self.ui.viewing_own_tab = Some(now_viewing);
+        if !now_viewing {
+            // Left the tab: a scan, not a read. Drop the pending sweep.
+            self.tab_read_dwell_until = None;
+        } else if switched_in {
+            self.tab_read_dwell_until = Some(Instant::now() + TAB_READ_DWELL);
+        }
+        if now_viewing
+            && self
+                .tab_read_dwell_until
+                .is_some_and(|until| Instant::now() >= until)
+        {
+            self.tab_read_dwell_until = None;
+            clear.merge(read_receipts_for_tab(
+                &self.current,
+                &view.working_pane_ids,
+                focused_row_id,
+                marks,
+                now,
+            ));
+        }
+    }
+
+    fn reconcile_selection_and_order(
+        &mut self,
+        prev_good: &SidebarSnapshot,
+        prev_selected: Option<PaneId>,
+        focused_pane: Option<PaneId>,
+        cleared: bool,
+        now_ms: i64,
+    ) {
         // Presentation sort reorders the snapshot's full row set. The order hold
         // below can keep this sorted order stable across a read-clear long enough
         // for the user to confirm where they landed.
-        current.sort_groups_for_presentation();
+        self.current.sort_groups_for_presentation();
         // Reconcile the highlight as part of the fold, before the next frame paints:
         // re-anchor the identity-keyed selection to its row (so a status-churn
         // reorder never slides it onto a neighbour) and re-derive the baseline from
@@ -1183,24 +1374,33 @@ impl LoopState {
         // deliberately blind to the make-up filter — the focused pane is real
         // however the body is narrowed, so a hidden baseline holds rather than
         // blanks.
-        let derived = focused_pane.filter(|pane| row_index_of_pane(current, None, pane).is_some());
+        let derived =
+            focused_pane.filter(|pane| row_index_of_pane(&self.current, None, pane).is_some());
         let derived_focus_pane = derived.is_some();
-        reconcile_selection(ui, current, derived);
+        reconcile_selection(&mut self.ui, &self.current, derived);
         // A fresh focus-register derivation that moved the highlight is an external
         // focus switch. Arm a one-shot reveal so the next paint brings the focused
         // card's worktree header on-screen with it. A sidebar jump also lands here,
         // but its fresh focus anchor cancels this in `apply_focus_anchor`.
-        if derived_focus_pane && ui.selected_pane.is_some() && ui.selected_pane != prev_selected {
-            ui.focus_group_reveal = true;
+        if derived_focus_pane
+            && self.ui.selected_pane.is_some()
+            && self.ui.selected_pane != prev_selected
+        {
+            self.ui.focus_group_reveal = true;
         }
-        let answered =
-            order_hold::focused_attention_dropped(&prev_good, current, ui.selected_pane.as_ref());
-        let interacted = !clear.ids.is_empty() || ui.selected_pane != prev_selected || answered;
-        order_hold::apply_order_hold(ui, current, interacted, now.as_millisecond());
-        let last_order = order_hold::capture_order(current, ui);
-        ui.last_order = last_order;
-        ui.animation_phase =
-            wall_clock_phase(anim_start, current.theme.display.resolved_refresh_ms());
+        let answered = order_hold::focused_attention_dropped(
+            prev_good,
+            &self.current,
+            self.ui.selected_pane.as_ref(),
+        );
+        let interacted = cleared || self.ui.selected_pane != prev_selected || answered;
+        order_hold::apply_order_hold(&mut self.ui, &mut self.current, interacted, now_ms);
+        self.ui.last_order = order_hold::capture_order(&self.current, &self.ui);
+    }
+
+    fn fold_spend_rolls(&mut self, anim_start: Instant) {
+        self.ui.animation_phase =
+            wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
         // Fold the fresh headline spend into the count-up: a higher figure starts a
         // stepped roll that the next frames paint, a reset or first value snaps,
         // and an unchanged one is a no-op that leaves a climb in flight. The live
@@ -1209,23 +1409,25 @@ impl LoopState {
         // carrying neither leaves the roll untouched, so a transient missing
         // snapshot never snaps the figure to zero. The serve loop paints the
         // folded state on its next frame boundary; this path never draws.
-        let today_usd = current.today_spend_live_usd.or(current
+        let today_usd = self.current.today_spend_live_usd.or(self
+            .current
             .workspace_value_tally
             .as_ref()
             .map(|tally| tally.headline.usd));
         if let Some(usd) = today_usd {
-            let shown = ui
+            let shown = self
+                .ui
                 .spend_ratchet
-                .observe(current.today_spend_epoch_secs, usd);
-            ui.tally.observe(shown, ui.animation_phase);
+                .observe(self.current.today_spend_epoch_secs, usd);
+            self.ui.tally.observe(shown, self.ui.animation_phase);
         }
         // The per-card cost rolls fold beside it: observe each agent row's session
         // cost under its durable row id (pruning rows the snapshot no longer
         // carries), so a card's `$cost` ticks up on the next frames the same way.
         // A row without the cost enrichment is simply not observed; when its first
         // cost lands, the first observation snaps — never a `0 → cost` boot roll.
-        ui.cost_rolls.observe(
-            current
+        self.ui.cost_rolls.observe(
+            self.current
                 .worktree_groups
                 .iter()
                 .flat_map(|group| group.rows.iter())
@@ -1236,52 +1438,8 @@ impl LoopState {
                         .and_then(|cost| cost.total_cost_usd)
                         .map(|usd| (row.id.clone(), usd))
                 }),
-            ui.animation_phase,
+            self.ui.animation_phase,
         );
-
-        // A renderer degraded this long is non-functional and, with a now-stale
-        // heartbeat, unreachable by `rimz reload` — so it gives up rather than
-        // lingering as a zombie showing a frozen frame. Exiting closes its
-        // `close_on_exit` pane; reload/attach recovery then rebuilds a current
-        // sidebar against the live panes.
-        if degraded_too_long(health, Timestamp::now()) {
-            warn!(
-                target: SIDEBAR_HEALTH_TARGET,
-                session = %config.session_name,
-                reason = health.alert.as_ref().map(|alert| alert.reason.as_str()),
-                "sidebar degraded too long; exiting so the pane closes and reload/attach can rebuild it",
-            );
-            return Ok(ApplyOutcome {
-                should_exit: true,
-                tab_emptied: false,
-                rejected,
-            });
-        }
-
-        // Own-view (sibling count) rides in on the snapshot — the producer computes
-        // it from the same pane list it already enumerated. Presence publication and
-        // the poll backstop feed this latch; resize only decides whether to hold a
-        // grown-width paint while the fresh fold is pending.
-        if self_close_decision(
-            self_close,
-            current.own_view.as_ref().map(|view| view.sibling_count),
-            Instant::now(),
-        ) {
-            debug!(
-                session = %config.session_name,
-                "sidebar tab emptied; exiting so the pane closes itself",
-            );
-            return Ok(ApplyOutcome {
-                should_exit: true,
-                tab_emptied: true,
-                rejected,
-            });
-        }
-        Ok(ApplyOutcome {
-            should_exit: false,
-            tab_emptied: false,
-            rejected,
-        })
     }
 
     fn fold_outcome(
