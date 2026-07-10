@@ -472,17 +472,13 @@ fn scope_ledgers_require_config_to_arm_runtime_caps() {
     assert_eq!(account.effective_cap_usd(&kind, &unarmed), None);
     assert_eq!(account.cap_source(&kind, &unarmed), BudgetCapSource::None);
 
-    let armed: MachineConfig = toml::from_str(
-        "[harness]\nbudget = \"10/day\"\n[accounts.budget]\nclaude = \"50/day\"\n",
-    )
-    .expect("config");
+    let armed: MachineConfig =
+        toml::from_str("[harness]\nbudget = \"10/day\"\n[accounts.budget]\nclaude = \"50/day\"\n")
+            .expect("config");
     assert_eq!(fleet.effective_cap_usd(&armed), Some(25.0));
     assert_eq!(fleet.cap_source(&armed), BudgetCapSource::Raised);
     assert_eq!(account.effective_cap_usd(&kind, &armed), Some(100.0));
-    assert_eq!(
-        account.cap_source(&kind, &armed),
-        BudgetCapSource::Raised
-    );
+    assert_eq!(account.cap_source(&kind, &armed), BudgetCapSource::Raised);
 }
 
 #[test]
