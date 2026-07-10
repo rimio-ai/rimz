@@ -434,6 +434,7 @@ pub fn project_parks(
         &runtime.shared_provider_spending_path(),
     );
     let day_cutoff = local_day_start(now, &zone).map(|stamp| stamp.as_second().max(0) as u64);
+    let mut accounts = BTreeMap::new();
     for agent in &mut snapshot.agents {
         agent.budget_park = None;
         if let Some(ledger) = ledger_for_agent(runtime, agent)
@@ -471,7 +472,9 @@ pub fn project_parks(
             });
             continue;
         }
-        let account = read_account_ledger(runtime, &agent.kind);
+        let account = accounts
+            .entry(agent.kind.clone())
+            .or_insert_with(|| read_account_ledger(runtime, &agent.kind));
         let Some(parked) = account.parked.as_ref() else {
             continue;
         };
