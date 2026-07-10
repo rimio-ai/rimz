@@ -1072,16 +1072,12 @@ pub(super) fn logs_agent(
         return follow_agent_logs(&workspace, &target, tail, all, json);
     }
     let view = crate::cli::transcript::chat_view(&workspace, Some(&target), None, tail, all)?;
+    let selected = crate::cli::transcript::selected_lines(&view);
     if json {
-        let entries: Vec<_> = view
-            .entries
-            .iter()
-            .map(|entry| entry.chat.clone())
-            .collect();
         render::finish(write_json_pretty(
-            &serde_json::json!({ "entries": entries }),
+            &serde_json::json!({ "entries": selected }),
         ))?;
-    } else if view.entries.is_empty() {
+    } else if selected.is_empty() {
         let mut out = render::err();
         writeln!(
             out,
@@ -1127,10 +1123,10 @@ fn follow_agent_logs(
         initial.entries.len()
     };
     if json {
-        for entry in &initial.entries {
-            render::finish(write_json_line(&entry.chat))?;
+        for entry in crate::cli::transcript::selected_lines(&initial) {
+            render::finish(write_json_line(&entry))?;
         }
-    } else if !initial.entries.is_empty() {
+    } else if !crate::cli::transcript::selected_lines(&initial).is_empty() {
         let tz = crate::cli::machine_config().time_zone();
         let mut out = render::out();
         finish_transcript_render(crate::cli::transcript::render_lines_to(
@@ -1154,17 +1150,11 @@ fn follow_agent_logs(
             }
         } else {
             let mut out = render::out();
-            let delta = crate::cli::transcript::RenderedChat {
-                channel: view.channel.clone(),
-                focus: view.focus.clone(),
-                entries: new_entries,
-                archive_prefix: 0,
-                archived_hidden: 0,
-                newest_archived_at: None,
-                empty_message: None,
-            };
-            finish_transcript_render(crate::cli::transcript::render_lines_to(
-                &mut out, &delta, &tz,
+            finish_transcript_render(crate::cli::transcript::render_lines_since_to(
+                &mut out,
+                &view,
+                seen - new_entries.len(),
+                &tz,
             ))?;
         }
     }

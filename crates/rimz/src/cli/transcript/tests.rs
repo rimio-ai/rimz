@@ -30,6 +30,8 @@ fn render_entry(
             to: to.map(ToOwned::to_owned),
             at: Some(ts(at)),
             text: text.to_owned(),
+            message_id: None,
+            reply_to: Vec::new(),
             error: kind == TranscriptKind::Error,
             questions: Vec::new(),
             answers: Vec::new(),
@@ -51,6 +53,16 @@ fn ask_entry(at: &str, text: &str) -> RenderEntry {
 
 fn answer_entry(at: &str, text: &str) -> RenderEntry {
     render_entry(TranscriptKind::Answer, "you", Some("@claude"), at, text)
+}
+
+fn message_id(index: u64) -> String {
+    format!("msg_{index:016x}")
+}
+
+fn linked(mut entry: RenderEntry, id: Option<u64>, parents: &[u64]) -> RenderEntry {
+    entry.chat.message_id = id.map(message_id);
+    entry.chat.reply_to = parents.iter().copied().map(message_id).collect();
+    entry
 }
 
 fn ask_option(label: &str) -> AskOption {
@@ -81,6 +93,189 @@ fn render_raw(entries: &[RenderEntry], today: Date) -> String {
     let mut out = Vec::new();
     render_chat_to(&mut out, None, entries, 0, &tz, today).expect("render");
     String::from_utf8(out).expect("utf8")
+}
+
+fn render_threaded(entries: &[RenderEntry], today: Date) -> String {
+    let tz = TimeZone::get("America/New_York").expect("timezone");
+    let display = assemble_threads(entries, 0, false);
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_display_chat_to(&mut out, None, &display, &tz, today).expect("render");
+    String::from_utf8(out.into_inner()).expect("utf8")
+}
+
+#[test]
+fn thread_assembly_expands_interleaved_components_in_place() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "root a"), Some(1), &[]),
+        linked(entry("2026-06-28T04:01:00Z", "root b"), Some(2), &[]),
+        linked(
+            assistant_entry("2026-06-28T04:02:00Z", "reply a"),
+            None,
+            &[1],
+        ),
+        linked(
+            assistant_entry("2026-06-28T04:03:00Z", "reply b"),
+            None,
+            &[2],
+        ),
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert_eq!(
+        display
+            .iter()
+            .map(|entry| entry.entry.chat.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["root a", "reply a", "root b", "reply b"]
+    );
+    assert!(display[0].lane.is_margin());
+    assert!(!display[1].lane.is_margin());
+    assert!(display[2].lane.is_margin());
+    assert!(!display[3].lane.is_margin());
+}
+
+#[test]
+fn thread_assembly_unions_multi_parent_turns_and_orphans_stay_flat() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "first"), Some(1), &[]),
+        linked(entry("2026-06-28T04:01:00Z", "second"), Some(2), &[]),
+        linked(
+            assistant_entry("2026-06-28T04:02:00Z", "combined"),
+            None,
+            &[1, 2],
+        ),
+        linked(
+            assistant_entry("2026-06-28T04:03:00Z", "missing parent"),
+            None,
+            &[99],
+        ),
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert_eq!(display[0].entry.chat.text, "first");
+    assert!(display[0].lane.is_margin());
+    assert!(!display[1].lane.is_margin());
+    assert!(!display[2].lane.is_margin());
+    assert_eq!(display[3].entry.chat.text, "missing parent");
+    assert!(display[3].lane.is_margin());
+}
+
+#[test]
+fn flat_and_last_apply_to_display_order() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "root a"), Some(1), &[]),
+        linked(entry("2026-06-28T04:01:00Z", "root b"), Some(2), &[]),
+        linked(
+            assistant_entry("2026-06-28T04:02:00Z", "reply a"),
+            None,
+            &[1],
+        ),
+        linked(
+            assistant_entry("2026-06-28T04:03:00Z", "reply b"),
+            None,
+            &[2],
+        ),
+    ];
+
+    let flat = assemble_threads(&entries, 0, true);
+    assert_eq!(
+        flat.iter()
+            .map(|entry| entry.entry.chat.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["root a", "root b", "reply a", "reply b"]
+    );
+
+    let mut threaded = assemble_threads(&entries, 0, false);
+    keep_last(&mut threaded, Some(3));
+    assert_eq!(
+        threaded
+            .iter()
+            .map(|entry| entry.entry.chat.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["reply a", "root b", "reply b"]
+    );
+
+    let view = RenderedChat {
+        channel: Some("chat".to_owned()),
+        focus: None,
+        entries,
+        archive_prefix: 0,
+        archived_hidden: 0,
+        newest_archived_at: None,
+        empty_message: None,
+        last: Some(3),
+        flat: false,
+    };
+    assert_eq!(
+        selected_chat_lines(&view)
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["root b", "reply a", "reply b"],
+        "JSON selection returns the display tail in chronological order"
+    );
+}
+
+#[test]
+fn threaded_render_puts_replies_behind_a_spine() {
+    let mut root_a = render_entry(
+        TranscriptKind::Message,
+        "@planner",
+        Some("@coder"),
+        "2026-06-28T04:00:00Z",
+        "handoff",
+    );
+    root_a = linked(root_a, Some(1), &[]);
+    let root_b = linked(
+        render_entry(
+            TranscriptKind::Message,
+            "@reviewer",
+            Some("@planner"),
+            "2026-06-28T04:01:00Z",
+            "review",
+        ),
+        Some(2),
+        &[],
+    );
+    let reply_a = linked(
+        render_entry(
+            TranscriptKind::Assistant,
+            "@coder",
+            None,
+            "2026-06-29T04:02:00Z",
+            "question",
+        ),
+        None,
+        &[1],
+    );
+    let reply_b = linked(
+        render_entry(
+            TranscriptKind::Assistant,
+            "@planner",
+            None,
+            "2026-06-28T04:03:00Z",
+            "answer",
+        ),
+        None,
+        &[2],
+    );
+
+    let out = render_threaded(
+        &[root_a, root_b, reply_a, reply_b],
+        jiff::civil::date(2026, 6, 28),
+    );
+
+    let first_root = out.find("handoff").unwrap();
+    let first_reply = out.find("│ @coder").unwrap();
+    let second_root = out.find("review").unwrap();
+    assert!(
+        first_root < first_reply && first_reply < second_root,
+        "{out}"
+    );
+    assert!(out.contains("│   question"), "{out}");
+    assert!(out.contains("Jun 29 2026 · 00:02"), "{out}");
 }
 
 fn log_entry(
@@ -242,13 +437,15 @@ fn latest_ask_view_skips_log_when_agent_not_waiting() {
 
 #[test]
 fn message_entry_projects_structured_sender_and_receiver() {
-    let entry = log_entry(
+    let mut entry = log_entry(
         "claude",
         "receiver",
         TranscriptKind::Message,
         Some("@planner"),
         "ship it",
     );
+    entry.message_id = Some(rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap());
+    entry.reply_to = vec![rimz::ids::MessageId::parse("msg_123456789abcdef0").unwrap()];
     let identities = build_identities(std::slice::from_ref(&entry));
 
     let chat = chat_entry_for_log_entry(&entry, &identities, false);
@@ -256,6 +453,11 @@ fn message_entry_projects_structured_sender_and_receiver() {
     assert_eq!(chat.from, "@planner");
     assert_eq!(chat.to.as_deref(), Some("@claude"));
     assert_eq!(chat.text, "ship it");
+    assert_eq!(chat.message_id.as_deref(), Some("msg_0123456789abcdef"));
+    assert_eq!(chat.reply_to, vec!["msg_123456789abcdef0"]);
+    let json = serde_json::to_value(&chat).unwrap();
+    assert_eq!(json["message_id"], "msg_0123456789abcdef");
+    assert_eq!(json["reply_to"][0], "msg_123456789abcdef0");
 }
 
 #[test]

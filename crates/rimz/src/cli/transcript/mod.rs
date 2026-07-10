@@ -39,6 +39,9 @@ pub struct TranscriptArgs {
     /// Emit JSON.
     #[arg(long)]
     json: bool,
+    /// Render pure timestamp order instead of grouping replies into threads.
+    #[arg(long)]
+    flat: bool,
 }
 
 #[derive(Serialize)]
@@ -68,6 +71,10 @@ pub(crate) struct ChatLine {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<jiff::Timestamp>,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reply_to: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub error: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -115,24 +122,28 @@ mod ask_card;
 mod chat;
 mod layout;
 mod scope;
+mod thread;
 
-use chat::{format_marker_when, render_chat_to, render_entry_for_log_entry};
+use chat::{format_marker_when, render_entry_for_log_entry};
 use scope::{
     build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_matches_focus,
     keep_last, live_boundary, live_root_agents, resolve_scope,
 };
+use thread::entries_for_view;
 #[cfg(test)]
-use {chat::*, scope::*};
+use {chat::*, scope::*, thread::*};
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let view = chat_view(
+    let view = chat_view_with_mode(
         &workspace,
         args.target.as_deref(),
         args.worktree.as_deref(),
         args.last,
         args.all,
+        args.flat,
     )?;
-    if view.entries.is_empty() {
+    let selected = selected_lines(&view);
+    if selected.is_empty() {
         return write_empty_chat(
             args.json,
             view.empty_message
@@ -144,11 +155,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         print_json(&ChatView {
             channel: view.channel.clone(),
             focus: view.focus.clone(),
-            entries: view
-                .entries
-                .iter()
-                .map(|entry| entry.chat.clone())
-                .collect(),
+            entries: selected,
             archived_count: (view.archived_hidden > 0).then_some(view.archived_hidden),
         })?;
     } else {
@@ -171,6 +178,8 @@ pub(crate) struct RenderedChat {
     pub(crate) archived_hidden: usize,
     pub(crate) newest_archived_at: Option<jiff::Timestamp>,
     pub(crate) empty_message: Option<String>,
+    pub(crate) last: Option<usize>,
+    pub(crate) flat: bool,
 }
 
 pub(crate) fn chat_view(
@@ -179,6 +188,17 @@ pub(crate) fn chat_view(
     worktree: Option<&str>,
     last: Option<usize>,
     all: bool,
+) -> Result<RenderedChat> {
+    chat_view_with_mode(workspace, target, worktree, last, all, false)
+}
+
+fn chat_view_with_mode(
+    workspace: &rimz::ResolvedWorkspace,
+    target: Option<&str>,
+    worktree: Option<&str>,
+    last: Option<usize>,
+    all: bool,
+    flat: bool,
 ) -> Result<RenderedChat> {
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
@@ -194,6 +214,8 @@ pub(crate) fn chat_view(
             archived_hidden: 0,
             newest_archived_at: None,
             empty_message: Some("No conversation recorded yet.".to_owned()),
+            last,
+            flat,
         });
     }
     let identities = build_identities(&entries);
@@ -220,6 +242,8 @@ pub(crate) fn chat_view(
             archived_hidden: 0,
             newest_archived_at: None,
             empty_message: Some(empty_message),
+            last,
+            flat,
         });
     }
 
@@ -242,6 +266,8 @@ pub(crate) fn chat_view(
             archived_hidden: 0,
             newest_archived_at: None,
             empty_message: Some(empty_message),
+            last,
+            flat,
         });
     }
 
@@ -256,7 +282,6 @@ pub(crate) fn chat_view(
     let mut archived_hidden = 0;
     let mut newest_archived_at = None;
     let (shown, archive_prefix) = if show_archive {
-        keep_last(&mut entries, last);
         let archive_prefix = archive_prefix(&entries, boundary);
         (entries, archive_prefix)
     } else {
@@ -264,8 +289,7 @@ pub(crate) fn chat_view(
         newest_archived_at = split
             .checked_sub(1)
             .and_then(|index| entries[index].chat.at);
-        let mut current = entries.split_off(split);
-        keep_last(&mut current, last);
+        let current = entries.split_off(split);
         (current, 0)
     };
 
@@ -277,6 +301,8 @@ pub(crate) fn chat_view(
         archived_hidden,
         newest_archived_at,
         empty_message: None,
+        last,
+        flat,
     })
 }
 
@@ -285,11 +311,33 @@ pub(crate) fn render_lines_to(
     view: &RenderedChat,
     tz: &TimeZone,
 ) -> Result<()> {
-    render_chat_to(
+    chat::render_display_chat_to(
         out,
         view.channel.as_deref(),
-        &view.entries,
-        view.archive_prefix,
+        &entries_for_view(view),
+        tz,
+        jiff::Timestamp::now().to_zoned(tz.clone()).date(),
+    )
+}
+
+pub(crate) fn selected_lines(view: &RenderedChat) -> Vec<ChatLine> {
+    thread::selected_chat_lines(view)
+}
+
+pub(crate) fn render_lines_since_to(
+    out: &mut impl Write,
+    view: &RenderedChat,
+    source_index: usize,
+    tz: &TimeZone,
+) -> Result<()> {
+    let entries = entries_for_view(view)
+        .into_iter()
+        .filter(|entry| entry.source_index >= source_index)
+        .collect::<Vec<_>>();
+    chat::render_display_chat_to(
+        out,
+        view.channel.as_deref(),
+        &entries,
         tz,
         jiff::Timestamp::now().to_zoned(tz.clone()).date(),
     )

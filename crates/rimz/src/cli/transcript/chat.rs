@@ -1,5 +1,6 @@
 use super::ask_card::write_ask_card;
 use super::scope::entry_key;
+use super::thread::DisplayEntry;
 use super::*;
 
 pub(super) fn render_entry_for_log_entry(
@@ -20,12 +21,16 @@ pub(super) fn chat_entry_for_log_entry(
     include_channel: bool,
 ) -> ChatLine {
     let receiver = handle_for(entry, identities, include_channel);
+    let message_id = entry.message_id.as_ref().map(ToString::to_string);
+    let reply_to = entry.reply_to.iter().map(ToString::to_string).collect();
     match entry.entry {
         TranscriptKind::Prompt => ChatLine {
             from: "user".to_owned(),
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            message_id,
+            reply_to,
             error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
@@ -35,6 +40,8 @@ pub(super) fn chat_entry_for_log_entry(
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            message_id,
+            reply_to,
             error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
@@ -44,6 +51,8 @@ pub(super) fn chat_entry_for_log_entry(
             to: None,
             at: Some(entry.at),
             text: entry.text.clone(),
+            message_id,
+            reply_to,
             error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
@@ -53,6 +62,8 @@ pub(super) fn chat_entry_for_log_entry(
             to: None,
             at: Some(entry.at),
             text: entry.text.clone(),
+            message_id,
+            reply_to,
             error: true,
             questions: Vec::new(),
             answers: Vec::new(),
@@ -62,6 +73,8 @@ pub(super) fn chat_entry_for_log_entry(
             to: Some(receiver),
             at: Some(entry.at),
             text: entry.text.clone(),
+            message_id,
+            reply_to,
             error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
@@ -140,6 +153,7 @@ pub(super) fn display_handle(handle: &str, grouped: bool) -> &str {
     if grouped { base_handle(handle) } else { handle }
 }
 
+#[cfg(test)]
 pub(super) fn render_chat_to(
     out: &mut impl Write,
     channel: Option<&str>,
@@ -148,28 +162,52 @@ pub(super) fn render_chat_to(
     tz: &TimeZone,
     today: Date,
 ) -> Result<()> {
+    render_display_chat_to(
+        out,
+        channel,
+        &super::thread::flat_entries(entries, archive_prefix),
+        tz,
+        today,
+    )
+}
+
+pub(super) fn render_display_chat_to(
+    out: &mut impl Write,
+    channel: Option<&str>,
+    entries: &[DisplayEntry],
+    tz: &TimeZone,
+    today: Date,
+) -> Result<()> {
     write_header(out, channel)?;
-    let archive_prefix = archive_prefix.min(entries.len());
     let grouped = channel.is_some();
-    let folded = pair_answers(entries);
+    let rendered = entries
+        .iter()
+        .map(|display| display.entry.clone())
+        .collect::<Vec<_>>();
+    let folded = pair_answers(&rendered);
     let mut tones = AgentTones::default();
     let mut last_date = Some(today);
     let mut first_entry = true;
     let mut follows_day_delimiter = false;
     let mut last_group: Option<GroupState> = None;
-    let mut wrote_live_divider = archive_prefix == 0 || archive_prefix >= entries.len();
-    if archive_prefix > 0
-        && let Some(at) = entries[archive_prefix - 1].chat.at
-    {
+    let mut previous_block = None;
+    let newest_archived_at = entries
+        .iter()
+        .filter(|entry| entry.archived)
+        .filter_map(|entry| entry.entry.chat.at)
+        .max();
+    let mut wrote_live_divider = newest_archived_at.is_none();
+    if let Some(at) = newest_archived_at {
         write_archive_banner(out, at, tz, today)?;
         follows_day_delimiter = true;
     }
-    for (index, entry) in entries.iter().enumerate() {
+    for (index, display) in entries.iter().enumerate() {
         if folded.suppressed_answers.contains(&index) {
             continue;
         }
+        let entry = &display.entry;
         let entry_date = entry.chat.at.map(|at| at.to_zoned(tz.clone()).date());
-        if !wrote_live_divider && index >= archive_prefix {
+        if display.lane.is_margin() && !wrote_live_divider && !display.archived {
             if let Some(at) = entry.chat.at {
                 write_live_divider(out, at, tz, today)?;
             }
@@ -178,7 +216,8 @@ pub(super) fn render_chat_to(
             follows_day_delimiter = true;
             wrote_live_divider = true;
         }
-        if let Some(date) = entry_date
+        if display.lane.is_margin()
+            && let Some(date) = entry_date
             && Some(date) != last_date
         {
             write_day_delimiter(out, date, today)?;
@@ -190,30 +229,94 @@ pub(super) fn render_chat_to(
         let continuation = !is_ask
             && last_group
                 .as_ref()
-                .is_some_and(|group| group.matches(entry, grouped, entry_date));
+                .is_some_and(|group| group.matches(display, grouped, entry_date));
         if !continuation && !first_entry && !follows_day_delimiter {
-            writeln!(out)?;
+            if previous_block == Some(display.block) && !display.lane.is_margin() {
+                writeln!(out, "{}", render::paint(render::palette::FAINT, "  │"))?;
+            } else {
+                writeln!(out)?;
+            }
         }
-        if !continuation {
-            write_entry_header(out, entry, grouped, &mut tones, tz)?;
+        let answer = folded
+            .answer_by_ask
+            .get(&index)
+            .map(|answer| &entries[*answer].entry);
+        if display.lane.is_margin() {
+            write_entry_content(
+                out,
+                entry,
+                answer,
+                continuation,
+                grouped,
+                &mut tones,
+                tz,
+                false,
+            )?;
+        } else {
+            let mut buffer = Vec::new();
+            let show_date = display
+                .lane
+                .root_at()
+                .zip(entry.chat.at)
+                .is_some_and(|(root, at)| {
+                    root.to_zoned(tz.clone()).date() != at.to_zoned(tz.clone()).date()
+                });
+            write_entry_content(
+                &mut buffer,
+                entry,
+                answer,
+                continuation,
+                grouped,
+                &mut tones,
+                tz,
+                show_date,
+            )?;
+            write_thread_lines(out, &buffer)?;
         }
         if is_ask {
-            let answer = folded
-                .answer_by_ask
-                .get(&index)
-                .map(|answer| &entries[*answer]);
-            write_ask_card(out, entry, answer)?;
             last_group = None;
         } else {
-            if entry.chat.error {
-                write_body_lines_with(out, &entry.chat.text, Some(render::palette::ALARM))?;
-            } else {
-                write_body_lines(out, &entry.chat.text)?;
-            }
-            last_group = Some(GroupState::new(entry, grouped, entry_date));
+            last_group = Some(GroupState::new(display, grouped, entry_date));
         }
         first_entry = false;
         follows_day_delimiter = false;
+        previous_block = Some(display.block);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_entry_content(
+    out: &mut impl Write,
+    entry: &RenderEntry,
+    answer: Option<&RenderEntry>,
+    continuation: bool,
+    grouped: bool,
+    tones: &mut AgentTones,
+    tz: &TimeZone,
+    show_date: bool,
+) -> Result<()> {
+    if !continuation {
+        write_entry_header(out, entry, grouped, tones, tz, show_date)?;
+    }
+    if entry.kind == TranscriptKind::Ask {
+        write_ask_card(out, entry, answer)
+    } else if entry.chat.error {
+        write_body_lines_with(out, &entry.chat.text, Some(render::palette::ALARM))
+    } else {
+        write_body_lines(out, &entry.chat.text)
+    }
+}
+
+fn write_thread_lines(out: &mut impl Write, rendered: &[u8]) -> Result<()> {
+    let rendered = std::str::from_utf8(rendered).expect("transcript rendering is utf-8");
+    for line in rendered.split_terminator('\n') {
+        let spine = render::paint(render::palette::FAINT, "  │");
+        if line.is_empty() {
+            writeln!(out, "{spine}")?;
+        } else {
+            writeln!(out, "{spine} {line}")?;
+        }
     }
     Ok(())
 }
@@ -263,21 +366,27 @@ pub(super) struct GroupState {
     to: Option<String>,
     at: Option<jiff::Timestamp>,
     date: Option<Date>,
+    lane: Option<usize>,
 }
 
 impl GroupState {
-    fn new(entry: &RenderEntry, grouped: bool, date: Option<Date>) -> Self {
-        let (from, to) = group_key(entry, grouped);
+    fn new(entry: &DisplayEntry, grouped: bool, date: Option<Date>) -> Self {
+        let lane = entry.lane.group_key();
+        let (from, to) = group_key(&entry.entry, grouped);
         Self {
             from,
             to,
-            at: entry.chat.at,
+            at: entry.entry.chat.at,
             date,
+            lane,
         }
     }
 
-    fn matches(&self, entry: &RenderEntry, grouped: bool, date: Option<Date>) -> bool {
-        let (from, to) = group_key(entry, grouped);
+    fn matches(&self, entry: &DisplayEntry, grouped: bool, date: Option<Date>) -> bool {
+        if self.lane != entry.lane.group_key() {
+            return false;
+        }
+        let (from, to) = group_key(&entry.entry, grouped);
         if self.from != from || self.to != to || self.date != date {
             return false;
         }
@@ -306,6 +415,7 @@ pub(super) fn write_entry_header(
     grouped: bool,
     tones: &mut AgentTones,
     tz: &TimeZone,
+    show_date: bool,
 ) -> Result<()> {
     let mut header = paint_handle(&entry.chat.from, grouped, tones);
     if let Some(to) = entry.chat.to.as_deref() {
@@ -314,9 +424,14 @@ pub(super) fn write_entry_header(
     }
     if let Some(at) = entry.chat.at {
         header.push_str("  ");
+        let format = if show_date {
+            "%a, %b %-d %Y · %H:%M"
+        } else {
+            "%H:%M"
+        };
         header.push_str(&render::paint(
             render::palette::FAINT,
-            &at.to_zoned(tz.clone()).strftime("%H:%M").to_string(),
+            &at.to_zoned(tz.clone()).strftime(format).to_string(),
         ));
     }
     writeln!(out, "{header}")?;
