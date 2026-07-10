@@ -1,10 +1,10 @@
 # Claude Code protocol reference
 
-> The mapping onto Rimz's internal types lives beside this doc: [claude.md](../../internals/agents/claude.md) maps the hooks, statusline, transcript, account, and spend surfaces onto Rimz's internal types; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
+> The mapping onto RimZ's internal types lives beside this doc: [claude.md](../../internals/agents/claude.md) maps the hooks, statusline, transcript, account, and spend surfaces onto RimZ's internal types; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Claude Code upstream protocol surface** Rimz binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, the auth surface, and the local-OAuth usage endpoint. It is a hand-maintained mirror of Anthropic's published docs plus the credential-file surfaces Claude Code itself uses, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks Rimz's internal types.
+This is the single home for the **Claude Code upstream protocol surface** RimZ binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, the auth surface, and the local-OAuth usage endpoint. It is a hand-maintained mirror of Anthropic's published docs plus the credential-file surfaces Claude Code itself uses, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks RimZ's internal types.
 
-Coverage is **depth on what Rimz wires, breadth as an index**: the events, statusline fields, and decision shapes the adapter actually parses or emits are documented in full; the rest of the upstream catalog is listed so a contributor wiring a new event knows it exists.
+Coverage is **depth on what RimZ wires, breadth as an index**: the events, statusline fields, and decision shapes the adapter actually parses or emits are documented in full; the rest of the upstream catalog is listed so a contributor wiring a new event knows it exists.
 
 ## Upstream sources
 
@@ -23,7 +23,7 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 
 ## Session resume and fork
 
-`claude --resume <id>` reopens a session in place. `claude --resume <id> --fork-session` copies its conversation into a provider-assigned new session id and leaves the source session untouched; Rimz uses that native fork argv and sets the source worktree as the process cwd.
+`claude --resume <id>` reopens a session in place. `claude --resume <id> --fork-session` copies its conversation into a provider-assigned new session id and leaves the source session untouched; RimZ uses that native fork argv and sets the source worktree as the process cwd.
 
 ## Hooks
 
@@ -46,7 +46,7 @@ Every hook receives these fields on stdin (some are event- or context-gated):
 }
 ```
 
-`permission_mode` and `effort` are not present on every event; `effort` rides events with a tool-use context (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) when the model supports the parameter. Rimz parses around `permission_mode` without consuming it — the upstream still sends it; the agent model derives the turn phase from tool events instead. `agent_id` / `agent_type` appear only with `--agent` or inside a subagent.
+`permission_mode` and `effort` are not present on every event; `effort` rides events with a tool-use context (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) when the model supports the parameter. RimZ parses around `permission_mode` without consuming it — the upstream still sends it; the agent model derives the turn phase from tool events instead. `agent_id` / `agent_type` appear only with `--agent` or inside a subagent.
 
 ### Decision and output schema
 
@@ -80,11 +80,11 @@ Per-event decision control rides `hookSpecificOutput` (or, for the post-* and st
 - **2** — blocking error; stdout and any JSON are ignored, stderr is fed back to Claude (e.g. `PreToolUse` blocks the call, `UserPromptSubmit` rejects the prompt, `Stop` prevents stopping).
 - **other** — non-blocking error; a `<hook> hook error` notice plus the first stderr line surfaces and execution continues.
 
-### Hooks Rimz wires
+### Hooks RimZ wires
 
-These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → Rimz status mapping is the [claude.md → Hooks and lifecycle](../../internals/agents/claude.md#hooks-and-lifecycle); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
+These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) `INSTALLED_EVENTS` constant installs. The native-event → RimZ status mapping is the [claude.md → Hooks and lifecycle](../../internals/agents/claude.md#hooks-and-lifecycle); the columns here are the upstream fire-time and the event-specific stdin fields the adapter reads.
 
-| Event | Fires | Event-specific input | Rimz channel |
+| Event | Fires | Event-specific input | RimZ channel |
 | --- | --- | --- | --- |
 | `SessionStart` | session begins or resumes | `source` (`startup`\|`resume`\|`clear`\|`compact`), `model`, `session_title` | lifecycle |
 | `UserPromptSubmit` | prompt submitted, before processing | `prompt` | lifecycle |
@@ -101,11 +101,11 @@ These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claud
 
 `ExitPlanMode` and `AskUserQuestion` have no dedicated install entry — they self-classify off `tool_name` on the broad `PreToolUse` hook.
 
-Compaction uses `PreCompact` as the opener. `PostCompact` closes with a known trigger when it arrives, and `SessionStart` with `source = "compact"` is triggerless close evidence so Rimz still closes and counts the bracket when `PostCompact` is missed.
+Compaction uses `PreCompact` as the opener. `PostCompact` closes with a known trigger when it arrives, and `SessionStart` with `source = "compact"` is triggerless close evidence so RimZ still closes and counts the bracket when `PostCompact` is missed.
 
-**Model field format.** The `model` field on `SessionStart` (and hook payloads generally) may carry an extended-context capability marker: `claude-opus-4-8[1m]` signals a 1,000,000-token context window. Later events in the same session carry the bare id. Rimz strips the marker at reduce time ([agent.md → The rollup](../../internals/agents/model.md#the-rollup)) and uses it to derive the window divisor ([claude.md → Context and transcript](../../internals/agents/claude.md#context-and-transcript)).
+**Model field format.** The `model` field on `SessionStart` (and hook payloads generally) may carry an extended-context capability marker: `claude-opus-4-8[1m]` signals a 1,000,000-token context window. Later events in the same session carry the bare id. RimZ strips the marker at reduce time ([agent.md → The rollup](../../internals/agents/model.md#the-rollup)) and uses it to derive the window divisor ([claude.md → Context and transcript](../../internals/agents/claude.md#context-and-transcript)).
 
-**Decision shapes Rimz renders.** A `PermissionRequest` answer:
+**Decision shapes RimZ renders.** A `PermissionRequest` answer:
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "allow" } } }
@@ -121,7 +121,7 @@ The neutral path is empty stdout, exit 0. Exact bytes are the inline goldens in 
 
 ### Full event catalog (index)
 
-The complete upstream set. ✓ marks what Rimz wires today; the rest is available for future wiring.
+The complete upstream set. ✓ marks what RimZ wires today; the rest is available for future wiring.
 
 | Event | Fires | Wired |
 | --- | --- | :---: |
@@ -158,7 +158,7 @@ The complete upstream set. ✓ marks what Rimz wires today; the rest is availabl
 
 ## Statusline JSON
 
-Claude `exec`s the configured `statusLine` command on every render and pipes this JSON to its stdin. Rimz wraps that command with `rimz statusline feed --source claude`; [`StatuslinePayload`](../../../crates/rimz/src/agents/claude/statusline.rs) parses the blob and the wrap forwards it unchanged to any prior command. The statusline runs locally and consumes no API tokens.
+Claude `exec`s the configured `statusLine` command on every render and pipes this JSON to its stdin. RimZ wraps that command with `rimz statusline feed --source claude`; [`StatuslinePayload`](../../../crates/rimz/src/agents/claude/statusline.rs) parses the blob and the wrap forwards it unchanged to any prior command. The statusline runs locally and consumes no API tokens.
 
 **Update triggers.** The command runs after each new assistant message, after `/compact`, on a permission-mode change, and on a vim-mode toggle (debounced 300ms; an in-flight run is cancelled when a new update arrives). `refreshInterval` (seconds, min 1) adds a fixed timer for idle/time-based segments.
 
@@ -261,7 +261,7 @@ Claude `exec`s the configured `statusLine` command on every render and pipes thi
 | `cost.total_duration_ms` | wall-clock time since session start |
 | `cost.total_api_duration_ms` | time spent waiting on API responses |
 | `cost.total_lines_added`, `cost.total_lines_removed` | lines changed |
-| `context_window.total_input_tokens`, `total_output_tokens` | tokens in the current context window (current, not cumulative, since v2.1.132); Rimz skips them — `current_usage` carries the same window, split by component |
+| `context_window.total_input_tokens`, `total_output_tokens` | tokens in the current context window (current, not cumulative, since v2.1.132); RimZ skips them — `current_usage` carries the same window, split by component |
 | `context_window.context_window_size` | max window in tokens (200000 default; 1000000 for extended-context models) |
 | `context_window.used_percentage`, `remaining_percentage` | pre-calculated context fill (from input-side tokens only) |
 | `context_window.current_usage.{input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens}` | per-component token counts from the last API call |
@@ -278,27 +278,27 @@ Claude `exec`s the configured `statusLine` command on every render and pipes thi
 | `pr.{number,url,review_state}` | open PR for the branch; `review_state` ∈ `approved`\|`pending`\|`changes_requested`\|`draft` |
 | `worktree.{name,path,branch,original_cwd,original_branch}` | active `--worktree` session details |
 
-**Absence vs null.** `session_name`, `workspace.git_worktree`, `workspace.repo`, `effort`, `vim`, `agent`, `pr`, `worktree` are *absent* unless their feature is active; `rate_limits` appears only for Claude.ai Pro/Max after the first API response, and each window may be absent independently. `context_window.current_usage` is `null` before the first API call and again after `/compact` until the next call; `used_percentage` / `remaining_percentage` may be `null` early in a session. Rimz's parser treats every field as optional and tolerates unknown keys.
+**Absence vs null.** `session_name`, `workspace.git_worktree`, `workspace.repo`, `effort`, `vim`, `agent`, `pr`, `worktree` are *absent* unless their feature is active; `rate_limits` appears only for Claude.ai Pro/Max after the first API response, and each window may be absent independently. `context_window.current_usage` is `null` before the first API call and again after `/compact` until the next call; `used_percentage` / `remaining_percentage` may be `null` early in a session. RimZ's parser treats every field as optional and tolerates unknown keys.
 
 **`subagentStatusLine`.** A separate command (`"subagentStatusLine": { "type": "command", "command": "…" }`) renders each subagent row in the agent panel, replacing the default `name · description · token count` body with whatever the script prints. The command runs once per refresh tick with **all visible subagent rows as a single JSON object on stdin**. The input includes the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. Write one JSON line to stdout per row to override: `{"id": "<task id>", "content": "<row body>"}`. The `content` string is rendered as-is, including ANSI escape codes and OSC 8 hyperlinks. Omit a task's `id` to keep its default rendering; emit an empty `content` to hide the row. The same trust and `disableAllHooks` gates that apply to `statusLine` apply here. Plugins can ship a default `subagentStatusLine` in their `settings.json`.
 
-Rimz wraps this command like the session `statusLine` and harvests each task's `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../../internals/sidebar/sidebar.md).
+RimZ wraps this command like the session `statusLine` and harvests each task's `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../../internals/sidebar/sidebar.md).
 
 ## Agent view
 
 A bare `claude` launch (≥ 2.1.173) opens the agents dashboard — a background-session supervisor, not the interactive REPL. The `disableAgentView` settings key turns the surface off (`claude agents`, `--bg`, `/background`, and the on-demand supervisor), and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` is its documented environment equivalent (settings page above).
 
-Rimz pins that variable on every Claude spawn ([`ClaudeAdapter::launch_env`](../../../crates/rimz/src/agents/claude/mod.rs)): the pane contract — hooks, transcript tail, message sends — drives the classic REPL, and multi-agent supervision is Rimz's own job.
+RimZ pins that variable on every Claude spawn ([`ClaudeAdapter::launch_env`](../../../crates/rimz/src/agents/claude/mod.rs)): the pane contract — hooks, transcript tail, message sends — drives the classic REPL, and multi-agent supervision is RimZ's own job.
 
 ## Remote control
 
-Claude Code's remote-control host is `claude remote-control --spawn worktree`. Rimz launches it in the `rimzd` view when `[remote_control] claude = true`, from the project root so each on-demand session is cut from the canonical repo. The host path explicitly unsets `CLAUDE_CODE_DISABLE_AGENT_VIEW`, because Claude Code ≥ 2.1.173 hosts remote control through the agent-view supervisor while ordinary Rimz pane sessions still need the classic REPL.
+Claude Code's remote-control host is `claude remote-control --spawn worktree`. RimZ launches it in the `rimzd` view when `[remote_control] claude = true`, from the project root so each on-demand session is cut from the canonical repo. The host path explicitly unsets `CLAUDE_CODE_DISABLE_AGENT_VIEW`, because Claude Code ≥ 2.1.173 hosts remote control through the agent-view supervisor while ordinary RimZ pane sessions still need the classic REPL.
 
-Version gates Rimz enforces: remote control exists at Claude Code ≥ 2.1.51; it is on by default at ≥ 2.1.128 unless `disableRemoteControl: true` is set; API-key auth disables remote control at ≥ 2.1.157 when `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`, or matching keys in settings `env` are active; `disableAgentView: true` disables the host at ≥ 2.1.173. An unknown `claude --version` applies only the version-independent `disableRemoteControl` gate and warns rather than guessing.
+Version gates RimZ enforces: remote control exists at Claude Code ≥ 2.1.51; it is on by default at ≥ 2.1.128 unless `disableRemoteControl: true` is set; API-key auth disables remote control at ≥ 2.1.157 when `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`, or matching keys in settings `env` are active; `disableAgentView: true` disables the host at ≥ 2.1.173. An unknown `claude --version` applies only the version-independent `disableRemoteControl` gate and warns rather than guessing.
 
-`remoteControlAtStartup: true` auto-enables remote control for ordinary Claude pane sessions. Rimz reads that setting to light the provider dashboard's `⇅ rc` flag even when the Rimz daemon-host toggle is off; `disableRemoteControl: true` suppresses the auto flag. `$CLAUDE_CODE_REMOTE` marks remote web sessions, not local host readiness.
+`remoteControlAtStartup: true` auto-enables remote control for ordinary Claude pane sessions. RimZ reads that setting to light the provider dashboard's `⇅ rc` flag even when the RimZ daemon-host toggle is off; `disableRemoteControl: true` suppresses the auto flag. `$CLAUDE_CODE_REMOTE` marks remote web sessions, not local host readiness.
 
-Rimz's remote-control preflight and badge read the user-level Claude `settings.json`, or the file named by `RIMZ_CLAUDE_SETTINGS` in tests and controlled environments. Claude Code also folds managed, local, and project settings; Rimz currently treats those tiers as upstream runtime policy and leaves their merge to Claude Code.
+RimZ's remote-control preflight and badge read the user-level Claude `settings.json`, or the file named by `RIMZ_CLAUDE_SETTINGS` in tests and controlled environments. Claude Code also folds managed, local, and project settings; RimZ currently treats those tiers as upstream runtime policy and leaves their merge to Claude Code.
 
 ## Auth surface
 
@@ -353,15 +353,15 @@ The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authoriza
 }
 ```
 
-`five_hour` and `seven_day` map to 300- and 10080-minute `RateLimitWindow`s. `utilization` is a 0–100 percentage and Rimz rounds/clamps it the same way as statusline `used_percentage`; `1.0` means 1%, not a fully spent window. `extra_usage.is_enabled = false` maps to `ExtraCredits::Disabled`; otherwise `used_credits` and `monthly_limit` are cents converted to USD. The semantics (`metered` inference, plan→brand label, cache cadence) are in [claude.md → Account and balance](../../internals/agents/claude.md#account-and-balance).
+`five_hour` and `seven_day` map to 300- and 10080-minute `RateLimitWindow`s. `utilization` is a 0–100 percentage and RimZ rounds/clamps it the same way as statusline `used_percentage`; `1.0` means 1%, not a fully spent window. `extra_usage.is_enabled = false` maps to `ExtraCredits::Disabled`; otherwise `used_credits` and `monthly_limit` are cents converted to USD. The semantics (`metered` inference, plan→brand label, cache cadence) are in [claude.md → Account and balance](../../internals/agents/claude.md#account-and-balance).
 
 ## Transcript JSONL
 
-Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. Rimz reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. The field → internal mapping and the window-divisor rule are in [claude.md → Context and transcript](../../internals/agents/claude.md#context-and-transcript); there is no source URL to pin.
+Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. RimZ reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. The field → internal mapping and the window-divisor rule are in [claude.md → Context and transcript](../../internals/agents/claude.md#context-and-transcript); there is no source URL to pin.
 
 ### Transcript death certificate
 
-A turn Claude aborts on a provider API error fires `StopFailure`, whose payload carries `error`, `error_details`, and `last_assistant_message` alongside the common hook fields. Rimz maps `error: "rate_limit"` to a rate-limit paused marker, `error: "overloaded"` to the backoff paused marker, and every other error through the capped assistant-message classifier so transient server labels park while terminal labels fail. The event writes only `AgentContext.turn_error`: no lifecycle envelope is appended, so the rollup stays `running` and display projection owns the pause/failure.
+A turn Claude aborts on a provider API error fires `StopFailure`, whose payload carries `error`, `error_details`, and `last_assistant_message` alongside the common hook fields. RimZ maps `error: "rate_limit"` to a rate-limit paused marker, `error: "overloaded"` to the backoff paused marker, and every other error through the capped assistant-message classifier so transient server labels park while terminal labels fail. The event writes only `AgentContext.turn_error`: no lifecycle envelope is appended, so the rollup stays `running` and display projection owns the pause/failure.
 
 Older Claude sessions, or sessions whose hooks were installed after the failure, still leave a transcript death certificate. The transcript records the death twice, milliseconds apart:
 

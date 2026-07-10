@@ -1,10 +1,10 @@
-# Rimz-owned worktrees
+# RimZ-owned worktrees
 
 > See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. [message.md § Channels](./messaging.md#channels) owns the room channel model, and [harness.md](./harness.md) launches agents into channels and triggers worktree cleanup; this doc owns the worktree itself — creation, the ownership marker, file seeding, and the cleanup that proves work landed before reclaiming.
 
-A worktree is one checkout of the repository on its own branch, with its name and path backing a Rimz channel. Rimz runs the full lifecycle for the ones it creates: spin one up for a line of work, seed it with the untracked files an agent needs, and reclaim it once its work has landed. The feature stands on its own: `rimz worktree new`, `list`, `remove`, and `gc` work whether or not an agent ever launches into the tree.
+A worktree is one checkout of the repository on its own branch, with its name and path backing a RimZ channel. RimZ runs the full lifecycle for the ones it creates: spin one up for a line of work, seed it with the untracked files an agent needs, and reclaim it once its work has landed. The feature stands on its own: `rimz worktree new`, `list`, `remove`, and `gc` work whether or not an agent ever launches into the tree.
 
-Rimz touches only worktrees it owns. A marker file inside each one records that ownership, and every managed operation — cleanup, `remove`, `gc` — checks for it first, so a hand-made checkout is never disturbed.
+RimZ touches only worktrees it owns. A marker file inside each one records that ownership, and every managed operation — cleanup, `remove`, `gc` — checks for it first, so a hand-made checkout is never disturbed.
 
 ## Create
 
@@ -16,13 +16,13 @@ The marker records the two inputs cleanup needs: the base **branch name** and th
 
 ## Ownership marker
 
-The checkout stays free of Rimz metadata. Ownership lives in `rimz-worktree.json` inside the worktree's Git admin directory, recording the name, branch, base branch and commit, repo root, path, and marker version. Cleanup, `remove`, and `gc` act only when that marker is present; its absence reads as user-owned, even when the path matches the configured directory template.
+The checkout stays free of RimZ metadata. Ownership lives in `rimz-worktree.json` inside the worktree's Git admin directory, recording the name, branch, base branch and commit, repo root, path, and marker version. Cleanup, `remove`, and `gc` act only when that marker is present; its absence reads as user-owned, even when the path matches the configured directory template.
 
 ## Seeded files and linked directories
 
 A new worktree starts ready to run. Two optional, committed project files describe what to carry in beyond the tracked tree:
 
-- **`.worktreeinclude`** copies untracked files an agent needs — `.env`, local config, caches. It lists glob patterns, one per line; Rimz copies each match from the checkout right after `git worktree add`, preserving the repo-relative path. Patterns use conventional shell-glob semantics (`*` within a path component, `**` across directories); matched directories copy recursively.
+- **`.worktreeinclude`** copies untracked files an agent needs — `.env`, local config, caches. It lists glob patterns, one per line; RimZ copies each match from the checkout right after `git worktree add`, preserving the repo-relative path. Patterns use conventional shell-glob semantics (`*` within a path component, `**` across directories); matched directories copy recursively.
 - **`.worktreelink`** symlinks directories agents should share rather than copy — the heavy machine-local ones like `node_modules`, `target`, or `.venv`. It lists relative paths, one per line.
 
 Both files skip blank lines and `#` comments, and both confine every source to the project root: absolute patterns and patterns reaching out with `..` are skipped, and each resolved path is checked against its canonical form, so a symlink a glob descends into cannot pull host files into the agent-readable tree. Linking additionally requires a real directory and never clobbers an existing destination, writing an absolute symlink. Each linked directory is registered in the worktree's effective `git info/exclude` as an anchored `/<path>` pattern (temp-file-plus-rename, deduped across creates); because that exclude is commonly the repo's shared one, the same build directory is also excluded in the main checkout and sibling worktrees — the intended outcome for build and dependency directories.
@@ -37,7 +37,7 @@ The decision is pure, over four inputs — the marker, `git status --porcelain`,
 
 | Marker | Status | User pane inside | Agent session bound | Decision |
 | --- | --- | --- | --- | --- |
-| absent | any | any | any | skip — not Rimz-owned |
+| absent | any | any | any | skip — not RimZ-owned |
 | present | clean and content-landed | no | no | remove the tree, then delete the branch |
 | present | dirty, pending, or unknown | no | no | prompt `keep / remove / shell` on a TTY; keep on EOF or non-TTY |
 | present | any | yes | any | skip — in use |

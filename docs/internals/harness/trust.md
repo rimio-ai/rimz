@@ -56,7 +56,7 @@ Project config uses one `agents` shape at a time: `[[agents]]` for env entries, 
 
 ### Env application
 
-An applied `[[agents]]` env reaches the agent through the login-shell wrapper ([`login_shell_argv`](../../../crates/rimz/src/harness/launch.rs)): the wrapper runs the user's default shell startup path when that shell is launchable, then execs `/usr/bin/env` to re-apply Rimz's launch env after the shell rc and profile files have run. Effective precedence, lowest to highest:
+An applied `[[agents]]` env reaches the agent through the login-shell wrapper ([`login_shell_argv`](../../../crates/rimz/src/harness/launch.rs)): the wrapper runs the user's default shell startup path when that shell is launchable, then execs `/usr/bin/env` to re-apply RimZ's launch env after the shell rc and profile files have run. Effective precedence, lowest to highest:
 
 1. pane env
 2. shell rc and profile env
@@ -93,7 +93,7 @@ rimz trust [status|grant|revoke] [--json]
 
 `status` is the default. `grant` renders the surface diff when a prior record exists, then pins the live hash and surface. `revoke` deletes the record, reverting the workspace to `untrusted` (or `no_config` when `.rimz/config.toml` is absent). `rimz doctor` surfaces the trust state alongside its protocol checks. The full command surface is in the [reference](../../reference/cli/hooks-trust.md#project-trust).
 
-A fresh interactive `rimz start` on an `untrusted` workspace offers the grant before room birth. The prompt is scoped to never-granted repos; `stale` remains a re-grant flow through `rimz trust grant`. A decline writes `birth-prompt.toml` for the current surface hash, so Rimz asks again only after the executable surface changes. Attach, web starts, supervised runs, and non-TTY starts skip the prompt, and prompt errors log a warning rather than blocking the room.
+A fresh interactive `rimz start` on an `untrusted` workspace offers the grant before room birth. The prompt is scoped to never-granted repos; `stale` remains a re-grant flow through `rimz trust grant`. A decline writes `birth-prompt.toml` for the current surface hash, so RimZ asks again only after the executable surface changes. Attach, web starts, supervised runs, and non-TTY starts skip the prompt, and prompt errors log a warning rather than blocking the room.
 
 ## Adding a command-running field
 

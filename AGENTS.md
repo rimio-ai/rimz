@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Working contract for humans and coding agents contributing to Rimz. Read on entry. Topic detail lives in the leaves linked from the [documentation map](#documentation-map); never duplicate it here.
+Working contract for humans and coding agents contributing to RimZ. Read on entry. Topic detail lives in the leaves linked from the [documentation map](#documentation-map); never duplicate it here.
 
-> **Invariant.** Rimz routes attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI.
+> **Invariant.** RimZ routes attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI.
 
 A child `AGENTS.md` under a subtree extends this file with local constraints; it never restates parent rules.
 
@@ -25,7 +25,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 ## Product invariants
 
 - **Durability first.** Correctness lives in durable records, CAS rules, nonces, and per-request sockets. Wakeups and pane reads are latency, never truth.
-- **Hook stdout is the decision channel.** Logs go to stderr or Rimz state logs; hook helper children get fresh stdio.
+- **Hook stdout is the decision channel.** Logs go to stderr or RimZ state logs; hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class; core behaviour never depends on a backend-only feature.
 - **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives, and `message` routes human text through the same send path; pane reads stay in rendering, explicit `pane capture` calls, and Codex turn-death confirmation.
 - **Sidebar is read-only on the store.** Sidebar code reads via `rimz sidebar snapshot`; store-write modules stay out of the sidebar's import graph.
@@ -76,7 +76,7 @@ rimz loop show <task>                # schedule, next fire, run forensics
 
 ## Code map
 
-Rimz ships as one Rust binary: the `rimz` crate is CLI, domain library, and native sidebar renderer, with `rimz-presence-zellij` a standalone Zellij wasm plugin beside it. This indexes what lives where; runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHITECTURE.md), and each module's `//!` header is the per-file authority.
+RimZ ships as one Rust binary: the `rimz` crate is CLI, domain library, and native sidebar renderer, with `rimz-presence-zellij` a standalone Zellij wasm plugin beside it. This indexes what lives where; runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHITECTURE.md), and each module's `//!` header is the per-file authority.
 
 **Repository** — `crates/rimz/` (the binary plus the runtime/domain library; `benches/`, and `presence/`/`pricing/`/`themes/` data `build.rs` embeds), `crates/rimz-presence-zellij/` (headless Zellij presence plugin, wasm32-wasip1, no rimz-crate deps), `docs/` (product and engineering docs; `docs/externals/` mirrors upstream), `xtask/` (task runner and every gate), `examples/`, `ci/`, `scripts/`, `supply-chain/`.
 
@@ -106,7 +106,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [multiplexer.md](./docs/guide/multiplexer.md) — Zellij and tmux baselines: recommended options, parity Alt chords, themed status bar, shipped under `examples/`.
 - [agents.md](./docs/guide/agents.md) — launching agents by name, permission-mode suffixes, profiles, and the layout grammar.
 - [teams.md](./docs/guide/teams.md) — named teams: role handles, the `agents.toml` shape, relaunch and resume, and the sidebar's one-block treatment.
-- [worktrees.md](./docs/guide/worktrees.md) — Rimz-owned Git worktrees: isolating a layout or team for parallel work, seeded files, and supervised cleanup.
+- [worktrees.md](./docs/guide/worktrees.md) — RimZ-owned Git worktrees: isolating a layout or team for parallel work, seeded files, and supervised cleanup.
 - [messaging.md](./docs/guide/messaging.md) — addresses, park/steer/schedule delivery, smart compaction, agent-to-agent chat, and channels.
 - [sidebar.md](./docs/guide/sidebar.md) — reading the sidebar: zones, agent cards and process rows, the agent lifecycle, attention routing and card ranking.
 - [insight.md](./docs/guide/insight.md) — token and dollar insight: the cockpit and provider-dashboard figures, `rimz stats` and its heatmap and breakdowns, and how every figure is calculated.
@@ -130,7 +130,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 
 **Internals** — `docs/internals/`; [README.md](./docs/internals/README.md) is the index. The three multi-doc subsystems keep a folder; every other subsystem is one flat file.
 - **`agents/`** — [model.md](./docs/internals/agents/model.md) (agent model: rollup, state machine, adapter boundary, live context), the per-kind mappings [claude.md](./docs/internals/agents/claude.md)/[codex.md](./docs/internals/agents/codex.md)/[pi.md](./docs/internals/agents/pi.md)/[opencode.md](./docs/internals/agents/opencode.md), [providers.md](./docs/internals/agents/providers.md) (accounts, balances, spend, pricing).
-- **`harness/`** — [harness.md](./docs/internals/harness/harness.md) (layout IR, address grammar, `-p` runs and the run wake, loop tasks), [messaging.md](./docs/internals/harness/messaging.md) (routing, records, delivery, channels, transcript), [worktrees.md](./docs/internals/harness/worktrees.md) (Rimz-owned Git worktrees), [trust.md](./docs/internals/harness/trust.md) (permission model: executable surface, grants, the stale diff).
+- **`harness/`** — [harness.md](./docs/internals/harness/harness.md) (layout IR, address grammar, `-p` runs and the run wake, loop tasks), [messaging.md](./docs/internals/harness/messaging.md) (routing, records, delivery, channels, transcript), [worktrees.md](./docs/internals/harness/worktrees.md) (RimZ-owned Git worktrees), [trust.md](./docs/internals/harness/trust.md) (permission model: executable surface, grants, the stale diff).
 - **`sidebar/`** — [sidebar.md](./docs/internals/sidebar/sidebar.md) (mechanics: presence, ranking, reload), [state.md](./docs/internals/sidebar/state.md) (pulled truth, events, fusion, cadences), [notifications.md](./docs/internals/sidebar/notifications.md), [pets.md](./docs/internals/sidebar/pets.md).
 - **Single-doc subsystems** — [store.md](./docs/internals/store.md) (durable state engine: on-disk shape, write classes, wakeups), [multiplexers.md](./docs/internals/multiplexers.md) (Zellij/tmux contracts), [remote.md](./docs/internals/remote.md) (SSH attach, reconnect, link health), [web.md](./docs/internals/web.md) (Zellij browser access), [welcome.md](./docs/internals/welcome.md) (lobby and `rimz stats`), [diagnostics.md](./docs/internals/diagnostics.md) (diagnostics log, frame observer, off-box Sentry), [performance.md](./docs/internals/performance.md) (render budget, cost map, fleet overhead), [profiling.md](./docs/internals/profiling.md) (live-fleet field guide).
 

@@ -1,6 +1,6 @@
 # Getting started CLI
 
-`rimz` opens one room for the project you are in and keeps it attachable. The room is a plain Zellij or tmux session with the sidebar added — your keybinds, layout, and scrollback stay yours — so leaving is a normal multiplexer detach and [`rimz reset`](./maintenance.md#reload-reset-gc-and-uninstall) is the escape hatch if one ever wedges. This page covers the commands that open, reach, and diagnose a local room: `start`, `attach`, `list`, `setup`, and `doctor`. Reaching a room on another host is [`rimz remote`](./remote.md); how Rimz picks the room from your directory is [the root model in ARCHITECTURE.md](../../../ARCHITECTURE.md).
+`rimz` opens one room for the project you are in and keeps it attachable. The room is a plain Zellij or tmux session with the sidebar added — your keybinds, layout, and scrollback stay yours — so leaving is a normal multiplexer detach and [`rimz reset`](./maintenance.md#reload-reset-gc-and-uninstall) is the escape hatch if one ever wedges. This page covers the commands that open, reach, and diagnose a local room: `start`, `attach`, `list`, `setup`, and `doctor`. Reaching a room on another host is [`rimz remote`](./remote.md); how RimZ picks the room from your directory is [the root model in ARCHITECTURE.md](../../../ARCHITECTURE.md).
 
 ```sh
 rimz setup                 # one-time: detect the machine, write config, choose hooks and appearance
@@ -30,11 +30,11 @@ rimz attach [SESSION] [same flags]
 
 `rimz` is `rimz start .`. `rimz start [PATH]` resolves the workspace root, creates or reattaches the Zellij or tmux session, launches the sidebar, and enters the room; `PATH` defaults to `.`. Nothing is destroyed on the way in — an existing session is reattached, not replaced.
 
-`rimz attach` with no `SESSION` uses the current directory's room. `rimz attach <SESSION>` targets an exact session name; when Rimz has a workspace record for it, it restores the room's sidebar and recovery state before attaching.
+`rimz attach` with no `SESSION` uses the current directory's room. `rimz attach <SESSION>` targets an exact session name; when RimZ has a workspace record for it, it restores the room's sidebar and recovery state before attaching.
 
 **Attach or print.** An interactive terminal attaches; a non-interactive caller prints the attach command instead, which is the shape scripts and shell wrappers want. `--attach`, `--no-attach`, and `--print` force the choice (`--print` is an alias for `--no-attach`). Inside the selected mux backend, the automatic `rimz` path reports the directory's room and exits so the existing client stays active; use `--attach` only to deliberately hand control to the mux attach command.
 
-**Resume on rebirth.** When a room comes back from a reboot or a crashed multiplexer, Rimz offers to recover the agents that were running, defaulting yes; non-interactive starts recover automatically. `start` prints context first, such as `rimz: this room's previous session ended with agents still running (2026-07-02 17:37)`, before the recovery prompt names the count and labels. `--no-resume` brings the room up empty. Live agents in a healthy room are never touched by this; the flag only governs the recovery launch.
+**Resume on rebirth.** When a room comes back from a reboot or a crashed multiplexer, RimZ offers to recover the agents that were running, defaulting yes; non-interactive starts recover automatically. `start` prints context first, such as `rimz: this room's previous session ended with agents still running (2026-07-02 17:37)`, before the recovery prompt names the count and labels. `--no-resume` brings the room up empty. Live agents in a healthy room are never touched by this; the flag only governs the recovery launch.
 
 `--refresh-ms <MS>` overrides the sidebar render cadence for sidebars born by this launch; the persistent cadence lives in machine config.
 
@@ -44,7 +44,7 @@ rimz attach [SESSION] [same flags]
 rimz list [-a|--all] [--json]
 ```
 
-`rimz list` joins known Rimz workspace records with live Zellij and tmux sessions. The default view shows running rooms and rooms active in the last 24 hours with a `LAST_SEEN` column; `--all` includes dormant ones and renders a recorded death as `crashed · 16 agents · 2026-07-02 17:37`. `--json` emits `workspace_id`, `project_root`, `session_name`, `running_on`, `last_activity`, and `last_death` for scripts. It reads records only and changes no room.
+`rimz list` joins known RimZ workspace records with live Zellij and tmux sessions. The default view shows running rooms and rooms active in the last 24 hours with a `LAST_SEEN` column; `--all` includes dormant ones and renders a recorded death as `crashed · 16 agents · 2026-07-02 17:37`. `--json` emits `workspace_id`, `project_root`, `session_name`, `running_on`, `last_activity`, and `last_death` for scripts. It reads records only and changes no room.
 
 ## Setup and doctor
 
@@ -58,7 +58,7 @@ rimz setup [--yes]
 rimz doctor [--audit] [--json] [--output PATH]
 ```
 
-`rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. It reads and reports only; it changes nothing. Each check prints as a titled section with a status glyph, and each failing check prints the next fix where Rimz knows one. The report covers:
+`rimz doctor` is the first thing to run when a room, hook, sidebar, or backend behaves unexpectedly. It reads and reports only; it changes nothing. Each check prints as a titled section with a status glyph, and each failing check prints the next fix where RimZ knows one. The report covers:
 
 - **Identity and paths** — current OS user, absolute rimz binary path, resolved workspace with absolute paths
 - **Backend** — backend and version, PATH-visible backend binaries, server-log excerpts, server socket, session health, duplicate sidebars

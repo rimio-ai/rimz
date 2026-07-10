@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Rimz is pre-1.0. Security fixes target the latest released version and `main`.
+RimZ is pre-1.0. Security fixes target the latest released version and `main`.
 
 ## Reporting a vulnerability
 

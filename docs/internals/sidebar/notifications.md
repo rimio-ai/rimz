@@ -1,6 +1,6 @@
 # Notifications
 
-Rimz sends best-effort attention alerts from the same state that drives the sidebar. The store remains truth; notifications are latency and reachability.
+RimZ sends best-effort attention alerts from the same state that drives the sidebar. The store remains truth; notifications are latency and reachability.
 
 ## Channels
 
@@ -36,7 +36,7 @@ A degraded-but-alive link — slow or lossy while bytes still flow — surfaces 
 
 ## Backend Behavior
 
-tmux forwards OSC notifications when `allow-passthrough` is on; Rimz enables that room option by default. The renderer wraps the OSC payload as `DCS tmux; ... ST` so the local terminal emulator receives it through tmux and SSH. BEL stays targeted to the triggering agent's window; desktop OSC stays broad enough to reach the active client.
+tmux forwards OSC notifications when `allow-passthrough` is on; RimZ enables that room option by default. The renderer wraps the OSC payload as `DCS tmux; ... ST` so the local terminal emulator receives it through tmux and SSH. BEL stays targeted to the triggering agent's window; desktop OSC stays broad enough to reach the active client.
 
 Zellij currently drops OSC 9, 777, and 99 notification sequences. `desktop = "auto"` therefore disables desktop OSC under Zellij and leaves notify handlers as the portable route. The targeted BEL marks only the Zellij tab whose sidebar shares an unread triggering agent — never a daemon-only `rimzd` tab — so the tab bar `[!]` points at an agent that still needs you and clears when you visit the tab and look, not when the agent resumes on its own. `desktop = "osc"` forces emission for users testing a future Zellij or terminal path.
 
@@ -66,7 +66,7 @@ suppress_focused = true
 debounce_ms = 5000
 coalesce_ms = 1000
 remind_secs = 60
-title = "Rimz: {{agent}} {{kind}}"
+title = "RimZ: {{agent}} {{kind}}"
 body = "{{task}}"
 command = "ntfy publish rimz"
 
@@ -76,7 +76,7 @@ command = "ntfy publish --title {{title}} rimz {{body}}"
 when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
 ```
 
-`remind_secs = 0` disables reminders. Desktop badge APIs are terminal- and OS-specific, so Rimz exports the unread count to the handler path instead of writing a dock badge escape itself.
+`remind_secs = 0` disables reminders. Desktop badge APIs are terminal- and OS-specific, so RimZ exports the unread count to the handler path instead of writing a dock badge escape itself.
 
 `title` and `body` are global banner templates for agent-status and coalesced notifications. The closed variable set is `kind`, `agent`, `handle`, `status`, `worktree`, `task`, `count`, `unread`, `pane`, and `root`, plus `title` and `body` inside handler commands after banner rendering. `agent` and `handle` carry the agent handles or roles, joined for multi-agent notifications. Unknown variables fail strict config load, and unavailable variables render empty for sparse kinds such as reminders, link alerts, and coalesced rows.
 

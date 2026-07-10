@@ -1,6 +1,6 @@
 # Transcript CLI
 
-`rimz transcript` reads Rimz's durable transcript log and renders a channel or one agent as a timestamped chat log. It reads only — nothing is sent, nothing changes — and it reaches back past what the agents keep: because Rimz records every prompt, answer, and inter-agent message itself, the log survives ended agents whose native transcript files have rotated away. It targets agents and channels with the [agent-address grammar](./agents.md#addressing-agents). Reading the conversation back as an everyday move is the [messaging guide](../../guide/messaging.md); the log model (entry kinds, JSONL buckets, retention) is [message.md → Transcript](../../internals/harness/messaging.md#transcript).
+`rimz transcript` reads RimZ's durable transcript log and renders a channel or one agent as a timestamped chat log. It reads only — nothing is sent, nothing changes — and it reaches back past what the agents keep: because RimZ records every prompt, answer, and inter-agent message itself, the log survives ended agents whose native transcript files have rotated away. It targets agents and channels with the [agent-address grammar](./agents.md#addressing-agents). Reading the conversation back as an everyday move is the [messaging guide](../../guide/messaging.md); the log model (entry kinds, JSONL buckets, retention) is [message.md → Transcript](../../internals/harness/messaging.md#transcript).
 
 ```sh
 rimz transcript @swift-otter            # one agent's channel messages

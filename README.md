@@ -32,21 +32,21 @@
 
 ---
 
-Rimz is a realtime dashboard for harnessing agentic coding: one human and tens of agents working together in one Zellij or tmux room, where everything about every agent reads at a glance. Every agent gets a live card (state, task, context health, live cost), and the sidebar routes your attention to whichever one needs you.
+RimZ is a realtime dashboard for harnessing agentic coding: one human and tens of agents working together in one Zellij or tmux room, where everything about every agent reads at a glance. Every agent gets a live card (state, task, context health, live cost), and the sidebar routes your attention to whichever one needs you.
 
 <p align="center">
-  <img src="docs/rimz-full.png" alt="A Rimz room: the sidebar triaging a fleet of coding agents beside their panes" width="100%">
+  <img src="docs/rimz-full.png" alt="A RimZ room: the sidebar triaging a fleet of coding agents beside their panes" width="100%">
   <br/><sub>The sidebar triages the fleet on the left; agents work in their own panes.</sub>
 </p>
 
 
-Rimz stays out of your way: a single lightweight binary inside the Zellij or tmux you already run, with your keybinds intact, the agent CLIs stock, and the official web, desktop, and mobile apps untouched. The same footprint carries the primitives that **harness engineering** and **loop engineering** build on: the sidebar is the observability layer, one uniform interface reaches Claude Code, Codex, Pi, and OpenCode, a durable message system steers and queues agents, supervised runs carry exit codes into scripts and CI, and scheduled wakeups keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on those primitives.
+RimZ stays out of your way: a single lightweight binary inside the Zellij or tmux you already run, with your keybinds intact, the agent CLIs stock, and the official web, desktop, and mobile apps untouched. The same footprint carries the primitives that **harness engineering** and **loop engineering** build on: the sidebar is the observability layer, one uniform interface reaches Claude Code, Codex, Pi, and OpenCode, a durable message system steers and queues agents, supervised runs carry exit codes into scripts and CI, and scheduled wakeups keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on those primitives.
 
 ## Project status
 
-Rimz is **alpha software**, moving fast. Expect rough edges and the occasional bug, and expect the surface to shift: commands, flags, config keys, and output formats can change between releases while the design settles.
+RimZ is **alpha software**, moving fast. Expect rough edges and the occasional bug, and expect the surface to shift: commands, flags, config keys, and output formats can change between releases while the design settles.
 
-It is also heavily used, on itself. Rimz is built with Rimz: the fleet behind this repository routinely runs 50–100 concurrent agents across 10–30 parallel worktrees and PRs, and a single room stays responsive with 100+ agents from multiple providers working at once. Driven through teams and loops, most of the routine engineering here — features, bug fixes, CI repair — already flows through the harness with little hand-holding.
+It is also heavily used, on itself. RimZ is built with RimZ: the fleet behind this repository routinely runs 50–100 concurrent agents across 10–30 parallel worktrees and PRs, and a single room stays responsive with 100+ agents from multiple providers working at once. Driven through teams and loops, most of the routine engineering here — features, bug fixes, CI repair — already flows through the harness with little hand-holding.
 
 Read that as: ready for personal, daily use today; for production workflows that need a stable interface, wait for the 1.0 release.
 
@@ -88,8 +88,8 @@ Read that as: ready for personal, daily use today; for production workflows that
 ```
 
 - **Agents report themselves:** sessions, tool calls, live status, and blocking questions arrive the moment they happen, through each agent's own hooks, transcripts, and APIs
-- **Rimz drives the panes:** messages, steering, and `-p` harness runs land as keystrokes in the agent's own pane, so every agent runs its stock CLI in a full terminal, exactly as if you typed
-- **Rimz fuses every channel:** agent events, git churn, process stats, and account state combine into one live picture, and the sidebar renders it
+- **RimZ drives the panes:** messages, steering, and `-p` harness runs land as keystrokes in the agent's own pane, so every agent runs its stock CLI in a full terminal, exactly as if you typed
+- **RimZ fuses every channel:** agent events, git churn, process stats, and account state combine into one live picture, and the sidebar renders it
 
 → [DESIGN.md](./DESIGN.md) · [ARCHITECTURE.md](./ARCHITECTURE.md)
 
@@ -121,7 +121,7 @@ Hooks install on the first `rimz` run, with your consent and a diff preview. →
 
 The commands below run from any pane in the room, and from any script or CI job that reaches it. They compose: a profile becomes a team, the team lands in a worktree, the worktree's agents take messages, and a schedule fires the whole thing while you sleep.
 
-**Start agents by name.** Type `claude` in any pane and it joins the room: the stock CLI with your flags and its own session files, no Rimz command in the path.
+**Start agents by name.** Type `claude` in any pane and it joins the room: the stock CLI with your flags and its own session files, no `rimz` command in the path.
 
 ```sh
 claude
@@ -136,7 +136,7 @@ rimz agents codex-yolo      # permission modes: -auto, -ask, -plan, -yolo
 rimz agents planner         # your profile: model, effort, system prompt
 ```
 
-**Launch layouts into worktrees.** One spec describes the shape: `,` splits, `+` tiles, `/` stacks. Add [`-w`](./docs/guide/worktrees.md) and the whole layout lands in an isolated Rimz-owned Git worktree, seeded with the untracked files it needs, so two lines of work run side by side without touching each other or your main checkout.
+**Launch layouts into worktrees.** One spec describes the shape: `,` splits, `+` tiles, `/` stacks. Add [`-w`](./docs/guide/worktrees.md) and the whole layout lands in an isolated RimZ-owned Git worktree, seeded with the untracked files it needs, so two lines of work run side by side without touching each other or your main checkout.
 
 ```sh
 rimz agents claude,codex -w feat-a             # two agents, side by side
@@ -145,7 +145,7 @@ rimz agents 'vim,codex+term' -w feat-c         # editor | agent stacked over a s
 rimz agents codex --from-pr 42                 # worktree checked out from a pull request
 ```
 
-**Combine models as teams.** A named [team](./docs/guide/teams.md) in `agents.toml` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. Rimz is built this way; `examples/teams/` ships the `forge` team it uses.
+**Combine models as teams.** A named [team](./docs/guide/teams.md) in `agents.toml` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. RimZ is built this way; `examples/teams/` ships the `forge` team it uses.
 
 ```sh
 rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without agents.toml
@@ -196,7 +196,7 @@ rimz remote connect dev --web    # the same room in your browser at 127.0.0.1
 
 ## Configuration
 
-Rimz runs with zero configuration, and everything you can tune is plain TOML in files you own: no config daemon, no bespoke language, nothing new to learn. `rimz setup` detects the machine and writes the per-machine defaults under `~/.config/rimz/` — `config.toml` (behavior), `theme.toml` (appearance), `agents.toml` (profiles and teams), `loop.toml` (schedules), `remote.toml` (SSH aliases) — every key commented with its default and an inline note, so the files are their own reference. After that first pass, [`rimz config set`](./docs/guide/configuration.md) edits one dotted key: it routes the key to the owning file, validates the value, and writes it durably, so you change behavior without hand-editing TOML.
+RimZ runs with zero configuration, and everything you can tune is plain TOML in files you own: no config daemon, no bespoke language, nothing new to learn. `rimz setup` detects the machine and writes the per-machine defaults under `~/.config/rimz/` — `config.toml` (behavior), `theme.toml` (appearance), `agents.toml` (profiles and teams), `loop.toml` (schedules), `remote.toml` (SSH aliases) — every key commented with its default and an inline note, so the files are their own reference. After that first pass, [`rimz config set`](./docs/guide/configuration.md) edits one dotted key: it routes the key to the owning file, validates the value, and writes it durably, so you change behavior without hand-editing TOML.
 
 ```sh
 rimz setup                                 # detect the machine, write the commented defaults
@@ -205,7 +205,7 @@ rimz config set theme "Catppuccin Mocha"   # edit one key; `rimz list-themes` sh
 
 ### True color, Nerd Font, and pets
 
-A terminal that advertises truecolor (Ghostty, WezTerm, Kitty, and Alacritty all do) gets 24-bit color out of the box, inside Rimz tmux rooms and over `rimz remote` too. With a Nerd Font in the terminal, [`theme.style`](./docs/guide/theme.md) turns on the sharper glyphs, and one more line adds a pet.
+A terminal that advertises truecolor (Ghostty, WezTerm, Kitty, and Alacritty all do) gets 24-bit color out of the box, inside RimZ tmux rooms and over `rimz remote` too. With a Nerd Font in the terminal, [`theme.style`](./docs/guide/theme.md) turns on the sharper glyphs, and one more line adds a pet.
 
 ```sh
 rimz config set theme.style modern        # truecolor + Nerd Font icons; "default" = auto color + Unicode
@@ -217,7 +217,7 @@ Pets render as crisp pixels in Ghostty and kitty terminals; inside tmux that als
 
 ### Auto-continue and smart compaction
 
-Two settings keep agents working [while you are away](./docs/guide/loops.md#built-in-recovery). Auto-continue picks parked turns back up: a rate-limit park resumes the moment the provider's budget window resets, and a transient API error retries on a backoff ramp. Smart compaction makes `rimz message` compact-first: past the threshold, Rimz submits `/compact` ahead of your text, so a long turn lands against a fresh context window instead of dying at the ceiling.
+Two settings keep agents working [while you are away](./docs/guide/loops.md#built-in-recovery). Auto-continue picks parked turns back up: a rate-limit park resumes the moment the provider's budget window resets, and a transient API error retries on a backoff ramp. Smart compaction makes `rimz message` compact-first: past the threshold, RimZ submits `/compact` ahead of your text, so a long turn lands against a fresh context window instead of dying at the ceiling.
 
 ```sh
 rimz config set resume.auto_continue true     # off by default; resumes rate-limit and API-error parks
@@ -283,7 +283,7 @@ rimz hooks install              # every detected agent (claude, codex, pi, openc
 rimz doctor                     # verify backend, hooks, and room health
 ```
 
-The install is additive (your existing hooks stay), and `rimz hooks uninstall` undoes it. Rimz is pre-release ([project status](#project-status)): the agent adapters, both multiplexer backends, and the sidebar are implemented in-tree.
+The install is additive (your existing hooks stay), and `rimz hooks uninstall` undoes it. RimZ is pre-release ([project status](#project-status)): the agent adapters, both multiplexer backends, and the sidebar are implemented in-tree.
 
 ## Contributing
 

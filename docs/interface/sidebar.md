@@ -10,7 +10,7 @@ Every frame below is what the renderer actually paints — structure, glyphs, co
 
 ## The whole frame at a glance
 
-A complete frame: a selected agent in a worktree, with the per-provider dashboard pinned at the bottom. The cockpit figures use the current Rimz room's project root and grouped worktrees; the provider dashboard and store figures use account-global transcript totals.
+A complete frame: a selected agent in a worktree, with the per-provider dashboard pinned at the bottom. The cockpit figures use the current RimZ room's project root and grouped worktrees; the provider dashboard and store figures use account-global transcript totals.
 
 ```
  ⌘ query-engine                    ~/code/query-engine    ← workspace identity
@@ -359,7 +359,7 @@ A **metered account** drains one "mana" bar per included budget window toward it
 
 These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
 
-When Rimz is reading only cached budgets and the longest cached window has already reset, the balance is unknown until the provider refreshes. The panel keeps the account and window labels, but every cached budget row becomes a dim empty track with no countdown, so it does not claim either a refreshed full budget or an exhausted one. A metered account whose window list has not arrived yet paints the same dim empty track with a blank label slot, preserving the budget grid without inventing a window.
+When RimZ is reading only cached budgets and the longest cached window has already reset, the balance is unknown until the provider refreshes. The panel keeps the account and window labels, but every cached budget row becomes a dim empty track with no countdown, so it does not claim either a refreshed full budget or an exhausted one. A metered account whose window list has not arrived yet paints the same dim empty track with a blank label slot, preserving the budget grid without inventing a window.
 
 Provider blocks stacked (`theme.display.provider_tabs = "never"`). Claude and Codex use account-global provider totals; Pi is shown as an idle API-key block to pin its built-in emblem:
 

@@ -2,7 +2,7 @@
 
 > The agent-agnostic boundary, state machine, and context read-path are in [model.md](./model.md); the account, balance, spend, and pricing model is in [providers.md](./providers.md). The raw upstream protocol — the full event catalog, the stdin payload schemas, the verbatim decision JSON, the statusline schema, and the auth surface — is in [claude-reference.md](../../externals/agent-adapter/claude-reference.md).
 
-This doc is the single home for everything Claude-specific: how each native event maps to a lifecycle signal, how the decision shapes render, and how Claude's transcript, statusline, account, and spend surfaces fold onto Rimz's internal types.
+This doc is the single home for everything Claude-specific: how each native event maps to a lifecycle signal, how the decision shapes render, and how Claude's transcript, statusline, account, and spend surfaces fold onto RimZ's internal types.
 
 ## Hooks and lifecycle
 
@@ -56,7 +56,7 @@ Claude writes only the bare model id, so the **window divisor is resolved by the
 
 **Rich context.** Claude `exec`s its configured `statusLine` command on every render and pipes a JSON blob to stdin (the full schema is in [claude-reference.md → Statusline JSON](../../externals/agent-adapter/claude-reference.md#statusline-json)). Install points `statusLine` at `rimz statusline feed --source claude`; [`observe_context`](../../../crates/rimz/src/agents/claude/statusline.rs) parses that blob into `AgentContext`. When the user already has a `statusLine`, install **wraps** it rather than replacing it: it captures the JSON, passes it unchanged to the original command, and forwards that command's stdout and exit code, so rendering is visually identical. The original is stored verbatim under `_rimz_wrapped` and restored on uninstall. The wrap is a visible security surface — the consent gate summarizes it and the install diff shows it in full — and its child's stdio is fully piped, never inherited. Field-exact shapes are the inline goldens in [`statusline.rs`](../../../crates/rimz/src/agents/claude/statusline.rs). Claude's statusline `cost.total_cost_usd` is live-session-only and reads `0` on resume, so turn-end card cost reconciles upward to the transcript-priced session total through `supplement_realtime_cost`.
 
-Install wraps Claude's per-child `subagentStatusLine` the same way (at `rimz statusline feed --source claude --subagent`). That feed harvests each task's `description`, `tokenCount`, and `startTime` — parsed by [`subagent_statusline.rs`](../../../crates/rimz/src/agents/claude/subagent_statusline.rs) — into a per-child sidecar the sidebar folds onto the subagent row (see [sidebar.md](../sidebar/sidebar.md)). It is enrichment for Rimz's own expanded card, not a row override, so Claude's panel renders unchanged. The consent gate summarizes both wraps and the install diff shows them in full.
+Install wraps Claude's per-child `subagentStatusLine` the same way (at `rimz statusline feed --source claude --subagent`). That feed harvests each task's `description`, `tokenCount`, and `startTime` — parsed by [`subagent_statusline.rs`](../../../crates/rimz/src/agents/claude/subagent_statusline.rs) — into a per-child sidecar the sidebar folds onto the subagent row (see [sidebar.md](../sidebar/sidebar.md)). It is enrichment for RimZ's own expanded card, not a row override, so Claude's panel renders unchanged. The consent gate summarizes both wraps and the install diff shows them in full.
 
 ### Turn-death marker
 

@@ -1,10 +1,10 @@
 # Scripting
 
-> `rimz agents -p` is `claude -p` for every agent Rimz supports: one prompt, one supervised turn, one exit code — with the turn running in a real pane you can watch, answer, and steer. This page is how you drop an agent into a shell script, a `Makefile`, a cron line, or a CI job. The run records, wakeup socket, and pane cleanup underneath it are [harness.md → Supervised runs](../internals/harness/harness.md#supervised-runs).
+> `rimz agents -p` is `claude -p` for every agent RimZ supports: one prompt, one supervised turn, one exit code — with the turn running in a real pane you can watch, answer, and steer. This page is how you drop an agent into a shell script, a `Makefile`, a cron line, or a CI job. The run records, wakeup socket, and pane cleanup underneath it are [harness.md → Supervised runs](../internals/harness/harness.md#supervised-runs).
 
 ## Why `rimz agents -p`
 
-You already script agents. `claude -p "explain this diff"` in a pipeline, `codex exec` in a Makefile: prompt in, answer out, an exit code the script branches on. The contract is right, and Rimz keeps it — same flag, same shape, nothing to relearn.
+You already script agents. `claude -p "explain this diff"` in a pipeline, `codex exec` in a Makefile: prompt in, answer out, an exit code the script branches on. The contract is right, and RimZ keeps it — same flag, same shape, nothing to relearn.
 
 What headless mode gives up is everything around the run. The turn is an invisible process: when it stalls, wanders, or stops to ask a permission question, the pipeline hangs with nothing to look at and nowhere to type an answer. And every CLI spells the mode its own way — different flags, different output framing, one wrapper script per provider.
 
@@ -27,7 +27,7 @@ rimz agents codex "Prepare the release checklist." -p             # the same gra
 3. It blocks until the agent's own reporting hooks say the root turn ended — hooks are the completion signal, which is why they are the one [prerequisite](#prerequisites).
 4. It prints the answer, exits with the run's code, and closes the pane. The agent's session file stays where the CLI always puts it, so `claude --resume` and the provider's own apps keep working, and `rimz agents show` and `rimz transcript` read the run back after it ends.
 
-Nothing else moves: no daemon, no forked agent, no Rimz-private copy of the session. Ctrl+C cancels cleanly — exit `130`, agent stopped, pane reclaimed — and `rimz agents stop <ref>` does the same from any other pane. Add `--keep` to leave the finished pane open for inspection.
+Nothing else moves: no daemon, no forked agent, no RimZ-private copy of the session. Ctrl+C cancels cleanly — exit `130`, agent stopped, pane reclaimed — and `rimz agents stop <ref>` does the same from any other pane. Add `--keep` to leave the finished pane open for inspection.
 
 ## One turn, one exit code
 
@@ -83,7 +83,7 @@ cat build-error.txt | rimz agents claude -p 'explain the root cause'          # 
 git diff --staged | rimz agents codex -p 'review this diff; reply SHIP or HOLD'
 ```
 
-When both a prompt and stdin are present, Rimz wraps the piped bytes in `<stdin>…</stdin>` so the agent reads them as attached material. For a fully programmatic feed, `--input-format stream-json` reads user messages from stdin until EOF instead of taking a positional prompt.
+When both a prompt and stdin are present, RimZ wraps the piped bytes in `<stdin>…</stdin>` so the agent reads them as attached material. For a fully programmatic feed, `--input-format stream-json` reads user messages from stdin until EOF instead of taking a positional prompt.
 
 ## Shape the output
 

@@ -13,7 +13,7 @@ rimz doctor
 The report reads top to bottom, one verdict per row (trimmed here to its shape):
 
 ```
-Rimz doctor
+rimz doctor
   version: 0.1.0+g90deb6d64e14
   user:    marvin (uid 1000)
   binary:  /home/marvin/.cargo/bin/rimz
@@ -73,13 +73,13 @@ Each row carries a glyph that sets its tone:
 
 The last line tallies the run (`✗ 2 problems, ⚠ 9 warnings`, or `✓ no problems found`). Work top down and clear the `✗` rows first. The rest of this page expands the common ones.
 
-The tail sections (`AGENTS`, `MESSAGES`, `DIAGNOSTICS`) report live state rather than machine setup: the agents doctor observed, messages that failed to land, and Rimz's own record of transient rendering hiccups. They are mostly context for a bug report, not a to-do list.
+The tail sections (`AGENTS`, `MESSAGES`, `DIAGNOSTICS`) report live state rather than machine setup: the agents doctor observed, messages that failed to land, and RimZ's own record of transient rendering hiccups. They are mostly context for a bug report, not a to-do list.
 
 ## The room won't start
 
-### Rimz reports an existing room instead of opening one
+### RimZ reports an existing room instead of opening one
 
-A Rimz room is its own Zellij or tmux session, so it cannot nest inside a session you are already attached to. Run bare `rimz` (or `rimz start`) from inside one, and instead of nesting it names the room and tells you how to reach it:
+A RimZ room is its own Zellij or tmux session, so it cannot nest inside a session you are already attached to. Run bare `rimz` (or `rimz start`) from inside one, and instead of nesting it names the room and tells you how to reach it:
 
 ```
 You're already inside a zellij session, which can't host a nested room.
@@ -90,13 +90,13 @@ Open a fresh terminal window that is not attached to Zellij or tmux, then run `r
 
 ### Zellij or tmux is missing or too old
 
-Rimz needs Zellij 0.44+ or tmux 3.5+ on the machine, and pixel-perfect pets add tmux 3.6+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.0 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
+RimZ needs Zellij 0.44+ or tmux 3.5+ on the machine, and pixel-perfect pets add tmux 3.6+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.0 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
 
 ## An agent isn't showing as a card
 
 ### It shows as a plain process row
 
-An agent earns a live card only once its reporting hooks are installed. The hooks are a handful of lines Rimz adds to the agent's own config file; through them the agent reports its turns, prompts, and blocking questions to the sidebar. Without those lines the agent still runs fine, but the sidebar has nothing to read, so it renders a plain process row instead of a card. Preview the lines, then install them:
+An agent earns a live card only once its reporting hooks are installed. The hooks are a handful of lines RimZ adds to the agent's own config file; through them the agent reports its turns, prompts, and blocking questions to the sidebar. Without those lines the agent still runs fine, but the sidebar has nothing to read, so it renders a plain process row instead of a card. Preview the lines, then install them:
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
@@ -104,15 +104,15 @@ rimz hooks install              # wire every detected agent (claude, codex, pi, 
 rimz hooks install claude       # wire one agent by name
 ```
 
-The install is additive, so your existing hooks stay, and `rimz doctor` reports per-agent hook status afterward. Restart the agent so it picks up the new hooks. To back the change out, `rimz hooks uninstall [AGENT]` removes exactly what Rimz added and restores any statusline it wrapped.
+The install is additive, so your existing hooks stay, and `rimz doctor` reports per-agent hook status afterward. Restart the agent so it picks up the new hooks. To back the change out, `rimz hooks uninstall [AGENT]` removes exactly what RimZ added and restores any statusline it wrapped.
 
 ### A card went quiet after a config edit
 
-If a card stops updating after you hand-edited an agent's config, the Rimz-managed hook block was likely disturbed. Re-run `rimz hooks install --dry-run` to see the current diff, then `rimz hooks install` to restore the block. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix in the `HOOKS` row.
+If a card stops updating after you hand-edited an agent's config, the RimZ-managed hook block was likely disturbed. Re-run `rimz hooks install --dry-run` to see the current diff, then `rimz hooks install` to restore the block. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix in the `HOOKS` row.
 
 ### Zellij pane discovery stopped
 
-On Zellij, Rimz loads a small presence plugin so the sidebar learns which panes exist and where. Its permission grant is seeded for you on the first attach. Revoking that grant in Zellij's plugin manager stops pane discovery until you restore it, and `rimz doctor` names the fix in the `presence` row. Re-grant the plugin's permissions in Zellij, then run `rimz reload`. The grant lives in Zellij's own permission store, and the plugin ships no pane content anywhere; the full picture is in [security and trust](./security.md#the-zellij-presence-plugin).
+On Zellij, RimZ loads a small presence plugin so the sidebar learns which panes exist and where. Its permission grant is seeded for you on the first attach. Revoking that grant in Zellij's plugin manager stops pane discovery until you restore it, and `rimz doctor` names the fix in the `presence` row. Re-grant the plugin's permissions in Zellij, then run `rimz reload`. The grant lives in Zellij's own permission store, and the plugin ships no pane content anywhere; the full picture is in [security and trust](./security.md#the-zellij-presence-plugin).
 
 ## The sidebar looks wrong
 
@@ -131,24 +131,24 @@ rimz config set theme.pets.enabled true   # an animated companion on the dashboa
 
 `modern` needs a Nerd Font installed in the terminal, and pets render as crisp pixels only in Ghostty and kitty; inside tmux that also needs tmux 3.6+ with `allow-passthrough on`. Everywhere else, including Zellij, the pet falls back to cell art. The full appearance model is in [theming](./theme.md); the per-terminal pet notes are in the [pets guide](./pets.md).
 
-### A pane looks stale after upgrading Rimz
+### A pane looks stale after upgrading RimZ
 
-When the running Rimz build drifts from an agent's tested version range, reporting fidelity degrades rather than a pane freezing outright: `rimz doctor` warns, and blocking prompts still route to the agent's own UI. After upgrading the binary, reconcile the running sidebars onto the new build:
+When the running RimZ build drifts from an agent's tested version range, reporting fidelity degrades rather than a pane freezing outright: `rimz doctor` warns, and blocking prompts still route to the agent's own UI. After upgrading the binary, reconcile the running sidebars onto the new build:
 
 ```sh
 rimz reload    # re-exec sidebars onto the current build, repair geometry, close duplicates
 ```
 
-`rimz doctor` also warns when more than one Rimz build is writing the workspace at the same time; `rimz reload` is the fix for that mixed-build state too.
+`rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the fix for that mixed-build state too.
 
 `rimz reload` runs from anywhere and leaves stopped sessions stopped. Agent version drift and its exact effects are in [agent support](../reference/agent-support.md).
 
 ## Notifications don't fire
 
-Rimz raises a desktop notification by writing a terminal notification escape (OSC 777) from the sidebar; your terminal turns it into the OS banner, even over SSH. When no banner appears, check in order:
+RimZ raises a desktop notification by writing a terminal notification escape (OSC 777) from the sidebar; your terminal turns it into the OS banner, even over SSH. When no banner appears, check in order:
 
 - **Zellij rooms.** Zellij currently drops notification escapes, so `desktop = "auto"` skips them there. For OS-level notifications on Zellij, wire a `[[notifications.handler]]` command (`notify-send`, `ntfy`, or anything else); the shape is in [the configuration guide](./configuration.md#notifications).
-- **tmux rooms.** Rimz turns `allow-passthrough` on in its rooms by default, which is what lets the notification bytes through tmux. A personal config that forces it off blocks them.
+- **tmux rooms.** RimZ turns `allow-passthrough` on in its rooms by default, which is what lets the notification bytes through tmux. A personal config that forces it off blocks them.
 - **Terminal and OS.** The terminal must support notification escapes, and the OS must allow notifications from that terminal app (on macOS, System Settings, then Notifications).
 - **Triggers.** Only the statuses in `notifications.triggers` fire, and the default is `["waiting", "failed"]`. Add `"success"` if you expect completion pings.
 
@@ -156,7 +156,7 @@ A missed notification loses nothing: the sidebar is the source of truth, so the 
 
 ## Project config isn't taking effect
 
-A cloned repository can ship a `.rimz/config.toml` that names agents, profiles, teams, loop tasks, hooks, and environment variables, any of which can run a command. So Rimz keeps that file inert until you trust the workspace: on an untrusted clone it reads only structural metadata, and every command-running field stays disabled.
+A cloned repository can ship a `.rimz/config.toml` that names agents, profiles, teams, loop tasks, hooks, and environment variables, any of which can run a command. So RimZ keeps that file inert until you trust the workspace: on an untrusted clone it reads only structural metadata, and every command-running field stays disabled.
 
 ```sh
 rimz trust status    # show the trust state and, when stale, a field-level diff
@@ -171,7 +171,7 @@ A remote room is plain SSH under a supervisor that reconnects itself when the li
 
 ## Reset and clean up
 
-These commands touch Rimz's own state, never your project files. Each one says exactly what it removes and what it keeps.
+These commands touch RimZ's own state, never your project files. Each one says exactly what it removes and what it keeps.
 
 ### Start a room clean
 
@@ -196,7 +196,7 @@ A plain reset keeps the prior-agent carryover for history but still starts the r
 
 ### Sweep stale state with `rimz gc`
 
-`rimz gc` sweeps runtime state that has outlived its use: orphaned atomic-write temp files, dead workspace stores, abandoned queued messages, and clean Rimz-marked worktrees whose work has already landed with no live pane inside. It keeps anything dirty, pending, or unproven, and it always prints a checklist of what it cleaned, what it kept, and why. Run it with `--dry-run` first to see the plan without removing anything:
+`rimz gc` sweeps runtime state that has outlived its use: orphaned atomic-write temp files, dead workspace stores, abandoned queued messages, and clean RimZ-marked worktrees whose work has already landed with no live pane inside. It keeps anything dirty, pending, or unproven, and it always prints a checklist of what it cleaned, what it kept, and why. Run it with `--dry-run` first to see the plan without removing anything:
 
 ```sh
 rimz gc --dry-run          # preview reclaimable state, remove nothing
@@ -227,17 +227,17 @@ A kept worktree carries its reason (`in use`, `not merged yet`), so nothing with
 
 ### Where state lives, and full removal
 
-Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, `remote.toml`), and durable room state lives under `~/.local/state/rimz/`. Both are plain files you can read and edit. To remove Rimz from the machine, `rimz uninstall` takes out installed hooks, running rooms, runtime state, and the binaries it finds; durable stores and per-machine config stay unless you ask for them:
+Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, `remote.toml`), and durable room state lives under `~/.local/state/rimz/`. Both are plain files you can read and edit. To remove RimZ from the machine, `rimz uninstall` takes out installed hooks, running rooms, runtime state, and the binaries it finds; durable stores and per-machine config stay unless you ask for them:
 
 ```sh
 rimz uninstall            # hooks, rooms, runtime state, binaries; keeps stores and config
 ```
 
-`--state`, `--config`, and `--all` widen the removal to durable stores and per-machine config; the exact scope of each flag is in the [maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall). Project-local `.rimz/` directories and Rimz-owned worktrees stay in place, because they can hold project config and unlanded work.
+`--state`, `--config`, and `--all` widen the removal to durable stores and per-machine config; the exact scope of each flag is in the [maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall). Project-local `.rimz/` directories and RimZ-owned worktrees stay in place, because they can hold project config and unlanded work.
 
 ## Filing an issue
 
-Capture the state Rimz sees and attach it to the report:
+Capture the state RimZ sees and attach it to the report:
 
 ```sh
 rimz doctor --json --output rimz-doctor.json    # full environment report as JSON

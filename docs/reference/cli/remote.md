@@ -1,6 +1,6 @@
 # Remote CLI
 
-`rimz remote` attaches to a room on another host over SSH. `remote connect` builds a guarded `ssh -t` command on your machine and runs the remote host's own `rimz`, so your `~/.ssh/config`, keys, ports, and jump hosts apply through normal SSH resolution — Rimz adds no daemon and opens no port of its own. It changes nothing on the remote host until you ask: `remote setup` is the only subcommand that installs a binary there, and aliases are plain lines in `~/.config/rimz/remote.toml` you remove with `remote rm`. Why you attach this way, and how the link heals itself, is the [remote guide](../../guide/remote.md).
+`rimz remote` attaches to a room on another host over SSH. `remote connect` builds a guarded `ssh -t` command on your machine and runs the remote host's own `rimz`, so your `~/.ssh/config`, keys, ports, and jump hosts apply through normal SSH resolution — RimZ adds no daemon and opens no port of its own. It changes nothing on the remote host until you ask: `remote setup` is the only subcommand that installs a binary there, and aliases are plain lines in `~/.config/rimz/remote.toml` you remove with `remote rm`. Why you attach this way, and how the link heals itself, is the [remote guide](../../guide/remote.md).
 
 ## Remote rooms
 
@@ -35,7 +35,7 @@ The details that matter in practice:
 - `remote connect --reset` and `remote reset` pass `--no-resume` to the remote `rimz`; `remote add --no-resume` saves that birth behavior on the alias.
 - `--attach`, `--no-attach`, and `--print` mirror local behavior; `--print` emits the SSH command instead of running it, so you can inspect or wrap it.
 - For `remote add` and `remote update`, `--mux`, `--zellij`, or `--tmux` given anywhere on the invocation is saved on the alias; `rimz remote connect --mux <name>` keeps `--mux` as a per-invocation override.
-- `rimz remote bandwidth [--secs N] [--json]` runs on the Linux host serving the room and samples VFS write-rate counters to attribute per-pane terminal output on both backends; tmux reports pane pids natively, and Zellij pane pids resolve through Rimz's process matcher. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
+- `rimz remote bandwidth [--secs N] [--json]` runs on the Linux host serving the room and samples VFS write-rate counters to attribute per-pane terminal output on both backends; tmux reports pane pids natively, and Zellij pane pids resolve through RimZ's process matcher. Use it inside the room when a remote attach looks chatty; full-screen TUIs such as agents mid-turn or system monitors should dominate the report.
 
 ## Remote rooms in the browser
 
@@ -47,6 +47,6 @@ The details that matter in practice:
 4. Prints the bare `http://127.0.0.1:<port>/<session>` URL and opens your local browser best-effort.
 5. Stays in the foreground until Ctrl-C, which tears the tunnel down.
 
-`--web-port <port>` pins the local browser origin; otherwise Rimz derives a stable port from the session name in `8300..8399`. The room itself is [`rimz web`](./web.md).
+`--web-port <port>` pins the local browser origin; otherwise RimZ derives a stable port from the session name in `8300..8399`. The room itself is [`rimz web`](./web.md).
 
 Link health, web tunneling, reconnect mechanics, and bandwidth attribution are in [remote internals](../../internals/remote.md).

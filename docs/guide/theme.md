@@ -2,7 +2,7 @@
 
 The sidebar wears a theme: the color scheme and depth, the glyph vocabulary, the status-head animations, provider branding, and an optional animated pet. All of it is display preference in one per-machine file, `~/.config/rimz/theme.toml`. A theme changes what the sidebar paints, never what an agent can do, so nothing on this page can break a run.
 
-Rimz reads color schemes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/alacritty), so a bundled name or the palette you already run in your terminal is one line away:
+RimZ reads color schemes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/alacritty), so a bundled name or the palette you already run in your terminal is one line away:
 
 ```sh
 rimz config set theme "Catppuccin Mocha"   # any bundled scheme; rimz list-themes shows them all
@@ -62,7 +62,7 @@ cyan = "#7dcfff"
 
 ## Color depth
 
-`[theme] mode` sets the palette depth: `auto` (default) emits truecolor when `COLORTERM` or the `$TERM` terminfo advertises direct color, otherwise quantizes the RGB tones to xterm 256 indexes; `truecolor` forces RGB; `256` pins indexed output. Inside a Rimz tmux room, Rimz stamps `COLORTERM=truecolor` at birth when the launcher advertises it, so `auto` resolves to truecolor despite tmux's `tmux-256color` default.
+`[theme] mode` sets the palette depth: `auto` (default) emits truecolor when `COLORTERM` or the `$TERM` terminfo advertises direct color, otherwise quantizes the RGB tones to xterm 256 indexes; `truecolor` forces RGB; `256` pins indexed output. Inside a RimZ tmux room, RimZ stamps `COLORTERM=truecolor` at birth when the launcher advertises it, so `auto` resolves to truecolor despite tmux's `tmux-256color` default.
 
 ```toml
 [theme]
@@ -77,7 +77,7 @@ Some cues are subtle lightness shifts — a calm card name dimmed a touch, the r
 
 ## Color slots
 
-The scheme supplies the raw terminal palette: background, foreground, the six hues, and a selection accent. From it Rimz derives thirteen slots, the roles everything on screen wears, with the derived steps kept perceptually even so any scheme stays readable. The slots are the layer to tune: override one and every element that wears it follows, and the override survives a scheme switch.
+The scheme supplies the raw terminal palette: background, foreground, the six hues, and a selection accent. From it RimZ derives thirteen slots, the roles everything on screen wears, with the derived steps kept perceptually even so any scheme stays readable. The slots are the layer to tune: override one and every element that wears it follows, and the override survives a scheme switch.
 
 Each slot under `[theme]` accepts a palette role name (`background`, `foreground`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `bright_blue`), a `#rrggbb` hex, or a raw 0–255 xterm index; an omitted slot keeps the scheme's tone. Role names resolve through the active palette, so `good = "green"` tracks a pasted `[colors.normal] green` just like a bundled scheme.
 

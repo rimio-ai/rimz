@@ -41,14 +41,14 @@ The pet acts out the selected card, one steady animation per state: it waves whe
 
 ### Petdex
 
-[petdex.dev](https://petdex.dev/) is the community pet gallery: thousands of open-source pixel pets, browsable by collection and previewable in every animation state. Rimz reads the petdex install format directly, so a pet from the gallery is two commands away:
+[petdex.dev](https://petdex.dev/) is the community pet gallery: thousands of open-source pixel pets, browsable by collection and previewable in every animation state. RimZ reads the petdex install format directly, so a pet from the gallery is two commands away:
 
 ```sh
 npx petdex install wall-e                # installs under ~/.codex/pets/wall-e/
 rimz config set theme.pets.pet wall-e    # a bare name selects the installed pet
 ```
 
-A petdex install is a directory under `~/.codex/pets/<name>/` holding a `pet.json` manifest beside its WebP or PNG sprite sheet; Rimz reads the manifest and loads the sheet it names. `pet = "~/.codex/pets/wall-e/"` reads the same directory by path, and any directory laid out this way works, wherever it lives.
+A petdex install is a directory under `~/.codex/pets/<name>/` holding a `pet.json` manifest beside its WebP or PNG sprite sheet; RimZ reads the manifest and loads the sheet it names. `pet = "~/.codex/pets/wall-e/"` reads the same directory by path, and any directory laid out this way works, wherever it lives.
 
 ### Your own sheet
 
@@ -76,9 +76,9 @@ Two tiers render the same sheet. **Pixel** draws the sprite through the kitty gr
 | `pixel` | opts past the terminal-name allowlist for newer kitty-compatible terminals, while hard gates such as tmux passthrough still apply |
 | `sextant` | the most portable cell art, on every backend |
 
-Sextant pets fit their source proportions inside the fixed dashboard footprint. Rimz probes the terminal's cell pixel dimensions when the pty exposes them; Zellij reports no pixel dimensions, so set the ratio manually when its font makes pets look tall or wide: `rimz config set theme.pets.cell_aspect 2.5`. Explicit config wins over the probe, and a neutral `13/6` fallback preserves the previous rendering when neither fact is available.
+Sextant pets fit their source proportions inside the fixed dashboard footprint. RimZ probes the terminal's cell pixel dimensions when the pty exposes them; Zellij reports no pixel dimensions, so set the ratio manually when its font makes pets look tall or wide: `rimz config set theme.pets.cell_aspect 2.5`. Explicit config wins over the probe, and a neutral `13/6` fallback preserves the previous rendering when neither fact is available.
 
-On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while pixel pets animate; Rimz transmits each sprite image once to minimize that traffic, and `glyphs = "sextant"` switches to the flicker-free cell-art path when you want it fully gone.
+On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while pixel pets animate; RimZ transmits each sprite image once to minimize that traffic, and `glyphs = "sextant"` switches to the flicker-free cell-art path when you want it fully gone.
 
 ## Offline and privacy
 

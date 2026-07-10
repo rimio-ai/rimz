@@ -1,6 +1,6 @@
 # Configuration
 
-Rimz runs with zero configuration: start it and you have a working room, nothing to write first. Everything you can tune from there is plain TOML in files you own. There is no config daemon holding your settings, no separate UI, and no bespoke language between you and a value: you already edit dotfiles and keep them under version control, and Rimz asks nothing new of that habit.
+RimZ runs with zero configuration: start it and you have a working room, nothing to write first. Everything you can tune from there is plain TOML in files you own. There is no config daemon holding your settings, no separate UI, and no bespoke language between you and a value: you already edit dotfiles and keep them under version control, and RimZ asks nothing new of that habit.
 
 Change something when you have a reason to, one line at a time: pin a theme, save a launch profile, route a notification. This page is the whole model. It opens with the settings most people touch and exactly what changing one does to your disk, then maps where configuration lives and how the layers combine, then gives a section per file so you can jump to the one you are editing. For the guided first pass on a new machine, read [set up your machine](./setup.md) first; this page is the reference it links into.
 
@@ -38,7 +38,7 @@ rimz config get theme.display.max_cols    # one value
 rimz config get sidebar --json
 ```
 
-`get` shows the effective config: your overrides layered over the built-in defaults. It answers "what is Rimz actually using", not "what did I write", so a key you never set still prints the default it is following.
+`get` shows the effective config: your overrides layered over the built-in defaults. It answers "what is RimZ actually using", not "what did I write", so a key you never set still prints the default it is following.
 
 ## Where your configuration lives
 
@@ -46,7 +46,7 @@ Configuration comes from two places, and each answers a different question.
 
 Your personal settings live in one directory, `~/.config/rimz/`: your terminal, accounts, notifications, theme, and launch shortcuts. This tier is yours, uncommitted and outside the project trust hash, so nothing you set here follows a repository to someone else's machine.
 
-A repository can also carry one shared file, `<repo>/.rimz/config.toml`: the shape a team agrees on through the repo, such as the agents a clone should launch and the loop tasks it should run. Because that file can name commands to execute, Rimz trust-tracks it, and a fresh clone reads `untrusted` until you review the executable surface and grant it. The full model is [Project config](#project-config).
+A repository can also carry one shared file, `<repo>/.rimz/config.toml`: the shape a team agrees on through the repo, such as the agents a clone should launch and the loop tasks it should run. Because that file can name commands to execute, RimZ trust-tracks it, and a fresh clone reads `untrusted` until you review the executable surface and grant it. The full model is [Project config](#project-config).
 
 ### The files in your home directory
 
@@ -63,7 +63,7 @@ Two more things share the directory but are managed for you: `remote.toml` (name
 
 ### How the layers combine
 
-Rimz reads configuration in four layers, and a later layer wins:
+RimZ reads configuration in four layers, and a later layer wins:
 
 1. built-in defaults,
 2. project config (`<repo>/.rimz/config.toml`),
@@ -74,11 +74,11 @@ Today the per-machine layer is live, CLI and env overrides apply where each comm
 
 ### A broken file never blocks the room
 
-Per-machine settings load leniently. A missing file is the default config, unknown keys are ignored so an older binary tolerates a newer file, and a file Rimz cannot parse falls back to built-in defaults with a startup warning. The room still opens, and `rimz config` and `rimz doctor` report the precise error and the fix.
+Per-machine settings load leniently. A missing file is the default config, unknown keys are ignored so an older binary tolerates a newer file, and a file RimZ cannot parse falls back to built-in defaults with a startup warning. The room still opens, and `rimz config` and `rimz doctor` report the precise error and the fix.
 
 ## Generate and refresh the files
 
-You never have to write these files from scratch. Rimz ships a commented template for each one, and generating them is safe to repeat.
+You never have to write these files from scratch. RimZ ships a commented template for each one, and generating them is safe to repeat.
 
 ```sh
 rimz                       # first start writes any missing config, then opens the room
@@ -91,7 +91,7 @@ Most people run `rimz` inside a project once, or `rimz setup` once, then edit th
 
 **Rerunning is safe: your values are kept.** `rimz setup` and `rimz setup --yes` merge. They write the files that are missing and leave the ones you already tuned alone, skipping any key an older file no longer understands with a warning. `rimz config init` is stricter: it refuses to touch an existing file and tells you to pass `--force`, and `--force` is the deliberate clean reset that overwrites with fresh templates. So the routine refresh (`rimz setup`) never overwrites your work, and the destructive path (`init --force`) is the one you have to ask for by name.
 
-**The template is the field reference.** Every persisted section and default ships as commented TOML with an inline note, so `rimz config init --print` is the authoritative, always-current list of keys and defaults. This page explains the model and the knobs that are easy to misread, and leaves the exhaustive field list to the template. A line left commented keeps following the default that future Rimz versions ship; uncommenting it makes that value this machine's override.
+**The template is the field reference.** Every persisted section and default ships as commented TOML with an inline note, so `rimz config init --print` is the authoritative, always-current list of keys and defaults. This page explains the model and the knobs that are easy to misread, and leaves the exhaustive field list to the template. A line left commented keeps following the default that future RimZ versions ship; uncommenting it makes that value this machine's override.
 
 ## config.toml: room behavior
 
@@ -105,7 +105,7 @@ triggers = ["waiting", "failed"]
 desktop = "auto"
 sound = "bell"
 remind_secs = 60
-title = "Rimz: {{agent}} {{kind}}"
+title = "RimZ: {{agent}} {{kind}}"
 body = "{{task}}"
 command = "ntfy publish rimz"
 
@@ -135,7 +135,7 @@ auto_continue_text = "continue"
 
 Resume covers two moments; the behavior model is [loops.md → Built-in recovery](./loops.md#built-in-recovery), and these are its keys.
 
-On a **rebirth after a reboot or multiplexer crash**, Rimz offers to recover prior agents from the durable record: the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab (empty named channels also reopen on same-boot rebirths). `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches (default 128).
+On a **rebirth after a reboot or multiplexer crash**, RimZ offers to recover prior agents from the durable record: the prompt defaults yes, non-interactive starts recover, and each restored agent starts idle in its worktree tab (empty named channels also reopen on same-boot rebirths). `on_rebirth = false`, `--no-resume`, and `rimz reset` come up without agents; `max` bounds how many agents one birth relaunches (default 128).
 
 While the room is **live**, `auto_continue` (off by default) picks a parked turn back up by typing `auto_continue_text` through the same path as `message --steer`:
 
@@ -152,7 +152,7 @@ The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-re
 smart_compact = "70%"
 ```
 
-`smart_compact` sets the default threshold for compact-first `message` sends, a percentage (`"70%"`) or an occupied-token count (`"120000"` or `"180k"`). When an agent's context window has reached the threshold, Rimz submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
+`smart_compact` sets the default threshold for compact-first `message` sends, a percentage (`"70%"`) or an occupied-token count (`"120000"` or `"180k"`). When an agent's context window has reached the threshold, RimZ submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
 
 ### rtk output compression
 
@@ -161,7 +161,7 @@ smart_compact = "70%"
 rtk = "auto"
 ```
 
-`rtk` controls output compression for Rimz-launched agents that run `cargo xtask`; a direct human `cargo xtask` run stays on plain cargo. `auto` wraps recognized cargo subcommands (`build`, `check`, `test`, `nextest`, `clippy`) through `rtk` when the binary is on the agent's `PATH`; `on` forces the wrapper and prints one warning before falling back to plain cargo when `rtk` is missing; `off` keeps cargo unwrapped. Install `rtk` on the machine for compression to take effect.
+`rtk` controls output compression for RimZ-launched agents that run `cargo xtask`; a direct human `cargo xtask` run stays on plain cargo. `auto` wraps recognized cargo subcommands (`build`, `check`, `test`, `nextest`, `clippy`) through `rtk` when the binary is on the agent's `PATH`; `on` forces the wrapper and prints one warning before falling back to plain cargo when `rtk` is missing; `off` keeps cargo unwrapped. Install `rtk` on the machine for compression to take effect.
 
 ### Remote control
 
@@ -186,9 +186,9 @@ font = "JetBrainsMono Nerd Font Mono"
 style_client = true
 ```
 
-`[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. Rimz always seeds Zellij's permission cache for its own presence plugin's pane-topology permissions; when web is enabled it also seeds the web-sharing permission so runtime browser sharing works without a one-time prompt. When disabled, web commands fail before any room change and tell you to change the config on the machine serving the room.
+`[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. RimZ always seeds Zellij's permission cache for its own presence plugin's pane-topology permissions; when web is enabled it also seeds the web-sharing permission so runtime browser sharing works without a one-time prompt. When disabled, web commands fail before any room change and tell you to change the config on the machine serving the room.
 
-`[web.zellij]` tunes browser access through Zellij's web server. `base_url` is the URL prefix Rimz prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves Zellij under a public host or path. `auto_start` lets `rimz web open` run `zellij web --start --daemonize` when the server is offline; set it to `false` when another supervisor owns the server. `style_client` lets Rimz write a generated Zellij `web_client` block on server start so the browser terminal uses `[theme]`; `font` sets that browser terminal font. These keys are per-machine and outside the project trust hash because they run no command and often name private hostnames or tunnels. Command detail is in [web.md](../reference/cli/web.md), and remote browser tunnels in [remote.md](../internals/remote.md#web-access).
+`[web.zellij]` tunes browser access through Zellij's web server. `base_url` is the URL prefix RimZ prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves Zellij under a public host or path. `auto_start` lets `rimz web open` run `zellij web --start --daemonize` when the server is offline; set it to `false` when another supervisor owns the server. `style_client` lets RimZ write a generated Zellij `web_client` block on server start so the browser terminal uses `[theme]`; `font` sets that browser terminal font. These keys are per-machine and outside the project trust hash because they run no command and often name private hostnames or tunnels. Command detail is in [web.md](../reference/cli/web.md), and remote browser tunnels in [remote.md](../internals/remote.md#web-access).
 
 ### Daemon view
 
@@ -202,7 +202,7 @@ command = "btop"
 cwd = "/var/log"
 ```
 
-`[daemon]` configures the middle column of the `rimzd` daemon view, beside the sidebar and any managed hosts. Unset or empty keeps the built-in held-live stats pane (`rimz stats --refresh --hold`). Listing `[[daemon.pane]]` entries replaces that default, so include `command = "stats"` when you want live stats plus extra panes. The reserved command token `"stats"` expands to the built-in stats argv; any other `command` is split into argv and run directly without a shell. `cwd` is optional: absent runs from the worktree root, an absolute path is used as-is, and a relative path is joined onto the worktree root. A running room reloads command and cwd edits when `config.toml` is saved; adding or removing `[[daemon.pane]]` entries changes the pane count and takes effect on room restart. A pane with an empty or unparseable command is skipped, and if every configured pane is skipped, Rimz falls back to the built-in stats pane.
+`[daemon]` configures the middle column of the `rimzd` daemon view, beside the sidebar and any managed hosts. Unset or empty keeps the built-in held-live stats pane (`rimz stats --refresh --hold`). Listing `[[daemon.pane]]` entries replaces that default, so include `command = "stats"` when you want live stats plus extra panes. The reserved command token `"stats"` expands to the built-in stats argv; any other `command` is split into argv and run directly without a shell. `cwd` is optional: absent runs from the worktree root, an absolute path is used as-is, and a relative path is joined onto the worktree root. A running room reloads command and cwd edits when `config.toml` is saved; adding or removing `[[daemon.pane]]` entries changes the pane count and takes effect on room restart. A pane with an empty or unparseable command is skipped, and if every configured pane is skipped, RimZ falls back to the built-in stats pane.
 
 ### Accounts
 
@@ -222,18 +222,18 @@ dsn         = "https://examplePublicKey@o0.ingest.sentry.io/0"
 environment = "production"
 ```
 
-This section applies only to Rimz builds compiled with the non-default `sentry` feature, and it is deliberately omitted from the generated per-machine template. Set a `dsn` to report Rimz `warn!` and `error!` events and observed agent rate-limit or overload conditions to a Sentry project. With no `dsn`, reporting stays off and Rimz makes no network calls; without the feature, the block is inert. `RIMZ_SENTRY_DSN` and `RIMZ_SENTRY_ENVIRONMENT` override the config for one invocation, and `environment` defaults by build profile (an installed release reports as `production`, a dev or CI build as `development`). The DSN lives per-machine, never in committed project config, so a clone never inherits it; events carry low-cardinality tags (workspace, command, build, fault class, and agent or session when known) with the hostname and personal data withheld. The full telemetry surface is in [security.md](./security.md#off-box-error-reporting) and the mechanics in [diagnostics.md](../internals/diagnostics.md#off-box-error-reporting).
+This section applies only to RimZ builds compiled with the non-default `sentry` feature, and it is deliberately omitted from the generated per-machine template. Set a `dsn` to report RimZ `warn!` and `error!` events and observed agent rate-limit or overload conditions to a Sentry project. With no `dsn`, reporting stays off and RimZ makes no network calls; without the feature, the block is inert. `RIMZ_SENTRY_DSN` and `RIMZ_SENTRY_ENVIRONMENT` override the config for one invocation, and `environment` defaults by build profile (an installed release reports as `production`, a dev or CI build as `development`). The DSN lives per-machine, never in committed project config, so a clone never inherits it; events carry low-cardinality tags (workspace, command, build, fault class, and agent or session when known) with the hostname and personal data withheld. The full telemetry surface is in [security.md](./security.md#off-box-error-reporting) and the mechanics in [diagnostics.md](../internals/diagnostics.md#off-box-error-reporting).
 
 ### Multiplexer room options
 
-Rimz applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without editing your global Zellij or tmux config. The `[zellij]` and `[tmux]` tables tune those settings; `rimz config init --print` lists every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/multiplexers.md).
+RimZ applies room-scoped multiplexer settings when it creates or reattaches a session, so the room behaves the way agents need without editing your global Zellij or tmux config. The `[zellij]` and `[tmux]` tables tune those settings; `rimz config init --print` lists every key with its default, and the per-backend mapping is in [multiplexers.md](../internals/multiplexers.md).
 
 The `[mux]` table selects the default backend after the `--mux <name>` selection, its `--zellij`/`--tmux` shorthands, and active Zellij/tmux environment checks. Leave `default` unset to choose tmux when both backends are installed, or set it to `"zellij"` or `"tmux"` to require that backend. A configured backend that is not installed makes `rimz start` refuse with a fix message.
 
 The two backends differ in how a key takes effect:
 
-- **`[zellij]`** carries a few invariants Rimz always applies (locked mode, click-through with focus-follows-mouse off, no session serialization since Rimz owns rebirth, disabled session metadata, and native focused-pane splitting) plus optional keys (`pane_frames`, `copy_clipboard`, …) that apply only when you set them and otherwise fall through to your `~/.config/zellij/config.kdl`. The sidebar pane is always borderless so its hit-testing stays stable regardless of `pane_frames`.
-- **`[tmux]`** applies its room invariants on every birth, each key carrying a Rimz default you can override. The pane-border keys are optional overrides; unset, they fall through to your `~/.tmux.conf` or tmux defaults just like `pane_frames`. Setting `pane_border_status` makes Rimz own `pane-border-format` too, blanking the sidebar border row and overriding any `~/.tmux.conf` format; unset, your tmux config wins and may title the sidebar. The table spans session, window, and server scope, including clipboard and rich-key handling, because tmux has no per-session form for those.
+- **`[zellij]`** carries a few invariants RimZ always applies (locked mode, click-through with focus-follows-mouse off, no session serialization since RimZ owns rebirth, disabled session metadata, and native focused-pane splitting) plus optional keys (`pane_frames`, `copy_clipboard`, …) that apply only when you set them and otherwise fall through to your `~/.config/zellij/config.kdl`. The sidebar pane is always borderless so its hit-testing stays stable regardless of `pane_frames`.
+- **`[tmux]`** applies its room invariants on every birth, each key carrying a RimZ default you can override. The pane-border keys are optional overrides; unset, they fall through to your `~/.tmux.conf` or tmux defaults just like `pane_frames`. Setting `pane_border_status` makes RimZ own `pane-border-format` too, blanking the sidebar border row and overriding any `~/.tmux.conf` format; unset, your tmux config wins and may title the sidebar. The table spans session, window, and server scope, including clipboard and rich-key handling, because tmux has no per-session form for those.
 
 ```toml
 [mux]
@@ -246,7 +246,7 @@ pane_frames = true          # an optional override; unset, your config.kdl wins
 ## pane_border_status = "top"  # optional override; unset, your ~/.tmux.conf wins
 ```
 
-To configure your *own* Zellij or tmux (the theme, true color, copy-mode, and keybindings Rimz leaves to you, and your sessions outside the room) see the [Zellij](./multiplexer.md#zellij) and [tmux](./multiplexer.md#tmux) baselines.
+To configure your *own* Zellij or tmux (the theme, true color, copy-mode, and keybindings RimZ leaves to you, and your sessions outside the room) see the [Zellij](./multiplexer.md#zellij) and [tmux](./multiplexer.md#tmux) baselines.
 
 ### Sidebar rendering
 
@@ -378,7 +378,7 @@ dir = "../{repo}-worktrees"
 base = "fresh"
 ```
 
-`rimz worktree` and `rimz agents --worktree` create Rimz-owned Git worktrees here. A relative `dir` resolves from the repository root and `{repo}` expands to the root basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Seeding untracked files into a new worktree and symlink-sharing directories are committed, repo-level concerns covered in the [worktrees guide](./worktrees.md); the seeding, symlink, and cleanup mechanics are in [worktrees.md](../internals/harness/worktrees.md).
+`rimz worktree` and `rimz agents --worktree` create RimZ-owned Git worktrees here. A relative `dir` resolves from the repository root and `{repo}` expands to the root basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Seeding untracked files into a new worktree and symlink-sharing directories are committed, repo-level concerns covered in the [worktrees guide](./worktrees.md); the seeding, symlink, and cleanup mechanics are in [worktrees.md](../internals/harness/worktrees.md).
 
 ## loop.toml: scheduled turns
 
@@ -444,7 +444,7 @@ Field notes:
 - Machine tasks carry a `root`: `rimz loop add` writes an absolute path, and a hand-edited `~` or relative root is normalized before room matching, firing, and display.
 - Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, reject `root`, `wake`, and `deadline`, and require `every` or `cron` because one-shots are machine state.
 - Trusted project tasks win over same-named machine tasks and state instances; an untrusted or stale project task stays visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, and removing or renaming a project-owned task edits that file and prints the `rimz trust grant` follow-up.
-- Rimz-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file.
+- RimZ-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` rather than this file.
 
 The full model is in [harness.md → Scheduled turns](../internals/harness/harness.md#scheduled-turns-loop), and the CLI is in [loop.md](../reference/cli/loop.md).
 
@@ -483,7 +483,7 @@ Which providers appear, their order, and their brand styling are theme and disco
 
 ## Project config
 
-The committed `<repo>/.rimz/config.toml` declares the workspace shape a team shares. Rimz computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches, and loads `[tasks]` for `rimz loop`. Use one `agents` shape per project config: `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behavior. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`. Rimz's own [`.rimz/config.toml`](../../.rimz/config.toml) is a living project-task example; its repository sync task assumes push rights on the remote.
+The committed `<repo>/.rimz/config.toml` declares the workspace shape a team shares. RimZ computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches, and loads `[tasks]` for `rimz loop`. Use one `agents` shape per project config: `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behavior. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`. RimZ's own [`.rimz/config.toml`](../../.rimz/config.toml) is a living project-task example; its repository sync task assumes push rights on the remote.
 
 ```toml
 [[agents]]

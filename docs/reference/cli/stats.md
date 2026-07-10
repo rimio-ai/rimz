@@ -1,6 +1,6 @@
 # Stats CLI
 
-`rimz stats` prints your account-global token and dollar history: a heatmap of daily use, totals for a chosen window, and where the spend went by model and by agent. It reads only — it touches no agent, writes nothing to any session, and prints from the cache Rimz already keeps under its own state directory, so it runs inside a room or anywhere else on the machine, in or out of a project. Its one network call is the weekly price-table refresh, which `RIMZ_PRICING_OFFLINE=1` turns off. How every figure is calculated, and how the held dashboard reads, is the [Token Insight guide](../../guide/insight.md).
+`rimz stats` prints your account-global token and dollar history: a heatmap of daily use, totals for a chosen window, and where the spend went by model and by agent. It reads only — it touches no agent, writes nothing to any session, and prints from the cache RimZ already keeps under its own state directory, so it runs inside a room or anywhere else on the machine, in or out of a project. Its one network call is the weekly price-table refresh, which `RIMZ_PRICING_OFFLINE=1` turns off. How every figure is calculated, and how the held dashboard reads, is the [Token Insight guide](../../guide/insight.md).
 
 ```sh
 rimz stats                 # the all-time panel: heatmap, totals, model and agent breakdowns

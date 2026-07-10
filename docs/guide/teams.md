@@ -24,7 +24,7 @@ That is what a team manages: which window holds which part of the problem, and w
 
 ## The forge loop
 
-`forge` is the team Rimz builds itself with, shipped ready to copy under [`examples/teams/forge/`](../../examples/README.md): three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system-prompt file.
+`forge` is the team RimZ builds itself with, shipped ready to copy under [`examples/teams/forge/`](../../examples/README.md): three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system-prompt file.
 
 - **@planner** (Claude, on Fable) talks with you. It explores the code through subagents, drafts directions, confirms the design choices with you, and writes the plan. Planning is where a deep model earns its price: Fable reads the intention behind a question, holds a large design in view, and writes implementation plans precise enough to execute. On a complex problem that conversation alone fills 200k to 300k tokens, and by hand-off the window holds the whole design history: the exploration, the alternatives weighed, your decisions. That context is exactly what good design calls for, and exactly what execution doesn't need. Asking the same window to also type the code would push it toward 400k to 600k tokens, where every turn gets slower and pricier and a big model's reasoning starts to dull.
 - **@coder** (Codex, on Sol, the current GPT 5.6) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. Sol is fast, cheap, and writes robust code once the details are pinned down, and a precise plan makes its context loading precise too: it pulls in just the code the change touches and implements from there. It verifies the plan against the real code as it goes rather than trusting it.
@@ -32,10 +32,10 @@ That is what a team manages: which window holds which part of the problem, and w
 
 By the time implementation starts, two windows understand the problem from different sides: the planner's holds the design history, the coder's holds the code as it stands, and each catches what the other misses. So the roles keep talking. The coder hits a choice the plan left open and takes it to the planner, whose full design context makes it the right desk for the call. Coder and reviewer argue findings with `file:line` evidence, fix or push back, and escalate to the planner when a dispute turns out to be a design call. Three independent windows, each with its own focus, cooperating as one team.
 
-The split reads like it should multiply cost; in practice it divides it. Building Rimz with forge, a complex change that a single Fable window would carry to 400k or 500k tokens and well past $100 lands around $10 of planning, $20 of coding, and $10 of review, and the quality rises as the price falls, because each window spends its whole budget inside its comfort zone.
+The split reads like it should multiply cost; in practice it divides it. Building RimZ with forge, a complex change that a single Fable window would carry to 400k or 500k tokens and well past $100 lands around $10 of planning, $20 of coding, and $10 of review, and the quality rises as the price falls, because each window spends its whole budget inside its comfort zone.
 
 <p align="center">
-  <img src="../rimz-team.png" alt="A Rimz room running forge teams: the coder messages the planner about a gap in the plan, and the planner takes the design call" width="100%">
+  <img src="../rimz-team.png" alt="A RimZ room running forge teams: the coder messages the planner about a gap in the plan, and the planner takes the design call" width="100%">
   <br/><sub>The loop mid-conversation: <code>@coder</code> finds a gap in the plan and messages <code>@planner</code> with <code>file:line</code> evidence; the planner (center pane) verifies before ruling, while the sidebar tracks each forge team as one block.</sub>
 </p>
 
@@ -78,11 +78,11 @@ Start from the forge directory or from scratch: rename the roles, add or drop so
 
 ## Relaunch reconciles instead of duplicating
 
-Point any co-launched layout — a named team or an inline multi-agent spec — at an explicit worktree name, and Rimz reads the state first: a live cohort focuses its tab, a closed cohort with work in progress offers to resume it, and a clean merged tree offers to remove it and start fresh.
+Point any co-launched layout — a named team or an inline multi-agent spec — at an explicit worktree name, and RimZ reads the state first: a live cohort focuses its tab, a closed cohort with work in progress offers to resume it, and a clean merged tree offers to remove it and start fresh.
 
 `rimz agents claude:planner,codex:coder -w feat-once` focuses the existing pair when the same command runs again.
 
-`--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume takes identity, working directory, and channel from Rimz's durable records, so it stands alone: no prompt, model, or channel flags ride with it.
+`--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume takes identity, working directory, and channel from RimZ's durable records, so it stands alone: no prompt, model, or channel flags ride with it.
 
 ```sh
 rimz agents forge --resume         # reopen the newest closed forge team

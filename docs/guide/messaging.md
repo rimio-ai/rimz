@@ -13,7 +13,7 @@ rimz message @all "summarize what changed at the next boundary"    # everyone in
 
 ## Address an agent
 
-An address is `@handle[#channel]`. The handle names who; the optional `#channel` names which group of agents — every worktree gets a channel automatically, and named channels group agents across them ([Channels below](#channels)). Leave it off and Rimz uses the channel your pane is in.
+An address is `@handle[#channel]`. The handle names who; the optional `#channel` names which group of agents — every worktree gets a channel automatically, and named channels group agents across them ([Channels below](#channels)). Leave it off and RimZ uses the channel your pane is in.
 
 A handle resolves through the shortest unique name for a running agent:
 
@@ -67,7 +67,7 @@ A parked message delivers the moment the agent can take it. All of these hold:
 - The turn boundary is open — a successful or idle turn for `--on done`, plus failures for `--on any`.
 - The agent isn't holding a question for you. An open prompt reserves the next input for your answer; `--force` sends past it.
 - It's the agent's turn for this text — messages to one agent deliver oldest first.
-- A live pane exists to receive it, and the agent's reporting hooks are installed, since hooks are how Rimz learns the turn ended.
+- A live pane exists to receive it, and the agent's reporting hooks are installed, since hooks are how RimZ learns the turn ended.
 
 `rimz message show msg_…` names the first unmet condition when a message is still waiting, so you never have to guess why.
 
@@ -104,11 +104,11 @@ A long turn can hit the context limit mid-message. Smart compaction sends `/comp
 rimz message --smart-compact 70% @claude "now write the migration guide"   # compact first if context ≥ 70% full
 ```
 
-Give a percentage of the window (`70%`) or an occupied-token count (`120000` or `180k`). Omit the flag and Rimz uses the `[harness] smart_compact` default from your config — set it once and every message inherits the behavior ([configuration → smart compaction](./configuration.md#smart-compaction), [setup guide](./setup.md)).
+Give a percentage of the window (`70%`) or an occupied-token count (`120000` or `180k`). Omit the flag and RimZ uses the `[harness] smart_compact` default from your config — set it once and every message inherits the behavior ([configuration → smart compaction](./configuration.md#smart-compaction), [setup guide](./setup.md)).
 
 ## Ask and wait for the reply
 
-Add `--wait` to ask one agent or scatter the same question across a fan-out and gather the replies from their existing contexts. Rimz parks or sends each durable prompt normally, waits through every reply turn, and exits after the join settles:
+Add `--wait` to ask one agent or scatter the same question across a fan-out and gather the replies from their existing contexts. RimZ parks or sends each durable prompt normally, waits through every reply turn, and exits after the join settles:
 
 ```sh
 rimz message @coder --wait "did the migration land? one line"       # one bare reply, no deadline
@@ -159,7 +159,7 @@ Read the conversation back — every prompt, answer, and inter-agent message acr
 
 ## Channels
 
-A channel groups the agents working one line of work inside a room: it is the identity the sidebar groups by, the `#channel` an address targets, and the tab name Rimz restores when it reopens the room. Your pane always sits in a channel, so `@codex` scopes to it by default and you only reach across when you name one.
+A channel groups the agents working one line of work inside a room: it is the identity the sidebar groups by, the `#channel` an address targets, and the tab name RimZ restores when it reopens the room. Your pane always sits in a channel, so `@codex` scopes to it by default and you only reach across when you name one.
 
 Channels come from three places:
 

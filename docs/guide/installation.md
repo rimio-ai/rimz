@@ -1,17 +1,17 @@
 # Installation
 
-Rimz is a single binary for macOS and Linux. Pick one install path: [Homebrew](#install-with-homebrew-macos) on macOS, a [prebuilt binary](#install-a-prebuilt-binary) from the releases page, or [Cargo](#install-with-cargo). [Building from source](#build-from-source) is for working on Rimz itself or for platforms the prebuilt paths miss.
+RimZ is a single binary for macOS and Linux. Pick one install path: [Homebrew](#install-with-homebrew-macos) on macOS, a [prebuilt binary](#install-a-prebuilt-binary) from the releases page, or [Cargo](#install-with-cargo). [Building from source](#build-from-source) is for working on RimZ itself or for platforms the prebuilt paths miss.
 
 ## Prerequisites
 
 - **macOS or Linux.**
 - **A terminal multiplexer** — Zellij 0.44 or newer, or tmux 3.5 or newer. One is enough; both are first-class. Distribution packages are often too old; [get a current Zellij or tmux](#get-a-current-zellij-or-tmux) has install recipes for current builds.
-- **The agent CLIs you plan to run** — Claude Code, Codex, Pi, or OpenCode, installed per their own docs. Rimz drives the stock CLIs and bundles none of them.
+- **The agent CLIs you plan to run** — Claude Code, Codex, Pi, or OpenCode, installed per their own docs. RimZ drives the stock CLIs and bundles none of them.
 - **Git** — agent worktrees and the sidebar's git status use it.
 
-Rimz refuses to start against a multiplexer below the minimum supported version, and `rimz doctor` reports the installed version and whether it clears that floor. On tmux, 3.6 or newer gives the best experience ([why](#rimz-doctor-flags-the-multiplexer-as-unsupported)).
+RimZ refuses to start against a multiplexer below the minimum supported version, and `rimz doctor` reports the installed version and whether it clears that floor. On tmux, 3.6 or newer gives the best experience ([why](#rimz-doctor-flags-the-multiplexer-as-unsupported)).
 
-The multiplexer needs no configuration for Rimz: every room sets its own options on session start and reattach, and your existing Zellij or tmux config keeps owning your theme, shell, and keybinds. The room's essential settings are in [set up your machine](./setup.md#configure-your-multiplexer), and a full baseline for your own sessions is [Zellij and tmux baselines](./multiplexer.md).
+The multiplexer needs no configuration for RimZ: every room sets its own options on session start and reattach, and your existing Zellij or tmux config keeps owning your theme, shell, and keybinds. The room's essential settings are in [set up your machine](./setup.md#configure-your-multiplexer), and a full baseline for your own sessions is [Zellij and tmux baselines](./multiplexer.md).
 
 ## Install with Homebrew (macOS)
 
@@ -54,7 +54,7 @@ Three notes on the archives:
 cargo install --locked rimz
 ```
 
-This builds Rimz from crates.io and works on any supported platform, including ARM Linux. It needs the Rust toolchain (install through [rustup](https://rustup.rs)) and a C linker (`build-essential` on Debian/Ubuntu, `xcode-select --install` on macOS). The crate ships Rimz's Zellij plugin as a prebuilt WebAssembly artifact, so no extra Rust targets are involved.
+This builds RimZ from crates.io and works on any supported platform, including ARM Linux. It needs the Rust toolchain (install through [rustup](https://rustup.rs)) and a C linker (`build-essential` on Debian/Ubuntu, `xcode-select --install` on macOS). The crate ships RimZ's Zellij plugin as a prebuilt WebAssembly artifact, so no extra Rust targets are involved.
 
 ## Verify the install
 
@@ -101,7 +101,7 @@ tar -xzf tmux-3.7.tar.gz && cd tmux-3.7
 
 ## Build from source
 
-The source build is for contributing to Rimz or installing on a platform the prebuilt paths miss. Beyond the [prerequisites](#prerequisites) above it needs a C toolchain, Git, and Rust through `rustup`:
+The source build is for contributing to RimZ or installing on a platform the prebuilt paths miss. Beyond the [prerequisites](#prerequisites) above it needs a C toolchain, Git, and Rust through `rustup`:
 
 ```sh
 # Linux — build tools (Debian/Ubuntu shown; use dnf or pacman equivalents)
@@ -125,17 +125,17 @@ cargo xtask install
 
 `cargo xtask install` builds the Zellij presence plugin (a WebAssembly artifact embedded into the binary), builds `rimz`, copies it into `~/.cargo/bin`, and prints the installed version and path. The repo's [rust-toolchain.toml](../../rust-toolchain.toml) pins the toolchain channel, components, and the `wasm32-wasip1` target, and `rustup` applies it on the first build — there is no manual target setup.
 
-To work on Rimz itself (debug builds, tests, the gate stack), continue with [the Rust conventions](../contributing/rust-conventions.md).
+To work on RimZ itself (debug builds, tests, the gate stack), continue with [the Rust conventions](../contributing/rust-conventions.md).
 
 ## Uninstall
 
-Run `rimz uninstall --all` from outside a Rimz room. It removes installed hooks, live rooms, runtime state, durable stores, per-machine config, and the installed binary; project-local `.rimz/` dirs and Rimz-owned worktrees stay in place for manual review. If you installed through Homebrew, also run `brew uninstall rimz`. Flags for partial removal are in the [maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall).
+Run `rimz uninstall --all` from outside a RimZ room. It removes installed hooks, live rooms, runtime state, durable stores, per-machine config, and the installed binary; project-local `.rimz/` dirs and RimZ-owned worktrees stay in place for manual review. If you installed through Homebrew, also run `brew uninstall rimz`. Flags for partial removal are in the [maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall).
 
 ## Troubleshooting
 
 ### `rimz doctor` flags the multiplexer as unsupported
 
-Rimz refuses to start against a multiplexer too old to carry the room options it sets: tmux below 3.5, or Zellij below 0.44. Check the installed version, then [install a current build](#get-a-current-zellij-or-tmux).
+RimZ refuses to start against a multiplexer too old to carry the room options it sets: tmux below 3.5, or Zellij below 0.44. Check the installed version, then [install a current build](#get-a-current-zellij-or-tmux).
 
 ```sh
 tmux -V
@@ -143,7 +143,7 @@ zellij --version
 rimz doctor
 ```
 
-One tmux nuance: on tmux 3.5.x the extended keys Rimz enables (so Shift+Enter and Alt+Enter reach agents as soft newlines) corrupt pasted multiline text; tmux 3.6 fixes the paste too.
+One tmux nuance: on tmux 3.5.x the extended keys RimZ enables (so Shift+Enter and Alt+Enter reach agents as soft newlines) corrupt pasted multiline text; tmux 3.6 fixes the paste too.
 
 ### `GLIBC_x.xx not found` running the prebuilt Linux binary
 

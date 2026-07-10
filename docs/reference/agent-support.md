@@ -1,10 +1,10 @@
 # Agent support
 
-Rimz watches the coding agents you already run — Claude Code, Codex, Pi, and OpenCode — so the question on install is a fair one: *will Rimz see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
+RimZ watches the coding agents you already run — Claude Code, Codex, Pi, and OpenCode — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
 
-The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of Rimz speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts all four the same way. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
+The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts all four the same way. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
-Every integration is declared cell by cell, not assumed. Each adapter states its own coverage, conformance tests cross-check that declaration against the code that backs it, and `rimz coverage` prints the same matrix on demand — so what Rimz claims to read is a thing you verify on your own machine rather than take on faith:
+Every integration is declared cell by cell, not assumed. Each adapter states its own coverage, conformance tests cross-check that declaration against the code that backs it, and `rimz coverage` prints the same matrix on demand — so what RimZ claims to read is a thing you verify on your own machine rather than take on faith:
 
 ```sh
 rimz coverage          # the wired / partial / unsupported grid, per agent, with a reason on every cell
@@ -32,7 +32,7 @@ Every tier delivers the core promise: the agent appears in the sidebar, its bloc
 
 ## The coverage matrix
 
-`rimz coverage` scores each agent against sixteen product concerns. A cell reads **wired** (✓, a native signal carries it directly), **partial** (◐, no native signal, so Rimz reconstructs the behaviour from other state), or **unsupported** (✗, unreachable from the agent's current protocol). A partial cell still shows you a live figure — it trades a native push for a derivation, and the command names the exact gap that derivation leaves.
+`rimz coverage` scores each agent against sixteen product concerns. A cell reads **wired** (✓, a native signal carries it directly), **partial** (◐, no native signal, so RimZ reconstructs the behaviour from other state), or **unsupported** (✗, unreachable from the agent's current protocol). A partial cell still shows you a live figure — it trades a native push for a derivation, and the command names the exact gap that derivation leaves.
 
 | Concern | Claude | Codex | Pi | OpenCode | What it drives |
 | --- | :--: | :--: | :--: | :--: | --- |
@@ -49,7 +49,7 @@ Every tier delivers the core promise: the agent appears in the sidebar, its bloc
 | `usage` | ✓ | ✓ | ✓ | ✓ | context-window fill and token counts |
 | `live$` | ✓ | ✓ | ◐ | ◐ | the live dollar figure on the card |
 | `rich` | ✓ | ✓ | ◐ | ✓ | provider extras — official model labels, account windows |
-| `install` | ✓ | ✓ | ✓ | ✓ | Rimz can install the reporting hooks |
+| `install` | ✓ | ✓ | ✓ | ✓ | RimZ can install the reporting hooks |
 | `spend` | ✓ | ✓ | ✓ | ✓ | account spend for the [token-insight](../guide/insight.md) dashboard |
 | `remote` | ✓ | ✓ | ✗ | ✗ | drive or spawn a session with no local pane |
 
@@ -75,13 +75,13 @@ Mapping detail: [claude.md](../internals/agents/claude.md); upstream protocol: [
 
 ### Codex
 
-Codex is a full integration with one structural difference: since 0.137 its hooks are **daemon-routed**, firing from a shared per-user app-server rather than the pane. Rimz recovers the pane from the in-pane `codex` process at the same working directory, so an in-pane Codex session still renders as a normal, jump-able row ([hooks resolve the room they live in](../internals/agents/model.md#hooks-resolve-the-room-they-live-in)).
+Codex is a full integration with one structural difference: since 0.137 its hooks are **daemon-routed**, firing from a shared per-user app-server rather than the pane. RimZ recovers the pane from the in-pane `codex` process at the same working directory, so an in-pane Codex session still renders as a normal, jump-able row ([hooks resolve the room they live in](../internals/agents/model.md#hooks-resolve-the-room-they-live-in)).
 
 - **Reports:** turn boundaries, per-tool activity, subagents (thread-spawned children since 0.134), plan approvals, permission prompts, and the `notify` channel.
 - **Two derived cells (◐):** `end` — Codex has no per-session end hook, so a closed session leaves by pane liveness and the rollup reaper on the next snapshot tick rather than at the instant of exit; `idle` — reconstructed from turn-end, `request_user_input`, and the stall window, without a native idle-timeout nudge.
 - **Three unsupported cells (✗):** `plan` — no plan-approval gate, since `update_plan` is non-blocking (`codex-plan` keeps the default posture); `answer` — no mapped prompt choreography; `bg` — no background-task parking.
 - **Live context:** the rollout `.jsonl` tail is the native live source for tokens, cost, and effort, read under a stat gate so an unchanged file costs nothing; the read-only app-server methods supply account and rate-limit context. The context window comes from the rollout's `model_context_window`.
-- **Turn-death handling:** Codex can end a turn on a provider limit with no error record and no `Stop` hook. Rimz confirms these from a bounded pane capture plus the account budget, so a paused Codex reads as `⏸` rather than a false success or a stall ([turn-completion and turn-death markers](../internals/agents/codex.md#turn-completion-marker)); `rimz agents refresh @codex` re-runs the check on demand.
+- **Turn-death handling:** Codex can end a turn on a provider limit with no error record and no `Stop` hook. RimZ confirms these from a bounded pane capture plus the account budget, so a paused Codex reads as `⏸` rather than a false success or a stall ([turn-completion and turn-death markers](../internals/agents/codex.md#turn-completion-marker)); `rimz agents refresh @codex` re-runs the check on demand.
 - **Resume and fork:** `codex resume` reopens a session; `codex fork <id>` branches one for `rimz agents fork`.
 - **Permission modes:** `codex-{auto,ask,plan,yolo,ping}` as launch cells; on the command line `--yolo` passes `--dangerously-bypass-approvals-and-sandbox`. Effort levels: `minimal|low|medium|high|xhigh`.
 - **Install target:** `~/.codex/config.toml`.
@@ -90,12 +90,12 @@ Mapping detail: [codex.md](../internals/agents/codex.md); upstream protocol: [co
 
 ### Pi
 
-Pi runs in-process in its pane and reports through a Rimz-authored **extension**, which stamps the context gauge directly onto each hook envelope — so Pi carries live context on the lifecycle channel with no transcript tail or separate transport.
+Pi runs in-process in its pane and reports through a RimZ-authored **extension**, which stamps the context gauge directly onto each hook envelope — so Pi carries live context on the lifecycle channel with no transcript tail or separate transport.
 
 - **Reports:** turn boundaries, per-tool activity, and context usage on every envelope.
 - **Three derived cells (◐):** `idle` — turn-end plus the stall window, without a native idle-timeout nudge; `live$` — the extension pushes a cumulative-cost figure and a turn-end walk sums the session transcript spend, so the in-process accumulator is best-effort and resets on resume while the turn-end walk reconciles to the authoritative session total; `rich` — the extension envelope carries model, effort, cost, and account windows, but rides the lifecycle channel with no out-of-band transport refreshing it between turns, unlike a statusline or app-server poll.
 - **Six unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (no native question tool), `answer` (no mapped prompt choreography), `sub` (no subagent hook surface), `bg` (no background-task parking), and `remote` (no remote-control surface).
-- **Blocking asks:** Pi has no native prompt UI, so its adapter declares `native_ask_ui` off. A blocking hook returns the neutral no-op — which for Pi *is* the allow — and Rimz records no waiting row, because there is no native prompt a `?` row could route you to. Pi's neutral semantics differ from Claude's and Codex's, so verify this per agent.
+- **Blocking asks:** Pi has no native prompt UI, so its adapter declares `native_ask_ui` off. A blocking hook returns the neutral no-op — which for Pi *is* the allow — and RimZ records no waiting row, because there is no native prompt a `?` row could route you to. Pi's neutral semantics differ from Claude's and Codex's, so verify this per agent.
 - **Resume and fork:** `pi --session` reopens a session; `pi --fork <id>` branches one for `rimz agents fork`.
 - **Permission modes:** `pi-{ask,plan}` as launch cells. Effort levels: `off|minimal|low|medium|high|xhigh`.
 - **Account:** read from `~/.pi/agent/auth.json` — OAuth is a metered subscription, an API key is unmetered.
@@ -105,7 +105,7 @@ Mapping detail: [pi.md](../internals/agents/pi.md); upstream protocol: [pi-refer
 
 ### OpenCode
 
-OpenCode reports through a Rimz-authored **plugin** that maintains its context gauge from the agent's `message.updated` events and stamps the latest usage split, plus the model's context window from OpenCode's own catalog, onto each lifecycle envelope. Interactive OpenCode runs in-process in its pane and binds standalone.
+OpenCode reports through a RimZ-authored **plugin** that maintains its context gauge from the agent's `message.updated` events and stamps the latest usage split, plus the model's context window from OpenCode's own catalog, onto each lifecycle envelope. Interactive OpenCode runs in-process in its pane and binds standalone.
 
 - **Reports:** turn boundaries, per-tool activity, subagents, and context usage per envelope.
 - **Three derived cells (◐):** `end` — `dispose` is server-scoped and carries no session id, so the card leaves on pane liveness and the reaper rather than at exit; `idle` — turn-end, `permission.ask`, and the stall window, without a native idle-timeout nudge; `live$` — summed from the session store (SQLite) at turn end, a reconstructed figure rather than a provider-pushed realtime one.
@@ -120,7 +120,7 @@ Mapping detail: [opencode.md](../internals/agents/opencode.md); upstream protoco
 
 ## The lifecycle hook surface
 
-Under the concern matrix sits the raw event surface: the eleven lifecycle signals Rimz folds into every agent's state machine, and the native event each agent fires for each one. `rimz coverage` prints this as its second grid, the hooks matrix; here it is with the native event names in place.
+Under the concern matrix sits the raw event surface: the eleven lifecycle signals RimZ folds into every agent's state machine, and the native event each agent fires for each one. `rimz coverage` prints this as its second grid, the hooks matrix; here it is with the native event names in place.
 
 | Signal | Claude | Codex | Pi | OpenCode |
 | --- | --- | --- | --- | --- |
@@ -136,21 +136,21 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | `ended` | `SessionEnd` | ◐ derived | `session_shutdown` | ◐ derived |
 | `lost` | ◐ derived | ◐ derived | ◐ derived | ◐ derived |
 
-`lost` — an agent's mux-session dying out from under it — has no native event in any of the four, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. Rimz derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
+`lost` — an agent's mux-session dying out from under it — has no native event in any of the four, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
 ## Versions
 
-Rimz tracks each agent's own release surface, and behaviour can shift with the agent's version — Codex, for example, moved to daemon-routed hooks at 0.137 and adjusted turn-completion signals through the 0.14x line. Rimz adapts to these at runtime rather than pinning a hard floor in this page, and `rimz doctor` reports any version drift it detects per agent after an upgrade ([troubleshooting](../guide/troubleshooting.md)). For the exact event surface a given agent version exposes, the authority is that agent's [adapter doc](../internals/agents/model.md) and [external reference](../externals/agent-adapter/claude-reference.md).
+RimZ tracks each agent's own release surface, and behaviour can shift with the agent's version — Codex, for example, moved to daemon-routed hooks at 0.137 and adjusted turn-completion signals through the 0.14x line. RimZ adapts to these at runtime rather than pinning a hard floor in this page, and `rimz doctor` reports any version drift it detects per agent after an upgrade ([troubleshooting](../guide/troubleshooting.md)). For the exact event surface a given agent version exposes, the authority is that agent's [adapter doc](../internals/agents/model.md) and [external reference](../externals/agent-adapter/claude-reference.md).
 
 ## How adapters work
 
-Adding an agent is implementing one trait plus a descriptor and a single registry line; nothing else in Rimz changes, because status, ranking, liveness, cost, and blocking-ask routing all flow from the agent-agnostic observation the adapter emits. Two invariants keep the seam honest: the adapter only classifies and normalizes, leaving every store write to the hook runner, and downstream code reads only that normalized observation. The full boundary, the two hook channels, and the install mechanics are in [the agent model](../internals/agents/model.md#the-adapter-boundary).
+Adding an agent is implementing one trait plus a descriptor and a single registry line; nothing else in RimZ changes, because status, ranking, liveness, cost, and blocking-ask routing all flow from the agent-agnostic observation the adapter emits. Two invariants keep the seam honest: the adapter only classifies and normalizes, leaving every store write to the hook runner, and downstream code reads only that normalized observation. The full boundary, the two hook channels, and the install mechanics are in [the agent model](../internals/agents/model.md#the-adapter-boundary).
 
 Installing an agent's hooks edits that agent's own config — the install target listed for each agent above — so it is a visible, consented step. `rimz start` offers it on first run with a diff preview, `rimz hooks install --dry-run` prints the patch and writes nothing, and `rimz hooks uninstall` reverses it exactly ([hooks and trust reference](./cli/hooks-trust.md)). The install is additive, so your existing hooks stay. An agent run before its hooks are installed simply reports nothing — it stays invisible in the sidebar rather than half-working, and one `rimz hooks install` wires it in.
 
 ## Agents not yet supported
 
-An agent Rimz doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Cursor, Gemini, or Copilot land the same way the four here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
+An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Cursor, Gemini, or Copilot land the same way the four here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
 
 ## See also
 

@@ -11,7 +11,7 @@ Four self-contained modules, so you adopt what you want by adding `source-file` 
 | [`agents.conf`](./tmux/agents.conf) | the behaviors agent TUIs rely on: true color, no escape lag, long scrollback, focus events, passthrough, OSC52 clipboard, Shift+Enter/Alt+Enter soft newlines |
 | [`quality-of-life.conf`](./tmux/quality-of-life.conf) | vi copy-mode with a working first-drag yank, stable window names, current-directory splits along the pane's longer edge |
 | [`zellij-keys.conf`](./tmux/zellij-keys.conf) | opt-in no-prefix Alt chords matching Zellij's locked mode; shadows the shell's Alt keys |
-| [`theme-tokyonight.conf`](./tmux/theme-tokyonight.conf) | titled pane frames and a Powerline status bar in Rimz's default TokyoNight Night palette; assumes a Nerd Font |
+| [`theme-tokyonight.conf`](./tmux/theme-tokyonight.conf) | titled pane frames and a Powerline status bar in RimZ's default TokyoNight Night palette; assumes a Nerd Font |
 
 Take everything with one command (works with or without an existing config), then reload:
 
@@ -20,7 +20,7 @@ printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-ke
 tmux source-file ~/.tmux.conf
 ```
 
-`agents.conf` needs tmux 3.5 or newer — the same floor Rimz enforces. On a machine with an older distro tmux, upgrade first ([installation](../docs/guide/installation.md#prerequisites)).
+`agents.conf` needs tmux 3.5 or newer — the same floor RimZ enforces. On a machine with an older distro tmux, upgrade first ([installation](../docs/guide/installation.md#prerequisites)).
 
 ## Zellij — `zellij/`
 
@@ -33,7 +33,7 @@ zellij setup --check
 
 ## Forge agent team — `teams/forge/`
 
-[`teams/forge`](./teams/forge/) is one Rimz drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles and the team, and the three Markdown files are the role prompts.
+[`teams/forge`](./teams/forge/) is one RimZ drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles and the team, and the three Markdown files are the role prompts.
 
 Install the fragment by copying it into the agents home:
 
@@ -48,7 +48,7 @@ Launch with `rimz agents forge`; the launch grammar lives in the [agents CLI ref
 
 The `claude` and `codex` CLIs must be on `PATH`. The profiles in `team.toml` pin models (`fable`, `opus`) and Codex feature flags; adjust them there to taste. The coder's PR step expects a `pr` skill from the author's private skills collection and falls back to plain `gh` or `tea` without it.
 
-Try the team before installing by pointing Rimz at this checkout:
+Try the team before installing by pointing RimZ at this checkout:
 
 ```sh
 RIMZ_AGENTS_HOME="$PWD/examples" rimz agents forge

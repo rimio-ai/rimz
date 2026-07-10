@@ -61,7 +61,7 @@ Structured input is one object per question:
 ]
 ```
 
-Rimz validates every answer before sending a keystroke. An ask-id target also acts as a compare-and-swap token: a prompt answered or superseded in the pane is stale and receives no input. Unsupported permission and plan actions exit `3` before pane delivery, list the valid remote option, and direct you to the Claude pane.
+RimZ validates every answer before sending a keystroke. An ask-id target also acts as a compare-and-swap token: a prompt answered or superseded in the pane is stale and receives no input. Unsupported permission and plan actions exit `3` before pane delivery, list the valid remote option, and direct you to the Claude pane.
 
 Confirmation waits 30 seconds by default. `--wait 5m` changes the deadline; `--no-wait` returns after the pane write. Exit `0` means confirmed or intentionally not waited, `2` means the ask was stale or its pane unavailable, `3` means validation or adapter capability failed, and `4` means the agent did not confirm before the deadline.
 

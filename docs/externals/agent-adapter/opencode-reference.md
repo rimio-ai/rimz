@@ -1,8 +1,8 @@
 # OpenCode protocol reference
 
-> This doc mirrors OpenCode ahead of its adapter, the path [pi-reference.md](./pi-reference.md) proved. The mapping onto Rimz's internal types lands beside it with the adapter, under `docs/internals/agents/`: the agent-agnostic boundary, lifecycle, and context read-path is [model.md](../../internals/agents/model.md), and the account, balance, and spend model is [providers.md](../../internals/agents/providers.md). [Mapping feasibility](#mapping-feasibility) below is that work's starting brief.
+> This doc mirrors OpenCode ahead of its adapter, the path [pi-reference.md](./pi-reference.md) proved. The mapping onto RimZ's internal types lands beside it with the adapter, under `docs/internals/agents/`: the agent-agnostic boundary, lifecycle, and context read-path is [model.md](../../internals/agents/model.md), and the account, balance, and spend model is [providers.md](../../internals/agents/providers.md). [Mapping feasibility](#mapping-feasibility) below is that work's starting brief.
 
-This is the single home for the **OpenCode upstream protocol surface** a Rimz adapter binds to — the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the opencode.ai docs and the published TypeScript wire types, pinned to the source URLs below; the storage, auth, event, and CLI shapes are additionally verified against an installed `opencode` 1.17.9 binary and 1.17.7 SDK/plugin packages (2026-06-25).
+This is the single home for the **OpenCode upstream protocol surface** a RimZ adapter binds to — the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the opencode.ai docs and the published TypeScript wire types, pinned to the source URLs below; the storage, auth, event, and CLI shapes are additionally verified against an installed `opencode` 1.17.9 binary and 1.17.7 SDK/plugin packages (2026-06-25).
 
 Coverage is **depth on what an adapter would wire, breadth as an index**: the hooks, events, store fields, and decision returns an adapter would parse or emit are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
 
@@ -27,9 +27,9 @@ Re-fetch these pages to refresh this mirror. The docs publish unversioned and Op
 
 ## Integration surface — in-process server plugins
 
-OpenCode is client/server even on one machine: every `opencode` TUI launch embeds its own HTTP server on `127.0.0.1` (`--port` defaults to **0** — a random free port per launch) and drives it over HTTP plus an SSE event stream. The integration surface is **TypeScript plugins loaded in-process by that server** (Bun runtime; the published module shape is `PluginModule = { id?, server: Plugin, tui?: never }` — an adapter sets only `server`) — OpenCode ships no out-of-process hook protocol and no statusline. A Rimz adapter is therefore a Rimz-authored plugin that subscribes to bus events and shells out to the `rimz` CLI, holding a permission open from inside the `permission.ask` hook when a decision must block.
+OpenCode is client/server even on one machine: every `opencode` TUI launch embeds its own HTTP server on `127.0.0.1` (`--port` defaults to **0** — a random free port per launch) and drives it over HTTP plus an SSE event stream. The integration surface is **TypeScript plugins loaded in-process by that server** (Bun runtime; the published module shape is `PluginModule = { id?, server: Plugin, tui?: never }` — an adapter sets only `server`) — OpenCode ships no out-of-process hook protocol and no statusline. A RimZ adapter is therefore a RimZ-authored plugin that subscribes to bus events and shells out to the `rimz` CLI, holding a permission open from inside the `permission.ask` hook when a decision must block.
 
-> **Divergence — the decision channel inverts, as with Pi.** Claude and Codex run Rimz as a child and read its stdout as the decision. OpenCode runs Rimz's *plugin* in-process; the plugin runs `rimz` as *its* child, reads the answer from the child's stdout, and applies it through the hook's `output.status`. Hook-stdout discipline becomes child-stdout discipline, and the sync-install invariant has no on-disk shape to enforce — blocking is awaiting inside the handler.
+> **Divergence — the decision channel inverts, as with Pi.** Claude and Codex run RimZ as a child and read its stdout as the decision. OpenCode runs RimZ's *plugin* in-process; the plugin runs `rimz` as *its* child, reads the answer from the child's stdout, and applies it through the hook's `output.status`. Hook-stdout discipline becomes child-stdout discipline, and the sync-install invariant has no on-disk shape to enforce — blocking is awaiting inside the handler.
 
 Discovery:
 
@@ -40,7 +40,7 @@ Discovery:
 | `opencode.json` — `plugin: ["npm:pkg", "file:./path.ts", ["spec", {options}]]` | configured; npm specifiers auto-install via Bun into `~/.cache/opencode/node_modules` |
 | `opencode plugin <module>` | CLI install — writes the specifier into config |
 
-Install for Rimz means **one Rimz-owned file** written to `~/.config/opencode/plugin/` — auto-discovered at the next launch, idempotent by path, removed by deleting the file. The file executes arbitrary code with the user's permissions inside every OpenCode server, so it belongs in the executable-surface trust hash like every hook config ([trust.md](../../internals/harness/trust.md)). `--pure` runs without external plugins — the integration-blind mode, same posture as an agent run before `rimz hooks install`.
+Install for RimZ means **one RimZ-owned file** written to `~/.config/opencode/plugin/` — auto-discovered at the next launch, idempotent by path, removed by deleting the file. The file executes arbitrary code with the user's permissions inside every OpenCode server, so it belongs in the executable-surface trust hash like every hook config ([trust.md](../../internals/harness/trust.md)). `--pure` runs without external plugins — the integration-blind mode, same posture as an agent run before `rimz hooks install`.
 
 A plugin module exports an async factory receiving `PluginInput` and returning its `Hooks`; `node:` built-ins and npm dependencies are importable.
 
@@ -152,7 +152,7 @@ type Permission = {
 
 Setting `output.status` to `allow` or `deny` short-circuits the dialog; leaving `ask` falls through to the native TUI dialog, which emits `permission.updated` (pending) and `permission.replied` (answered: `once` / `always` / `reject`). The native reply also rides HTTP: `POST /session/:id/permissions/:permissionID`.
 
-**The neutral path is `ask`.** Rimz records the waiting observation and returns `ask`, so OpenCode's own dialog asks the human. That makes the fallback a first-class upstream value rather than an empty-stdout convention.
+**The neutral path is `ask`.** RimZ records the waiting observation and returns `ask`, so OpenCode's own dialog asks the human. That makes the fallback a first-class upstream value rather than an empty-stdout convention.
 
 **Asks are config-dependent.** Permission defaults are permissive — most tools run without asking. The typed config keys are `edit`, `bash` (a single action or a pattern → action map, last match wins), `webfetch`, `doom_loop`, and `external_directory`; `doom_loop` and `external_directory` default to `ask`, `.env` reads are denied by default, and everything else defaults to `allow`. A default-config OpenCode therefore fires few native asks, and the blocking channel engages only as far as the user's `permission` config asks — closer to Claude's `bypassPermissions` than to its default mode.
 
@@ -165,8 +165,8 @@ Setting `output.status` to `allow` or `deny` short-circuits the dialog; leaving 
 Each TUI launch owns a private server; there is no fixed port and no published discovery surface (no lockfile, no well-known socket) — the one in-process place the port surfaces is the plugin's `serverUrl`. Detached modes exist: `opencode serve` (`--port`, `--hostname`, `--mdns`, `--cors`), `opencode web`, and `opencode attach <url>` to point a TUI at a running server. Optional HTTP basic auth rides `OPENCODE_SERVER_PASSWORD` (with `OPENCODE_SERVER_USERNAME`, default `opencode`).
 
 - `GET /global/health` → `{"healthy":true,"version":"1.17.9"}` (live-verified) — the version probe.
-- `GET /config/providers` → provider catalog, including `providers[].models` and display `name`; Rimz uses it read-only to map the lifecycle model hint to `model_display_name`.
-- `GET /session/:id` → session metadata, including `title`, `version`, `model`, token/cost aggregates, and timestamps; Rimz uses it read-only for the session title.
+- `GET /config/providers` → provider catalog, including `providers[].models` and display `name`; RimZ uses it read-only to map the lifecycle model hint to `model_display_name`.
+- `GET /session/:id` → session metadata, including `title`, `version`, `model`, token/cost aggregates, and timestamps; RimZ uses it read-only for the session title.
 - `GET /event` — the SSE stream of the bus events above.
 - `GET /doc` — the OpenAPI 3.1 spec the SDK is generated from; the version-exact method catalog.
 - `GET /session`, `GET /session/:id/message`, `POST /session/:id/message`, `POST /session/:id/permissions/:permissionID`, `GET /config`, `GET /find/*`, … — the typed client is `createOpencodeClient` from `@opencode-ai/sdk`.
@@ -253,7 +253,7 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 ## Mapping feasibility
 
-The adapter verdict has landed in [opencode.md](../../internals/agents/opencode.md): OpenCode is wired as a first-class `AgentAdapter` through one Rimz-authored in-process plugin plus a read-only SQLite spend reader. Unlike Pi, `permission.ask` gives Rimz a native prompt to route because `ask` is an upstream fallback. Like Pi, the integration is one whole-file plugin that runs Rimz as its child.
+The adapter verdict has landed in [opencode.md](../../internals/agents/opencode.md): OpenCode is wired as a first-class `AgentAdapter` through one RimZ-authored in-process plugin plus a read-only SQLite spend reader. Unlike Pi, `permission.ask` gives RimZ a native prompt to route because `ask` is an upstream fallback. Like Pi, the integration is one whole-file plugin that runs RimZ as its child.
 
 | Native surface | Channel | Landed mapping |
 | --- | --- | --- |
@@ -265,7 +265,7 @@ The adapter verdict has landed in [opencode.md](../../internals/agents/opencode.
 | `session.created` (with `parentID`) / child `session.idle` or `session.error` | lifecycle | `SubagentStarted` / `SubagentStopped` — the child session id keys the child, `parentID` links the parent |
 | `experimental.session.compacting` → `session.compacted` | lifecycle | `Compacting` — a leading signal like Claude's `PreCompact`, cleared by the trailing event |
 | `dispose` | — | not forwarded — server-scoped and carries no session id; pane liveness and the rollup reaper are the session-end posture |
-| `permission.ask` | awaiting-user | `waiting` — Rimz records the waiting observation and returns `ask`; OpenCode's native prompt remains responsible for the answer |
+| `permission.ask` | awaiting-user | `waiting` — RimZ records the waiting observation and returns `ask`; OpenCode's native prompt remains responsible for the answer |
 
 - **Identity.** The plugin runs inside the server the pane's TUI embeds, so an interactive OpenCode is standalone and stampable — the in-process environment carries the pane id, and pid capture rides the spawned `rimz` child. A session exists only once created (typically at the first prompt), so OpenCode is a `registers_lazily` candidate — the Codex pattern: idle-row synthesis before the first turn, cwd-bind from `Session.directory` ([agent.md → The instance lifecycle](../../internals/agents/model.md#the-instance-lifecycle)). A session served by a detached `opencode serve`, reached over `attach`, or driven from the web UI is daemon-routed/remote — the documented remote-agent gap.
 - **Context gauge.** Every assistant message carries the full token split — in-process on `message.updated`, at rest in SQLite — so the gauge rides lifecycle events with no transcript tail. The plugin resolves the context-window divisor for every model family from OpenCode's own model catalog as the model's max input tokens (`Model.limit.input`, falling back to the total `Model.limit.context`; read once per server launch via the in-process `client.config.providers()`), keyed `${providerID}/${modelID}` and stamped onto each lifecycle envelope; a Claude-family local table is the offline fallback when the catalog read is unavailable.

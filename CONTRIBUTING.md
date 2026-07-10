@@ -1,6 +1,6 @@
 # Contributing
 
-Rimz uses the Rust toolchain pinned in `rust-toolchain.toml`; install from source with:
+RimZ uses the Rust toolchain pinned in `rust-toolchain.toml`; install from source with:
 
 ```sh
 cargo xtask install

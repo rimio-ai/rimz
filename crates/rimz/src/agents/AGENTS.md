@@ -9,7 +9,7 @@ Topic detail lives in the internals leaves the root map describes — [model.md]
 - Shared, kind-agnostic code sits at the top level — the [`AgentAdapter`](./mod.rs) trait, [`state.rs`](./state.rs) rollup types, descriptor/registry/lifecycle/context companions, the wire enums, the account probe contract, [`spending/`](./spending/mod.rs) aggregation, the [`pricing/`](./pricing/mod.rs) tables, and helper modules for payloads ([`payload.rs`](./payload.rs)), identity ([`identity.rs`](./identity.rs)), location ([`locate.rs`](./locate.rs)), and whole-file managed sources ([`managed_source.rs`](./managed_source.rs)); per-file detail lives in the `//!` headers.
 - Each agent kind is a sibling directory ([`claude/`](./claude/mod.rs), [`codex/`](./codex/mod.rs), [`pi/`](./pi/mod.rs), [`opencode/`](./opencode/mod.rs)) owning its integration, typed payloads, rich-context transport, account and OAuth-usage probes, and `spend.rs`.
 - `spend.rs` is the read-only, sidebar-safe full-history cost parser; a CI grep keeps every `spend.rs` free of store-write, run-wake, and broker imports.
-- Pi and OpenCode own their wire: both integrate through Rimz-authored in-process TypeScript installed whole-file — [`pi/extension.ts`](./pi/extension.ts) and [`opencode/plugin.ts`](./opencode/plugin.ts) — so the payload schema is Rimz's by design and drift is a Rimz bug, never an upstream one.
+- Pi and OpenCode own their wire: both integrate through RimZ-authored in-process TypeScript installed whole-file — [`pi/extension.ts`](./pi/extension.ts) and [`opencode/plugin.ts`](./opencode/plugin.ts) — so the payload schema is RimZ's by design and drift is a RimZ bug, never an upstream one.
 
 ## The boundary
 
@@ -22,7 +22,7 @@ An adapter is the *single* place a native agent protocol is normalized. It owns 
 
 - **Blocking ask hooks are sync.** Installing one as async is a hard install error — the source of truth for "must block" is the adapter's `BLOCKING_EVENTS`-style constant, never the on-disk config.
 - **Neutral is empty stdout.** Blocking asks return the agent-native no-op; diagnostics stay off stdout. The fresh-stdio rule for helper children (a wrapped statusline, a notifier) is enforced by the no-`Stdio::inherit` CI grep.
-- **Set installed hook timeouts from upstream deadlines**, leaving margin for Rimz to finish store writes before the agent kills the hook.
+- **Set installed hook timeouts from upstream deadlines**, leaving margin for RimZ to finish store writes before the agent kills the hook.
 - **Install is idempotent.** Reclaim every rimz-owned entry by the stable command substring before rewriting the canonical set; leave user-authored entries untouched.
 
 ## Tests

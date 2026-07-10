@@ -1,17 +1,17 @@
 # Agents
 
-Rimz watches the agents you already run. Type `claude` into any pane and it joins the room; `rimz agents` earns its keystrokes later, when you want an agent tuned for one job or several agents launched in one line. This page covers both ways in, and the commands that read and drive the fleet once it is working.
+RimZ watches the agents you already run. Type `claude` into any pane and it joins the room; `rimz agents` earns its keystrokes later, when you want an agent tuned for one job or several agents launched in one line. This page covers both ways in, and the commands that read and drive the fleet once it is working.
 
 ## Run the CLI you already run
 
-Type the agent's own command in any pane, exactly as you did before Rimz:
+Type the agent's own command in any pane, exactly as you did before RimZ:
 
 ```sh
 claude          # the stock Claude CLI
 codex           # the stock Codex CLI
 ```
 
-The agent appears in the sidebar, reporting from its first line. No Rimz command sits in the path: the CLI runs with your flags, your config, your session files, and the reporting hooks you approved when you [installed hooks](./setup.md#install-agent-hooks) tell Rimz what it does — status, task, context health, live cost. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents Rimz drives, and what each integration reports, is [agent support](../reference/agent-support.md).
+The agent appears in the sidebar, reporting from its first line. No `rimz` command sits in the path: the CLI runs with your flags, your config, your session files, and the reporting hooks you approved when you [installed hooks](./setup.md#install-agent-hooks) tell RimZ what it does — status, task, context health, live cost. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents RimZ drives, and what each integration reports, is [agent support](../reference/agent-support.md).
 
 For a single agent in the pane you are standing in, this is the whole story. Everything below is for the sessions where it isn't.
 
@@ -35,7 +35,7 @@ rimz agents claude,codex      # two stock agents, side by side in one line
 rimz agents forge -w feat-x   # a whole team, isolated in its own worktree
 ```
 
-The wrapper stays thin. `rimz agents planner` does exactly two things on your machine: it renders the profile into the stock CLI's own flags (the `claude --model opus …` line above, nothing you couldn't type yourself), and it runs that command in your Zellij or tmux — in the pane you are standing in for a single agent, in a fresh tab for a layout or worktree — under a small Rimz launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI; its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. Closing the pane or `rimz agents stop @planner` ends it the same way Ctrl+C would.
+The wrapper stays thin. `rimz agents planner` does exactly two things on your machine: it renders the profile into the stock CLI's own flags (the `claude --model opus …` line above, nothing you couldn't type yourself), and it runs that command in your Zellij or tmux — in the pane you are standing in for a single agent, in a fresh tab for a layout or worktree — under a small RimZ launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI; its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. Closing the pane or `rimz agents stop @planner` ends it the same way Ctrl+C would.
 
 Beyond the preset, the launcher carries three habits that build on it, each with its own guide:
 
@@ -73,7 +73,7 @@ Each field renders into the base CLI's own flag, so a profile can pin anything t
 | `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
 | `args` | raw flags handed to the stock CLI | verbatim |
 
-The system prompt and `args` are what make a profile targeted. There is no Rimz-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--allowed-tools` for Claude, `--sandbox` for Codex — and a narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
+The system prompt and `args` are what make a profile targeted. There is no RimZ-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--allowed-tools` for Claude, `--sandbox` for Codex — and a narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
 
 When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
 
@@ -87,7 +87,7 @@ Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi t
 
 ## Cap what an agent can spend
 
-`--budget 5` parks an agent when its session cost reaches $5; `--budget 20/day` measures from the start of each local calendar day and resumes through auto-continue at the next day boundary. Cost arrives after provider responses, so the last tool call can overshoot slightly before Rimz sends Esc. Inspect or raise a cap with `rimz agents budget @coder`, `rimz agents budget @coder 10`, or `rimz agents budget @coder +5`; `clear` removes it. A delivered human message waives an absolute cap for the one turn that message starts.
+`--budget 5` parks an agent when its session cost reaches $5; `--budget 20/day` measures from the start of each local calendar day and resumes through auto-continue at the next day boundary. Cost arrives after provider responses, so the last tool call can overshoot slightly before RimZ sends Esc. Inspect or raise a cap with `rimz agents budget @coder`, `rimz agents budget @coder 10`, or `rimz agents budget @coder +5`; `clear` removes it. A delivered human message waives an absolute cap for the one turn that message starts.
 
 ## Set a permission mode
 
@@ -129,7 +129,7 @@ Add `-w` and the whole layout lands in an isolated Git worktree, the pattern for
 
 ## Handles, in brief
 
-Every agent answers to a handle: `@claude` names a kind, `@planner` names a profile or an inline `cell:planner` role, and `forge.reviewer` names one role of a team. Rimz gives each bare launch a stable pet name too (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes the handle to one channel — every worktree gets one, and named channels and teams have their own — defaulting to the one you are standing in.
+Every agent answers to a handle: `@claude` names a kind, `@planner` names a profile or an inline `cell:planner` role, and `forge.reviewer` names one role of a team. RimZ gives each bare launch a stable pet name too (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes the handle to one channel — every worktree gets one, and named channels and teams have their own — defaulting to the one you are standing in.
 
 ```sh
 rimz agents focus @claude-2#feat-a   # jump to a specific agent's pane
@@ -257,7 +257,7 @@ rimz agents stop @claude --all  # close every Claude in scope
 
 **Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current `agents.toml`, so edits take effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the allocated replacement handle instead of hiding a possible rename.
 
-**Fork an agent to try another approach.** `rimz agents fork @coder` opens the full conversation under a new provider-assigned session id beside the source agent in the same worktree, leaving the original untouched and preserving its permission mode. Rimz gives the fork a fresh pet name; use `rimz agents fork @coder --name twin` to pin `@twin` when you want both approaches to have memorable handles.
+**Fork an agent to try another approach.** `rimz agents fork @coder` opens the full conversation under a new provider-assigned session id beside the source agent in the same worktree, leaving the original untouched and preserving its permission mode. RimZ gives the fork a fresh pet name; use `rimz agents fork @coder --name twin` to pin `@twin` when you want both approaches to have memorable handles.
 
 Two everyday tasks have their own guides, with the depth this page leaves out:
 
@@ -270,7 +270,7 @@ The complete `rimz agents` surface, every verb and flag, is the [agent-control r
 
 Claude Code and Codex each ship **remote control** (`claude remote-control` and `codex remote-control`), which links a machine to your account so the provider's official mobile app can see and drive the sessions on it. The feature is entirely the provider's; what the room adds is the remembering: the bridge only helps if it is already up when an agent stops to ask, on every machine you work from, and starting infrastructure with the room is exactly a room's job.
 
-Two toggles in your per-machine `config.toml` opt in. Both are off by default; Rimz links your account and starts a remote-control host only after you switch it on:
+Two toggles in your per-machine `config.toml` opt in. Both are off by default; RimZ links your account and starts a remote-control host only after you switch it on:
 
 ```sh
 rimz config set remote_control.claude true
@@ -284,7 +284,7 @@ With a toggle on, every `rimz start` brings up the provider's own command, and t
 
 The payoff is one session, continuous across surfaces: you start the turn at the terminal, the ask catches you on the phone through the provider's own app, and your answer lands in the same session on your machine. By the time you sit back down, the turn has moved on as if you had answered in the pane, with nothing to hand off and nothing to resume. A fleet that runs while you commute, cook, or sleep stays a fleet you can unblock.
 
-The Rimz toggle covers the machine-level Claude host; Claude's own `remoteControlAtStartup: true` (in `~/.claude/settings.json`) additionally makes every session you type into a pane reachable from the app, and Rimz lights the `⇅ rc` flag for that setting too.
+The RimZ toggle covers the machine-level Claude host; Claude's own `remoteControlAtStartup: true` (in `~/.claude/settings.json`) additionally makes every session you type into a pane reachable from the app, and RimZ lights the `⇅ rc` flag for that setting too.
 
 Preconditions check both ways at start. An enabled host whose agent is missing is skipped so the room still opens; Codex remote control boots from Codex's managed standalone install, so a `codex` merely on `PATH` is skipped and `rimz doctor` prints the install fix. An installed host with a fixable misconfiguration (a Claude older than remote control, `disableRemoteControl` set, API-key auth on releases where it disables the surface) refuses at `rimz start` with the fix spelled out, so an enabled toggle always means a working bridge.
 
@@ -302,4 +302,4 @@ Key detail and the daemon-view placement live in [configuration → remote contr
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.
-- [Agent support](../reference/agent-support.md) — which agents Rimz drives and what each integration adds.
+- [Agent support](../reference/agent-support.md) — which agents RimZ drives and what each integration adds.

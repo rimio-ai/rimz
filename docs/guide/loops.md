@@ -46,7 +46,7 @@ rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:
 
 Every weekday at 07:00 the task runs one lowest-effort turn, and the window runs 07:00 to 12:00. (Claude's ping pins Sonnet, so a flagship account does not prime at the flagship rate.) You sit down at 9:00 against an almost untouched budget, the reset lands at noon instead of mid-afternoon, and the next window carries you to 17:00. Same subscription, same limits. The resets just stop landing in the middle of your deep work.
 
-The ping is cheap insurance, not a wasted turn. Before it fires, Rimz reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex.
+The ping is cheap insurance, not a wasted turn. Before it fires, RimZ reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex.
 
 To keep the windows back-to-back all day, let the window set its own schedule:
 
@@ -66,7 +66,7 @@ Where `--agent` starts a new agent, `--wake` reaches one you already have. Point
 rimz loop add check-ci --wake @planner --prompt "CI should be done; check the run and merge if green" --in 30m
 ```
 
-Rimz resolves `@planner` the moment you add the task, in the current room and channel, exactly as [`rimz message`](./messaging.md) would, and pins that one session; the add output names the session it pinned. Thirty minutes later the prompt travels the same durable delivery path as any message, so it lands back in that conversation with all of its context. An idle agent takes it at once, a mid-turn agent parks it for its next turn boundary, and a session that has exited by then is skipped and the task removed.
+RimZ resolves `@planner` the moment you add the task, in the current room and channel, exactly as [`rimz message`](./messaging.md) would, and pins that one session; the add output names the session it pinned. Thirty minutes later the prompt travels the same durable delivery path as any message, so it lands back in that conversation with all of its context. An idle agent takes it at once, a mid-turn agent parks it for its next turn boundary, and a session that has exited by then is skipped and the task removed.
 
 Because `rimz loop add` is a plain command, the agent can set its own alarm. At the end of a turn ("tests pass, CI needs half an hour") it runs the `loop add` from its shell tool and goes idle; thirty minutes later it wakes itself and finishes the job. Tell the agent once that the command exists, or wrap the pattern in a short skill, and "check back later" stops being your job. Chain it and you have a self-paced loop: each wake schedules the next `--in` only while work remains, so the loop advances exactly as long as the goal is unmet, then stops on its own. These self-set alarms are one-shots. They live in state rather than your `loop.toml`, show up in `rimz loop list`, and clear themselves after firing.
 
@@ -88,7 +88,7 @@ rimz loop add ci-green --check "gh run watch --exit-status" --on success \
     --until 30m --every 2m --wake @planner --prompt "CI is green; merge"
 ```
 
-The check runs first, every time, and costs nothing. Only its result spends a turn: `--on fail` (the default) wakes the agent on a non-zero exit or a timeout, `--on success` on a zero exit. When the guard fires, Rimz appends the command, its exit status, and its output tail to the prompt, so the agent wakes already reading the evidence instead of rediscovering it. That adds a rung to the escalation ladder: the script handles the routine, the agent handles the failure, and you hear about it only when the agent itself gets stuck. Its turn is supervised like any other, so a stuck fix goes `? waiting` and a [notification](./notifications.md) reaches you.
+The check runs first, every time, and costs nothing. Only its result spends a turn: `--on fail` (the default) wakes the agent on a non-zero exit or a timeout, `--on success` on a zero exit. When the guard fires, RimZ appends the command, its exit status, and its output tail to the prompt, so the agent wakes already reading the evidence instead of rediscovering it. That adds a rung to the escalation ladder: the script handles the routine, the agent handles the failure, and you hear about it only when the agent itself gets stuck. Its turn is supervised like any other, so a stuck fix goes `? waiting` and a [notification](./notifications.md) reaches you.
 
 A `--check` with no agent action is still worth having. It is a scheduled command that logs `completed`, `failed`, or `timed out`, each with the exit code and output tail, into the run history, and it keeps recurring.
 
@@ -100,7 +100,7 @@ A `--check` with no agent action is still worth having. It is a scheduled comman
 
 - A repeating task (`--every` or `--cron`) appends a `[tasks.<name>]` entry to `~/.config/rimz/loop.toml`: per-machine automation, like your crontab, never inherited by a cloned repository.
 - A one-shot (bare `--at`, `--in`, or a `--until` deadline) persists as state instead, so an agent scheduling its own wake never touches your `loop.toml`; the entry retires itself after firing.
-- `--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a repeating task (a one-shot is machine state by definition). A committed task runs commands on whoever pulls it, so it enters the project trust hash and stays inert until each user approves it ([security.md](./security.md)); in a terminal Rimz shows the surface diff and offers the grant immediately, while off a terminal it prints the review and approve commands. A trusted project task wins over a same-named machine task without double-firing.
+- `--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a repeating task (a one-shot is machine state by definition). A committed task runs commands on whoever pulls it, so it enters the project trust hash and stays inert until each user approves it ([security.md](./security.md)); in a terminal RimZ shows the surface diff and offers the grant immediately, while off a terminal it prints the review and approve commands. A trusted project task wins over a same-named machine task without double-firing.
 
 There is no daemon; the room keeps time. While a room for the task's project is open, attached or not, that room's elected sidebar process fires due tasks on its regular tick, running each through the hidden `rimz loop run`. Close the room and the clock stops. Opening one late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
 
@@ -119,7 +119,7 @@ rimz config set harness.smart_compact "70%"   # compact before a message once co
 
 **Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap. `rimz loop list` shows each task's spend against its daily cap, while `rimz loop show` reads back each run's cost and fresh input/output tokens plus the last-run and rolling ten-run average cost. The skip is recorded there too. A `/day` agent budget resets and auto-continues at the next local day; an absolute cap stays parked until you raise or clear it, or a human message waives one turn.
 
-**Smart compaction** rides the same loop. Past the threshold, Rimz submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
+**Smart compaction** rides the same loop. Past the threshold, RimZ submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
 
 Turn both on and a long-running agent keeps its footing through the five-hour wall, a flaky API, and a filling context window, with no babysitter process watching it.
 
@@ -162,7 +162,7 @@ An unattended run has to answer permission prompts without you, and two patterns
 
 **Answer in the agent's own UI** to keep the full record. A [handler that acts](./notifications.md#handlers-that-act-not-just-alert) sends the answer with `rimz pane send`, leaving the prompt, the answer, and the tool run all in the agent's transcript, exactly as if you had typed it. Prefer this path when handled decisions belong on the record.
 
-**Use the agent's bypass flag** for runs where you accept the tradeoff. `rimz agents <kind> "<prompt>" -p --yolo` passes the adapter's bypass flag (`claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`), while `--ask` keeps the provider's prompts in place. Rimz still observes sessions, completions, and failures through lifecycle hooks; the tradeoff is that the agent skips permission events at the source, so Rimz's durable record holds what other hooks report rather than a per-decision audit trail.
+**Use the agent's bypass flag** for runs where you accept the tradeoff. `rimz agents <kind> "<prompt>" -p --yolo` passes the adapter's bypass flag (`claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`), while `--ask` keeps the provider's prompts in place. RimZ still observes sessions, completions, and failures through lifecycle hooks; the tradeoff is that the agent skips permission events at the source, so RimZ's durable record holds what other hooks report rather than a per-decision audit trail.
 
 Reserve the bypass flag for runs where you accept the missing per-decision trail, and keep the guardrails visible: trust grants, notification handlers, and the posture itself are product behavior, covered in [security.md](./security.md).
 

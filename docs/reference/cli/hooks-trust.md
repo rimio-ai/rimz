@@ -1,6 +1,6 @@
 # Hooks and trust
 
-These commands wire agent hooks and grant project trust — the two edits Rimz makes to give itself a live view of your agents and to gate what a project may execute. Both are explicit and reversible: `hooks install` is additive and previews its diff with `--dry-run`, `hooks uninstall` removes only Rimz's own blocks, and `trust grant`/`trust revoke` are one grant record on this machine. The safety model behind them is [security and trust](../../guide/security.md).
+These commands wire agent hooks and grant project trust — the two edits RimZ makes to give itself a live view of your agents and to gate what a project may execute. Both are explicit and reversible: `hooks install` is additive and previews its diff with `--dry-run`, `hooks uninstall` removes only RimZ's own blocks, and `trust grant`/`trust revoke` are one grant record on this machine. The safety model behind them is [security and trust](../../guide/security.md).
 
 ## Agent hooks
 
@@ -9,11 +9,11 @@ rimz hooks install [--dry-run] [AGENT]
 rimz hooks uninstall [AGENT]
 ```
 
-`hooks install` writes Rimz-managed hook entries into the agent's per-user config so the agent reports its lifecycle and blocking prompts back to Rimz. With no `AGENT` it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit kind (`claude`, `codex`, `pi`, …) it prints the single report. The install is additive — your existing hooks stay — and `--dry-run` prints the same per-agent summary plus a unified diff to stderr and writes no files, so you see the exact edit before it happens.
+`hooks install` writes RimZ-managed hook entries into the agent's per-user config so the agent reports its lifecycle and blocking prompts back to RimZ. With no `AGENT` it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit kind (`claude`, `codex`, `pi`, …) it prints the single report. The install is additive — your existing hooks stay — and `--dry-run` prints the same per-agent summary plus a unified diff to stderr and writes no files, so you see the exact edit before it happens.
 
-`hooks uninstall` removes only Rimz-managed hook blocks, leaving everything else in the file untouched. With no `AGENT` it removes every installed set, prints `[]` when nothing is installed, and exits successfully without needing the binary on PATH. This is the clean undo for `hooks install`.
+`hooks uninstall` removes only RimZ-managed hook blocks, leaving everything else in the file untouched. With no `AGENT` it removes every installed set, prints `[]` when nothing is installed, and exits successfully without needing the binary on PATH. This is the clean undo for `hooks install`.
 
-Installed hooks call back into Rimz for lifecycle and blocking-ask events. Hook stdout is the agent's decision channel, so installed hooks keep diagnostics off stdout and return only the agent-native neutral no-op for blocking asks; the prompt stays in the agent UI ([the adapter boundary](../../internals/agents/model.md#the-adapter-boundary)). Some agents add their own hook trust gate; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix.
+Installed hooks call back into RimZ for lifecycle and blocking-ask events. Hook stdout is the agent's decision channel, so installed hooks keep diagnostics off stdout and return only the agent-native neutral no-op for blocking asks; the prompt stays in the agent UI ([the adapter boundary](../../internals/agents/model.md#the-adapter-boundary)). Some agents add their own hook trust gate; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix.
 
 ## Project trust
 

@@ -1,8 +1,8 @@
 # Pi protocol reference
 
-> The mapping onto Rimz's internal types lives beside this doc: [pi.md](../../internals/agents/pi.md) owns the lifecycle, context, account, and spend mapping; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
+> The mapping onto RimZ's internal types lives beside this doc: [pi.md](../../internals/agents/pi.md) owns the lifecycle, context, account, and spend mapping; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Pi upstream protocol surface** the Rimz adapter binds to — the in-process extension API (events, payloads, blocking returns, response headers), the session JSONL, the headless RPC/JSON modes, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the pi.dev docs, pinned to the source URLs below; the session and auth shapes are additionally verified against a live `pi` 0.78.0 install (2026-06-04). The code binding this surface is the adapter directory [`pi/`](../../../crates/rimz/src/agents/pi/mod.rs): the embedded [`extension.ts`](../../../crates/rimz/src/agents/pi/extension.ts) forwards the lifecycle events, including the `session_before_compact`/`session_compact` bracket; stamps token composition, cumulative cost, and response-header windows; gates `tool_call` on the blocking bridge; and the read-only spending parser [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks the session tree.
+This is the single home for the **Pi upstream protocol surface** the RimZ adapter binds to — the in-process extension API (events, payloads, blocking returns, response headers), the session JSONL, the headless RPC/JSON modes, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the pi.dev docs, pinned to the source URLs below; the session and auth shapes are additionally verified against a live `pi` 0.78.0 install (2026-06-04). The code binding this surface is the adapter directory [`pi/`](../../../crates/rimz/src/agents/pi/mod.rs): the embedded [`extension.ts`](../../../crates/rimz/src/agents/pi/extension.ts) forwards the lifecycle events, including the `session_before_compact`/`session_compact` bracket; stamps token composition, cumulative cost, and response-header windows; gates `tool_call` on the blocking bridge; and the read-only spending parser [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks the session tree.
 
 Coverage is **depth on what the adapter wires, breadth as an index**: the events, session fields, and decision returns [`src/agents/pi/`](../../../crates/rimz/src/agents/pi/mod.rs) parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists. [Mapping feasibility](#mapping-feasibility) closes the doc with what remains unwired; the landed verdict is the [pi.md](../../internals/agents/pi.md).
 
@@ -26,9 +26,9 @@ Re-fetch these pages to refresh this mirror. Each `pi.dev/docs/latest/<page>` pa
 
 ## Integration surface — in-process extensions
 
-Pi's integration surface is **TypeScript extensions loaded in-process** (via jiti, no compile step) — it ships no out-of-process hook protocol, no statusline, and no app-server. A Rimz adapter is therefore a Rimz-authored extension file that subscribes to lifecycle events and shells out to the `rimz` CLI, holding pi's turn open from inside a handler when a decision must block.
+Pi's integration surface is **TypeScript extensions loaded in-process** (via jiti, no compile step) — it ships no out-of-process hook protocol, no statusline, and no app-server. A RimZ adapter is therefore a RimZ-authored extension file that subscribes to lifecycle events and shells out to the `rimz` CLI, holding pi's turn open from inside a handler when a decision must block.
 
-> **Divergence — the decision channel inverts.** Claude and Codex run Rimz as a child and read its stdout as the decision. Pi runs Rimz's *extension* in-process; the extension runs `rimz` as *its* child, reads the answer from the child's stdout, and applies it through the handler's return value. Hook-stdout discipline becomes child-stdout discipline, and the sync-install invariant has no on-disk shape to enforce — blocking is awaiting inside the handler.
+> **Divergence — the decision channel inverts.** Claude and Codex run RimZ as a child and read its stdout as the decision. Pi runs RimZ's *extension* in-process; the extension runs `rimz` as *its* child, reads the answer from the child's stdout, and applies it through the handler's return value. Hook-stdout discipline becomes child-stdout discipline, and the sync-install invariant has no on-disk shape to enforce — blocking is awaiting inside the handler.
 
 Discovery, in load order:
 
@@ -39,9 +39,9 @@ Discovery, in load order:
 | `settings.json` — `extensions: [paths]`, `packages: ["npm:…", "git:…"]` | configured |
 | `pi -e <path>` / `--extension <source>` | per-invocation |
 
-Install for Rimz means **one Rimz-owned file** written to `~/.pi/agent/extensions/` — auto-discovered, hot-reloaded by `/reload`, removed by deleting the file, idempotent by path. The file executes arbitrary code with the user's permissions (upstream states this explicitly), so it belongs in the executable-surface trust hash like every hook config. `--no-extensions`, `-p` (print), and `--mode json` run pi without UI-capable extensions — see [Mapping feasibility](#mapping-feasibility).
+Install for RimZ means **one RimZ-owned file** written to `~/.pi/agent/extensions/` — auto-discovered, hot-reloaded by `/reload`, removed by deleting the file, idempotent by path. The file executes arbitrary code with the user's permissions (upstream states this explicitly), so it belongs in the executable-surface trust hash like every hook config. `--no-extensions`, `-p` (print), and `--mode json` run pi without UI-capable extensions — see [Mapping feasibility](#mapping-feasibility).
 
-An extension default-exports a (sync or async) factory receiving `ExtensionAPI` — `pi.on(event, handler)`, `pi.registerCommand`, `pi.registerTool`, `pi.exec`, `pi.appendEntry` (persist extension state in the session), `pi.setSessionName`, `pi.getThinkingLevel` (the Rimz wire's `effort`), `pi.events` (inter-extension bus). Every handler receives `ExtensionContext`:
+An extension default-exports a (sync or async) factory receiving `ExtensionAPI` — `pi.on(event, handler)`, `pi.registerCommand`, `pi.registerTool`, `pi.exec`, `pi.appendEntry` (persist extension state in the session), `pi.setSessionName`, `pi.getThinkingLevel` (the RimZ wire's `effort`), `pi.events` (inter-extension bus). Every handler receives `ExtensionContext`:
 
 | Field | Carries |
 | --- | --- |
@@ -75,7 +75,7 @@ prompt         ─► input ─► before_agent_start ─► agent_start
 exit (Ctrl+C, Ctrl+D, SIGHUP, SIGTERM) ─► session_shutdown { reason: "quit" }
 ```
 
-Note pi's vocabulary: a pi **turn** is one LLM call, and `agent_start`/`agent_end` bracket one user prompt — pi's `agent_*` pair is what Rimz calls a turn.
+Note pi's vocabulary: a pi **turn** is one LLM call, and `agent_start`/`agent_end` bracket one user prompt — pi's `agent_*` pair is what RimZ calls a turn.
 
 ### Events an adapter would wire
 
@@ -113,7 +113,7 @@ Pi writes one session file per conversation:
 e.g.   sessions/--home-user-workspace-project-rimz-rimz--/2026-06-04T06-45-56-308Z_019e9161-a5d0-791d-879e-39679acd4ded.jsonl
 ```
 
-The directory key is the working directory with `/` replaced by `-`; the filename stem is `<ISO timestamp, : and . as ->_<session uuid>`, so the session id is everything after the first `_`. Overrides: `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, settings `sessionDir`; `--no-session` skips persistence entirely. [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks this tree fleet-wide for spending (its `PI_AGENT_DIR` env is a Rimz test override, not a pi variable).
+The directory key is the working directory with `/` replaced by `-`; the filename stem is `<ISO timestamp, : and . as ->_<session uuid>`, so the session id is everything after the first `_`. Overrides: `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, settings `sessionDir`; `--no-session` skips persistence entirely. [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks this tree fleet-wide for spending (its `PI_AGENT_DIR` env is a RimZ test override, not a pi variable).
 
 The first line is the header; every later line is a tree entry (`id` is 8-char hex, `parentId` links it, `timestamp` is ISO):
 
@@ -151,12 +151,12 @@ The `message` roles are `user`, `assistant`, `toolResult`, `bashExecution` (`!` 
 Two properties matter for any tail read:
 
 - **Dollars are logged directly.** `usage.cost.total` is the priced cost per assistant message — no pricing-table multiplication ([`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) reads it verbatim). The token split mirrors Anthropic's: context tokens are `input + cacheRead + cacheWrite`; the transcript carries **no context window**, so a gauge divisor resolves from the model registry (`contextWindow` per model) or a table, the way Claude's payload model resolves its divisor.
-- **Rimz's envelope carries a live dollar sum.** The extension adds each `turn_end` assistant message's `usage.cost.total` into a per-session accumulator and stamps positive totals as `total_cost_usd` on forwarded envelopes. `agent_end` carries the same final assistant message as the last `turn_end`, so it forwards the accumulated value and contributes no additional cost. `/resume` starts a new extension process with an empty accumulator; the turn-end JSONL spend walk reconciles the authoritative session total.
+- **RimZ's envelope carries a live dollar sum.** The extension adds each `turn_end` assistant message's `usage.cost.total` into a per-session accumulator and stamps positive totals as `total_cost_usd` on forwarded envelopes. `agent_end` carries the same final assistant message as the last `turn_end`, so it forwards the accumulated value and contributes no additional cost. `/resume` starts a new extension process with an empty accumulator; the turn-end JSONL spend walk reconciles the authoritative session total.
 - **The file is a tree, not a log.** `/tree` and `/fork` move the leaf to an earlier entry in place, so file order is append order, not branch order — the newest record by file position can sit on an abandoned branch right after a rewind. `buildSessionContext()` (the upstream context builder) walks leaf→root; a bounded tail read is an approximation that self-corrects on the next turn.
 
 ## Headless modes (index)
 
-Recorded for breadth; a Rimz adapter targets the interactive TUI in a pane.
+Recorded for breadth; a RimZ adapter targets the interactive TUI in a pane.
 
 - **`--mode json`** — every session event as JSON lines on stdout. The union is the extension `AgentEvent` set plus `queue_update`, `compaction_start` / `compaction_end` (`reason: manual|threshold|overflow`), and `auto_retry_start` / `auto_retry_end`. Interactive extension `session_compact` carries `compactionEntry` and `fromExtension` and omits this reason.
 - **`--mode rpc`** — bidirectional JSONL over stdio for embedding: commands (`prompt`, `steer`, `follow_up`, `abort`, `get_state`, `get_messages`, `get_session_stats`, `set_model`, `new_session`, `switch_session`, `fork`, `compact`, `bash`, …) correlate by `id` + `success`; the same events stream interleaved; extension `ctx.ui` dialogs surface as an RPC sub-protocol.
@@ -176,7 +176,7 @@ Recorded for breadth; a Rimz adapter targets the interactive TUI in a pane.
 
 OAuth subscription logins: ChatGPT Plus/Pro (`openai-codex`), Claude Pro/Max (`anthropic` — upstream notes third-party usage bills per token as extra usage, outside plan limits), GitHub Copilot. API keys resolve in order: `--api-key` flag → `auth.json` → provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) → `models.json` custom-provider keys.
 
-**Balance windows.** Pi exposes no plan tier, but Rimz derives windows from two local surfaces. The extension captures per-response headers via `after_provider_response`: Codex OAuth traffic uses `x-codex-primary-*` and `x-codex-secondary-*`, while Anthropic OAuth traffic may expose `anthropic-ratelimit-unified-*` variants. The idle authoritative path reads the active OAuth credential from `auth.json` and reuses the Claude or Codex OAuth usage endpoint, including the `openai-codex.accountId` header when present. API-key credentials remain unmetered. See [pi.md → Account and balance](../../internals/agents/pi.md#account-and-balance) for how the dashboard fuses and caches these readings.
+**Balance windows.** Pi exposes no plan tier, but RimZ derives windows from two local surfaces. The extension captures per-response headers via `after_provider_response`: Codex OAuth traffic uses `x-codex-primary-*` and `x-codex-secondary-*`, while Anthropic OAuth traffic may expose `anthropic-ratelimit-unified-*` variants. The idle authoritative path reads the active OAuth credential from `auth.json` and reuses the Claude or Codex OAuth usage endpoint, including the `openai-codex.accountId` header when present. API-key credentials remain unmetered. See [pi.md → Account and balance](../../internals/agents/pi.md#account-and-balance) for how the dashboard fuses and caches these readings.
 
 ## CLI and environment surface
 
@@ -193,7 +193,7 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 | `pi --fork <path\|id>`, `--no-session`, `--name <n>` | fork into a new file, ephemeral mode, display name |
 | `pi -e <source>`, `--no-extensions` | load an extension / disable discovery |
 | `-p`, `--mode json`, `--mode rpc` | headless modes (above) |
-| `pi install npm:…\|git:…` / `pi remove` / `pi list` | pi package management — the distribution channel an npm-published Rimz extension would use |
+| `pi install npm:…\|git:…` / `pi remove` / `pi list` | pi package management — the distribution channel an npm-published RimZ extension would use |
 | `PI_CODING_AGENT_DIR` | config root override (default `~/.pi/agent`) |
 | `PI_CODING_AGENT_SESSION_DIR` | session-dir override (below `--session-dir`) |
 | `PI_PACKAGE_DIR`, `PI_OFFLINE`, `PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY` | package root, startup-network and telemetry switches |

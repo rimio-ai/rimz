@@ -1,10 +1,10 @@
 # Zellij upstream reference
 
-> The Rimz-side contracts live in [multiplexers.md](../../internals/multiplexers.md) — the `MuxBackend` seam, the presence channel, the birth layout, the health gates — and [web.md](../../internals/web.md) for browser access. This doc mirrors the upstream surface itself.
+> The RimZ-side contracts live in [multiplexers.md](../../internals/multiplexers.md) — the `MuxBackend` seam, the presence channel, the birth layout, the health gates — and [web.md](../../internals/web.md) for browser access. This doc mirrors the upstream surface itself.
 
-This is the single home for the **Zellij upstream surface** Rimz binds to — the wasm plugin API (lifecycle, events, commands, types, permissions, workers, pipes), the CLI control surface, the configuration options, the layout KDL, and session serialization. It is a hand-maintained mirror of zellij.dev's docs cross-checked against the installed binary's `--help` and the `zellij-utils`/`zellij-tile` 0.44.3 source, captured at **Zellij 0.44.3** (2026-06). Where the website and the source disagree, the source wins.
+This is the single home for the **Zellij upstream surface** RimZ binds to — the wasm plugin API (lifecycle, events, commands, types, permissions, workers, pipes), the CLI control surface, the configuration options, the layout KDL, and session serialization. It is a hand-maintained mirror of zellij.dev's docs cross-checked against the installed binary's `--help` and the `zellij-utils`/`zellij-tile` 0.44.3 source, captured at **Zellij 0.44.3** (2026-06). Where the website and the source disagree, the source wins.
 
-Coverage is **depth on what Rimz wires, breadth as an index**: the events and host commands the presence plugin uses, the CLI verbs the backend adapter calls, and the layout nodes the birth templates spell are documented in full; the rest of the catalog is listed so a contributor wiring a new surface knows it exists.
+Coverage is **depth on what RimZ wires, breadth as an index**: the events and host commands the presence plugin uses, the CLI verbs the backend adapter calls, and the layout nodes the birth templates spell are documented in full; the rest of the catalog is listed so a contributor wiring a new surface knows it exists.
 
 ## Upstream sources
 
@@ -28,7 +28,7 @@ Re-fetch these to refresh this mirror. The canonical type definitions live in th
 
 ## Plugin API
 
-Plugins are wasm32-wasip1 binaries loaded into Zellij's plugin host. Rimz ships one: [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/) ([multiplexers.md → presence channel](../../internals/multiplexers.md#zellij-presence-channel)).
+Plugins are wasm32-wasip1 binaries loaded into Zellij's plugin host. RimZ ships one: [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/) ([multiplexers.md → presence channel](../../internals/multiplexers.md#zellij-presence-channel)).
 
 ### Lifecycle
 
@@ -92,9 +92,9 @@ Full `Event` catalog as defined in `zellij-utils 0.44.3 src/data.rs` (46 variant
 
 `Context` is `BTreeMap<String, String>` — the caller-supplied dictionary echoed back on the matching reply event; it is how a plugin correlates async replies to requests.
 
-Verified Rimz caveat: the `SessionUpdate` pane manifest for the current session can arrive transiently partial on Zellij's roughly 60s serialization cadence while `PaneUpdate`, `list-panes -j -a`, and the serialized session metadata still reflect the full live room. Rimz treats `PaneUpdate` as the authoritative pane roster and uses `SessionUpdate` only as an upstream session-info event reference.
+Verified RimZ caveat: the `SessionUpdate` pane manifest for the current session can arrive transiently partial on Zellij's roughly 60s serialization cadence while `PaneUpdate`, `list-panes -j -a`, and the serialized session metadata still reflect the full live room. RimZ treats `PaneUpdate` as the authoritative pane roster and uses `SessionUpdate` only as an upstream session-info event reference.
 
-**`CommandChanged` is the load-bearing event for Rimz**: it pushes the foreground-command handoff with the full argv, the foreground bit, and the focused clients — exactly the live process state `list-panes -j` does not report ([caveats](../../internals/multiplexers.md#zellij-backend-caveats)). A cached permission grant produces **no** `PermissionRequestResult`; application state flowing is the proof of grant (verified live, 0.44.3).
+**`CommandChanged` is the load-bearing event for RimZ**: it pushes the foreground-command handoff with the full argv, the foreground bit, and the focused clients — exactly the live process state `list-panes -j` does not report ([caveats](../../internals/multiplexers.md#zellij-backend-caveats)). A cached permission grant produces **no** `PermissionRequestResult`; application state flowing is the proof of grant (verified live, 0.44.3).
 
 ### Commands (host functions)
 
@@ -127,7 +127,7 @@ The `get_pane_pid` / `get_pane_running_command` / `get_pane_cwd` request/respons
 
 ### Types
 
-Canonical home: [docs.rs `zellij_tile`](https://docs.rs/zellij-tile/latest/zellij_tile/) / `zellij-utils/src/data.rs`. The shapes Rimz reads or will read, verified against 0.44.3 source:
+Canonical home: [docs.rs `zellij_tile`](https://docs.rs/zellij-tile/latest/zellij_tile/) / `zellij-utils/src/data.rs`. The shapes RimZ reads or will read, verified against 0.44.3 source:
 
 ```rust
 enum PaneId { Terminal(u32), Plugin(u32) }
@@ -137,7 +137,7 @@ struct PaneManifest { panes: HashMap<usize /* tab position */, Vec<PaneInfo>> }
 
 `PaneInfo` (full shape on docs.rs) groups into identity (`id`, `is_plugin`, `title`), state bits (`is_focused`, `is_fullscreen`, `is_floating`, `is_suppressed`, `is_selectable`, `exited`, `exit_status: Option<i32>`, `is_held`), geometry (`pane_x/y/rows/columns` including the frame, `pane_content_*` excluding it, `cursor_coordinates_in_pane`), the spawn surface (`terminal_command` — a command pane's **launch** command, not the live foreground command — and `plugin_url`), and per-client chrome (`index_in_pane_group: BTreeMap<ClientId, usize>`, `default_fg`/`default_bg` color strings). The subset the presence plugin folds — and why `title` is carried but excluded from the change hash — lives in code: [`policy.rs::PaneFields`](../../../crates/rimz-presence-zellij/src/policy.rs).
 
-`is_focused` is a projected focus mark, not a uniqueness guarantee. In Zellij 0.44.3 a reconnect-churned SSH room with one listed client has been observed reporting multiple durable `is_focused: true` terminal panes in one tab; treat the marks as candidates, use `TabInfo.other_focused_clients` as related client-focus evidence, and let Rimz's producer resolve the session focus register. `is_held` means the command pane sits at the `Press ENTER to run` banner — the resurrection fingerprint Rimz's pre-attach gate keys on. There is **no pid, cwd, or live-command field** — those are the request/response host commands above, or `CommandChanged`/`CwdChanged` pushes.
+`is_focused` is a projected focus mark, not a uniqueness guarantee. In Zellij 0.44.3 a reconnect-churned SSH room with one listed client has been observed reporting multiple durable `is_focused: true` terminal panes in one tab; treat the marks as candidates, use `TabInfo.other_focused_clients` as related client-focus evidence, and let RimZ's producer resolve the session focus register. `is_held` means the command pane sits at the `Press ENTER to run` banner — the resurrection fingerprint RimZ's pre-attach gate keys on. There is **no pid, cwd, or live-command field** — those are the request/response host commands above, or `CommandChanged`/`CwdChanged` pushes.
 
 | Type | Fields (abridged) |
 | --- | --- |
@@ -259,14 +259,14 @@ Subcommands (aliases): `action`/`ac` · `attach`/`a` · `run`/`r` · `edit`/`e` 
 ```text
 zellij attach [OPTIONS] [SESSION_NAME] [options …]
   -c, --create               create if absent (attached)
-  -b, --create-background    create DETACHED if absent — the Rimz birth verb
+  -b, --create-background    create DETACHED if absent — the RimZ birth verb
   -f, --force-run-commands   resurrecting: run held commands immediately (skip the ENTER banner)
       --forget               delete the saved session before connecting
       --index <n>            pick session by creation-order index
   remote/web auth: -t/--token, -r/--remember (4-week re-auth), --ca-cert <pem>, --insecure
 ```
 
-`attach <session> options --…` applies room options onto the attach (and `attach --create-background <s> options --…` onto birth) — this is the channel Rimz uses for per-machine `[zellij]` config. **`options` accepts every config option as a kebab-case flag** (42 flags at 0.44.3 — `zellij options --help` is the authority). `attach` doubles as the remote client for `zellij web`-served sessions, hence the token/TLS flags.
+`attach <session> options --…` applies room options onto the attach (and `attach --create-background <s> options --…` onto birth) — this is the channel RimZ uses for per-machine `[zellij]` config. **`options` accepts every config option as a kebab-case flag** (42 flags at 0.44.3 — `zellij options --help` is the authority). `attach` doubles as the remote client for `zellij web`-served sessions, hence the token/TLS flags.
 
 ### `action` catalog
 
@@ -288,7 +288,7 @@ zellij attach [OPTIONS] [SESSION_NAME] [options …]
 | Theme | `set-dark-theme` / `set-light-theme` / `toggle-theme` |
 | Files | `edit <path> [--line-number n] [--direction] [--floating] [--in-place] [--cwd] [--tab-id] [floating geometry]` |
 
-`list-panes -j` output (0.44) carries per-pane `id`, internal `tab_id`, `tab_position`, `tab_name`, `title`, and geometry, plus the *spawn* command — `terminal_command` for command panes (preserved verbatim across an in-place re-exec), `pane_command` for default-shell panes (the shell) — and **no durable live foreground command, cwd, or pid**: live process state is plugin-surface-only (the `get_pane_*` trio and the `CommandChanged`/`CwdChanged` pushes above). Rimz's `pane-topology.json` cache is not raw `list-panes`: the presence plugin keeps a per-pane foreground map from `CommandChanged`, adds a one-shot baseline from `get_pane_running_command` and `get_pane_cwd` for terminal panes with no spawn command, and publishes those as `pane_command` and `pane_cwd` beside the spawn `terminal_command`, so topology and CLI reads populate foreground, cwd, and spawn as distinct fields. In 0.44.3 source, the route handler enters `enrich_panes_with_pty_data` whenever JSON output is requested, independent of the selected field flags; that enrichment performs command and cwd PTY round trips per terminal pane, so Rimz avoids `-j` on the hot path when the presence plugin has published fresh topology.
+`list-panes -j` output (0.44) carries per-pane `id`, internal `tab_id`, `tab_position`, `tab_name`, `title`, and geometry, plus the *spawn* command — `terminal_command` for command panes (preserved verbatim across an in-place re-exec), `pane_command` for default-shell panes (the shell) — and **no durable live foreground command, cwd, or pid**: live process state is plugin-surface-only (the `get_pane_*` trio and the `CommandChanged`/`CwdChanged` pushes above). RimZ's `pane-topology.json` cache is not raw `list-panes`: the presence plugin keeps a per-pane foreground map from `CommandChanged`, adds a one-shot baseline from `get_pane_running_command` and `get_pane_cwd` for terminal panes with no spawn command, and publishes those as `pane_command` and `pane_cwd` beside the spawn `terminal_command`, so topology and CLI reads populate foreground, cwd, and spawn as distinct fields. In 0.44.3 source, the route handler enters `enrich_panes_with_pty_data` whenever JSON output is requested, independent of the selected field flags; that enrichment performs command and cwd PTY round trips per terminal pane, so RimZ avoids `-j` on the hot path when the presence plugin has published fresh topology.
 
 **Blocking panes** turn panes into pipeline steps: `--blocking` waits for exit *and pane close*; `--block-until-exit` waits for any exit; `--block-until-exit-success` / `-failure` gate on the status — available on `new-pane`, `new-tab`, and `zellij run`. Exit code propagates to the caller, so `zellij action new-pane --block-until-exit-success -- cargo test && next-step` works.
 
@@ -314,7 +314,7 @@ Blank payload reads STDIN line-buffered with plugin backpressure; plugin `cli_pi
 
 ### `web`
 
-`zellij web [--start|--stop|--status] [-d/--daemonize] [--ip] [--port]` (defaults `127.0.0.1:8082`) `[--cert/--key]` (required off-localhost). Token auth: `--create-token` (shown once) and `--create-read-only-token` (watcher-only) are clap-`exclusive(true)` creation flags and auto-name tokens as `token_N`; `--token-name` cannot accompany them. Token management uses `--revoke-token <name>`, `--revoke-all-tokens`, and `--list-tokens`. Pairs with the `web_server*` / `web_sharing` config options and `attach`'s token flags. Rimz's use lives in [web.md](../../internals/web.md).
+`zellij web [--start|--stop|--status] [-d/--daemonize] [--ip] [--port]` (defaults `127.0.0.1:8082`) `[--cert/--key]` (required off-localhost). Token auth: `--create-token` (shown once) and `--create-read-only-token` (watcher-only) are clap-`exclusive(true)` creation flags and auto-name tokens as `token_N`; `--token-name` cannot accompany them. Token management uses `--revoke-token <name>`, `--revoke-all-tokens`, and `--list-tokens`. Pairs with the `web_server*` / `web_sharing` config options and `attach`'s token flags. RimZ's use lives in [web.md](../../internals/web.md).
 
 ### `setup` and sessions
 
@@ -332,7 +332,7 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 
 | Option | Values (default first) | Note |
 | --- | --- | --- |
-| `default_mode` | `normal` \| `locked` | Rimz always sets `locked` so typing reaches the agent pane |
+| `default_mode` | `normal` \| `locked` | RimZ always sets `locked` so typing reaches the agent pane |
 | `default_shell` | `$SHELL` | |
 | `default_cwd` | path | |
 | `default_layout` | `default` | name in the layout dir |
@@ -342,7 +342,7 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 | `session_name` | string | + `attach_to_session true\|false` to attach if it exists |
 | `mirror_session` | `false` \| `true` | multi-client: mirror vs independent views |
 | `mouse_mode` | `true` \| `false` | |
-| `mouse_click_through` | `false` \| `true` | click focuses **and** reaches the pane — first-click jump; Rimz sets `true`; flag exists ≥ 0.44.0 |
+| `mouse_click_through` | `false` \| `true` | click focuses **and** reaches the pane — first-click jump; RimZ sets `true`; flag exists ≥ 0.44.0 |
 | `advanced_mouse_actions` | `true` \| `false` | hover effects, pane grouping, mouse resize; flag exists ≥ 0.43.0 |
 | `mouse_hover_effects` | `true` \| `false` | frame highlight + help text on hover; flag exists ≥ 0.44.0 |
 | `focus_follows_mouse` | `false` \| `true` | 0.44: first click only passes through when click-through on **and** this off |
@@ -356,15 +356,15 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 | `styled_underlines` | `true` \| `false` | |
 | `pane_frames` | `true` \| `false` | plus `ui { pane_frames { rounded_corners true; hide_session_name true } }` |
 | `simplified_ui` | `false` \| `true` | no arrow fonts in plugins |
-| `auto_layout` | `true` \| `false` | predefined swap-layout flow on new panes; Rimz passes `false` and ships no swap layout so native focused-pane splits stay active |
-| `stacked_resize` | `true` \| `false` | focused-pane split/resize path for no-direction panes; Rimz passes `true` on Zellij ≥ 0.42 |
+| `auto_layout` | `true` \| `false` | predefined swap-layout flow on new panes; RimZ passes `false` and ships no swap layout so native focused-pane splits stay active |
+| `stacked_resize` | `true` \| `false` | focused-pane split/resize path for no-direction panes; RimZ passes `true` on Zellij ≥ 0.42 |
 | `visual_bell` | `true` \| `false` | |
-| `show_startup_tips` / `show_release_notes` | `true` \| `false` | Rimz suppresses both |
-| `session_serialization` | `true` \| `false` | Rimz passes `false` — see [resurrection](#session-serialization-and-resurrection) |
+| `show_startup_tips` / `show_release_notes` | `true` \| `false` | RimZ suppresses both |
+| `session_serialization` | `true` \| `false` | RimZ passes `false` — see [resurrection](#session-serialization-and-resurrection) |
 | `serialize_pane_viewport` | `false` \| `true` | |
 | `scrollback_lines_to_serialize` | int; `0` = all | only with viewport serialization |
 | `serialization_interval` | seconds | default ~1s |
-| `disable_session_metadata` | `false` \| `true` | Rimz passes `true`; gates the per-second session-metadata writer and command-discovery `ps` loop |
+| `disable_session_metadata` | `false` \| `true` | RimZ passes `true`; gates the per-second session-metadata writer and command-discovery `ps` loop |
 | `post_command_discovery_hook` | shell snippet | rewrites the discovered `$RESURRECT_COMMAND` |
 | `env` | `env { KEY "value" }` | set on every terminal pane |
 | `web_server` | `false` \| `true` | start server on startup; + `web_server_ip` (`127.0.0.1`), `web_server_port` (`8082`), `web_server_cert` / `web_server_key`, `enforce_https_for_localhost` |
@@ -401,24 +401,24 @@ Bare alias names resolve in layouts, the CLI, keybinds, and pipes. Defaults ship
 
 ## Layout KDL
 
-The surface Rimz's birth templates use ([multiplexers.md → Zellij backend](../../internals/multiplexers.md#zellij-backend)). Root node `layout`; children: `pane`, `tab`, `pane_template`, `tab_template`, `default_tab_template`, `new_tab_template`, `floating_panes`, and a global `cwd`. Layouts apply **only at session birth** (or via `new-tab --layout` / `override-layout`). `zellij setup --dump-layout default` prints the built-in.
+The surface RimZ's birth templates use ([multiplexers.md → Zellij backend](../../internals/multiplexers.md#zellij-backend)). Root node `layout`; children: `pane`, `tab`, `pane_template`, `tab_template`, `default_tab_template`, `new_tab_template`, `floating_panes`, and a global `cwd`. Layouts apply **only at session birth** (or via `new-tab --layout` / `override-layout`). `zellij setup --dump-layout default` prints the built-in.
 
-**`pane`** — leaf or container. Attributes: `split_direction "vertical"|"horizontal"` (container; default horizontal), `size "30%"|<fixed>` (upstream calls fixed sizes unstable — and a fixed size wider than a detached session's default 80×24 geometry kills the birth, hence Rimz's percentage-at-birth rule), `borderless`, `focus`, `name`, `cwd`, `command` + `args "a" "b"` (args only in child braces), `close_on_exit`, `start_suspended`, `edit "file"`, `plugin { location "zellij:…" }` (location only in child braces), `stacked` / `expanded`, `default_fg` / `default_bg`.
+**`pane`** — leaf or container. Attributes: `split_direction "vertical"|"horizontal"` (container; default horizontal), `size "30%"|<fixed>` (upstream calls fixed sizes unstable — and a fixed size wider than a detached session's default 80×24 geometry kills the birth, hence RimZ's percentage-at-birth rule), `borderless`, `focus`, `name`, `cwd`, `command` + `args "a" "b"` (args only in child braces), `close_on_exit`, `start_suspended`, `edit "file"`, `plugin { location "zellij:…" }` (location only in child braces), `stacked` / `expanded`, `default_fg` / `default_bg`.
 
 **`tab`** — `name`, `focus` (one tab), `split_direction`, `cwd`, `hide_floating_panes`, children panes.
 
-**Templates** — `pane_template name="…"` / `tab_template name="…"` carry a `children` node marking the insertion point; consumers invoke them by name as nodes. A template with `command` accepts `args`/`cwd` from the consumer. **`default_tab_template`** shapes the initial tabs *and* every later tab — and **replaces Zellij's built-in template, dropping the tab/status bar unless re-added explicitly**. **`new_tab_template`** shapes only user-opened tabs and does not apply to the birth tabs. Two sharp edges Rimz hit: a `children` node nested inside a split is never auto-filled with a default terminal (spell the terminal pane explicitly), and on 0.44.3 a layout carrying a `new_tab_template` but **no `tab` node** kills a `--create-background` birth ([multiplexers.md](../../internals/multiplexers.md#zellij-backend)).
+**Templates** — `pane_template name="…"` / `tab_template name="…"` carry a `children` node marking the insertion point; consumers invoke them by name as nodes. A template with `command` accepts `args`/`cwd` from the consumer. **`default_tab_template`** shapes the initial tabs *and* every later tab — and **replaces Zellij's built-in template, dropping the tab/status bar unless re-added explicitly**. **`new_tab_template`** shapes only user-opened tabs and does not apply to the birth tabs. Two sharp edges RimZ hit: a `children` node nested inside a split is never auto-filled with a default terminal (spell the terminal pane explicitly), and on 0.44.3 a layout carrying a `new_tab_template` but **no `tab` node** kills a `--create-background` birth ([multiplexers.md](../../internals/multiplexers.md#zellij-backend)).
 
 **`floating_panes`** — child panes with `x`/`y`/`width`/`height` as fixed or `"%"` values.
 
 **cwd composition** — relative paths chain pane ← tab ← global ← invocation dir (`/hi` + `there` + `friend` = `/hi/there/friend`); an absolute pane cwd overrides all parents.
 
-Swap layouts (`*.swap.kdl`, `swap_tiled_layout` / `swap_floating_layout`) drive the `auto_layout` flow and `next-/previous-swap-layout`; Rimz keeps that flow off and relies on Zellij's native `stacked_resize` focused-pane split. Behaviours verified locally on 0.44.3: a template's `max_panes` budget counts plugin panes and assigns them to slots like terminals, so a template without a plugin slot re-tiles a status bar into the work area as a full-size pane; underfilled explicit tier slots absorb panes in order and render fewer rows rather than failing the tier; without `stacked_resize`, native no-direction `NewPane` chooses the largest weighted-area pane (`rows × 4 × cols`) and can target a full-height fixed sidebar; with `stacked_resize`, native no-direction `NewPane` splits the focused pane and closing returns freed space to that split sibling; a no-direction open after manual resize preserves the user's proportions where the native shape allows; the new pane appends to the end of a `children` stack and keeps focus regardless of which pane was focused; an unbounded swap `tab` with a `children` work area applies at any pane count and re-applies after manual resize; and a root `swap_tiled_layout` coexists with a `new_tab_template` only when no `default_tab_template` is present. `default_tab_template` plus a root swap layout requires a `children` node, which collapses the docked sidebar shape, so Rimz births from explicit `tab` nodes instead.
+Swap layouts (`*.swap.kdl`, `swap_tiled_layout` / `swap_floating_layout`) drive the `auto_layout` flow and `next-/previous-swap-layout`; RimZ keeps that flow off and relies on Zellij's native `stacked_resize` focused-pane split. Behaviours verified locally on 0.44.3: a template's `max_panes` budget counts plugin panes and assigns them to slots like terminals, so a template without a plugin slot re-tiles a status bar into the work area as a full-size pane; underfilled explicit tier slots absorb panes in order and render fewer rows rather than failing the tier; without `stacked_resize`, native no-direction `NewPane` chooses the largest weighted-area pane (`rows × 4 × cols`) and can target a full-height fixed sidebar; with `stacked_resize`, native no-direction `NewPane` splits the focused pane and closing returns freed space to that split sibling; a no-direction open after manual resize preserves the user's proportions where the native shape allows; the new pane appends to the end of a `children` stack and keeps focus regardless of which pane was focused; an unbounded swap `tab` with a `children` work area applies at any pane count and re-applies after manual resize; and a root `swap_tiled_layout` coexists with a `new_tab_template` only when no `default_tab_template` is present. `default_tab_template` plus a root swap layout requires a `children` node, which collapses the docked sidebar shape, so RimZ births from explicit `tab` nodes instead.
 
 ## Session serialization and resurrection
 
 By default every session serializes to the user **cache folder** (`~/.cache/zellij/<contract_version>/session_info/<session>/`) on `serialization_interval` (~1s) as human-readable KDL layouts — the same dialect as `--layout`, shareable across machines. Serialized: the layout plus each pane's *discovered* command (`$RESURRECT_COMMAND`, rewritable via `post_command_discovery_hook`, whose STDOUT replaces the discovered command); optionally the viewport (`serialize_pane_viewport`) and scrollback (`scrollback_lines_to_serialize`).
 
-A dead serialized session lists as `EXITED - attach to resurrect`; attach recreates the layout with every command pane **held at a `Press ENTER to run…` banner** (`PaneInfo.is_held`) — `attach -f/--force-run-commands` runs them immediately instead. `kill-session` keeps the serialized state; `delete-session` / `delete-all-sessions` removes it; `attach --forget` deletes before connecting. `session_serialization false` switches the resurrection machinery off — Rimz's choice, and why: agents cannot restore their running state, so a resurrected room is a wall of held panes ([multiplexers.md](../../internals/multiplexers.md#zellij-backend)).
+A dead serialized session lists as `EXITED - attach to resurrect`; attach recreates the layout with every command pane **held at a `Press ENTER to run…` banner** (`PaneInfo.is_held`) — `attach -f/--force-run-commands` runs them immediately instead. `kill-session` keeps the serialized state; `delete-session` / `delete-all-sessions` removes it; `attach --forget` deletes before connecting. `session_serialization false` switches the resurrection machinery off — RimZ's choice, and why: agents cannot restore their running state, so a resurrected room is a wall of held panes ([multiplexers.md](../../internals/multiplexers.md#zellij-backend)).
 
-`disable_session_metadata true` separately stops the live session metadata loop: the periodic `session-metadata.kdl` rewrite and command-discovery `ps` probes that still run when serialization itself is disabled. Rimz passes it for every room birth and attach.
+`disable_session_metadata true` separately stops the live session metadata loop: the periodic `session-metadata.kdl` rewrite and command-discovery `ps` probes that still run when serialization itself is disabled. RimZ passes it for every room birth and attach.

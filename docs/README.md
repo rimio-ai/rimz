@@ -1,18 +1,18 @@
-# Rimz documentation
+# RimZ documentation
 
-Rimz puts your coding agents in one Zellij or tmux room and routes your attention to whichever one needs you. This page maps the whole documentation set.
+RimZ puts your coding agents in one Zellij or tmux room and routes your attention to whichever one needs you. This page maps the whole documentation set.
 
-New here? Start with the [README](../README.md) for what Rimz is and why it exists, then read [installation](./guide/installation.md) and [set up your machine](./guide/setup.md) in that order. Once the room is running, the guides under [working with agents](#working-with-agents) and [harness engineering](#harness-engineering) cover the daily work, and the [reference](#reference) answers a specific flag or field when you need it.
+New here? Start with the [README](../README.md) for what RimZ is and why it exists, then read [installation](./guide/installation.md) and [set up your machine](./guide/setup.md) in that order. Once the room is running, the guides under [working with agents](#working-with-agents) and [harness engineering](#harness-engineering) cover the daily work, and the [reference](#reference) answers a specific flag or field when you need it.
 
 ## Getting started
 
-- [Introduction](../README.md): what Rimz is, what it does, and the everyday moves, with a runnable get-started block.
+- [Introduction](../README.md): what RimZ is, what it does, and the everyday moves, with a runnable get-started block.
 - [Installation](./guide/installation.md): prerequisites and every install path (Homebrew, prebuilt binary, Cargo, source), verified with `rimz doctor`.
-- [Set up your machine](./guide/setup.md): the one-time pass that makes Rimz a daily driver, covering config init, agent hooks, true color, pets, and the hands-off loop settings.
+- [Set up your machine](./guide/setup.md): the one-time pass that makes RimZ a daily driver, covering config init, agent hooks, true color, pets, and the hands-off loop settings.
 
 ## Working with agents
 
-- [Sidebar](./guide/sidebar.md): read the zones, the agent cards and their lifecycle, and the process rows, and follow how Rimz decides which agent needs you.
+- [Sidebar](./guide/sidebar.md): read the zones, the agent cards and their lifecycle, and the process rows, and follow how RimZ decides which agent needs you.
 - [Agents](./guide/agents.md): run the stock CLIs in the room, shape an agent for one job with a profile, compose several into one layout, and bridge Claude and Codex to their official mobile apps with remote control.
 - [Token Insight](./guide/insight.md): read what the fleet costs and how hard it is working, from the live cockpit to `rimz stats`, and how every figure is calculated.
 - [Remote](./guide/remote.md): attach to a room on another host over SSH, a multiplexer attach with a self-healing link, kept alive across reboots.
@@ -37,7 +37,7 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 ## Help
 
 - [Troubleshooting](./guide/troubleshooting.md): start with `rimz doctor`, then the fixes for a room that will not start, agents not reporting, degraded banners, version drift, and resetting state.
-- [Security and Trust](./guide/security.md): what Rimz changes on your machine and how to undo it, the two places config can run a command (project trust and notification handlers), and what leaves the box.
+- [Security and Trust](./guide/security.md): what RimZ changes on your machine and how to undo it, the two places config can run a command (project trust and notification handlers), and what leaves the box.
 
 ## Reference
 
@@ -46,4 +46,4 @@ New here? Start with the [README](../README.md) for what Rimz is and why it exis
 
 ## How it works
 
-[DESIGN.md](../DESIGN.md) states the attention problem, the design pillars, and the invariants; [ARCHITECTURE.md](../ARCHITECTURE.md) is the runtime shape and the on-disk state; the [internals](./internals/README.md) document each subsystem in depth. To work on Rimz itself, start at [CONTRIBUTING.md](../CONTRIBUTING.md).
+[DESIGN.md](../DESIGN.md) states the attention problem, the design pillars, and the invariants; [ARCHITECTURE.md](../ARCHITECTURE.md) is the runtime shape and the on-disk state; the [internals](./internals/README.md) document each subsystem in depth. To work on RimZ itself, start at [CONTRIBUTING.md](../CONTRIBUTING.md).

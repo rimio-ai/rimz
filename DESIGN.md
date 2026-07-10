@@ -1,14 +1,14 @@
 # Design
 
-Rimz is the harness layer for agentic coding: one human, a fleet of coding agents, one room per project. The room is a Zellij or tmux session with a sidebar that reads the whole fleet at a glance; underneath it, one CLI carries every event into a durable store, so the room survives detach, reload, reboot, and reattach from anywhere.
+RimZ is the harness layer for agentic coding: one human, a fleet of coding agents, one room per project. The room is a Zellij or tmux session with a sidebar that reads the whole fleet at a glance; underneath it, one CLI carries every event into a durable store, so the room survives detach, reload, reboot, and reattach from anywhere.
 
 Leverage over a raw model call accrues in layers: prompt engineering, context engineering, **harness engineering**, **loop engineering**. A harness is everything wrapped around one agent run: the tools, guardrails, feedback loops, and observability that make it reliable. A loop is the control structure above that: act, observe, decide, repeat, driving runs toward a goal unattended.
 
-Rimz supplies the primitives those two layers build on (fleet observability, one uniform interface over every agent, durable messaging, supervised runs, scheduled wakeups) and touches nothing else: your terminal, your multiplexer, the stock agent CLIs, and the official apps all keep working as they are. The harness and loops you compose on those primitives stay yours, with their own policy and credentials.
+RimZ supplies the primitives those two layers build on (fleet observability, one uniform interface over every agent, durable messaging, supervised runs, scheduled wakeups) and touches nothing else: your terminal, your multiplexer, the stock agent CLIs, and the official apps all keep working as they are. The harness and loops you compose on those primitives stay yours, with their own policy and credentials.
 
-The problem Rimz answers is attention. A fleet emits far more than one person can read (prompts, tool calls, completions, failures, token burn, rate-limit stalls), and Rimz spends that finite attention well: it turns the wall of activity into "this pane, right now, needs you," and otherwise stays quiet. A good harness spends your attention only where a run genuinely needs a human, and a good loop removes the need for it between runs; every choice below serves that economy.
+The problem RimZ answers is attention. A fleet emits far more than one person can read (prompts, tool calls, completions, failures, token burn, rate-limit stalls), and RimZ spends that finite attention well: it turns the wall of activity into "this pane, right now, needs you," and otherwise stays quiet. A good harness spends your attention only where a run genuinely needs a human, and a good loop removes the need for it between runs; every choice below serves that economy.
 
-> **Invariant.** Rimz routes your attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI.
+> **Invariant.** RimZ routes your attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI.
 
 ## Triage at a glance
 
@@ -23,7 +23,7 @@ The glyph legend and rendered frames live in [the interface reference](./docs/in
 
 ## Answering in the agent's own UI
 
-The moment an agent asks to run a command is the moment a human can stop something destructive. Rimz keeps that moment in the agent's own UI and spends its effort getting you there fast. A blocking prompt (a permission request, a plan approval, a question) reaches Rimz through the agent's hooks and sets the agent's `waiting` state, the hook returns the agent-native neutral no-op so the prompt stays on screen exactly as the agent rendered it, and the sidebar routes you there: the row turns `?`, notifications fire, and focusing the row lands you in the pane. Your answer clears the state through the same lifecycle channel, and the transcript keeps the question and the answer. The state machine and clearing edges live in [model.md](./docs/internals/agents/model.md).
+The moment an agent asks to run a command is the moment a human can stop something destructive. RimZ keeps that moment in the agent's own UI and spends its effort getting you there fast. A blocking prompt (a permission request, a plan approval, a question) reaches RimZ through the agent's hooks and sets the agent's `waiting` state, the hook returns the agent-native neutral no-op so the prompt stays on screen exactly as the agent rendered it, and the sidebar routes you there: the row turns `?`, notifications fire, and focusing the row lands you in the pane. Your answer clears the state through the same lifecycle channel, and the transcript keeps the question and the answer. The state machine and clearing edges live in [model.md](./docs/internals/agents/model.md).
 
 ## A fleet run like a team
 
@@ -43,7 +43,7 @@ Loop engineering composes those primitives into a routine: `rimz loop` drives su
 
 ## Built on what you already run
 
-- Zellij and tmux own panes, sessions, attach/detach, and scrollback; Rimz drives them through a thin backend seam and leaves your keybinds and layout exactly as they were. The store, CLI, and sidebar model are identical on both backends; core behaviour uses only primitives both share.
+- Zellij and tmux own panes, sessions, attach/detach, and scrollback; RimZ drives them through a thin backend seam and leaves your keybinds and layout exactly as they were. The store, CLI, and sidebar model are identical on both backends; core behaviour uses only primitives both share.
 - Durable state is a directory of flat files written with atomic temp-file-plus-rename: no daemon, no database, no schema to migrate. It survives detach, reload, and reboot, travels over SSH, and reads with `cat`.
 
 ## Invariants
@@ -53,9 +53,9 @@ Each line is a decision a reader might challenge, with the reason on the same li
 - **One root, one room.** A workspace root — a git repo whose worktrees group inside the room, a project-marker directory, or any directory, `$HOME` and `/` included — maps to one workspace, one mux session, one store, one sidebar, and one live backend, and a rival mux over the same path is refused while the first lives. Ten agents across five branches stay scannable as one room, and a headless box with no source control gets the same room.
 - **A pane's workspace is the session it lives in.** Session birth pins the workspace identity into the mux environment and commands honor the verified pin before re-deriving from cwd, so an agent in a nested repo still writes to the room's store. Overlapping rooms are legal and surfaced, and a deliberate per-repo room stays one `rimz start` away.
 - **The store owns durability.** Agent state and event history outlive detach, sidebar reload, sidebar crash, and no-client mode; the sidebar renders the store, and correctness lives one layer down.
-- **A reborn room offers its fleet back.** After a reboot or mux crash, Rimz offers to re-seed prior agents from the durable rollup into their channel tabs, restored idle (`claude --resume`, `codex resume`, `pi --session`); the prompt defaults to recovery, non-interactive starts recover, and agents you closed deliberately stay closed. Continuity is Rimz-owned and transcript-based — the rebirth is guaranteed, the transcript with asks and answers is durable, and the provider's own resume rides on top as best-effort enrichment.
+- **A reborn room offers its fleet back.** After a reboot or mux crash, RimZ offers to re-seed prior agents from the durable rollup into their channel tabs, restored idle (`claude --resume`, `codex resume`, `pi --session`); the prompt defaults to recovery, non-interactive starts recover, and agents you closed deliberately stay closed. Continuity is RimZ-owned and transcript-based — the rebirth is guaranteed, the transcript with asks and answers is durable, and the provider's own resume rides on top as best-effort enrichment.
 - **One view-model, many renderers.** The `rimz sidebar snapshot` JSON is the shared view-model; the native pane and CLI listings are projections of it, and any future renderer joins the same way. None owns state; none gates correctness.
-- **Degraded frames say so.** The sidebar keeps the last good snapshot and pins a labeled banner with cause and age; banners, the trust state, and `rimz doctor` are where Rimz reports what it cannot currently vouch for.
+- **Degraded frames say so.** The sidebar keeps the last good snapshot and pins a labeled banner with cause and age; banners, the trust state, and `rimz doctor` are where RimZ reports what it cannot currently vouch for.
 - **Interactive attach is opportunistic.** `rimz` enters the mux only when stdin/stdout are TTYs and the caller is not already inside it; non-interactive callers get a printed attach command, and explicit flags override.
 - **Loop engineering is explicit and per-machine.** A notification handler or scheduled loop runs only where you wire it, lives in per-machine config, and owns its own credentials and policy.
 - **Pane I/O is explicit, and it enriches rather than decides.** `pane capture` and `pane send` are public primitives for humans and scripts, and `message` routes human-authored text through the same send path — delivering only at open turn boundaries, held while the agent waits on your answer. Pane contents and transcripts decorate rows; the store, hooks, and explicit events decide permissions, state, and correctness.
@@ -65,5 +65,5 @@ Each line is a decision a reader might challenge, with the reason on the same li
 
 - A cloud control plane or cross-workspace orchestrator: one project, one room.
 - An agents-only control surface: humans and scripts drive the room through the same CLI an agent's hooks use.
-- Built-in answer policy: Rimz gets you to the prompt; anything that answers for you is yours to build on the public primitives.
+- Built-in answer policy: RimZ gets you to the prompt; anything that answers for you is yours to build on the public primitives.
 - Process resurrection across host restart: the store survives a reboot; running sessions belong to tmux-resurrect, Zellij resurrect, systemd, or another supervisor.

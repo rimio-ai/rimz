@@ -1,10 +1,10 @@
 # tmux upstream reference
 
-> The Rimz-side contracts live in [multiplexers.md](../../internals/multiplexers.md) — the `MuxBackend` seam, the managed sidebar pane, the control-mode presence watch, and the room options. This doc mirrors the upstream surface itself.
+> The RimZ-side contracts live in [multiplexers.md](../../internals/multiplexers.md) — the `MuxBackend` seam, the managed sidebar pane, the control-mode presence watch, and the room options. This doc mirrors the upstream surface itself.
 
-This is the single home for the **tmux upstream surface** Rimz binds to — the client/server and socket model, the command verbs the backend adapter drives, the format language, hooks, options, the session environment, and the control-mode protocol. It is a hand-maintained mirror of the tmux(1) man page cross-checked against the installed binary and live probes on a scratch `-S` server, captured at **tmux 3.5a** (2026-06; upstream latest is **3.6b**, 2026-05-20). Where the man page and the wire disagree, the wire wins and the disagreement is flagged.
+This is the single home for the **tmux upstream surface** RimZ binds to — the client/server and socket model, the command verbs the backend adapter drives, the format language, hooks, options, the session environment, and the control-mode protocol. It is a hand-maintained mirror of the tmux(1) man page cross-checked against the installed binary and live probes on a scratch `-S` server, captured at **tmux 3.5a** (2026-06; upstream latest is **3.6b**, 2026-05-20). Where the man page and the wire disagree, the wire wins and the disagreement is flagged.
 
-Coverage is **depth on what Rimz wires, breadth as an index**: the commands `TmuxBackend` runs, the format variables `list-panes`/`list-clients` read, the twelve room options, the `after-new-window` hook, and the control-mode notifications `PresenceWatch` filters are documented in full; the rest of each catalog is listed so a contributor wiring a new surface knows it exists.
+Coverage is **depth on what RimZ wires, breadth as an index**: the commands `TmuxBackend` runs, the format variables `list-panes`/`list-clients` read, the twelve room options, the `after-new-window` hook, and the control-mode notifications `PresenceWatch` filters are documented in full; the rest of each catalog is listed so a contributor wiring a new surface knows it exists.
 
 ## Upstream sources
 
@@ -51,7 +51,7 @@ Sessions, windows, and panes carry server-unique ids — `$N`, `@N`, `%N` — un
 | 3.3a | 2022-06-09 | | 3.6a | 2025-12-05 |
 | 3.4 | 2024-02-13 | | 3.6b | 2026-05-20 |
 
-Floors for the surfaces Rimz uses (from CHANGES):
+Floors for the surfaces RimZ uses (from CHANGES):
 
 | Surface | Landed |
 | --- | --- |
@@ -72,11 +72,11 @@ Floors for the surfaces Rimz uses (from CHANGES):
 | `new-window -S` (select-if-exists by name) | 3.2 |
 | `pane_start_time` format variable | **does not exist in any release** ([formats](#the-variables-rimz-reads)) |
 
-**The floor is option-driven:** `MIN_TMUX_VERSION` is 3.5.0 because the room options Rimz applies across supported hosts include `allow-passthrough` (3.3) and `extended-keys-format` (3.5), and a batched option sequence fails at the first option the server does not know — the command surface alone would need only 3.2. tmux 3.5.x carries the rich-key options but re-encodes bracketed-paste control bytes as extended-key sequences while they are active; 3.6 removes that paste cost. The optional pet pixel tier gates itself higher at tmux 3.6 because it relies on kitty graphics passthrough plus Unicode-placeholder repaint behavior. A future option below the floor either moves the constant again or gates itself (`set-option -q` silences unknown-option errors without branching on `tmux -V`).
+**The floor is option-driven:** `MIN_TMUX_VERSION` is 3.5.0 because the room options RimZ applies across supported hosts include `allow-passthrough` (3.3) and `extended-keys-format` (3.5), and a batched option sequence fails at the first option the server does not know — the command surface alone would need only 3.2. tmux 3.5.x carries the rich-key options but re-encodes bracketed-paste control bytes as extended-key sequences while they are active; 3.6 removes that paste cost. The optional pet pixel tier gates itself higher at tmux 3.6 because it relies on kitty graphics passthrough plus Unicode-placeholder repaint behavior. A future option below the floor either moves the constant again or gates itself (`set-option -q` silences unknown-option errors without branching on `tmux -V`).
 
 Behaviour changes inside the supported range: 3.6 keeps paste bytes uninterpreted while extended keys are active; 3.5 cut `escape-time`'s default 500→10ms and revamped extended-keys (always requests mode 2 upstream, new internal key representation; 3.5a adjusts BSpace/Shift encoding); 3.5 ran `#()`/`run-shell`/`if-shell`/popups under `default-shell`, and 3.5a reverted all but popups to `/bin/sh`; 3.3 made `command-prompt`/`confirm-before` block by default (`-b` restores async); 3.2 moved window/pane hooks off session scope ([hooks](#hooks)), renamed `refresh-client -F` to `-f`, and made `window_flags` escape `#` (`window_raw_flags` is the raw form).
 
-3.6 additions, forward-looking and none load-bearing for Rimz: pane scrollbars (`pane-scrollbars*` options), dark/light theme reporting (DEC mode 2031) with `client-light-theme`/`client-dark-theme` hooks, `capture-pane -M`, `display-popup -k`, N-ary `&&`/`||` plus `!` in formats, `buffer_full` and `sixel_support` variables, a `no-detach-on-destroy` client flag, `default-client-command`, `input-buffer-size`.
+3.6 additions, forward-looking and none load-bearing for RimZ: pane scrollbars (`pane-scrollbars*` options), dark/light theme reporting (DEC mode 2031) with `client-light-theme`/`client-dark-theme` hooks, `capture-pane -M`, `display-popup -k`, N-ary `&&`/`||` plus `!` in formats, `buffer_full` and `sixel_support` variables, a `no-detach-on-destroy` client flag, `default-client-command`, `input-buffer-size`.
 
 ## Command surface
 
@@ -94,7 +94,7 @@ Behaviour changes inside the supported range: 3.6 keeps paste bytes uninterprete
 
 **`attach-session [-dErx] [-c dir] [-f flags] [-t session]`** — `-d` detaches other clients, `-x` detach-and-SIGHUP them, `-E` skips `update-environment`, `-r` is read-only (alias for `-f read-only,ignore-size`). Client flags (`-f`, comma-separated; a leading `!` clears a flag on an already-attached client): `active-pane` (client-private active pane), `ignore-size` (excluded from size negotiation), and the control-mode trio `no-output`, `pause-after=secs`, `wait-exit` ([control mode](#control-mode)). A read-only client's *keys* are limited to detach/switch bindings — its stdin commands are not ([sharp edges](#client-flags-and-flow-control)).
 
-**`detach-client [-aP] [-E cmd] [-s session] [-t client]`** — `-s` detaches every client on the session (Rimz's `detach`); `-P` SIGHUPs the client's parent; `-E` exec-replaces the client process.
+**`detach-client [-aP] [-E cmd] [-s session] [-t client]`** — `-s` detaches every client on the session (RimZ's `detach`); `-P` SIGHUPs the client's parent; `-E` exec-replaces the client process.
 
 **`kill-session [-aC] [-t session]`** — an absent target exits 1 with `can't find session: <name>` (alongside the two no-server shapes, the goal state of an idempotent kill). `-a` kills every *other* session. **`kill-server`** tears down the server, all sessions, all clients.
 
@@ -104,7 +104,7 @@ Index: `has-session -t` (pure exit code), `rename-session`, `lock-client`/`lock-
 
 ### Windows and panes
 
-**`new-window [-abdkPS] [-c dir] [-e VAR=val]… [-F fmt] [-n name] [-t window] [cmd…]`** — `-d` keeps the current window current; `-P -F '#{window_id} #{pane_id}'` prints the ids for follow-up targeting; `-n` names the window **and disables `automatic-rename` for it**, making the name a stable idempotency key (Rimz's resume/daemon windows probe `list-windows -F '#{window_name}'`); `-S` selects an existing window of that name instead of erroring (3.2); `-a`/`-b` insert after/before an index, shifting others; `-k` replaces an existing target. The window closes when its command exits unless `remain-on-exit` holds the corpse.
+**`new-window [-abdkPS] [-c dir] [-e VAR=val]… [-F fmt] [-n name] [-t window] [cmd…]`** — `-d` keeps the current window current; `-P -F '#{window_id} #{pane_id}'` prints the ids for follow-up targeting; `-n` names the window **and disables `automatic-rename` for it**, making the name a stable idempotency key (RimZ's resume/daemon windows probe `list-windows -F '#{window_name}'`); `-S` selects an existing window of that name instead of erroring (3.2); `-a`/`-b` insert after/before an index, shifting others; `-k` replaces an existing target. The window closes when its command exits unless `remain-on-exit` holds the corpse.
 
 **`split-window [-bdfhIvPZ] [-c dir] [-e VAR=val]… [-l size] [-t pane] [cmd…] [-F fmt]`** — `-h` splits left-right, `-v` top-bottom (default); `-b` puts the new pane before (left of / above) the target — the sidebar-on-the-left shape; `-l <n>` fixes columns/lines, `-l <n>%` a percentage; `-f` spans the full window edge; `-d` leaves focus alone; `-P [-F]` prints the new pane (ask for `#{pane_id}` explicitly — the default format is index-shaped); an empty command `''` births a command-less pane writable via `display-message -I`. Splits mount fine on a detached session — no client required (the asymmetry with Zellij's detached-mount drop).
 
@@ -159,7 +159,7 @@ The format language is tmux's read surface: every `-F` flag, filter, hook comman
 - `s/pat/rep/:` substitute (extended regex, any delimiter, `i` flag) · `=N:` truncate (negative from the end, `=/N/…:` adds a marker) · `pN:` pad · `n:` length · `w:` display width · `l:` literal (no expansion).
 - `#(cmd)` inserts the last line of a shell command's output — cached, refreshed at most once a second, never blocks (a placeholder until the first completion); `/bin/sh` with the global environment.
 
-### The variables Rimz reads
+### The variables RimZ reads
 
 | Variable | Replaced with | Notes |
 | --- | --- | --- |
@@ -180,7 +180,7 @@ The format language is tmux's read surface: every `-F` flag, filter, hook comman
 | `client_tty` / `client_session` / `client_name` / `client_control_mode` / `client_flags` | per-client facts | the `list-clients` row context |
 | `socket_path` / `pid` / `start_time` / `version` | server facts | `start_time` is the **server's** start, not a pane's |
 
-**There is no `pane_start_time`.** No release from 3.2 through 3.6b defines a per-pane process start-time variable — `display-message -v` reports `format 'pane_start_time' not found` and the column expands empty (probed 3.5a; absent from master `format.c`). The nearest live facts are `pane_pid` (first process) and the monotonic never-reused `%id` itself, which already rules out stale-id collisions within one server's lifetime; Rimz derives `pane_process_start` from `pane_pid` via `/proc` ([multiplexers.md → pane metadata](../../internals/multiplexers.md#pane-metadata)).
+**There is no `pane_start_time`.** No release from 3.2 through 3.6b defines a per-pane process start-time variable — `display-message -v` reports `format 'pane_start_time' not found` and the column expands empty (probed 3.5a; absent from master `format.c`). The nearest live facts are `pane_pid` (first process) and the monotonic never-reused `%id` itself, which already rules out stale-id collisions within one server's lifetime; RimZ derives `pane_process_start` from `pane_pid` via `/proc` ([multiplexers.md → pane metadata](../../internals/multiplexers.md#pane-metadata)).
 
 Catalog breadth (~230 variables): `buffer_*`, `client_*` (geometry, flags, tty, uid), `command_*`, copy-mode state (`copy_cursor_*`, `selection_*`, `search_*`, `scroll_position`), `cursor_*`, `history_*` (`history_size`, `history_limit`, `history_bytes`), `hook_*` (firing context), `mouse_*`, `pane_*` (geometry, edges, flags, modes), `session_*` (counts, times, groups, `session_attached`), `window_*` (geometry, flags, counts, `window_zoomed_flag`, `window_layout`), and the server singletons. Full table: man FORMATS.
 
@@ -196,13 +196,13 @@ Commands run on triggers, stored as **array options** — they scope and stack e
 
 ## Options
 
-Four scope tables — server, session, window, pane — each in a global and a local flavour; local shadows global. The room options Rimz applies at `ensure_session`, batched into one client call ([multiplexers.md → tmux backend](../../internals/multiplexers.md#tmux-backend)); Rimz's value in bold:
+Four scope tables — server, session, window, pane — each in a global and a local flavour; local shadows global. The room options RimZ applies at `ensure_session`, batched into one client call ([multiplexers.md → tmux backend](../../internals/multiplexers.md#tmux-backend)); RimZ's value in bold:
 
 | Option | Scope | Values | Why it matters |
 | --- | --- | --- | --- |
 | `focus-events` | server | **on** \| off | requests focus reporting from the terminal and forwards FocusIn/Out to apps; enables the `pane-focus-*` hooks; clients should re-attach after flipping |
 | `set-clipboard` | server | **on** \| external \| off | `on` both accepts OSC 52 from apps (into a tmux buffer) and forwards to the outer terminal (needs terminfo `Ms`); `external` forwards only, ignoring app sets |
-| `extended-keys` | server | tmux accepts on/off/always; Rimz writes **on** by default | modifyOtherKeys: `on` honours app requests for mode 1/2; on tmux 3.5.x it contaminates bracketed paste, and 3.6 fixes that cost |
+| `extended-keys` | server | tmux accepts on/off/always; RimZ writes **on** by default | modifyOtherKeys: `on` honours app requests for mode 1/2; on tmux 3.5.x it contaminates bracketed paste, and 3.6 fixes that cost |
 | `extended-keys-format` | server | **csi-u** \| xterm | `C-S-a` → `^[[65;6u` (csi-u) vs `^[[27;6;65~` (xterm); **3.5+** |
 | `terminal-features` (append `*:sync`) | server | **`*:sync`** | tells tmux the outer terminal honours synchronized output, so bracketed frame writes forward as atomic redraws for pixel pets and full-screen TUIs; appended rather than replaced, so the user's RGB and clipboard features survive |
 | `terminal-features` (append `*:extkeys`) | server | **`*:extkeys`** when extended keys are enabled | requests extended keys from the outer terminal so modified keys, including Shift+Enter and Alt+Enter, arrive as CSI-u; appended rather than replaced, so the user's RGB and clipboard features survive |
@@ -213,7 +213,7 @@ Four scope tables — server, session, window, pane — each in a global and a l
 | `allow-passthrough` | pane (set at window scope) | off \| **on** \| all | the `\ePtmux;…\e\\` passthrough escape; **3.3+, default off**; `on` works only while the pane is visible, `all` always (3.4); the pet pixel tier also requires tmux 3.6+ and a kitty-capable attached client termname (`#{client_termname}`) unless `[theme.pets] glyphs = "pixel"` explicitly opts past that allowlist |
 | `aggressive-resize` | window | **on** \| off | size to the smallest/largest session currently *viewing* the window rather than merely linked to it |
 | `pane-border-status` | window | **off** \| top \| bottom | a per-pane border text line (`pane-border-format`) |
-| `pane-border-format` | window | format string | text rendered in the `pane-border-status` row; when Rimz owns `pane-border-status`, it drives this to blank the sidebar segment |
+| `pane-border-format` | window | format string | text rendered in the `pane-border-status` row; when RimZ owns `pane-border-status`, it drives this to blank the sidebar segment |
 | `pane-border-lines` | window | **simple** \| single \| double \| heavy \| number | border glyph set; `simple` is plain ASCII |
 
 Neighbours a contributor will reach for: `default-size XxY` (detached birth geometry — **implicitly set by `new-session -x/-y`**, probed), `base-index` (first window index, conventionally global), `window-size largest|smallest|manual|latest`, `remain-on-exit [on|off|failed]` + `remain-on-exit-format`, `detach-on-destroy [on|off|no-detached|previous|next]`, `destroy-unattached [off|on|keep-last|keep-group]`, `exit-empty`/`exit-unattached` (server lifetime), `allow-rename` (apps renaming windows via escape, default off), `allow-set-title` (apps writing `pane_title`, default on), `automatic-rename[-format]`, `update-environment[]`, `default-terminal` + `terminal-features[]` (the modern per-terminal capability switchboard: `256`, `RGB`, `clipboard`, `extkeys`, `focus`, `hyperlinks`, `mouse`, `osc7`, `sixel`, `sync`, `title`, `usstyle`, …), `default-command`/`default-shell`, `popup-style`/`popup-border-style`/`popup-border-lines` (3.3), `synchronize-panes`, `monitor-activity`/`monitor-bell`/`monitor-silence`.

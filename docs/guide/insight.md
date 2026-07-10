@@ -2,7 +2,7 @@
 
 You run a fleet now, not a single agent, and the fleet spends. Tokens turn into dollars across every provider you use, and each keeps its own tally on its own billing page: none beside your code, none aware of the others. The one number you actually want, what the fleet cost and how hard it worked, is the one nobody puts in front of you.
 
-Token insight is that number, in the terminal. Every turn your agents run leaves a transcript on disk (the model, the token counts, the timestamps, and for some providers the dollar cost), and Rimz reads those files and rolls them into one account-global picture across Claude, Codex, Pi, and OpenCode. If you have run `ccusage` over Claude's transcripts, this is the same trick, widened to every provider and wired into the room so it updates as the work lands. It is also just satisfying to watch: the totals are a fair read on how much your agents are doing for you, and there is nothing to switch on, since the hooks you approved at install already point Rimz at the files.
+Token insight is that number, in the terminal. Every turn your agents run leaves a transcript on disk (the model, the token counts, the timestamps, and for some providers the dollar cost), and RimZ reads those files and rolls them into one account-global picture across Claude, Codex, Pi, and OpenCode. If you have run `ccusage` over Claude's transcripts, this is the same trick, widened to every provider and wired into the room so it updates as the work lands. It is also just satisfying to watch: the totals are a fair read on how much your agents are doing for you, and there is nothing to switch on, since the hooks you approved at install already point RimZ at the files.
 
 You read it two ways. `rimz stats` prints the whole history on demand, from anywhere. The sidebar keeps a live slice of the same data in front of you while you work.
 
@@ -17,12 +17,12 @@ You read it two ways. `rimz stats` prints the whole history on demand, from anyw
 
 - **The heatmap** is a GitHub-style contribution graph of tokens per day, about a year of history, shaded from an idle day up to your heaviest. The scale is relative to your own busiest day in view, so the texture reads against your rhythm rather than an absolute ceiling. `--dollars` shades it by cost instead of tokens.
 - **The window row** (All time, Week, Month, Year) scopes the Models, Agents, and insight rows below it, while the heatmap stays full-history. In the held dashboard, `Tab` and `Shift-Tab` cycle the window; a plain `rimz stats` prints the All-time view.
-- **Models** ranks where the dollars went, each model under its friendly name (`gpt-5.5` reads as `GPT 5.5`) with its token split and its share of the window; the long tail folds into one `Other` row. **Agents** ranks by session count across Claude, Codex, Pi, and OpenCode. Both breakdowns carry tokens as well as dollars, so a model Rimz cannot price still shows up with its tokens counted.
+- **Models** ranks where the dollars went, each model under its friendly name (`gpt-5.5` reads as `GPT 5.5`) with its token split and its share of the window; the long tail folds into one `Other` row. **Agents** ranks by session count across Claude, Codex, Pi, and OpenCode. Both breakdowns carry tokens as well as dollars, so a model RimZ cannot price still shows up with its tokens counted.
 - **The insight lines** close it: sessions and spend for the window, how many days in the window saw activity, your heaviest single day, and your longest and current active-day streaks.
 
 For a shell or a script, `rimz stats --json` emits the per-day buckets, the windows, both breakdowns, and the insights. `rimz stats --refresh` instead holds the panel open and repaints it every minute; this is the live pane the `rimzd` daemon view carries.
 
-`rimz stats` only reads. It touches no agent, writes nothing to your sessions, and prints from a cache Rimz keeps under its own state directory. Its one network call is the weekly price-table refresh described below, which `RIMZ_PRICING_OFFLINE=1` turns off.
+`rimz stats` only reads. It touches no agent, writes nothing to your sessions, and prints from a cache RimZ keeps under its own state directory. Its one network call is the weekly price-table refresh described below, which `RIMZ_PRICING_OFFLINE=1` turns off.
 
 ## In the sidebar, live
 
@@ -90,13 +90,13 @@ To read one agent's cost instead of the room's, [`rimz agents show`](./agents.md
 
 ## How the numbers are calculated
 
-Every figure on every surface comes from one place: the transcript and session files your agents already write to disk. Rimz never scrapes a pane or guesses from the screen. It reads the same records the provider's own CLI wrote, so the token counts are the provider's, not an estimate.
+Every figure on every surface comes from one place: the transcript and session files your agents already write to disk. RimZ never scrapes a pane or guesses from the screen. It reads the same records the provider's own CLI wrote, so the token counts are the provider's, not an estimate.
 
 Turning tokens into dollars is where the care goes:
 
 - Providers that log a dollar cost per turn (Pi, and older Claude transcripts) are taken at their word.
-- Providers that log token counts (Claude, Codex) are priced with a per-model table. Rimz ships a built-in table and refreshes it weekly from the public LiteLLM price list, so a new model's rate lands without waiting on a Rimz release. Input, output, cache writes, and cache reads each price at their own rate, including the higher tier some models charge above 200k tokens.
-- A model Rimz has no price for still contributes its tokens and its session to every total. Only its dollar column reads zero, until a price is found. Token attribution never waits on pricing.
+- Providers that log token counts (Claude, Codex) are priced with a per-model table. RimZ ships a built-in table and refreshes it weekly from the public LiteLLM price list, so a new model's rate lands without waiting on a RimZ release. Input, output, cache writes, and cache reads each price at their own rate, including the higher tier some models charge above 200k tokens.
+- A model RimZ has no price for still contributes its tokens and its session to every total. Only its dollar column reads zero, until a price is found. Token attribution never waits on pricing.
 
 Two scopes and a set of windows keep the surfaces honest:
 

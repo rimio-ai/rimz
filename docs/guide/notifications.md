@@ -1,16 +1,16 @@
 # Notifications
 
-> When an agent needs you and you are not looking, Rimz taps you: a desktop banner, a terminal bell, and — through notification handlers — any channel or script you own. This page wires the tap to your phone, your chat, or a script that clears routine prompts itself. The trigger model, debounce, and delivery plumbing are [internals → notifications](../internals/sidebar/notifications.md).
+> When an agent needs you and you are not looking, RimZ taps you: a desktop banner, a terminal bell, and — through notification handlers — any channel or script you own. This page wires the tap to your phone, your chat, or a script that clears routine prompts itself. The trigger model, debounce, and delivery plumbing are [internals → notifications](../internals/sidebar/notifications.md).
 
 ## Why notifications
 
-Rimz's job is routing your attention, and the sidebar does it while you watch: a row flips to `? waiting`, rises, and one keystroke lands you in the right pane ([sidebar](./sidebar.md)). The moment that costs you is when you are not watching. You are heads-down in another pane, in a meeting, detached over SSH, asleep — and an agent hits a permission prompt ten minutes into an hour of work. The blocker is a one-line answer; unseen, it stalls the agent for exactly as long as you are away.
+RimZ's job is routing your attention, and the sidebar does it while you watch: a row flips to `? waiting`, rises, and one keystroke lands you in the right pane ([sidebar](./sidebar.md)). The moment that costs you is when you are not watching. You are heads-down in another pane, in a meeting, detached over SSH, asleep — and an agent hits a permission prompt ten minutes into an hour of work. The blocker is a one-line answer; unseen, it stalls the agent for exactly as long as you are away.
 
-You also already own the last mile. ntfy or Pushover on your phone, a Slack webhook, `notify-send` on your desktop — every developer has a push route that reaches them. Rimz ships no push service of its own: a handler runs your command with the event in hand, and your route does what it already does.
+You also already own the last mile. ntfy or Pushover on your phone, a Slack webhook, `notify-send` on your desktop — every developer has a push route that reaches them. RimZ ships no push service of its own: a handler runs your command with the event in hand, and your route does what it already does.
 
 ## What you get without configuring anything
 
-An agent going `waiting` or `failed` marks its card unread in the sidebar, writes a terminal notification escape that your terminal turns into a native desktop banner — through tmux and SSH included, since Rimz rooms enable passthrough by default — and rings the bell. A row that stays waiting earns one reminder nudge rather than a stream, and several agents flipping at once coalesce into one notification. All of it is best-effort polish over the durable store: a missed banner loses nothing, because the card stays unread and ranked until you look.
+An agent going `waiting` or `failed` marks its card unread in the sidebar, writes a terminal notification escape that your terminal turns into a native desktop banner — through tmux and SSH included, since RimZ rooms enable passthrough by default — and rings the bell. A row that stays waiting earns one reminder nudge rather than a stream, and several agents flipping at once coalesce into one notification. All of it is best-effort polish over the durable store: a missed banner loses nothing, because the card stays unread and ranked until you look.
 
 Two caveats are worth knowing up front. Zellij currently drops desktop notification escapes, so on Zellij the handler path below is the route to a native banner. And when no banner appears anywhere, [troubleshooting](./troubleshooting.md#notifications-dont-fire) walks the checklist from terminal support to OS permission.
 
@@ -35,7 +35,7 @@ For Claude and Codex, [remote control](./agents.md#answer-asks-from-your-phone) 
 
 ## Handlers that act, not just alert
 
-A handler fires with the pane and root in hand, and everything it might do next is a public Rimz command. That makes a handler a place to clear the routine prompt you have already approved eight times today, composed from the room's own primitives:
+A handler fires with the pane and root in hand, and everything it might do next is a public RimZ command. That makes a handler a place to clear the routine prompt you have already approved eight times today, composed from the room's own primitives:
 
 - `rimz asks show "$RIMZ_NOTIFY_ASK" --json` reads the structured prompt and safe choices.
 - `rimz answer "$RIMZ_NOTIFY_ASK" <choice>` validates and types one atomic supported answer into the agent's own UI. Claude permission notifications offer `allow`, and plan approvals offer caution-marked `approve`; the remaining menu actions route the human to the pane.

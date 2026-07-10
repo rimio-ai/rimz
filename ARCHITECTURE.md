@@ -1,14 +1,14 @@
 # Architecture
 
-Rimz is a single Rust binary that turns a Zellij or tmux session into a control room for coding agents. It owns no daemon and no database: it builds on the multiplexer you already run, a directory of flat files for durable state, and one CLI that every event flows through.
+RimZ is a single Rust binary that turns a Zellij or tmux session into a control room for coding agents. It owns no daemon and no database: it builds on the multiplexer you already run, a directory of flat files for durable state, and one CLI that every event flows through.
 
 One invariant ties the runtime together:
 
 ```text
-workspace root == Rimz workspace == multiplexer session
+workspace root == RimZ workspace == multiplexer session
 ```
 
-A **root** is the richest class a directory offers: an enclosing git repository (whose worktrees group inside one room), else a project-marker directory, else the directory itself — the workspace a headless box of agents gets with no source control. A pane's workspace is the session it lives in: session birth stamps the identity pin into the mux environment, and participating commands honor it before re-deriving from cwd ([workspace.rs](./crates/rimz/src/workspace.rs)). Zellij and tmux own panes, views, sessions, attach/detach, and scrollback; Rimz owns project identity, durable state, notification handlers, hook entrypoints, and the sidebar rendering contract.
+A **root** is the richest class a directory offers: an enclosing git repository (whose worktrees group inside one room), else a project-marker directory, else the directory itself — the workspace a headless box of agents gets with no source control. A pane's workspace is the session it lives in: session birth stamps the identity pin into the mux environment, and participating commands honor it before re-deriving from cwd ([workspace.rs](./crates/rimz/src/workspace.rs)). Zellij and tmux own panes, views, sessions, attach/detach, and scrollback; RimZ owns project identity, durable state, notification handlers, hook entrypoints, and the sidebar rendering contract.
 
 The design pillars and product invariants live in [DESIGN.md](./DESIGN.md); this file is the structural map.
 
@@ -23,7 +23,7 @@ Detail lives in four places, narrowing as you go:
 
 ## Runtime shape
 
-There is no Rimz daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process.
+There is no RimZ daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process.
 
 ```text
 terminal emulator
@@ -49,10 +49,10 @@ The CLI and hook subprocesses are the only writers of product truth. The sidebar
 | Owner | Owns | Does not own |
 | --- | --- | --- |
 | Multiplexer | panes, views, sessions, attach/detach, layout, scrollback | store state, agent status, handler trust |
-| Rimz store | events, agent state, messages, runs, snapshots | terminal rendering, pane mechanics |
+| RimZ store | events, agent state, messages, runs, snapshots | terminal rendering, pane mechanics |
 | CLI / hook subprocesses | durable writes, supervised-run waiters, mux command calls | UI presentation |
 | Sidebar | rendering, focus affordances, human actions through the CLI | durable state files |
-| Agents | native UI, prompts, sandboxing, bypass behaviour | Rimz store state |
+| Agents | native UI, prompts, sandboxing, bypass behaviour | RimZ store state |
 | Host | process resurrection, OS sandboxing | workspace state |
 
 ### Durable state on disk

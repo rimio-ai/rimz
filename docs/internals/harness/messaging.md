@@ -1,8 +1,8 @@
 # The message system
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [model.md](../agents/model.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktrees.md](./worktrees.md); the user-facing commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), and [cli/channel.md](../../reference/cli/channel.md). This doc owns how Rimz routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent model (rollup, state machine, turn phase, liveness) is [model.md](../agents/model.md); the address grammar and the exec wrapper are [harness.md](./harness.md); the Git worktree backing is [worktrees.md](./worktrees.md); the user-facing commands are [cli/message.md](../../reference/cli/message.md), [cli/transcript.md](../../reference/cli/transcript.md), and [cli/channel.md](../../reference/cli/channel.md). This doc owns how RimZ routes text to a running agent — from send mode to durable record to confirmed delivery — plus the channel lanes that scope addressing, the transcript read-back, and the audit trail.
 
-`rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and Rimz types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command uses.
+`rimz message` routes text to a running agent. A human, a script, a CI hook, or another agent names a target, and RimZ types the text into that agent's pane through the same bracketed-paste primitive the public `pane send` command uses.
 
 One model runs underneath every send: create a durable record first, deliver now when the agent can take the text, otherwise keep the record queued and deliver at the agent's next turn boundary, oldest first. The record-first path lets a message outlive a busy agent, a room that closes and reopens, a transient mux write failure, or a crash between claim and send.
 
@@ -24,7 +24,7 @@ Three modes place a send on the timing axis. All three resolve the target throug
 
 The address grammar (handle classes, channel resolution, arity, fan-out, `--create`) is [harness.md § The address](./harness.md#the-address). This section covers what a target resolves to for delivery: a live pane, or the durable **card** a parked message keys on — the logical agent identity the rollup tracks, a kind plus a session id or launch placeholder ([agent.md § The rollup](../agents/model.md#the-rollup)).
 
-Resolution climbs from the live command snapshot to the durable audit rollup. The live snapshot supplies bound panes and lazy sessionless panes. If that view misses, Rimz resolves the same address against audit-scope registered sessions and launch placeholders, bypassing runtime liveness expel and pane-frame failures. A match there creates a pane-less queued record; the next sweep or turn-boundary delivery re-resolves a live pane.
+Resolution climbs from the live command snapshot to the durable audit rollup. The live snapshot supplies bound panes and lazy sessionless panes. If that view misses, RimZ resolves the same address against audit-scope registered sessions and launch placeholders, bypassing runtime liveness expel and pane-frame failures. A match there creates a pane-less queued record; the next sweep or turn-boundary delivery re-resolves a live pane.
 
 `message --steer` reaches live panes. A bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet, a lazy-registering agent (Codex) before its first turn ([agent.md § The instance lifecycle](../agents/model.md#the-instance-lifecycle)), because the thing a paste needs is the pane, which the producer already detects. When the durable audit rollup resolves the target but no live pane is available, `--steer` parks the message instead of dropping it.
 
@@ -42,7 +42,7 @@ Paste and submit land back-to-back as one atomic interaction: the close marker, 
 
 ### Sender prefix
 
-By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels. The recipient lane comes from its registered channel, live pane channel, or addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands. The handle uses the shortest unique selector: the role when unique in scope, then the explicit launch name, then the profile when unique, else the kind, else the kind ordinal, else the petname. `--no-from` delivers without the sender prefix. The receiver's turn-start hook parses the prefix once and records a first-class `Message` entry in the transcript log with structured `from`; the queue record supplies the confirmed message id and parentage stamped onto that entry while the entry text remains the transcript source.
+By default a RimZ-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels. The recipient lane comes from its registered channel, live pane channel, or addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands. The handle uses the shortest unique selector: the role when unique in scope, then the explicit launch name, then the profile when unique, else the kind, else the kind ordinal, else the petname. `--no-from` delivers without the sender prefix. The receiver's turn-start hook parses the prefix once and records a first-class `Message` entry in the transcript log with structured `from`; the queue record supplies the confirmed message id and parentage stamped onto that entry while the entry text remains the transcript source.
 
 A fan-out also prefixes the text with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
@@ -200,7 +200,7 @@ Ready `Queued` heads arm the wake stamp as a backstop even when `not_before` is 
 
 ## Smart compaction
 
-`--smart-compact <PCT|TOKENS>` lands a message against a fresh context window. When the agent's context fill has reached the threshold, Rimz sends a tracked `/compact` command message first, waits one message interval, then sends the prompt message so it runs after compaction instead of racing the agent's own auto-compaction mid-turn.
+`--smart-compact <PCT|TOKENS>` lands a message against a fresh context window. When the agent's context fill has reached the threshold, RimZ sends a tracked `/compact` command message first, waits one message interval, then sends the prompt message so it runs after compaction instead of racing the agent's own auto-compaction mid-turn.
 
 Threshold forms:
 
@@ -230,16 +230,16 @@ Reply wait requires lifecycle-bound cards with installed and trusted hooks, dedu
 
 ## Channels
 
-Every target lives in a channel. A channel is a cooperation lane inside one room: the identity the sidebar groups by, the suffix an address uses as `#channel`, and the tab name Rimz recovers on rebirth.
+Every target lives in a channel. A channel is a cooperation lane inside one room: the identity the sidebar groups by, the suffix an address uses as `#channel`, and the tab name RimZ recovers on rebirth.
 
 ### Backings and labels
 
-Launch resolves one stamped lane and writes it to `RIMZ_CHANNEL`, the launch event, and the rollup. `resolve_room_channel` uses this precedence: explicit `--channel`, then Rimz-owned worktree directory name, then in-place team as `<dir>/<team>`, then no lane for a bare directory room. Read paths use that stamped lane, falling back only to the worktree basename for agents that lack a stamp.
+Launch resolves one stamped lane and writes it to `RIMZ_CHANNEL`, the launch event, and the rollup. `resolve_room_channel` uses this precedence: explicit `--channel`, then RimZ-owned worktree directory name, then in-place team as `<dir>/<team>`, then no lane for a bare directory room. Read paths use that stamped lane, falling back only to the worktree basename for agents that lack a stamp.
 
 The launch inputs are:
 
 - **Named channel**: a durable bare name created by `rimz channel new design` or first use through `--channel design`; it stamps `RIMZ_CHANNEL=design`.
-- **Worktree channel**: a Rimz-owned Git worktree; the worktree directory name is the stable lane and the worktree path stays addressable.
+- **Worktree channel**: a RimZ-owned Git worktree; the worktree directory name is the stable lane and the worktree path stays addressable.
 - **In-place team launch**: a named team under one plain directory; launch stamps `<dir>/<team>` into `RIMZ_CHANNEL` and keeps `RIMZ_TEAM` as cohort identity.
 - **Directory fallback**: the directory basename used for unstamped live agents.
 
@@ -251,11 +251,11 @@ Worktree identity follows the agent's own resolved checkout, not the room tree: 
 
 Named channels live in `channels.json` beside `workspace.json` in the workspace store. The record stores the bare name and creation time; writes hold the workspace lock and use temp-file-plus-rename.
 
-The registry stores only named channels. Worktree channels use their `rimz-worktree.json` marker as durable truth, while in-place team and directory lanes derive from the stamped live launch identity. `rimz channel list` unions the registry, Rimz-owned worktrees, and live channels from the snapshot.
+The registry stores only named channels. Worktree channels use their `rimz-worktree.json` marker as durable truth, while in-place team and directory lanes derive from the stamped live launch identity. `rimz channel list` unions the registry, RimZ-owned worktrees, and live channels from the snapshot.
 
 The sidebar stays presence-driven: a group appears when a pane is running in that channel. An empty named channel persists in `channels.json`, appears in `rimz channel list`, and reopens as an empty `#channel` tab on room rebirth. Named-channel records stay until `rimz channel rm`; `rimz gc` acts on worktrees only.
 
-Named channels and Rimz-owned worktrees reserve the same bare channel namespace. `rimz channel new NAME` refuses an existing worktree channel, and `rimz worktree new NAME` refuses an existing named channel with the fix to use the named-channel command or choose another name.
+Named channels and RimZ-owned worktrees reserve the same bare channel namespace. `rimz channel new NAME` refuses an existing worktree channel, and `rimz worktree new NAME` refuses an existing named channel with the fix to use the named-channel command or choose another name.
 
 ### Launch and address
 
@@ -291,7 +291,7 @@ Confirmation polls until the current ask leaves the rollup or a matching transcr
 
 ## Transcript
 
-Routing text to an agent is the write side; the transcript log is the durable record of the resulting conversation, and `rimz transcript` reads it back as a chat timeline. The log is Rimz-owned, distinct from a provider's native session files, so ended agents, past channels, and their asks and answers stay visible after those native files rotate away or leave the live snapshot.
+Routing text to an agent is the write side; the transcript log is the durable record of the resulting conversation, and `rimz transcript` reads it back as a chat timeline. The log is RimZ-owned, distinct from a provider's native session files, so ended agents, past channels, and their asks and answers stay visible after those native files rotate away or leave the live snapshot.
 
 Hook and delivery paths append entries to fixed 7-day buckets at `transcript/<bucket-start>.jsonl`, append-only and under the workspace lock. Buckets are never pruned, and reads sort by recorded timestamp, so a bucket boundary carries no ordering meaning. Each entry stores a kind, the receiving agent's identity and channel, a timestamp, the text, and the structured `from`, `questions`, or `answers` its kind needs. A matched delivered prompt also carries its `message_id`; `reply_to` carries the parent message ids for a delivered prompt or the turn-authored `Assistant`/`Ask`. Both fields default empty so older JSONL lines decode unchanged. Six kinds cover the conversation surface:
 
@@ -343,6 +343,6 @@ Two hidden helpers are the pipeline's execution arms, spawned detached with null
 
 ## Hazards
 
-- Queued text can land while a human has half-typed a draft in the agent pane. Rimz gates on store state, not focused-pane state or captured composer contents.
+- Queued text can land while a human has half-typed a draft in the agent pane. RimZ gates on store state, not focused-pane state or captured composer contents.
 - Agent UIs can present dialogs no hook reports. Core keeps pane capture out of delivery; a script that needs to inspect UI text owns capture-before-send through the public `pane capture` primitive.
 - Multiplexer sends are best-effort: a pane can disappear or reject input after the claim, which the message record records and retries until the attempt cap.

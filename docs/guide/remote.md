@@ -1,10 +1,10 @@
 # Remote
 
-Remote is your multiplexer attach, run over SSH. A Rimz room is a plain Zellij or tmux session that lives on one host: a fleet on a server, or the room you left running on the machine at home. It keeps working headless while no one is attached. `rimz remote connect` opens an SSH session to that host and attaches to the room there, so your local terminal renders exactly what the host is running, sidebar and agent panes alike. The room, its agents, and its state never leave the host; SSH just carries the screen. To open a remote room in a browser instead of a terminal, see [Web](./web.md).
+Remote is your multiplexer attach, run over SSH. A RimZ room is a plain Zellij or tmux session that lives on one host: a fleet on a server, or the room you left running on the machine at home. It keeps working headless while no one is attached. `rimz remote connect` opens an SSH session to that host and attaches to the room there, so your local terminal renders exactly what the host is running, sidebar and agent panes alike. The room, its agents, and its state never leave the host; SSH just carries the screen. To open a remote room in a browser instead of a terminal, see [Web](./web.md).
 
 ## Connect to a room on another host
 
-Point `rimz remote connect` at a target and Rimz builds the SSH command, connects, and attaches to the room on the far side:
+Point `rimz remote connect` at a target and RimZ builds the SSH command, connects, and attaches to the room on the far side:
 
 ```sh
 rimz remote connect dev-box:~/code/query-engine   # [user@]host:<session-or-path>
@@ -81,7 +81,7 @@ rimz reset               # force a clean rebirth of a stuck or resurrected room
 rimz reset --hard        # rebuild without seeding prior agents
 ```
 
-Keeping the agent processes alive across a reboot belongs to the host. Reach for systemd, tmux-resurrect, or Zellij resurrect to carry them across a restart, and Rimz reattaches to whatever is still running ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
+Keeping the agent processes alive across a reboot belongs to the host. Reach for systemd, tmux-resurrect, or Zellij resurrect to carry them across a restart, and RimZ reattaches to whatever is still running ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
 
 ## See also
 

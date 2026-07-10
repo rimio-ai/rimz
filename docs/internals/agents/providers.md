@@ -47,13 +47,13 @@ A kind's account and balance reach the dashboard two ways, mirroring the [two-so
 
 A live session always wins where both exist: its reading is richer and current.
 
-Paid usage reaches the dashboard through a separate shared `credits.json` cache when a provider account-usage surface can be reached from local OAuth credentials or the Codex app-server, and through a read-time local spend projection for API-key accounts. Credential-file probes are read-only: Rimz does not refresh tokens, write provider auth files, or use browser-cookie dashboard strategies. Absence is an unknown `ex`/`api` row, not a synthesized value.
+Paid usage reaches the dashboard through a separate shared `credits.json` cache when a provider account-usage surface can be reached from local OAuth credentials or the Codex app-server, and through a read-time local spend projection for API-key accounts. Credential-file probes are read-only: RimZ does not refresh tokens, write provider auth files, or use browser-cookie dashboard strategies. Absence is an unknown `ex`/`api` row, not a synthesized value.
 
 An agent launched through an elevation wrapper as another real uid stays outside account aggregation. Its hooks and credentials live under that other user's home directory, and the current user's out-of-band probe reads only the current user's account surface, so the sidebar presents it as a flagged process row only and leaves it out of the provider dashboard.
 
 ## Per-provider mapping
 
-Each provider maps its native account and balance surfaces onto the internal types in its own adapter doc; this table is the index. A new provider fills the relevant cells in its adapter doc and the rest of Rimz is unchanged.
+Each provider maps its native account and balance surfaces onto the internal types in its own adapter doc; this table is the index. A new provider fills the relevant cells in its adapter doc and the rest of RimZ is unchanged.
 
 | Provider | Account identity → [`AgentAccount`](../../../crates/rimz/src/agents/context.rs) | Balance → [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs) / [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs) |
 | --- | --- | --- |
@@ -146,7 +146,7 @@ A session ending or going idle would otherwise empty the dashboard, so the produ
 
 - Before a window's reset, the last-known fused reading stands.
 - Once a shorter window's reset passes while the longest cached window is still in the future, that shorter window has refilled — it shows full with the reset rolled one window-length forward, until a live reading overwrites it.
-- Once the longest cached window's reset passes with no fresh reading, Rimz no longer knows the account balance — every cached bar for that provider shows as an unknown empty track until a live or out-of-band reading overwrites it.
+- Once the longest cached window's reset passes with no fresh reading, RimZ no longer knows the account balance — every cached bar for that provider shows as an unknown empty track until a live or out-of-band reading overwrites it.
 
 Only live ground truth is persisted; the synthesized full or unknown window is a **read-time projection, never written**. The cache tracks login and drops a kind once it logs out.
 
@@ -223,7 +223,7 @@ Every read-only price consumer uses the same current book: the embedded snapshot
 
 `rimz sidebar snapshot` is a one-shot process, so the refresh is disk-cached at `$XDG_STATE_HOME/rimz/shared/pricing-cache.json` rather than held in memory: the spending producer reads the embedded snapshot plus the cache instantly while it holds the shared runtime spending lock, and re-fetches when the cache is older than a week. The pricing cache carries a schema stamp; a stale cache shape is dropped so tierless rows cannot override the embedded snapshot and builtins after a formula upgrade. A failed fetch records its attempt time and backs off an hour, so a persistent outage never re-fetches on every snapshot. `RIMZ_PRICING_OFFLINE` skips every fetch path.
 
-An unknown-model chase rides the same producer walk, with no timer of its own. When the [cost-history pass](#cost-history) records a priceable model name that the assembled book still cannot price, the pricing cache may fetch early on a standalone 30-minute gate, and this chase is the only path that fetches models.dev. While the same unknowns persist, that gate doubles to 1h, 2h, and onward to the 24h cap; a newly seen unknown resets the gate to 30m. The chase also observes a 30-minute floor after any fetch attempt, so a just-refreshed source has time to catch up before Rimz asks again. Failed chase attempts escalate the same way as successful ones; when every recorded unknown resolves, the chase state clears.
+An unknown-model chase rides the same producer walk, with no timer of its own. When the [cost-history pass](#cost-history) records a priceable model name that the assembled book still cannot price, the pricing cache may fetch early on a standalone 30-minute gate, and this chase is the only path that fetches models.dev. While the same unknowns persist, that gate doubles to 1h, 2h, and onward to the 24h cap; a newly seen unknown resets the gate to 30m. The chase also observes a 30-minute floor after any fetch attempt, so a just-refreshed source has time to catch up before RimZ asks again. Failed chase attempts escalate the same way as successful ones; when every recorded unknown resolves, the chase state clears.
 
 `build.rs` never touches the network: it embeds the ignored generated snapshot at `crates/rimz/pricing/litellm-pricing.json` when present (or a `RIMZ_PRICING_JSON_PATH` override), then writes a gzipped `OUT_DIR/litellm-pricing.json.gz`, so ordinary builds stay reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches LiteLLM from `https://raw.githubusercontent.com/BerriAI/litellm/refs/heads/main/model_prices_and_context_window.json`, fills missing models from the authoritative Anthropic/OpenAI models.dev catalogues, and rewrites the generated snapshot atomically; `cargo xtask dist` runs that refresh before release builds. The release workflow publishes the crate with that snapshot force-included through Cargo's `include` allowlist and `--allow-dirty`, so `cargo install rimz` embeds it too.
 

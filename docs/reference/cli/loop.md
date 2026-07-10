@@ -31,7 +31,7 @@ A `<kind>-ping` agent is the window-primer: the run skips when the provider's wi
 
 ## Wakes and checks
 
-`--wake @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the task fires, Rimz skips delivery and removes the schedule.
+`--wake @<handle>` resolves the address immediately and pins the exact session id; if that session is gone when the task fires, RimZ skips delivery and removes the schedule.
 
 `--check` runs at the project root; `--on fail` wakes on non-zero exit or timeout, while `--on success` wakes on zero exit.
 
@@ -39,7 +39,7 @@ A `<kind>-ping` agent is the window-primer: the run skips when the provider's wi
 
 ## Machine, project, and state tasks
 
-`rimz loop add` writes repeating tasks to the per-machine `loop.toml` by default. Rimz-generated `--in`, bare `--at`, and `--until` tasks persist as state, not `loop.toml` config, so they clear themselves when they retire.
+`rimz loop add` writes repeating tasks to the per-machine `loop.toml` by default. RimZ-generated `--in`, bare `--at`, and `--until` tasks persist as state, not `loop.toml` config, so they clear themselves when they retire.
 
 `--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--wake` and `--until`, requires `--every` or `--cron`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; an untrusted project task does not fire, and during the untrusted window a same-named machine task keeps running. Project tasks ship in the repo, so they run only on a machine that has [granted trust](./hooks-trust.md#project-trust).
 

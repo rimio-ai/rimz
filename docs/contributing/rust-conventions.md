@@ -104,7 +104,7 @@ impl<'de> Deserialize<'de> for RequestId { /* parses from a string */ }
 Conventions:
 
 - Inner value is **never** `pub`. Use `pub(crate)` only if the same crate needs the unwrapped form for an FFI seam.
-- Identifiers minted by Rimz (`RunId`, `EventId`, `SidebarInstanceId`, and other internal correlation IDs) use **UUIDv7** for monotonic ordering — filenames named after the ID sort chronologically without an external index.
+- Identifiers minted by RimZ (`RunId`, `EventId`, `SidebarInstanceId`, and other internal correlation IDs) use **UUIDv7** for monotonic ordering — filenames named after the ID sort chronologically without an external index.
 - Identifiers derived from external truth use their natural shape: `WorkspaceId` is the SHA-256 of `project_root`; `PaneId` is `"<mux>:<raw_pane_id>"` per [multiplexers.md](../internals/multiplexers.md). These types still go through a newtype and a parser — never assembled inline.
 
 ## State machines as types
@@ -190,7 +190,7 @@ Snapshot churn caused by transient IDs is a test-helper bug, not a product failu
 
 ## Dependency budget
 
-The direct-dependency snapshot. Entries move when a better-designed alternative wins on design fit, maintenance, footprint, and security. The full justification for each entry — what it provides, what it replaces, why Rimz does not write the moral equivalent in twenty lines — lives as a comment beside it in the workspace [Cargo.toml](../../Cargo.toml); this table is the policy summary.
+The direct-dependency snapshot. Entries move when a better-designed alternative wins on design fit, maintenance, footprint, and security. The full justification for each entry — what it provides, what it replaces, why RimZ does not write the moral equivalent in twenty lines — lives as a comment beside it in the workspace [Cargo.toml](../../Cargo.toml); this table is the policy summary.
 
 | Tier | Crates |
 | --- | --- |

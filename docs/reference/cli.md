@@ -1,6 +1,6 @@
 # The rimz command line
 
-`rimz` is one binary. Run it in a project and it opens that project's room — a Zellij or tmux session with the sidebar — and gives you the verbs to live in it: launch and steer agents, read the fleet, schedule turns, and keep the workspace healthy. Every command resolves to the room for the directory you run it in, so the same command reaches the same workspace from any pane, any worktree, or a script on the machine. How Rimz picks that room from the directory is [the root model in ARCHITECTURE.md](../../ARCHITECTURE.md).
+`rimz` is one binary. Run it in a project and it opens that project's room — a Zellij or tmux session with the sidebar — and gives you the verbs to live in it: launch and steer agents, read the fleet, schedule turns, and keep the workspace healthy. Every command resolves to the room for the directory you run it in, so the same command reaches the same workspace from any pane, any worktree, or a script on the machine. How RimZ picks that room from the directory is [the root model in ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 This page is the map: it indexes every command and collects the conventions that hold across all of them. Each command has a page with the full synopsis, flags, and what it does on your machine.
 
@@ -29,7 +29,7 @@ These hold across the whole CLI, so each command page assumes them rather than r
 
 **`--root` overrides the room.** Any command takes `--root <path>` to target a workspace other than the one the cwd resolves to — the escape hatch for monorepos and deliberate directory rooms. The session also pins `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, so commands run in panes that wander through subdirectories still reach the one store. The resolution model is in [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
-**Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation; `--zellij` and `--tmux` are shorthands. With one installed, Rimz uses it.
+**Pick the backend with `--mux`.** When both Zellij and tmux are installed, `--mux zellij` or `--mux tmux` chooses the backend for that invocation; `--zellij` and `--tmux` are shorthands. With one installed, RimZ uses it.
 
 **Scripting output is `--json`.** Read commands that take `--json` emit a stable, machine-readable document; that is the surface scripts parse. Human tables stay compact and may change to read better. Supervised runs shape their own output with `--output-format` instead.
 
