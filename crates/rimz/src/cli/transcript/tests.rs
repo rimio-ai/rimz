@@ -727,7 +727,7 @@ fn mention_painting_highlights_agents_and_channels() {
     assert!(raw.contains("\u{1b}["), "{raw:?}");
     assert!(raw.contains("@codex"), "{raw}");
     assert!(raw.contains("#feat-auth"), "{raw}");
-    assert!(raw.contains(&render::paint(render::palette::ACCENT.bold(), "#feat-auth")));
+    assert!(raw.contains(&render::paint(render::palette::COOL.bold(), "#feat-auth")));
     assert!(raw.contains("email@host"), "{raw}");
 }
 
@@ -878,7 +878,7 @@ fn question_lines_paint_mentions() {
     let raw = render_raw(&[ask], jiff::civil::date(2026, 6, 28));
 
     assert!(raw.contains(&render::paint(render::palette::COOL.bold(), "@codex")));
-    assert!(raw.contains(&render::paint(render::palette::ACCENT.bold(), "#cli-docs")));
+    assert!(raw.contains(&render::paint(render::palette::COOL.bold(), "#cli-docs")));
 }
 
 #[test]

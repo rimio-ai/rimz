@@ -108,8 +108,8 @@ pub(super) fn render_handle(base: &str, channel: Option<&str>, include_channel: 
 
 pub(super) const AGENT_TONES: [anstyle::Style; 3] = [
     render::palette::META,
-    render::palette::ACCENT,
     render::palette::GOOD,
+    render::palette::WARN,
 ];
 pub(super) const GROUP_WINDOW_SECS: i64 = 5 * 60;
 
@@ -142,7 +142,7 @@ pub(super) fn write_header(out: &mut impl Write, channel: Option<&str>) -> Resul
         writeln!(
             out,
             "{}",
-            render::paint(render::palette::ACCENT.bold(), &format!("#{channel}"))
+            render::paint(render::palette::COOL.bold(), &format!("#{channel}"))
         )?;
         writeln!(out)?;
     }
@@ -499,13 +499,11 @@ pub(super) fn paint_mentions_with(line: &str, base_style: Option<anstyle::Style>
                 }
             }
             if paint_end > token_start {
-                let style = if ch == '@' {
-                    render::palette::COOL.bold()
-                } else {
-                    render::palette::ACCENT.bold()
-                };
                 push_painted(&mut rendered, base_style, &line[..index]);
-                rendered.push_str(&render::paint(style, &line[index..paint_end]));
+                rendered.push_str(&render::paint(
+                    render::palette::COOL.bold(),
+                    &line[index..paint_end],
+                ));
                 push_painted(&mut rendered, base_style, &line[paint_end..token_end]);
                 let rest = &line[token_end..];
                 rendered.push_str(&paint_mentions_with(rest, base_style));

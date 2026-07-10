@@ -322,15 +322,7 @@ pub(super) fn show_agent(
         crate::cli::transcript::render_lines_to(&mut out, view, &tz)?;
     }
     if let Some(capture) = pane_capture {
-        use std::io::Write;
-
-        writeln!(
-            out,
-            "{} {}",
-            render::paint(render::palette::MUTED, "capture:"),
-            capture.pane_id,
-        )?;
-        write!(out, "{}", capture.raw_text)?;
+        render_capture_section(&mut out, &capture)?;
     }
     Ok(())
 }
@@ -366,7 +358,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Clone, Debug, serde::Serialize)]
 struct ShowMessage {
     id: String,
-    status: String,
+    status: rimz::message::MessageStatus,
     from: String,
     age: String,
     text: String,
@@ -378,6 +370,15 @@ fn section(w: &mut impl Write, title: &str) -> std::io::Result<()> {
         "{}",
         render::paint(render::palette::ACCENT.bold(), title)
     )
+}
+
+fn render_capture_section(
+    w: &mut impl Write,
+    capture: &rimz::mux::PaneCapture,
+) -> std::io::Result<()> {
+    writeln!(w)?;
+    section(w, "Capture")?;
+    render::pane_frame(w, &capture.pane_id.to_string(), &capture.raw_text)
 }
 
 fn render_agent_section(
@@ -617,8 +618,8 @@ fn render_messages_section(w: &mut impl Write, messages: &[ShowMessage]) -> std:
     let mut table = render::Table::new(["ID", "STATUS", "FROM", "AGE", "TEXT"]);
     for message in messages {
         table.row([
-            render::cell(message.id.as_str()).fg(render::palette::ACCENT),
-            render::cell(message.status.as_str()),
+            render::cell(message.id.as_str()),
+            render::cell(message.status.as_str()).fg(render::status::message(message.status)),
             render::cell(message.from.as_str()).fg(render::palette::META),
             render::cell(message.age.as_str()),
             render::cell(message.text.as_str()).dash(),
@@ -678,7 +679,7 @@ fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMess
         .filter(|message| message.same_agent_card(agent))
         .map(|message| ShowMessage {
             id: message.message_id.to_string(),
-            status: message.status.as_str().to_owned(),
+            status: message.status,
             from: message.sender.render(),
             age: render::rel_age(message.enqueued_at, now),
             text: preview(&message.text),
@@ -703,7 +704,7 @@ fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMess
         }
         delivered.push(ShowMessage {
             id: payload.message_id.to_string(),
-            status: payload.status.as_str().to_owned(),
+            status: payload.status,
             from: payload.sender.unwrap_or_default().render(),
             age: render::rel_age(payload.enqueued_at.unwrap_or(event.timestamp), now),
             text: "-".to_owned(),
@@ -2231,6 +2232,48 @@ fn push_pane_anchor(kv: &mut render::KeyVals, agent: &AgentState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strip(
+        render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> std::io::Result<()>,
+    ) -> String {
+        let mut stream = anstream::StripStream::new(Vec::new());
+        render_one(&mut stream).expect("render to in-memory buffer");
+        String::from_utf8(stream.into_inner()).expect("utf-8")
+    }
+
+    #[test]
+    fn capture_section_has_a_heading_and_pane_frame() {
+        let capture = rimz::mux::PaneCapture {
+            pane_id: rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_3"),
+            raw_text: "working".to_owned(),
+            lines: vec!["working".to_owned()],
+        };
+
+        let rendered = strip(|w| render_capture_section(w, &capture));
+
+        assert!(
+            rendered.starts_with("\nCapture\n╭─ zellij:terminal_3 "),
+            "{rendered}"
+        );
+        assert!(rendered.contains("\n│ working"), "{rendered}");
+        assert!(rendered.ends_with("╯\n"), "{rendered}");
+    }
+
+    #[test]
+    fn show_message_status_serializes_as_its_existing_string() {
+        let message = ShowMessage {
+            id: "msg_1".to_owned(),
+            status: rimz::message::MessageStatus::TimedOut,
+            from: "@planner".to_owned(),
+            age: "2m ago".to_owned(),
+            text: "check".to_owned(),
+        };
+
+        assert_eq!(
+            serde_json::to_string(&message).expect("serialize show message"),
+            r#"{"id":"msg_1","status":"timed_out","from":"@planner","age":"2m ago","text":"check"}"#
+        );
+    }
 
     #[test]
     fn list_channel_filter_resolves_explicit_all_and_current_channel() {

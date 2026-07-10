@@ -230,7 +230,7 @@ Rows group under channel section headers: `⑂` marks a worktree-backed or isola
 
 #### `show` / `inspect`
 
-`show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section includes transcript-priced session cost when a transcript path and cached price book can price it. `--capture` appends the bound pane's visible area as plain text (an error when the agent has no bound pane), `--ansi` keeps colors, and `--json` includes the same live agent fields plus additive `cost`, `messages`, and optional `capture` data. (Supervised `-p` runs shape their output with `--output-format` instead.)
+`show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section includes transcript-priced session cost when a transcript path and cached price book can price it. `--capture` appends a Capture section that frames the bound pane's visible area with its pane id in the top border (an error when the agent has no bound pane), `--ansi` keeps colors inside that frame, and `--json` includes the same live agent fields plus additive `cost`, `messages`, and optional raw `capture` data. (Supervised `-p` runs shape their output with `--output-format` instead.)
 
 #### `logs`
 

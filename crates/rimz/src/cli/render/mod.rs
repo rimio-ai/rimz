@@ -86,6 +86,45 @@ pub(crate) fn paint(style: anstyle::Style, text: &str) -> String {
     format!("{}{text}{}", style.render(), style.render_reset())
 }
 
+/// Frame captured pane text in quiet terminal chrome, with `title` embedded in
+/// the top border. ANSI inside the capture remains intact and does not affect
+/// the frame or its padding.
+pub(crate) fn pane_frame(w: &mut impl Write, title: &str, text: &str) -> std::io::Result<()> {
+    let title_width = title.width();
+    let inner_width = text
+        .split_terminator('\n')
+        .map(|line| anstream::adapter::strip_str(line).to_string().width())
+        .max()
+        // The leading dash and spaces around the title need one more column
+        // than the content itself for every edge to stay aligned.
+        .unwrap_or(0)
+        .max(title_width + 1);
+    let top_fill = inner_width - title_width - 1;
+    let border_fill = inner_width + 2;
+
+    write!(w, "{}", paint(palette::FAINT, "╭─ "))?;
+    write!(w, "{}", paint(palette::MUTED, title))?;
+    writeln!(
+        w,
+        "{}",
+        paint(palette::FAINT, &format!(" {}╮", "─".repeat(top_fill)))
+    )?;
+
+    for line in text.split_terminator('\n') {
+        let line_width = anstream::adapter::strip_str(line).to_string().width();
+        write!(w, "{}", paint(palette::FAINT, "│ "))?;
+        write!(w, "{line}{}", anstyle::Reset.render())?;
+        write!(w, "{:width$}", "", width = inner_width - line_width)?;
+        writeln!(w, "{}", paint(palette::FAINT, " │"))?;
+    }
+
+    writeln!(
+        w,
+        "{}",
+        paint(palette::FAINT, &format!("╰{}╯", "─".repeat(border_fill)))
+    )
+}
+
 /// Render an absolute path relative to `$HOME` as `~`/`~/rest`, so cwd columns
 /// read at a glance. Leaves any path outside `$HOME` (or when `$HOME` is unset)
 /// untouched.
@@ -559,6 +598,72 @@ mod tests {
         let error = anyhow::anyhow!("plain failure");
 
         assert_eq!(strip(|w| write_report(w, &error)), "error: plain failure\n");
+    }
+
+    #[test]
+    fn pane_frame_aligns_plain_text() {
+        let rendered = strip(|w| pane_frame(w, "tmux:%3", "short\na longer line"));
+        let widths: Vec<usize> = rendered.lines().map(UnicodeWidthStr::width).collect();
+
+        assert_eq!(widths, vec![17, 17, 17, 17], "{rendered}");
+        assert_eq!(
+            rendered,
+            "╭─ tmux:%3 ─────╮\n│ short         │\n│ a longer line │\n╰───────────────╯\n"
+        );
+    }
+
+    #[test]
+    fn pane_frame_measures_ansi_styled_content_without_sgr_bytes() {
+        let styled = format!(
+            "{}ready{}\nlonger",
+            palette::GOOD.render(),
+            palette::GOOD.render_reset()
+        );
+
+        assert_eq!(
+            strip(|w| pane_frame(w, "pane", &styled)),
+            "╭─ pane ─╮\n│ ready  │\n│ longer │\n╰────────╯\n"
+        );
+    }
+
+    #[test]
+    fn pane_frame_aligns_wide_unicode_content() {
+        let rendered = strip(|w| pane_frame(w, "p", "文字\nx"));
+        let widths: Vec<usize> = rendered.lines().map(UnicodeWidthStr::width).collect();
+
+        assert_eq!(widths, vec![8, 8, 8, 8], "{rendered}");
+        assert!(rendered.contains("│ 文字 │"), "{rendered}");
+    }
+
+    #[test]
+    fn pane_frame_fits_a_title_wider_than_its_content() {
+        assert_eq!(
+            strip(|w| pane_frame(w, "zellij:terminal_3", "ok")),
+            "╭─ zellij:terminal_3 ╮\n│ ok                 │\n╰────────────────────╯\n"
+        );
+    }
+
+    #[test]
+    fn pane_frame_ignores_a_trailing_content_newline() {
+        assert_eq!(
+            strip(|w| pane_frame(w, "p", "one\ntwo\n")),
+            strip(|w| pane_frame(w, "p", "one\ntwo"))
+        );
+    }
+
+    #[test]
+    fn pane_frame_renders_an_empty_capture_without_a_content_row() {
+        assert_eq!(strip(|w| pane_frame(w, "p", "")), "╭─ p ╮\n╰────╯\n");
+    }
+
+    #[test]
+    fn pane_frame_resets_capture_style_before_padding() {
+        let mut raw = Vec::new();
+
+        pane_frame(&mut raw, "p", "\u{1b}[31mred\nlonger").expect("render pane frame");
+        let raw = String::from_utf8(raw).expect("utf-8");
+
+        assert!(raw.contains("\u{1b}[31mred\u{1b}[0m   "), "{raw:?}");
     }
 
     #[test]
