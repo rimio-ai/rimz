@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::config::TaskEntry;
 use jiff::{SignedDuration, Timestamp, Zoned};
 
+pub mod config_edit;
 pub(crate) mod fire;
 pub mod instances;
 pub mod pauses;

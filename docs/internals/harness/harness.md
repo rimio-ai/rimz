@@ -195,7 +195,8 @@ Durable definitions live in `~/.config/rimz/loop.toml` and trusted `<root>/.rimz
 
 - [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs) — pure parsing, descriptions, due evaluation, and next-occurrence calculation.
 - [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) — check execution, prompt augmentation, per-task run locks, and the window-priming ping gate.
-- [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd) — config and state editing, the `list`/`show` surfaces, and hidden `run` orchestration.
+- [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd) — the `list`/`show` surfaces and hidden `run` orchestration.
+- [`schedule/config_edit.rs`](../../../crates/rimz/src/harness/schedule/config_edit.rs) — comment-preserving machine and project task-store editing.
 - [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs) — the ephemeral state store and merged project/config/state read path; project definitions take precedence when supplied.
 - [`schedule/pauses.rs`](../../../crates/rimz/src/harness/schedule/pauses.rs) — the machine-local pause overlay and effective-last-fire rule.
 - [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) — elder firing and the `loop-fire.json` state.

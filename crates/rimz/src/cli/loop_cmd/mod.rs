@@ -7,9 +7,9 @@
 //! cell is the window-priming special case and gets the budget-window skip
 //! optimization.
 //!
-//! This handler parses and edits the per-machine config, lists room-open and
-//! next-fire state, inspects run history, and owns the hidden runner the elder
-//! spawns. The runner appends exactly one history record after loading a task:
+//! This handler parses commands, lists room-open and next-fire state, inspects
+//! run history, and owns the hidden runner the elder spawns. The runner appends
+//! exactly one history record after loading a task:
 //! the pure executor returns an outcome, and this wrapper records success,
 //! failure, or error with capped forensics.
 //! Pure schedule parsing and due evaluation live in [`rimz::harness::schedule`];
@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
-use toml_edit::{DocumentMut, Item, Table, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
@@ -48,8 +47,7 @@ use rimz::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use rimz::ids::WorkspaceId;
 use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
-use rimz::store::atomic::write_bytes_atomically;
-use rimz::store::paths::{RuntimePaths, StatePaths, agents_home, config_home, state_home};
+use rimz::store::paths::{RuntimePaths, StatePaths, config_home, state_home};
 use rimz::trust::{self, TrustState};
 use rimz::workspace::WorkspaceResolver;
 
@@ -62,8 +60,6 @@ mod render;
 mod run_tasks;
 
 pub(crate) use run_tasks::reap_dead_delivery_schedules;
-
-const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
 
 #[derive(Debug, Args)]
 pub struct LoopArgs {
@@ -396,26 +392,21 @@ fn preflight_kind(kind: &str) -> Result<()> {
     Ok(())
 }
 
-fn remove_task(name: &str, source: TaskSource) -> Result<bool> {
-    match source {
-        TaskSource::Config => config_remove(name),
-        TaskSource::Instance => instances::remove(name).map_err(Into::into),
-        TaskSource::Project { .. } => {
-            bail!("internal error: project task `{name}` removal needs its project root")
-        }
-    }
-}
-
 fn remove_loaded_task(name: &str, entry: &TaskEntry, source: TaskSource) -> Result<bool> {
     match source {
-        TaskSource::Config => config_remove(name),
+        TaskSource::Config => {
+            schedule::config_edit::remove(schedule::config_edit::TaskStore::Machine, name)
+        }
         TaskSource::Instance => instances::remove(name).map_err(Into::into),
-        TaskSource::Project { .. } => project_config_remove(&entry.root, name),
+        TaskSource::Project { .. } => schedule::config_edit::remove(
+            schedule::config_edit::TaskStore::Project(&entry.root),
+            name,
+        ),
     }
 }
 
 fn project_config_path(project_root: &Path) -> PathBuf {
-    project_root.join(PROJECT_CONFIG_REL)
+    schedule::config_edit::TaskStore::Project(project_root).path()
 }
 
 fn project_tasks_for_root(
@@ -651,253 +642,4 @@ fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
-}
-
-// ---- config editing (toml_edit, comment-preserving) -------------------------
-
-fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
-    let path = MachineConfig::loop_path();
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            MachineConfig::template_loop().to_owned()
-        }
-        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
-    };
-    let mut doc = text
-        .parse::<DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
-
-    root_tasks_table(&mut doc)?.insert(name, Item::Table(task_entry_table(entry, true)));
-
-    let rendered = doc.to_string();
-    MachineConfig::parse_text(&path, &rendered, &agents_home())
-        .with_context(|| format!("validating `loop.tasks.{name}`"))?;
-    write_bytes_atomically(&path, rendered.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
-}
-
-fn project_config_set_entry(project_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
-    let path = project_config_path(project_root);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
-    };
-    let mut doc = text
-        .parse::<DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
-
-    root_tasks_table(&mut doc)?.insert(name, Item::Table(task_entry_table(entry, false)));
-
-    let rendered = doc.to_string();
-    validate_project_config_tasks(project_root, &path, &rendered, name)?;
-    write_bytes_atomically(&path, rendered.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
-}
-
-fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
-    let mut table = Table::new();
-    if let Some(agent) = &entry.agent {
-        table["agent"] = value(agent);
-    }
-    if let Some(target) = &entry.wake {
-        table["wake"] = Item::Table(task_target_table(target));
-    }
-    if let Some(prompt) = &entry.prompt {
-        table["prompt"] = value(prompt);
-    }
-    if let Some(prompt_file) = &entry.prompt_file {
-        table["prompt-file"] = value(prompt_file.to_string_lossy().into_owned());
-    }
-    if let Some(check) = &entry.check {
-        table["check"] = value(check);
-    }
-    if let Some(verify) = &entry.verify {
-        table["verify"] = value(verify);
-    }
-    if let Some(max_attempts) = entry.max_attempts {
-        table["max-attempts"] = value(i64::from(max_attempts));
-    }
-    if let Some(max_strikes) = entry.max_strikes {
-        table["max-strikes"] = value(i64::from(max_strikes));
-    }
-    if let Some(on) = entry.on {
-        table["on"] = value(match on {
-            CheckOn::Fail => "fail",
-            CheckOn::Success => "success",
-        });
-    }
-    if include_root {
-        table["root"] = value(entry.root.to_string_lossy().into_owned());
-    }
-    if let Some(worktree) = &entry.worktree {
-        table["worktree"] = value(worktree);
-    }
-    if let Some(mode) = &entry.mode {
-        table["mode"] = value(mode);
-    }
-    if let Some(effort) = &entry.effort {
-        table["effort"] = value(effort);
-    }
-    if let Some(budget) = &entry.budget {
-        table["budget"] = value(budget);
-    }
-    if let Some(budget) = &entry.budget_per_day {
-        table["budget-per-day"] = value(budget);
-    }
-    if let Some(path) = &entry.system_prompt_file {
-        table["system-prompt-file"] = value(path.to_string_lossy().into_owned());
-    }
-    if let Some(timeout) = &entry.timeout {
-        table["timeout"] = value(timeout);
-    }
-    if let Some(at) = &entry.at {
-        table["at"] = value(at);
-    }
-    if let Some(every) = &entry.every {
-        table["every"] = value(every);
-    }
-    if let Some(cron) = &entry.cron {
-        table["cron"] = value(cron);
-    }
-    if let Some(deadline) = entry.deadline {
-        table["deadline"] = value(deadline.to_string());
-    }
-    table
-}
-
-fn task_target_table(target: &TaskTarget) -> Table {
-    let mut table = Table::new();
-    table["kind"] = value(target.kind.as_str());
-    table["session"] = value(target.session.as_str());
-    table["handle"] = value(target.handle.as_str());
-    table
-}
-
-fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
-    let tasks = doc
-        .as_table_mut()
-        .entry("tasks")
-        .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_mut()
-        .context("`tasks` is not a table")?;
-    tasks.set_implicit(true);
-    Ok(tasks)
-}
-
-fn config_remove(name: &str) -> Result<bool> {
-    let path = MachineConfig::loop_path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(false);
-    };
-    let mut doc = text
-        .parse::<DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
-    let removed = doc
-        .get_mut("tasks")
-        .and_then(Item::as_table_mut)
-        .map(|tasks| tasks.remove(name).is_some())
-        .unwrap_or(false);
-    if removed {
-        let rendered = doc.to_string();
-        write_bytes_atomically(&path, rendered.as_bytes())
-            .with_context(|| format!("writing {}", path.display()))?;
-    }
-    Ok(removed)
-}
-
-fn project_config_remove(project_root: &Path, name: &str) -> Result<bool> {
-    let path = project_config_path(project_root);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(false);
-    };
-    let mut doc = text
-        .parse::<DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
-    let removed = doc
-        .get_mut("tasks")
-        .and_then(Item::as_table_mut)
-        .map(|tasks| tasks.remove(name).is_some())
-        .unwrap_or(false);
-    if removed {
-        let rendered = doc.to_string();
-        validate_project_config_tasks(project_root, &path, &rendered, name)?;
-        write_bytes_atomically(&path, rendered.as_bytes())
-            .with_context(|| format!("writing {}", path.display()))?;
-    }
-    Ok(removed)
-}
-
-fn config_rename(name: &str, new_name: &str) -> Result<bool> {
-    let path = MachineConfig::loop_path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(false);
-    };
-    let mut doc = text
-        .parse::<DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
-    let Some(tasks) = doc.get_mut("tasks").and_then(Item::as_table_mut) else {
-        return Ok(false);
-    };
-    if tasks.contains_key(new_name) {
-        bail!("loop task `{new_name}` already exists");
-    }
-    let Some(entry) = tasks.remove(name) else {
-        return Ok(false);
-    };
-    tasks.insert(new_name, entry);
-
-    let rendered = doc.to_string();
-    MachineConfig::parse_text(&path, &rendered, &agents_home())
-        .with_context(|| format!("validating `loop.tasks.{new_name}`"))?;
-    write_bytes_atomically(&path, rendered.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(true)
-}
-
-fn project_config_rename(project_root: &Path, name: &str, new_name: &str) -> Result<bool> {
-    let path = project_config_path(project_root);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(false);
-    };
-    let mut doc = text
-        .parse::<DocumentMut>()
-        .with_context(|| format!("parsing {}", path.display()))?;
-    let Some(tasks) = doc.get_mut("tasks").and_then(Item::as_table_mut) else {
-        return Ok(false);
-    };
-    if tasks.contains_key(new_name) {
-        bail!("loop task `{new_name}` already exists");
-    }
-    let Some(entry) = tasks.remove(name) else {
-        return Ok(false);
-    };
-    tasks.insert(new_name, entry);
-
-    let rendered = doc.to_string();
-    validate_project_config_tasks(project_root, &path, &rendered, new_name)?;
-    write_bytes_atomically(&path, rendered.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(true)
-}
-
-fn validate_project_config_tasks(
-    project_root: &Path,
-    path: &Path,
-    rendered: &str,
-    name: &str,
-) -> Result<()> {
-    let value = toml::from_str::<toml::Value>(rendered)
-        .with_context(|| format!("parsing {}", path.display()))?;
-    rimz::config::effective::project_tasks_from_value(
-        project_root,
-        path,
-        TrustState::Untrusted,
-        &value,
-    )
-    .with_context(|| format!("validating project `tasks.{name}`"))?;
-    Ok(())
 }

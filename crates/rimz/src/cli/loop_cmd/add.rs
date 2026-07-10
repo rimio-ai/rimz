@@ -226,7 +226,11 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         preflight_entry(&args.name, &entry, resolved_for_preflight.as_ref())?;
     }
     if args.project {
-        project_config_set_entry(&project_root, &args.name, &entry)?;
+        schedule::config_edit::set_entry(
+            schedule::config_edit::TaskStore::Project(&project_root),
+            &args.name,
+            &entry,
+        )?;
     } else if matches!(
         instances::load_entry_visible_with_project(
             &args.name,
@@ -240,11 +244,15 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             project_config_path(&project_root).display()
         );
     } else if instances::is_ephemeral(&entry) {
-        config_remove(&args.name)?;
+        schedule::config_edit::remove(schedule::config_edit::TaskStore::Machine, &args.name)?;
         instances::insert(&args.name, &entry)?;
     } else {
         instances::remove(&args.name)?;
-        config_set_entry(&args.name, &entry)?;
+        schedule::config_edit::set_entry(
+            schedule::config_edit::TaskStore::Machine,
+            &args.name,
+            &entry,
+        )?;
     }
     let cleared_pause = pauses::remove(&args.name)?;
     let cleared_strikes = strikes::clear(&args.name)?;
@@ -309,10 +317,18 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
     let loaded = load_task(name, globals)?;
     let renamed = match loaded {
         Some((entry, source)) => match source {
-            TaskSource::Config => config_rename(name, new_name)?,
+            TaskSource::Config => schedule::config_edit::rename(
+                schedule::config_edit::TaskStore::Machine,
+                name,
+                new_name,
+            )?,
             TaskSource::Instance => instances::rename(name, new_name)?,
             TaskSource::Project { .. } => {
-                let renamed = project_config_rename(&entry.root, name, new_name)?;
+                let renamed = schedule::config_edit::rename(
+                    schedule::config_edit::TaskStore::Project(&entry.root),
+                    name,
+                    new_name,
+                )?;
                 if renamed {
                     pauses::rename(name, new_name)?;
                     strikes::rename(name, new_name)?;

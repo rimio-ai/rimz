@@ -1092,7 +1092,7 @@ pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
         match delivery_target_alive(&entry, target) {
             Ok(true) => {}
             Ok(false) => {
-                let _ = remove_task(&name, source)?;
+                let _ = remove_loaded_task(&name, &entry, source)?;
                 reaped += 1;
             }
             Err(err) => {
