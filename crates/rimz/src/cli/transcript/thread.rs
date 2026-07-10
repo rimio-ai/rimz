@@ -94,6 +94,8 @@ pub(super) fn assemble_threads(
                 components.union(index, parent_index);
             }
         }
+        // Typed prompts have no recorded linkage, so their output falls back
+        // to the latest opener for the same agent session.
         match entry.kind {
             TranscriptKind::Prompt | TranscriptKind::Message => {
                 latest_opener.insert(entry.agent.clone(), index);
@@ -158,10 +160,9 @@ pub(super) fn keep_last_blocks(entries: &mut Vec<DisplayEntry>, last: Option<usi
     }
 }
 
-/// A turn output without recorded linkage joins its agent's latest opener.
-/// Otherwise, a causal `reply_to` edge joins a thread only when it continues
-/// the conversation: a turn's output pairs with the message that opened the
-/// turn, and a sent message continues the thread only as a reply back to its
+/// A causal `reply_to` edge joins a thread only when it continues the
+/// conversation: a turn's output pairs with the message that opened the turn,
+/// and a sent message continues the thread only as a reply back to its
 /// parent's sender. A hand-off to a third party roots a new exchange.
 fn thread_edge(parent: &RenderEntry, child: &RenderEntry) -> bool {
     match child.kind {

@@ -308,13 +308,20 @@ fn thread_assembly_unions_multi_parent_turns_and_orphans_stay_flat() {
 
 #[test]
 fn unlinked_turn_outputs_join_the_latest_opener_for_their_agent() {
-    let mut other_agent_output = assistant_entry("2026-06-28T04:04:00Z", "other agent");
+    let mut other_agent_output = assistant_entry("2026-06-28T04:05:00Z", "other agent");
     other_agent_output.agent = agent_key_for("codex", "sess-2");
     let entries = vec![
         entry("2026-06-28T04:00:00Z", "first prompt"),
         assistant_entry("2026-06-28T04:01:00Z", "first reply"),
         entry("2026-06-28T04:02:00Z", "second prompt"),
         ask_entry("2026-06-28T04:03:00Z", "second output"),
+        render_entry(
+            TranscriptKind::Error,
+            "@claude",
+            None,
+            "2026-06-28T04:04:00Z",
+            "second error",
+        ),
         other_agent_output,
     ];
 
@@ -330,6 +337,7 @@ fn unlinked_turn_outputs_join_the_latest_opener_for_their_agent() {
             "first reply",
             "second prompt",
             "second output",
+            "second error",
             "other agent"
         ]
     );
@@ -337,9 +345,11 @@ fn unlinked_turn_outputs_join_the_latest_opener_for_their_agent() {
     assert!(!display[1].lane.is_margin());
     assert!(display[2].lane.is_margin());
     assert!(!display[3].lane.is_margin());
-    assert!(display[4].lane.is_margin());
+    assert!(!display[4].lane.is_margin());
+    assert!(display[5].lane.is_margin());
     assert_eq!(display[0].block, display[1].block);
     assert_eq!(display[2].block, display[3].block);
+    assert_eq!(display[2].block, display[4].block);
     assert_ne!(display[0].block, display[2].block);
 }
 
