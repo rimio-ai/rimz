@@ -11,9 +11,10 @@ use clap::{Args, Subcommand};
 use super::{GlobalFlags, open_store};
 use crate::cli::render;
 use rimz::agents::AgentState;
-use rimz::config::WorktreeBase;
+use rimz::config::{WorktreeBase, WorktreeConfig};
+use rimz::forge::PrTarget;
 use rimz::mux::own_pane_id;
-use rimz::workspace::{RootClass, WorkspaceResolver};
+use rimz::workspace::{ResolvedWorkspace, RootClass, WorkspaceResolver};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
 const WORKTREE_REMOVED_ARCHIVE_REASON: &str = "worktree removed";
@@ -54,7 +55,7 @@ enum WorktreeSubcmd {
         #[arg(long, value_parser = parse_base)]
         base: Option<WorktreeBase>,
         /// Create the worktree from a pull request number or URL.
-        #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "base")]
+        #[arg(long = "from-pr", value_name = "PR", value_parser = rimz::forge::parse, conflicts_with = "base")]
         from_pr: Option<rimz::forge::PrTarget>,
         /// Branch to create instead of `<name>`.
         #[arg(long)]
@@ -109,203 +110,195 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             base,
             from_pr,
             branch,
-        } => {
-            let store = open_store(&workspace)?;
-            let requested_name = name
-                .as_deref()
-                .map(rimz::worktree::parse_requested_name)
-                .transpose()?;
-            if let Some(name) = requested_name
-                .as_ref()
-                .map(|requested| requested.name.as_str())
-                && super::channel::named_channel_registered(&store, name)
-            {
-                bail!(
-                    "channel `{name}` is a named channel; use `rimz channel new` or pick another name"
-                );
-            }
-            let created = if let Some(pr) = from_pr.as_ref() {
-                rimz::worktree::create_from_pr(
-                    &workspace.project_root,
-                    &config,
-                    pr,
-                    name.as_deref(),
-                    branch.as_deref(),
-                    false,
-                )?
-            } else {
-                rimz::worktree::create(
-                    &workspace.project_root,
-                    &config,
-                    name.as_deref(),
-                    base,
-                    branch.as_deref(),
-                    false,
-                )?
-            };
-            store
-                .archive_channel_messages(
-                    &created.name,
-                    "channel recreated",
-                    &workspace.session_name,
-                )
-                .context("archiving messages for recreated worktree channel")?;
-            #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
-            {
-                println!("created {}", created.name);
-                println!("  path   : {}", created.path.display());
-                println!("  branch : {}", created.branch);
-                if let Some((remote, merge_ref)) = fork_push_destination(&created) {
-                    println!("  pushes : {remote} {merge_ref}");
-                    if merge_ref.strip_prefix("refs/heads/") != Some(created.branch.as_str()) {
-                        let head = merge_ref.strip_prefix("refs/heads/").unwrap_or(&merge_ref);
-                        println!("  push   : git push {remote} HEAD:{head}");
-                    }
-                }
-                if let Some(base_branch) = created.base_branch.as_deref() {
-                    println!("  base branch: {base_branch}");
-                }
-                println!("  base   : {}", created.base_ref);
-                if created.included > 0 {
-                    println!(
-                        "  seeded : {} file(s) from .worktreeinclude",
-                        created.included
-                    );
-                }
-                if created.linked > 0 {
-                    println!("  linked : {} dir(s) from .worktreelink", created.linked);
-                }
-            }
-            Ok(())
-        }
-        WorktreeSubcmd::List { json } => {
-            let entries = rimz::worktree::list(&workspace.project_root)?;
-            if json {
-                let rendered = serde_json::to_string_pretty(&entries)?;
-                #[expect(clippy::print_stdout, reason = "json emitter")]
-                {
-                    println!("{rendered}");
-                }
-            } else {
-                // Best-effort overlay: which agent-colleagues live in each channel.
-                let snapshot = crate::cli::open_store(&workspace)
-                    .ok()
-                    .and_then(|store| store.snapshot_cached().ok());
-                let agents: Vec<&AgentState> = snapshot
-                    .as_ref()
-                    .map(|snapshot| {
-                        snapshot
-                            .agents
-                            .iter()
-                            .filter(|agent| agent.parent_agent_id.is_none())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let mut table =
-                    render::Table::new(["WORKTREE", "BRANCH", "AGENTS", "DIRTY", "MERGED", "PATH"]);
-                for entry in entries {
-                    let path_str = entry.path.to_string_lossy().into_owned();
-                    let here: Vec<&AgentState> = agents
-                        .iter()
-                        .copied()
-                        .filter(|agent| {
-                            agent.worktree_path.as_deref() == Some(path_str.as_str())
-                                || (entry.branch.is_some() && agent.worktree_branch == entry.branch)
-                        })
-                        .collect();
-                    let chips = if here.is_empty() {
-                        "-".to_owned()
-                    } else {
-                        here.iter()
-                            .map(|agent| rimz::harness::target::agent_handle(agent, &here, false))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    };
-                    let merged = match entry.landed {
-                        Some(true) => render::cell("yes"),
-                        Some(false) => render::cell("pending").fg(render::palette::WARN),
-                        None => render::cell("?"),
-                    };
-                    let branch = entry.branch.clone().unwrap_or_else(|| "-".to_owned());
-                    let dirty_cell = if entry.dirty {
-                        render::cell("dirty").fg(render::palette::WARN)
-                    } else {
-                        render::cell("-").dash()
-                    };
-                    let path_display = render::home_relative(&path_str);
-                    table.row([
-                        render::cell(entry.name).fg(render::palette::ACCENT),
-                        render::cell(branch).dash(),
-                        render::cell(chips).fg(render::palette::ACCENT).dash(),
-                        dirty_cell,
-                        merged,
-                        render::cell(path_display).dash(),
-                    ]);
-                }
-                table.render(&mut render::out())?;
-            }
-            Ok(())
-        }
-        WorktreeSubcmd::Remove { name, force } => {
-            let store = open_store(&workspace)?;
-            let path = rimz::worktree::worktree_path(&workspace.project_root, &config, &name)?;
-            let marker = rimz::worktree::read_marker_for_worktree(&path)?.ok_or_else(|| {
-                rimz::worktree::WorktreeErr::Unmarked {
-                    name: name.clone(),
-                    path: path.clone(),
-                }
-            })?;
-            let removed = remove_and_archive(
-                &marker,
-                || {
-                    rimz::worktree::remove(&workspace.project_root, &config, &name, force)
-                        .map_err(Into::into)
-                },
-                |channel, reason| {
-                    store
-                        .archive_channel_messages(channel, reason, &workspace.session_name)
-                        .map(|_| ())
-                        .map_err(Into::into)
-                },
-            )?;
-            removed
-                .archive
-                .context("archiving messages for removed worktree channel")?;
-            #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
-            {
-                println!("removed {name}");
-                if removed.branch_deletion == rimz::worktree::BranchDeletion::KeptUnmerged {
-                    println!("  branch kept: work not proven merged into its base");
-                }
-            }
-            Ok(())
-        }
+        } => new_worktree(&workspace, &config, name, base, from_pr, branch),
+        WorktreeSubcmd::List { json } => list_worktrees(&workspace, json),
+        WorktreeSubcmd::Remove { name, force } => remove_worktree(&workspace, &config, name, force),
         WorktreeSubcmd::Cleanup(_) => unreachable!("cleanup returned before workspace resolution"),
     }
 }
 
-fn fork_push_destination(created: &rimz::worktree::CreatedWorktree) -> Option<(String, String)> {
-    let remote_key = format!("branch.{}.remote", created.branch);
-    let remote = git_config_value(&created.path, &remote_key)?;
-    if matches!(remote.as_str(), "origin" | ".") {
-        return None;
+fn new_worktree(
+    workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
+    name: Option<String>,
+    base: Option<WorktreeBase>,
+    from_pr: Option<PrTarget>,
+    branch: Option<String>,
+) -> Result<()> {
+    let store = open_store(workspace)?;
+    let requested_name = name
+        .as_deref()
+        .map(rimz::worktree::parse_requested_name)
+        .transpose()?;
+    if let Some(name) = requested_name
+        .as_ref()
+        .map(|requested| requested.name.as_str())
+        && super::channel::named_channel_registered(&store, name)
+    {
+        bail!("channel `{name}` is a named channel; use `rimz channel new` or pick another name");
     }
-    let merge_key = format!("branch.{}.merge", created.branch);
-    let merge_ref = git_config_value(&created.path, &merge_key)?;
-    Some((remote, merge_ref))
+    let created = if let Some(pr) = from_pr.as_ref() {
+        rimz::worktree::create_from_pr(
+            &workspace.project_root,
+            config,
+            pr,
+            name.as_deref(),
+            branch.as_deref(),
+            false,
+        )?
+    } else {
+        rimz::worktree::create(
+            &workspace.project_root,
+            config,
+            name.as_deref(),
+            base,
+            branch.as_deref(),
+            false,
+        )?
+    };
+    store
+        .archive_channel_messages(&created.name, "channel recreated", &workspace.session_name)
+        .context("archiving messages for recreated worktree channel")?;
+    report_created(&workspace.project_root, &created);
+    Ok(())
 }
 
-fn git_config_value(worktree: &Path, key: &str) -> Option<String> {
-    let output = Command::new("git")
-        .args(["config", "--get", key])
-        .current_dir(worktree)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+#[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
+fn report_created(repo_root: &Path, created: &rimz::worktree::CreatedWorktree) {
+    println!("created {}", created.name);
+    println!("  path   : {}", created.path.display());
+    println!("  branch : {}", created.branch);
+    if let Some((remote, merge_ref)) =
+        rimz::worktree::fork_push_destination(repo_root, &created.branch)
+    {
+        println!("  pushes : {remote} {merge_ref}");
+        if merge_ref.strip_prefix("refs/heads/") != Some(created.branch.as_str()) {
+            let head = merge_ref.strip_prefix("refs/heads/").unwrap_or(&merge_ref);
+            println!("  push   : git push {remote} HEAD:{head}");
+        }
     }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!value.is_empty()).then_some(value)
+    if let Some(base_branch) = created.base_branch.as_deref() {
+        println!("  base branch: {base_branch}");
+    }
+    println!("  base   : {}", created.base_ref);
+    if created.included > 0 {
+        println!(
+            "  seeded : {} file(s) from .worktreeinclude",
+            created.included
+        );
+    }
+    if created.linked > 0 {
+        println!("  linked : {} dir(s) from .worktreelink", created.linked);
+    }
+}
+
+fn list_worktrees(workspace: &ResolvedWorkspace, json: bool) -> Result<()> {
+    let entries = rimz::worktree::list(&workspace.project_root)?;
+    if json {
+        let rendered = serde_json::to_string_pretty(&entries)?;
+        #[expect(clippy::print_stdout, reason = "json emitter")]
+        {
+            println!("{rendered}");
+        }
+    } else {
+        // Best-effort overlay: which agent-colleagues live in each channel.
+        let snapshot = crate::cli::open_store(workspace)
+            .ok()
+            .and_then(|store| store.snapshot_cached().ok());
+        let agents: Vec<&AgentState> = snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .agents
+                    .iter()
+                    .filter(|agent| agent.parent_agent_id.is_none())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut table =
+            render::Table::new(["WORKTREE", "BRANCH", "AGENTS", "DIRTY", "MERGED", "PATH"]);
+        for entry in entries {
+            let path_str = entry.path.to_string_lossy().into_owned();
+            let here: Vec<&AgentState> = agents
+                .iter()
+                .copied()
+                .filter(|agent| {
+                    agent.worktree_path.as_deref() == Some(path_str.as_str())
+                        || (entry.branch.is_some() && agent.worktree_branch == entry.branch)
+                })
+                .collect();
+            let chips = if here.is_empty() {
+                "-".to_owned()
+            } else {
+                here.iter()
+                    .map(|agent| rimz::harness::target::agent_handle(agent, &here, false))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            let merged = match entry.landed {
+                Some(true) => render::cell("yes"),
+                Some(false) => render::cell("pending").fg(render::palette::WARN),
+                None => render::cell("?"),
+            };
+            let branch = entry.branch.clone().unwrap_or_else(|| "-".to_owned());
+            let dirty_cell = if entry.dirty {
+                render::cell("dirty").fg(render::palette::WARN)
+            } else {
+                render::cell("-").dash()
+            };
+            let path_display = render::home_relative(&path_str);
+            table.row([
+                render::cell(entry.name).fg(render::palette::ACCENT),
+                render::cell(branch).dash(),
+                render::cell(chips).fg(render::palette::ACCENT).dash(),
+                dirty_cell,
+                merged,
+                render::cell(path_display).dash(),
+            ]);
+        }
+        table.render(&mut render::out())?;
+    }
+    Ok(())
+}
+
+fn remove_worktree(
+    workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
+    name: String,
+    force: bool,
+) -> Result<()> {
+    let store = open_store(workspace)?;
+    let path = rimz::worktree::worktree_path(&workspace.project_root, config, &name)?;
+    let marker = rimz::worktree::read_marker_for_worktree(&path)?.ok_or_else(|| {
+        rimz::worktree::WorktreeErr::Unmarked {
+            name: name.clone(),
+            path: path.clone(),
+        }
+    })?;
+    let removed = remove_and_archive(
+        &marker,
+        || {
+            rimz::worktree::remove(&workspace.project_root, config, &name, force)
+                .map_err(Into::into)
+        },
+        |channel, reason| {
+            store
+                .archive_channel_messages(channel, reason, &workspace.session_name)
+                .map(|_| ())
+                .map_err(Into::into)
+        },
+    )?;
+    removed
+        .archive
+        .context("archiving messages for removed worktree channel")?;
+    #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
+    {
+        println!("removed {name}");
+        if removed.branch_deletion == rimz::worktree::BranchDeletion::KeptUnmerged {
+            println!("  branch kept: work not proven merged into its base");
+        }
+    }
+    Ok(())
 }
 
 fn parse_base(raw: &str) -> std::result::Result<WorktreeBase, String> {
@@ -318,10 +311,6 @@ fn parse_base(raw: &str) -> std::result::Result<WorktreeBase, String> {
         "fresh" => WorktreeBase::Fresh,
         other => WorktreeBase::Explicit(other.to_owned()),
     })
-}
-
-fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {
-    rimz::forge::parse(raw)
 }
 
 pub(super) fn cleanup_worktree(
@@ -340,47 +329,21 @@ pub(super) fn cleanup_worktree(
     let roster_bound = roster_binds_worktree_from_store(path, &marker, globals);
     match rimz::worktree::cleanup_decision(status, true, other_pane_inside || roster_bound) {
         rimz::worktree::CleanupDecision::RemoveClean => {
-            let removed = remove_and_archive(
-                &marker,
-                || remove_after_leaving_worktree(path, &marker, false),
-                |channel, reason| {
-                    archive_removed_worktree_messages(&marker, globals, channel, reason)
-                },
-            )?;
-            if let Err(err) = removed.archive {
-                tracing::debug!(
-                    branch = %marker.branch,
-                    error = %err,
-                    "could not archive messages for removed worktree",
-                );
-            }
+            let branch_deletion = remove_for_cleanup(path, &marker, globals, false)?;
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: removed clean worktree {}",
                 path.display()
             );
-            report_kept_branch(removed.branch_deletion, &marker);
+            report_kept_branch(branch_deletion, &marker);
         }
         rimz::worktree::CleanupDecision::PromptDirty => {
             if interactive {
                 match dirty_choice(path)? {
                     DirtyChoice::Keep => {}
                     DirtyChoice::Remove => {
-                        let removed = remove_and_archive(
-                            &marker,
-                            || remove_after_leaving_worktree(path, &marker, true),
-                            |channel, reason| {
-                                archive_removed_worktree_messages(&marker, globals, channel, reason)
-                            },
-                        )?;
-                        if let Err(err) = removed.archive {
-                            tracing::debug!(
-                                branch = %marker.branch,
-                                error = %err,
-                                "could not archive messages for removed worktree",
-                            );
-                        }
-                        report_kept_branch(removed.branch_deletion, &marker);
+                        let branch_deletion = remove_for_cleanup(path, &marker, globals, true)?;
+                        report_kept_branch(branch_deletion, &marker);
                     }
                     DirtyChoice::Shell => exec_shell(path)?,
                 }
@@ -389,6 +352,27 @@ pub(super) fn cleanup_worktree(
         rimz::worktree::CleanupDecision::Skip => {}
     }
     Ok(())
+}
+
+fn remove_for_cleanup(
+    path: &Path,
+    marker: &rimz::worktree::WorktreeMarker,
+    globals: &GlobalFlags,
+    force: bool,
+) -> Result<rimz::worktree::BranchDeletion> {
+    let removed = remove_and_archive(
+        marker,
+        || remove_after_leaving_worktree(path, marker, force),
+        |channel, reason| archive_removed_worktree_messages(marker, globals, channel, reason),
+    )?;
+    if let Err(err) = removed.archive {
+        tracing::debug!(
+            branch = %marker.branch,
+            error = %err,
+            "could not archive messages for removed worktree",
+        );
+    }
+    Ok(removed.branch_deletion)
 }
 
 fn roster_binds_worktree_from_store(

@@ -414,6 +414,23 @@ pub fn create_from_pr(
     Ok(created)
 }
 
+/// Push destination for a branch whose config points at a fork remote
+/// (set by `create_from_pr`); `None` for origin-tracking or unconfigured branches.
+pub fn fork_push_destination(repo_root: &Path, branch: &str) -> Option<(String, String)> {
+    let remote_key = format!("branch.{branch}.remote");
+    let remote = git_stdout(repo_root, ["config", "--get", remote_key.as_str()])
+        .ok()
+        .filter(|remote| !remote.is_empty())?;
+    if matches!(remote.as_str(), "origin" | ".") {
+        return None;
+    }
+    let merge_key = format!("branch.{branch}.merge");
+    let merge_ref = git_stdout(repo_root, ["config", "--get", merge_key.as_str()])
+        .ok()
+        .filter(|merge_ref| !merge_ref.is_empty())?;
+    Some((remote, merge_ref))
+}
+
 fn fetch_pr_head(repo_root: &Path, number: u64, remote: &str, refspec: &str) -> Result<String> {
     git_run(repo_root, ["fetch", "origin", refspec]).map_err(|err| match err {
         WorktreeErr::Git { stderr, .. } => WorktreeErr::PrFetch {
