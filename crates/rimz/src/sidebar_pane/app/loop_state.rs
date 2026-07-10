@@ -145,14 +145,6 @@ struct PendingFetch {
     request: FetchRequest,
 }
 
-struct InputApply {
-    painted: bool,
-    focused: Option<PaneId>,
-    mark_read: Option<String>,
-    mark_unread: Option<String>,
-    mark_all_read: bool,
-}
-
 pub(super) fn handle_wakeup(
     wakeup: Wakeup,
     ui: &mut UiState,
@@ -654,7 +646,7 @@ impl LoopState {
         } else {
             if self
                 .apply_input(Wakeup::Resize, terminal, anim_start)?
-                .painted
+                .redraw
             {
                 self.dirty = false;
             }
@@ -690,20 +682,20 @@ impl LoopState {
         diag: &crate::diag::DiagSink,
     ) -> Result<()> {
         let applied = self.apply_input(wakeup, terminal, anim_start)?;
-        if applied.painted {
+        if applied.redraw {
             // Key/mouse input paints synchronously for instant feedback; a
             // paint settles any frame the loop owed.
             self.dirty = false;
         }
-        let interacted = applied.painted
-            || applied.focused.is_some()
+        let interacted = applied.redraw
+            || applied.focus.is_some()
             || applied.mark_read.is_some()
             || applied.mark_unread.is_some()
             || applied.mark_all_read;
         if interacted {
             order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
         }
-        if let Some(pane) = applied.focused {
+        if let Some(pane) = applied.focus {
             // A jump records and broadcasts the focus intent so peer tabs
             // adopt the anchor offset and repaint while still hidden. The mux
             // focus switch fires last, so the destination tab is already at
@@ -729,14 +721,14 @@ impl LoopState {
     /// jump focus, but it never re-runs the snapshot burst — that per-keystroke
     /// refetch was the input lag. Input paints synchronously so a keypress or
     /// click feels instant rather than waiting for the next frame; the returned
-    /// `bool` reports whether it painted, so the serve loop can clear its
-    /// frame-pending flag.
+    /// `InputOutcome::redraw` reports whether it painted, so the serve loop can
+    /// clear its frame-pending flag.
     fn apply_input(
         &mut self,
         wakeup: Wakeup,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         anim_start: Instant,
-    ) -> Result<InputApply> {
+    ) -> Result<InputOutcome> {
         let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current);
         if outcome.dismiss {
             self.health.alert = None;
@@ -761,16 +753,7 @@ impl LoopState {
                 &mut self.ui,
             )?;
         }
-        Ok(InputApply {
-            painted: outcome.redraw,
-            focused: outcome.focus,
-            // The read-state keys name row/global work; the loop does the
-            // durable write and repaint (`on_input`), which owns the runtime
-            // paths.
-            mark_read: outcome.mark_read,
-            mark_unread: outcome.mark_unread,
-            mark_all_read: outcome.mark_all_read,
-        })
+        Ok(outcome)
     }
 
     /// Mark a row read without jumping (`m`): write the durable manual receipt,
