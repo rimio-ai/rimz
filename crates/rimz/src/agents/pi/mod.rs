@@ -12,8 +12,9 @@
 //! the sidebar's bar and dollar line stay current with the turn-end spend walk
 //! reconciling the final total.
 //! Lifecycle maps per docs/internals/agents/pi.md: `session_start`
-//! registers, `before_agent_start` starts the
-//! turn with the prompt, `agent_end` ends it carrying the in-band error bit,
+//! registers, `before_agent_start` starts the turn with the prompt,
+//! `agent_end` captures its in-band verdict, `agent_settled` ends it once no
+//! automatic continuation remains,
 //! `tool_execution_end` is the mutating-tool heartbeat, and
 //! `session_before_compact`/`session_compact`/`session_shutdown` are the
 //! compaction and exit signals. Spend stays in [`spend`].
@@ -133,7 +134,7 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::TurnLifecycle,
         ConcernCoverage::Wired {
-            via: "session_start/before_agent_start/agent_end",
+            via: "session_start/before_agent_start/agent_settled",
         },
     ),
     (
@@ -183,14 +184,12 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
-        // No idle Notification event, but the attention slice is
-        // reconstructed: `agent_end` settles a finished turn to a calm state
-        // and the stall window escalates a silent `running` row — Codex's
-        // partial minus the `request_user_input` leg pi has no tool for.
+        // `agent_settled` is the native final-idle boundary, while the shared
+        // coverage concern also asks for an idle-timeout Notification nudge.
         IntegrationConcern::IdleNotification,
         ConcernCoverage::Partial {
-            via: "turn-end + stall window",
-            gap: "no idle Notification hook; no idle-timeout nudge",
+            via: "agent_settled + stall window",
+            gap: "no idle-timeout Notification nudge",
         },
     ),
     (
@@ -248,7 +247,9 @@ const PI_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     ),
     (
         LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "agent_end" },
+        HookCoverage::Native {
+            event: "agent_settled",
+        },
     ),
     (
         LifecycleSignalKind::ToolUsed,
@@ -310,6 +311,7 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "session_start",
     "before_agent_start",
     "agent_end",
+    "agent_settled",
     "tool_execution_end",
     "model_select",
     "thinking_level_select",
@@ -324,6 +326,7 @@ const WIRED_EVENTS: &[&str] = &[
     "session_start",
     "before_agent_start",
     "agent_end",
+    "agent_settled",
     "tool_execution_end",
     "model_select",
     "thinking_level_select",
@@ -396,6 +399,12 @@ impl AgentAdapter for PiAdapter {
                 None,
             ),
             ClassificationSample::new(
+                "agent_settled",
+                json!({ "session_id": "sess-1", "stop_reason": "stop" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
                 "tool_execution_end",
                 json!({ "session_id": "sess-1", "tool_name": "bash" }),
                 AgentHookClass::Lifecycle,
@@ -462,14 +471,14 @@ impl AgentAdapter for PiAdapter {
         // mapping is docs/internals/agents/pi.md.
         let signal = match event_name {
             "session_start" => LifecycleSignal::Registered,
-            // Pi's `agent_start`/`agent_end` bracket one user prompt — pi's
-            // `agent_*` pair is what Rimz calls a turn. `before_agent_start`
-            // carries the prompt.
+            // `before_agent_start` carries the prompt. `agent_end` can still
+            // be followed by retry, compaction, or queued continuation, so it
+            // is enrichment-only; `agent_settled` is the true final boundary.
             "before_agent_start" => LifecycleSignal::TurnStarted,
             // The last assistant message is the in-band death certificate:
             // `stopReason: "error" | "aborted"` plus `errorMessage`, no
             // transcript forensics needed. Pi has no background-task parking.
-            "agent_end" => LifecycleSignal::TurnEnded {
+            "agent_settled" => LifecycleSignal::TurnEnded {
                 errored: payloads::agent_end_errored(&parsed),
                 parked_on_background: false,
             },
@@ -485,9 +494,12 @@ impl AgentAdapter for PiAdapter {
             }
             // A leading signal, like Claude's `PreCompact`.
             "session_before_compact" => LifecycleSignal::Compacting,
-            // Pi's extension hook reports no manual/auto trigger, so this
-            // only clears the transient head and preserves the prior state.
-            "session_compact" => LifecycleSignal::CompactionEnded { auto: None },
+            "session_compact" => LifecycleSignal::CompactionEnded {
+                auto: parsed
+                    .compaction_reason
+                    .as_ref()
+                    .and_then(payloads::PiCompactionReason::auto_flag),
+            },
             // Fires on quit including Ctrl+C/SIGHUP/SIGTERM and on every
             // session replacement (`/new`, `/resume`) — a true session end.
             "session_shutdown" => LifecycleSignal::Ended,
@@ -530,10 +542,10 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn moves_on(&self, event_name: &str) -> bool {
-        // A new prompt starts a fresh turn; an agent_end completes the current
-        // one. Pi raises no native asks today, so this only future-proofs
+        // A new prompt starts a fresh turn; agent_settled completes the current
+        // one after retries and queued continuations. Pi raises no native asks today, so this only future-proofs
         // enrichment-sourced ask handling.
-        matches!(event_name, "before_agent_start" | "agent_end")
+        matches!(event_name, "before_agent_start" | "agent_settled")
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {

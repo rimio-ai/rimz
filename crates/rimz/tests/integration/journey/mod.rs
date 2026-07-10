@@ -763,6 +763,16 @@ pub fn pi_agent_end(session_id: &str, errored: bool) -> Value {
     )
 }
 
+pub fn pi_agent_settled(session_id: &str, errored: bool) -> Value {
+    pi_envelope(
+        "agent_settled",
+        session_id,
+        json!({
+            "stop_reason": if errored { "error" } else { "stop" },
+        }),
+    )
+}
+
 pub fn pi_session_shutdown(session_id: &str) -> Value {
     pi_envelope("session_shutdown", session_id, json!({}))
 }

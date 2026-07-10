@@ -11,7 +11,7 @@
 //! show `pi --version` even when no account file exists. Best-effort and
 //! producer-only — see [`crate::agents::account`] for the probe contract.
 //!
-//! [docs/internals/adapter/pi-reference.md]: ../../../../../docs/internals/adapter/pi-reference.md
+//! [Pi protocol reference]: ../../../../../docs/externals/agent-adapter/pi-reference.md
 
 use serde::Deserialize;
 use std::collections::BTreeMap;

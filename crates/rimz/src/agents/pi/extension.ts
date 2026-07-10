@@ -10,13 +10,28 @@
 // true, "reason": …}` blocks the tool, anything else (including an absent or
 // broken rimz) lets it run. Rimz authors this wire; the event mapping it
 // feeds is docs/internals/agents/pi.md and the upstream surface is
-// docs/internals/adapter/pi-reference.md.
+// docs/externals/agent-adapter/pi-reference.md.
 import { spawn } from "node:child_process";
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
 const RIMZ = process.env.RIMZ_BIN || "rimz";
 const usageBySession = new Map();
 const costBySession = new Map();
+const verdictBySession = new Map();
 let latestWindows = [];
+
+const versionAtLeast = (version, floor) => {
+  const parts = String(version)
+    .split(".")
+    .slice(0, 3)
+    .map((part) => Number.parseInt(part, 10) || 0);
+  for (let index = 0; index < floor.length; index += 1) {
+    if ((parts[index] ?? 0) > floor[index]) return true;
+    if ((parts[index] ?? 0) < floor[index]) return false;
+  }
+  return true;
+};
+const hasAgentSettled = versionAtLeast(PI_VERSION, [0, 80, 4]);
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const roundMaybe = (value) =>
@@ -162,9 +177,10 @@ export default function rimz(pi) {
   };
 
   pi.on("session_start", (ev, ctx) => feed("session_start", ctx, { reason: ev?.reason }));
-  pi.on("before_agent_start", (ev, ctx) =>
-    feed("before_agent_start", ctx, { prompt: ev?.prompt }),
-  );
+  pi.on("before_agent_start", (ev, ctx) => {
+    verdictBySession.delete(sessionId(ctx));
+    feed("before_agent_start", ctx, { prompt: ev?.prompt });
+  });
   pi.on("agent_end", (ev, ctx) => {
     // The prompt's last assistant message carries the turn verdict and usage.
     const messages = Array.isArray(ev?.messages) ? ev.messages : [];
@@ -176,7 +192,21 @@ export default function rimz(pi) {
     // JSON.
     if (last?.model) fields.model = last.model;
     if (last?.usage?.totalTokens != null) fields.total_tokens = Math.round(last.usage.totalTokens);
-    feed("agent_end", ctx, fields);
+    verdictBySession.set(sessionId(ctx), fields);
+    if (hasAgentSettled) {
+      feed("agent_end", ctx, fields);
+    } else {
+      // Pi before 0.80.4 has no automatic-work-aware settled event. Preserve
+      // its historical agent_end boundary while new releases wait for the
+      // native final-idle signal.
+      feed("agent_settled", ctx, fields);
+      verdictBySession.delete(sessionId(ctx));
+    }
+  });
+  pi.on("agent_settled", (_ev, ctx) => {
+    const id = sessionId(ctx);
+    feed("agent_settled", ctx, verdictBySession.get(id) ?? {});
+    verdictBySession.delete(id);
   });
   pi.on("turn_end", (ev, ctx) => {
     const messages = Array.isArray(ev?.messages) ? ev.messages : [];
@@ -197,8 +227,18 @@ export default function rimz(pi) {
   pi.on("thinking_level_select", (ev, ctx) =>
     feed("thinking_level_select", ctx, { effort: ev?.level }),
   );
-  pi.on("session_before_compact", (_ev, ctx) => feed("session_before_compact", ctx, {}));
-  pi.on("session_compact", (_ev, ctx) => feed("session_compact", ctx, {}));
+  pi.on("session_before_compact", (ev, ctx) =>
+    feed("session_before_compact", ctx, {
+      compaction_reason: ev?.reason,
+      compaction_will_retry: ev?.willRetry,
+    }),
+  );
+  pi.on("session_compact", (ev, ctx) =>
+    feed("session_compact", ctx, {
+      compaction_reason: ev?.reason,
+      compaction_will_retry: ev?.willRetry,
+    }),
+  );
   pi.on("session_shutdown", (ev, ctx) => {
     // A /reload tears down and re-registers the SAME session id; both
     // children are fire-and-forget, so a tombstone racing the re-register
@@ -209,6 +249,7 @@ export default function rimz(pi) {
     const id = sessionId(ctx);
     usageBySession.delete(id);
     costBySession.delete(id);
+    verdictBySession.delete(id);
     latestWindows = [];
     feed("session_shutdown", ctx, { reason: ev?.reason });
   });

@@ -11,7 +11,7 @@
 //! id). Upstream overrides: `--session-dir` / `PI_CODING_AGENT_SESSION_DIR`;
 //! the `PI_AGENT_DIR` env honored here is Rimz's own comma-separated test
 //! override, not a pi variable. Upstream shapes are mirrored in
-//! `docs/internals/adapter/pi-reference.md`. JSONL shape (one entry per
+//! `docs/externals/agent-adapter/pi-reference.md`. JSONL shape (one entry per
 //! assistant turn):
 //! ```json
 //! { "type": "message",

@@ -376,7 +376,7 @@ Provider blocks stacked (`theme.display.provider_tabs = "never"`). Claude and Co
  ▐▜▌ ▚ ▐▛▌ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱ ↻ 1h45m
   ▝▀▀▀▀▀▘  7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱ ↻ 3d19h
 
-  Pi v0.78.1 · OpenAI API
+  Pi v0.80.6 · OpenAI API
   █▜███▛█  ◎ 19  ◇  8M ↘  7M ↗ 1M ◌ 142M      $420.42
  ▝▜▛▀▀▀▜▛▘ api ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ $420.42∞
   ▝▘   ▝▘
@@ -384,7 +384,7 @@ Provider blocks stacked (`theme.display.provider_tabs = "never"`). Claude and Co
 
 An **unmetered** account (an API key) shows an `api` bar: trailing-month transcript spend against an optional display ceiling, `∞` when none is configured. The dashboard isn't pinned to fixed windows — each is labeled by its reported length, and paid usage earns a separate `ex` row only when it matters to the account's usable budget.
 
-A **Pi block** names its version and the backing account it runs on — `Pi v0.78.1 · Anthropic OAuth`. Pi keeps its budget readings under the `pi` provider: live sessions publish response-header windows, idle OAuth accounts refresh out-of-band, and an API key gets the `api` paid-usage row instead ([provider.md → Per-provider mapping](../internals/agents/providers.md#per-provider-mapping)).
+A **Pi block** names its version and the backing account it runs on — `Pi v0.80.6 · Anthropic OAuth`. Pi keeps its budget readings under the `pi` provider: live sessions publish response-header windows, idle OAuth accounts refresh out-of-band, and an API key gets the `api` paid-usage row instead ([provider.md → Per-provider mapping](../internals/agents/providers.md#per-provider-mapping)).
 
 Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — host infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[theme.providers.<kind>]`, see [theme.md](../guide/theme.md#provider-styling)).
 

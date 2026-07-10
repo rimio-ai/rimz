@@ -160,7 +160,7 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
 
     let clean = PiAdapter
         .observe_lifecycle(
-            "agent_end",
+            "agent_settled",
             &json!({
                 "session_id": "sess-1",
                 "stop_reason": "stop",
@@ -193,7 +193,7 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
         json!({ "session_id": "sess-1", "stop_reason": "stop", "error_message": "boom" }),
     ] {
         let observation = PiAdapter
-            .observe_lifecycle("agent_end", &payload)
+            .observe_lifecycle("agent_settled", &payload)
             .expect("observation");
         assert_eq!(
             observation.signal,
@@ -398,12 +398,45 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         .observe_lifecycle("session_before_compact", &json!({ "session_id": "sess-1" }))
         .expect("observation");
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
-    let compacted = PiAdapter
-        .observe_lifecycle("session_compact", &json!({ "session_id": "sess-1" }))
+    for (reason, expected) in [
+        (Some("manual"), Some(false)),
+        (Some("threshold"), Some(true)),
+        (Some("overflow"), Some(true)),
+        (Some("future"), None),
+        (None, None),
+    ] {
+        let mut payload = json!({ "session_id": "sess-1" });
+        if let Some(reason) = reason {
+            payload["compaction_reason"] = json!(reason);
+        }
+        let compacted = PiAdapter
+            .observe_lifecycle("session_compact", &payload)
+            .expect("observation");
+        assert_eq!(
+            compacted.signal,
+            LifecycleSignal::CompactionEnded { auto: expected },
+            "{reason:?}"
+        );
+    }
+    assert_eq!(
+        PiAdapter.observe_lifecycle(
+            "agent_end",
+            &json!({ "session_id": "sess-1", "stop_reason": "error" }),
+        ),
+        None
+    );
+    let settled = PiAdapter
+        .observe_lifecycle(
+            "agent_settled",
+            &json!({ "session_id": "sess-1", "stop_reason": "error" }),
+        )
         .expect("observation");
     assert_eq!(
-        compacted.signal,
-        LifecycleSignal::CompactionEnded { auto: None }
+        settled.signal,
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+        }
     );
     let ended = PiAdapter
         .observe_lifecycle("session_shutdown", &json!({ "session_id": "sess-1" }))
@@ -421,7 +454,8 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
     assert!(PiAdapter.ends_session("session_shutdown"));
     assert!(!PiAdapter.ends_session("agent_end"));
     assert!(PiAdapter.moves_on("before_agent_start"));
-    assert!(PiAdapter.moves_on("agent_end"));
+    assert!(!PiAdapter.moves_on("agent_end"));
+    assert!(PiAdapter.moves_on("agent_settled"));
     assert!(!PiAdapter.moves_on("session_start"));
 }
 
@@ -492,14 +526,19 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains(r#"["hooks", "feed", "--source", "pi"]"#));
     assert!(EXTENSION_SOURCE.contains("RIMZ_AGENT_PID"));
     assert!(EXTENSION_SOURCE.contains("RIMZ_BIN"));
+    assert!(EXTENSION_SOURCE.contains("PI_VERSION"));
+    assert!(EXTENSION_SOURCE.contains("hasAgentSettled"));
     assert!(EXTENSION_SOURCE.contains("getContextUsage"));
     assert!(EXTENSION_SOURCE.contains("Math.round"));
     assert!(EXTENSION_SOURCE.contains("costBySession"));
+    assert!(EXTENSION_SOURCE.contains("verdictBySession"));
     assert!(EXTENSION_SOURCE.contains("total_cost_usd"));
     assert!(EXTENSION_SOURCE.contains(r#"pi.on("turn_end""#));
     assert!(EXTENSION_SOURCE.contains(r#"pi.on("after_provider_response""#));
     assert!(EXTENSION_SOURCE.contains("cache_write_input_tokens"));
     assert!(EXTENSION_SOURCE.contains("rate_limits"));
+    assert!(EXTENSION_SOURCE.contains("compaction_reason"));
+    assert!(EXTENSION_SOURCE.contains("compaction_will_retry"));
     assert!(
         !EXTENSION_SOURCE.contains("addSessionCost(sessionId(ctx), last?.usage"),
         "agent_end's last message is the final turn_end usage and must not add cost again"

@@ -80,7 +80,7 @@ Mapping detail: [claude.md](../internals/agents/claude.md); upstream protocol: [
 
 Codex is a full integration with one structural difference: since 0.137 its hooks are **daemon-routed**, firing from a shared per-user app-server rather than the pane. RimZ recovers the pane from the in-pane `codex` process at the same working directory, so an in-pane Codex session still renders as a normal, jump-able row ([hooks resolve the room they live in](../internals/agents/model.md#hooks-resolve-the-room-they-live-in)).
 
-- **Reports:** turn boundaries, per-tool activity, subagents (thread-spawned children since 0.134), plan approvals, permission prompts, and the `notify` channel.
+- **Reports:** turn boundaries, supported-tool activity, subagents (thread-spawned children since 0.134), permission prompts, and native user questions. Codex has no plan-approval hook; `notify` is a separate upstream channel that RimZ does not install.
 - **Two derived cells (◐):** `end` — Codex has no per-session end hook, so a closed session leaves by pane liveness and the rollup reaper on the next snapshot tick rather than at the instant of exit; `idle` — reconstructed from turn-end, `request_user_input`, and the stall window, without a native idle-timeout nudge.
 - **Three unsupported cells (✗):** `plan` — no plan-approval gate, since `update_plan` is non-blocking (`codex-plan` keeps the default posture); `answer` — no mapped prompt choreography; `bg` — no background-task parking.
 - **Live context:** the rollout `.jsonl` tail is the native live source for tokens, cost, and effort, read under a stat gate so an unchanged file costs nothing; the read-only app-server methods supply account and rate-limit context. The context window comes from the rollout's `model_context_window`.
@@ -96,11 +96,11 @@ Mapping detail: [codex.md](../internals/agents/codex.md); upstream protocol: [co
 Pi runs in-process in its pane and reports through a RimZ-authored **extension**, which stamps the context gauge directly onto each hook envelope — so Pi carries live context on the lifecycle channel with no transcript tail or separate transport.
 
 - **Reports:** turn boundaries, per-tool activity, and context usage on every envelope.
-- **Three derived cells (◐):** `idle` — turn-end plus the stall window, without a native idle-timeout nudge; `live$` — the extension pushes a cumulative-cost figure and a turn-end walk sums the session transcript spend, so the in-process accumulator is best-effort and resets on resume while the turn-end walk reconciles to the authoritative session total; `rich` — the extension envelope carries model, effort, cost, and account windows, but rides the lifecycle channel with no out-of-band transport refreshing it between turns, unlike a statusline or app-server poll.
+- **Three derived cells (◐):** `idle` — native final-idle `agent_settled` plus the stall window, without an idle-timeout nudge; `live$` — the extension pushes a cumulative-cost figure and a settled-boundary walk sums the session transcript spend, so the in-process accumulator is best-effort and resets on resume while the walk reconciles to the authoritative session total; `rich` — the extension envelope carries model, effort, cost, and account windows, but rides the lifecycle channel with no out-of-band transport refreshing it between turns, unlike a statusline or app-server poll.
 - **Six unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (no native question tool), `answer` (no mapped prompt choreography), `sub` (no subagent hook surface), `bg` (no background-task parking), and `remote` (no remote-control surface).
 - **Blocking asks:** Pi has no native prompt UI, so its adapter declares `native_ask_ui` off. A blocking hook returns the neutral no-op — which for Pi *is* the allow — and RimZ records no waiting row, because there is no native prompt a `?` row could route you to. Pi's neutral semantics differ from Claude's and Codex's, so verify this per agent.
 - **Resume and fork:** `pi --session` reopens a session; `pi --fork <id>` branches one for `rimz agents fork`.
-- **Permission modes:** `pi-{ask,plan}` as launch cells. Effort levels: `off|minimal|low|medium|high|xhigh`.
+- **Permission modes:** `pi-{ask,plan}` as launch cells. Effort levels: `off|minimal|low|medium|high|xhigh|max` (`max` requires Pi 0.80.6+ and supporting models).
 - **Account:** read from `~/.pi/agent/auth.json` — OAuth is a metered subscription, an API key is unmetered.
 - **Install target:** `~/.pi/agent/extensions/rimz.ts`.
 
@@ -129,7 +129,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | --- | --- | --- | --- | --- |
 | `registered` | `SessionStart` | `SessionStart` | `session_start` | `session_created` |
 | `turn_started` | `UserPromptSubmit` | `UserPromptSubmit` | `before_agent_start` | `chat_message` |
-| `turn_ended` | `Stop` | `Stop` | `agent_end` | `session_idle` |
+| `turn_ended` | `Stop` | `Stop` | `agent_settled` (`agent_end` before Pi 0.80.4) | `session_idle` |
 | `tool_used` | `PostToolUse` | `PostToolUse` | `tool_execution_end` | `tool_after` |
 | `awaiting_input` | `PermissionRequest` | `PermissionRequest` | ✗ | `permission_ask` |
 | `subagent_started` | `SubagentStart` | `SubagentStart` | ✗ | `SubagentStart` |

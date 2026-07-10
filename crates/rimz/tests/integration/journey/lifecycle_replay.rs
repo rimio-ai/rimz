@@ -2,7 +2,7 @@ use rimz::ids::MuxName;
 use serde_json::{Value, json};
 
 use super::{
-    RoomHarness, SETTLE, compacting_row, pi_agent_end, pi_before_agent_start,
+    RoomHarness, SETTLE, compacting_row, pi_agent_end, pi_agent_settled, pi_before_agent_start,
     pi_session_before_compact, pi_session_compact, pi_session_shutdown, pi_session_start,
     pi_tool_execution_end, post_compact, post_tool_use, pre_compact, running_row, session_end,
     session_start, session_start_compact, stop_failure, stop_turn, subagent_start, subagent_stop,
@@ -138,8 +138,15 @@ impl ReplayAgent {
 
     fn turn_end_clean(self) -> Value {
         match self {
-            Self::Pi => pi_agent_end(self.session(), false),
+            Self::Pi => pi_agent_settled(self.session(), false),
             Self::Claude | Self::Codex => stop_turn(self.session()),
+        }
+    }
+
+    fn turn_end_enrichment(self) -> Option<Value> {
+        match self {
+            Self::Pi => Some(pi_agent_end(self.session(), false)),
+            Self::Claude | Self::Codex => None,
         }
     }
 
@@ -151,7 +158,7 @@ impl ReplayAgent {
                 payload["status"] = json!("failed");
                 payload
             }
-            Self::Pi => pi_agent_end(self.session(), true),
+            Self::Pi => pi_agent_settled(self.session(), true),
         }
     }
 
@@ -272,6 +279,15 @@ fn replay_full_lifecycle(agent: ReplayAgent) {
         running_row(&screen, agent.role()),
         "compaction close restores the working head:\n{screen}"
     );
+
+    if let Some(payload) = agent.turn_end_enrichment() {
+        room.agent_hook(agent.source(), &payload);
+        let screen = room.wait_for(|s| running_row(s, agent.role()), SETTLE);
+        assert!(
+            running_row(&screen, agent.role()),
+            "agent-end enrichment keeps the active turn open:\n{screen}"
+        );
+    }
 
     room.agent_hook(agent.source(), &agent.turn_end_clean());
     let screen = room.wait_for(

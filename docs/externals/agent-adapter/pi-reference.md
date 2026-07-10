@@ -2,13 +2,13 @@
 
 > The mapping onto RimZ's internal types lives beside this doc: [pi.md](../../internals/agents/pi.md) owns the lifecycle, context, account, and spend mapping; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Pi upstream protocol surface** the RimZ adapter binds to — the in-process extension API (events, payloads, blocking returns, response headers), the session JSONL, the headless RPC/JSON modes, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the pi.dev docs, pinned to the source URLs below; the session and auth shapes are additionally verified against a live `pi` 0.78.0 install (2026-06-04). The code binding this surface is the adapter directory [`pi/`](../../../crates/rimz/src/agents/pi/mod.rs): the embedded [`extension.ts`](../../../crates/rimz/src/agents/pi/extension.ts) forwards the lifecycle events, including the `session_before_compact`/`session_compact` bracket; stamps token composition, cumulative cost, and response-header windows; gates `tool_call` on the blocking bridge; and the read-only spending parser [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks the session tree.
+This is the single home for the **Pi upstream protocol surface** the RimZ adapter binds to — the in-process extension API (events, payloads, blocking returns, response headers), the session JSONL, the headless RPC/JSON modes, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the pi.dev docs, refreshed against npm release [`@earendil-works/pi-coding-agent` 0.80.6](https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/0.80.6) and upstream tag [`v0.80.6`](https://github.com/earendil-works/pi/tree/v0.80.6) (`2b3fda9921b5590f285165287bd442a25817f17b`, 2026-07-09); compatibility behavior is additionally checked against a local 0.80.3 install. The code binding this surface is the adapter directory [`pi/`](../../../crates/rimz/src/agents/pi/mod.rs): the embedded [`extension.ts`](../../../crates/rimz/src/agents/pi/extension.ts) forwards lifecycle through the final `agent_settled` boundary, including the reasoned `session_before_compact`/`session_compact` bracket; stamps token composition, cumulative cost, and response-header windows; gates `tool_call` on the blocking bridge; and the read-only spending parser [`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) walks the session tree.
 
 Coverage is **depth on what the adapter wires, breadth as an index**: the events, session fields, and decision returns [`src/agents/pi/`](../../../crates/rimz/src/agents/pi/mod.rs) parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists. [Mapping feasibility](#mapping-feasibility) closes the doc with what remains unwired; the landed verdict is the [pi.md](../../internals/agents/pi.md).
 
 ## Upstream sources
 
-Re-fetch these pages to refresh this mirror. Each `pi.dev/docs/latest/<page>` page renders `packages/coding-agent/docs/<page>.md` from the GitHub repo — the markdown is the higher-fidelity fetch. Docs publish only as `latest` (no version-pinned tree), so pair a refresh with `pi --version` and the repo commit; exact TypeScript types ship in `node_modules/@earendil-works/pi-coding-agent/dist/`.
+Re-fetch these pages to refresh this mirror. Each `pi.dev/docs/latest/<page>` page renders `packages/coding-agent/docs/<page>.md` from the GitHub repo — the markdown is the higher-fidelity fetch. The website publishes a moving `latest`; pair a refresh with the npm version and Git tag, and use the tag's documentation tree for the version-pinned record. Exact TypeScript types ship in `node_modules/@earendil-works/pi-coding-agent/dist/`.
 
 | Surface | Source |
 | --- | --- |
@@ -21,7 +21,8 @@ Re-fetch these pages to refresh this mirror. Each `pi.dev/docs/latest/<page>` pa
 | RPC mode (headless JSONL protocol) | <https://pi.dev/docs/latest/rpc> |
 | JSON event-stream mode | <https://pi.dev/docs/latest/json> |
 | Pi packages (`pi install`) | <https://pi.dev/docs/latest/packages> |
-| Markdown doc sources + extension examples | <https://github.com/earendil-works/pi> — `packages/coding-agent/docs/`, `packages/coding-agent/examples/extensions/` |
+| Version-pinned docs, types, and examples for this refresh | <https://github.com/earendil-works/pi/tree/v0.80.6/packages/coding-agent> — `docs/`, `src/core/extensions/types.ts`, `examples/extensions/` |
+| Changelog | <https://github.com/earendil-works/pi/blob/v0.80.6/packages/coding-agent/CHANGELOG.md> |
 | Extension type definitions | npm [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) |
 
 ## Integration surface — in-process extensions
@@ -35,13 +36,13 @@ Discovery, in load order:
 | Location | Scope |
 | --- | --- |
 | `~/.pi/agent/extensions/*.ts` and `*/index.ts` | global |
-| `.pi/extensions/*.ts` and `*/index.ts` | project-local |
+| `.pi/extensions/*.ts` and `*/index.ts` | project-local, loaded after project trust resolves |
 | `settings.json` — `extensions: [paths]`, `packages: ["npm:…", "git:…"]` | configured |
 | `pi -e <path>` / `--extension <source>` | per-invocation |
 
-Install for RimZ means **one RimZ-owned file** written to `~/.pi/agent/extensions/` — auto-discovered, hot-reloaded by `/reload`, removed by deleting the file, idempotent by path. The file executes arbitrary code with the user's permissions (upstream states this explicitly), so it belongs in the executable-surface trust hash like every hook config. `--no-extensions`, `-p` (print), and `--mode json` run pi without UI-capable extensions — see [Mapping feasibility](#mapping-feasibility).
+Install for RimZ means **one RimZ-owned file** written to `~/.pi/agent/extensions/` — auto-discovered, hot-reloaded by `/reload`, removed by deleting the file, idempotent by path. The file executes arbitrary code with the user's permissions (upstream states this explicitly), so it belongs in the executable-surface trust hash like every hook config. `--no-extensions` disables discovered extensions while retaining explicit `-e` paths; `-p` (print) and `--mode json` still run extensions but provide no UI — see [Mapping feasibility](#mapping-feasibility).
 
-An extension default-exports a (sync or async) factory receiving `ExtensionAPI` — `pi.on(event, handler)`, `pi.registerCommand`, `pi.registerTool`, `pi.exec`, `pi.appendEntry` (persist extension state in the session), `pi.setSessionName`, `pi.getThinkingLevel` (the RimZ wire's `effort`), `pi.events` (inter-extension bus). Every handler receives `ExtensionContext`:
+An extension default-exports a (sync or async) factory receiving `ExtensionAPI` — `pi.on(event, handler)`, `pi.registerCommand`, `pi.registerTool`, `pi.exec`, `pi.appendEntry` (persist extension state in the session), `pi.registerEntryRenderer`, `pi.setSessionName`, `pi.getThinkingLevel` (the RimZ wire's `effort`), `pi.events` (inter-extension bus). Every normal handler receives `ExtensionContext`; the startup-only `project_trust` event receives the smaller `ProjectTrustContext` instead:
 
 | Field | Carries |
 | --- | --- |
@@ -49,8 +50,10 @@ An extension default-exports a (sync or async) factory receiving `ExtensionAPI` 
 | `ctx.getContextUsage()` | live context-token usage for the active model |
 | `ctx.ui` | dialogs (`confirm`, `select`, `input`, `editor` — each with an optional `timeout` auto-dismiss) and fire-and-forget (`notify`, `setStatus`, `setWidget`, `setTitle`) |
 | `ctx.mode` / `ctx.hasUI` | `"tui" \| "rpc" \| "json" \| "print"`; `hasUI` is true in TUI and RPC only — gate every dialog on it |
-| `ctx.cwd`, `ctx.signal`, `ctx.isIdle()`, `ctx.abort()`, `ctx.shutdown()` | working directory, the active turn's abort signal, control-flow helpers |
-| `ctx.modelRegistry` / `ctx.model` | model catalog — each model carries `provider`, `id`, `contextWindow`, `maxTokens`, and per-token cost rates |
+| `ctx.cwd`, `ctx.signal`, `ctx.isIdle()`, `ctx.hasPendingMessages()`, `ctx.abort()`, `ctx.shutdown()` | working directory, the active turn's abort signal, control-flow helpers |
+| `ctx.isProjectTrusted()` | effective trust for project-local settings and resources |
+| `ctx.getSystemPrompt()`, `ctx.compact()` | current assembled system prompt and extension-triggered compaction |
+| `ctx.modelRegistry` / `ctx.model` | model catalog — each model carries `provider`, `id`, `contextWindow`, `maxTokens`, and cost rates including optional request-wide input tiers |
 
 Node built-ins (`node:fs`, `node:child_process`, …) and npm dependencies (via an adjacent `package.json`) are importable.
 
@@ -59,23 +62,25 @@ Node built-ins (`node:fs`, `node:child_process`, …) and npm dependencies (via 
 The lifecycle, condensed (the full diagram is in the [extensions doc](https://pi.dev/docs/latest/extensions)):
 
 ```text
-launch         ─► session_start { reason: "startup" }
+launch         ─► project_trust ─► session_start { reason: "startup" }
 prompt         ─► input ─► before_agent_start ─► agent_start
                    ┌─ turn (one LLM call; repeats while tools run) ─┐
-                   │ turn_start ─► context ─► before_provider_request│
+                   │ turn_start ─► context ─► before_provider_headers│
+                   │   ─► before_provider_request ─► after_provider_response│
                    │   tool_execution_start ─► tool_call (can block) │
                    │   ─► tool_execution_update* ─► tool_result      │
                    │   ─► tool_execution_end                         │
                    │ turn_end { message, toolResults }               │
                    └─────────────────────────────────────────────────┘
-               ─► agent_end { messages }
+               ─► agent_end { messages } ─► retry/compact/follow-up? ─► agent_settled
+/name          ─► session_info_changed
 /compact, auto ─► session_before_compact ─► session_compact
 /new, /resume  ─► session_before_switch ─► session_shutdown ─► session_start { reason }
 /fork, /clone  ─► session_before_fork ─► session_shutdown ─► session_start { reason: "fork" }
 exit (Ctrl+C, Ctrl+D, SIGHUP, SIGTERM) ─► session_shutdown { reason: "quit" }
 ```
 
-Note pi's vocabulary: a pi **turn** is one LLM call, and `agent_start`/`agent_end` bracket one user prompt — pi's `agent_*` pair is what RimZ calls a turn.
+Note pi's vocabulary: a pi **turn** is one LLM call, while `agent_start`/`agent_end` bracket one low-level agent run. An `agent_end` can still lead to automatic retry, compaction-and-retry, or a queued follow-up; `agent_settled` is the final boundary RimZ calls a completed turn.
 
 ### Events an adapter would wire
 
@@ -83,20 +88,20 @@ Note pi's vocabulary: a pi **turn** is one LLM call, and `agent_start`/`agent_en
 | --- | --- | --- | --- |
 | `session_start` | launch, `/new`, `/resume`, fork/clone, `/reload` | `reason` (`startup`\|`reload`\|`new`\|`resume`\|`fork`), `previousSessionFile?` | — |
 | `before_agent_start` | prompt submitted, before the agent loop | `prompt`, `images?`, `systemPrompt`, `systemPromptOptions` | may inject a message / replace the system prompt |
-| `agent_start` / `agent_end` | once per user prompt | `agent_end.messages` — the prompt's messages; the last assistant message carries `stopReason` and `errorMessage?` | — |
+| `agent_start` / `agent_end` / `agent_settled` | low-level run start/end; final settled idle | `agent_end.messages` — the run's messages; the last assistant message carries `stopReason` and `errorMessage?`; `agent_settled` has no fields | — |
 | `turn_end` | per LLM call inside the loop | `turnIndex`, `message` (assistant, with `usage`), `toolResults` | — |
 | `tool_call` | before a tool executes — **can block** | `toolName`, `toolCallId`, `input` (mutable) | `{ block: true, reason?: string }` blocks; mutations to `input` patch the call |
 | `tool_execution_end` | after a tool finishes | `toolCallId`, `toolName`, `result`, `isError` | — |
-| `session_before_compact` / `session_compact` | compaction, manual or auto | `preparation` / `compactionEntry`, `fromExtension` | `before` may cancel or supply a custom summary |
+| `session_before_compact` / `session_compact` | compaction, manual or auto | `preparation` / `compactionEntry`, `fromExtension`; both carry `reason` (`manual`\|`threshold`\|`overflow`) and `willRetry` | `before` may cancel or supply a custom summary |
 | `session_shutdown` | quit (incl. Ctrl+C/SIGHUP/SIGTERM), `/new`, `/resume`, fork, `/reload` | `reason` (`quit`\|`reload`\|`new`\|`resume`\|`fork`), `targetSessionFile?` | — |
 | `model_select` | `/model`, `Ctrl+P` cycling, session restore | `model`, `previousModel?`, `source` (`set`\|`cycle`\|`restore`) — `model` carries `contextWindow`/`maxTokens`/cost rates | — |
-| `thinking_level_select` | thinking level change | `level` (`off`\|`minimal`\|`low`\|`medium`\|`high`\|`xhigh`), `previousLevel` | — |
+| `thinking_level_select` | thinking level change | `level` (`off`\|`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`), `previousLevel` | — |
 
 Session identity rides `ctx.sessionManager` rather than event payloads: `getSessionId()`, `getSessionFile()`, and `getCwd()` are valid from the first `session_start` — at launch, with no lazy-registration window.
 
 ### Event index (the rest)
 
-`resources_discover`, `session_before_switch`, `session_before_fork`, `session_before_tree` / `session_tree`, `message_start` / `message_update` / `message_end` (streaming; `message_end` may replace the finalized message), `context` (mutate the message list before each LLM call), `before_provider_request` (inspect/replace the provider payload), `after_provider_response` (`status`, normalized `headers` — the only place provider rate-limit response headers surface), `tool_execution_start` / `tool_execution_update`, `tool_result` (patch `content`/`details`/`isError`, middleware-chained), `input` (`text`, `images?`, `source`: `interactive`\|`rpc`\|`extension`, `streamingBehavior`; can transform or handle), `user_bash`.
+`project_trust` (global and CLI extensions only; first `yes`/`no` decision wins), `resources_discover`, `session_info_changed`, `session_before_switch`, `session_before_fork`, `session_before_tree` / `session_tree`, `message_start` / `message_update` / `message_end` (streaming; `message_end` may replace the finalized message), `context` (mutate the message list before each LLM call), `before_provider_headers` (mutate request headers), `before_provider_request` (inspect/replace the provider payload), `after_provider_response` (`status`, normalized `headers` — the response-header surface), `tool_execution_start` / `tool_execution_update`, `tool_result` (patch `content`/`details`/`isError`, middleware-chained), `input` (`text`, `images?`, `source`: `interactive`\|`rpc`\|`extension`, `streamingBehavior`; can transform or handle), `user_bash`.
 
 ### Blocking, dialogs, and error handling
 
@@ -118,10 +123,10 @@ The directory key is the working directory with `/` replaced by `-`; the filenam
 The first line is the header; every later line is a tree entry (`id` is 8-char hex, `parentId` links it, `timestamp` is ISO):
 
 ```jsonc
-{"type":"session","version":3,"id":"<session uuid>","timestamp":"2026-06-04T06:45:56.308Z","cwd":"/home/user/…","parentSession":"<path, fork/clone only>"}
+{"type":"session","version":3,"id":"<session uuid>","timestamp":"2026-07-09T06:45:56.308Z","cwd":"/home/user/…","parentSession":"<path, fork/clone only>"}
 ```
 
-Sessions are versioned (v1 linear → v2 tree → v3 renamed `hookMessage` → `custom`) and auto-migrate on load; parse around the `version` field.
+Sessions are versioned (v1 linear → v2 tree → v3 renamed `hookMessage` → `custom`) and auto-migrate on load; parse around the `version` field. The header's `parentSession` is optional.
 
 | Entry `type` | Carries |
 | --- | --- |
@@ -134,32 +139,32 @@ Sessions are versioned (v1 linear → v2 tree → v3 renamed `hookMessage` → `
 | `label` | `targetId`, `label` — `/tree` bookmarks |
 | `session_info` | `name` — the `/name` display name |
 
-The `message` roles are `user`, `assistant`, `toolResult`, `bashExecution` (`!` commands), `custom`, `branchSummary`, `compactionSummary`; message-level `timestamp` is Unix **ms**, unlike the ISO entry envelope. The assistant shape (live-verified; `responseId` is present on the wire though undocumented — parse tolerantly):
+The `message` roles are `user`, `assistant`, `toolResult`, `bashExecution` (`!` commands), `custom`, `branchSummary`, `compactionSummary`; message-level `timestamp` is Unix **ms**, unlike the ISO entry envelope. The assistant shape follows the 0.80.6 types; `responseModel`, `responseId`, and redacted `diagnostics` are optional, so parse tolerantly:
 
 ```jsonc
 {"type":"message","id":"a1b2c3d4","parentId":"…","timestamp":"2026-06-04T06:46:14.308Z","message":{
   "role": "assistant",
-  "provider": "openai-codex", "model": "gpt-5.5", "api": "…", "responseId": "…",
+  "provider": "openai-codex", "model": "gpt-5.5", "responseModel": "gpt-5.6-sol", "api": "…", "responseId": "…",
   "content": [ {"type":"text","text":"…"} ],            // also "thinking", "toolCall" blocks
   "stopReason": "stop",                                  // stop | length | toolUse | error | aborted
   "errorMessage": "…",                                   // present on error
-  "usage": { "input": 3435, "output": 6, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 3441,
+  "usage": { "input": 3435, "output": 6, "cacheRead": 0, "cacheWrite": 0, "cacheWrite1h": 0, "reasoning": 4, "totalTokens": 3441,
              "cost": { "input": 0.017175, "output": 0.00018, "cacheRead": 0, "cacheWrite": 0, "total": 0.017355 } }
 }}
 ```
 
 Two properties matter for any tail read:
 
-- **Dollars are logged directly.** `usage.cost.total` is the priced cost per assistant message — no pricing-table multiplication ([`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) reads it verbatim). The token split mirrors Anthropic's: context tokens are `input + cacheRead + cacheWrite`; the transcript carries **no context window**, so a gauge divisor resolves from the model registry (`contextWindow` per model) or a table, the way Claude's payload model resolves its divisor.
-- **RimZ's envelope carries a live dollar sum.** The extension adds each `turn_end` assistant message's `usage.cost.total` into a per-session accumulator and stamps positive totals as `total_cost_usd` on forwarded envelopes. `agent_end` carries the same final assistant message as the last `turn_end`, so it forwards the accumulated value and contributes no additional cost. `/resume` starts a new extension process with an empty accumulator; the turn-end JSONL spend walk reconciles the authoritative session total.
+- **Dollars are logged directly.** `usage.cost.total` is the priced cost per assistant message — no pricing-table multiplication ([`pi/spend.rs`](../../../crates/rimz/src/agents/pi/spend.rs) reads it verbatim). The token split mirrors Anthropic's: context tokens are `input + cacheRead + cacheWrite`; optional `cacheWrite1h` is a subset of cache writes, and optional `reasoning` is a subset of output, so neither adds to `totalTokens`. The transcript carries **no context window**, so a gauge divisor resolves from the model registry (`contextWindow` per model) or a table, the way Claude's payload model resolves its divisor.
+- **RimZ's envelope carries a live dollar sum.** The extension adds each `turn_end` assistant message's `usage.cost.total` into a per-session accumulator and stamps positive totals as `total_cost_usd` on forwarded envelopes. `agent_end` carries the same final assistant message as the last `turn_end`, so it forwards the accumulated value and contributes no additional cost. `/resume` starts a new extension process with an empty accumulator; the settled-boundary JSONL spend walk reconciles the authoritative session total.
 - **The file is a tree, not a log.** `/tree` and `/fork` move the leaf to an earlier entry in place, so file order is append order, not branch order — the newest record by file position can sit on an abandoned branch right after a rewind. `buildSessionContext()` (the upstream context builder) walks leaf→root; a bounded tail read is an approximation that self-corrects on the next turn.
 
 ## Headless modes (index)
 
 Recorded for breadth; a RimZ adapter targets the interactive TUI in a pane.
 
-- **`--mode json`** — every session event as JSON lines on stdout. The union is the extension `AgentEvent` set plus `queue_update`, `compaction_start` / `compaction_end` (`reason: manual|threshold|overflow`), and `auto_retry_start` / `auto_retry_end`. Interactive extension `session_compact` carries `compactionEntry` and `fromExtension` and omits this reason.
-- **`--mode rpc`** — bidirectional JSONL over stdio for embedding: commands (`prompt`, `steer`, `follow_up`, `abort`, `get_state`, `get_messages`, `get_session_stats`, `set_model`, `new_session`, `switch_session`, `fork`, `compact`, `bash`, …) correlate by `id` + `success`; the same events stream interleaved; extension `ctx.ui` dialogs surface as an RPC sub-protocol.
+- **`--mode json`** — every session event as JSON lines on stdout. The union is the low-level `AgentEvent` set (including `agent_settled`) plus `queue_update`, `compaction_start` / `compaction_end` (`reason: manual|threshold|overflow`, with end carrying `willRetry` and a result whose `estimatedTokensAfter` is heuristic), and `auto_retry_start` / `auto_retry_end`. Extension `session_before_compact` and `session_compact` now carry the same `reason` and `willRetry` distinction.
+- **`--mode rpc`** — bidirectional JSONL over stdio for embedding: commands (`prompt`, `steer`, `follow_up`, `abort`, `get_state`, `get_messages`, `get_entries`, `get_tree`, `get_session_stats`, `set_model`, `new_session`, `switch_session`, `fork`, `compact`, `bash`, …) correlate by `id` + `success`; the same events stream interleaved; extension `ctx.ui` dialogs surface as an RPC sub-protocol. `get_entries` supports an entry-id `since` cursor and includes abandoned/pre-compaction history; `get_tree` returns the full entry tree.
 - **SDK** — `createAgentSession({ customTools, … })` embeds the agent loop in another Node program: <https://pi.dev/docs/latest/sdk>.
 
 ## Auth file
@@ -170,11 +175,11 @@ Recorded for breadth; a RimZ adapter targets the interactive TUI in a pane.
 {
   "anthropic":    { "type": "oauth", "access": "…", "refresh": "…", "expires": <epoch ms> },
   "openai-codex": { "type": "oauth", "access": "…", "refresh": "…", "expires": <epoch ms>, "accountId": "…" },
-  "openai":       { "type": "api_key", "key": "sk-…" }   // key also takes "$ENV_VAR" or "!command"
+  "openai":       { "type": "api_key", "key": "sk-…", "env": { "HTTP_PROXY": "http://proxy" } }
 }
 ```
 
-OAuth subscription logins: ChatGPT Plus/Pro (`openai-codex`), Claude Pro/Max (`anthropic` — upstream notes third-party usage bills per token as extra usage, outside plan limits), GitHub Copilot. API keys resolve in order: `--api-key` flag → `auth.json` → provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) → `models.json` custom-provider keys.
+OAuth subscription logins: ChatGPT Plus/Pro (`openai-codex`), Claude Pro/Max (`anthropic` — upstream notes third-party usage bills per token as extra usage, outside plan limits), GitHub Copilot. An `api_key` credential may carry provider-scoped `env` values; these precede the process environment for credential interpolation, provider configuration, headers, and proxy/cache settings. The `key` accepts literals, `$ENV_VAR` / `${ENV_VAR}` interpolation, or a leading `!command`; plain uppercase strings are literals. API keys resolve in order: `--api-key` flag → `auth.json` → provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) → `models.json` custom-provider keys.
 
 **Balance windows.** Pi exposes no plan tier, but RimZ derives windows from two local surfaces. The extension captures per-response headers via `after_provider_response`: Codex OAuth traffic uses `x-codex-primary-*` and `x-codex-secondary-*`, while Anthropic OAuth traffic may expose `anthropic-ratelimit-unified-*` variants. The idle authoritative path reads the active OAuth credential from `auth.json` and reuses the Claude or Codex OAuth usage endpoint, including the `openai-codex.accountId` header when present. API-key credentials remain unmetered. See [pi.md → Account and balance](../../internals/agents/pi.md#account-and-balance) for how the dashboard fuses and caches these readings.
 
@@ -184,14 +189,15 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 | Surface | Meaning |
 | --- | --- |
-| `pi --version` | version (`0.78.1` verified), written to **stderr** — the adapter probe captures both streams |
+| `pi --version` | version (`0.80.6` refresh target); current releases write plain output to stdout, while RimZ captures both streams for older releases |
 | `pi -c` / `pi -r` | continue the most recent session / browse and pick |
-| `pi --session <path\|id>` | resume a specific session; accepts a partial UUID — the resume-on-rebirth seed |
+| `pi --session <path\|id>` / `--session-id <id>` | resume a path/partial UUID, or use an exact project session id (creating it when absent) |
 | `pi --model <provider/id\|model:level>` | select the model; the optional `:level` suffix selects thinking effort |
 | `pi --provider <name>` | select the provider for a model name that omits one |
-| `pi --thinking <off\|minimal\|low\|medium\|high\|xhigh>` | select reasoning effort |
+| `pi --thinking <off\|minimal\|low\|medium\|high\|xhigh\|max>` | select reasoning effort; `max` is opt-in and clamps to model support |
 | `pi --fork <path\|id>`, `--no-session`, `--name <n>` | fork into a new file, ephemeral mode, display name |
 | `pi -e <source>`, `--no-extensions` | load an extension / disable discovery |
+| `--approve` / `--no-approve` | trust or ignore project-local settings and resources for this run; non-interactive modes do not draw a trust prompt |
 | `-p`, `--mode json`, `--mode rpc` | headless modes (above) |
 | `pi install npm:…\|git:…` / `pi remove` / `pi list` | pi package management — the distribution channel an npm-published RimZ extension would use |
 | `PI_CODING_AGENT_DIR` | config root override (default `~/.pi/agent`) |
@@ -200,8 +206,8 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 ## Mapping feasibility
 
-The landed verdict — the native-event → signal table, the blocking `tool_call` gate and its decision shape, the turn-death and identity properties, and the install shape — is [pi.md](../../internals/agents/pi.md). Upstream's own scope statement ([usage.md](https://pi.dev/docs/latest/usage)) frames the gaps: pi intentionally ships **no built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash** — those are extension territory. The context gauge, token split, model/effort enrichment, and best-effort `total_cost_usd` now ride every hook envelope (`ctx.getContextUsage()`, `ctx.model.id`, the thinking level, and `usage.cost.total` accumulated at `turn_end`), so no transcript-tail gauge is needed.
+The landed verdict — the native-event → signal table, the blocking `tool_call` gate and its decision shape, the turn-death and identity properties, and the install shape — is [pi.md](../../internals/agents/pi.md). Upstream's own scope statement ([usage.md](https://pi.dev/docs/latest/usage)) frames the gaps: pi intentionally ships **no built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash** — those are extension territory. The context gauge, token split, model/effort enrichment, and best-effort `total_cost_usd` ride every hook envelope (`ctx.getContextUsage()`, `ctx.model.id`, the thinking level, and `usage.cost.total` accumulated at `turn_end`), so no transcript-tail gauge is needed. On Pi 0.80.4+, RimZ retains the last `agent_end` verdict and applies it at `agent_settled`, avoiding a false idle boundary while Pi still has an automatic retry, compaction retry, or queued follow-up; the extension version-gates this path and normalizes older Pi's historical `agent_end` boundary to the same RimZ event.
 
 The account probe is wired: [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads `auth.json` (oauth → metered subscription, api_key → unmetered), labels the sub the fleet uses — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — and the separate adapter version probe attaches `pi --version`; mapping summary in [pi.md → Account and balance](../../internals/agents/pi.md#account-and-balance).
 
-Wired increments from this feasibility pass are complete: `model_select` and `thinking_level_select` now push an immediate envelope, so a mid-session model or thinking-level switch stamps the row at once instead of riding the next event's carry-forward.
+Wired increments from this refresh are complete: `model_select` and `thinking_level_select` push immediate enrichment; `agent_settled` is the final RimZ turn boundary; and compaction `reason` maps `manual` to manual while `threshold` and `overflow` map to automatic lifecycle completion. `willRetry` remains on the RimZ-authored wire for diagnostics and future retry-specific presentation.

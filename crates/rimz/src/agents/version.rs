@@ -4,8 +4,7 @@
 //! still win when they carry a fresher version. This module is the cheap
 //! out-of-band fallback: run `<binary> --version`, capture both streams, and
 //! parse the conventional leading version token where a caller needs ordering.
-//! Agent CLIs disagree on the stream — Claude and Codex print to stdout, Pi
-//! prints to stderr — so the probe reads both.
+//! Agent CLI releases have disagreed on the stream, so the probe reads both.
 
 use std::ffi::OsStr;
 use std::process::{Command, Stdio};
@@ -95,9 +94,9 @@ pub(crate) fn probe_cli_version(binary: impl AsRef<OsStr>) -> Option<String> {
     )
 }
 
-/// Pick the version from a `--version` probe's two streams. Claude and Codex
-/// write the version to stdout, Pi writes it to stderr, so scan both for the
-/// first parseable version token.
+/// Pick the version from a `--version` probe's two streams. Scan both for the
+/// first parseable version token so older Pi releases that used stderr remain
+/// compatible with current releases that use stdout.
 fn cli_version_from_streams(stdout: &str, stderr: &str) -> Option<String> {
     normalize_cli_version_output(&format!("{stdout}\n{stderr}"))
 }
@@ -155,7 +154,7 @@ mod tests {
             cli_version_from_streams("codex-cli 0.139.0\n", "").as_deref(),
             Some("0.139.0")
         );
-        // Pi prints `--version` to stderr, leaving stdout empty.
+        // Older Pi releases printed `--version` to stderr; keep accepting it.
         assert_eq!(
             cli_version_from_streams("", "0.78.1\n").as_deref(),
             Some("0.78.1")
