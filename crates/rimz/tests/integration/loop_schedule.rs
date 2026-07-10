@@ -417,7 +417,7 @@ fn loop_fire_keeps_ephemeral_task() {
     for _ in 0..2 {
         let stdout = loop_ok(&env, &["loop", "fire", "probe"]);
         assert!(
-            stdout.contains("loop `probe`: completed (exit 0)"),
+            stdout.contains("probe — check") && stdout.contains("✓ check passed (exit 0)"),
             "check-only manual fire should keep the check exit label: {stdout}"
         );
         assert!(
@@ -495,8 +495,9 @@ fn loop_fire_runs_paused_task_and_resume_is_idempotent() {
 
     let stdout = loop_ok(&env, &["loop", "fire", "probe"]);
     assert!(
-        stdout.contains("loop `probe`: task is paused; firing anyway")
-            && stdout.contains("loop `probe`: completed (exit 0)"),
+        stdout.contains("probe — check")
+            && stdout.contains("task is paused; firing anyway")
+            && stdout.contains("✓ check passed (exit 0)"),
         "manual fire should explain and bypass the pause: {stdout}"
     );
 
@@ -693,7 +694,7 @@ fn loop_check_failure_show_prints_exit_and_output() {
 
     let fire_stdout = loop_ok(&env, &["loop", "fire", "missing"]);
     assert!(
-        fire_stdout.contains("loop `missing`: failed (exit 127"),
+        fire_stdout.contains("✗ check failed (exit 127"),
         "fire should print outcome summary: {fire_stdout}"
     );
     assert!(
@@ -785,8 +786,8 @@ fn loop_run_check_guard_skips_or_delivers_with_output() {
     assert!(
         fire_stdout.contains("probe-line")
             && fire_stdout.contains("check passed (exit 0)")
-            && fire_stdout.contains("on=fail")
-            && fire_stdout.contains("not woken"),
+            && fire_stdout.contains("@claude#project not woken")
+            && fire_stdout.contains("fires when the check fails"),
         "manual fire should stream check output and explain no wake: {fire_stdout}"
     );
 
@@ -1152,7 +1153,7 @@ fn loop_fire_bind_dead_session_keeps_schedule() {
 
     let stdout = loop_ok(&env, &["loop", "fire", "dead"]);
     assert!(
-        stdout.contains("not alive; leaving schedule in place"),
+        stdout.contains("○ @claude not alive — schedule left in place"),
         "dead target should be reported: {stdout}"
     );
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");

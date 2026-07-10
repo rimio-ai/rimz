@@ -9,15 +9,15 @@ const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
 struct RunOutcome {
     result: LoopRunResult,
     check: Option<CheckRecord>,
+    check_duration_ms: Option<u64>,
     run_id: Option<String>,
     transcript_path: Option<String>,
     failure_tail: Option<String>,
     last_message: Option<String>,
     target: Option<String>,
     exit_code: Option<i32>,
-    polarity: Option<CheckOn>,
-    wake_subject: Option<String>,
     cost_usd: Option<f64>,
+    skip_reason: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -31,15 +31,15 @@ impl RunOutcome {
         Self {
             result,
             check: None,
+            check_duration_ms: None,
             run_id: None,
             transcript_path: None,
             failure_tail: None,
             last_message: None,
             target: None,
             exit_code: None,
-            polarity: None,
-            wake_subject: None,
             cost_usd: None,
+            skip_reason: None,
         }
     }
 }
@@ -53,14 +53,22 @@ pub(super) fn run_one(
     let (entry, source) = load_runnable_task(name, globals)?
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     block_untrusted_project_task(name, &entry, source)?;
+    task_action(name, &entry)?;
+    let started = Instant::now();
+    if mode == LoopRunMode::Manual {
+        write_manual_header(&mut ui::out(), name, &entry)?;
+    }
     if mode == LoopRunMode::Manual
         && pauses::load()
             .get(name)
             .is_some_and(|entry| pauses::is_active(entry, Timestamp::now()))
     {
-        writeln!(ui::out(), "loop `{name}`: task is paused; firing anyway")?;
+        writeln!(
+            ui::out(),
+            "{}",
+            ui::paint(ui::palette::MUTED, "  task is paused; firing anyway")
+        )?;
     }
-    let started = Instant::now();
     let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
     if let Some(gate) =
         run_log::daily_budget_gate(&state_home(), name, &entry, &now).map_err(anyhow::Error::msg)?
@@ -80,7 +88,15 @@ pub(super) fn run_one(
             target: None,
             cost_usd: None,
         });
-        writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;
+        if mode == LoopRunMode::Manual {
+            write_manual_verdict(
+                &mut ui::out(),
+                LoopRunResult::BudgetSkipped,
+                &format!("budget skipped — {reason}"),
+            )?;
+        } else {
+            writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;
+        }
         return Ok(());
     }
     let _run_lock = match acquire_run_lock(name, &entry) {
@@ -101,10 +117,18 @@ pub(super) fn run_one(
                 target: None,
                 cost_usd: None,
             });
-            writeln!(
-                ui::out(),
-                "loop `{name}`: previous run still active; skipping"
-            )?;
+            if mode == LoopRunMode::Manual {
+                write_manual_verdict(
+                    &mut ui::out(),
+                    LoopRunResult::Overlapped,
+                    "previous run still active — skipped",
+                )?;
+            } else {
+                writeln!(
+                    ui::out(),
+                    "loop `{name}`: previous run still active; skipping"
+                )?;
+            }
             return Ok(());
         }
         Err(err) => {
@@ -117,7 +141,7 @@ pub(super) fn run_one(
             let duration_ms = elapsed_ms(started);
             let record = loop_record(name, mode, duration_ms, &outcome);
             run_log::append(&record);
-            print_run_summary(name, duration_ms, mode, keep, &outcome)?;
+            print_run_summary(name, &entry, duration_ms, mode, keep, &outcome)?;
             if let Some(code) = outcome.exit_code {
                 std::process::exit(code);
             }
@@ -150,6 +174,33 @@ fn append_error_record(name: &str, mode: LoopRunMode, started: Instant, err: &an
     tracing::warn!(task = name, error = %error, "loop task run failed");
 }
 
+fn write_manual_header(out: &mut impl Write, name: &str, entry: &TaskEntry) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}{}",
+        ui::paint(ui::palette::ACCENT.bold(), name),
+        ui::paint(
+            ui::palette::MUTED,
+            &format!(" — {}", render::task_run_rule(entry))
+        )
+    )
+}
+
+fn write_manual_verdict(
+    out: &mut impl Write,
+    result: LoopRunResult,
+    label: &str,
+) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}",
+        ui::paint(
+            render::loop_result_style(result),
+            &format!("{} {label}", render::loop_result_glyph(result))
+        )
+    )
+}
+
 fn execute_task(
     name: &str,
     entry: &TaskEntry,
@@ -162,11 +213,6 @@ fn execute_task(
     if deadline_expired(entry) {
         if mode == LoopRunMode::Scheduled {
             let _ = remove_loaded_task(name, entry, source)?;
-        } else {
-            writeln!(
-                ui::out(),
-                "loop `{name}`: deadline expired; leaving task in place"
-            )?;
         }
         return Ok(RunOutcome::new(LoopRunResult::Expired));
     }
@@ -174,32 +220,28 @@ fn execute_task(
     let prompt_override = match entry.check.as_deref() {
         Some(cmd) => {
             let echo = if mode == LoopRunMode::Manual {
-                CheckEcho::Stream
-            } else {
-                CheckEcho::Capture
-            };
-            if echo == CheckEcho::Stream {
                 let mut out = ui::out();
                 writeln!(
                     out,
-                    "loop `{name}`: check {}",
-                    ui::paint(ui::palette::MUTED, cmd)
+                    "{}",
+                    ui::paint(ui::palette::MUTED, &format!("  check: {cmd}"))
                 )?;
                 out.flush()?;
-            }
+                CheckEcho::Stream {
+                    prefix: ui::paint(ui::palette::FAINT, "  │ "),
+                }
+            } else {
+                CheckEcho::Capture
+            };
+            let check_started = Instant::now();
             let outcome = run_check(
                 &entry.resolved_root(),
                 cmd,
                 check_timeout(entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
                 echo,
             )?;
+            let check_duration_ms = elapsed_ms(check_started);
             let record = check_record(&outcome);
-            if echo == CheckEcho::Stream
-                && !record.output.is_empty()
-                && !record.output.ends_with('\n')
-            {
-                writeln!(ui::out())?;
-            }
             match action {
                 TaskAction::CheckOnly => {
                     if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
@@ -207,15 +249,18 @@ fn execute_task(
                     }
                     let mut run = RunOutcome::new(check_only_result(&outcome));
                     run.check = Some(record);
+                    run.check_duration_ms = Some(check_duration_ms);
                     return Ok(run);
                 }
                 TaskAction::Spawn(_) | TaskAction::Deliver(_) => {
                     if !polarity_fires(entry.on, &outcome) {
                         let mut run = RunOutcome::new(LoopRunResult::CheckSkipped);
                         run.check = Some(record);
-                        run.polarity = Some(entry.on.unwrap_or_default());
-                        run.wake_subject = Some(task_subject(entry));
+                        run.check_duration_ms = Some(check_duration_ms);
                         return Ok(run);
+                    }
+                    if mode == LoopRunMode::Manual {
+                        write_check_trip_line(&mut ui::out(), entry, &record, check_duration_ms)?;
                     }
                     check_detail = Some(record);
                     Some(augment_prompt(
@@ -254,13 +299,19 @@ fn execute_task(
             window_already_running(entry, &resolved.kind)?
         };
         if window_running {
-            writeln!(
-                ui::out(),
-                "loop `{name}`: {} budget window already active; skipping ping",
-                resolved.kind
-            )?;
+            if mode == LoopRunMode::Scheduled {
+                writeln!(
+                    ui::out(),
+                    "loop `{name}`: {} budget window already active; skipping ping",
+                    resolved.kind
+                )?;
+            }
             let mut run = RunOutcome::new(LoopRunResult::SkippedWindow);
             run.check = check_detail;
+            run.skip_reason = Some(format!(
+                "{} budget window already counting down",
+                resolved.kind
+            ));
             return Ok(run);
         }
     }
@@ -350,12 +401,6 @@ fn execute_delivery_task(
                 target.handle
             )?;
             let _ = remove_loaded_task(name, entry, disposition.source)?;
-        } else {
-            writeln!(
-                ui::out(),
-                "loop `{name}`: target {} not alive; leaving schedule in place",
-                target.handle
-            )?;
         }
         let mut run = RunOutcome::new(LoopRunResult::TargetGone);
         run.check = check_record;
@@ -392,12 +437,6 @@ fn execute_delivery_task(
                     target.handle
                 )?;
                 let _ = remove_loaded_task(name, entry, disposition.source)?;
-            } else {
-                writeln!(
-                    ui::out(),
-                    "loop `{name}`: target {} not alive; leaving schedule in place",
-                    target.handle
-                )?;
             }
             let mut run = RunOutcome::new(LoopRunResult::TargetGone);
             run.check = check_record;
@@ -436,28 +475,145 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 fn print_run_summary(
     name: &str,
+    entry: &TaskEntry,
     duration_ms: u64,
     mode: LoopRunMode,
     keep: bool,
     outcome: &RunOutcome,
 ) -> Result<()> {
     let mut out = ui::out();
-    write_run_summary(&mut out, name, duration_ms, mode, keep, outcome)?;
+    write_run_summary(&mut out, name, entry, duration_ms, mode, keep, outcome)?;
     Ok(())
 }
 
 fn write_run_summary(
     out: &mut impl Write,
     name: &str,
+    entry: &TaskEntry,
     duration_ms: u64,
     mode: LoopRunMode,
     keep: bool,
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
-    if outcome.result == LoopRunResult::CheckSkipped {
-        return write_check_skipped_summary(out, name, duration_ms, outcome);
+    match mode {
+        LoopRunMode::Manual => {
+            write_manual_run_summary(out, name, entry, duration_ms, keep, outcome)
+        }
+        LoopRunMode::Scheduled => {
+            write_scheduled_run_summary(out, name, entry, duration_ms, outcome)
+        }
     }
-    let result_style = super::render::loop_result_style(outcome.result);
+}
+
+fn write_manual_run_summary(
+    out: &mut impl Write,
+    name: &str,
+    entry: &TaskEntry,
+    duration_ms: u64,
+    keep: bool,
+    outcome: &RunOutcome,
+) -> std::io::Result<()> {
+    if outcome.result == LoopRunResult::CheckSkipped {
+        return write_check_skipped_summary(
+            out,
+            name,
+            entry,
+            duration_ms,
+            LoopRunMode::Manual,
+            outcome,
+        );
+    }
+    match outcome.result {
+        LoopRunResult::Expired => {
+            return write_manual_verdict(
+                out,
+                outcome.result,
+                "deadline expired — task left in place",
+            );
+        }
+        LoopRunResult::TargetGone => {
+            let target = outcome.target.as_deref().unwrap_or("target");
+            return write_manual_verdict(
+                out,
+                outcome.result,
+                &format!("{target} not alive — schedule left in place"),
+            );
+        }
+        LoopRunResult::SkippedWindow => {
+            let mut label = format!("skipped in {}", render::format_duration_ms(duration_ms));
+            if let Some(reason) = outcome.skip_reason.as_deref() {
+                label.push_str(" — ");
+                label.push_str(reason);
+            }
+            return write_manual_verdict(out, outcome.result, &label);
+        }
+        _ => {}
+    }
+
+    let result_style = render::loop_result_style(outcome.result);
+    let result_label = manual_result_label(entry, outcome);
+    write!(
+        out,
+        "{}",
+        ui::paint(
+            result_style,
+            &format!(
+                "{} {result_label}",
+                render::loop_result_glyph(outcome.result)
+            )
+        )
+    )?;
+    write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+    if let Some(cost) = outcome.cost_usd {
+        write!(out, " · ${cost:.2}")?;
+    }
+    writeln!(out)?;
+
+    if matches!(
+        outcome.result,
+        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::BudgetExceeded
+    ) && !is_check_only(entry)
+    {
+        write_failure_forensics(out, name, outcome)?;
+    } else if outcome.result == LoopRunResult::Completed && outcome.run_id.is_some() {
+        write_completion_detail(out, name, outcome)?;
+    }
+    if !matches!(
+        outcome.result,
+        LoopRunResult::Failed | LoopRunResult::TimedOut | LoopRunResult::BudgetExceeded
+    ) && !keep
+        && outcome.run_id.is_some()
+    {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(
+                ui::palette::MUTED,
+                "  pane closed; rerun with --keep to watch"
+            )
+        )?;
+    }
+    Ok(())
+}
+
+fn write_scheduled_run_summary(
+    out: &mut impl Write,
+    name: &str,
+    entry: &TaskEntry,
+    duration_ms: u64,
+    outcome: &RunOutcome,
+) -> std::io::Result<()> {
+    if outcome.result == LoopRunResult::CheckSkipped {
+        return write_check_skipped_summary(
+            out,
+            name,
+            entry,
+            duration_ms,
+            LoopRunMode::Scheduled,
+            outcome,
+        );
+    }
+    let result_style = render::loop_result_style(outcome.result);
     let exit_label = outcome_exit_label(outcome);
     if matches!(
         outcome.result,
@@ -474,28 +630,7 @@ fn write_run_summary(
             ui::paint(result_style.bold(), &label)
         )?;
         writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
-        if let Some(tail) = outcome_failure_tail(outcome) {
-            write_failure_tail(out, &tail)?;
-        }
-        if let Some(run_id) = outcome.run_id.as_deref() {
-            writeln!(
-                out,
-                "{}",
-                ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
-            )?;
-        }
-        if let Some(transcript) = outcome.transcript_path.as_deref() {
-            writeln!(
-                out,
-                "{}",
-                ui::paint(ui::palette::MUTED, &format!("  transcript: {transcript}"))
-            )?;
-        }
-        writeln!(
-            out,
-            "{}",
-            ui::paint(ui::palette::MUTED, &format!("  see: rimz loop show {name}"))
-        )?;
+        write_failure_forensics(out, name, outcome)?;
     } else {
         let result_label = success_result_label(outcome);
         write!(
@@ -508,32 +643,7 @@ fn write_run_summary(
         }
         writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
         if outcome.result == LoopRunResult::Completed && outcome.run_id.is_some() {
-            if let Some(message) = outcome
-                .last_message
-                .as_deref()
-                .filter(|msg| !msg.trim().is_empty())
-            {
-                render::write_gutter_block(out, None, message)?;
-            } else {
-                writeln!(
-                    out,
-                    "{}",
-                    ui::paint(
-                        ui::palette::MUTED,
-                        &format!("  no final message; see: rimz loop show {name}")
-                    )
-                )?;
-            }
-        }
-        if mode == LoopRunMode::Manual && !keep && outcome.run_id.is_some() {
-            writeln!(
-                out,
-                "{}",
-                ui::paint(
-                    ui::palette::MUTED,
-                    "  pane closed; rerun with --keep to watch"
-                )
-            )?;
+            write_completion_detail(out, name, outcome)?;
         }
     }
     Ok(())
@@ -546,47 +656,153 @@ fn success_result_label(outcome: &RunOutcome) -> String {
     }
 }
 
-fn write_check_skipped_summary(
-    out: &mut impl Write,
-    name: &str,
-    duration_ms: u64,
-    outcome: &RunOutcome,
-) -> std::io::Result<()> {
-    let label = match outcome.check.as_ref() {
-        Some(check) if check.timed_out => "check timed out".to_owned(),
-        Some(check) if check.code == Some(0) => "check passed (exit 0)".to_owned(),
-        Some(check) => match check.code {
+fn manual_result_label(entry: &TaskEntry, outcome: &RunOutcome) -> String {
+    if is_check_only(entry)
+        && let Some(check) = outcome.check.as_ref()
+    {
+        return check_result_label(check);
+    }
+    let mut label = success_result_label(outcome);
+    if let Some(exit_label) = outcome_exit_label(outcome) {
+        label.push(' ');
+        label.push_str(&exit_label);
+    }
+    label
+}
+
+fn is_check_only(entry: &TaskEntry) -> bool {
+    entry.check.is_some() && entry.agent.is_none() && entry.wake.is_none()
+}
+
+fn check_result_label(check: &CheckRecord) -> String {
+    if check.timed_out {
+        "check timed out".to_owned()
+    } else if check.code == Some(0) {
+        "check passed (exit 0)".to_owned()
+    } else {
+        match check.code {
             Some(code) => format!("check failed (exit {code})"),
             None => "check failed (signal)".to_owned(),
-        },
-        None => "check skipped".to_owned(),
+        }
+    }
+}
+
+fn write_check_trip_line(
+    out: &mut impl Write,
+    entry: &TaskEntry,
+    check: &CheckRecord,
+    duration_ms: u64,
+) -> std::io::Result<()> {
+    let (glyph, style) = if check.timed_out || check.code != Some(0) {
+        ("✗", ui::palette::ALARM)
+    } else {
+        ("✓", ui::palette::GOOD)
     };
     write!(
         out,
-        "loop `{name}`: {} in {}",
-        ui::paint(ui::palette::MUTED, &label),
-        render::format_duration_ms(duration_ms)
+        "  {}",
+        ui::paint(
+            style,
+            &format!(
+                "{glyph} {} in {}",
+                check_result_label(check),
+                render::format_duration_ms(duration_ms)
+            )
+        )
     )?;
-    if let Some(subject) = outcome.wake_subject.as_deref() {
-        if outcome.check.as_ref().is_some_and(|check| check.timed_out) {
-            write!(out, " — {subject} not woken")?;
-        } else if let Some(polarity) = outcome.polarity {
-            write!(
-                out,
-                " — on={}, {subject} not woken",
-                check_on_label(polarity)
-            )?;
-        } else {
-            write!(out, " — {subject} not woken")?;
-        }
-    }
-    writeln!(out)
+    writeln!(
+        out,
+        " {}",
+        ui::paint(
+            ui::palette::ACCENT,
+            &format!(
+                "→ {} {}",
+                render::action_progressive_verb(entry),
+                task_subject(entry)
+            )
+        )
+    )
 }
 
-fn check_on_label(on: CheckOn) -> &'static str {
-    match on {
-        CheckOn::Fail => "fail",
-        CheckOn::Success => "success",
+fn write_check_skipped_summary(
+    out: &mut impl Write,
+    name: &str,
+    entry: &TaskEntry,
+    duration_ms: u64,
+    mode: LoopRunMode,
+    outcome: &RunOutcome,
+) -> std::io::Result<()> {
+    let label = outcome
+        .check
+        .as_ref()
+        .map(check_result_label)
+        .unwrap_or_else(|| "check skipped".to_owned());
+    let check_duration_ms = outcome.check_duration_ms.unwrap_or(duration_ms);
+    let line = format!(
+        "{label} in {} — {}",
+        render::format_duration_ms(check_duration_ms),
+        render::check_skip_decision(entry)
+    );
+    if mode == LoopRunMode::Manual {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(ui::palette::MUTED, &format!("○ {line}"))
+        )
+    } else {
+        writeln!(out, "loop `{name}`: {line}")
+    }
+}
+
+fn write_failure_forensics(
+    out: &mut impl Write,
+    name: &str,
+    outcome: &RunOutcome,
+) -> std::io::Result<()> {
+    if let Some(tail) = outcome_failure_tail(outcome) {
+        write_failure_tail(out, &tail)?;
+    }
+    if let Some(run_id) = outcome.run_id.as_deref() {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
+        )?;
+    }
+    if let Some(transcript) = outcome.transcript_path.as_deref() {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(ui::palette::MUTED, &format!("  transcript: {transcript}"))
+        )?;
+    }
+    writeln!(
+        out,
+        "{}",
+        ui::paint(ui::palette::MUTED, &format!("  see: rimz loop show {name}"))
+    )
+}
+
+fn write_completion_detail(
+    out: &mut impl Write,
+    name: &str,
+    outcome: &RunOutcome,
+) -> std::io::Result<()> {
+    if let Some(message) = outcome
+        .last_message
+        .as_deref()
+        .filter(|msg| !msg.trim().is_empty())
+    {
+        render::write_gutter_block(out, None, message)
+    } else {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(
+                ui::palette::MUTED,
+                &format!("  no final message; see: rimz loop show {name}")
+            )
+        )
     }
 }
 
@@ -675,149 +891,168 @@ pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
 mod tests {
     use super::*;
 
+    fn spawn_entry(check: bool, on: CheckOn) -> TaskEntry {
+        TaskEntry {
+            agent: Some("codex".to_owned()),
+            check: check.then(|| "cargo test".to_owned()),
+            on: Some(on),
+            ..TaskEntry::default()
+        }
+    }
+
+    fn wake_entry(check: bool, on: CheckOn) -> TaskEntry {
+        TaskEntry {
+            wake: Some(TaskTarget {
+                kind: "claude".to_owned(),
+                session: "sess-planner".to_owned(),
+                handle: "@planner".to_owned(),
+            }),
+            check: check.then(|| "cargo test".to_owned()),
+            on: Some(on),
+            ..TaskEntry::default()
+        }
+    }
+
+    fn check_entry() -> TaskEntry {
+        TaskEntry {
+            check: Some("cargo test".to_owned()),
+            ..TaskEntry::default()
+        }
+    }
+
+    fn summary(
+        name: &str,
+        entry: &TaskEntry,
+        duration_ms: u64,
+        mode: LoopRunMode,
+        keep: bool,
+        outcome: &RunOutcome,
+    ) -> String {
+        let mut out = Vec::new();
+        write_run_summary(&mut out, name, entry, duration_ms, mode, keep, outcome).unwrap();
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+    }
+
     #[test]
     fn failed_summary_links_run_transcript_and_loop_show() {
+        let entry = spawn_entry(false, CheckOn::Fail);
         let mut outcome = RunOutcome::new(LoopRunResult::Failed);
         outcome.exit_code = Some(1);
         outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
         outcome.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
         outcome.failure_tail = Some("error: boom\nUsage: codex [OPTIONS] [PROMPT]".to_owned());
-        let mut out = Vec::new();
 
-        write_run_summary(
-            &mut out,
-            "wake",
+        let out = summary(
+            "watchdog",
+            &entry,
             1_900,
             LoopRunMode::Manual,
             false,
             &outcome,
-        )
-        .unwrap();
+        );
 
-        let raw = String::from_utf8(out).unwrap();
-        assert!(raw.contains(&ui::paint(ui::palette::ALARM.bold(), "failed (exit 1)")));
-        let out = anstream::adapter::strip_str(&raw).to_string();
-        assert!(out.contains("loop `wake`: failed (exit 1) in 1.9s"));
+        assert!(out.contains("✗ failed (exit 1) in 1.9s"));
         assert!(out.contains("  │ error: boom\n  │ Usage: codex [OPTIONS] [PROMPT]"));
         assert!(out.contains("run: run_0123456789abcdef01234567"));
         assert!(out.contains("transcript: /tmp/transcript.jsonl"));
-        assert!(out.contains("see: rimz loop show wake"));
+        assert!(out.contains("see: rimz loop show watchdog"));
     }
 
     #[test]
-    fn skipped_check_summary_names_polarity_and_unwoken_target() {
+    fn skipped_check_summary_uses_check_time_and_action_verbs() {
+        let mut spawn = RunOutcome::new(LoopRunResult::CheckSkipped);
+        spawn.check = Some(CheckRecord {
+            code: Some(0),
+            timed_out: false,
+            output: "ok".to_owned(),
+        });
+        spawn.check_duration_ms = Some(4_400);
+        let entry = spawn_entry(true, CheckOn::Fail);
+        assert_eq!(
+            summary(
+                "watchdog",
+                &entry,
+                9_000,
+                LoopRunMode::Manual,
+                false,
+                &spawn,
+            ),
+            "○ check passed (exit 0) in 4.4s — codex not started; fires when the check fails\n"
+        );
+
+        let mut wake = RunOutcome::new(LoopRunResult::CheckSkipped);
+        wake.check = Some(CheckRecord {
+            code: Some(1),
+            timed_out: false,
+            output: "no".to_owned(),
+        });
+        wake.check_duration_ms = Some(2_000);
+        let entry = wake_entry(true, CheckOn::Success);
+        assert_eq!(
+            summary("nudge", &entry, 8_000, LoopRunMode::Manual, false, &wake,),
+            "○ check failed (exit 1) in 2.0s — @planner not woken; fires when the check passes\n"
+        );
+    }
+
+    #[test]
+    fn scheduled_check_skip_keeps_compact_task_prefix() {
+        let entry = spawn_entry(true, CheckOn::Fail);
         let mut outcome = RunOutcome::new(LoopRunResult::CheckSkipped);
         outcome.check = Some(CheckRecord {
             code: Some(0),
             timed_out: false,
             output: "ok".to_owned(),
         });
-        outcome.polarity = Some(CheckOn::Fail);
-        outcome.wake_subject = Some("codex".to_owned());
-        let mut out = Vec::new();
+        outcome.check_duration_ms = Some(700);
 
-        write_run_summary(
-            &mut out,
-            "wake",
-            7_300,
-            LoopRunMode::Manual,
-            false,
-            &outcome,
-        )
-        .unwrap();
-
-        let raw = String::from_utf8(out).unwrap();
-        assert!(raw.contains(&ui::paint(ui::palette::MUTED, "check passed (exit 0)")));
-        let out = anstream::adapter::strip_str(&raw).to_string();
         assert_eq!(
-            out,
-            "loop `wake`: check passed (exit 0) in 7.3s — on=fail, codex not woken\n"
+            summary(
+                "watchdog",
+                &entry,
+                900,
+                LoopRunMode::Scheduled,
+                false,
+                &outcome,
+            ),
+            "loop `watchdog`: check passed (exit 0) in 700ms — codex not started; fires when the check fails\n"
         );
     }
 
     #[test]
-    fn skipped_failed_check_summary_names_success_guard() {
-        let mut outcome = RunOutcome::new(LoopRunResult::CheckSkipped);
-        outcome.check = Some(CheckRecord {
-            code: Some(1),
+    fn trip_line_names_check_fact_and_action() {
+        let check = CheckRecord {
+            code: Some(101),
             timed_out: false,
-            output: "no".to_owned(),
-        });
-        outcome.polarity = Some(CheckOn::Success);
-        outcome.wake_subject = Some("codex".to_owned());
+            output: "failed".to_owned(),
+        };
         let mut out = Vec::new();
 
-        write_run_summary(
-            &mut out,
-            "wake",
-            2_000,
-            LoopRunMode::Manual,
-            false,
-            &outcome,
-        )
-        .unwrap();
+        write_check_trip_line(&mut out, &spawn_entry(true, CheckOn::Fail), &check, 12_000).unwrap();
 
-        let out = String::from_utf8(out).unwrap();
-        let out = anstream::adapter::strip_str(&out).to_string();
         assert_eq!(
-            out,
-            "loop `wake`: check failed (exit 1) in 2.0s — on=success, codex not woken\n"
+            anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
+            "  ✗ check failed (exit 101) in 12s → starting codex\n"
         );
     }
 
     #[test]
-    fn skipped_timeout_summary_omits_polarity() {
-        let mut outcome = RunOutcome::new(LoopRunResult::CheckSkipped);
-        outcome.check = Some(CheckRecord {
-            code: None,
-            timed_out: true,
-            output: String::new(),
-        });
-        outcome.polarity = Some(CheckOn::Success);
-        outcome.wake_subject = Some("codex".to_owned());
-        let mut out = Vec::new();
-
-        write_run_summary(
-            &mut out,
-            "wake",
-            300_000,
-            LoopRunMode::Manual,
-            false,
-            &outcome,
-        )
-        .unwrap();
-
-        let out = String::from_utf8(out).unwrap();
-        let out = anstream::adapter::strip_str(&out).to_string();
-        assert_eq!(
-            out,
-            "loop `wake`: check timed out in 5m — codex not woken\n"
-        );
-    }
-
-    #[test]
-    fn completed_spawn_summary_prints_last_message_and_keep_hint() {
+    fn completed_spawn_summary_prints_cost_message_and_keep_hint() {
         let mut outcome = RunOutcome::new(LoopRunResult::Completed);
         outcome.exit_code = Some(0);
         outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
         outcome.last_message = Some("pong\n".to_owned());
-        let mut out = Vec::new();
+        outcome.cost_usd = Some(0.42);
 
-        write_run_summary(
-            &mut out,
-            "wake",
-            3_700,
-            LoopRunMode::Manual,
-            false,
-            &outcome,
-        )
-        .unwrap();
-
-        let out = String::from_utf8(out).unwrap();
-        let out = anstream::adapter::strip_str(&out).to_string();
         assert_eq!(
-            out,
-            "loop `wake`: completed in 3.7s\n  │ pong\n  pane closed; rerun with --keep to watch\n"
+            summary(
+                "watchdog",
+                &spawn_entry(false, CheckOn::Fail),
+                180_000,
+                LoopRunMode::Manual,
+                false,
+                &outcome,
+            ),
+            "✓ completed in 3m · $0.42\n  │ pong\n  pane closed; rerun with --keep to watch\n"
         );
     }
 
@@ -827,62 +1062,77 @@ mod tests {
         outcome.exit_code = Some(0);
         outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
         outcome.last_message = Some(" \n".to_owned());
-        let mut out = Vec::new();
-
-        write_run_summary(
-            &mut out,
-            "wake",
-            1_000,
-            LoopRunMode::Manual,
-            false,
-            &outcome,
-        )
-        .unwrap();
-
-        let out = String::from_utf8(out).unwrap();
-        let out = anstream::adapter::strip_str(&out).to_string();
         assert_eq!(
-            out,
-            "loop `wake`: completed in 1.0s\n  no final message; see: rimz loop show wake\n  pane closed; rerun with --keep to watch\n"
+            summary(
+                "watchdog",
+                &spawn_entry(false, CheckOn::Fail),
+                1_000,
+                LoopRunMode::Manual,
+                false,
+                &outcome,
+            ),
+            "✓ completed in 1.0s\n  no final message; see: rimz loop show watchdog\n  pane closed; rerun with --keep to watch\n"
         );
     }
 
     #[test]
     fn delivered_summary_names_target_handle() {
         let mut outcome = RunOutcome::new(LoopRunResult::Delivered);
-        outcome.target = Some("@claude".to_owned());
-        let mut out = Vec::new();
+        outcome.target = Some("@planner".to_owned());
 
-        write_run_summary(&mut out, "nudge", 90, LoopRunMode::Manual, false, &outcome).unwrap();
-
-        let out = String::from_utf8(out).unwrap();
-        let out = anstream::adapter::strip_str(&out).to_string();
-        assert_eq!(out, "loop `nudge`: delivered to @claude in 90ms\n");
+        assert_eq!(
+            summary(
+                "nudge",
+                &wake_entry(false, CheckOn::Fail),
+                90,
+                LoopRunMode::Manual,
+                false,
+                &outcome,
+            ),
+            "✓ delivered to @planner in 90ms\n"
+        );
     }
 
     #[test]
-    fn spawn_success_suppresses_exit_zero_but_check_only_keeps_it() {
-        let mut spawn = RunOutcome::new(LoopRunResult::Completed);
-        spawn.exit_code = Some(0);
-        let mut out = Vec::new();
-
-        write_run_summary(&mut out, "spawn", 1_000, LoopRunMode::Manual, false, &spawn).unwrap();
-
-        let stripped = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-        assert_eq!(stripped, "loop `spawn`: completed in 1.0s\n");
-
-        let mut check = RunOutcome::new(LoopRunResult::Completed);
-        check.check = Some(CheckRecord {
-            code: Some(0),
-            timed_out: false,
-            output: "ok".to_owned(),
-        });
-        let mut out = Vec::new();
-
-        write_run_summary(&mut out, "check", 1_000, LoopRunMode::Manual, false, &check).unwrap();
-
-        let stripped = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-        assert_eq!(stripped, "loop `check`: completed (exit 0) in 1.0s\n");
+    fn check_only_verdicts_name_the_check_fact() {
+        for (result, code, timed_out, expected) in [
+            (
+                LoopRunResult::Completed,
+                Some(0),
+                false,
+                "✓ check passed (exit 0) in 1.2s\n",
+            ),
+            (
+                LoopRunResult::Failed,
+                Some(1),
+                false,
+                "✗ check failed (exit 1) in 1.2s\n",
+            ),
+            (
+                LoopRunResult::TimedOut,
+                None,
+                true,
+                "✗ check timed out in 1.2s\n",
+            ),
+        ] {
+            let mut outcome = RunOutcome::new(result);
+            outcome.check = Some(CheckRecord {
+                code,
+                timed_out,
+                output: "detail".to_owned(),
+            });
+            assert_eq!(
+                summary(
+                    "certs",
+                    &check_entry(),
+                    1_200,
+                    LoopRunMode::Manual,
+                    false,
+                    &outcome,
+                ),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -891,23 +1141,37 @@ mod tests {
         outcome.exit_code = Some(0);
         outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
         outcome.last_message = Some("done".to_owned());
+        let entry = spawn_entry(false, CheckOn::Fail);
 
         for (mode, keep, should_hint) in [
             (LoopRunMode::Manual, false, true),
             (LoopRunMode::Manual, true, false),
             (LoopRunMode::Scheduled, false, false),
         ] {
-            let mut out = Vec::new();
-            write_run_summary(&mut out, "wake", 100, mode, keep, &outcome).unwrap();
-
-            let stripped =
-                anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+            let stripped = summary("watchdog", &entry, 100, mode, keep, &outcome);
             assert_eq!(
                 stripped.contains("pane closed; rerun with --keep to watch"),
                 should_hint,
                 "{mode:?} keep={keep}: {stripped}"
             );
         }
+    }
+
+    #[test]
+    fn manual_early_exits_explain_what_stays_in_place() {
+        let entry = wake_entry(false, CheckOn::Fail);
+        let mut gone = RunOutcome::new(LoopRunResult::TargetGone);
+        gone.target = Some("@planner".to_owned());
+        assert_eq!(
+            summary("nudge", &entry, 100, LoopRunMode::Manual, false, &gone,),
+            "○ @planner not alive — schedule left in place\n"
+        );
+
+        let expired = RunOutcome::new(LoopRunResult::Expired);
+        assert_eq!(
+            summary("nudge", &entry, 100, LoopRunMode::Manual, false, &expired,),
+            "○ deadline expired — task left in place\n"
+        );
     }
 
     #[test]

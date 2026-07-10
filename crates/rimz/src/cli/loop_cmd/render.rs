@@ -139,13 +139,80 @@ fn schedule_style<T, E>(parsed: std::result::Result<&T, &E>) -> anstyle::Style {
 fn check_summary(entry: &TaskEntry) -> Option<String> {
     let check = entry.check.as_ref()?;
     if entry.agent.is_some() || entry.wake.is_some() {
-        let on = match entry.on.unwrap_or_default() {
-            CheckOn::Fail => "fail",
-            CheckOn::Success => "success",
-        };
-        Some(format!("{check} (wake on {on})"))
+        Some(format!(
+            "{check} ({} {} on {})",
+            action_third_person_verb(entry),
+            task_subject(entry),
+            check_on_label(entry.on.unwrap_or_default())
+        ))
     } else {
         Some(check.clone())
+    }
+}
+
+pub(super) fn task_run_rule(entry: &TaskEntry) -> String {
+    let action = if entry.agent.is_some() || entry.wake.is_some() {
+        Some(format!(
+            "{} {}",
+            action_base_verb(entry),
+            task_subject(entry)
+        ))
+    } else {
+        None
+    };
+    match (entry.check.is_some(), action) {
+        (true, Some(action)) => format!(
+            "check, then {action} on {}",
+            check_on_label(entry.on.unwrap_or_default())
+        ),
+        (true, None) => "check".to_owned(),
+        (false, Some(action)) => action,
+        (false, None) => "run".to_owned(),
+    }
+}
+
+pub(super) fn action_progressive_verb(entry: &TaskEntry) -> &'static str {
+    if entry.agent.is_some() {
+        "starting"
+    } else {
+        "waking"
+    }
+}
+
+pub(super) fn check_skip_decision(entry: &TaskEntry) -> String {
+    let subject = task_subject(entry);
+    let untouched = if entry.agent.is_some() {
+        "not started"
+    } else {
+        "not woken"
+    };
+    let condition = match entry.on.unwrap_or_default() {
+        CheckOn::Fail => "fails",
+        CheckOn::Success => "passes",
+    };
+    format!("{subject} {untouched}; fires when the check {condition}")
+}
+
+fn action_base_verb(entry: &TaskEntry) -> &'static str {
+    if entry.agent.is_some() {
+        "start"
+    } else {
+        "wake"
+    }
+}
+
+fn action_third_person_verb(entry: &TaskEntry) -> &'static str {
+    if entry.agent.is_some() {
+        "starts"
+    } else {
+        "wakes"
+    }
+}
+
+fn check_on_label(on: CheckOn) -> &'static str {
+    match on {
+        CheckOn::Fail => "fail",
+        CheckOn::Success => "success",
     }
 }
 
@@ -441,9 +508,9 @@ struct RunStatusDisplay {
 }
 
 fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
-    let (glyph, label, style) = match record.result {
-        LoopRunResult::Completed => ("✓", "completed".to_owned(), ui::palette::GOOD),
-        LoopRunResult::Delivered => ("✓", "delivered".to_owned(), ui::palette::GOOD),
+    let label = match record.result {
+        LoopRunResult::Completed => "completed".to_owned(),
+        LoopRunResult::Delivered => "delivered".to_owned(),
         LoopRunResult::Failed => {
             let mut label = "failed".to_owned();
             if let Some(exit) = failure_exit_label(record) {
@@ -451,27 +518,23 @@ fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
                 label.push_str(&exit);
                 label.push(')');
             }
-            ("✗", label, ui::palette::ALARM)
+            label
         }
-        LoopRunResult::TimedOut => ("✗", "timed out".to_owned(), ui::palette::ALARM),
-        LoopRunResult::BudgetExceeded => ("✗", "budget exceeded".to_owned(), ui::palette::ALARM),
-        LoopRunResult::BudgetSkipped => ("○", "budget skipped".to_owned(), ui::palette::WARN),
-        LoopRunResult::Errored => ("✗", "error".to_owned(), ui::palette::ALARM),
-        LoopRunResult::SkippedWindow => ("○", "skipped".to_owned(), ui::palette::WARN),
-        LoopRunResult::Expired => ("○", "expired".to_owned(), ui::palette::WARN),
-        LoopRunResult::Canceled => ("○", "canceled".to_owned(), ui::palette::WARN),
-        LoopRunResult::TargetGone => ("○", "target gone".to_owned(), ui::palette::WARN),
-        LoopRunResult::Overlapped => ("○", "overlapped".to_owned(), ui::palette::WARN),
-        LoopRunResult::CheckSkipped => (
-            "○",
-            check_skipped_label(record).to_owned(),
-            ui::palette::MUTED,
-        ),
+        LoopRunResult::TimedOut => "timed out".to_owned(),
+        LoopRunResult::BudgetExceeded => "budget exceeded".to_owned(),
+        LoopRunResult::BudgetSkipped => "budget skipped".to_owned(),
+        LoopRunResult::Errored => "error".to_owned(),
+        LoopRunResult::SkippedWindow => "skipped".to_owned(),
+        LoopRunResult::Expired => "expired".to_owned(),
+        LoopRunResult::Canceled => "canceled".to_owned(),
+        LoopRunResult::TargetGone => "target gone".to_owned(),
+        LoopRunResult::Overlapped => "overlapped".to_owned(),
+        LoopRunResult::CheckSkipped => check_skipped_label(record).to_owned(),
     };
     RunStatusDisplay {
-        glyph,
+        glyph: loop_result_glyph(record.result),
         label,
-        style,
+        style: loop_result_style(record.result),
     }
 }
 
@@ -516,6 +579,23 @@ pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
         | LoopRunResult::SkippedWindow
         | LoopRunResult::BudgetSkipped => ui::palette::WARN,
         LoopRunResult::CheckSkipped => ui::palette::MUTED,
+    }
+}
+
+pub(super) fn loop_result_glyph(result: LoopRunResult) -> &'static str {
+    match result {
+        LoopRunResult::Completed | LoopRunResult::Delivered => "✓",
+        LoopRunResult::Failed
+        | LoopRunResult::TimedOut
+        | LoopRunResult::BudgetExceeded
+        | LoopRunResult::Errored => "✗",
+        LoopRunResult::Expired
+        | LoopRunResult::Canceled
+        | LoopRunResult::TargetGone
+        | LoopRunResult::Overlapped
+        | LoopRunResult::SkippedWindow
+        | LoopRunResult::BudgetSkipped
+        | LoopRunResult::CheckSkipped => "○",
     }
 }
 
@@ -793,6 +873,53 @@ mod tests {
             target: None,
             cost_usd: None,
         }
+    }
+
+    #[test]
+    fn task_rules_and_check_rows_use_action_specific_verbs() {
+        let spawn = TaskEntry {
+            agent: Some("codex".to_owned()),
+            check: Some("cargo test".to_owned()),
+            on: Some(CheckOn::Fail),
+            ..TaskEntry::default()
+        };
+        assert_eq!(task_run_rule(&spawn), "check, then start codex on fail");
+        assert_eq!(
+            check_summary(&spawn).as_deref(),
+            Some("cargo test (starts codex on fail)")
+        );
+
+        let wake = TaskEntry {
+            wake: Some(TaskTarget {
+                kind: "claude".to_owned(),
+                session: "sess-planner".to_owned(),
+                handle: "@planner".to_owned(),
+            }),
+            check: Some("cargo test".to_owned()),
+            on: Some(CheckOn::Success),
+            ..TaskEntry::default()
+        };
+        assert_eq!(task_run_rule(&wake), "check, then wake @planner on success");
+        assert_eq!(
+            check_summary(&wake).as_deref(),
+            Some("cargo test (wakes @planner on success)")
+        );
+
+        let check = TaskEntry {
+            check: Some("cargo test".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert_eq!(task_run_rule(&check), "check");
+
+        let spawn = TaskEntry {
+            agent: Some("claude".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert_eq!(task_run_rule(&spawn), "start claude");
+
+        let mut wake_only = wake;
+        wake_only.check = None;
+        assert_eq!(task_run_rule(&wake_only), "wake @planner");
     }
 
     #[test]

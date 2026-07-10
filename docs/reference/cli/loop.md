@@ -48,7 +48,7 @@ Pause is per-machine state. Pausing a project task affects only this machine and
 
 ## Fire, list, show, rename
 
-`loop fire <name>` runs the task now in the foreground with the same check guard, window skip, overlap guard, and run-log record as a scheduled fire. It streams the check's live output, prints the outcome and the agent's final message for successful supervised runs, hints `--keep` when the transient pane closes, and keeps one-shot entries and wake schedules in place; `--keep` leaves the transient supervised pane open for inspection.
+`loop fire <name>` runs the task now in the foreground with the same check guard, window skip, overlap guard, and run-log record as a scheduled fire. It opens with the task's check-to-action rule, gutters the check's live output, closes each stage with a glyph verdict, prints the agent's final message for successful supervised runs, hints `--keep` when the transient pane closes, and keeps one-shot entries and wake schedules in place; `--keep` leaves the transient supervised pane open for inspection.
 
 A task that is already running records `overlapped` and skips instead of stacking another run. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
 

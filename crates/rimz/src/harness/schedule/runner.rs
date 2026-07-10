@@ -60,10 +60,10 @@ pub struct CheckOutcome {
     code: Option<i32>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckEcho {
     Capture,
-    Stream,
+    Stream { prefix: String },
 }
 
 pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
@@ -136,13 +136,19 @@ pub fn run_check(
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("running loop check `{cmd}` in {}", dir.display()))?;
+    let prefix = match echo {
+        CheckEcho::Capture => None,
+        CheckEcho::Stream { prefix } => Some(prefix),
+    };
     let stdout = drain_pipe(
         child.stdout.take(),
-        (echo == CheckEcho::Stream).then_some(PipeForward::Stdout),
+        prefix
+            .clone()
+            .map(|prefix| PipeForward::new(PipeDestination::Stdout, prefix)),
     );
     let stderr = drain_pipe(
         child.stderr.take(),
-        (echo == CheckEcho::Stream).then_some(PipeForward::Stderr),
+        prefix.map(|prefix| PipeForward::new(PipeDestination::Stderr, prefix)),
     );
     let deadline = Instant::now() + timeout;
     let (status, timed_out) = loop {
@@ -173,31 +179,75 @@ pub fn run_check(
 }
 
 #[derive(Clone, Copy)]
-enum PipeForward {
+enum PipeDestination {
     Stdout,
     Stderr,
 }
 
+struct PipeForward {
+    destination: PipeDestination,
+    prefix: Vec<u8>,
+    pending: Vec<u8>,
+}
+
 impl PipeForward {
-    fn write(self, bytes: &[u8]) -> std::io::Result<()> {
-        match self {
-            Self::Stdout => {
-                let mut out = std::io::stdout().lock();
-                out.write_all(bytes)?;
+    fn new(destination: PipeDestination, prefix: String) -> Self {
+        Self {
+            destination,
+            prefix: prefix.into_bytes(),
+            pending: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        self.pending.extend_from_slice(bytes);
+        while let Some(line) = take_complete_line(&mut self.pending) {
+            let _ = self.write_line(&line);
+        }
+    }
+
+    fn finish(mut self) {
+        if let Some(line) = take_trailing_line(&mut self.pending) {
+            let _ = self.write_line(&line);
+        }
+    }
+
+    fn write_line(&self, line: &[u8]) -> std::io::Result<()> {
+        let mut painted = Vec::with_capacity(self.prefix.len() + line.len());
+        painted.extend_from_slice(&self.prefix);
+        painted.extend_from_slice(line);
+        match self.destination {
+            PipeDestination::Stdout => {
+                let mut out = anstream::AutoStream::auto(std::io::stdout().lock());
+                out.write_all(&painted)?;
                 out.flush()
             }
-            Self::Stderr => {
-                let mut err = std::io::stderr().lock();
-                err.write_all(bytes)?;
+            PipeDestination::Stderr => {
+                let mut err = anstream::AutoStream::auto(std::io::stderr().lock());
+                err.write_all(&painted)?;
                 err.flush()
             }
         }
     }
 }
 
+fn take_complete_line(pending: &mut Vec<u8>) -> Option<Vec<u8>> {
+    let end = pending.iter().position(|byte| *byte == b'\n')?;
+    Some(pending.drain(..=end).collect())
+}
+
+fn take_trailing_line(pending: &mut Vec<u8>) -> Option<Vec<u8>> {
+    if pending.is_empty() {
+        return None;
+    }
+    let mut line = std::mem::take(pending);
+    line.push(b'\n');
+    Some(line)
+}
+
 fn drain_pipe(
     pipe: Option<impl Read + Send + 'static>,
-    forward: Option<PipeForward>,
+    mut forward: Option<PipeForward>,
 ) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -209,10 +259,13 @@ fn drain_pipe(
                 }
                 let bytes = &chunk[..read];
                 buf.extend_from_slice(bytes);
-                if let Some(forward) = forward {
-                    let _ = forward.write(bytes);
+                if let Some(forward) = &mut forward {
+                    forward.push(bytes);
                 }
             }
+        }
+        if let Some(forward) = forward {
+            forward.finish();
         }
         buf
     })
@@ -327,5 +380,20 @@ mod tests {
 
         assert!(!outcome.passed);
         assert!(outcome.timed_out);
+    }
+
+    #[test]
+    fn pipe_forward_buffers_partial_lines_and_terminates_the_tail() {
+        let mut pending = b"first".to_vec();
+        assert_eq!(take_complete_line(&mut pending), None);
+
+        pending.extend_from_slice(b" line\nsecond");
+        assert_eq!(
+            take_complete_line(&mut pending),
+            Some(b"first line\n".to_vec())
+        );
+        assert_eq!(pending, b"second");
+        assert_eq!(take_trailing_line(&mut pending), Some(b"second\n".to_vec()));
+        assert!(pending.is_empty());
     }
 }
