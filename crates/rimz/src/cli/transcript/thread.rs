@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use super::chat::base_handle;
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,7 +87,9 @@ pub(super) fn assemble_threads(
     let mut components = Components::new(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         for parent in &entry.chat.reply_to {
-            if let Some(parent_index) = by_message_id.get(parent).copied() {
+            if let Some(parent_index) = by_message_id.get(parent).copied()
+                && thread_edge(&entries[parent_index], entry)
+            {
                 components.union(index, parent_index);
             }
         }
@@ -125,6 +128,27 @@ pub(super) fn assemble_threads(
         }
     }
     display
+}
+
+/// A causal `reply_to` edge joins a thread only when it continues the
+/// conversation: a turn's output pairs with the message that opened the turn,
+/// and a sent message continues the thread only as a reply back to its
+/// parent's sender. A hand-off to a third party roots a new exchange.
+fn thread_edge(parent: &RenderEntry, child: &RenderEntry) -> bool {
+    match child.kind {
+        TranscriptKind::Assistant
+        | TranscriptKind::Ask
+        | TranscriptKind::Error
+        | TranscriptKind::Answer => true,
+        TranscriptKind::Prompt | TranscriptKind::Message => {
+            parent.chat.from != "user"
+                && child
+                    .chat
+                    .to
+                    .as_deref()
+                    .is_some_and(|to| base_handle(to) == base_handle(&parent.chat.from))
+        }
+    }
 }
 
 struct Components {

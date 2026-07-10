@@ -136,6 +136,150 @@ fn thread_assembly_expands_interleaved_components_in_place() {
 }
 
 #[test]
+fn hand_off_roots_a_new_thread_and_reply_back_continues_it() {
+    let entries = vec![
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@planner",
+                Some("@coder"),
+                "2026-06-28T04:00:00Z",
+                "plan",
+            ),
+            Some(1),
+            &[],
+        ),
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@coder",
+                Some("@reviewer"),
+                "2026-06-28T04:01:00Z",
+                "review",
+            ),
+            Some(2),
+            &[1],
+        ),
+        linked(
+            render_entry(
+                TranscriptKind::Assistant,
+                "@coder",
+                None,
+                "2026-06-28T04:02:00Z",
+                "implemented and committed",
+            ),
+            None,
+            &[1],
+        ),
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@reviewer",
+                Some("@coder"),
+                "2026-06-28T04:03:00Z",
+                "clear to PR",
+            ),
+            Some(3),
+            &[2],
+        ),
+        linked(
+            render_entry(
+                TranscriptKind::Assistant,
+                "@coder",
+                None,
+                "2026-06-28T04:04:00Z",
+                "PR opened",
+            ),
+            None,
+            &[3],
+        ),
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert_eq!(
+        display
+            .iter()
+            .map(|entry| entry.entry.chat.text.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "plan",
+            "implemented and committed",
+            "review",
+            "clear to PR",
+            "PR opened"
+        ]
+    );
+    assert!(display[0].lane.is_margin());
+    assert!(!display[1].lane.is_margin());
+    assert!(display[2].lane.is_margin());
+    assert!(!display[3].lane.is_margin());
+    assert!(!display[4].lane.is_margin());
+    assert_eq!(display[0].block, 0);
+    assert_eq!(display[1].block, 0);
+    assert_eq!(display[2].block, 1);
+    assert_eq!(display[3].block, 1);
+    assert_eq!(display[4].block, 1);
+}
+
+#[test]
+fn message_to_third_party_after_user_prompt_stays_at_margin() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "fix this"), Some(1), &[]),
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@coder",
+                Some("@reviewer"),
+                "2026-06-28T04:01:00Z",
+                "review",
+            ),
+            Some(2),
+            &[1],
+        ),
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert!(display[0].lane.is_margin());
+    assert!(display[1].lane.is_margin());
+}
+
+#[test]
+fn reply_back_matches_base_handles_across_channels() {
+    let entries = vec![
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@coder#feat-a",
+                Some("@reviewer#feat-a"),
+                "2026-06-28T04:00:00Z",
+                "review",
+            ),
+            Some(1),
+            &[],
+        ),
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@reviewer",
+                Some("@coder"),
+                "2026-06-28T04:01:00Z",
+                "clear to PR",
+            ),
+            Some(2),
+            &[1],
+        ),
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert!(display[0].lane.is_margin());
+    assert!(!display[1].lane.is_margin());
+    assert_eq!(display[1].block, display[0].block);
+}
+
+#[test]
 fn thread_assembly_unions_multi_parent_turns_and_orphans_stay_flat() {
     let entries = vec![
         linked(entry("2026-06-28T04:00:00Z", "first"), Some(1), &[]),
