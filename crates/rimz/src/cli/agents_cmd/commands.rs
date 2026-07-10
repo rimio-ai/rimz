@@ -322,6 +322,9 @@ pub(super) fn show_agent(
         crate::cli::transcript::render_lines_to(&mut out, view, &tz)?;
     }
     if let Some(capture) = pane_capture {
+        if recent_transcript.is_some() {
+            writeln!(out)?;
+        }
         render_capture_section(&mut out, &capture)?;
     }
     Ok(())
@@ -376,7 +379,6 @@ fn render_capture_section(
     w: &mut impl Write,
     capture: &rimz::mux::PaneCapture,
 ) -> std::io::Result<()> {
-    writeln!(w)?;
     section(w, "Capture")?;
     render::pane_frame(w, &capture.pane_id.to_string(), &capture.raw_text)
 }
@@ -2252,7 +2254,7 @@ mod tests {
         let rendered = strip(|w| render_capture_section(w, &capture));
 
         assert!(
-            rendered.starts_with("\nCapture\n╭─ zellij:terminal_3 "),
+            rendered.starts_with("Capture\n╭─ zellij:terminal_3 "),
             "{rendered}"
         );
         assert!(rendered.contains("\n│ working"), "{rendered}");
