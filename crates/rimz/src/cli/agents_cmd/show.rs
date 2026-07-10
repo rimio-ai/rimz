@@ -4,47 +4,62 @@ use super::list::{
     agent_status_label, agent_status_projection, agent_status_style, context_cell, model_label,
     phase_label, worktree_label,
 };
-use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
+use super::runs_lookup::{agent_name, newest_run_by_ref, print_run_line};
 use crate::cli::render;
 
-pub(super) fn show_agent(
-    reference: String,
-    json: bool,
+#[derive(serde::Serialize)]
+struct ShowReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent: Option<AgentState>,
+    #[serde(skip_serializing_if = "is_false")]
+    stale: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<RunRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ask: Option<crate::cli::transcript::AskView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost: Option<rimz::agents::AgentCost>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    messages: Vec<ShowMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture: Option<rimz::mux::PaneCapture>,
+    #[serde(skip)]
+    recent_transcript: Option<crate::cli::transcript::RenderedChat>,
+}
+
+fn collect_show_report(
+    store: &rimz::Store,
+    workspace: &rimz::ResolvedWorkspace,
+    runtime: &rimz::RuntimePaths,
+    snapshot: &rimz::SidebarSnapshot,
+    reference: &str,
     capture: bool,
     ansi: bool,
-    globals: &GlobalFlags,
-) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
-    // Fold the rich statusline context so the shown card — and the `--json`
-    // payload — carries the real token window, not the carried-forward
-    // `context_pct`.
-    let snapshot = crate::cli::alive_snapshot(&store, &runtime, &workspace.session_name)?
-        .with_agent_context(rimz::store::agent_context::read_all(&runtime));
+) -> Result<(ShowReport, Option<anyhow::Error>)> {
     let agent_result = crate::cli::resolve_agent_one(
-        &snapshot,
-        &reference,
+        snapshot,
+        reference,
         None,
-        crate::cli::current_channel(&workspace).as_deref(),
+        crate::cli::current_channel(workspace).as_deref(),
     );
-    let mut agent = agent_result.as_ref().ok().map(|agent| (*agent).clone());
+    let (mut agent, mut deferred_error) = match agent_result {
+        Ok(agent) => (Some(agent.clone()), None),
+        Err(err) => (None, Some(err)),
+    };
     let mut stale = false;
-    let mut audit_error = None;
     if agent.is_none() {
-        match resolve_audit_agent(&store, &workspace, &runtime, &reference) {
+        match resolve_audit_agent(store, workspace, runtime, reference) {
             Ok(Some(audit_agent)) => {
                 agent = Some(audit_agent);
                 stale = true;
             }
             Ok(None) => {}
-            Err(err) => audit_error = Some(err),
+            Err(err) => deferred_error = Some(err),
         }
     }
-    let run = newest_run_by_ref(&store, &reference, agent.as_ref())?;
+    let run = newest_run_by_ref(store, reference, agent.as_ref())?;
     let ask = match agent.as_ref() {
-        Some(agent) => crate::cli::transcript::latest_ask_view(&workspace, agent)?,
+        Some(agent) => crate::cli::transcript::latest_ask_view(workspace, agent)?,
         None => None,
     };
     let pane_capture = if capture {
@@ -67,57 +82,43 @@ pub(super) fn show_agent(
     };
     let cost = agent
         .as_ref()
-        .and_then(|agent| session_cost(&runtime, agent));
+        .and_then(|agent| session_cost(runtime, agent));
     let messages = match agent.as_ref() {
-        Some(agent) => show_messages(&store, agent)?,
+        Some(agent) => show_messages(store, agent)?,
         None => Vec::new(),
     };
     let recent_transcript = match agent.as_ref() {
-        Some(agent) => recent_agent_transcript(&workspace, agent).ok(),
+        Some(agent) => recent_agent_transcript(workspace, agent).ok(),
         None => None,
     }
     .filter(|view| !view.entries.is_empty());
-    if json {
-        #[derive(serde::Serialize)]
-        struct Show<'a> {
-            #[serde(skip_serializing_if = "Option::is_none")]
-            agent: Option<&'a AgentState>,
-            #[serde(skip_serializing_if = "is_false")]
-            stale: bool,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            run: Option<RunRecord>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            ask: Option<crate::cli::transcript::AskView>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            cost: Option<rimz::agents::AgentCost>,
-            #[serde(default, skip_serializing_if = "Vec::is_empty")]
-            messages: Vec<ShowMessage>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            capture: Option<rimz::mux::PaneCapture>,
-        }
-        supervised::output::print_json(&Show {
-            agent: agent.as_ref(),
+    Ok((
+        ShowReport {
+            agent,
             stale,
             run,
             ask,
             cost,
             messages,
             capture: pane_capture,
-        })?;
-        return Ok(());
-    }
-    let Some(agent) = agent.as_ref() else {
-        if let Some(run) = run {
-            print_run_line(&run)?;
+            recent_transcript,
+        },
+        deferred_error,
+    ))
+}
+
+fn render_show_report(
+    report: ShowReport,
+    snapshot: &rimz::SidebarSnapshot,
+    runtime: &rimz::RuntimePaths,
+    deferred_error: Option<anyhow::Error>,
+) -> Result<()> {
+    let Some(agent) = report.agent.as_ref() else {
+        if let Some(run) = report.run.as_ref() {
+            print_run_line(run)?;
             return Ok(());
         }
-        if let Some(err) = audit_error {
-            return Err(err);
-        }
-        return match agent_result {
-            Err(err) => Err(err),
-            Ok(_) => unreachable!("agent is present above"),
-        };
+        return Err(deferred_error.unwrap_or_else(|| anyhow::anyhow!("agent resolution failed")));
     };
     let peers: Vec<&AgentState> = snapshot
         .agents
@@ -127,27 +128,50 @@ pub(super) fn show_agent(
     let now = jiff::Timestamp::now();
     let mut out = render::out();
     render_agent_section(&mut out, agent, &peers)?;
-    render_activity_section(&mut out, agent, ask.as_ref(), stale, now)?;
-    render_context_section(&mut out, agent, cost.as_ref(), &runtime)?;
+    render_activity_section(&mut out, agent, report.ask.as_ref(), report.stale, now)?;
+    render_context_section(&mut out, agent, report.cost.as_ref(), runtime)?;
     render_placement_section(&mut out, agent)?;
-    if let Some(run) = run.or_else(|| newest_run_for_agent(&store, agent).ok().flatten()) {
-        render_run_section(&mut out, &run, now)?;
+    if let Some(run) = report.run.as_ref() {
+        render_run_section(&mut out, run, now)?;
     }
-    if !messages.is_empty() {
-        render_messages_section(&mut out, &messages)?;
+    if !report.messages.is_empty() {
+        render_messages_section(&mut out, &report.messages)?;
     }
-    if let Some(view) = recent_transcript.as_ref() {
+    if let Some(view) = report.recent_transcript.as_ref() {
         section(&mut out, "Recent transcript")?;
         let tz = crate::cli::machine_config().time_zone();
         crate::cli::transcript::render_lines_to(&mut out, view, &tz)?;
     }
-    if let Some(capture) = pane_capture {
-        if recent_transcript.is_some() {
+    if let Some(capture) = report.capture.as_ref() {
+        if report.recent_transcript.is_some() {
             writeln!(out)?;
         }
-        render_capture_section(&mut out, &capture)?;
+        render_capture_section(&mut out, capture)?;
     }
     Ok(())
+}
+
+pub(super) fn show_agent(
+    reference: String,
+    json: bool,
+    capture: bool,
+    ansi: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let store = crate::cli::open_store(&workspace)?;
+    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    let snapshot = crate::cli::alive_snapshot(&store, &runtime, &workspace.session_name)?
+        .with_agent_context(rimz::store::agent_context::read_all(&runtime));
+    let (report, deferred_error) = collect_show_report(
+        &store, &workspace, &runtime, &snapshot, &reference, capture, ansi,
+    )?;
+    if json {
+        supervised::output::print_json(&report)?;
+        return Ok(());
+    }
+    render_show_report(report, &snapshot, &runtime, deferred_error)
 }
 
 pub(super) fn resolve_audit_agent(
