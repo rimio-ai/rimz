@@ -91,22 +91,13 @@ where
         stdout.read_to_end(&mut output).map(|_| output)
     });
 
-    let mut stderr_output = String::new();
-    let stderr_result = (|| -> std::io::Result<()> {
-        for line in BufReader::new(stderr).lines() {
-            let line = line?;
-            on_line(&line);
-            stderr_output.push_str(&line);
-            stderr_output.push('\n');
-        }
-        Ok(())
-    })();
+    let stderr_result = capture_lines_lossy(BufReader::new(stderr), on_line);
     let status = child.wait().context("waiting for command")?;
     let stdout = stdout_worker
         .join()
         .map_err(|_| anyhow::anyhow!("command stdout reader panicked"))?
         .context("reading command stdout")?;
-    stderr_result.context("reading command stderr")?;
+    let stderr_output = stderr_result.context("reading command stderr")?;
 
     let mut combined = String::from_utf8_lossy(&stdout).into_owned();
     combined.push_str(&stderr_output);
@@ -114,6 +105,21 @@ where
         status,
         output: combined,
     })
+}
+
+fn capture_lines_lossy(
+    mut reader: impl BufRead,
+    on_line: &mut dyn FnMut(&str),
+) -> std::io::Result<String> {
+    let mut output = String::new();
+    let mut bytes = Vec::new();
+    while reader.read_until(b'\n', &mut bytes)? != 0 {
+        let line = String::from_utf8_lossy(&bytes);
+        on_line(line.trim_end_matches(['\r', '\n']));
+        output.push_str(&line);
+        bytes.clear();
+    }
+    Ok(output)
 }
 
 fn build_command<S: AsRef<OsStr>>(
@@ -179,4 +185,22 @@ fn manifest_declares_workspace(manifest: &Path) -> Result<bool> {
     let parsed = toml::from_str::<toml::Value>(&raw)
         .with_context(|| format!("parsing {}", manifest.display()))?;
     Ok(parsed.get("workspace").is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streamed_capture_preserves_lines_with_lossy_utf8() {
+        let mut lines = Vec::new();
+        let output = capture_lines_lossy(
+            std::io::Cursor::new(b"first\xff line\r\nsecond line"),
+            &mut |line| lines.push(line.to_owned()),
+        )
+        .unwrap();
+
+        assert_eq!(lines, ["first� line", "second line"]);
+        assert_eq!(output, "first� line\r\nsecond line");
+    }
 }
