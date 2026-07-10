@@ -57,7 +57,6 @@ Rimz stays out of your way: a single lightweight binary inside the Zellij or tmu
 - **Scriptable, End to End:** `rimz agents -p` is `claude -p` for every agent, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows
 - **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result), and notification handlers run your own command the moment a row needs eyes
 - **Auto Continue, while you're Away:** a rate-limit pause resumes the moment the budget window resets and transient API overload retries on a backoff ramp; agents recover themselves and keep working while you're gone
-- **Answer from your Phone:** official remote control puts your terminal sessions in the Claude and ChatGPT mobile apps: kick off a task at your desk, answer its questions from your phone, come back and review in the pane — one seamless session, end to end
 - **Pets, your beloved Companion:** an animated sprite on the provider dashboard that keeps you company, running while the agents run and waving when one waits
 - **Local or Remote, Continuously:** start on your MacBook or a server, close the laptop, and reattach from anywhere; the link heals itself every time you reconnect
 - **Extremely Lightweight:** a single binary that hooks the agents you already run, inside your familiar Zellij or tmux: same keybinds, same terminal, zero learning curve; all the official web, desktop, and mobile apps keep working
@@ -216,17 +215,6 @@ rimz config set harness.smart_compact "70%"   # compact before a message once co
 ```
 
 Add a [scheduled ping](#everyday-moves) to start each provider's budget window on your clock, and the fleet only needs you for real decisions.
-
-### Asks on your phone
-
-Claude Code and Codex ship remote control, the bridge their official mobile apps drive. Two toggles make the room bring it up at every start — `claude remote-control` as a background pane, the Codex remote-control daemon ensured once per machine — so a blocking ask pushes to your phone, your answer lands in the same session, and the turn continues in its pane as if you had typed it there:
-
-```sh
-rimz config set remote_control.claude true
-rimz config set remote_control.codex true
-```
-
-Both are off by default, and the [agents guide](./docs/guide/agents.md#answer-asks-from-your-phone) shows exactly what each toggle runs.
 
 The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, appearance, the hands-off behaviors, and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration guide](./docs/guide/configuration.md).
 
