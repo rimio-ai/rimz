@@ -450,6 +450,7 @@ mod tests {
     fn answer_detail_preserves_live_question_context() {
         let cases = [
             (
+                "observed answer map",
                 json!({
                     "annotations": {
                         "Choose deployment path?": { "notes": " use prod window " }
@@ -488,6 +489,7 @@ mod tests {
                 ],
             ),
             (
+                "nullable live fields",
                 json!({
                     "annotations": null,
                     "answers": { "Choose deployment path?": "safe" },
@@ -501,8 +503,12 @@ mod tests {
             ),
         ];
 
-        for (response, expected) in cases {
-            assert_eq!(answer_detail("AskUserQuestion", &response), Some(expected));
+        for (case, response, expected) in cases {
+            assert_eq!(
+                answer_detail("AskUserQuestion", &response),
+                Some(expected),
+                "{case}"
+            );
         }
     }
 
