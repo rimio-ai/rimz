@@ -229,10 +229,19 @@ fn print_stream_json_input_refuses_a_positional_prompt() {
 #[test]
 fn failed_supervised_run_retries_with_failure_context() {
     let env = Env::new();
+    if !init_git_repo(&env.project_root) {
+        tracing::warn!("skipping: git unavailable");
+        return;
+    }
     let store = env.store();
-    let mut child = spawn_retrying_print(&env, "retry-success");
+    let worktree = env
+        .home_root
+        .join("project-worktrees")
+        .join("retry-worktree");
+    let mut child = spawn_retrying_print(&env, "retry-success", true);
 
     let mut records = wait_for_run_count(&store, &mut child, 1);
+    assert!(worktree.is_dir(), "attempt 1 created the shared worktree");
     let mut failed = records.pop().expect("first run");
     assert_eq!(failed.agent_name.as_deref(), Some("fixed-name"));
     failed.status = RunStatus::Failed;
@@ -241,6 +250,10 @@ fn failed_supervised_run_retries_with_failure_context() {
     finish_run(&store, &mut failed);
 
     let records = wait_for_run_count(&store, &mut child, 2);
+    assert!(
+        worktree.is_dir(),
+        "the failed first attempt must not remove the shared worktree"
+    );
     let retry = records
         .iter()
         .find(|record| record.retry_of.as_ref() == Some(&failed.run_id))
@@ -265,6 +278,7 @@ fn failed_supervised_run_retries_with_failure_context() {
     let mut completed = retry.clone();
     completed.status = RunStatus::Completed;
     completed.last_message = Some("fixed".to_owned());
+    tombstone_retry_agents(&env, &store);
     finish_run(&store, &mut completed);
 
     let out = child.wait_with_output().expect("wait retrying print");
@@ -289,6 +303,10 @@ fn failed_supervised_run_retries_with_failure_context() {
         stderr.contains("rimz: retrying (attempt 2 of 2)"),
         "{stderr}"
     );
+    assert!(
+        !worktree.exists(),
+        "the coordinator removes the clean worktree after the terminal attempt"
+    );
 }
 
 #[cfg(unix)]
@@ -296,7 +314,7 @@ fn failed_supervised_run_retries_with_failure_context() {
 fn timed_out_supervised_run_does_not_retry() {
     let env = Env::new();
     let store = env.store();
-    let mut child = spawn_retrying_print(&env, "retry-timeout");
+    let mut child = spawn_retrying_print(&env, "retry-timeout", false);
 
     let mut records = wait_for_run_count(&store, &mut child, 1);
     let mut timed_out = records.pop().expect("first run");
@@ -321,13 +339,25 @@ fn timed_out_supervised_run_does_not_retry() {
 }
 
 #[cfg(unix)]
-fn spawn_retrying_print(env: &Env, trace_name: &str) -> std::process::Child {
+fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std::process::Child {
     env.install_agent_hooks("codex");
     trust_codex_hooks(env);
     let agent_bin = write_failing_agent_shim(env, "codex", 1);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let runtime = env.runtime_paths();
+    rimz::sidebar::cache::write_pane_topology_cache(
+        &runtime,
+        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
+            session_name: workspace.session_name.clone(),
+            produced_at_ms: rimz::sidebar::timing::unix_now_ms(),
+            writer: None,
+            focused_pane: None,
+            clients: None,
+            panes: Vec::new(),
+        },
+    )
+    .expect("write pane topology");
     let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
         env.workspace_id.clone(),
         rimz::ids::SidebarInstanceId::new(),
@@ -358,6 +388,8 @@ fn spawn_retrying_print(env: &Env, trace_name: &str) -> std::process::Child {
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+        .env("RIMZ_TEST_ZELLIJ_TOPOLOGY_PANES", "[]")
         .env("ZELLIJ_PANE_ID", "1")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
@@ -365,7 +397,60 @@ fn spawn_retrying_print(env: &Env, trace_name: &str) -> std::process::Child {
         )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if use_worktree {
+        command.arg("--worktree=retry-worktree");
+    }
     command.spawn().expect("spawn retrying print")
+}
+
+#[cfg(unix)]
+fn init_git_repo(root: &std::path::Path) -> bool {
+    if !git_ok(root, &["init", "-q", "-b", "main"]) {
+        return false;
+    }
+    let _ = git_ok(root, &["config", "user.email", "test@example.com"]);
+    let _ = git_ok(root, &["config", "user.name", "Test User"]);
+    std::fs::write(root.join("README.md"), "base\n").expect("write README");
+    git_ok(root, &["add", "README.md"]) && git_ok(root, &["commit", "-q", "-m", "base"])
+}
+
+#[cfg(unix)]
+fn git_ok(cwd: &std::path::Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+fn tombstone_retry_agents(env: &Env, store: &rimz::Store) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    // The trace backend opens no real wrapper process, so drain the provisional
+    // launch cards an exiting wrapper would tombstone before cleanup.
+    for _ in 0..3 {
+        let agents = store.snapshot().expect("snapshot agents").agents;
+        if agents.is_empty() {
+            return;
+        }
+        for agent in agents {
+            let observation = rimz::agents::AgentLifecycleObservation::new(
+                Some(agent.agent_id),
+                LifecycleSignal::Ended,
+            );
+            store
+                .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                    env.workspace_id.clone(),
+                    &workspace.session_name,
+                    agent.kind.as_str(),
+                    "rimz.agent-ended",
+                    &observation,
+                ))
+                .expect("tombstone retry agent");
+        }
+    }
+    panic!("retry launch cards did not tombstone");
 }
 
 #[cfg(unix)]

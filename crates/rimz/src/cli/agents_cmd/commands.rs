@@ -1473,6 +1473,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
     );
 
     let retries = args.retries.unwrap_or(0);
+    let owns_worktree = args.worktree.is_some() || args.from_pr.is_some();
     let base_prompt = prompt.clone();
     let mut prompt = prompt;
     let mut retry_of = None;
@@ -1544,7 +1545,7 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
             launch_id: Some(&launch_identity.agent_id),
             cwd: &launch.cwd,
             prompt: &prompt,
-            cleanup_worktree: args.worktree.is_some() || args.from_pr.is_some(),
+            cleanup_worktree: owns_worktree && retries == 0,
             permission_args: agent_cell.args,
             self_cleanup_on_completion: args.bg && !args.keep,
         })?;
@@ -1674,6 +1675,16 @@ pub(super) fn run_supervised(args: AgentsArgs, globals: &GlobalFlags) -> Result<
         }
         drop(socket_guard);
         if !record.status.is_retryable() || attempt == retries {
+            if retries > 0
+                && owns_worktree
+                && let Err(err) =
+                    crate::cli::worktree::cleanup_worktree(&launch.cwd, globals, false)
+            {
+                let _ = writeln!(
+                    render::err(),
+                    "rimz: worktree cleanup did not complete: {err}"
+                );
+            }
             return Ok(Some(record));
         }
         let mut stderr = render::err();
