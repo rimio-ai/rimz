@@ -411,10 +411,8 @@ pub(crate) fn resume_gate_recovered(
         )
         .map(effective_turn_error_class)
         .is_some_and(|class| {
-            matches!(
-                class,
-                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
-            ) && budget.is_some_and(|budget| budget.subscription_budget_available(now))
+            class.is_limit()
+                && budget.is_some_and(|budget| budget.subscription_budget_available(now))
         }),
     }
 }
@@ -1099,11 +1097,10 @@ impl AgentState {
             return self.status;
         }
         if let Some((class, _)) = self.displayed_turn_error() {
-            return match class {
-                TurnErrorClass::PausedRateLimit
-                | TurnErrorClass::PausedSpendLimit
-                | TurnErrorClass::PausedOverloaded => AgentStatus::Paused,
-                TurnErrorClass::Unknown | TurnErrorClass::Failed => self.status,
+            return if class.pauses_turn() {
+                AgentStatus::Paused
+            } else {
+                self.status
             };
         }
         if is_turn_complete(self.status, self.context.as_ref(), self.last_activity) {

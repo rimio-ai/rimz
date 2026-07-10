@@ -264,12 +264,7 @@ fn limit_marker_active(agent: &AgentState) -> bool {
         agent.turn_started_at,
     )
     .map(effective_turn_error_class)
-    .is_some_and(|class| {
-        matches!(
-            class,
-            TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit
-        )
-    })
+    .is_some_and(TurnErrorClass::is_limit)
 }
 
 /// Capture (or refresh) the park while the reading is still active. A new park

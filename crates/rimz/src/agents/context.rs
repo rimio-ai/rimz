@@ -454,6 +454,19 @@ pub enum TurnErrorClass {
 }
 
 impl TurnErrorClass {
+    /// Whether provider capacity paused the turn instead of failing it.
+    pub(crate) fn pauses_turn(self) -> bool {
+        matches!(
+            self,
+            Self::PausedRateLimit | Self::PausedSpendLimit | Self::PausedOverloaded
+        )
+    }
+
+    /// Whether the pause follows a resumable rate or spend window.
+    pub(crate) fn is_limit(self) -> bool {
+        matches!(self, Self::PausedRateLimit | Self::PausedSpendLimit)
+    }
+
     /// Classify a capped upstream provider-error label into the display and
     /// auto-resume bucket shared by every adapter.
     pub(crate) fn classify_label(label: Option<&str>) -> Self {
