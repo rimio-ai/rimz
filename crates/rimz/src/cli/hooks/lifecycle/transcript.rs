@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) fn record_native_answer(
     workspace: &ResolvedWorkspace,
     store: &Store,

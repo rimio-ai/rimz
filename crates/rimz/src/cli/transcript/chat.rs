@@ -390,7 +390,7 @@ impl GroupState {
         if self.from != from || self.to != to || self.date != date {
             return false;
         }
-        let (Some(previous), Some(current)) = (self.at, entry.chat.at) else {
+        let (Some(previous), Some(current)) = (self.at, entry.entry.chat.at) else {
             return false;
         };
         let gap = current.duration_since(previous);
