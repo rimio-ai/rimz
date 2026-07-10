@@ -1354,7 +1354,7 @@ fn write_gh_pr_head_shim(env: &Env) -> std::path::PathBuf {
     std::fs::write(
         &shim,
         "#!/bin/sh\n\
-         printf '%s\\n' '{\"headRefName\":\"feature\",\"headRepository\":{\"name\":\"fork\"},\"headRepositoryOwner\":{\"login\":\"alice\"},\"isCrossRepository\":true}'\n",
+         printf '%s\\n' '{\"headRefName\":\"feature\",\"headRepository\":{\"name\":\"fork\"},\"headRepositoryOwner\":{\"login\":\"alice\"}}'\n",
     )
     .expect("write gh shim");
     let mut perms = std::fs::metadata(&shim)

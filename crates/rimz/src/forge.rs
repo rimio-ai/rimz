@@ -34,7 +34,6 @@ pub struct PrHead {
     pub branch: String,
     pub owner: Option<String>,
     pub repo_full_name: Option<String>,
-    pub cross_repo: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,8 +159,6 @@ pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
         head_repository: Option<Repository>,
         #[serde(rename = "headRepositoryOwner")]
         head_repository_owner: Option<Owner>,
-        #[serde(rename = "isCrossRepository")]
-        is_cross_repository: bool,
     }
 
     #[derive(Deserialize)]
@@ -191,7 +188,6 @@ pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
         branch,
         owner,
         repo_full_name,
-        cross_repo: pull.is_cross_repository,
     })
 }
 
@@ -215,17 +211,6 @@ pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
         .and_then(|repo| repo.get("full_name"))
         .and_then(Value::as_str)
         .and_then(nonempty);
-    let base_repo = value
-        .get("base")
-        .and_then(|base| base.get("repo"))
-        .and_then(|repo| repo.get("full_name"))
-        .and_then(Value::as_str)
-        .and_then(nonempty);
-    let cross_repo = repo_full_name
-        .as_deref()
-        .zip(base_repo.as_deref())
-        .is_some_and(|(head, base)| head != base)
-        || label_owner.is_some();
     let owner = label_owner.or_else(|| {
         repo_full_name
             .as_deref()
@@ -236,7 +221,6 @@ pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
         branch,
         owner,
         repo_full_name,
-        cross_repo,
     })
 }
 
@@ -690,8 +674,7 @@ bbb\trefs/heads/same-tip
                 r#"{
                     "headRefName":"feature",
                     "headRepository":{"name":"repo"},
-                    "headRepositoryOwner":{"login":"org"},
-                    "isCrossRepository":false
+                    "headRepositoryOwner":{"login":"org"}
                 }"#
             )
             .unwrap(),
@@ -699,7 +682,6 @@ bbb\trefs/heads/same-tip
                 branch: "feature".to_owned(),
                 owner: Some("org".to_owned()),
                 repo_full_name: Some("org/repo".to_owned()),
-                cross_repo: false,
             }
         );
         assert_eq!(
@@ -707,8 +689,7 @@ bbb\trefs/heads/same-tip
                 r#"{
                     "headRefName":"fork-work",
                     "headRepository":{"name":"fork"},
-                    "headRepositoryOwner":{"login":"alice"},
-                    "isCrossRepository":true
+                    "headRepositoryOwner":{"login":"alice"}
                 }"#
             )
             .unwrap()
@@ -732,7 +713,6 @@ bbb\trefs/heads/same-tip
                 branch: "feature".to_owned(),
                 owner: Some("alice".to_owned()),
                 repo_full_name: Some("alice/fork".to_owned()),
-                cross_repo: true,
             }
         );
         assert_eq!(
@@ -742,7 +722,6 @@ bbb\trefs/heads/same-tip
                 branch: "feature".to_owned(),
                 owner: Some("org".to_owned()),
                 repo_full_name: Some("org/repo".to_owned()),
-                cross_repo: false,
             }
         );
     }

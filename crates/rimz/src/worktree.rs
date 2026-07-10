@@ -445,7 +445,7 @@ fn resolve_pr_head_with_cli(repo_root: &Path, number: u64, remote: &str) -> Resu
                 "view",
                 number_arg.as_str(),
                 "--json",
-                "headRefName,headRepository,headRepositoryOwner,isCrossRepository",
+                "headRefName,headRepository,headRepositoryOwner",
             ],
         ),
         forge::ForgeCli::Tea => {
