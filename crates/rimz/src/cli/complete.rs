@@ -214,7 +214,7 @@ pub(crate) fn agent_refs() -> Vec<CompletionCandidate> {
                 let name = run.agent_name?;
                 Some(candidate(
                     name,
-                    format!("run · {}", format!("{:?}", run.status).to_lowercase()),
+                    format!("run · {:?}", run.status).to_lowercase(),
                 ))
             }),
     );
