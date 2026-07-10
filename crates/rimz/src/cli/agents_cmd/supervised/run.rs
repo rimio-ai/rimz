@@ -82,17 +82,72 @@ struct PreparedRun {
     output_format: OutputFormat,
 }
 
-enum AttemptOutcome {
-    Background,
-    Blocking(BlockingAttempt),
-}
-
 struct BlockingAttempt {
     record: RunRecord,
     wait_sock: Option<std::os::unix::net::UnixDatagram>,
     expected: ExpectedRunFrame,
     interrupt: Arc<AtomicBool>,
     socket_guard: Option<SocketGuard>,
+}
+
+fn open_attempt_pane(
+    prepared: &PreparedRun,
+    room: &crate::cli::room::RunRoom,
+    args: &AgentsArgs,
+    run_id: &rimz::RunId,
+    launch_identity: &LaunchIdentity,
+    pane: &PaneCmd,
+) -> Result<()> {
+    let target = own_pane_id(room.mux());
+    let direction = rimz::mux::detect_terminal_size()
+        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
+        .unwrap_or_default();
+    let room_target = room.target(&prepared.workspace, &prepared.launch.cwd);
+    let open_result = match run_placement(args.new_tab, target.is_some()) {
+        RunPlacement::Split => room.backend().split_pane(SplitPaneOptions {
+            target_pane_id: target,
+            cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
+            command: Some(pane.argv.clone()),
+            env: crate::cli::agents_launch::launch_identity_env(
+                &prepared.workspace,
+                prepared.room_channel.as_deref(),
+                args.worktree.is_none() && args.from_pr.is_none(),
+            ),
+            direction,
+            focus: false,
+        }),
+        RunPlacement::Tab => room.backend().open_tab(&TabOptions {
+            session_name: prepared.workspace.session_name.clone(),
+            title: format!("run {}", prepared.adapter.descriptor().kind),
+            cwd: prepared.launch.cwd.clone(),
+            panes: LayoutPanes {
+                columns: vec![LayoutColumn {
+                    panes: vec![pane.clone()],
+                    stacked: false,
+                }],
+            },
+            focus: false,
+            dock_sidebar: true,
+            sidebar: crate::cli::room::build_sidebar_opts(&room_target, Vec::new())?,
+        }),
+    };
+    if let Err(err) = open_result {
+        let _ = rimz::harness::run::fail(prepared.store.paths(), run_id);
+        let _ = append_launch_event(
+            &prepared.store,
+            &prepared.workspace,
+            launch_identity,
+            LaunchEventParams {
+                cwd: &prepared.launch.cwd,
+                worktree_name: prepared.launch.worktree_name.as_deref(),
+                channel: prepared.room_channel.as_deref(),
+                state: rimz::store::event::AgentLaunchState::Failed,
+                pane_id: None,
+            },
+        );
+        return Err(err).context("opening run pane");
+    }
+    Ok(())
 }
 
 fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<PreparedRun> {
@@ -195,8 +250,7 @@ fn execute_attempt(
     retry_of: Option<&rimz::RunId>,
     attempt: u32,
     retries: u32,
-    owns_worktree: bool,
-) -> Result<AttemptOutcome> {
+) -> Result<Option<BlockingAttempt>> {
     let agent_cell = agent_cells(&prepared.layout)[0];
     let permission_mode = agent_cell.mode.unwrap_or(prepared.mode);
     let mut record = RunRecord::new(
@@ -264,7 +318,7 @@ fn execute_attempt(
         launch_id: Some(&launch_identity.agent_id),
         cwd: &prepared.launch.cwd,
         prompt,
-        cleanup_worktree: owns_worktree && retries == 0,
+        cleanup_worktree: (args.worktree.is_some() || args.from_pr.is_some()) && retries == 0,
         permission_args: agent_cell.args,
         self_cleanup_on_completion: args.bg && !args.keep,
     })?;
@@ -285,61 +339,20 @@ fn execute_attempt(
         .as_ref()
         .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
     rimz::harness::run::create(prepared.store.paths(), &record).context("recording run")?;
-    let target = own_pane_id(room.mux());
-    let direction = rimz::mux::detect_terminal_size()
-        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
-        .unwrap_or_default();
-    let room_target = room.target(&prepared.workspace, &prepared.launch.cwd);
-    let open_result = match run_placement(args.new_tab, target.is_some()) {
-        RunPlacement::Split => room.backend().split_pane(SplitPaneOptions {
-            target_pane_id: target,
-            cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
-            command: Some(pane.argv.clone()),
-            env: crate::cli::agents_launch::launch_identity_env(
-                &prepared.workspace,
-                prepared.room_channel.as_deref(),
-                args.worktree.is_none() && args.from_pr.is_none(),
-            ),
-            direction,
-            focus: false,
-        }),
-        RunPlacement::Tab => room.backend().open_tab(&TabOptions {
-            session_name: prepared.workspace.session_name.clone(),
-            title: format!("run {}", prepared.adapter.descriptor().kind),
-            cwd: prepared.launch.cwd.clone(),
-            panes: LayoutPanes {
-                columns: vec![LayoutColumn {
-                    panes: vec![pane],
-                    stacked: false,
-                }],
-            },
-            focus: false,
-            dock_sidebar: true,
-            sidebar: crate::cli::room::build_sidebar_opts(&room_target, Vec::new())?,
-        }),
-    };
-    if let Err(err) = open_result {
-        let _ = rimz::harness::run::fail(prepared.store.paths(), &run_id);
-        let _ = append_launch_event(
-            &prepared.store,
-            &prepared.workspace,
-            &launch_identity,
-            LaunchEventParams {
-                cwd: &prepared.launch.cwd,
-                worktree_name: prepared.launch.worktree_name.as_deref(),
-                channel: prepared.room_channel.as_deref(),
-                state: rimz::store::event::AgentLaunchState::Failed,
-                pane_id: None,
-            },
-        );
-        return Err(err).context("opening run pane");
-    }
+    open_attempt_pane(
+        prepared,
+        room,
+        args,
+        &run_id,
+        &launch_identity,
+        &pane,
+    )?;
     if args.bg {
         #[expect(clippy::print_stdout, reason = "command result is the agent name")]
         {
             println!("{}", launch_identity.name);
         }
-        return Ok(AttemptOutcome::Background);
+        return Ok(None);
     }
     let Some((sock, _sock_path)) = bound else {
         bail!("blocking run did not bind its completion socket");
@@ -379,7 +392,7 @@ fn execute_attempt(
         &prepared.workspace.session_name,
         record,
     );
-    Ok(AttemptOutcome::Blocking(BlockingAttempt {
+    Ok(Some(BlockingAttempt {
         record,
         wait_sock,
         expected,
@@ -556,7 +569,7 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
             crate::cli::render::report(&anyhow::anyhow!(reason));
             std::process::exit(RunStatus::BudgetExceeded.exit_code());
         }
-        let AttemptOutcome::Blocking(blocking) = execute_attempt(
+        let Some(blocking) = execute_attempt(
             &prepared,
             &room,
             &args,
@@ -564,7 +577,6 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
             retry_of.as_ref(),
             attempt,
             retries,
-            owns_worktree,
         )?
         else {
             return Ok(None);

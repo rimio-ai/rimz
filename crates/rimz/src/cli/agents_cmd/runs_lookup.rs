@@ -43,9 +43,6 @@ pub(super) fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
     )
 }
 
-/// The columns shared by `agents list` in display order. The lead `AGENT` cell
-/// omits `#channel` because its section header carries that scope.
-
 pub(super) fn agent_name(agent: &AgentState) -> &str {
     agent.name.as_deref().unwrap_or(agent.agent_id.as_str())
 }

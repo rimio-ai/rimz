@@ -112,9 +112,3 @@ fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> 
         .close_pane(&workspace.session_name, &pane.pane_id)
         .map_err(Into::into)
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RunPlacement {
-    Split,
-    Tab,
-}
