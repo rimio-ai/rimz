@@ -650,5 +650,19 @@ mod tests {
         assert!(!kiro.capabilities.account_spend);
         assert!(!kiro.capabilities.remote_control.pane_sessions);
         assert!(!kiro.capabilities.remote_control.background_sessions);
+
+        let qwen = crate::agents::registry::descriptor_by_kind("qwen").unwrap();
+        assert!(!qwen.capabilities.remote_control.pane_sessions);
+        assert!(!qwen.capabilities.remote_control.background_sessions);
+        assert!(qwen.capabilities.rich_context);
+        assert!(!qwen.capabilities.transcript_tail_context);
+        assert!(!qwen.capabilities.daemon_hooked_sessions);
+        assert!(!qwen.capabilities.realtime_usage.covers_account_while_live);
+        assert!(
+            !qwen
+                .capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
     }
 }

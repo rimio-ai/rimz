@@ -1,7 +1,5 @@
 # Qwen Code protocol reference
 
-> RimZ does not yet ship a Qwen Code adapter. This document records the upstream surfaces needed to build one. The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
-
 This is the single home for the **Qwen Code upstream protocol surface** relevant to RimZ: lifecycle hooks and their decision channel, live process/session identity, dual-output observation and control, statusline enrichment, session JSONL, authentication, subagents, resume and fork behavior, permission modes, and headless execution. It mirrors Qwen's published documentation and the open-source `QwenLM/qwen-code` wire types, with source links pinned for implementation work.
 
 Coverage is **depth on viable adapter inputs, breadth as an index**. The hook, statusline, dual-output, runtime-sidecar, and transcript shapes are detailed enough to implement typed parsers. ACP and daemon mode are indexed so an implementer can choose them deliberately rather than confusing them with observation of a stock interactive pane.

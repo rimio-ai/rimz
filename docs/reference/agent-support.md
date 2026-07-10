@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ watches the coding agents you already run — Claude Code, Codex, Amp, Copilot, Gemini CLI, Pi, OpenCode, Cursor, Droid, and Kiro — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
+RimZ watches the coding agents you already run — Claude Code, Codex, Amp, Copilot, Gemini CLI, Pi, OpenCode, Cursor, Droid, Kiro, and Qwen Code — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
 
 The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
@@ -29,6 +29,7 @@ This page is the annotated read of that command.
 | Cursor | alpha | 4 wired · 2 derived · 10 unsupported | command hooks · opaque transcript metadata · `agent --resume` |
 | Droid | alpha | 5 wired · 11 unsupported | native hooks · `~/.factory/settings.json` · `droid --resume` |
 | Kiro CLI | early | 2 wired · 2 derived · 12 unsupported | v3 command hooks · `kiro-cli chat --resume-id` |
+| Qwen Code | beta | 12 wired · 2 partial · 2 unsupported | hooks · statusline · session `.jsonl` · `qwen --resume` |
 | Third-party plugin | bundle-defined | derived by `rimz coverage` | canonical event shim · optional executable probes |
 
 What the tiers promise:
@@ -59,6 +60,7 @@ One row per agent, so a new agent adds exactly one line:
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Kiro | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
+| Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ |
 
 <sub>✓ wired · ◐ partial (derived) · ✗ unsupported. Run `rimz coverage` for the live grid with the exact reason printed on every ◐ and ✗ cell.</sub>
 
@@ -215,6 +217,21 @@ Kiro support targets the early-access v3 engine and carries the root lifecycle m
 
 Mapping detail: [kiro.md](../internals/agents/kiro.md); upstream protocol: [kiro-reference.md](../externals/agent-adapter/kiro-reference.md).
 
+### Qwen Code
+
+Qwen Code runs standalone in its pane and publishes Claude-shaped native hooks plus a command statusline. RimZ registers it eagerly on `SessionStart` and binds the hook's process and pane directly.
+
+- **Reports:** turn boundaries, per-tool activity, permission prompts, plan approvals, native user questions, background parking, subagent brackets, compaction, session end, and context usage.
+- **Two partial cells (◐):** `live$` and `spend` price transcript tokens through the model price book, while Qwen can route to multiple providers and subscriptions whose billing cannot be inferred from the model alone; off-book models retain tokens at zero dollars.
+- **Two unsupported cells (✗):** `answer` keeps native dialog controls in the Qwen pane, and `remote` leaves ACP/daemon hosting outside the pane-first adapter.
+- **Live context:** a command-mode `ui.statusLine` is wrapped to publish Qwen's provider-selected context window, percentage, model label, version, token categories, Vim mode, and file-line totals. Preset statuslines stay untouched and fall back to the transcript tail.
+- **Resume and fork:** `qwen --resume <id>` reopens a session; adding `--fork-session` branches one for `rimz agents fork`. Smart compaction types `/compress`.
+- **Permission modes:** plan → `--approval-mode plan`, ask → Qwen's default, auto → `--approval-mode auto-edit`, and yolo → `--approval-mode yolo`.
+- **Account:** reads the selected provider from `~/.qwen/settings.json` and checks only credential-source presence. Qwen exposes no stable cross-provider quota endpoint.
+- **Install target:** `~/.qwen/settings.json` or `$QWEN_HOME/settings.json`, edited additively. A command statusline is restored exactly on uninstall; a preset remains untouched.
+
+Mapping detail: [qwen.md](../internals/agents/qwen.md); upstream protocol: [qwen-reference.md](../externals/agent-adapter/qwen-reference.md).
+
 ## The lifecycle hook surface
 
 Under the concern matrix sits the raw event surface: the eleven lifecycle signals RimZ folds into every agent's state machine, and the native event each agent fires for each one. `rimz coverage` prints this as its second grid, the hooks matrix; here it is with the native event names in place, one row per agent so a new agent adds a single line.
@@ -231,6 +248,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
+| Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
 `lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, Amp, OpenCode, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 

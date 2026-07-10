@@ -15,6 +15,7 @@ use super::gemini::GeminiAdapter;
 use super::kiro::KiroAdapter;
 use super::opencode::OpencodeAdapter;
 use super::pi::PiAdapter;
+use super::qwen::QwenAdapter;
 use super::{AgentAdapter, AgentErr, Result};
 
 /// Every wired agent, in display order. `&'static dyn` — adapters are
@@ -30,6 +31,7 @@ pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &CursorAdapter,
     &DroidAdapter,
     &KiroAdapter,
+    &QwenAdapter,
 ];
 
 /// Every built-in and valid machine-tier plugin adapter, in display order.

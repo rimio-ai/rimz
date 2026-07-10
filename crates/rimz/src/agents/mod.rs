@@ -38,6 +38,7 @@ pub(crate) mod payload;
 pub mod pi;
 pub mod plugin;
 pub mod pricing;
+pub mod qwen;
 pub mod registry;
 pub mod spending;
 pub mod state;
@@ -116,6 +117,7 @@ pub use gemini::GeminiAdapter;
 pub use kiro::KiroAdapter;
 pub use opencode::OpencodeAdapter;
 pub use pi::PiAdapter;
+pub use qwen::QwenAdapter;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentErr {

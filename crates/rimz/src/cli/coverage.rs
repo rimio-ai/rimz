@@ -349,7 +349,7 @@ mod tests {
             matrix.agents,
             [
                 "claude", "codex", "amp", "copilot", "gemini", "pi", "opencode", "cursor", "droid",
-                "kiro"
+                "kiro", "qwen"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -467,6 +467,19 @@ mod tests {
             agent_labels(&matrix, "kiro", MatrixCellState::Partial),
             ["end", "idle"]
         );
+
+        let qwen = agent_cells(&matrix, "qwen");
+        assert_eq!(count(&qwen, MatrixCellState::Ok), 12);
+        assert_eq!(count(&qwen, MatrixCellState::Partial), 2);
+        assert_eq!(count(&qwen, MatrixCellState::Absent), 2);
+        assert_eq!(
+            agent_labels(&matrix, "qwen", MatrixCellState::Partial),
+            ["live$", "spend"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "qwen", MatrixCellState::Absent),
+            ["answer", "remote"]
+        );
     }
 
     #[test]
@@ -488,7 +501,7 @@ mod tests {
             matrix.agents,
             [
                 "claude", "codex", "amp", "copilot", "gemini", "pi", "opencode", "cursor", "droid",
-                "kiro"
+                "kiro", "qwen"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -507,6 +520,7 @@ mod tests {
                 MatrixCellState::Ok,      // cursor
                 MatrixCellState::Ok,      // droid
                 MatrixCellState::Partial, // kiro
+                MatrixCellState::Ok,      // qwen
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -525,6 +539,7 @@ mod tests {
                 MatrixCellState::Absent, // cursor
                 MatrixCellState::Absent, // droid
                 MatrixCellState::Absent, // kiro
+                MatrixCellState::Ok,     // qwen
             ]
         );
     }

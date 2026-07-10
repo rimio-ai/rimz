@@ -87,7 +87,7 @@ pub struct DisplayConfig {
     pub provider_tabs: ProviderTabsMode,
     /// Provider kinds to show in the dashboard and their order. Empty means all
     /// discovered providers in the registry's display order (`claude, codex, pi,
-    /// opencode`), still governed by `max_provider_blocks`; an explicit list
+    /// opencode, qwen`), still governed by `max_provider_blocks`; an explicit list
     /// overrides both the set and the order. `"all"` expands to every remaining
     /// discovered provider at that position (in that same display order);
     /// without `"all"` this is a strict allowlist. An explicit list bypasses

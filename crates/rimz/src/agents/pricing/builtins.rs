@@ -118,6 +118,11 @@ pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
         p(2.5e-6, 15e-6, 2.5e-6, 0.25e-6),
     );
     entries.insert("gpt-5.6-luna".to_owned(), p(1e-6, 6e-6, 1e-6, 0.1e-6));
+    entries.insert("qwen3-coder-plus".to_owned(), p(1e-6, 5e-6, 0.0, 0.2e-6));
+    entries.insert(
+        "qwen3-coder-flash".to_owned(),
+        p(0.3e-6, 1.5e-6, 0.0, 0.06e-6),
+    );
 
     entries.insert(
         "gemini-3-pro-preview".to_owned(),
@@ -225,6 +230,8 @@ mod tests {
         assert_eq!(entries["gpt-5.6-sol"].cache_read, 0.5e-6);
         assert_eq!(entries["gemini-3-pro-preview"].output, 12e-6);
         assert_eq!(entries["gemini-3-flash-preview"].input, 0.5e-6);
+        assert_eq!(entries["qwen3-coder-plus"].cache_read, 0.2e-6);
+        assert_eq!(entries["qwen3-coder-flash"].input, 0.3e-6);
         assert_eq!(entries["claude-opus-4-8"].fast_multiplier, 2.0);
         assert_eq!(entries["claude-sonnet-4"].input_above_200k, Some(6e-6));
         assert!((entries["moonshot/kimi-k2.6"].cache_read - 0.16e-6).abs() < 1e-18);
