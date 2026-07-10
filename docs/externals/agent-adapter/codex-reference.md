@@ -4,6 +4,8 @@
 
 This is the single home for the **Codex upstream protocol surface** RimZ binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, the auth file, and the local-OAuth usage endpoint. It is a hand-maintained mirror of OpenAI's published docs, the open-source `codex-rs` types, and the credential-file surfaces Codex itself uses, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client are the only code that reads this surface.
 
+Refresh baseline: Codex CLI **0.144.1** and the OpenAI Codex docs/source available on **2026-07-10**. Generated app-server details below come from `codex app-server generate-json-schema` on that release; the method index also calls out newer `main`-branch additions where stated.
+
 Coverage is **depth on what RimZ wires, breadth as an index**: the events, app-server methods, and rollout fields the code actually parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
 
 ## Upstream sources
@@ -12,12 +14,12 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 
 | Surface | Source |
 | --- | --- |
-| Hooks reference (events, payloads, decision schema, trust) | <https://developers.openai.com/codex/hooks> |
+| Hooks reference (events, payloads, decision schema, trust) | <https://learn.chatgpt.com/docs/hooks> |
 | Hook executor (cwd/env semantics) | <https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/command_runner.rs> |
-| Config reference (`notify`, `[tui]` notifications) | <https://developers.openai.com/codex/config-reference> |
-| Advanced config (`notify` payload) | <https://developers.openai.com/codex/config-advanced> |
-| CLI reference (`resume`, `fork`) | <https://developers.openai.com/codex/cli/reference> |
-| App-server API (protocol, methods, notifications) | <https://developers.openai.com/codex/app-server> |
+| Config reference (`notify`, credential store, `[tui]` notifications) | <https://learn.chatgpt.com/docs/config-file/config-reference> |
+| Advanced config (`notify` payload) | <https://learn.chatgpt.com/docs/config-file/config-advanced> |
+| CLI reference (`resume`, `fork`, `login status`) | <https://learn.chatgpt.com/docs/developer-commands?surface=cli> |
+| App-server API (protocol, methods, notifications) | <https://learn.chatgpt.com/docs/app-server> |
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
 | App-server control socket WebSocket transport | <https://github.com/openai/codex/pull/21843> |
 | Rollout/session JSONL + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex> |
@@ -38,9 +40,11 @@ codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 
 Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. RimZ's [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → RimZ status mapping is the [codex.md → Hooks and lifecycle](../../internals/agents/codex.md#hooks-and-lifecycle).
 
-**Execution.** A hook command runs with the **session cwd** as working directory and the **spawning process's environment** (`command_runner.rs`: no `env_clear`, per-handler overlays only). Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent — and its environment — is the daemon's, not the pane's; the mux-stamped identity pin never arrives via env, and RimZ recovers it from the in-pane process instead ([agent.md → Hooks resolve the room they live in](../../internals/agents/model.md#hooks-resolve-the-room-they-live-in)).
+**Execution.** Matching groups from every active hook source run, and multiple matching command handlers for one event start concurrently. A hook command runs with the **session cwd** as working directory and the **spawning process's environment** (`command_runner.rs`: no `env_clear`, per-handler overlays only). Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent — and its environment — is the daemon's, not the pane's; the mux-stamped identity pin never arrives via env, and RimZ recovers it from the in-pane process instead ([agent.md → Hooks resolve the room they live in](../../internals/agents/model.md#hooks-resolve-the-room-they-live-in)).
 
 ### Config shape
+
+Codex discovers `hooks.json` and inline `[hooks]` tables beside active user and trusted-project config layers; plugin and managed layers can add their own hooks. Sources merge rather than replace one another. RimZ writes one user-level inline representation in `~/.codex/config.toml`, and hooks are enabled by default (`[features].hooks = false` disables them; `codex_hooks` is a deprecated alias).
 
 ```toml
 [[hooks.PreToolUse]]
@@ -55,6 +59,8 @@ statusMessage = "Checking Bash command"
 ```
 
 `matcher` is a regex over the tool name (or source, for `SessionStart`). Default `timeout` is **600** seconds.
+
+Only `type = "command"` runs today. `prompt` and `agent` handlers are parsed and skipped, and `async = true` command handlers are also skipped. `UserPromptSubmit` and `Stop` ignore `matcher`; the installed RimZ groups omit it for those events.
 
 ### Trust state
 
@@ -102,9 +108,9 @@ RimZ parses around `permission_mode` without consuming it — the upstream still
 
 Codex has **no `SessionEnd`, `Notification`, or plan-approval hook**. Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed.
 
-Observed Codex tool names in current rollouts include `exec_command`, `apply_patch`, `update_plan`, and `request_user_input`; older or compatibility traces can still mention `shell` / `local_shell`. RimZ treats `request_user_input` as the only blocking `PreToolUse` question tool and treats `update_plan` as ordinary non-blocking progress state.
+Hook tool names are not the same vocabulary as rollout function-call names. The current hook contract reports canonical `Bash`, `apply_patch`, and `mcp__server__tool` names; `apply_patch` matcher aliases include `Edit` and `Write`. Hook interception remains partial: simple shell calls, `apply_patch`, and MCP calls are covered, while unified-exec, web search, and other non-shell/non-MCP paths are not a complete enforcement boundary. Current rollouts can still record `exec_command`, `apply_patch`, `update_plan`, and `request_user_input`, with older or compatibility traces mentioning `shell` / `local_shell`. RimZ reads the payload's actual `tool_name`, treats `request_user_input` as the only blocking `PreToolUse` question tool, and treats `update_plan` as ordinary non-blocking progress state.
 
-**Observed registration quirks** (upstream, pinned for refresh): `SessionStart` does not fire on a plain CLI launch — it rides the first `UserPromptSubmit` — and does not fire on `/clear` despite the documented `source = "clear"`. RimZ works around the missing clear hook through rollout `session_meta.payload.forked_from_id`: absent means a fresh `/clear` / `/new` root, present means a fork. RimZ's handling is in the [codex.md → Session registration](../../internals/agents/codex.md#session-registration-and-launch-quirks); re-verify against the hooks reference URL above on each refresh.
+**Observed registration quirks** (upstream, re-verified on Codex 0.144.1): opening a plain TUI reaches the idle prompt without firing `SessionStart`; the hook rides the first submitted prompt immediately before `UserPromptSubmit`. `/clear` still provides no reliable `SessionStart(source = "clear")` observation in RimZ's corpus despite that documented source value. RimZ works around the missing clear hook through rollout `session_meta.payload.forked_from_id`: absent means a fresh `/clear` / `/new` root, present means a fork. RimZ's handling is in the [codex.md → Session registration](../../internals/agents/codex.md#session-registration-and-launch-quirks); re-verify both observations against an installed release on each refresh.
 
 ### Decision and output schema
 
@@ -151,7 +157,7 @@ The program receives a single JSON argument:
 }
 ```
 
-Event types: `agent-turn-complete` (the primary, currently only, `notify` event) and `approval-requested` (referenced for TUI filtering). The in-terminal `[tui]` notifications are a separate channel:
+The external `notify` program currently receives only `agent-turn-complete`. `approval-requested` belongs to the separate in-terminal notification filter:
 
 ```toml
 [tui]
@@ -162,7 +168,7 @@ notification_condition = "unfocused"  # unfocused | always
 
 ## App-server API
 
-Codex has no statusline, so RimZ reads its rich context out of band from the **app-server**: a bidirectional JSON-RPC 2.0 service (the `"jsonrpc":"2.0"` header is omitted on the wire), streamed as JSONL over stdio by default. Transports: `stdio://` (default), `ws://IP:PORT`, `unix://[PATH]`, or `off`. Start with `codex app-server` (or `--listen …`). The remote-control daemon's unix-domain control socket speaks standard WebSocket HTTP upgrade over that UDS, then carries the same JSON-RPC payloads as text frames. A client must send one `initialize` request per connection, then an `initialized` notification, before any other method.
+Codex has no statusline, so RimZ reads its rich context out of band from the **app-server**: a bidirectional JSON-RPC 2.0 service (the `"jsonrpc":"2.0"` header is omitted on the wire), streamed as JSONL over stdio by default. Transports: `stdio://` (default), experimental unsupported `ws://IP:PORT`, `unix://[PATH]`, or `off`. Start with `codex app-server` (or `--listen …`). The unix-domain control socket speaks standard WebSocket HTTP upgrade over that UDS, then carries the same JSON-RPC payloads as text frames. The server bounds ingress queues and returns retryable JSON-RPC error `-32001` when overloaded. A client must send one `initialize` request per connection, then an `initialized` notification, before any other method.
 
 The protocol is organized around three primitives: an **Item** (atomic input/output unit with a `started` → optional `delta` → `completed` lifecycle), a **Turn** (the items from one unit of agent work), and a **Thread** (the durable session container).
 
@@ -188,7 +194,7 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
 { "method": "initialized", "params": {} }
 ```
 
-**`account/rateLimits/read`** → the 5h/7d balance windows, plan tier, and optional paid-credit state.
+**`account/rateLimits/read`** → the included-usage windows, plan tier, optional paid-credit state, and optional rate-limit reset credits.
 
 ```jsonc
 // result — RateLimitsResponse { rateLimits: RateLimitSnapshot }
@@ -209,11 +215,18 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
     "unlimited": true | false,
     "overageLimitReached": true | false,
     "balance": <USD number or string>
-  } // optional
+  }, // optional
+  "rateLimitsByLimitId": { "codex": { "primary": {}, "secondary": {} } }, // optional multi-bucket view
+  "rateLimitResetCredits": {
+    "availableCount": 2,
+    "credits": [
+      { "id": "opaque", "status": "available", "expiresAt": <epoch s>, "grantedAt": <epoch s>, "resetType": "codexRateLimits" }
+    ]
+  } // optional; credits may be null when only the count is known
 }
 ```
 
-Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and a server-side change in window count or length renders gracefully off `windowDurationMins` rather than a hard-coded 5h/7d. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. Snake-case aliases are tolerated for the credit-state fields, and unknown credit shapes leave valid windows intact.
+Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and a server-side change in window count or length renders gracefully off `windowDurationMins` rather than a hard-coded 5h/7d. `rateLimits` remains the backward-compatible single-bucket view; `rateLimitsByLimitId` carries newer multi-bucket data. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted in older payloads, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. The 0.144.1 generated schema requires only `hasCredits` and `unlimited` in `CreditsSnapshot`; RimZ tolerates the older fields and unknown shapes without dropping valid windows. `rateLimitResetCredits.availableCount` maps to the dashboard count, and the earliest `expiresAt` among `available` detail rows maps to its expiry.
 
 **`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but RimZ does not map it to row effort because it is a catalog default/recommendation, not the current session's live value.
 
@@ -240,11 +253,11 @@ RimZ reads `thread/read` by the hook `session_id`, then uses `thread/list` as th
 
 A non-exhaustive map of the broader surface, for future wiring. Generate the exact, version-pinned schema with `codex app-server generate-json-schema`.
 
-- **Thread**: `thread/start`, `thread/resume`, `thread/fork`, `thread/archive`, `thread/name/set`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/rollback`, `thread/inject_items`.
+- **Thread**: `thread/start`, `thread/resume`, `thread/fork`, `thread/archive`, `thread/name/set`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/rollback`, `thread/inject_items`, `thread/metadata/update`; current `main` also documents experimental `thread/turns/list`, while 0.144.1 does not generate it.
 - **Turn**: `turn/start`, `turn/steer`, `turn/interrupt`; `review/start`.
-- **Account / auth**: `account/read`, `account/login/{start,cancel}`, `account/logout`, `account/rateLimits/read`, `account/sendAddCreditsNudgeEmail`.
+- **Account / auth**: `account/read`, `account/login/{start,cancel}`, `account/logout`, `account/rateLimits/read`, `account/usage/read`, `account/rateLimitResetCredit/consume`.
 - **Tools / exec / fs**: `command/exec` (+ `write`/`resize`/`terminate`), `process/{spawn,writeStdin,resizePty,kill}`, `fs/{readFile,writeFile,createDirectory,getMetadata,readDirectory,remove,copy,watch,unwatch}`, `mcpServer/*`.
-- **Config / features**: `config/read`, `config/value/write`, `config/batchWrite`, `model/list`, `experimentalFeature/list`, `skills/list`, `app/list`, `plugin/*`.
+- **Config / features**: `config/read`, `config/value/write`, `config/batchWrite`, `configRequirements/read`, `model/list`, `experimentalFeature/list`, `skills/list`, `hooks/list`, `app/list`, `plugin/*`.
 - **Server-initiated notifications**: `thread/started`, `thread/status/changed`, `thread/tokenUsage/updated`, `turn/{started,completed,diff/updated,plan/updated}`, `item/{started,completed}` and `item/*/delta` streams, `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `account/{updated,rateLimits/updated,login/completed}`.
 - **Item types** (`ThreadItem` union): `userMessage`, `agentMessage`, `plan`, `reasoning`, `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `collabToolCall`, `webSearch`, `imageView`, `enteredReviewMode`, `exitedReviewMode`, `contextCompaction`.
 
@@ -303,14 +316,14 @@ Unlike Claude (raw tokens, window derived from the payload model), Codex carries
 
 ## Auth file
 
-[`account.rs`](../../../crates/rimz/src/agents/account.rs) reads `~/.codex/auth.json` directly (a cheap file read, no subprocess) for the logged-in-but-idle probe:
+Codex stores credentials according to `cli_auth_credentials_store = "file" | "keyring" | "auto"`. With file storage, [`account.rs`](../../../crates/rimz/src/agents/codex/account.rs) reads `~/.codex/auth.json` directly for the logged-in-but-idle probe:
 
 | Shape | Meaning |
 | --- | --- |
 | `OPENAI_API_KEY` present, non-empty | API-key login → **unmetered** by subscription windows; the provider dashboard uses transcript-derived API spend plus any display ceiling |
 | `tokens.access_token` present | ChatGPT login → **metered** (plan tier filled by live app-server context or the OAuth usage response) |
 
-The plan tier rides the app-server (`account/rateLimits/read` `plan_type`) and the OAuth usage response (`plan_type`) for idle or switched accounts. The semantics are in [codex.md → Account and balance](../../internals/agents/codex.md#account-and-balance).
+When no auth file exists, RimZ runs `codex login status` so keyring-backed logins still appear with the correct metered/unmetered posture. The command prints one line per auth mode: `Logged in using ChatGPT` (metered by subscription windows), `Logged in using an API key - <masked>` and `Logged in using Amazon Bedrock API key` (token/AWS-billed, so unmetered), `Logged in using access token` and `Logged in using personal access token` (logged in, metering unknown), or `Not logged in`. It reports login kind but no plan tier or token, so the plan rides the app-server (`account/rateLimits/read` `planType`) and direct OAuth usage remains available only when Codex exposes a file token. The semantics are in [codex.md → Account and balance](../../internals/agents/codex.md#account-and-balance).
 
 [`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`; the same local `tokens.account_id` is the cache key used to detect account switches.
 
