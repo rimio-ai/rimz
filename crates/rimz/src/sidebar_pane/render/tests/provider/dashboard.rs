@@ -59,7 +59,7 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
 }
 
 #[test]
-fn provider_daily_cap_renders_against_account_day_spend() {
+fn provider_healthy_daily_cap_stays_quiet_on_headline_spend() {
     let mut panels = two_provider_panels();
     panels[0].day_budget = Some(crate::DailyBudgetView {
         cap_usd: 10.0,
@@ -77,7 +77,33 @@ fn provider_daily_cap_renders_against_account_day_spend() {
         fixed_now(),
     );
     let rendered = line_texts(&lines).join("\n");
-    assert!(rendered.contains("$9.50 of $10/day"), "{rendered}");
+    assert!(rendered.contains("$3.50"), "{rendered}");
+    assert!(
+        !rendered.contains(" of "),
+        "healthy cap stays quiet: {rendered}"
+    );
+}
+
+#[test]
+fn provider_tripped_daily_cap_renders_against_account_day_spend() {
+    let mut panels = two_provider_panels();
+    panels[0].day_budget = Some(crate::DailyBudgetView {
+        cap_usd: 10.0,
+        spend_usd: 10.25,
+        parked: true,
+    });
+    let theme = Theme::default();
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &panels[..1],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+    assert!(rendered.contains("$10.25 of $10/day"), "{rendered}");
 }
 /// The dashboard paints the Codex block whichever way the active tab is
 /// derived: a manual pick (`←`/`→` or a click on the label) swaps the chip onto

@@ -633,7 +633,11 @@ pub(super) fn top_lines(
     // tally on a pre-overlay snapshot.
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
     let unread_agents = unread_total(&snapshot.worktree_groups);
-    let today_usd = snapshot.fleet_budget.as_ref().map_or_else(
+    let tripped = snapshot
+        .fleet_budget
+        .as_ref()
+        .filter(|budget| budget.parked);
+    let today_usd = tripped.map_or_else(
         || {
             snapshot
                 .today_spend_live_usd
@@ -642,7 +646,7 @@ pub(super) fn top_lines(
         },
         |budget| budget.spend_usd,
     );
-    let spend_epoch = if snapshot.fleet_budget.is_some() {
+    let spend_epoch = if tripped.is_some() {
         snapshot.fleet_day_spend_epoch_secs
     } else {
         snapshot.today_spend_epoch_secs
@@ -654,7 +658,7 @@ pub(super) fn top_lines(
         theme,
         live_agents,
         (unread_agents, unread_picked),
-        (today_usd, snapshot.fleet_budget.as_ref()),
+        (today_usd, tripped),
         &ui.tally,
         ui.animation_phase,
         inner,

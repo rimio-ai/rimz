@@ -1034,23 +1034,23 @@ fn provider_stats_row(
     region: usize,
 ) -> Line<'static> {
     let left = provider_stats_left_spans(theme, headline, detail);
-    let (label, style) = panel.day_budget.as_ref().map_or_else(
-        || (dollars2(headline.usd), theme.money_style(Modifier::BOLD)),
-        |budget| {
-            (
-                format!(
-                    "{} of {}/day",
-                    dollars2(budget.spend_usd),
-                    dollars_cap(budget.cap_usd)
-                ),
-                if budget.parked {
-                    theme.alarm(Modifier::BOLD)
-                } else {
-                    theme.money_style(Modifier::BOLD)
-                },
-            )
-        },
-    );
+    let (label, style) = panel
+        .day_budget
+        .as_ref()
+        .filter(|budget| budget.parked)
+        .map_or_else(
+            || (dollars2(headline.usd), theme.money_style(Modifier::BOLD)),
+            |budget| {
+                (
+                    format!(
+                        "{} of {}/day",
+                        dollars2(budget.spend_usd),
+                        dollars_cap(budget.cap_usd)
+                    ),
+                    theme.alarm(Modifier::BOLD),
+                )
+            },
+        );
     let right = vec![Span::styled(label, style)];
     pin_right(left, right, region)
 }

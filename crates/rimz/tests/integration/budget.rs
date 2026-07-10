@@ -46,5 +46,31 @@ fn budget_set_raise_clear_and_config_routes() {
         .args(["budget", "5", "--no-continue"])
         .assert()
         .failure()
-        .stderr(contains("must end in `/day`"));
+        .stderr(contains("must end in `/day`"))
+        .stderr(contains("`off` to disable"));
+    env.rimz()
+        .args(["budget", "off", "--no-continue"])
+        .assert()
+        .success()
+        .stdout(contains("source: cleared"));
+}
+
+#[test]
+fn budget_refuses_to_arm_unconfigured_daily_caps() {
+    let env = Env::new();
+
+    env.rimz()
+        .args(["budget", "20/day", "--no-continue"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "turn it on with `rimz config set harness.budget 50/day`",
+        ));
+    env.rimz()
+        .args(["budget", "--account", "claude", "100/day", "--no-continue"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "turn it on with `rimz config set accounts.budget.claude 100/day`",
+        ));
 }

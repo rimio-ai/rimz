@@ -171,6 +171,7 @@ pub struct FleetBudgetLedger {
 
 impl FleetBudgetLedger {
     pub fn effective_cap_usd(&self, config: &MachineConfig) -> Option<f64> {
+        config.harness.budget?;
         if self.disabled {
             return None;
         }
@@ -180,7 +181,9 @@ impl FleetBudgetLedger {
     }
 
     pub fn cap_source(&self, config: &MachineConfig) -> BudgetCapSource {
-        if self.disabled {
+        if config.harness.budget.is_none() {
+            BudgetCapSource::None
+        } else if self.disabled {
             BudgetCapSource::Cleared
         } else if self.raised_cap_usd.is_some() {
             BudgetCapSource::Raised
@@ -215,6 +218,7 @@ pub enum ScopeLedgerWriteError {
 
 impl AccountBudgetLedger {
     pub fn effective_cap_usd(&self, kind: &AgentKind, config: &MachineConfig) -> Option<f64> {
+        config.accounts.budget(kind.as_str())?;
         if self.disabled {
             return None;
         }
@@ -227,7 +231,9 @@ impl AccountBudgetLedger {
     }
 
     pub fn cap_source(&self, kind: &AgentKind, config: &MachineConfig) -> BudgetCapSource {
-        if self.disabled {
+        if config.accounts.budget(kind.as_str()).is_none() {
+            BudgetCapSource::None
+        } else if self.disabled {
             BudgetCapSource::Cleared
         } else if self.raised_cap_usd.is_some() {
             BudgetCapSource::Raised
@@ -1564,6 +1570,35 @@ mod tests {
             .label(),
             "claude account budget: $25.50 of $25.00/day"
         );
+    }
+
+    #[test]
+    fn scope_ledgers_require_config_to_arm_runtime_caps() {
+        let kind = AgentKind::new_unchecked("claude");
+        let fleet = FleetBudgetLedger {
+            override_spec: Some("20/day".parse().expect("spec")),
+            raised_cap_usd: Some(25.0),
+            ..Default::default()
+        };
+        let account = AccountBudgetLedger {
+            raised_cap_usd: Some(100.0),
+            ..Default::default()
+        };
+        let unarmed = MachineConfig::default();
+
+        assert_eq!(fleet.effective_cap_usd(&unarmed), None);
+        assert_eq!(fleet.cap_source(&unarmed), BudgetCapSource::None);
+        assert_eq!(account.effective_cap_usd(&kind, &unarmed), None);
+        assert_eq!(account.cap_source(&kind, &unarmed), BudgetCapSource::None);
+
+        let armed: MachineConfig = toml::from_str(
+            "[harness]\nbudget = \"10/day\"\n[accounts.budget]\nclaude = \"50/day\"\n",
+        )
+        .expect("config");
+        assert_eq!(fleet.effective_cap_usd(&armed), Some(25.0));
+        assert_eq!(fleet.cap_source(&armed), BudgetCapSource::Raised);
+        assert_eq!(account.effective_cap_usd(&kind, &armed), Some(100.0));
+        assert_eq!(account.cap_source(&kind, &armed), BudgetCapSource::Raised);
     }
 
     #[test]

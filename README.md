@@ -226,7 +226,7 @@ rimz config set harness.smart_compact "70%"   # compact before a message once co
 
 Add a [scheduled ping](#everyday-moves) to start each provider's budget window on your clock, and the fleet only needs you for real decisions.
 
-Bound dollar spend at the scale you promise yourself: `rimz config set harness.budget 50/day` caps each room's whole fleet, `[accounts.budget]` caps one provider login across rooms, and `rimz budget` shows or changes the live headroom.
+Bound dollar spend at the scale you promise yourself: `rimz config set harness.budget 50/day` turns on a cap for each room's whole fleet, `[accounts.budget]` turns on one provider-login cap across rooms, and `rimz budget` shows or changes the live headroom.
 
 ### Asks on your phone
 

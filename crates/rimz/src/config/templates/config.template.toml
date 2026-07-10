@@ -134,6 +134,6 @@ aggressive_resize = true
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
 
 [harness]
-## budget = "50/day"             # default whole-room local-calendar-day cap; runtime override: `rimz budget 20/day`
+## budget = "50/day"             # turn on the whole-room local-day cap; adjust the live cap with `rimz budget`
 ## smart_compact = "70%"          # default compact-first threshold for message ("70%", "120000", or "180k"); unset = off
 # rtk = "auto"                    # wrap agent cargo runs (build/check/test/nextest/clippy) through `rtk`; auto = when rtk is on PATH, on = force, off = never

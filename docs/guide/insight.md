@@ -71,9 +71,9 @@ When a window empties mid-turn the agent parks rather than fails, and with auto-
 
 #### Dollar caps at four scopes
 
-Dollar budgets use one model at four scopes: an agent session (`--budget` or a profile budget), a loop task (`--budget` and `--budget-per-day`), a room fleet (`harness.budget`), and a provider login (`accounts.budget.<kind>`). The room and login caps accept `/day` only and read a dedicated local-calendar-day spend window, independent of the headline window displayed in the sidebar.
+Dollar budgets use one model at four scopes: an agent session (`--budget` or a profile budget), a loop task (`--budget` and `--budget-per-day`), a room fleet (`harness.budget`), and a provider login (`accounts.budget.<kind>`). The room and login caps accept `/day` only, read a dedicated local-calendar-day spend window, and turn on only through their config keys.
 
-Run `rimz budget` to inspect the room and configured accounts, `rimz budget 20/day` to override this room, or `rimz budget --account claude +10` to add account headroom. A room cap appears in the cockpit as `$41.20 of $50/day`; an account cap appears beside that provider's day spend.
+Run `rimz budget` to inspect or adjust an armed cap: `20/day` replaces the live room cap, `+10` adds headroom, and `off` disables it; add `--account claude` to target that login. An armed, healthy scope reads exactly like an uncapped one. While agents are parked on a crossed cap, the cockpit or provider row turns alarm-red and explains the stop as `$50.21 of $50/day`.
 
 Crossing any cap parks a running agent through the same interrupt backstop. A human message delivered after the park waives that agent's next turn once, and the waiver is consumed when the turn ends; background delivery stays parked. Supervised `-p` launches and loop fires do not consume waivers: they fail or record `budget skipped` until the room and account scopes have headroom.
 

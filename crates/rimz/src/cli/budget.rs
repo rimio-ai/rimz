@@ -19,7 +19,7 @@ use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
-    /// New `/day` cap, `+AMOUNT`, or `clear`; omit to inspect.
+    /// New `/day` cap, `+AMOUNT`, or `off`/`clear`; omit to inspect.
     value: Option<String>,
     /// Target one provider login instead of this room's fleet.
     #[arg(long, value_name = "KIND")]
@@ -152,7 +152,7 @@ fn mutate_fleet(runtime: &rimz::RuntimePaths, config: &MachineConfig, raw: &str)
     let mut ledger = read_fleet_ledger(runtime);
     let was_parked = ledger.parked.is_some();
     match raw.trim() {
-        "clear" => {
+        "clear" | "off" => {
             ledger.disabled = true;
             ledger.raised_cap_usd = None;
         }
@@ -164,7 +164,12 @@ fn mutate_fleet(runtime: &rimz::RuntimePaths, config: &MachineConfig, raw: &str)
             ledger.disabled = false;
         }
         raw => {
-            let cap = DayCap::from_str(raw)?;
+            if config.harness.budget.is_none() {
+                bail!(
+                    "no fleet budget is configured; turn it on with `rimz config set harness.budget 50/day`"
+                );
+            }
+            let cap = parse_day_cap(raw)?;
             ledger.override_spec = Some(cap.as_spec());
             ledger.raised_cap_usd = None;
             ledger.disabled = false;
@@ -184,7 +189,7 @@ fn mutate_account(
     let mut ledger = read_account_ledger(runtime, kind);
     let was_parked = ledger.parked.is_some();
     match raw.trim() {
-        "clear" => {
+        "clear" | "off" => {
             ledger.disabled = true;
             ledger.raised_cap_usd = None;
         }
@@ -198,13 +203,26 @@ fn mutate_account(
             ledger.disabled = false;
         }
         raw => {
-            ledger.raised_cap_usd = Some(DayCap::from_str(raw)?.as_usd());
+            if config.accounts.budget(kind.as_str()).is_none() {
+                bail!(
+                    "no {kind} account budget is configured; turn it on with `rimz config set accounts.budget.{kind} 100/day`"
+                );
+            }
+            ledger.raised_cap_usd = Some(parse_day_cap(raw)?.as_usd());
             ledger.disabled = false;
         }
     }
     ledger.parked = None;
     write_account_ledger(runtime, kind, &ledger).context("writing account budget ledger")?;
     Ok(was_parked)
+}
+
+fn parse_day_cap(raw: &str) -> Result<DayCap> {
+    DayCap::from_str(raw).map_err(|err| {
+        anyhow::anyhow!(
+            "invalid budget value `{raw}`; use a `/day` cap such as `50/day`, `+10` to raise, or `off` to disable: {err}"
+        )
+    })
 }
 
 fn inspect(
