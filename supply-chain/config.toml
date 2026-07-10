@@ -146,6 +146,10 @@ criteria = "safe-to-deploy"
 version = "3.2.5"
 criteria = "safe-to-run"
 
+[[exemptions.clap_complete]]
+version = "4.6.7"
+criteria = "safe-to-deploy"
+
 [[exemptions.clap_derive]]
 version = "3.2.25"
 criteria = "safe-to-run"
@@ -524,6 +528,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.is_ci]]
 version = "1.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.is_executable]]
+version = "1.0.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.is_terminal_polyfill]]

@@ -13,6 +13,7 @@ mod asks;
 mod backend;
 mod channel;
 mod codex_broker;
+mod complete;
 mod config;
 mod coverage;
 #[cfg(unix)]

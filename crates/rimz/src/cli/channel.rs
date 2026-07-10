@@ -34,7 +34,10 @@ enum ChannelSubcmd {
     /// Remove a named channel record.
     #[command(alias = "remove")]
     Rm {
-        #[arg(value_name = "NAME")]
+        #[arg(
+            value_name = "NAME",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
+        )]
         name: String,
     },
 }

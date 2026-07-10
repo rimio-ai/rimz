@@ -84,7 +84,10 @@ pub struct AgentsArgs {
     #[command(subcommand)]
     command: Option<AgentsSubcmd>,
     /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
-    #[arg(value_name = "SPEC")]
+    #[arg(
+        value_name = "SPEC",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
+    )]
     spec: Option<String>,
     /// Prompt broadcast to every launched agent cell.
     #[arg(value_name = "PROMPT")]
@@ -99,11 +102,17 @@ pub struct AgentsArgs {
         value_name = "NAME",
         num_args = 0..=1,
         default_missing_value = "",
-        conflicts_with = "channel"
+        conflicts_with = "channel",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
     )]
     worktree: Option<String>,
     /// Launch into a durable named channel.
-    #[arg(long, value_name = "NAME", conflicts_with = "worktree")]
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with = "worktree",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
+    )]
     channel: Option<String>,
     /// Create or reuse a Rimz-owned worktree from a pull request number or URL.
     #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "channel")]
@@ -221,7 +230,11 @@ enum AgentsSubcmd {
     #[command(aliases = ["ls", "ps"])]
     List {
         /// Scope to one lane: `#channel`, worktree, branch, or directory name.
-        #[arg(value_name = "SCOPE", conflicts_with_all = ["worktree", "all"])]
+        #[arg(
+            value_name = "SCOPE",
+            conflicts_with_all = ["worktree", "all"],
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::scope_names)
+        )]
         scope: Option<String>,
         /// Emit JSON.
         #[arg(long)]
@@ -230,12 +243,19 @@ enum AgentsSubcmd {
         #[arg(long)]
         all: bool,
         /// Filter to one lane by worktree name or path (flag spelling of SCOPE).
-        #[arg(long, conflicts_with = "all")]
+        #[arg(
+            long,
+            conflicts_with = "all",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
+        )]
         worktree: Option<String>,
     },
     /// Show one agent card.
     #[command(alias = "inspect")]
     Show {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::agent_refs
+        ))]
         reference: String,
         /// Emit JSON.
         #[arg(long)]
@@ -249,6 +269,9 @@ enum AgentsSubcmd {
     },
     /// Show one agent transcript.
     Logs {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::agent_refs
+        ))]
         reference: String,
         /// Keep the last N chat lines.
         #[arg(short = 'n', long = "tail")]
@@ -276,10 +299,19 @@ enum AgentsSubcmd {
     /// Show live agent resource usage.
     Top(TopArgs),
     /// Focus an agent pane.
-    Focus { reference: String },
+    Focus {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::agent_refs
+        ))]
+        reference: String,
+    },
     /// Wait for supervised runs or interactive agents; several references join.
     Wait {
-        #[arg(required = true, num_args = 1..)]
+        #[arg(
+            required = true,
+            num_args = 1..,
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_refs)
+        )]
         references: Vec<String>,
         /// Return when the first target finishes; print its name.
         #[arg(long, conflicts_with = "stream")]
@@ -299,6 +331,9 @@ enum AgentsSubcmd {
     },
     /// Stop a supervised run or close an agent pane.
     Stop {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::agent_refs
+        ))]
         reference: String,
         /// Stop every agent the address matches.
         #[arg(long)]

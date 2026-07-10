@@ -138,6 +138,7 @@ codegen-units = 16
 anstream.workspace = true
 anstyle.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 colorchoice.workspace = true
 crc32fast.workspace = true
 glob.workspace = true

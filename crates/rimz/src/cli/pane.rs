@@ -31,6 +31,9 @@ enum PaneSubcmd {
     /// Capture a pane's visible text.
     Capture {
         /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::pane_targets
+        ))]
         target: String,
         /// Capture only the last N lines.
         #[arg(long)]
@@ -45,6 +48,9 @@ enum PaneSubcmd {
     /// Send text or named keys to a pane as if typed.
     Send {
         /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::pane_targets
+        ))]
         target: String,
         /// Press Enter after text and explicit keys.
         #[arg(long)]
@@ -58,6 +64,9 @@ enum PaneSubcmd {
     /// Focus a pane.
     Focus {
         /// Pane id or agent address (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::pane_targets
+        ))]
         target: String,
         /// Session to re-check before focusing when process-start metadata is provided.
         #[arg(long)]

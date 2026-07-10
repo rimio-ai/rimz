@@ -106,7 +106,7 @@ rimz agents 'vim,claude+term' --worktree=feat-y  # editor, agent, shell in one t
 rimz remote connect dev-box:~/code/query-engine
 ```
 
-Hooks install on the first `rimz` run, with your consent and a diff preview. → [set up your machine](./docs/guide/setup.md)
+Hooks install on the first `rimz` run, with your consent and a diff preview. → [set up your machine](./docs/guide/setup.md) · [enable dynamic shell completion](./docs/guide/setup.md#shell-completion)
 
 ## Everyday moves
 

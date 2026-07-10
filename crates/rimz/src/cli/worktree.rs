@@ -67,6 +67,9 @@ enum WorktreeSubcmd {
     },
     /// Remove a Rimz-owned worktree.
     Remove {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::worktrees
+        ))]
         name: String,
         /// Remove even when the worktree is dirty or has work not proven landed.
         #[arg(long)]

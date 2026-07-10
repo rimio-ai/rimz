@@ -32,7 +32,11 @@ pub(super) struct TopArgs {
     #[arg(long)]
     all: bool,
     /// Filter to a worktree/channel.
-    #[arg(long, conflicts_with = "all")]
+    #[arg(
+        long,
+        conflicts_with = "all",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
+    )]
     worktree: Option<String>,
 }
 

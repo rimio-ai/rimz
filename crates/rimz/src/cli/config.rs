@@ -43,6 +43,9 @@ struct InitArgs {
 #[derive(Debug, Args)]
 struct GetArgs {
     /// Dotted config key, for example `theme.display.max_cols`.
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::config_keys
+    ))]
     key: Option<String>,
     /// Emit JSON instead of TOML/plain scalar output.
     #[arg(long)]
@@ -52,6 +55,9 @@ struct GetArgs {
 #[derive(Debug, Args)]
 struct SetArgs {
     /// Dotted config key, for example `theme.display.max_cols`.
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::config_keys
+    ))]
     key: String,
     /// TOML value. Bare words are treated as strings.
     value: String,
@@ -522,7 +528,7 @@ fn read_config_or_template(path: &Path, template: &str) -> Result<String> {
     }
 }
 
-fn config_value(config: &MachineConfig) -> Result<toml::Value> {
+pub(super) fn config_value(config: &MachineConfig) -> Result<toml::Value> {
     let text = toml::to_string(config).context("serializing per-machine config")?;
     toml::from_str(&text).context("building per-machine config value")
 }

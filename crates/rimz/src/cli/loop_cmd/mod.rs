@@ -98,10 +98,19 @@ struct AddArgs {
     /// Schedule name (letters, digits, `-`, `_`).
     name: String,
     /// Kind, profile, or virtual cell; launches a fresh supervised pane.
-    #[arg(long, conflicts_with = "wake")]
+    #[arg(
+        long,
+        conflicts_with = "wake",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
+    )]
     agent: Option<String>,
     /// Live agent to wake through the message path; resolved and pinned now.
-    #[arg(long, value_name = "ADDRESS", conflicts_with = "agent")]
+    #[arg(
+        long,
+        value_name = "ADDRESS",
+        conflicts_with = "agent",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::handles)
+    )]
     wake: Option<String>,
     /// Inline prompt for the scheduled turn.
     #[arg(long, conflicts_with = "prompt_file")]
@@ -161,6 +170,9 @@ struct AddArgs {
 
 #[derive(Debug, Args)]
 struct NameArgs {
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::loop_tasks
+    ))]
     name: String,
 }
 
@@ -174,6 +186,9 @@ struct PauseArgs {
 
 #[derive(Debug, Args)]
 struct FireArgs {
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::loop_tasks
+    ))]
     name: String,
     /// Leave the transient run pane open for inspection.
     #[arg(long)]
@@ -182,12 +197,18 @@ struct FireArgs {
 
 #[derive(Debug, Args)]
 struct RenameArgs {
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::loop_tasks
+    ))]
     name: String,
     new_name: String,
 }
 
 #[derive(Debug, Args)]
 struct ShowArgs {
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::loop_tasks
+    ))]
     name: String,
     /// Number of recent run rows to show; consecutive identical runs collapse into one.
     #[arg(short = 'n', long = "runs", default_value_t = 10)]
@@ -410,7 +431,9 @@ fn project_tasks_for_globals(
     project_tasks_for_root(&workspace.project_root)
 }
 
-fn load_all_tasks(globals: &GlobalFlags) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
+pub(super) fn load_all_tasks(
+    globals: &GlobalFlags,
+) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
     validate_machine_loop_stores()?;
     let project = project_tasks_for_globals(globals)?;
     Ok(instances::load_all_visible_with_project(

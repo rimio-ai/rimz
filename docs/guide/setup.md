@@ -47,6 +47,23 @@ rimz config set theme "Catppuccin Mocha"     # edit one dotted key in the owning
 
 A commented line keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override. `rimz config set` routes a dotted key to the file that owns it, validates the value, and writes durably. The config model — tiers, merge order, and every behavior section including notifications — is in the [configuration guide](./configuration.md).
 
+## Shell completion
+
+Source Rimz's completion registration from your shell startup file:
+
+```sh
+# ~/.bashrc
+source <(COMPLETE=bash rimz)
+
+# ~/.zshrc
+source <(COMPLETE=zsh rimz)
+
+# ~/.config/fish/config.fish
+COMPLETE=fish rimz | source
+```
+
+Completion covers the static command and flag surface plus current room data such as live `@handles`, queued `msg_` ids, loop tasks, launch specs, worktrees, channels, sessions, remote aliases, and config keys. Source the registration at shell startup instead of caching its output so it stays compatible when Rimz upgrades.
+
 ## Install agent hooks
 
 Hooks are how a running agent reports to the room: turn starts and ends, permission prompts, and blocking questions reach the sidebar through hook events. Install them into every detected agent's per-user config:

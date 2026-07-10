@@ -19,9 +19,16 @@ use rimz::workspace::WorkspaceResolver;
 #[derive(Debug, Args)]
 pub struct TranscriptArgs {
     /// Agent address, `#channel`, or `@all`. Omit for the current channel.
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::transcript_targets
+    ))]
     target: Option<String>,
     /// Override the channel/worktree used to resolve the target.
-    #[arg(short = 'w', long)]
+    #[arg(
+        short = 'w',
+        long,
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
+    )]
     worktree: Option<String>,
     /// Keep the last N chat lines.
     #[arg(short = 'n', long)]

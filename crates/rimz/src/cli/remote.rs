@@ -48,6 +48,9 @@ enum RemoteSubcmd {
         after_help = "Like `remote add`, --mux <name> pins the saved alias. Flags not passed reset to their defaults."
     )]
     Update {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::remote_aliases
+        ))]
         name: String,
         target: String,
         /// Hand the link to a single ssh run instead of supervising reconnects.
@@ -59,6 +62,9 @@ enum RemoteSubcmd {
     },
     /// Connect to a remote alias or raw `[user@]host:<session-or-path>` target.
     Connect {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::remote_aliases
+        ))]
         alias_or_target: String,
         /// Force a fresh remote room by passing `--no-resume` to the remote rimz.
         #[arg(long)]
@@ -76,9 +82,17 @@ enum RemoteSubcmd {
         attach: AttachFlags,
     },
     /// Install rimz on a remote alias, `[user@]host:<session-or-path>` target, or `[user@]host`.
-    Setup { alias_or_host: String },
+    Setup {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::remote_aliases
+        ))]
+        alias_or_host: String,
+    },
     /// Connect to a remote alias or raw target with `--no-resume`.
     Reset {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::remote_aliases
+        ))]
         alias_or_target: String,
         /// Hand the link to a single ssh run instead of supervising reconnects.
         #[arg(long)]
@@ -93,9 +107,20 @@ enum RemoteSubcmd {
         attach: AttachFlags,
     },
     /// Delete a saved remote alias.
-    Rm { name: String },
+    Rm {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::remote_aliases
+        ))]
+        name: String,
+    },
     /// Rename a saved remote alias.
-    Rename { old: String, new: String },
+    Rename {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::remote_aliases
+        ))]
+        old: String,
+        new: String,
+    },
     /// List saved remote aliases.
     #[clap(visible_alias = "ls")]
     List {

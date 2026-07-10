@@ -32,6 +32,9 @@ pub struct MessageArgs {
     #[command(subcommand)]
     command: Option<MessageSubcmd>,
     /// Agent mention for the bare message form.
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::message_targets
+    ))]
     target: Option<String>,
     /// The message, as one quoted argument. Omit it to pipe stdin or pass
     /// `--file` to deliver external contents verbatim.
@@ -63,17 +66,27 @@ enum MessageSubcmd {
         #[arg(long, value_name = "STATUS", value_parser = parse_status)]
         status: Option<MessageStatus>,
         /// Filter by channel name.
-        #[arg(long, value_name = "NAME")]
+        #[arg(
+            long,
+            value_name = "NAME",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
+        )]
         channel: Option<String>,
         /// Max rows to show, newest first. 0 lists all.
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
         /// Optional target filter.
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::message_targets
+        ))]
         target: Option<String>,
     },
     /// Show one message record with timeline and delivery diagnosis.
     #[command(alias = "status")]
     Show {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::all_message_ids
+        ))]
         message_id: MessageId,
         /// Emit JSON.
         #[arg(long)]
@@ -81,12 +94,18 @@ enum MessageSubcmd {
     },
     /// Change a queued message.
     Edit {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::queued_message_ids
+        ))]
         message_id: MessageId,
         #[command(flatten)]
         edit: EditFlags,
     },
     /// Deliver a queued message now.
     Steer {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::queued_message_ids
+        ))]
         message_id: MessageId,
         /// Send even when the agent is Waiting.
         #[arg(long)]
@@ -94,24 +113,43 @@ enum MessageSubcmd {
     },
     /// Queue a new copy of a finished message.
     Requeue {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::all_message_ids
+        ))]
         message_id: MessageId,
         #[command(flatten)]
         edit: EditFlags,
     },
     /// Remove queued messages.
     Remove {
-        #[arg(value_name = "MESSAGE_ID", num_args = 1..)]
+        #[arg(
+            value_name = "MESSAGE_ID",
+            num_args = 1..,
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::queued_message_ids)
+        )]
         message_ids: Vec<MessageId>,
     },
     /// Remove queued messages for an agent, or in the scoped channel.
     Clear {
         /// Optional agent address whose queued messages are removed.
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::message_targets
+        ))]
         target: Option<String>,
         /// Remove queued messages in this worktree or lane.
-        #[arg(long, conflicts_with = "channel")]
+        #[arg(
+            long,
+            conflicts_with = "channel",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
+        )]
         worktree: Option<String>,
         /// Remove queued messages in this channel.
-        #[arg(long, value_name = "NAME", conflicts_with = "worktree")]
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with = "worktree",
+            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
+        )]
         channel: Option<String>,
     },
     /// Deliver one queued message. Spawned by lifecycle hooks.

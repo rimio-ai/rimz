@@ -18,6 +18,8 @@ rimz                       # open the room and drop in
 | Diagnose backend, hook, trust, and room health | `rimz doctor` |
 | Connect to a room on another host | `rimz remote connect <alias-or-target>` |
 
+Enable command, flag, and live room completion from the [shell completion setup](../../guide/setup.md#shell-completion).
+
 ## Start the room
 
 ```sh

@@ -8,6 +8,7 @@ mod answer;
 mod asks;
 mod channel;
 mod codex;
+mod complete;
 mod config;
 mod coverage;
 mod daemon;
@@ -56,6 +57,15 @@ use rimz::{RuntimePaths, StatePaths, Store};
 /// Render a command failure at the binary boundary.
 pub fn report(error: &anyhow::Error) {
     render::report(error);
+}
+
+/// Serve environment-activated completion before any normal startup work can
+/// write stdout or install process-wide reporting.
+pub fn complete_env() {
+    clap_complete::CompleteEnv::with_factory(
+        || help::customize(<Cli as CommandFactory>::command()),
+    )
+    .complete();
 }
 
 /// Entry point used by `main.rs`.
@@ -383,7 +393,12 @@ struct Cli {
 #[derive(Debug, Args, Clone)]
 pub struct GlobalFlags {
     /// Override multiplexer backend selection.
-    #[arg(long, value_parser = parse_mux, global = true)]
+    #[arg(
+        long,
+        value_parser = parse_mux,
+        global = true,
+        add = clap_complete::ArgValueCandidates::new(complete::mux_names)
+    )]
     pub mux: Option<MuxName>,
     /// Select the Zellij backend (shorthand for `--mux zellij`).
     #[arg(long, global = true)]
@@ -584,7 +599,10 @@ pub struct AttachArgs {
     #[command(flatten)]
     attach: AttachFlags,
     /// Workspace session name (omit to use the cwd's workspace).
-    #[arg(value_name = "SESSION")]
+    #[arg(
+        value_name = "SESSION",
+        add = clap_complete::ArgValueCandidates::new(complete::sessions)
+    )]
     workspace: Option<String>,
     /// Come up empty: skip recovering prior agents when the session is reborn.
     #[arg(long)]

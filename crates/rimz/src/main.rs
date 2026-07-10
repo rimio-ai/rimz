@@ -19,6 +19,9 @@ const DEFAULT_LOG_FILTER: &str = "warn";
 const SIDEBAR_SERVE_LOG_FILTER: &str = "off";
 
 fn main() -> std::process::ExitCode {
+    // Completion runs before observability and build-id startup: every TAB is
+    // latency-sensitive, and clap_complete owns stdout for this request.
+    cli::complete_env();
     // Start reading the executable identity off-thread so the build-id Sentry
     // tag is usually ready by the time `dispatch` sets the command scope.
     rimz::build_id::warm();
