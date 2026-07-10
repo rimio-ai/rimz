@@ -17,7 +17,7 @@ every = "day"
 # Keeps main synced with origin; assumes push rights on the remote.
 [tasks.sync-repo-rimz]
 agent = "codex"
-prompt = "Repair the scheduled repository sync. Run cargo xtask install-dev after any code change, then rerun ./scripts/sync-repo --loop-check."
+prompt = "Repair the scheduled repository sync. If a rebase is in progress, resolve the conflicts preserving both upstream and local intent, stage the files, and finish with GIT_EDITOR=true git rebase --continue. If the failure came from cargo xtask install-dev, fix the compile errors and rerun it until it passes; the sync script runs install-dev itself after code changes, so do not run it otherwise. Finish by rerunning ./scripts/sync-repo --loop-check until it exits 0."
 check = "./scripts/sync-repo --loop-check"
 on = "fail"
 mode = "yolo"
