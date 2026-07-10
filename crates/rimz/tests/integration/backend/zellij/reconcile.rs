@@ -115,7 +115,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     let xdg = xdg_dir.path().to_path_buf();
     wait_for_attached_client(&xdg, &name);
     let before = raw_sidebar_pane(&xdg, &name);
-    let sidebar_id = sidebar_id_from(&before);
+    let sidebar_id = before.id;
     assert!(
         before.pane_x > 0,
         "the recreated mis-mount starts off the left column: {before:?}",
@@ -206,7 +206,7 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
     wait_for_attached_client(&xdg, &name);
 
     let before = raw_sidebar_pane(&xdg, &name);
-    let sidebar_id = sidebar_id_from(&before);
+    let sidebar_id = before.id;
     assert_eq!(
         before.pane_x, 0,
         "the nested sidebar starts in the left row band: {before:?}",
@@ -326,7 +326,7 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
     wait_for_attached_client(&xdg, &name);
 
     let before_sidebar = raw_sidebar_pane(&xdg, &name);
-    let sidebar_id = sidebar_id_from(&before_sidebar);
+    let sidebar_id = before_sidebar.id;
     let before_sidebar_cols = before_sidebar.pane_columns;
     let before_work = work_pane_geometry(&xdg, &name);
     let before_ids: BTreeSet<u64> = before_work.iter().map(|pane| pane.id).collect();
@@ -491,10 +491,6 @@ fn claimed_liveness(raw_sidebar_id: u64) -> SidebarLiveness {
         format!("terminal_{raw_sidebar_id}"),
     ));
     liveness
-}
-
-fn sidebar_id_from(sidebar: &ListedPane) -> u64 {
-    sidebar.id
 }
 
 fn assert_sidebar_identity(xdg: &Path, name: &str, sidebar_id: u64, message: &str) {
