@@ -207,34 +207,27 @@ pub(super) fn wait_for_replies(
     {
         bail!(error);
     }
+    let spinner = Spinner::delayed(wait_label(&legs), Duration::from_millis(500));
     let mut printed_block = false;
-    if wait.any
-        && let Some(winner) = legs.iter().position(|leg| leg.done.is_some())
+    let settled = legs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, leg)| leg.done.is_some().then_some(index))
+        .collect::<Vec<_>>();
+    if let Some(winner) = drain_settled(&legs, &settled, wait, total, &spinner, &mut printed_block)?
     {
-        if !wait.json {
-            print_reply_result_for_leg(&legs[winner], total, &mut printed_block)?;
-        }
         return finish_join(&legs, wait, Some(winner));
     }
-    for leg in legs.iter().filter(|leg| leg.done.is_some()) {
-        if !wait.json {
-            print_reply_result_for_leg(leg, total, &mut printed_block)?;
-        }
-    }
-    if let Some(status) = settled_status(&legs.iter().map(|leg| leg.done).collect::<Vec<_>>(), None)
-    {
-        if wait.json {
-            print_json_replies(&legs, None)?;
-        }
-        return return_or_exit(status);
+    if settled_status(&legs.iter().map(|leg| leg.done).collect::<Vec<_>>(), None).is_some() {
+        return finish_join(&legs, wait, None);
     }
 
-    let spinner = Spinner::delayed(wait_label(&legs), Duration::from_millis(500));
     let mut tick = 0_u8;
     loop {
         spinner.set(wait_label(&legs));
         let messages = store.list_messages()?;
         let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+        let mut settled = Vec::new();
         if tick == 0
             && let Some((self_kind, self_name)) = caller_identity.as_ref()
         {
@@ -247,41 +240,26 @@ pub(super) fn wait_for_replies(
                 let leg = &mut legs[index];
                 leg.done = Some(RunStatus::Failed);
                 leg.error = Some(deadlock_error(leg, &cycle));
-                if !wait.json {
-                    spinner.pause();
-                    print_reply_result_for_leg(leg, total, &mut printed_block)?;
-                }
-                if wait.any {
-                    spinner.pause();
-                    return finish_join(&legs, wait, Some(index));
-                }
-                spinner.resume();
+                settled.push(index);
             }
         }
-        for index in 0..legs.len() {
-            if legs[index].done.is_some() {
+        for (index, leg) in legs.iter_mut().enumerate() {
+            if leg.done.is_some() {
                 continue;
             }
-            if advance_leg(&mut legs[index], store, &messages, &snapshot, steer)? {
-                if !wait.json {
-                    spinner.pause();
-                    print_reply_result_for_leg(&legs[index], total, &mut printed_block)?;
-                }
-                if wait.any {
-                    spinner.pause();
-                    return finish_join(&legs, wait, Some(index));
-                }
-                spinner.resume();
+            if advance_leg(leg, store, &messages, &snapshot, steer)? {
+                settled.push(index);
             }
         }
 
-        let statuses = legs.iter().map(|leg| leg.done).collect::<Vec<_>>();
-        if let Some(status) = settled_status(&statuses, None) {
+        if let Some(winner) =
+            drain_settled(&legs, &settled, wait, total, &spinner, &mut printed_block)?
+        {
+            return finish_join(&legs, wait, Some(winner));
+        }
+        if settled_status(&legs.iter().map(|leg| leg.done).collect::<Vec<_>>(), None).is_some() {
             spinner.pause();
-            if wait.json {
-                print_json_replies(&legs, None)?;
-            }
-            return return_or_exit(status);
+            return finish_join(&legs, wait, None);
         }
 
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -313,6 +291,29 @@ pub(super) fn wait_for_replies(
         tick = (tick + 1) % WAIT_GUARD_TICKS;
         std::thread::sleep(next_sleep(deadline));
     }
+}
+
+/// Report each newly settled leg; returns the `--any` winner index when the join short-circuits.
+fn drain_settled(
+    legs: &[Leg],
+    settled: &[usize],
+    wait: WaitSpec,
+    total: usize,
+    spinner: &Spinner,
+    printed_block: &mut bool,
+) -> Result<Option<usize>> {
+    for &index in settled {
+        if !wait.json {
+            spinner.pause();
+            print_reply_result_for_leg(&legs[index], total, printed_block)?;
+        }
+        if wait.any {
+            spinner.pause();
+            return Ok(Some(index));
+        }
+        spinner.resume();
+    }
+    Ok(None)
 }
 
 fn wait_label(legs: &[Leg]) -> String {
@@ -522,19 +523,6 @@ fn return_or_exit(status: RunStatus) -> Result<()> {
 
 fn print_reply_result_for_leg(leg: &Leg, total: usize, printed_block: &mut bool) -> Result<()> {
     let status = leg.done.context("rendering an unfinished reply leg")?;
-    if total == 1 {
-        if let Some(error) = &leg.error {
-            let mut err = render::err();
-            writeln!(err, "rimz: {error}")?;
-            err.flush()?;
-            return Ok(());
-        }
-        return print_reply_result(
-            status,
-            leg.last_message.as_deref(),
-            leg.transcript_path.as_deref(),
-        );
-    }
     if let Some(error) = &leg.error {
         let mut err = render::err();
         writeln!(err, "rimz: {error}")?;
@@ -546,6 +534,24 @@ fn print_reply_result_for_leg(leg: &Leg, total: usize, printed_block: &mut bool)
         .as_deref()
         .map(str::trim)
         .filter(|message| !message.is_empty());
+    if total == 1 {
+        if let Some(message) = message {
+            let mut out = render::out();
+            writeln!(out, "{message}")?;
+            out.flush()?;
+        } else if status == RunStatus::Completed {
+            let mut err = render::err();
+            writeln!(
+                err,
+                "rimz: turn completed but no final assistant message was extracted"
+            )?;
+            err.flush()?;
+        }
+        if status != RunStatus::Completed {
+            print_turn_failure(None, status, leg.transcript_path.as_deref())?;
+        }
+        return Ok(());
+    }
     if status == RunStatus::Completed {
         if let Some(message) = message {
             let mut out = render::out();
@@ -567,15 +573,35 @@ fn print_reply_result_for_leg(leg: &Leg, total: usize, printed_block: &mut bool)
         return Ok(());
     }
 
+    print_turn_failure(
+        Some(&leg.target.label),
+        status,
+        leg.transcript_path.as_deref(),
+    )
+}
+
+fn print_turn_failure(
+    label: Option<&str>,
+    status: RunStatus,
+    transcript_path: Option<&str>,
+) -> Result<()> {
     let mut err = render::err();
-    writeln!(
-        err,
-        "rimz: {} turn {} (exit {})",
-        leg.target.label,
-        run_status_label(status),
-        status.exit_code()
-    )?;
-    if let Some(transcript_path) = &leg.transcript_path {
+    if let Some(label) = label {
+        writeln!(
+            err,
+            "rimz: {label} turn {} (exit {})",
+            run_status_label(status),
+            status.exit_code()
+        )?;
+    } else {
+        writeln!(
+            err,
+            "rimz: turn {} (exit {})",
+            run_status_label(status),
+            status.exit_code()
+        )?;
+    }
+    if let Some(transcript_path) = transcript_path {
         writeln!(err, "transcript: {transcript_path}")?;
     }
     err.flush()?;
@@ -635,40 +661,6 @@ fn print_timeout(legs: &[Leg], unfinished: &[usize], wait: WaitSpec) -> Result<(
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(err, "rimz: wait timed out for {labels}{hint}")?;
-    }
-    err.flush()?;
-    Ok(())
-}
-
-fn print_reply_result(
-    status: RunStatus,
-    last_message: Option<&str>,
-    transcript_path: Option<&str>,
-) -> Result<()> {
-    let mut out = render::out();
-    let mut err = render::err();
-    if let Some(message) = last_message
-        .map(str::trim)
-        .filter(|message| !message.is_empty())
-    {
-        writeln!(out, "{message}")?;
-        out.flush()?;
-    } else if status == RunStatus::Completed {
-        writeln!(
-            err,
-            "rimz: turn completed but no final assistant message was extracted"
-        )?;
-    }
-    if status != RunStatus::Completed {
-        writeln!(
-            err,
-            "rimz: turn {} (exit {})",
-            run_status_label(status),
-            status.exit_code()
-        )?;
-        if let Some(transcript_path) = transcript_path {
-            writeln!(err, "transcript: {transcript_path}")?;
-        }
     }
     err.flush()?;
     Ok(())

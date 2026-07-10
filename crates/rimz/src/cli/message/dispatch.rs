@@ -2,15 +2,19 @@ use std::collections::BTreeSet;
 
 use super::*;
 
-/// Shared enqueue for parked messages: resolve the prompt from inline argv or
-/// `--file`, then split the mirrored `SendFlags` into the delivery spec and the
-/// fan-out controls and hand off.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn message_add(
+pub(super) enum SendKind {
+    Steer,
+    Boundary {
+        gate: DeliveryGate,
+        schedule: Option<String>,
+        after: Vec<String>,
+    },
+}
+
+/// Resolve shared send flags and dispatch a steer or turn-boundary message.
+pub(super) fn send_message(
     target: String,
-    gate: DeliveryGate,
-    schedule: Option<String>,
-    after: Vec<String>,
+    mode: SendKind,
     send: SendFlags,
     text: Vec<String>,
     piped: Option<String>,
@@ -32,32 +36,59 @@ pub(super) fn message_add(
         any,
     } = send;
     let agent_caller = send::agent_caller();
-    if schedule.is_some() && create {
-        bail!("--schedule needs an existing agent; remove --create");
-    }
-    if !after.is_empty() && create {
-        bail!("--after needs an existing recipient; remove --create");
+    if let SendKind::Boundary {
+        schedule, after, ..
+    } = &mode
+    {
+        if schedule.is_some() && create {
+            bail!("--schedule needs an existing agent; remove --create");
+        }
+        if !after.is_empty() && create {
+            bail!("--after needs an existing recipient; remove --create");
+        }
     }
     let wait = send::WaitSpec {
         mode: send::reply_wait(wait, agent_caller),
         any,
         json,
     };
-    send::validate_reply_wait(wait, !no_enter, create, schedule.is_some())?;
+    let scheduled = matches!(
+        &mode,
+        SendKind::Boundary {
+            schedule: Some(_),
+            ..
+        }
+    );
+    send::validate_reply_wait(wait, !no_enter, create, scheduled)?;
     let machine_config = crate::cli::machine_config();
     let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
-    let now = Timestamp::now().to_zoned(machine_config.time_zone());
-    let not_before = schedule
-        .as_deref()
-        .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
-        .transpose()?;
+    let (dispatch_mode, gate, not_before, after) = match mode {
+        SendKind::Steer => (
+            MessageDispatchMode::Steer,
+            DeliveryGate::Any,
+            None,
+            Vec::new(),
+        ),
+        SendKind::Boundary {
+            gate,
+            schedule,
+            after,
+        } => {
+            let now = Timestamp::now().to_zoned(machine_config.time_zone());
+            let not_before = schedule
+                .as_deref()
+                .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
+                .transpose()?;
+            (MessageDispatchMode::Boundary, gate, not_before, after)
+        }
+    };
     dispatch_message(
         target,
         worktree,
         channel,
         text,
-        MessageDispatchMode::Boundary,
+        dispatch_mode,
         MessageSpec {
             enter: !no_enter,
             gate,
@@ -68,59 +99,6 @@ pub(super) fn message_add(
             wait,
             not_before,
             after,
-        },
-        FanoutFlags { all, create },
-        globals,
-    )
-}
-
-pub(super) fn steer_message(
-    target: String,
-    send: SendFlags,
-    text: Vec<String>,
-    piped: Option<String>,
-    globals: &GlobalFlags,
-) -> Result<()> {
-    let SendFlags {
-        worktree,
-        channel: channel_flag,
-        no_enter,
-        force,
-        all,
-        create,
-        smart_compact,
-        file,
-        stdin: _,
-        no_from,
-        wait,
-        json,
-        any,
-    } = send;
-    let agent_caller = send::agent_caller();
-    let wait = send::WaitSpec {
-        mode: send::reply_wait(wait, agent_caller),
-        any,
-        json,
-    };
-    send::validate_reply_wait(wait, !no_enter, create, false)?;
-    let auto_compact = smart_compact.or_else(|| crate::cli::machine_config().harness.smart_compact);
-    let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
-    dispatch_message(
-        target,
-        worktree,
-        channel_flag,
-        text,
-        MessageDispatchMode::Steer,
-        MessageSpec {
-            enter: !no_enter,
-            gate: DeliveryGate::Any,
-            force,
-            auto_compact,
-            no_from,
-            automated: false,
-            wait,
-            not_before: None,
-            after: Vec::new(),
         },
         FanoutFlags { all, create },
         globals,

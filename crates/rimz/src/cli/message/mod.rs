@@ -249,13 +249,15 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
             };
             let text = args.text.into_iter().collect();
             if args.steer {
-                steer_message(target, args.send, text, piped, globals)
+                send_message(target, SendKind::Steer, args.send, text, piped, globals)
             } else {
-                message_add(
+                send_message(
                     target,
-                    args.on,
-                    args.schedule,
-                    args.after,
+                    SendKind::Boundary {
+                        gate: args.on,
+                        schedule: args.schedule,
+                        after: args.after,
+                    },
                     args.send,
                     text,
                     piped,
