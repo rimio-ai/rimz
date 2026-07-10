@@ -593,25 +593,30 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
     let mut agents = Vec::new();
     if config.claude {
         let claude_present = which::which("claude").is_ok();
-        let (label, ready) = if !claude_present {
-            ("claude enabled, not on PATH".to_owned(), false)
+        let (detail, ready) = if !claude_present {
+            ("enabled, not on PATH".to_owned(), false)
         } else if claude_preflight.as_ref().is_some_and(Result::is_ok) {
-            ("claude ready".to_owned(), true)
+            ("ready".to_owned(), true)
         } else {
-            ("claude enabled, blocked".to_owned(), false)
+            ("enabled, blocked".to_owned(), false)
         };
-        agents.push(model::RemoteAgent { label, ready });
+        agents.push(model::RemoteAgent {
+            kind: "claude",
+            detail,
+            ready,
+        });
     }
     if config.codex {
-        let (label, ready) = if codex_preflight.as_ref().is_some_and(Result::is_err) {
-            (
-                "codex enabled, standalone install missing".to_owned(),
-                false,
-            )
+        let (detail, ready) = if codex_preflight.as_ref().is_some_and(Result::is_err) {
+            ("enabled, standalone install missing".to_owned(), false)
         } else {
-            ("codex ready".to_owned(), true)
+            ("ready".to_owned(), true)
         };
-        agents.push(model::RemoteAgent { label, ready });
+        agents.push(model::RemoteAgent {
+            kind: "codex",
+            detail,
+            ready,
+        });
     }
 
     let (skipped, refusals): (Vec<_>, Vec<_>) =

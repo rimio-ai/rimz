@@ -693,16 +693,24 @@ fn doctor_json_reports_remote_control_refusals_and_skips() {
 
     let remote = &report["remote_control"];
     assert_eq!(remote["state"], "on");
-    let labels: Vec<&str> = remote["agents"]
+    let agents: Vec<(&str, &str)> = remote["agents"]
         .as_array()
         .expect("agents")
         .iter()
-        .map(|agent| agent["label"].as_str().expect("label"))
+        .map(|agent| {
+            (
+                agent["kind"].as_str().expect("kind"),
+                agent["detail"].as_str().expect("detail"),
+            )
+        })
         .collect();
-    assert!(labels.contains(&"claude enabled, blocked"), "{labels:?}");
     assert!(
-        labels.contains(&"codex enabled, standalone install missing"),
-        "{labels:?}"
+        agents.contains(&("claude", "enabled, blocked")),
+        "{agents:?}"
+    );
+    assert!(
+        agents.contains(&("codex", "enabled, standalone install missing")),
+        "{agents:?}"
     );
 
     let refusals = remote["refusals"]

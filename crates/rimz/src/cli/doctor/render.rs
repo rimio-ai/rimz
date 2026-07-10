@@ -16,9 +16,10 @@ use rimz::diag::record::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{
-    AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, Host, LoopTasks,
-    MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, Presence, Probe, RemoteControl,
-    SessionHealth, Storage, Terminal, Trust, Version, Workspace,
+    AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorReport, DuplicateSessions,
+    HookStatus, Host, LoopTasks, MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow,
+    Presence, Probe, Protocols, RemoteAgent, RemoteControl, SessionHealth, Storage, Terminal,
+    TopologyWriterHealth, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -71,6 +72,27 @@ fn verdict(tally: &mut Tally, health: Health, text: impl Into<String>) -> Cell {
     cell(format!("{glyph} {}", text.into())).fg(style)
 }
 
+fn unavailable_text(error: &str) -> String {
+    format!("unavailable ({error})")
+}
+
+fn unavailable(tally: &mut Tally, health: Health, error: &str) -> Cell {
+    verdict(tally, health, unavailable_text(error))
+}
+
+fn fit_cell(tally: &mut Tally, fits: bool, used: usize, limit: usize, path: &str) -> Cell {
+    let (health, label) = if fits {
+        (Health::Ok, "OK")
+    } else {
+        (Health::Alarm, "TOO LONG")
+    };
+    verdict(
+        tally,
+        health,
+        format!("{label} ({used}/{limit} bytes for {path})"),
+    )
+}
+
 fn style_of(health: Health) -> anstyle::Style {
     parts(health).1
 }
@@ -88,6 +110,10 @@ fn note(tally: &mut Tally, w: &mut impl Write, health: Health, text: &str) -> io
     writeln!(w, "    {}", paint(style, &format!("{glyph} {text}")))
 }
 
+fn detail(w: &mut impl Write, style: anstyle::Style, text: &str) -> io::Result<()> {
+    writeln!(w, "      {}", paint(style, text))
+}
+
 pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Result<()> {
     let mut tally = Tally::default();
     render_identity(w, report.version, &report.host)?;
@@ -101,48 +127,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_storage(w, &report.disk_usage, &mut tally)?;
 
     if let Some(protocols) = &report.protocols {
-        section(w, "PROTOCOLS")?;
-        let mut kv = KeyVals::new().indent(2);
-        kv.push("event", cell(protocols.event));
-        kv.push("sidebar", cell(protocols.sidebar));
-        kv.render(w)?;
-        for warning in &protocols.warnings {
-            note(&mut tally, w, Health::Warn, warning)?;
-        }
-        if let Some(drift) = &protocols.build_drift {
-            note(
-                &mut tally,
-                w,
-                Health::Warn,
-                &format!(
-                    "mixed rimz builds writing this workspace: {} distinct builds; run `rimz reload` to converge",
-                    drift.writers.len(),
-                ),
-            )?;
-            for writer in &drift.writers {
-                let tag = if writer.is_running {
-                    " (this binary)"
-                } else {
-                    ""
-                };
-                let location = if writer.sidebar_count == 0 {
-                    "no live sidebar".to_owned()
-                } else if writer.pane_ids.is_empty() {
-                    format!("{} sidebars: unlocated", writer.sidebar_count)
-                } else {
-                    format!(
-                        "{} sidebars: {}",
-                        writer.sidebar_count,
-                        writer.pane_ids.join(", ")
-                    )
-                };
-                writeln!(
-                    w,
-                    "      {}",
-                    paint(palette::BODY, &format!("{}{tag}: {location}", writer.build))
-                )?;
-            }
-        }
+        render_protocols(w, protocols, &mut tally)?;
     }
 
     if let Some(trust) = &report.trust {
@@ -249,29 +234,13 @@ fn render_workspace(
             );
             kv.push("session", cell(ws.session_name.as_str()));
             match &ws.sock_headroom {
-                Probe::Unavailable { error } => kv.push(
-                    "sock headroom",
-                    verdict(tally, Health::Alarm, format!("unavailable ({error})")),
-                ),
+                Probe::Unavailable { error } => {
+                    kv.push("sock headroom", unavailable(tally, Health::Alarm, error))
+                }
                 Probe::Ready(budget) => {
-                    let health = if budget.fits {
-                        Health::Ok
-                    } else {
-                        Health::Alarm
-                    };
-                    let label = if budget.fits { "OK" } else { "TOO LONG" };
                     kv.push(
                         "sock headroom",
-                        verdict(
-                            tally,
-                            health,
-                            format!(
-                                "{label} ({}/{} bytes for {})",
-                                budget.used,
-                                budget.limit,
-                                budget.dir.as_str()
-                            ),
-                        ),
+                        fit_cell(tally, budget.fits, budget.used, budget.limit, &budget.dir),
                     );
                     if let Some(remedy) = &budget.remedy {
                         kv.push("remedy", verdict(tally, Health::Warn, remedy));
@@ -288,10 +257,7 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     let mux = match mux {
         Probe::Unavailable { error } => {
             let mut kv = KeyVals::new().indent(2);
-            kv.push(
-                "multiplexer",
-                verdict(tally, Health::Alarm, format!("unavailable ({error})")),
-            );
+            kv.push("multiplexer", unavailable(tally, Health::Alarm, error));
             return kv.render(w);
         }
         Probe::Ready(mux) => mux,
@@ -299,25 +265,58 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
 
     let mut kv = KeyVals::new().indent(2);
     kv.push("backend", cell(mux.name.to_string()).fg(palette::ACCENT));
-    match &mux.version {
-        Version::Reported { version } => kv.push("version", cell(version.as_str())),
-        Version::Unknown => kv.push("version", cell("unknown").fg(palette::FAINT)),
-        Version::Unavailable { error } => kv.push(
-            "version",
-            verdict(tally, Health::Warn, format!("unavailable ({error})")),
-        ),
+    kv.push("version", mux_version_cell(tally, &mux.version));
+    push_capabilities(&mut kv, tally, &mux.capabilities);
+    match &mux.binaries.active {
+        Some(active) => kv.push("binary", cell(binary_label(active)).fg(palette::BODY)),
+        None => kv.push("binary", verdict(tally, Health::Warn, "not found on PATH")),
     }
-    match &mux.capabilities {
-        Capabilities::Zellij(Probe::Ready(caps)) => {
-            kv.push(
-                "zellij floor",
-                floor_cell(tally, caps.meets_min_version, caps.min_version),
-            );
+    kv.push("log", mux_log_cell(tally, &mux.log));
+    if let Some(socket) = &mux.socket {
+        kv.push("socket", cell(socket.as_str()).fg(palette::BODY));
+    }
+    if let Some(socket) = &mux.zellij_socket {
+        kv.push(
+            "zellij socket",
+            fit_cell(tally, socket.fits, socket.len, socket.limit, &socket.path),
+        );
+        if let Some(fix) = &socket.fix {
+            kv.push("fix", verdict(tally, Health::Warn, fix));
         }
-        Capabilities::Zellij(Probe::Unavailable { error }) => kv.push(
+    }
+    if let Some(health) = &mux.session_health {
+        kv.push("session health", session_health_cell(tally, health));
+    }
+    if let Some(presence) = &mux.presence {
+        kv.push("presence", presence_cell(tally, presence));
+    }
+    if let Some(writer) = &mux.topology_writer {
+        push_topology_writer(&mut kv, tally, writer);
+    }
+    kv.render(w)?;
+
+    render_mux_binary_notes(w, mux, tally)?;
+    render_mux_log_notes(w, &mux.log, tally)?;
+    render_duplicate_session_notes(w, &mux.duplicate_sessions, tally)
+}
+
+fn mux_version_cell(tally: &mut Tally, version: &Version) -> Cell {
+    match version {
+        Version::Reported { version } => cell(version.as_str()),
+        Version::Unknown => cell("unknown").fg(palette::FAINT),
+        Version::Unavailable { error } => unavailable(tally, Health::Warn, error),
+    }
+}
+
+fn push_capabilities(kv: &mut KeyVals, tally: &mut Tally, capabilities: &Capabilities) {
+    match capabilities {
+        Capabilities::Zellij(Probe::Ready(caps)) => kv.push(
             "zellij floor",
-            verdict(tally, Health::Warn, format!("unavailable ({error})")),
+            floor_cell(tally, caps.meets_min_version, caps.min_version),
         ),
+        Capabilities::Zellij(Probe::Unavailable { error }) => {
+            kv.push("zellij floor", unavailable(tally, Health::Warn, error));
+        }
         Capabilities::Tmux(Probe::Ready(caps)) => {
             kv.push(
                 "tmux floor",
@@ -335,130 +334,94 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
             };
             kv.push("tmux popup", popup);
         }
-        Capabilities::Tmux(Probe::Unavailable { error }) => kv.push(
-            "tmux floor",
-            verdict(tally, Health::Warn, format!("unavailable ({error})")),
-        ),
+        Capabilities::Tmux(Probe::Unavailable { error }) => {
+            kv.push("tmux floor", unavailable(tally, Health::Warn, error));
+        }
     }
-    match &mux.binaries.active {
-        Some(active) => kv.push("binary", cell(binary_label(active)).fg(palette::BODY)),
-        None => kv.push("binary", verdict(tally, Health::Warn, "not found on PATH")),
-    }
-    match &mux.log {
+}
+
+fn mux_log_cell(tally: &mut Tally, log: &MuxLog) -> Cell {
+    match log {
         MuxLog::Ready {
             path, size_bytes, ..
-        } => kv.push(
-            "log",
-            cell(format!("{path} ({})", fmt_bytes(*size_bytes))).fg(palette::BODY),
+        } => cell(format!("{path} ({})", fmt_bytes(*size_bytes))).fg(palette::BODY),
+        MuxLog::Missing { path } => cell(format!("none yet ({path})")).fg(palette::FAINT),
+        MuxLog::Disabled { hint } => cell(hint.as_str()).fg(palette::FAINT),
+        MuxLog::Unavailable { error } => unavailable(tally, Health::Warn, error),
+    }
+}
+
+fn session_health_cell(tally: &mut Tally, health: &Probe<SessionHealth>) -> Cell {
+    match health {
+        Probe::Unavailable { error } => unavailable(tally, Health::Warn, error),
+        Probe::Ready(SessionHealth::Ok) => verdict(tally, Health::Ok, "ok"),
+        Probe::Ready(SessionHealth::Stuck { fix }) => verdict(
+            tally,
+            Health::Alarm,
+            format!("stuck (resurrected/suspended panes) — {fix}"),
         ),
-        MuxLog::Missing { path } => {
-            kv.push("log", cell(format!("none yet ({path})")).fg(palette::FAINT))
+    }
+}
+
+fn presence_cell(tally: &mut Tally, presence: &Presence) -> Cell {
+    match presence {
+        Presence::Event { poked_secs } => verdict(
+            tally,
+            Health::Ok,
+            format!("event mode (poked {poked_secs}s ago)"),
+        ),
+        Presence::Poll { reason, expected } => {
+            let health = if *expected { Health::Ok } else { Health::Warn };
+            verdict(tally, health, format!("polling — {reason}"))
         }
-        MuxLog::Disabled { hint } => kv.push("log", cell(hint.as_str()).fg(palette::FAINT)),
-        MuxLog::Unavailable { error } => kv.push(
-            "log",
-            verdict(tally, Health::Warn, format!("unavailable ({error})")),
-        ),
+        Presence::Unavailable { error } => unavailable(tally, Health::Alarm, error),
     }
-    if let Some(socket) = &mux.socket {
-        kv.push("socket", cell(socket.as_str()).fg(palette::BODY));
-    }
-    if let Some(socket) = &mux.zellij_socket {
-        let health = if socket.fits {
-            Health::Ok
+}
+
+fn push_topology_writer(kv: &mut KeyVals, tally: &mut Tally, writer: &TopologyWriterHealth) {
+    if let Some(bin) = &writer.recorded_bin {
+        let health = if bin.exists { Health::Ok } else { Health::Warn };
+        let label = if bin.exists {
+            bin.path.clone()
         } else {
-            Health::Alarm
+            format!("missing ({})", bin.path)
         };
-        let label = if socket.fits { "OK" } else { "TOO LONG" };
+        kv.push("room binary", verdict(tally, health, label));
+        if let Some(fix) = &bin.fix {
+            kv.push("room binary fix", verdict(tally, Health::Warn, fix));
+        }
+    }
+    if let Some(conflict) = &writer.conflict {
+        let stale = conflict
+            .stale
+            .as_ref()
+            .map(topology_writer_label)
+            .unwrap_or_else(|| "legacy".to_owned());
+        let accepted = conflict
+            .accepted
+            .as_ref()
+            .map(topology_writer_label)
+            .unwrap_or_else(|| "legacy".to_owned());
         kv.push(
-            "zellij socket",
+            "topology writers",
             verdict(
                 tally,
-                health,
+                Health::Warn,
                 format!(
-                    "{label} ({}/{} bytes for {})",
-                    socket.len, socket.limit, socket.path
+                    "duplicate writers: rejected {stale}, accepted {accepted}; {} rejects, {}s ago — {}",
+                    conflict.rejected_count, conflict.age_secs, conflict.fix
                 ),
             ),
         );
-        if let Some(fix) = &socket.fix {
-            kv.push("fix", verdict(tally, Health::Warn, fix));
-        }
     }
-    if let Some(health) = &mux.session_health {
-        let value = match health {
-            Probe::Unavailable { error } => {
-                verdict(tally, Health::Warn, format!("unavailable ({error})"))
-            }
-            Probe::Ready(SessionHealth::Ok) => verdict(tally, Health::Ok, "ok"),
-            Probe::Ready(SessionHealth::Stuck { fix }) => verdict(
-                tally,
-                Health::Alarm,
-                format!("stuck (resurrected/suspended panes) — {fix}"),
-            ),
-        };
-        kv.push("session health", value);
-    }
-    if let Some(presence) = &mux.presence {
-        let value = match presence {
-            Presence::Event { poked_secs } => verdict(
-                tally,
-                Health::Ok,
-                format!("event mode (poked {poked_secs}s ago)"),
-            ),
-            Presence::Poll { reason, expected } => {
-                let health = if *expected { Health::Ok } else { Health::Warn };
-                verdict(tally, health, format!("polling — {reason}"))
-            }
-            Presence::Unavailable { error } => {
-                verdict(tally, Health::Alarm, format!("unavailable ({error})"))
-            }
-        };
-        kv.push("presence", value);
-    }
-    if let Some(writer) = &mux.topology_writer {
-        if let Some(bin) = &writer.recorded_bin {
-            let health = if bin.exists { Health::Ok } else { Health::Warn };
-            let label = if bin.exists {
-                bin.path.clone()
-            } else {
-                format!("missing ({})", bin.path)
-            };
-            kv.push("room binary", verdict(tally, health, label));
-            if let Some(fix) = &bin.fix {
-                kv.push("room binary fix", verdict(tally, Health::Warn, fix));
-            }
-        }
-        if let Some(conflict) = &writer.conflict {
-            let stale = conflict
-                .stale
-                .as_ref()
-                .map(topology_writer_label)
-                .unwrap_or_else(|| "legacy".to_owned());
-            let accepted = conflict
-                .accepted
-                .as_ref()
-                .map(topology_writer_label)
-                .unwrap_or_else(|| "legacy".to_owned());
-            kv.push(
-                "topology writers",
-                verdict(
-                    tally,
-                    Health::Warn,
-                    format!(
-                        "duplicate writers: rejected {stale}, accepted {accepted}; {} rejects, {}s ago — {}",
-                        conflict.rejected_count, conflict.age_secs, conflict.fix
-                    ),
-                ),
-            );
-        }
-    }
-    kv.render(w)?;
+}
 
-    render_mux_binary_notes(w, mux, tally)?;
-    render_mux_log_notes(w, &mux.log, tally)?;
-
-    if let Some(Probe::Ready(dup)) = &mux.duplicate_sessions {
+fn render_duplicate_session_notes(
+    w: &mut impl Write,
+    duplicate_sessions: &Option<Probe<DuplicateSessions>>,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    if let Some(Probe::Ready(dup)) = duplicate_sessions {
         if dup.groups.is_empty() {
             note(tally, w, Health::Ok, "duplicate sessions: none")?;
         } else {
@@ -478,28 +441,25 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
                 } else {
                     group.pane_ids.join(", ")
                 };
-                writeln!(
+                detail(
                     w,
-                    "      {}",
-                    paint(
-                        palette::BODY,
-                        &format!(
-                            "{here}{}: {} sidebars ({panes})",
-                            group.session_name, group.sidebar_count
-                        )
-                    )
+                    palette::BODY,
+                    &format!(
+                        "{here}{}: {} sidebars ({panes})",
+                        group.session_name, group.sidebar_count
+                    ),
                 )?;
             }
             if let Some(advice) = &dup.advice {
                 note(tally, w, Health::Warn, advice)?;
             }
         }
-    } else if let Some(Probe::Unavailable { error }) = &mux.duplicate_sessions {
+    } else if let Some(Probe::Unavailable { error }) = duplicate_sessions {
         note(
             tally,
             w,
             Health::Warn,
-            &format!("duplicate sessions: unavailable ({error})"),
+            &format!("duplicate sessions: {}", unavailable_text(error)),
         )?;
     }
     Ok(())
@@ -528,18 +488,10 @@ fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> 
             ),
         )?;
         if let Some(active) = &mux.binaries.active {
-            writeln!(
-                w,
-                "      {}",
-                paint(palette::BODY, &format!("* {}", binary_label(active)))
-            )?;
+            detail(w, palette::BODY, &format!("* {}", binary_label(active)))?;
         }
         for install in &mux.binaries.duplicates {
-            writeln!(
-                w,
-                "      {}",
-                paint(palette::BODY, &format!("  {}", binary_label(install)))
-            )?;
+            detail(w, palette::BODY, &format!("  {}", binary_label(install)))?;
         }
     }
     if mux.binaries.active.is_none() {
@@ -588,13 +540,10 @@ fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> 
         } else {
             Health::Alarm
         };
-        writeln!(
+        detail(
             w,
-            "      {}",
-            paint(
-                style_of(health),
-                &format!("{}: {}", entry.severity, entry.line)
-            )
+            style_of(health),
+            &format!("{}: {}", entry.severity, entry.line),
         )?;
     }
     Ok(())
@@ -648,39 +597,7 @@ fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) 
     section(w, "AGENT PLUGINS")?;
     let mut table = Table::new(["", "AGENT", "STATUS", "MANIFEST", "DETAIL"]);
     for plugin in &report.plugins {
-        let (health, status, detail) = if plugin.valid {
-            let bad_probes = plugin
-                .probes
-                .iter()
-                .filter(|probe| !probe.present || !probe.executable)
-                .map(|probe| probe.name)
-                .collect::<Vec<_>>();
-            if bad_probes.is_empty() {
-                (
-                    Health::Ok,
-                    "valid",
-                    plugin
-                        .setup_doc
-                        .clone()
-                        .unwrap_or_else(|| "self-managed hooks".to_owned()),
-                )
-            } else {
-                (
-                    Health::Warn,
-                    "valid; probe unavailable",
-                    format!("check {}", bad_probes.join(", ")),
-                )
-            }
-        } else {
-            (
-                Health::Alarm,
-                "invalid",
-                plugin
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "manifest validation failed".to_owned()),
-            )
-        };
+        let (health, status, detail) = plugin_verdict(plugin);
         table.row([
             badge(tally, health),
             cell(plugin.kind.as_str()).fg(palette::ACCENT),
@@ -688,27 +605,66 @@ fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) 
             cell(home_relative(&plugin.manifest)).fg(palette::BODY),
             cell(detail).dash(),
         ]);
-        for probe in &plugin.probes {
-            let probe_health = if probe.present && probe.executable {
-                Health::Ok
-            } else {
-                Health::Warn
-            };
-            let status = match (probe.present, probe.executable) {
-                (true, true) => "executable",
-                (true, false) => "not executable",
-                (false, _) => "missing",
-            };
-            table.row([
-                badge(tally, probe_health),
-                cell(format!("  {} probe", probe.name)).fg(palette::META),
-                cell(status).fg(style_of(probe_health)),
-                cell("-"),
-                cell(probe.command.as_str()).fg(palette::BODY),
-            ]);
-        }
+        push_probe_rows(&mut table, tally, plugin);
     }
     table.render(w)
+}
+
+fn plugin_verdict(plugin: &PluginRow) -> (Health, &'static str, String) {
+    if !plugin.valid {
+        return (
+            Health::Alarm,
+            "invalid",
+            plugin
+                .error
+                .clone()
+                .unwrap_or_else(|| "manifest validation failed".to_owned()),
+        );
+    }
+    let bad_probes = plugin
+        .probes
+        .iter()
+        .filter(|probe| !probe.present || !probe.executable)
+        .map(|probe| probe.name)
+        .collect::<Vec<_>>();
+    if bad_probes.is_empty() {
+        (
+            Health::Ok,
+            "valid",
+            plugin
+                .setup_doc
+                .clone()
+                .unwrap_or_else(|| "self-managed hooks".to_owned()),
+        )
+    } else {
+        (
+            Health::Warn,
+            "valid; probe unavailable",
+            format!("check {}", bad_probes.join(", ")),
+        )
+    }
+}
+
+fn push_probe_rows(table: &mut Table, tally: &mut Tally, plugin: &PluginRow) {
+    for probe in &plugin.probes {
+        let probe_health = if probe.present && probe.executable {
+            Health::Ok
+        } else {
+            Health::Warn
+        };
+        let status = match (probe.present, probe.executable) {
+            (true, true) => "executable",
+            (true, false) => "not executable",
+            (false, _) => "missing",
+        };
+        table.row([
+            badge(tally, probe_health),
+            cell(format!("  {} probe", probe.name)).fg(palette::META),
+            cell(status).fg(style_of(probe_health)),
+            cell("-"),
+            cell(probe.command.as_str()).fg(palette::BODY),
+        ]);
+    }
 }
 
 fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) -> io::Result<()> {
@@ -768,41 +724,45 @@ fn render_remote_control(
             agents,
             refusals,
             skipped,
-        } => {
-            let mut kv = KeyVals::new().indent(2);
-            for agent in agents {
-                let (name, rest) = agent
-                    .label
-                    .split_once(' ')
-                    .unwrap_or((agent.label.as_str(), ""));
-                let health = if agent.ready {
-                    Health::Ok
-                } else {
-                    Health::Warn
-                };
-                kv.push(name.to_owned(), verdict(tally, health, rest));
-            }
-            kv.render(w)?;
-            for refusal in refusals {
-                note(tally, w, Health::Alarm, "`rimz start` refuses:")?;
-                for line in refusal.lines() {
-                    writeln!(w, "      {}", paint(palette::MUTED, line))?;
-                }
-            }
-            for skip in skipped {
-                note(
-                    tally,
-                    w,
-                    Health::Warn,
-                    "enabled but not installed — skipped (the room still starts):",
-                )?;
-                for line in skip.lines() {
-                    writeln!(w, "      {}", paint(palette::MUTED, line))?;
-                }
-            }
-            Ok(())
+        } => render_remote_on(w, agents, refusals, skipped, tally),
+    }
+}
+
+fn render_remote_on(
+    w: &mut impl Write,
+    agents: &[RemoteAgent],
+    refusals: &[String],
+    skipped: &[String],
+    tally: &mut Tally,
+) -> io::Result<()> {
+    let mut kv = KeyVals::new().indent(2);
+    for agent in agents {
+        let health = if agent.ready {
+            Health::Ok
+        } else {
+            Health::Warn
+        };
+        kv.push(agent.kind, verdict(tally, health, &agent.detail));
+    }
+    kv.render(w)?;
+    for refusal in refusals {
+        note(tally, w, Health::Alarm, "`rimz start` refuses:")?;
+        for line in refusal.lines() {
+            detail(w, palette::MUTED, line)?;
         }
     }
+    for skip in skipped {
+        note(
+            tally,
+            w,
+            Health::Warn,
+            "enabled but not installed — skipped (the room still starts):",
+        )?;
+        for line in skip.lines() {
+            detail(w, palette::MUTED, line)?;
+        }
+    }
+    Ok(())
 }
 
 fn render_storage(w: &mut impl Write, disk_usage: &Storage, tally: &mut Tally) -> io::Result<()> {
@@ -836,13 +796,61 @@ fn render_storage(w: &mut impl Write, disk_usage: &Storage, tally: &mut Tally) -
     table.render(w)
 }
 
+fn render_protocols(
+    w: &mut impl Write,
+    protocols: &Protocols,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    section(w, "PROTOCOLS")?;
+    let mut kv = KeyVals::new().indent(2);
+    kv.push("event", cell(protocols.event));
+    kv.push("sidebar", cell(protocols.sidebar));
+    kv.render(w)?;
+    for warning in &protocols.warnings {
+        note(tally, w, Health::Warn, warning)?;
+    }
+    if let Some(drift) = &protocols.build_drift {
+        note(
+            tally,
+            w,
+            Health::Warn,
+            &format!(
+                "mixed rimz builds writing this workspace: {} distinct builds; run `rimz reload` to converge",
+                drift.writers.len(),
+            ),
+        )?;
+        for writer in &drift.writers {
+            let tag = if writer.is_running {
+                " (this binary)"
+            } else {
+                ""
+            };
+            let location = if writer.sidebar_count == 0 {
+                "no live sidebar".to_owned()
+            } else if writer.pane_ids.is_empty() {
+                format!("{} sidebars: unlocated", writer.sidebar_count)
+            } else {
+                format!(
+                    "{} sidebars: {}",
+                    writer.sidebar_count,
+                    writer.pane_ids.join(", ")
+                )
+            };
+            detail(
+                w,
+                palette::BODY,
+                &format!("{}{tag}: {location}", writer.build),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn render_trust(w: &mut impl Write, trust: &Probe<Trust>, tally: &mut Tally) -> io::Result<()> {
     section(w, "TRUST")?;
     let mut kv = KeyVals::new().indent(2);
     let value = match trust {
-        Probe::Unavailable { error } => {
-            verdict(tally, Health::Alarm, format!("unavailable ({error})"))
-        }
+        Probe::Unavailable { error } => unavailable(tally, Health::Alarm, error),
         Probe::Ready(Trust { state, granted_at }) => match state {
             TrustState::Trusted => verdict(
                 tally,
@@ -876,7 +884,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
     section(w, "AGENTS")?;
     match rollup {
         AgentRollup::Unavailable { error } => {
-            note(tally, w, Health::Alarm, &format!("unavailable ({error})"))
+            note(tally, w, Health::Alarm, &unavailable_text(error))
         }
         AgentRollup::None => writeln!(w, "  {}", paint(palette::FAINT, "none observed")),
         AgentRollup::Observed { counts, rows } => {
@@ -931,7 +939,7 @@ fn render_messages(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally)
     section(w, "MESSAGES")?;
     let messages = match messages {
         Probe::Unavailable { error } => {
-            return note(tally, w, Health::Alarm, &format!("unavailable ({error})"));
+            return note(tally, w, Health::Alarm, &unavailable_text(error));
         }
         Probe::Ready(messages) => messages,
     };
@@ -1081,30 +1089,20 @@ fn render_last_incident(
             })
             .collect::<Vec<_>>()
             .join(", ");
-        writeln!(
-            w,
-            "      {}",
-            paint(palette::BODY, &format!("lost: {names}"))
-        )?;
+        detail(w, palette::BODY, &format!("lost: {names}"))?;
     }
     if let Some(recovered) = incident.recovered {
-        writeln!(
+        detail(
             w,
-            "      {}",
-            paint(
-                palette::BODY,
-                &format!("recovered: {recovered} of {}", incident.lost_agents.len()),
-            ),
+            palette::BODY,
+            &format!("recovered: {recovered} of {}", incident.lost_agents.len()),
         )?;
     }
     if let Some(forensics) = &incident.forensics {
-        writeln!(
+        detail(
             w,
-            "      {}",
-            paint(
-                palette::MUTED,
-                &format!("forensics: {}", home_relative(forensics)),
-            ),
+            palette::MUTED,
+            &format!("forensics: {}", home_relative(forensics)),
         )?;
     }
     Ok(())
@@ -1224,6 +1222,37 @@ mod tests {
             term: Some("xterm-ghostty".to_owned()),
             terminfo_truecolor: true,
             fix: None,
+        }
+    }
+
+    fn mux_fixture() -> Mux {
+        Mux {
+            name: MuxName::Tmux,
+            version: Version::Reported {
+                version: "tmux 3.5".to_owned(),
+            },
+            capabilities: Capabilities::Tmux(Probe::Ready(TmuxCaps {
+                meets_min_version: true,
+                min_version: (3, 5, 0),
+                popup_supported: true,
+            })),
+            binaries: MuxBinaries {
+                active: Some(MuxBinaryRow {
+                    path: "/usr/bin/tmux".to_owned(),
+                    version: Some("tmux 3.5".to_owned()),
+                }),
+                duplicates: Vec::new(),
+                server_mismatches: Vec::new(),
+            },
+            log: MuxLog::Disabled {
+                hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
+            },
+            zellij_socket: None,
+            socket: Some("/tmp/tmux-1001/default".to_owned()),
+            session_health: None,
+            duplicate_sessions: None,
+            presence: None,
+            topology_writer: None,
         }
     }
 
@@ -1380,34 +1409,7 @@ mod tests {
 
     #[test]
     fn mux_section_shows_backend_socket() {
-        let mux = Mux {
-            name: MuxName::Tmux,
-            version: Version::Reported {
-                version: "tmux 3.5".to_owned(),
-            },
-            capabilities: Capabilities::Tmux(Probe::Ready(TmuxCaps {
-                meets_min_version: true,
-                min_version: (3, 5, 0),
-                popup_supported: true,
-            })),
-            binaries: MuxBinaries {
-                active: Some(MuxBinaryRow {
-                    path: "/usr/bin/tmux".to_owned(),
-                    version: Some("tmux 3.5".to_owned()),
-                }),
-                duplicates: Vec::new(),
-                server_mismatches: Vec::new(),
-            },
-            log: MuxLog::Disabled {
-                hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
-            },
-            zellij_socket: None,
-            socket: Some("/tmp/tmux-1001/default".to_owned()),
-            session_health: None,
-            duplicate_sessions: None,
-            presence: None,
-            topology_writer: None,
-        };
+        let mux = mux_fixture();
         let out = strip(|w| {
             let mut tally = Tally::default();
             render_mux(w, &Probe::Ready(mux), &mut tally)
@@ -1418,45 +1420,14 @@ mod tests {
 
     #[test]
     fn mux_section_tallies_poll_presence_by_expectedness() {
-        let mux = |presence| Mux {
-            name: MuxName::Tmux,
-            version: Version::Reported {
-                version: "tmux 3.5".to_owned(),
-            },
-            capabilities: Capabilities::Tmux(Probe::Ready(TmuxCaps {
-                meets_min_version: true,
-                min_version: (3, 5, 0),
-                popup_supported: true,
-            })),
-            binaries: MuxBinaries {
-                active: Some(MuxBinaryRow {
-                    path: "/usr/bin/tmux".to_owned(),
-                    version: Some("tmux 3.5".to_owned()),
-                }),
-                duplicates: Vec::new(),
-                server_mismatches: Vec::new(),
-            },
-            log: MuxLog::Disabled {
-                hint: "server logging off".to_owned(),
-            },
-            zellij_socket: None,
-            socket: Some("/tmp/tmux-1001/default".to_owned()),
-            session_health: None,
-            duplicate_sessions: None,
-            presence: Some(presence),
-            topology_writer: None,
-        };
-
         let out = strip(|w| {
             let mut tally = Tally::default();
-            render_mux(
-                w,
-                &Probe::Ready(mux(Presence::Poll {
-                    reason: "no sidebar running in this workspace".to_owned(),
-                    expected: true,
-                })),
-                &mut tally,
-            )?;
+            let mut mux = mux_fixture();
+            mux.presence = Some(Presence::Poll {
+                reason: "no sidebar running in this workspace".to_owned(),
+                expected: true,
+            });
+            render_mux(w, &Probe::Ready(mux), &mut tally)?;
             render_tally(w, &tally)
         });
         assert!(out.contains("✓ polling — no sidebar running"), "{out}");
@@ -1464,14 +1435,12 @@ mod tests {
 
         let out = strip(|w| {
             let mut tally = Tally::default();
-            render_mux(
-                w,
-                &Probe::Ready(mux(Presence::Poll {
-                    reason: "sidebar running but the live tmux watch is not attached".to_owned(),
-                    expected: false,
-                })),
-                &mut tally,
-            )?;
+            let mut mux = mux_fixture();
+            mux.presence = Some(Presence::Poll {
+                reason: "sidebar running but the live tmux watch is not attached".to_owned(),
+                expected: false,
+            });
+            render_mux(w, &Probe::Ready(mux), &mut tally)?;
             render_tally(w, &tally)
         });
         assert!(
@@ -1644,18 +1613,15 @@ mod tests {
     }
 
     #[test]
-    fn remote_agent_label_splits_into_key_and_verdict() {
-        let _ = RemoteAgent {
-            label: "claude ready".to_owned(),
-            ready: true,
-        };
+    fn remote_agent_fields_render_as_key_and_verdict() {
         let out = strip(|w| {
             let mut tally = Tally::default();
             render_remote_control(
                 w,
                 &RemoteControl::On {
                     agents: vec![RemoteAgent {
-                        label: "claude enabled, blocked".to_owned(),
+                        kind: "claude",
+                        detail: "enabled, blocked".to_owned(),
                         ready: false,
                     }],
                     refusals: vec!["disableRemoteControl: true".to_owned()],

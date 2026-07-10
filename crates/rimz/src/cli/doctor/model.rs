@@ -369,7 +369,8 @@ pub(super) enum RemoteControl {
 
 #[derive(Debug, Serialize)]
 pub(super) struct RemoteAgent {
-    pub(super) label: String,
+    pub(super) kind: &'static str,
+    pub(super) detail: String,
     pub(super) ready: bool,
 }
 
