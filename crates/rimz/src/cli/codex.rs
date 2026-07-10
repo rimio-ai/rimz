@@ -218,7 +218,7 @@ fn confirm_codex_turn_death(
     session_id: &str,
     refresh: &mut agents::LocalContextRefresh,
 ) {
-    let Some(error) = refresh.turn_error.as_ref() else {
+    let Some(error) = refresh.turn_error.as_mut() else {
         return;
     };
     if !codex::turn_death_needs_pane_confirmation(error) {
@@ -228,7 +228,7 @@ fn confirm_codex_turn_death(
     rimz::sidebar::refresh::sessions::confirm_codex_turn_death_from_pane(
         runtime,
         pane.as_ref(),
-        refresh,
+        error,
     );
 }
 

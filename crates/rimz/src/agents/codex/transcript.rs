@@ -576,11 +576,12 @@ fn death_warning_from_frame_scan(frame: &str) -> Option<DeathWarning> {
     let search_len = prompt_idx.unwrap_or(lines.len());
     for idx in (0..search_len).rev() {
         let line = trim_frame_line(lines[idx]);
+        let banner = line.starts_with('⚠');
         if line.is_empty() || is_codex_input_prompt_text(line) {
             continue;
         }
         let class = TurnErrorClass::classify_label(Some(line));
-        if class == TurnErrorClass::Failed {
+        if class == TurnErrorClass::Failed && !banner {
             continue;
         }
         let anchor = trim_banner_ornaments(line);

@@ -643,6 +643,14 @@ again at 6:35 AM.
 
     assert_eq!(death_warning_from_frame("no warning\n› \n"), None);
     assert_eq!(
+        death_warning_from_frame(
+            "⚠ Selected model is at capacity. Please try a different model.\n\n⚠ Provider ended turn early\n› \n"
+        )
+        .as_deref(),
+        Some("Provider ended turn early"),
+        "the nearest warning banner wins even when its text is unrecognized"
+    );
+    assert_eq!(
         death_warning_from_frame("› You've hit your usage limit\n› \n"),
         None,
         "prompt echoes are not provider warnings"
@@ -650,7 +658,7 @@ again at 6:35 AM.
 }
 
 #[test]
-fn refine_turn_death_from_frame_only_parks_keyword_proven_warning() {
+fn refine_turn_death_from_frame_parks_keyword_proven_and_adopts_banner() {
     let mut capacity = crate::agents::AgentTurnError {
         class: crate::agents::TurnErrorClass::Unknown,
         at: "2026-07-03T12:55:00.000Z".parse().unwrap(),
@@ -704,11 +712,8 @@ again at 6:35 AM.
         label: Some("turn ended with no final message".to_owned()),
     };
     refine_turn_death_from_frame(&mut unknown, "⚠ Provider ended turn early\n› \n");
-    assert_eq!(unknown.class, crate::agents::TurnErrorClass::Unknown);
-    assert_eq!(
-        unknown.label.as_deref(),
-        Some("turn ended with no final message")
-    );
+    assert_eq!(unknown.class, crate::agents::TurnErrorClass::Failed);
+    assert_eq!(unknown.label.as_deref(), Some("Provider ended turn early"));
 }
 
 #[test]

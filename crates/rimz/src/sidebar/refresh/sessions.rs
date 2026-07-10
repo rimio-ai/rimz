@@ -5,14 +5,15 @@
 //! the same trigger seams hooks use.
 
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use jiff::Timestamp;
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
 use crate::agents::{
-    LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger,
+    AgentTurnError, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn,
+    RefreshTrigger,
 };
 use crate::ids::{AgentKind, PaneId};
 use crate::sidebar::timing::{
@@ -22,6 +23,7 @@ use crate::sidebar::timing::{
 use super::SidebarSnapshot;
 
 const CODEX_TURN_DEATH_CAPTURE_LINES: u16 = 60;
+const CODEX_TURN_DEATH_RETRY_WINDOW: Duration = Duration::from_secs(10 * 60);
 
 type SessionRefreshResult<T> = std::result::Result<T, crate::store::atomic::AtomicErr>;
 
@@ -167,7 +169,13 @@ fn refresh_session_transcript_context_core(
     };
     let refresh = adapter.local_context_refresh(RefreshTrigger::Tick, &ctx);
     let Some(refresh) = refresh else {
-        return Ok(false);
+        return retry_unconfirmed_codex_turn_death(
+            snapshot,
+            runtime,
+            kind,
+            session_id,
+            prior.as_ref(),
+        );
     };
     let mut refresh = refresh;
     if let Some(snapshot) = snapshot {
@@ -206,15 +214,22 @@ fn confirm_codex_turn_death_from_snapshot(
     session_id: &str,
     refresh: &mut LocalContextRefresh,
 ) {
-    if kind != "codex"
-        || refresh
-            .turn_error
-            .as_ref()
-            .is_none_or(|error| !crate::agents::codex::turn_death_needs_pane_confirmation(error))
-    {
+    let Some(error) = refresh.turn_error.as_mut() else {
+        return;
+    };
+    if kind != "codex" || !crate::agents::codex::turn_death_needs_pane_confirmation(error) {
         return;
     }
-    let pane = snapshot
+    let pane = session_pane_from_snapshot(snapshot, kind, session_id);
+    confirm_codex_turn_death_from_pane(runtime, pane, error);
+}
+
+fn session_pane_from_snapshot<'a>(
+    snapshot: &'a SidebarSnapshot,
+    kind: &str,
+    session_id: &str,
+) -> Option<&'a PaneId> {
+    snapshot
         .agent_panes
         .iter()
         .find(|pane| {
@@ -224,18 +239,14 @@ fn confirm_codex_turn_death_from_snapshot(
                     .as_ref()
                     .is_some_and(|agent_id| agent_id.as_str() == session_id)
         })
-        .map(|pane| &pane.pane_id);
-    confirm_codex_turn_death_from_pane(runtime, pane, refresh);
+        .map(|pane| &pane.pane_id)
 }
 
 pub fn confirm_codex_turn_death_from_pane(
     runtime: &RuntimePaths,
     pane: Option<&PaneId>,
-    refresh: &mut LocalContextRefresh,
+    error: &mut AgentTurnError,
 ) {
-    let Some(error) = refresh.turn_error.as_mut() else {
-        return;
-    };
     if !crate::agents::codex::turn_death_needs_pane_confirmation(error) {
         return;
     }
@@ -253,6 +264,38 @@ pub fn confirm_codex_turn_death_from_pane(
         let kind = AgentKind::new_unchecked("codex");
         crate::agents::codex::infer_turn_death_from_spent_window(error, budgets.get(&kind), now);
     }
+}
+
+fn retry_unconfirmed_codex_turn_death(
+    snapshot: Option<&SidebarSnapshot>,
+    runtime: &RuntimePaths,
+    kind: &str,
+    session_id: &str,
+    prior: Option<&crate::store::agent_context::AgentContextRecord>,
+) -> SessionRefreshResult<bool> {
+    let Some(error) = prior.and_then(|record| record.context.turn_error.as_ref()) else {
+        return Ok(false);
+    };
+    if !codex_turn_death_retry_due(kind, error, Timestamp::now()) {
+        return Ok(false);
+    }
+    let mut marker = error.clone();
+    let pane = snapshot.and_then(|snapshot| session_pane_from_snapshot(snapshot, kind, session_id));
+    confirm_codex_turn_death_from_pane(runtime, pane, &mut marker);
+    if marker == *error {
+        return Ok(false);
+    }
+    let changed = crate::store::agent_context::merge_turn_error(runtime, kind, session_id, marker)?;
+    if changed {
+        let _ = crate::store::wakeup::wake_sidebars(runtime);
+    }
+    Ok(changed)
+}
+
+fn codex_turn_death_retry_due(kind: &str, error: &AgentTurnError, now: Timestamp) -> bool {
+    kind == "codex"
+        && crate::agents::codex::turn_death_needs_pane_confirmation(error)
+        && now.duration_since(error.at).as_secs() <= CODEX_TURN_DEATH_RETRY_WINDOW.as_secs() as i64
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -533,28 +576,88 @@ mod tests {
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
         let now = write_spent_codex_window(&runtime);
-        let mut refresh = LocalContextRefresh {
-            model_id: None,
-            effort: None,
-            tokens: None,
-            cost: None,
-            turn_error: Some(crate::agents::AgentTurnError {
-                class: crate::agents::TurnErrorClass::Unknown,
-                at: now,
-                label: Some("turn ended with no final message".to_owned()),
-            }),
-            turn_complete: None,
-            turn_interrupted: None,
-            transcript_path: None,
-            transcript_stat: None,
+        let mut error = crate::agents::AgentTurnError {
+            class: crate::agents::TurnErrorClass::Unknown,
+            at: now,
+            label: Some("turn ended with no final message".to_owned()),
         };
 
-        confirm_codex_turn_death_from_pane(&runtime, None, &mut refresh);
+        confirm_codex_turn_death_from_pane(&runtime, None, &mut error);
 
-        let error = refresh.turn_error.expect("turn death remains stamped");
         assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
         assert_eq!(
             error.label.as_deref(),
+            Some("usage limit inferred (rate-limit window spent)")
+        );
+    }
+
+    #[test]
+    fn codex_turn_death_retry_is_bounded_to_generic_recent_codex_markers() {
+        let now = Timestamp::now();
+        let marker = crate::agents::AgentTurnError {
+            class: crate::agents::TurnErrorClass::Unknown,
+            at: now,
+            label: Some("turn ended with no final message".to_owned()),
+        };
+
+        assert!(codex_turn_death_retry_due("codex", &marker, now));
+        assert!(!codex_turn_death_retry_due("claude", &marker, now));
+
+        let classified = crate::agents::AgentTurnError {
+            class: crate::agents::TurnErrorClass::Failed,
+            ..marker.clone()
+        };
+        assert!(!codex_turn_death_retry_due("codex", &classified, now));
+
+        let expired = crate::agents::AgentTurnError {
+            at: now
+                .checked_sub(jiff::SignedDuration::from_secs(
+                    CODEX_TURN_DEATH_RETRY_WINDOW.as_secs() as i64 + 1,
+                ))
+                .unwrap(),
+            ..marker
+        };
+        assert!(!codex_turn_death_retry_due("codex", &expired, now));
+    }
+
+    #[test]
+    fn codex_turn_death_retry_merges_refined_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let at = write_spent_codex_window(&runtime);
+        let marker = crate::agents::AgentTurnError {
+            class: crate::agents::TurnErrorClass::Unknown,
+            at,
+            label: Some("turn ended with no final message".to_owned()),
+        };
+        let mut record = crate::store::agent_context::new_record(
+            "codex",
+            "sess-1",
+            crate::store::agent_context::empty_context("codex", at),
+        );
+        record.context.turn_error = Some(marker);
+        crate::store::agent_context::write_record(&runtime, &record).unwrap();
+        let prior = crate::store::agent_context::read_one(&runtime, "codex", "sess-1");
+
+        assert!(
+            retry_unconfirmed_codex_turn_death(None, &runtime, "codex", "sess-1", prior.as_ref(),)
+                .unwrap()
+        );
+
+        let refined = crate::store::agent_context::read_one(&runtime, "codex", "sess-1")
+            .unwrap()
+            .context
+            .turn_error
+            .expect("refined turn death remains stamped");
+        assert_eq!(refined.at, at);
+        assert_eq!(
+            refined.class,
+            crate::agents::TurnErrorClass::PausedRateLimit
+        );
+        assert_eq!(
+            refined.label.as_deref(),
             Some("usage limit inferred (rate-limit window spent)")
         );
     }
