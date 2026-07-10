@@ -1,15 +1,18 @@
 //! Zellij presence-plugin materialization and wakeup pipe helpers.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use std::{env, fs};
 
 use kdl::{KdlDocument, KdlNode};
 
 use super::{
-    PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_SHARE_PIPE,
-    PRESENCE_TOPOLOGY_PIPE, ZellijBackend,
+    PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_RETIRE_PROOF_TIMEOUT,
+    PRESENCE_SHARE_PIPE, PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
 use crate::mux::{MuxErr, Result};
+use crate::sidebar::cache::read_pane_topology_cache;
+use crate::sidebar::timing::unix_now_ms;
 use crate::store::{atomic, paths};
 
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
@@ -179,6 +182,64 @@ pub(super) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
 }
 
 impl ZellijBackend {
+    pub(super) fn converge_presence_plugin_for(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+    ) -> Result<()> {
+        self.converge_presence_plugin_for_with(
+            opts,
+            PRESENCE_RETIRE_PROOF_TIMEOUT,
+            TOPOLOGY_CACHE_POLL_STEP,
+        )
+    }
+
+    fn converge_presence_plugin_for_with(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+        timeout: Duration,
+        poll_step: Duration,
+    ) -> Result<()> {
+        let floor_ms = unix_now_ms();
+        self.ensure_presence_plugin_for(opts)?;
+        match self.pipe_to_presence_plugin(opts, PRESENCE_TOPOLOGY_PIPE, "dump") {
+            Ok(()) | Err(MuxErr::Timeout { .. }) => {}
+            Err(err) => return Err(err),
+        }
+
+        let runtime = match self.runtime_paths_for_workspace(opts.workspace_id.clone()) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                tracing::debug!(
+                    session = %opts.session_name,
+                    error = %err,
+                    "presence retire skipped because replacement proof paths are unavailable",
+                );
+                return Ok(());
+            }
+        };
+        if !wait_for_presence_replacement(
+            &runtime,
+            &opts.session_name,
+            floor_ms,
+            timeout,
+            poll_step,
+        ) {
+            tracing::debug!(
+                session = %opts.session_name,
+                "presence retire skipped because the replacement was not proven live",
+            );
+            return Ok(());
+        }
+        if let Err(err) = self.broadcast_presence_retire_for(&opts.session_name, &opts.rimz_bin) {
+            tracing::debug!(
+                session = %opts.session_name,
+                error = %err,
+                "presence retire broadcast failed",
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn ensure_presence_plugin_for(
         &self,
         opts: &super::super::PresencePluginOptions,
@@ -302,6 +363,29 @@ impl ZellijBackend {
             ])
             .run_with_timeout(PRESENCE_PIPE_TIMEOUT)
             .map(|_| ())
+    }
+}
+
+fn wait_for_presence_replacement(
+    runtime: &crate::store::RuntimePaths,
+    session_name: &str,
+    floor_ms: u64,
+    timeout: Duration,
+    poll_step: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if read_pane_topology_cache(runtime, session_name)
+            .and_then(|cache| cache.writer)
+            .is_some_and(|writer| writer.loaded_at_ms >= floor_ms)
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        std::thread::sleep(remaining.min(poll_step));
     }
 }
 
@@ -526,6 +610,49 @@ mod tests {
         (temp, shim)
     }
 
+    #[cfg(unix)]
+    fn presence_convergence_log(
+        writer: Option<crate::mux::zellij::pane_topology::TopologyWriter>,
+    ) -> String {
+        use crate::mux::zellij::pane_topology::PaneTopologyCache;
+        use crate::sidebar::cache::write_pane_topology_cache;
+        use crate::store::RuntimePaths;
+
+        let (temp, shim) = zellij_shim(
+            r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+exit 0
+"#,
+        );
+        let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
+        let mut opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+        opts.converge = true;
+        if let Some(writer) = writer {
+            let runtime =
+                RuntimePaths::under(opts.workspace_id.clone(), temp.path()).expect("runtime paths");
+            runtime.ensure_dirs().expect("runtime dirs");
+            write_pane_topology_cache(
+                &runtime,
+                &PaneTopologyCache {
+                    session_name: opts.session_name.clone(),
+                    produced_at_ms: u64::MAX,
+                    writer: Some(writer),
+                    focused_pane: None,
+                    clients: None,
+                    panes: Vec::new(),
+                },
+            )
+            .expect("write topology cache");
+        }
+
+        backend
+            .converge_presence_plugin_for_with(&opts, Duration::ZERO, Duration::ZERO)
+            .expect("converge presence plugin");
+
+        std::fs::read_to_string(temp.path().join("zellij.log")).expect("read log")
+    }
+
     #[test]
     fn embedded_presence_plugin_is_present() {
         assert!(!EMBEDDED_PRESENCE_PLUGIN.is_empty());
@@ -563,6 +690,55 @@ fi
         assert!(
             log.contains("--name rimz:share_session -- share"),
             "share should send the runtime web-sharing pipe and payload:\n{log}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn presence_convergence_skips_retire_without_replacement_topology() {
+        let log = presence_convergence_log(None);
+
+        assert!(
+            log.contains("--name rimz_presence_boot -- load"),
+            "convergence should boot the replacement:\n{log}",
+        );
+        assert!(
+            !log.contains("--name rimz:retire"),
+            "an unproven replacement must not retire the old plugin:\n{log}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn presence_convergence_retires_after_replacement_writer_is_proven() {
+        let log =
+            presence_convergence_log(Some(crate::mux::zellij::pane_topology::TopologyWriter {
+                plugin_id: 2,
+                loaded_at_ms: u64::MAX,
+            }));
+
+        assert!(
+            log.contains("--name rimz:dump_topology -- dump"),
+            "convergence should request replacement topology:\n{log}",
+        );
+        assert!(
+            log.contains("--name rimz:retire -- /home/user/.cargo/bin/rimz"),
+            "a proven replacement should retire stale plugins:\n{log}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn presence_convergence_rejects_old_writer_generation() {
+        let log =
+            presence_convergence_log(Some(crate::mux::zellij::pane_topology::TopologyWriter {
+                plugin_id: 1,
+                loaded_at_ms: 0,
+            }));
+
+        assert!(
+            !log.contains("--name rimz:retire"),
+            "fresh topology from an old writer must not prove the replacement:\n{log}",
         );
     }
 

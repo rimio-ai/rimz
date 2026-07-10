@@ -34,7 +34,7 @@ pub use zellij::ZellijBackend;
 
 use std::collections::BTreeMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -719,14 +719,10 @@ pub trait MuxBackend: Send + Sync {
     /// sidebar producer off its pane poll. A latency hint layered over the
     /// poll truth, so failure costs freshness only and callers never block on
     /// it. Zellij implements it; the default no-op covers tmux, whose
-    /// control-mode `PresenceWatch` already pushes.
+    /// control-mode `PresenceWatch` already pushes. With `converge`, Zellij
+    /// also retires stale instances once a current replacement proves it is
+    /// publishing topology.
     fn ensure_presence_plugin(&self, _opts: &PresencePluginOptions) -> Result<()> {
-        Ok(())
-    }
-    /// Broadcast the canonical room binary to every loaded presence plugin in
-    /// the session so stale instances can close themselves. Backends without a
-    /// persistent plugin ignore it.
-    fn broadcast_presence_retire(&self, _session_name: &str, _rimz_bin: &Path) -> Result<()> {
         Ok(())
     }
     /// Ask the session's presence plugin to enable Zellij web sharing for this

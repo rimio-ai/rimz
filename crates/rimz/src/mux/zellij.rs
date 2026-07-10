@@ -70,6 +70,10 @@ fn health_probe_timeout() -> Duration {
 /// topology payload.
 const TOPOLOGY_CACHE_POLL_STEP: Duration = Duration::from_millis(50);
 
+/// Maximum reload wait for a newly loaded presence-plugin generation to prove
+/// it is publishing before stale instances are retired.
+const PRESENCE_RETIRE_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// `query-tab-names` can hit an action-client startup race during busy session
 /// ticks.
 const TAB_NAMES_ATTEMPTS: u32 = 5;

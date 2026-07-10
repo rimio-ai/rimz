@@ -146,7 +146,10 @@ impl ZellijBackend {
         }
     }
 
-    fn runtime_paths_for_workspace(&self, workspace_id: WorkspaceId) -> Result<RuntimePaths> {
+    pub(super) fn runtime_paths_for_workspace(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> Result<RuntimePaths> {
         match &self.runtime_dir {
             Some(dir) => RuntimePaths::under(workspace_id, dir),
             None => RuntimePaths::for_workspace(workspace_id),

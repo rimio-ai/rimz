@@ -129,7 +129,11 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
     let workspaces = match workspace::known_workspaces() {
         Ok(workspaces) => workspaces,
         Err(err) => {
-            tracing::warn!(error = %err, "reload: cannot enumerate workspaces");
+            tracing::warn!(
+                tags.operation = "reload.enumerate_workspaces",
+                error = &err as &dyn std::error::Error,
+                "reload: cannot enumerate workspaces",
+            );
             return outcome;
         }
     };
@@ -157,7 +161,12 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
                 let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
                     Ok(runtime) => runtime,
                     Err(err) => {
-                        tracing::warn!(workspace = %ws.workspace_id, error = %err, "reload: runtime paths");
+                        tracing::warn!(
+                            workspace = %ws.workspace_id,
+                            tags.operation = "reload.runtime_paths",
+                            error = &err as &dyn std::error::Error,
+                            "reload: runtime paths",
+                        );
                         continue;
                     }
                 };
@@ -167,7 +176,12 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
                 let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
                     Ok(runtime) => runtime,
                     Err(err) => {
-                        tracing::warn!(workspace = %ws.workspace_id, error = %err, "reload: runtime paths");
+                        tracing::warn!(
+                            workspace = %ws.workspace_id,
+                            tags.operation = "reload.runtime_paths",
+                            error = &err as &dyn std::error::Error,
+                            "reload: runtime paths",
+                        );
                         continue;
                     }
                 };
@@ -243,7 +257,12 @@ fn reconcile_live(
     match wakeup::reload_sidebars(runtime) {
         Ok(_) => {}
         Err(err) => {
-            tracing::warn!(session = %ws.session_name, error = %err, "reload: signaling sidebars");
+            tracing::warn!(
+                session = %ws.session_name,
+                tags.operation = "reload.signal_sidebars",
+                error = &err as &dyn std::error::Error,
+                "reload: signaling sidebars failed",
+            );
         }
     }
 
@@ -302,15 +321,20 @@ fn reconcile_live(
             outcome.misdocked += report.misdocked;
         }
         Err(err) => {
-            tracing::warn!(session = %ws.session_name, error = %err, "reload: reconcile pass failed");
+            tracing::warn!(
+                session = %ws.session_name,
+                tags.operation = "reload.reconcile",
+                error = &err as &dyn std::error::Error,
+                "reload: reconcile pass failed",
+            );
         }
     }
 
     // 3. Converge the session's presence plugin onto the current wasm — reload
-    //    is the explicit upgrade verb, so a running plugin re-loads in place
-    //    when a client is attached (a detached session converges on its next
-    //    attached reload; the plugin is at worst the prior build, and poll
-    //    mode backstops it regardless). Best-effort like every step here.
+    //    is the explicit upgrade verb. Stale instances retire only after the
+    //    replacement publishes topology from its new writer generation; a
+    //    detached or degraded session keeps its prior plugin and retries on a
+    //    later reload. Best-effort like every step here.
     if let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact() {
         let presence = crate::mux::PresencePluginOptions {
             session_name: ws.session_name.clone(),
@@ -324,10 +348,12 @@ fn reconcile_live(
             mouse_click_through: mux_config.zellij.mouse_click_through,
         };
         if let Err(err) = backend.ensure_presence_plugin(&presence) {
-            tracing::warn!(session = %ws.session_name, error = %err, "reload: presence plugin convergence failed");
-        }
-        if let Err(err) = backend.broadcast_presence_retire(&ws.session_name, rimz_bin) {
-            tracing::debug!(session = %ws.session_name, error = %err, "reload: presence retire broadcast failed");
+            tracing::warn!(
+                session = %ws.session_name,
+                tags.operation = "reload.presence_converge",
+                error = &err as &dyn std::error::Error,
+                "reload: presence plugin convergence failed",
+            );
         }
     }
 
@@ -368,7 +394,8 @@ fn on_disk_build(rimz_bin: &Path) -> Option<String> {
         Err(err) => {
             tracing::warn!(
                 path = %binary.display(),
-                error = %err,
+                tags.operation = "reload.digest_binary",
+                error = &err as &dyn std::error::Error,
                 "reload: cannot digest on-disk binary; convergence is unverified",
             );
             None
@@ -496,7 +523,12 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
     }) {
         Ok(listing) => listing.panes.into_iter().map(|pane| pane.pane_id).collect(),
         Err(err) => {
-            tracing::warn!(session = %ws.session_name, error = %err, "reload: listing panes to reap orphans");
+            tracing::warn!(
+                session = %ws.session_name,
+                tags.operation = "reload.reap_list_panes",
+                error = &err as &dyn std::error::Error,
+                "reload: pane listing for orphan reap failed; skipping reap",
+            );
             return 0;
         }
     };

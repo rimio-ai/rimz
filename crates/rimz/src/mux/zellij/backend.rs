@@ -957,15 +957,11 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn ensure_presence_plugin(&self, opts: &super::super::PresencePluginOptions) -> Result<()> {
-        self.ensure_presence_plugin_for(opts)
-    }
-
-    fn broadcast_presence_retire(
-        &self,
-        session_name: &str,
-        rimz_bin: &std::path::Path,
-    ) -> Result<()> {
-        self.broadcast_presence_retire_for(session_name, rimz_bin)
+        if opts.converge {
+            self.converge_presence_plugin_for(opts)
+        } else {
+            self.ensure_presence_plugin_for(opts)
+        }
     }
 
     fn share_web_session(&self, opts: &super::super::PresencePluginOptions) -> Result<()> {
