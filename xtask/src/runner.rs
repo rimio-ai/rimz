@@ -1,8 +1,10 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::thread;
 
 use anyhow::{Context, Result, bail};
 
@@ -64,40 +66,52 @@ where
     ensure_success(program, &args, status)
 }
 
-pub(crate) fn run_captured<I, S>(
+pub(crate) fn run_streamed<I, S>(
     root: &Path,
     program: &str,
     args: I,
     removed_envs: &[&str],
-) -> Result<Captured>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    run_captured_with_env_and_removed(root, program, args, &[], removed_envs)
-}
-
-pub(crate) fn run_captured_with_env_and_removed<I, S>(
-    root: &Path,
-    program: &str,
-    args: I,
-    envs: &[(&str, PathBuf)],
-    removed_envs: &[&str],
+    on_line: &mut dyn FnMut(&str),
 ) -> Result<Captured>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    let output = build_command(root, program, &args, envs, removed_envs)
+    let mut child = build_command(root, program, &args, &[], removed_envs)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .with_context(|| format!("running `{program}`"))?;
-    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    let stdout = child.stdout.take().context("capturing command stdout")?;
+    let stderr = child.stderr.take().context("capturing command stderr")?;
+    let stdout_worker = thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut stdout = stdout;
+        stdout.read_to_end(&mut output).map(|_| output)
+    });
+
+    let mut stderr_output = String::new();
+    let stderr_result = (|| -> std::io::Result<()> {
+        for line in BufReader::new(stderr).lines() {
+            let line = line?;
+            on_line(&line);
+            stderr_output.push_str(&line);
+            stderr_output.push('\n');
+        }
+        Ok(())
+    })();
+    let status = child.wait().context("waiting for command")?;
+    let stdout = stdout_worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("command stdout reader panicked"))?
+        .context("reading command stdout")?;
+    stderr_result.context("reading command stderr")?;
+
+    let mut combined = String::from_utf8_lossy(&stdout).into_owned();
+    combined.push_str(&stderr_output);
     Ok(Captured {
-        status: output.status,
+        status,
         output: combined,
     })
 }

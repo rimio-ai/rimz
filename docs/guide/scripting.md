@@ -52,6 +52,8 @@ fi
 
 On success, stdout is the final assistant answer and nothing else, so it pipes cleanly. A failed, timed-out, or canceled run prints its status, the captured pane tail, and the transcript path on stderr, keeping stdout uncontaminated for the happy path.
 
+Long-running commands animate their current phase and elapsed time on an interactive stderr terminal. Set `RIMZ_NO_PROGRESS=1` to disable the status line everywhere; non-TTY stderr and RimZ-launched agent shells carrying `RIMZ_AGENT_KIND` disable it automatically.
+
 **Cap the wall clock.** `--timeout` bounds the run and turns a wedged turn into exit `124` your wrapper can handle.
 
 ```sh

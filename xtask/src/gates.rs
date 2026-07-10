@@ -10,7 +10,8 @@ use anyhow::{Context, Result, bail};
 use crate::build::build_plugin;
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
-use crate::runner::{ensure_success, run, run_captured, run_with_env_removed};
+use crate::runner::{ensure_success, run, run_streamed, run_with_env_removed};
+use crate::spinner::Spinner;
 
 const LINT_ARGS: &[&str] = &[
     "clippy",
@@ -149,7 +150,7 @@ const COVERAGE_LCOV_PATH: &str = "target/ci/coverage/lcov.info";
 // and a standalone CI job (see `externals`).
 type Gate = fn(&Path) -> Result<()>;
 
-type CompactGate = fn(&Path) -> Result<GateResult>;
+type CompactGate = fn(&Path, &mut dyn FnMut(&str)) -> Result<GateResult>;
 
 enum GateResult {
     Pass { note: Option<String> },
@@ -157,14 +158,27 @@ enum GateResult {
 }
 
 pub(crate) fn gate(root: &Path) -> Result<()> {
-    for (name, step) in [
+    let steps = [
         ("fmt", gate_fmt as CompactGate),
         ("invariants", gate_invariants),
         ("docs-links", gate_docs_links),
         ("lint", gate_lint),
         ("test", gate_test),
-    ] {
-        match step(root)? {
+    ];
+    let total = steps.len();
+    for (index, (name, step)) in steps.into_iter().enumerate() {
+        let base_label = format!("gate [{}/{}] {name}", index + 1, total);
+        let spinner = Spinner::new(&base_label);
+        let mut progress = |line: &str| {
+            let line = line.trim();
+            if !line.is_empty() {
+                let line = line.chars().take(100).collect::<String>();
+                spinner.set(format!("{base_label} — {line}"));
+            }
+        };
+        let result = step(root, &mut progress);
+        drop(spinner);
+        match result? {
             GateResult::Pass { note } => report_gate_pass(name, note.as_deref()),
             GateResult::Fail { detail } => {
                 report_gate_failure(name, &detail);
@@ -176,28 +190,29 @@ pub(crate) fn gate(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn gate_fmt(root: &Path) -> Result<GateResult> {
-    captured_cargo_gate(root, ["fmt", "--all"], &[], None)
+fn gate_fmt(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+    captured_cargo_gate(root, ["fmt", "--all"], &[], None, progress)
 }
 
-fn gate_invariants(root: &Path) -> Result<GateResult> {
+fn gate_invariants(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     Ok(in_process_gate(|| invariants(root)))
 }
 
-fn gate_docs_links(root: &Path) -> Result<GateResult> {
+fn gate_docs_links(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     Ok(in_process_gate(|| docs_links(root)))
 }
 
-fn gate_lint(root: &Path) -> Result<GateResult> {
-    captured_cargo_gate(root, LINT_ARGS.iter().copied(), &[], None)
+fn gate_lint(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+    captured_cargo_gate(root, LINT_ARGS.iter().copied(), &[], None, progress)
 }
 
-fn gate_test(root: &Path) -> Result<GateResult> {
+fn gate_test(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     captured_cargo_gate(
         root,
         GATE_TEST_ARGS.iter().copied(),
         &["NO_COLOR"],
         Some(extract_test_summary),
+        progress,
     )
 }
 
@@ -206,12 +221,13 @@ fn captured_cargo_gate<I, S>(
     args: I,
     removed_envs: &[&str],
     note: Option<fn(&str) -> Option<String>>,
+    progress: &mut dyn FnMut(&str),
 ) -> Result<GateResult>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let captured = run_captured(root, "cargo", args, removed_envs)?;
+    let captured = run_streamed(root, "cargo", args, removed_envs, progress)?;
     if captured.status.success() {
         return Ok(GateResult::Pass {
             note: note.and_then(|extract| extract(&captured.output)),

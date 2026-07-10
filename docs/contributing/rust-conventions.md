@@ -244,6 +244,7 @@ Escalate past `gate` when the change touches the matching surface: `cargo xtask 
 
 The individual gates:
 
+- Long-running human-facing phases show a TTY-gated stderr status line with the live phase and elapsed time; `xtask/src/spinner.rs` is a deliberate lightweight copy of the RimZ CLI spinner that keeps xtask independent of the runtime crate.
 - `cargo fmt --all -- --check` — formatting (the `fmt` task).
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
 - `cargo nextest run --workspace --all-features --locked` — the `test` task; accepts nextest filters and profiles as trailing args.

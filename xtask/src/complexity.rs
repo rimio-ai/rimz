@@ -4,12 +4,19 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering as AtomicOrdering},
+};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::runner;
 use crate::source_files;
+use crate::spinner::Spinner;
 
 const COMPLEXITY_OUTPUT_DIR: &str = "target/complexity";
 const DEFAULT_TOP_N: usize = 20;
@@ -164,6 +171,7 @@ struct DirectoryRollup {
 pub(crate) fn complexity(root: &Path, args: &[String]) -> Result<()> {
     let args = parse_complexity_args(args)?;
     ensure_complexity_prerequisites()?;
+    let spinner = Arc::new(Spinner::new("complexity — listing tracked files"));
     let files = source_files::tracked_rust_files(root)?;
     if files.is_empty() {
         bail!("no tracked Rust files found");
@@ -193,8 +201,32 @@ pub(crate) fn complexity(root: &Path, args: &[String]) -> Result<()> {
         command_args.push(OsString::from("-p"));
         command_args.push(relative.as_os_str().to_owned());
     }
-    runner::run(root, "rust-code-analysis-cli", command_args)?;
+    spinner.set(format!("complexity — analyzing 0/{} files", files.len()));
+    let watcher_stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&watcher_stop);
+    let worker_spinner = Arc::clone(&spinner);
+    let worker_output_dir = output_dir.clone();
+    let total = files.len();
+    let watcher = thread::spawn(move || {
+        while !worker_stop.load(AtomicOrdering::Relaxed) {
+            let mut json_files = Vec::new();
+            if walk_json_files(&worker_output_dir, &mut json_files).is_ok() {
+                worker_spinner.set(format!(
+                    "complexity — analyzing {}/{total} files",
+                    json_files.len()
+                ));
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+    });
+    let analysis = runner::run(root, "rust-code-analysis-cli", command_args);
+    watcher_stop.store(true, AtomicOrdering::Relaxed);
+    if watcher.join().is_err() {
+        bail!("complexity progress watcher panicked");
+    }
+    analysis?;
 
+    spinner.set("complexity — aggregating reports");
     let mut json_files = Vec::new();
     walk_json_files(&output_dir, &mut json_files)?;
     let reports = json_files
@@ -223,6 +255,7 @@ pub(crate) fn complexity(root: &Path, args: &[String]) -> Result<()> {
     }
 
     source_groups.sort_by(compare_file_groups);
+    drop(spinner);
     if args.json {
         print_json(&source_groups, args.top_n)?;
     } else {
