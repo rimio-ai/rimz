@@ -193,7 +193,9 @@ fn ambiguous_prompt_leader_refuses_before_side_effects() {
         .assert()
         .failure()
         .stderr(contains("this layout has several `claude` cells"))
-        .stderr(contains("give the leader a role (`claude:lead,claude`)"));
+        .stderr(contains(
+            "give the first cell an inline role (`claude:lead,claude`)",
+        ));
 
     assert!(
         !env.state_path_for(&env.project_root).events_log.exists(),

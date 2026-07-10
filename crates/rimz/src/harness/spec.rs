@@ -194,7 +194,7 @@ pub enum LayoutErr {
         valid_roles: String,
     },
     #[error(
-        "the launch prompt goes to the leader — the first agent cell — but this layout has several `{token}` cells; give the leader a role (`{token}:lead,{token}`), set `leader` on a named team, or launch without a prompt and `rimz message` the right agent"
+        "the launch prompt leader `{token}` is ambiguous because this layout has several `{token}` cells; give the first cell an inline role (`{token}:lead,{token}`), use a unique profile plus `leader` on a named team, or launch without a prompt and `rimz message` the right agent"
     )]
     AmbiguousPromptLeader { token: String },
     #[error("this layout has no agent cell to receive a prompt")]
