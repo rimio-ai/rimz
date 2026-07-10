@@ -947,65 +947,83 @@ impl LoopState {
         // Once the tab has emptied, never paint again. A grow resize also
         // defers its paint until the sibling-count verdict releases the hold.
         let watched = self.watched();
-        let background_key = (self.dirty && !watched && !self.dirty_paintable(watched))
-            .then(|| background_content_key(&self.current));
-        let background = background_key.as_ref().is_some_and(|key| {
-            self.last_bg_paint.is_none_or(|at| {
-                now.saturating_duration_since(at)
-                    >= crate::sidebar::timing::BACKGROUND_PAINT_MIN_INTERVAL
-            }) && self.last_bg_key.as_ref() != Some(key)
-        });
+        let background_key = self.background_paint_due(now, watched);
         let paintable = (active && watched) || (self.dirty && self.dirty_paintable(watched));
         if !self.should_exit
             && !self.self_close.confirming_empty()
             && !paint_blocked
-            && ((paintable && now >= self.next_frame) || background)
+            && ((paintable && now >= self.next_frame) || background_key.is_some())
         {
-            self.ui.animation_phase =
-                wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
-            let alert_active = self
-                .health
-                .alert
-                .as_ref()
-                .is_some_and(render::Alert::is_active);
-            let animating = is_animating(
-                &self.current,
-                &self.ui,
-                self.ui.animation_phase,
-                alert_active,
-            );
-            if self.dirty || animating {
-                let was_dirty = self.dirty;
-                self.paint
-                    .refresh_view(&mut self.ui, &self.current, alert_active);
-                self.paint.draw_and_paint(
-                    terminal,
-                    &self.current,
-                    self.health.alert.as_ref(),
-                    &mut self.ui,
-                )?;
-                self.dirty = false;
-                if was_dirty {
-                    self.last_bg_key = Some(
-                        background_key
-                            .clone()
-                            .unwrap_or_else(|| background_content_key(&self.current)),
-                    );
-                }
-                if background {
-                    self.last_bg_paint = Some(now);
-                }
-            }
-            self.next_frame = next_frame_after(
-                self.next_frame,
-                now,
-                frame_interval(&self.current, &self.ui, alert_active),
-            );
+            self.paint_now(terminal, anim_start, now, background_key)?;
         } else if !active && !self.dirty {
             // Idle re-arm only: with a fold pending, the armed boundary must
             // hold so a paint already due within one frame is not pushed out.
             self.next_frame = now + animation_frame(&self.current);
         }
+        Ok(())
+    }
+
+    /// Whether an off-screen dirty frame earns a background paint: content key
+    /// changed and the minimum interval elapsed.
+    fn background_paint_due(&self, now: Instant, watched: bool) -> Option<BackgroundContentKey> {
+        if !self.dirty || watched || self.dirty_paintable(watched) {
+            return None;
+        }
+        let key = background_content_key(&self.current);
+        (self.last_bg_paint.is_none_or(|at| {
+            now.saturating_duration_since(at)
+                >= crate::sidebar::timing::BACKGROUND_PAINT_MIN_INTERVAL
+        }) && self.last_bg_key.as_ref() != Some(&key))
+        .then_some(key)
+    }
+
+    fn paint_now(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        anim_start: Instant,
+        now: Instant,
+        background_key: Option<BackgroundContentKey>,
+    ) -> Result<()> {
+        self.ui.animation_phase =
+            wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
+        let alert_active = self
+            .health
+            .alert
+            .as_ref()
+            .is_some_and(render::Alert::is_active);
+        let animating = is_animating(
+            &self.current,
+            &self.ui,
+            self.ui.animation_phase,
+            alert_active,
+        );
+        if self.dirty || animating {
+            let was_dirty = self.dirty;
+            self.paint
+                .refresh_view(&mut self.ui, &self.current, alert_active);
+            self.paint.draw_and_paint(
+                terminal,
+                &self.current,
+                self.health.alert.as_ref(),
+                &mut self.ui,
+            )?;
+            self.dirty = false;
+            if was_dirty {
+                self.last_bg_key = Some(
+                    background_key
+                        .clone()
+                        .unwrap_or_else(|| background_content_key(&self.current)),
+                );
+            }
+            if background_key.is_some() {
+                self.last_bg_paint = Some(now);
+            }
+        }
+        self.next_frame = next_frame_after(
+            self.next_frame,
+            now,
+            frame_interval(&self.current, &self.ui, alert_active),
+        );
         Ok(())
     }
 
