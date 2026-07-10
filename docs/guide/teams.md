@@ -10,27 +10,29 @@ rimz agents forge --resume                # reopen the newest closed forge team
 
 ## Why split the work
 
-Every agent works inside one context window, and everything it does fills it: files read, tool output, discussion, dead ends. A filling window costs more per turn and reasons less sharply, so the window is the real budget a long task runs against.
+Every agent works inside one context window, and everything it does fills it: files read, tool output, discussion, dead ends. A filling window costs more per turn and reasons less sharply, so the window is the real budget a long task runs against. And inside the window, attention is the scarcer resource still: a model weighs everything it holds against everything else, and when everything claims importance, nothing receives it.
 
 Subagents are the first tool against that, and a good one. The parent dispatches an explore subagent to locate the relevant code and folds back a summary instead of the whole search; plan subagents draft competing directions in parallel. But a subagent runs one way: the parent spawns it, collects its report, and still carries the whole task in its own window.
 
 A team splits the task itself across independent windows:
 
 - Each member keeps its own context and its own attention, the way specialists on a human team do. Each member still uses its own subagents, so a team stacks on that architecture rather than replacing it.
-- Each member can run a different provider. Model capability is jagged — brilliant at one kind of work, mediocre at the next — and every model's peaks and valleys sit in different places, so mixing providers lets one model's peak cover another's valley: better results for fewer tokens.
+- Each member can run a different provider. Model capability is jagged (brilliant at one kind of work, mediocre at the next), the peaks and valleys sit in different places per model, and each model has a comfort zone shaped by its size and training. Matching phases of the work to models lets one model's peak cover another's valley: better results for fewer tokens.
 - Members talk both ways, over as many rounds as the work needs: a downstream role can ask, push back, and escalate, which a subagent can never do to its parent.
 
-The split itself is yours to design: two roles or five, one provider or several, whatever shape the work divides into. The rest of this page walks one split that has proven itself.
+That is what a team manages: which window holds which part of the problem, and what each window's attention is spent on. The split itself is yours to design: two roles or five, one provider or several, whatever shape the work divides into. The rest of this page walks one split that has proven itself.
 
 ## The forge loop
 
 `forge` is the team Rimz builds itself with, shipped ready to copy under [`examples/teams/forge/`](../../examples/README.md): three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system-prompt file.
 
-- **@planner** (Claude) talks with you. It explores the code through subagents, drafts directions, confirms the design choices with you, and writes the plan. By hand-off its window holds the whole design history: the exploration, the alternatives weighed, your decisions. That context is exactly what good design calls for, and exactly what execution doesn't need; letting the same heavy window type the code would be slower, pricier, and past its sharpest.
-- **@coder** (Codex) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. Focused, unburdened, and playing to Codex's strength at executing a precise spec, it implements faster and cheaper, with a far better shot at working code in one pass. It verifies the plan against the real code as it goes rather than trusting it.
-- **@reviewer** (Claude) is a third fresh window. It reads the plan, reviews the full diff blind before opening the coder's report, so its findings form from the code rather than the coder's narrative, then reconciles that report claim by claim.
+- **@planner** (Claude, on Fable) talks with you. It explores the code through subagents, drafts directions, confirms the design choices with you, and writes the plan. Planning is where a deep model earns its price: Fable reads the intention behind a question, holds a large design in view, and writes implementation plans precise enough to execute. On a complex problem that conversation alone fills 200k to 300k tokens, and by hand-off the window holds the whole design history: the exploration, the alternatives weighed, your decisions. That context is exactly what good design calls for, and exactly what execution doesn't need. Asking the same window to also type the code would push it toward 400k to 600k tokens, where every turn gets slower and pricier and a big model's reasoning starts to dull.
+- **@coder** (Codex, on Sol, the current GPT 5.6) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. Sol is fast, cheap, and writes robust code once the details are pinned down, and a precise plan makes its context loading precise too: it pulls in just the code the change touches and implements from there. It verifies the plan against the real code as it goes rather than trusting it.
+- **@reviewer** (Claude, on Opus) is a third fresh window. It reads the plan, reviews the full diff blind before opening the coder's report, so its findings form from the code rather than the coder's narrative, then reconciles that report claim by claim.
 
-The roles keep talking. The coder hits a choice the plan left open and takes it to the planner, whose full design context makes it the right desk for the call. Coder and reviewer argue findings with `file:line` evidence, fix or push back, and escalate to the planner when a dispute turns out to be a design call. Three independent windows, each with its own focus, cooperating as one team.
+By the time implementation starts, two windows understand the problem from different sides: the planner's holds the design history, the coder's holds the code as it stands, and each catches what the other misses. So the roles keep talking. The coder hits a choice the plan left open and takes it to the planner, whose full design context makes it the right desk for the call. Coder and reviewer argue findings with `file:line` evidence, fix or push back, and escalate to the planner when a dispute turns out to be a design call. Three independent windows, each with its own focus, cooperating as one team.
+
+The split reads like it should multiply cost; in practice it divides it. Building Rimz with forge, a complex change that a single Fable window would carry to 400k or 500k tokens and well past $100 lands around $10 of planning, $20 of coding, and $10 of review, and the quality rises as the price falls, because each window spends its whole budget inside its comfort zone.
 
 <p align="center">
   <img src="../rimz-team.png" alt="A Rimz room running forge teams: the coder messages the planner about a gap in the plan, and the planner takes the design call" width="100%">
