@@ -238,7 +238,7 @@ fn resolve_fork_source(
     match crate::cli::resolve_agent_one(snapshot, reference, None, current_channel.as_deref()) {
         Ok(agent) => Ok(agent.clone()),
         Err(live_err) => {
-            match super::commands::resolve_audit_agent(store, workspace, runtime, reference) {
+            match super::show::resolve_audit_agent(store, workspace, runtime, reference) {
                 Ok(Some(agent)) => Ok(agent),
                 Ok(None) => Err(live_err),
                 Err(audit_err) => Err(audit_err),

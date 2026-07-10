@@ -17,6 +17,7 @@ use rimz::workspace::WorkspaceResolver;
 
 pub(super) mod output;
 pub(super) mod pane;
+pub(super) mod run;
 pub(super) mod stream;
 pub(super) mod verify;
 

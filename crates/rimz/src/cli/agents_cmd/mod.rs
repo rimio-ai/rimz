@@ -4,20 +4,25 @@ mod auto_continue;
 mod budget;
 mod budget_park;
 mod check;
-mod commands;
 mod exec;
 mod fork;
 mod history;
 mod launch;
+mod list;
+mod logs;
 mod reconcile;
 mod refresh;
 mod refresh_usage;
 mod register;
 mod restart;
 mod resume;
+mod runs_lookup;
+mod show;
+mod stop;
 mod supervised;
 pub(crate) mod team_restore;
 mod top;
+mod wait;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -36,7 +41,6 @@ use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
 use rimz::config::LaunchPlacement;
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
-use rimz::harness::run_wake::{self, ExpectedRunFrame, SocketGuard};
 use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId, EventId};
 use rimz::message::{DeliveryGate, gate_open};
@@ -48,24 +52,28 @@ use auto_continue::{AutoContinueArgs, run_auto_continue};
 use budget::{BudgetArgs, run_budget};
 use budget_park::{BudgetParkArgs, run_budget_park};
 use check::{CheckArgs, run_check};
-pub(crate) use commands::render_agents_table;
-#[cfg(test)]
-use commands::{RunPlacement, run_placement, run_stop_should_cancel, validate_supervised_output};
-use commands::{
-    focus_agent, list_agents, logs_agent, run_print, run_supervised, show_agent, stop_agent,
-    wait_agent,
-};
 use exec::run_exec;
 use fork::{ForkArgs, run_fork};
 use history::history_agent;
 use launch::*;
+use list::list_agents;
+pub(crate) use list::render_agents_table;
+use logs::logs_agent;
 use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
 use resume::resume_lane;
+use show::{focus_agent, show_agent};
+#[cfg(test)]
+use stop::run_stop_should_cancel;
+use stop::stop_agent;
+#[cfg(test)]
+use supervised::run::{RunPlacement, run_placement, validate_supervised_output};
+use supervised::run::{run_print, run_supervised};
 pub(crate) use supervised::stream::TranscriptCursor;
 use top::{TopArgs, run_top};
+use wait::wait_agent;
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);

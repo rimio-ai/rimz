@@ -23,7 +23,7 @@ pub(super) fn history_agent(
     let (agent, resolved_live) = match live_result {
         Ok(agent) => (agent.clone(), true),
         Err(live_error) => {
-            match super::commands::resolve_audit_agent(&store, &workspace, &runtime, &reference)? {
+            match super::show::resolve_audit_agent(&store, &workspace, &runtime, &reference)? {
                 Some(agent) => (agent, false),
                 None => return Err(live_error),
             }

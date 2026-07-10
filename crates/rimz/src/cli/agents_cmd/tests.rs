@@ -2225,7 +2225,7 @@ mod render {
         );
 
         let mut active_out = anstream::StripStream::new(Vec::new());
-        super::commands::render_activity_section(&mut active_out, &active, None, false, now)
+        super::show::render_activity_section(&mut active_out, &active, None, false, now)
             .expect("render active activity");
         let active_text = String::from_utf8(active_out.into_inner()).expect("utf8");
         assert!(
@@ -2242,7 +2242,7 @@ mod render {
         );
 
         let mut idle_out = anstream::StripStream::new(Vec::new());
-        super::commands::render_activity_section(&mut idle_out, &idle, None, false, now)
+        super::show::render_activity_section(&mut idle_out, &idle, None, false, now)
             .expect("render idle activity");
         let idle_text = String::from_utf8(idle_out.into_inner()).expect("utf8");
         assert!(idle_text.contains("status:"), "{idle_text}");
