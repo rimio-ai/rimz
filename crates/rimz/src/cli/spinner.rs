@@ -126,7 +126,7 @@ fn animation_allowed(
     term: Option<&str>,
 ) -> bool {
     !matches!(no_progress, Some("1") | Some("true"))
-        && !agent_kind.is_some_and(|kind| !kind.is_empty())
+        && agent_kind.is_none_or(str::is_empty)
         && term != Some("dumb")
 }
 
