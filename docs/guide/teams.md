@@ -78,7 +78,9 @@ Start from the forge directory or from scratch: rename the roles, add or drop so
 
 ## Relaunch reconciles instead of duplicating
 
-Point `rimz agents <team> -w <name>` at a worktree that already holds that team, and Rimz reads the state first: a live team focuses its tab, a closed team with work in progress offers to resume it, and a clean merged tree offers to remove it and start fresh.
+Point any co-launched layout — a named team or an inline multi-agent spec — at an explicit worktree name, and Rimz reads the state first: a live cohort focuses its tab, a closed cohort with work in progress offers to resume it, and a clean merged tree offers to remove it and start fresh.
+
+`rimz agents claude:planner,codex:coder -w feat-once` focuses the existing pair when the same command runs again.
 
 `--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume takes identity, working directory, and channel from Rimz's durable records, so it stands alone: no prompt, model, or channel flags ride with it.
 
