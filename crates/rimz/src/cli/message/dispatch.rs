@@ -236,8 +236,15 @@ pub(super) fn dispatch_message(
     let store = open_store(&workspace)?;
     let channel = current_channel(&workspace);
     let sender = send::sender_from_env(channel.as_deref(), spec.no_from);
+    let needs_agent_context = spec.auto_compact.is_some()
+        || !spec.after.is_empty()
+        || matches!(sender, MessageSender::Agent { .. })
+        || send::agent_caller();
+    let agent_context = needs_agent_context
+        .then(|| read_agent_context(&workspace))
+        .flatten();
     let mut pending = Vec::new();
-    let mut agent_context = None;
+    let mut cached_snapshot = None;
     let rollup_only = match mode {
         MessageDispatchMode::Steer => false,
         MessageDispatchMode::Boundary => {
@@ -246,12 +253,9 @@ pub(super) fn dispatch_message(
             if (!spec.after.is_empty()
                 || matches!(sender, MessageSender::Agent { .. })
                 || send::agent_caller())
-                && let Ok(runtime) =
-                    rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+                && let Some(records) = agent_context.as_ref()
             {
-                let records = rimz::store::agent_context::read_all(&runtime);
                 snapshot = snapshot.with_agent_context(records.clone());
-                agent_context = Some(records);
             }
             let rollup_only = message_dispatch::rollup_targets_all_park_without_live(
                 &snapshot,
@@ -262,62 +266,19 @@ pub(super) fn dispatch_message(
                 spec.gate,
                 spec.force,
             );
-            if rollup_only {
-                let durable_agents = message_dispatch::durable_target_agents(&store)?;
-                let Some(targets) = resolve_message_targets(
-                    &store,
-                    &workspace,
-                    &snapshot,
-                    &sender,
-                    &target,
-                    worktree.as_deref(),
-                    channel_flag.as_deref(),
-                    channel.as_deref(),
-                    &text,
-                    flags.create,
-                    globals,
-                    &durable_agents,
-                    true,
-                )?
-                else {
-                    return Ok(());
-                };
-                let after = resolve_after_conditions(
-                    &snapshot,
-                    &durable_agents,
-                    &targets,
-                    &spec.after,
-                    worktree.as_deref().or(channel_flag.as_deref()),
-                    channel.as_deref(),
-                    true,
-                    spec.gate,
-                    &pending,
-                )?;
-                return dispatch_resolved_message(
-                    mode, &workspace, &store, &snapshot, pending, &sender, target, text, spec,
-                    flags, targets, channel, after,
-                );
-            }
-            false
+            cached_snapshot = Some(snapshot);
+            rollup_only
         }
     };
-    let mut snapshot = crate::cli::resolution_snapshot(&workspace, &store, globals)?;
+    let mut snapshot = match cached_snapshot.filter(|_| rollup_only) {
+        Some(snapshot) => snapshot,
+        None => crate::cli::resolution_snapshot(&workspace, &store, globals)?,
+    };
     // Smart compaction reads context fill. Immediate message sends share the
     // live path, so fold the disposable context sidecars before any send-now
     // decision that might compact first.
-    if spec.auto_compact.is_some()
-        || !spec.after.is_empty()
-        || matches!(sender, MessageSender::Agent { .. })
-        || send::agent_caller()
-    {
-        if agent_context.is_none()
-            && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        {
-            agent_context = Some(rimz::store::agent_context::read_all(&runtime));
-        }
-        if let Some(records) = agent_context {
-            snapshot = snapshot.with_agent_context(records);
-        }
+    if !rollup_only && let Some(records) = agent_context {
+        snapshot = snapshot.with_agent_context(records);
     }
     let durable_agents = message_dispatch::durable_target_agents(&store)?;
     let Some(targets) = resolve_message_targets(
@@ -345,7 +306,7 @@ pub(super) fn dispatch_message(
         &spec.after,
         worktree.as_deref().or(channel_flag.as_deref()),
         channel.as_deref(),
-        false,
+        rollup_only,
         spec.gate,
         &pending,
     )?;
@@ -353,6 +314,14 @@ pub(super) fn dispatch_message(
         mode, &workspace, &store, &snapshot, pending, &sender, target, text, spec, flags, targets,
         channel, after,
     )
+}
+
+fn read_agent_context(
+    workspace: &ResolvedWorkspace,
+) -> Option<Vec<rimz::store::agent_context::AgentContextRecord>> {
+    rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .ok()
+        .map(|runtime| rimz::store::agent_context::read_all(&runtime))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -508,74 +477,12 @@ pub(super) fn dispatch_resolved_message(
     }
     let caller_identity = send::agent_caller_identity();
     let reply_targets = if spec.wait.is_on() {
-        let mut reply_targets = Vec::with_capacity(targets.len());
-        let mut checked_kinds = BTreeSet::new();
-        let guard_records = if caller_identity.is_some() {
-            Some((store.list_messages()?, store.list_message_history()?))
-        } else {
-            None
-        };
-        for resolved in &targets {
-            let label = resolved.label(snapshot);
-            let identity = resolved.agent().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--wait requires an agent with lifecycle state; `{label}` is only a pane target"
-                )
-            })?;
-            let agent = snapshot
-                .agents
-                .iter()
-                .find(|agent| {
-                    rimz::message::card_matches(
-                        &identity.kind,
-                        &identity.agent_id,
-                        identity.name.as_deref(),
-                        &agent.kind,
-                        &agent.agent_id,
-                        agent.name.as_deref(),
-                    )
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "--wait requires a live agent with lifecycle state; `{label}` is not running"
-                    )
-                })?;
-            let adapter = rimz::agents::find_adapter(agent.kind.as_str())
-                .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
-            if checked_kinds.insert(agent.kind.clone()) {
-                if !adapter.hooks_installed() {
-                    bail!(
-                        "--wait requires {} hooks so the reply turn can report its boundaries; run `rimz hooks install {}`",
-                        agent.kind,
-                        agent.kind
-                    );
-                }
-                let untrusted = adapter.untrusted_installed_hooks();
-                if !untrusted.is_empty() {
-                    bail!(
-                        "{} hooks are installed but not trusted ({}); {}",
-                        agent.kind,
-                        untrusted.join(", "),
-                        rimz::agents::hook_trust_fix(agent.kind.as_str())
-                    );
-                }
-            }
-            if let (Some((self_kind, self_name)), Some((live, history))) =
-                (caller_identity.as_ref(), guard_records.as_ref())
-                && let Some(cycle) = rimz::message::wait_guard::wait_cycle(
-                    live,
-                    history,
-                    &snapshot.agents,
-                    self_kind,
-                    self_name,
-                    agent,
-                )
-            {
-                return Err(wait_cycle_error(&cycle, &label));
-            }
-            reply_targets.push(reply::ReplyTarget::new(agent, label, adapter));
-        }
-        Some(reply_targets)
+        Some(resolve_reply_targets(
+            store,
+            snapshot,
+            &targets,
+            caller_identity.as_ref(),
+        )?)
     } else {
         None
     };
@@ -652,6 +559,90 @@ pub(super) fn dispatch_resolved_message(
     )
 }
 
+fn resolve_reply_targets(
+    store: &rimz::Store,
+    snapshot: &SidebarSnapshot,
+    targets: &[message_dispatch::QueueTarget<'_>],
+    caller_identity: Option<&(AgentKind, String)>,
+) -> Result<Vec<reply::ReplyTarget>> {
+    let mut reply_targets = Vec::with_capacity(targets.len());
+    let mut checked_kinds = BTreeSet::new();
+    let guard_records = if caller_identity.is_some() {
+        Some((store.list_messages()?, store.list_message_history()?))
+    } else {
+        None
+    };
+    for resolved in targets {
+        let label = resolved.label(snapshot);
+        let identity = resolved.agent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--wait requires an agent with lifecycle state; `{label}` is only a pane target"
+            )
+        })?;
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| {
+                rimz::message::card_matches(
+                    &identity.kind,
+                    &identity.agent_id,
+                    identity.name.as_deref(),
+                    &agent.kind,
+                    &agent.agent_id,
+                    agent.name.as_deref(),
+                )
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--wait requires a live agent with lifecycle state; `{label}` is not running"
+                )
+            })?;
+        let adapter = rimz::agents::find_adapter(agent.kind.as_str())
+            .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
+        if checked_kinds.insert(agent.kind.clone()) {
+            preflight_reply_hooks(agent, adapter)?;
+        }
+        if let (Some((self_kind, self_name)), Some((live, history))) =
+            (caller_identity, guard_records.as_ref())
+            && let Some(cycle) = rimz::message::wait_guard::wait_cycle(
+                live,
+                history,
+                &snapshot.agents,
+                self_kind,
+                self_name,
+                agent,
+            )
+        {
+            return Err(wait_cycle_error(&cycle, &label));
+        }
+        reply_targets.push(reply::ReplyTarget::new(agent, label, adapter));
+    }
+    Ok(reply_targets)
+}
+
+fn preflight_reply_hooks(
+    agent: &AgentState,
+    adapter: &dyn rimz::agents::AgentAdapter,
+) -> Result<()> {
+    if !adapter.hooks_installed() {
+        bail!(
+            "--wait requires {} hooks so the reply turn can report its boundaries; run `rimz hooks install {}`",
+            agent.kind,
+            agent.kind
+        );
+    }
+    let untrusted = adapter.untrusted_installed_hooks();
+    if !untrusted.is_empty() {
+        bail!(
+            "{} hooks are installed but not trusted ({}); {}",
+            agent.kind,
+            untrusted.join(", "),
+            rimz::agents::hook_trust_fix(agent.kind.as_str())
+        );
+    }
+    Ok(())
+}
+
 fn wait_cycle_error(
     cycle: &[rimz::message::wait_guard::WaitCycleHop],
     target: &str,
@@ -724,56 +715,54 @@ pub(super) fn report_dispatch(
     outcomes: &[DispatchOutcome],
     compacted: &[String],
 ) -> Result<()> {
-    if matches!(mode, ReportMode::Boundary) {
-        for label in compacted {
+    match mode {
+        ReportMode::Boundary => report_boundary(outcomes, compacted),
+        ReportMode::Steer => report_steer(target, total, outcomes, compacted),
+    }
+}
+
+fn report_boundary(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {
+    for label in compacted {
+        #[expect(clippy::print_stdout, reason = "command result")]
+        {
+            println!("compacted {label}");
+        }
+    }
+    for outcome in outcomes {
+        if let Some(line) = render_dispatch_outcome(outcome) {
             #[expect(clippy::print_stdout, reason = "command result")]
             {
-                println!("compacted {label}");
+                println!("{line}");
             }
         }
-        for outcome in outcomes {
-            if let Some(line) = render_dispatch_outcome(outcome) {
-                #[expect(clippy::print_stdout, reason = "command result")]
-                {
-                    println!("{line}");
-                }
-            }
-        }
-        return Ok(());
     }
+    Ok(())
+}
 
-    let sent = outcomes
-        .iter()
-        .filter_map(|outcome| match outcome {
-            DispatchOutcome::Sent { label, message_id } => Some(format!("{label} ({message_id})")),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let sent_labels = outcomes
-        .iter()
-        .filter_map(|outcome| match outcome {
-            DispatchOutcome::Sent { label, .. } => Some(label.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let queued = outcomes
-        .iter()
-        .filter_map(|outcome| match outcome {
+fn report_steer(
+    target: &str,
+    total: usize,
+    outcomes: &[DispatchOutcome],
+    compacted: &[String],
+) -> Result<()> {
+    let mut sent = Vec::new();
+    let mut sent_labels = Vec::new();
+    let mut queued = Vec::new();
+    let mut pending = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            DispatchOutcome::Sent { label, message_id } => {
+                sent.push(format!("{label} ({message_id})"));
+                sent_labels.push(label.as_str());
+            }
             DispatchOutcome::Queued { label, message_id } => {
-                Some(format!("{label} ({message_id})"))
+                queued.push(format!("{label} ({message_id})"));
             }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let pending = outcomes
-        .iter()
-        .filter_map(|outcome| match outcome {
             DispatchOutcome::SkippedWaiting { label, message_id } => {
-                Some(format!("{label} ({message_id})"))
+                pending.push(format!("{label} ({message_id})"));
             }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+        }
+    }
     if total == 1 {
         if !sent.is_empty() {
             let label = sent_labels[0];
