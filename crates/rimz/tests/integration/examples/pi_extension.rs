@@ -5,7 +5,7 @@
 
 #[test]
 #[cfg(unix)]
-fn extension_accumulates_cost_only_on_turn_end_and_clears_on_shutdown() {
+fn extension_gates_settled_boundary_and_accumulates_cost() {
     if std::process::Command::new("node")
         .arg("--version")
         .output()
@@ -15,6 +15,21 @@ fn extension_accumulates_cost_only_on_turn_end_and_clears_on_shutdown() {
         return;
     }
 
+    // Pi 0.80.4 added the native `agent_settled` idle boundary. The extension
+    // reads the host package's exported `VERSION` to gate on it: 0.80.4+
+    // forwards `agent_end` as enrichment and waits for native `agent_settled`,
+    // while older releases emit `agent_settled` themselves on `agent_end`.
+    // Both paths must accumulate cost on `turn_end` and clear it on shutdown.
+    run_extension_harness("0.80.6", "agent_end", "agent_settled");
+    run_extension_harness("0.80.3", "agent_settled", "agent_end");
+}
+
+/// Drive the embedded extension through Node as if `PI_VERSION` were
+/// `pi_version`, asserting the turn verdict rides `boundary_event` (carrying the
+/// accumulated cost and the `turn_end` token split), `absent_event` is never
+/// forwarded, and shutdown clears the running cost.
+#[cfg(unix)]
+fn run_extension_harness(pi_version: &str, boundary_event: &str, absent_event: &str) {
     use std::os::unix::fs::PermissionsExt as _;
 
     const EXTENSION_SOURCE: &str = include_str!("../../../src/agents/pi/extension.ts");
@@ -24,6 +39,28 @@ fn extension_accumulates_cost_only_on_turn_end_and_clears_on_shutdown() {
     let capture_path = dir.path().join("capture.jsonl");
     let stub_path = dir.path().join("rimz-capture");
     std::fs::write(&extension_path, EXTENSION_SOURCE).unwrap();
+
+    // Pi's extension loader aliases the host package so an extension can import
+    // runtime values like `VERSION`. Standalone Node has no such alias, so
+    // stand up the minimal module the bare import resolves to.
+    let pkg_dir = dir
+        .path()
+        .join("node_modules/@earendil-works/pi-coding-agent");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(
+        pkg_dir.join("package.json"),
+        r#"{"name":"@earendil-works/pi-coding-agent","version":"0.0.0","type":"module","exports":"./index.js"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        pkg_dir.join("index.js"),
+        format!(
+            "export const VERSION = {};\n",
+            serde_json::to_string(pi_version).unwrap()
+        ),
+    )
+    .unwrap();
+
     std::fs::write(
         &stub_path,
         "#!/bin/sh\npayload=$(cat)\nprintf '%s\\n' \"$payload\" >> \"$RIMZ_CAPTURE\"\n",
@@ -42,6 +79,8 @@ import fs from "node:fs/promises";
 
 process.env.RIMZ_BIN = {};
 process.env.RIMZ_CAPTURE = {};
+const boundaryEvent = {};
+const absentEvent = {};
 
 const {{ default: rimz }} = await import({});
 const handlers = new Map();
@@ -98,11 +137,18 @@ if (payloads.length < 2) {{
   throw new Error(`expected 2 forwarded payloads, got ${{payloads.length}}`);
 }}
 const byEvent = Object.fromEntries(payloads.map((payload) => [payload.hook_event_name, payload]));
-if (byEvent.agent_end.total_cost_usd !== 0.25) {{
-  throw new Error(`agent_end cost was ${{byEvent.agent_end.total_cost_usd}}`);
+const boundary = byEvent[boundaryEvent];
+if (!boundary) {{
+  throw new Error(`missing boundary ${{boundaryEvent}}: ${{JSON.stringify(payloads.map((p) => p.hook_event_name))}}`);
 }}
-if (byEvent.agent_end.input_tokens !== 10 || byEvent.agent_end.cache_write_input_tokens !== 2) {{
-  throw new Error(`agent_end lost turn_end token split: ${{JSON.stringify(byEvent.agent_end)}}`);
+if (absentEvent in byEvent) {{
+  throw new Error(`unexpected ${{absentEvent}} forwarded for this pi version`);
+}}
+if (boundary.total_cost_usd !== 0.25) {{
+  throw new Error(`boundary cost was ${{boundary.total_cost_usd}}`);
+}}
+if (boundary.input_tokens !== 10 || boundary.cache_write_input_tokens !== 2) {{
+  throw new Error(`boundary lost turn_end token split: ${{JSON.stringify(boundary)}}`);
 }}
 if ("total_cost_usd" in byEvent.session_shutdown) {{
   throw new Error(`shutdown kept cost: ${{JSON.stringify(byEvent.session_shutdown)}}`);
@@ -110,6 +156,8 @@ if ("total_cost_usd" in byEvent.session_shutdown) {{
 "#,
             serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),
             serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
+            serde_json::to_string(boundary_event).unwrap(),
+            serde_json::to_string(absent_event).unwrap(),
             serde_json::to_string(&format!("file://{}", extension_path.display())).unwrap(),
             serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
         ),
@@ -122,7 +170,7 @@ if ("total_cost_usd" in byEvent.session_shutdown) {{
         .unwrap();
     assert!(
         output.status.success(),
-        "node harness failed\nstdout:\n{}\nstderr:\n{}",
+        "node harness failed for pi {pi_version}\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

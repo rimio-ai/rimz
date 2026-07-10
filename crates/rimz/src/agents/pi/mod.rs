@@ -543,8 +543,8 @@ impl AgentAdapter for PiAdapter {
 
     fn moves_on(&self, event_name: &str) -> bool {
         // A new prompt starts a fresh turn; agent_settled completes the current
-        // one after retries and queued continuations. Pi raises no native asks today, so this only future-proofs
-        // enrichment-sourced ask handling.
+        // one after retries and queued continuations. Pi raises no native asks
+        // today, so this only future-proofs enrichment-sourced ask handling.
         matches!(event_name, "before_agent_start" | "agent_settled")
     }
 
