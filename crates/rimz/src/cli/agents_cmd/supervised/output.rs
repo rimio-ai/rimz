@@ -53,8 +53,8 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
             };
             writeln!(
                 err,
-                "verify `{}` exited {status} (attempt {} of {})",
-                verify.cmd, verify.attempts, verify.attempts
+                "verify `{}` exited {status} (attempt {})",
+                verify.cmd, verify.attempts
             )?;
             if !verify.output.trim().is_empty() {
                 writeln!(
@@ -312,7 +312,7 @@ mod tests {
         assert_eq!(String::from_utf8(out).unwrap(), "claimed done\n");
         let err = anstream::adapter::strip_str(&String::from_utf8(err).unwrap()).to_string();
         assert!(err.contains("rimz: run verify_failed (exit 123)"));
-        assert!(err.contains("verify `cargo xtask test auth` exited 7 (attempt 3 of 3)"));
+        assert!(err.contains("verify `cargo xtask test auth` exited 7 (attempt 3)"));
         assert!(err.contains("still broken"));
     }
 
