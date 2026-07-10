@@ -2,7 +2,7 @@
 
 > The RimZ-side contracts live in [multiplexers.md](../../internals/multiplexers.md) — the `MuxBackend` seam, the presence channel, the birth layout, the health gates — and [web.md](../../internals/web.md) for browser access. This doc mirrors the upstream surface itself.
 
-This is the single home for the **Zellij upstream surface** RimZ binds to — the wasm plugin API (lifecycle, events, commands, types, permissions, workers, pipes), the CLI control surface, the configuration options, the layout KDL, and session serialization. It is a hand-maintained mirror of zellij.dev's docs cross-checked against the installed binary's `--help` and the `zellij-utils`/`zellij-tile` 0.44.3 source, captured at **Zellij 0.44.3** (2026-06). Where the website and the source disagree, the source wins.
+This is the single home for the **Zellij upstream surface** RimZ binds to — the wasm plugin API (lifecycle, events, commands, types, permissions, workers, pipes), the CLI control surface, the configuration options, the layout KDL, and session serialization. It is a hand-maintained mirror of zellij.dev's docs cross-checked against the installed binary's `--help` and the `zellij-utils`/`zellij-tile` 0.44.3 source, audited in 2026-07 against the current **Zellij 0.44.3** release (2026-05-13). Where the website and the source disagree, the source wins.
 
 Coverage is **depth on what RimZ wires, breadth as an index**: the events and host commands the presence plugin uses, the CLI verbs the backend adapter calls, and the layout nodes the birth templates spell are documented in full; the rest of the catalog is listed so a contributor wiring a new surface knows it exists.
 
@@ -12,6 +12,7 @@ Re-fetch these to refresh this mirror. The canonical type definitions live in th
 
 | Surface | Source |
 | --- | --- |
+| Release baseline | <https://github.com/zellij-org/zellij/releases/tag/v0.44.3> |
 | Plugin events | <https://zellij.dev/documentation/plugin-api-events.html> |
 | Plugin commands | <https://zellij.dev/documentation/plugin-api-commands.html> |
 | Plugin types | <https://zellij.dev/documentation/plugin-api-types.html> → docs.rs |
@@ -108,14 +109,14 @@ The `get_pane_pid` / `get_pane_running_command` / `get_pane_cwd` request/respons
 
 **ChangeApplicationState** — the bulk of the catalog:
 
-- *Focus & navigation:* `focus_terminal_pane(id, float_if_hidden, in_place_if_hidden)` · `focus_plugin_pane(…)` · `focus_pane_with_id(PaneId, …)` · `focus_next_pane()` / `focus_previous_pane()` · `move_focus(Direction)` / `move_focus_or_tab(Direction)` · `switch_tab_to(idx)` / `go_to_tab(idx)` / `go_to_tab_name(&str)` / `focus_or_create_tab(&str)` / `toggle_tab()` / `go_to_next_tab()` / `go_to_previous_tab()`.
-- *Pane lifecycle & shape:* `close_focus()` · `close_terminal_pane(id)` / `close_plugin_pane(id)` / `close_pane_with_id(PaneId)` / `close_multiple_panes(Vec<PaneId>)` · `rename_terminal_pane` / `rename_plugin_pane` / `rename_pane_with_id` / `undo_rename_pane()` · `toggle_focus_fullscreen()` / `toggle_pane_id_fullscreen(PaneId)` · `toggle_pane_frames()` · `toggle_pane_embed_or_eject[_for_pane_id]` · `toggle_pane_borderless(PaneId)` / `set_pane_borderless(PaneId, bool)` · `move_pane[_with_direction|_with_pane_id|…]` · `replace_pane_with_existing_pane(replace, existing, suppress_replaced)` · `set_floating_pane_pinned(PaneId, bool)` · `stack_panes(Vec<PaneId>)` · `float_multiple_panes` / `embed_multiple_panes` · `change_floating_panes_coordinates(Vec<(PaneId, FloatingPaneCoordinates)>)` · `group_and_ungroup_panes(group, ungroup, for_all_clients)` · `highlight_and_unhighlight_panes(hl, unhl)` · `set_pane_color(PaneId, fg, bg)` · `hide_pane_with_id(PaneId)` / `show_pane_with_id(PaneId, float, focus)` · `show_floating_panes(tab)` / `hide_floating_panes(tab)`.
+- *Focus & navigation:* `focus_terminal_pane(id, float_if_hidden, in_place_if_hidden)` · `focus_plugin_pane(…)` · `focus_pane_with_id(PaneId, …)` · `focus_next_pane()` / `focus_previous_pane()` · `move_focus(Direction)` / `move_focus_or_tab(Direction)` · `switch_tab_to(idx)` / `go_to_tab(idx)` / `go_to_tab_name(&str)` / `focus_or_create_tab(&str)` / `toggle_tab()` / `go_to_next_tab()` / `go_to_previous_tab()` · `switch_to_input_mode(&InputMode)`.
+- *Pane lifecycle & shape:* `close_focus()` · `close_terminal_pane(id)` / `close_plugin_pane(id)` / `close_pane_with_id(PaneId)` / `close_multiple_panes(Vec<PaneId>)` · `rename_terminal_pane` / `rename_plugin_pane` / `rename_pane_with_id` / `undo_rename_pane()` · `toggle_focus_fullscreen()` / `toggle_pane_id_fullscreen(PaneId)` · `toggle_pane_frames()` · `toggle_pane_embed_or_eject[_for_pane_id]` · `toggle_pane_borderless(PaneId)` / `set_pane_borderless(PaneId, bool)` · `move_pane[_with_direction|_with_pane_id|…]` · `replace_pane_with_existing_pane(replace, existing, suppress_replaced)` · `set_floating_pane_pinned(PaneId, bool)` · `stack_panes(Vec<PaneId>)` · `float_multiple_panes` / `embed_multiple_panes` · `change_floating_panes_coordinates(Vec<(PaneId, FloatingPaneCoordinates)>)` · `group_and_ungroup_panes(group, ungroup, for_all_clients)` · `highlight_and_unhighlight_panes(hl, unhl)` · `set_pane_color(PaneId, fg, bg)` · `hide_pane_with_id(PaneId)` / `show_pane_with_id(PaneId, float, focus)` · `show_floating_panes(tab)` / `hide_floating_panes(tab)` · `set_pane_regex_highlights(PaneId, Vec<RegexHighlight>)` / `clear_pane_highlights(PaneId)`.
 - *Resize & scroll:* `resize_focused_pane(Resize)` / `…_with_direction(Resize, Direction)` / `resize_pane_with_id(ResizeStrategy, PaneId)` · scroll family: `scroll_up/down[_in_pane_id]`, `scroll_to_top/bottom[_in_pane_id]`, `page_scroll_up/down[_in_pane_id]` · `edit_scrollback[_for_pane_with_id]` · `clear_screen[_for_pane_id]`.
 - *Tabs:* `new_tab(name, cwd) -> Option<usize>` · `new_tabs_with_layout(kdl: &str) -> Vec<usize>` · `new_tabs_with_layout_info(LayoutInfo)` · `close_focused_tab()` / `close_tab_with_index(usize)` / `close_tab_with_id(u64)` · `rename_tab(position, name)` / `rename_tab_with_id(u64, name)` / `undo_rename_tab()` · `toggle_active_tab_sync()` · `break_panes_to_new_tab(ids, name, focus)` / `…_to_tab_with_index` / `…_to_tab_with_id` · `open_command_pane_in_new_tab` / `open_plugin_pane_in_new_tab` / `open_editor_pane_in_new_tab` — each returns `(Option<usize> tab, Option<PaneId>)`.
 - *Sessions:* `switch_session(Option<&str>)` / `…_with_layout` / `…_with_cwd` / `…_with_focus(name, tab, (pane_id, is_plugin))` · `rename_session(&str)` · `kill_sessions(&[names])` · `delete_dead_session(name)` / `delete_all_dead_sessions()` · `detach()` · `disconnect_other_clients()` · `quit_zellij()` · `change_host_folder(PathBuf)`.
 - *Signals & layouts:* `send_sigint_to_pane_id(PaneId)` / `send_sigkill_to_pane_id(PaneId)` · `rerun_command_pane(terminal_id)` · `save_layout(name, kdl, overwrite)` / `delete_layout(name)` / `rename_layout(old, new)` / `edit_layout(name, ctx)` · `override_layout(LayoutInfo, retain_terminals, retain_plugins, active_tab_only, ctx)` · `previous_swap_layout()` / `next_swap_layout()`.
 
-**RunCommands** — `run_command(&[&str], Context)` ✓ → `RunCommandResult` · `run_command_with_env_variables_and_cwd(cmd, env, cwd, ctx)` · the `open_command_pane*` family (tiled / `_floating` / `_in_place` / `_near_plugin` / `_floating_near_plugin` / `_in_place_of_plugin(close_after)` / `_in_place_of_pane_id` / `_background`) each `(CommandToRun, [coords,] Context) -> Option<PaneId>`. `run_command` spawns with the **server's** env and the launching CLI's cwd — pass absolute argv. Both `run_command` and timers keep working with **zero clients attached** (verified live, 0.44.3), though a detached or starved server can still drop *pane-lifecycle* processing until the next attach ([caveats](../../internals/multiplexers.md#zellij-backend-caveats)).
+**RunCommands** — `run_command(&[&str], Context)` ✓ → `RunCommandResult` · `run_command_with_env_variables_and_cwd(cmd, env, cwd, ctx)` · the `open_command_pane*` family (tiled / `_floating` / `_in_place` / `_near_plugin` / `_floating_near_plugin` / `_in_place_of_plugin(close_after)` / `_in_place_of_pane_id` / `_background`) each `(CommandToRun, [coords,] Context) -> Option<PaneId>` · doc-hidden `exec_cmd(&[&str])`. `run_command` spawns with the **server's** env and the launching CLI's cwd — pass absolute argv. Both `run_command` and timers keep working with **zero clients attached** (verified live, 0.44.3), though a detached or starved server can still drop *pane-lifecycle* processing until the next attach ([caveats](../../internals/multiplexers.md#zellij-backend-caveats)).
 
 **OpenFiles** — `open_file*` family mirroring the command-pane variants, each `(FileToOpen, [coords,] Context) -> Option<PaneId>`, plus `open_edit_pane_in_place_of_pane_id`.
 
@@ -123,7 +124,7 @@ The `get_pane_pid` / `get_pane_running_command` / `get_pane_cwd` request/respons
 
 **WriteToStdin** — `write(Vec<u8>)` / `write_chars(&str)` to the focused pane; `write_to_pane_id` / `write_chars_to_pane_id` to a specific pane.
 
-**Other gates** — `web_request(url, HttpVerb, headers, body, ctx)` (WebAccess) → `WebRequestResult` · `copy_to_clipboard(text)` (WriteToClipboard) · `reconfigure(kdl: String, save_to_disk: bool)` and `rebind_keys(unbind, rebind, save)` (Reconfigure) · `intercept_key_presses()` / `clear_key_presses_intercepts()` (InterceptInput) · `block_cli_pipe_input(pipe_id)` / `unblock_cli_pipe_input(pipe_id)` / `cli_pipe_output(pipe_id, output)` (ReadCliPipes) · `pipe_message_to_plugin(MessageToPlugin)` (MessageAndLaunchOtherPlugins) · `start_web_server()` (StartWebServer) · `get_session_environment_variables()` (ReadSessionEnvironmentVariables) · `get_pane_scrollback(PaneId, full) -> Result<PaneContents>` (ReadPaneContents).
+**Other gates** — `web_request(url, HttpVerb, headers, body, ctx)` (WebAccess) → `WebRequestResult` · `copy_to_clipboard(text)` (WriteToClipboard) · `reconfigure(kdl: String, save_to_disk: bool)` and `rebind_keys(unbind, rebind, save)` (Reconfigure) · `list_windows_volumes()` (FullHdAccess; Windows only, result through `FileSystemUpdate`) · `intercept_key_presses()` / `clear_key_presses_intercepts()` (InterceptInput) · `block_cli_pipe_input(pipe_id)` / `unblock_cli_pipe_input(pipe_id)` / `cli_pipe_output(pipe_id, output)` (ReadCliPipes) · `pipe_message_to_plugin(MessageToPlugin)` (MessageAndLaunchOtherPlugins) · `start_web_server()` / `stop_web_server()` / `query_web_server_status()` / `share_current_session()` / `stop_sharing_current_session()` / `generate_web_login_token(label, read_only)` / `revoke_web_login_token(label)` / `list_web_login_tokens()` / `revoke_all_web_tokens()` / `rename_web_token(old, new)` (StartWebServer) · `run_action(Action, Context)` (RunActionsAsUser) → `ActionComplete` · `get_session_environment_variables()` (ReadSessionEnvironmentVariables) · `get_pane_scrollback(PaneId, full) -> Result<PaneContents>` (ReadPaneContents).
 
 ### Types
 
@@ -154,7 +155,7 @@ struct PaneManifest { panes: HashMap<usize /* tab position */, Vec<PaneInfo>> }
 | `MessageToPlugin` | `plugin_url: Option<String>`, `destination_plugin_id: Option<u32>`, `plugin_config`, `message_name`, `message_payload`, `message_args`, `new_plugin_args: Option<NewPluginArgs>`, `floating_pane_coordinates` |
 | `NewPluginArgs` | `should_float`, `pane_id_to_replace`, `pane_title`, `cwd`, `skip_cache`, `should_focus` |
 | `PaneContents` | `viewport: Vec<String>`, `lines_above_viewport` / `lines_below_viewport` (full-scrollback requests only), `selected_text: Option<SelectedText>` |
-| `RegexHighlight` | `pattern`, `style: HighlightStyle`, `layer: HighlightLayer` (`Hint` < `Tool` < `ActionFeedback`), `context` (echoed on `HighlightClicked`), `on_hover`, `bold/italic/underline`, `tooltip_text` |
+| `RegexHighlight` | `pattern`, `style: HighlightStyle` (`None`, theme emphasis foreground/background variants, `CustomRgb`, `CustomIndex`), `layer: HighlightLayer` (`Hint` < `Tool` < `ActionFeedback`), `context` (echoed on `HighlightClicked`), `on_hover`, `bold/italic/underline`, `tooltip_text` |
 | `ModeInfo` | `mode: InputMode`, `base_mode`, `keybinds`, `style`, `capabilities`, `session_name`, `editor`, `shell`, web fields |
 | `KeyWithModifier` | `bare_key: BareKey` (`Char(c)`, `Enter`, `F(n)`, …), `key_modifiers: BTreeSet<KeyModifier>` (`Ctrl`/`Alt`/`Shift`/`Super`) |
 | `Mouse` | `ScrollUp/Down(usize)`, `LeftClick/RightClick/Hold/Release/Hover(line: isize, col: usize)` |
@@ -314,7 +315,7 @@ Blank payload reads STDIN line-buffered with plugin backpressure; plugin `cli_pi
 
 ### `web`
 
-`zellij web [--start|--stop|--status] [-d/--daemonize] [--ip] [--port]` (defaults `127.0.0.1:8082`) `[--cert/--key]` (required off-localhost). Token auth: `--create-token` (shown once) and `--create-read-only-token` (watcher-only) are clap-`exclusive(true)` creation flags and auto-name tokens as `token_N`; `--token-name` cannot accompany them. Token management uses `--revoke-token <name>`, `--revoke-all-tokens`, and `--list-tokens`. Pairs with the `web_server*` / `web_sharing` config options and `attach`'s token flags. RimZ's use lives in [web.md](../../internals/web.md).
+`zellij web [--start|--stop|--status] [-d/--daemonize] [--timeout seconds] [--ip] [--port]` (defaults `127.0.0.1:8082`) `[--cert/--key]` (required off-localhost). `--server-startup-timeout` controls only the Windows daemon-start poll; Unix uses a pipe. Token auth: `--create-token` (shown once) and `--create-read-only-token` (watcher-only) are clap-`exclusive(true)` creation flags and auto-name tokens as `token_N`; `--token-name` cannot accompany them. Token management uses `--revoke-token <name>`, `--revoke-all-tokens`, and `--list-tokens`. Pairs with the `web_server*` / `web_sharing` config options and `attach`'s token flags. RimZ's use lives in [web.md](../../internals/web.md).
 
 ### `setup` and sessions
 
@@ -328,7 +329,7 @@ KDL, one file. Lookup order: `--config-dir` flag → `$ZELLIJ_CONFIG_DIR` → `$
 
 ### Options catalog
 
-Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `options` CLI flag. Field names verified against the 0.44.3 source.
+Top-level KDL options (`option_name value`). The scalar options exposed by `zellij options --help` double as 42 kebab-case flags; `env` stays KDL-only, and the five `web_server_*` address/TLS fields are positional `zellij options` arguments in 0.44.3 rather than long flags. Field names verified against the 0.44.3 source.
 
 | Option | Values (default first) | Note |
 | --- | --- | --- |
@@ -369,6 +370,7 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 | `env` | `env { KEY "value" }` | set on every terminal pane |
 | `web_server` | `false` \| `true` | start server on startup; + `web_server_ip` (`127.0.0.1`), `web_server_port` (`8082`), `web_server_cert` / `web_server_key`, `enforce_https_for_localhost` |
 | `web_sharing` | `"off"` \| `"on"` \| `"disabled"` | `disabled` cannot be re-enabled at runtime |
+| `client_async_worker_tasks` | `4`; `0` = physical core count | async workers per active client; currently web clients only |
 
 Plus the `keybinds`, `themes`, `plugins` (aliases), and `load_plugins` blocks. `load_plugins { "file:/path.wasm" }` starts background plugins at session start — config-level only; **a layout-level `load_plugins` does not exist** (verified live, 0.44.3), so a layout cannot be a plugin-load channel.
 
