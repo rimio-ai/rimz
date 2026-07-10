@@ -11,6 +11,7 @@ enum AddTaskAction {
     Spawn {
         resolved: ResolvedTaskSpec,
         is_ping: bool,
+        mode: Option<String>,
     },
     Deliver {
         target: TaskTarget,
@@ -22,6 +23,41 @@ enum AddTaskAction {
 // ---- add / remove -----------------------------------------------------------
 
 pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
+    validate_add_args(&args)?;
+    let workspace = resolve_add_workspace(&args)?;
+    let project_root = workspace.project_root.clone();
+    let action = resolve_add_action(&args, &workspace)?;
+    let (entry, resolved_for_preflight) = build_task_entry(&args, action, &project_root)?;
+    // Validate the firing time before writing, so a bad `--at`/`--every` fails here.
+    let parsed = schedule::parse_schedule(&args.name, &entry)?;
+    if entry.agent.is_some() || entry.wake.is_some() {
+        preflight_entry(&args.name, &entry, resolved_for_preflight.as_ref())?;
+    }
+    persist_entry(&args, &entry, &project_root)?;
+    let cleared_pause = pauses::remove(&args.name)?;
+    let cleared_strikes = strikes::clear(&args.name)?;
+
+    let mut out = ui::out();
+    writeln!(out, "added loop task `{}`", args.name)?;
+    if cleared_pause || cleared_strikes {
+        writeln!(out, "pause: cleared")?;
+    }
+    if args.project {
+        finish_project_mutation(&mut out, &project_root, true)?;
+    }
+    write_add_feedback(&mut out, &args.name, &entry, &parsed)?;
+    writeln!(
+        out,
+        "live while a room for {} is open",
+        entry.root.display()
+    )?;
+    if !render::room_open(&entry.root) {
+        writeln!(out, "no room is open there; start one with `rimz start`")?;
+    }
+    Ok(())
+}
+
+fn validate_add_args(args: &AddArgs) -> Result<()> {
     schedule::validate_name(&args.name)?;
     if args.project && args.wake.is_some() {
         bail!(
@@ -61,32 +97,43 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             bail!("--until conflicts with --in");
         }
     }
+    Ok(())
+}
+
+fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
     let task_workspace = WorkspaceResolver::resolve(&args.root, None)
         .with_context(|| format!("resolving project root at {}", args.root.display()))?;
-    let workspace = if args.project {
-        let current =
-            WorkspaceResolver::resolve(".", None).context("resolving current project root")?;
-        if task_workspace.project_root != current.project_root {
-            bail!(
-                "--project writes tasks for {}; choose a --root inside that project or run from the target project",
-                current.project_root.display()
-            );
-        }
-        current
-    } else {
-        task_workspace
-    };
-    let project_root = workspace.project_root.clone();
+    if !args.project {
+        return Ok(task_workspace);
+    }
+    let current =
+        WorkspaceResolver::resolve(".", None).context("resolving current project root")?;
+    if task_workspace.project_root != current.project_root {
+        bail!(
+            "--project writes tasks for {}; choose a --root inside that project or run from the target project",
+            current.project_root.display()
+        );
+    }
+    Ok(current)
+}
+
+fn resolve_add_action(
+    args: &AddArgs,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Result<AddTaskAction> {
     let target = match args.wake.as_deref() {
-        Some(address) => Some(resolve_delivery_target(&workspace, &args, address)?),
+        Some(address) => Some(resolve_delivery_target(workspace, args, address)?),
         None => None,
     };
     let resolved = match args.agent.as_deref() {
-        Some(spec) => Some(resolve_task_spec(spec, &workspace)?),
+        Some(spec) => Some(resolve_task_spec(spec, workspace)?),
         None => None,
     };
-    let action = match (target, resolved) {
-        (Some(target), resolved) => AddTaskAction::Deliver { target, resolved },
+    let mut action = match (target, resolved) {
+        (Some(target), resolved) => {
+            reject_delivery_spawn_flags(args)?;
+            AddTaskAction::Deliver { target, resolved }
+        }
         (None, Some(resolved)) => {
             let is_ping = args
                 .agent
@@ -95,26 +142,33 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             if is_ping {
                 ping_kind_supported(&resolved.kind)?;
             }
-            AddTaskAction::Spawn { resolved, is_ping }
+            AddTaskAction::Spawn {
+                resolved,
+                is_ping,
+                mode: None,
+            }
         }
-        (None, None) => AddTaskAction::CheckOnly,
+        (None, None) => {
+            reject_check_only_agent_flags(args)?;
+            AddTaskAction::CheckOnly
+        }
     };
     if args.every.as_deref() == Some("reset")
         && !matches!(action, AddTaskAction::Spawn { is_ping: true, .. })
     {
         bail!("--every reset only applies to a `<kind>-ping` agent task");
     }
-    let mode = match &action {
-        AddTaskAction::Spawn { .. } => args.mode.as_deref().map(parse_mode).transpose()?,
-        AddTaskAction::Deliver { .. } => {
-            reject_delivery_spawn_flags(&args)?;
-            None
-        }
-        AddTaskAction::CheckOnly => {
-            reject_check_only_agent_flags(&args)?;
-            None
-        }
-    };
+    if let AddTaskAction::Spawn { mode, .. } = &mut action {
+        *mode = args.mode.as_deref().map(parse_mode).transpose()?;
+    }
+    Ok(action)
+}
+
+fn build_task_entry(
+    args: &AddArgs,
+    action: AddTaskAction,
+    project_root: &Path,
+) -> Result<(TaskEntry, Option<ResolvedTaskSpec>)> {
     if let Some(timeout) = args.timeout.as_deref() {
         parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
     }
@@ -131,148 +185,87 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         .transpose()?
         .map(|spec| format!("${:.2}", spec.cap_usd));
     let on = args.on.as_deref().map(parse_check_on).transpose()?;
-    let timing = resolve_add_timing(&args)?;
-    let prompt = args.prompt;
-    if !matches!(action, AddTaskAction::CheckOnly) && prompt.is_none() && args.prompt_file.is_none()
+    let timing = resolve_add_timing(args)?;
+    if !matches!(action, AddTaskAction::CheckOnly)
+        && args.prompt.is_none()
+        && args.prompt_file.is_none()
     {
         bail!(
             "loop task `{}` needs a prompt; pass --prompt or --prompt-file",
             args.name
         );
     }
-    let check = args.check;
-    let uses_check_timeout = check.is_some();
+    let uses_check_timeout = args.check.is_some();
+    let mut entry = TaskEntry {
+        prompt: args.prompt.clone(),
+        prompt_file: args.prompt_file.clone(),
+        check: args.check.clone(),
+        max_strikes: args.max_strikes,
+        on,
+        root: project_root.to_path_buf(),
+        at: timing.at,
+        every: args.every.clone(),
+        cron: args.cron.clone(),
+        deadline: timing.deadline,
+        ..TaskEntry::default()
+    };
     let mut resolved_for_preflight = None;
-    let entry = match action {
-        AddTaskAction::Spawn { resolved, .. } => {
+    match action {
+        AddTaskAction::Spawn { resolved, mode, .. } => {
             resolved_for_preflight = Some(resolved);
-            TaskEntry {
-                agent: args.agent,
-                wake: None,
-                prompt,
-                prompt_file: args.prompt_file,
-                check,
-                verify: args.verify,
-                max_attempts: args.max_attempts,
-                max_strikes: args.max_strikes,
-                on,
-                root: project_root.clone(),
-                worktree: args.worktree,
-                mode,
-                effort: args.effort,
-                budget,
-                budget_per_day,
-                system_prompt_file: args.system_prompt_file,
-                timeout: args.timeout,
-                at: timing.at,
-                every: args.every,
-                cron: args.cron,
-                deadline: timing.deadline,
-            }
+            entry.agent = args.agent.clone();
+            entry.verify = args.verify.clone();
+            entry.max_attempts = args.max_attempts;
+            entry.worktree = args.worktree.clone();
+            entry.mode = mode;
+            entry.effort = args.effort.clone();
+            entry.budget = budget;
+            entry.budget_per_day = budget_per_day;
+            entry.system_prompt_file = args.system_prompt_file.clone();
+            entry.timeout = args.timeout.clone();
         }
         AddTaskAction::Deliver { target, resolved } => {
             resolved_for_preflight = resolved;
-            TaskEntry {
-                agent: args.agent,
-                wake: Some(target),
-                prompt,
-                prompt_file: args.prompt_file,
-                check,
-                verify: None,
-                max_attempts: None,
-                max_strikes: args.max_strikes,
-                on,
-                root: project_root.clone(),
-                worktree: None,
-                mode: None,
-                effort: None,
-                budget: None,
-                budget_per_day: None,
-                system_prompt_file: None,
-                timeout: uses_check_timeout.then_some(args.timeout).flatten(),
-                at: timing.at,
-                every: args.every,
-                cron: args.cron,
-                deadline: timing.deadline,
-            }
+            entry.agent = args.agent.clone();
+            entry.wake = Some(target);
+            entry.timeout = uses_check_timeout.then(|| args.timeout.clone()).flatten();
         }
-        AddTaskAction::CheckOnly => TaskEntry {
-            agent: None,
-            wake: None,
-            prompt,
-            prompt_file: args.prompt_file,
-            check,
-            verify: None,
-            max_attempts: None,
-            max_strikes: args.max_strikes,
-            on,
-            root: project_root.clone(),
-            worktree: None,
-            mode: None,
-            effort: None,
-            budget: None,
-            budget_per_day: None,
-            system_prompt_file: None,
-            timeout: uses_check_timeout.then_some(args.timeout).flatten(),
-            at: timing.at,
-            every: args.every,
-            cron: args.cron,
-            deadline: timing.deadline,
-        },
-    };
-    // Validate the firing time before writing, so a bad `--at`/`--every` fails here.
-    let parsed = schedule::parse_schedule(&args.name, &entry)?;
-    if entry.agent.is_some() || entry.wake.is_some() {
-        preflight_entry(&args.name, &entry, resolved_for_preflight.as_ref())?;
+        AddTaskAction::CheckOnly => {
+            entry.timeout = uses_check_timeout.then(|| args.timeout.clone()).flatten();
+        }
     }
+    Ok((entry, resolved_for_preflight))
+}
+
+fn persist_entry(args: &AddArgs, entry: &TaskEntry, project_root: &Path) -> Result<()> {
     if args.project {
         schedule::config_edit::set_entry(
-            schedule::config_edit::TaskStore::Project(&project_root),
+            schedule::config_edit::TaskStore::Project(project_root),
             &args.name,
-            &entry,
+            entry,
         )?;
     } else if matches!(
         instances::load_entry_visible_with_project(
             &args.name,
-            project_visible_merge(&project_tasks_for_root(&project_root)?)
+            project_visible_merge(&project_tasks_for_root(project_root)?)
         ),
         Some((_, TaskSource::Project { .. }))
     ) {
         bail!(
             "loop task `{}` is project-owned in {}; use `rimz loop add --project` or choose another name",
             args.name,
-            project_config_path(&project_root).display()
+            project_config_path(project_root).display()
         );
-    } else if instances::is_ephemeral(&entry) {
+    } else if instances::is_ephemeral(entry) {
         schedule::config_edit::remove(schedule::config_edit::TaskStore::Machine, &args.name)?;
-        instances::insert(&args.name, &entry)?;
+        instances::insert(&args.name, entry)?;
     } else {
         instances::remove(&args.name)?;
         schedule::config_edit::set_entry(
             schedule::config_edit::TaskStore::Machine,
             &args.name,
-            &entry,
+            entry,
         )?;
-    }
-    let cleared_pause = pauses::remove(&args.name)?;
-    let cleared_strikes = strikes::clear(&args.name)?;
-
-    let mut out = ui::out();
-    writeln!(out, "added loop task `{}`", args.name)?;
-    if cleared_pause || cleared_strikes {
-        writeln!(out, "pause: cleared")?;
-    }
-    if args.project {
-        finish_project_mutation(&mut out, &project_root, true)?;
-    }
-    write_add_feedback(&mut out, &args.name, &entry, &parsed)?;
-    writeln!(
-        out,
-        "live while a room for {} is open",
-        entry.root.display()
-    )?;
-    if !render::room_open(&entry.root) {
-        writeln!(out, "no room is open there; start one with `rimz start`")?;
     }
     Ok(())
 }
