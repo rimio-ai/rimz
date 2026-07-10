@@ -227,9 +227,9 @@ The fork always opens in the source agent's recorded worktree. `--name/-n <name>
 
 `wait` blocks on supervised runs (by run id or pet name) and interactive agents reaching an idle/success gate. One reference keeps the answer-oriented behavior: a plain run wait prints the final assistant message, `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing.
 
-Several references form a join. Text mode prints `<name> <status>` in completion order, and `--json` emits one terminal run or agent record per line as NDJSON. The command succeeds when every target completes; otherwise it exits with the first non-completed target's status code in argument order. `--stream` accepts one target because one stdout stream has one transcript.
+Several references form a join. Text mode prints `<name> <status>` in completion order, and `--json` prints one labeled map `{name: {status, exit, cost, transcript_path}}` after every target settles. The command succeeds when every target completes; otherwise it exits with the first non-completed target's status code in argument order. `--stream` accepts one target because one stdout stream has one transcript.
 
-`--any` returns on the first terminal target regardless of success or failure, prints the winner's bare name to stdout, and exits with that target's status code; JSON mode prints the winner's terminal record instead. The other targets keep running. `--timeout` caps the whole wait and exits `124` without changing pending targets.
+`--any` returns on the first terminal target regardless of success or failure, prints the winner's bare name to stdout, and exits with that target's status code; JSON mode prints the labeled map with only the winner. The other targets keep running. `--timeout` caps the whole wait and exits `124` without changing pending targets; JSON mode stamps unfinished targets `timed_out` in the result map before exiting.
 
 #### `refresh`
 

@@ -838,8 +838,36 @@ enum WaitTarget {
 
 struct TargetOutcome {
     name: String,
+    entry: WaitEntryJson,
+}
+
+#[derive(serde::Serialize)]
+struct WaitEntryJson {
     status: RunStatus,
-    json: serde_json::Value,
+    exit: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transcript_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl WaitEntryJson {
+    fn new(
+        status: RunStatus,
+        cost: Option<f64>,
+        transcript_path: Option<String>,
+        error: Option<String>,
+    ) -> Self {
+        Self {
+            status,
+            exit: status.exit_code(),
+            cost,
+            transcript_path,
+            error,
+        }
+    }
 }
 
 fn wait_multi(
@@ -900,10 +928,19 @@ fn wait_multi(
                 WaitTarget::Run { run_id, name } => {
                     let record = rimz::harness::run::load(store.paths(), run_id)?;
                     if record.status.is_terminal() {
+                        let status = record.status;
                         Some(TargetOutcome {
                             name: name.clone(),
-                            status: record.status,
-                            json: serde_json::to_value(record)?,
+                            entry: WaitEntryJson::new(
+                                status,
+                                record.cost_usd,
+                                record.transcript_path,
+                                if status == RunStatus::Failed {
+                                    record.failure_tail
+                                } else {
+                                    None
+                                },
+                            ),
                         })
                     } else {
                         None
@@ -919,21 +956,28 @@ fn wait_multi(
                         None,
                         current_channel.as_deref(),
                     ) {
-                        Ok(agent) if gate_open(DeliveryGate::Done, agent.status) => {
-                            Some(TargetOutcome {
+                        Ok(agent) => {
+                            let status = if gate_open(DeliveryGate::Done, agent.status) {
+                                Some(RunStatus::Completed)
+                            } else if agent.status == rimz::agents::AgentStatus::Failed {
+                                Some(RunStatus::Failed)
+                            } else {
+                                None
+                            };
+                            status.map(|status| TargetOutcome {
                                 name: agent_name(agent).to_owned(),
-                                status: RunStatus::Completed,
-                                json: serde_json::to_value(agent)?,
+                                entry: WaitEntryJson::new(
+                                    status,
+                                    agent
+                                        .context
+                                        .as_ref()
+                                        .and_then(|context| context.cost.as_ref())
+                                        .and_then(|cost| cost.total_cost_usd),
+                                    agent.transcript_path.clone(),
+                                    None,
+                                ),
                             })
                         }
-                        Ok(agent) if agent.status == rimz::agents::AgentStatus::Failed => {
-                            Some(TargetOutcome {
-                                name: agent_name(agent).to_owned(),
-                                status: RunStatus::Failed,
-                                json: serde_json::to_value(agent)?,
-                            })
-                        }
-                        Ok(_) => None,
                         Err(_) => {
                             writeln!(
                                 render::err(),
@@ -941,12 +985,12 @@ fn wait_multi(
                             )?;
                             Some(TargetOutcome {
                                 name: reference.clone(),
-                                status: RunStatus::Failed,
-                                json: serde_json::json!({
-                                    "reference": reference,
-                                    "status": "failed",
-                                    "error": "agent disappeared while waiting",
-                                }),
+                                entry: WaitEntryJson::new(
+                                    RunStatus::Failed,
+                                    None,
+                                    None,
+                                    Some("agent disappeared while waiting".to_owned()),
+                                ),
                             })
                         }
                     }
@@ -958,16 +1002,14 @@ fn wait_multi(
             };
             if any {
                 if json {
-                    supervised::output::print_json(&outcome.json)?;
+                    print_wait_json(std::iter::once(&outcome))?;
                 } else {
                     writeln!(render::out(), "{}", outcome.name)?;
                     print_wait_status(&mut render::err(), &outcome)?;
                 }
-                std::process::exit(outcome.status.exit_code());
+                std::process::exit(outcome.entry.exit);
             }
-            if json {
-                write_json_line(&outcome.json)?;
-            } else {
+            if !json {
                 print_wait_status(&mut render::out(), &outcome)?;
             }
             outcomes[index] = Some(outcome);
@@ -977,15 +1019,46 @@ fn wait_multi(
             let exit_code = outcomes
                 .iter()
                 .flatten()
-                .find(|outcome| outcome.status != RunStatus::Completed)
-                .map_or(0, |outcome| outcome.status.exit_code());
+                .find(|outcome| outcome.entry.status != RunStatus::Completed)
+                .map_or(0, |outcome| outcome.entry.exit);
+            if json {
+                print_wait_json(outcomes.iter().flatten())?;
+            }
             std::process::exit(exit_code);
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            if json {
+                for (target, outcome) in targets.iter().zip(&mut outcomes) {
+                    if outcome.is_some() {
+                        continue;
+                    }
+                    let name = match target {
+                        WaitTarget::Run { name, .. } => name.clone(),
+                        WaitTarget::Agent { reference } => reference.clone(),
+                    };
+                    *outcome = Some(TargetOutcome {
+                        name,
+                        entry: WaitEntryJson::new(RunStatus::TimedOut, None, None, None),
+                    });
+                }
+                print_wait_json(outcomes.iter().flatten())?;
+            }
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+fn print_wait_json<'a>(outcomes: impl IntoIterator<Item = &'a TargetOutcome>) -> Result<()> {
+    let entries = outcomes
+        .into_iter()
+        .map(|outcome| (outcome.name.as_str(), &outcome.entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut out = render::out();
+    serde_json::to_writer(&mut out, &entries)?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
 }
 
 fn print_wait_status(out: &mut impl Write, outcome: &TargetOutcome) -> std::io::Result<()> {
@@ -994,8 +1067,8 @@ fn print_wait_status(out: &mut impl Write, outcome: &TargetOutcome) -> std::io::
         "{} {}",
         render::paint(render::palette::ACCENT, &outcome.name),
         render::paint(
-            render::status::run(outcome.status),
-            supervised::output::status_label(outcome.status)
+            render::status::run(outcome.entry.status),
+            supervised::output::status_label(outcome.entry.status)
         ),
     )
 }

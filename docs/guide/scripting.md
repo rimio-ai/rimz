@@ -116,6 +116,7 @@ rimz agents wait "$name" --stream                               # block on it, t
 ```
 
 - `rimz agents wait <ref>...` blocks until every named run lands; `--stream` tails one run's answer as it lands.
+- `rimz agents wait a b c --json` returns one labeled result map `{name: {status, exit, cost, transcript_path}}` after the join settles.
 - `rimz agents show <ref>` reports a run's activity, context, and recent transcript.
 - `rimz agents stop <ref>` cancels a live run or closes its pane.
 

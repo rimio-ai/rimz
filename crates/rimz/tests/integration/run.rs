@@ -1204,7 +1204,7 @@ fn wait_multi_exits_with_first_failed_code() {
 }
 
 #[test]
-fn wait_multi_json_emits_ndjson_records() {
+fn wait_multi_json_emits_labeled_map() {
     let env = Env::new();
     let store = env.store();
     let mut otter = create_running_named_run(&env, &store, "swift-otter");
@@ -1223,15 +1223,38 @@ fn wait_multi_json_emits_ndjson_records() {
 
     let out = child.wait_with_output().expect("wait for JSON join");
     assert!(out.status.success());
-    let records = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("NDJSON run record"))
-        .collect::<Vec<_>>();
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["agent_name"], "swift-otter");
-    assert_eq!(records[0]["status"], "completed");
-    assert_eq!(records[1]["agent_name"], "quiet-fox");
-    assert_eq!(records[1]["status"], "completed");
+    let result: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("labeled wait result map");
+    assert_eq!(result.as_object().map(serde_json::Map::len), Some(2));
+    assert_eq!(result["swift-otter"]["status"], "completed");
+    assert_eq!(result["swift-otter"]["exit"], 0);
+    assert_eq!(result["quiet-fox"]["status"], "completed");
+    assert_eq!(result["quiet-fox"]["exit"], 0);
+}
+
+#[test]
+fn wait_multi_json_reports_failed_entry_and_exit() {
+    let env = Env::new();
+    let store = env.store();
+    let mut completed = create_running_named_run(&env, &store, "swift-otter");
+    let mut failed = create_running_named_run(&env, &store, "quiet-fox");
+    write_run_status(&store, &mut completed, RunStatus::Completed);
+    failed.failure_tail = Some("review failed".to_owned());
+    write_run_status(&store, &mut failed, RunStatus::Failed);
+
+    let out = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox", "--json"])
+        .output()
+        .expect("run failed JSON join");
+
+    assert_eq!(out.status.code(), Some(1));
+    let result: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("failed wait result map");
+    assert_eq!(result["swift-otter"]["status"], "completed");
+    assert_eq!(result["quiet-fox"]["status"], "failed");
+    assert_eq!(result["quiet-fox"]["exit"], 1);
+    assert_eq!(result["quiet-fox"]["error"], "review failed");
 }
 
 #[test]
@@ -1258,6 +1281,37 @@ fn wait_any_prints_first_finisher_and_leaves_rest_running() {
         String::from_utf8_lossy(&out.stderr),
         "quiet-fox completed\n"
     );
+    let other = rimz::harness::run::load(store.paths(), &otter.run_id).expect("load other run");
+    assert_eq!(other.status, RunStatus::Running);
+}
+
+#[test]
+fn wait_any_json_prints_winner_map() {
+    let env = Env::new();
+    let store = env.store();
+    let otter = create_running_named_run(&env, &store, "swift-otter");
+    let mut fox = create_running_named_run(&env, &store, "quiet-fox");
+    write_run_status(&store, &mut fox, RunStatus::Completed);
+
+    let out = env
+        .rimz()
+        .args([
+            "agents",
+            "wait",
+            "swift-otter",
+            "quiet-fox",
+            "--any",
+            "--json",
+        ])
+        .output()
+        .expect("run JSON first-finisher wait");
+
+    assert!(out.status.success());
+    let result: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("winner wait result map");
+    assert_eq!(result.as_object().map(serde_json::Map::len), Some(1));
+    assert_eq!(result["quiet-fox"]["status"], "completed");
+    assert_eq!(result["quiet-fox"]["exit"], 0);
     let other = rimz::harness::run::load(store.paths(), &otter.run_id).expect("load other run");
     assert_eq!(other.status, RunStatus::Running);
 }
@@ -1325,4 +1379,37 @@ fn wait_multi_timeout_exits_124() {
         let record = rimz::harness::run::load(store.paths(), run_id).expect("load running run");
         assert_eq!(record.status, RunStatus::Running);
     }
+}
+
+#[test]
+fn wait_multi_json_timeout_stamps_pending_entries() {
+    let env = Env::new();
+    let store = env.store();
+    let mut otter = create_running_named_run(&env, &store, "swift-otter");
+    let fox = create_running_named_run(&env, &store, "quiet-fox");
+    write_run_status(&store, &mut otter, RunStatus::Completed);
+
+    let out = env
+        .rimz()
+        .args([
+            "agents",
+            "wait",
+            "swift-otter",
+            "quiet-fox",
+            "--timeout",
+            "0s",
+            "--json",
+        ])
+        .output()
+        .expect("run timed JSON join");
+
+    assert_eq!(out.status.code(), Some(124));
+    let result: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("timed wait result map");
+    assert_eq!(result["swift-otter"]["status"], "completed");
+    assert_eq!(result["swift-otter"]["exit"], 0);
+    assert_eq!(result["quiet-fox"]["status"], "timed_out");
+    assert_eq!(result["quiet-fox"]["exit"], 124);
+    let pending = rimz::harness::run::load(store.paths(), &fox.run_id).expect("load pending run");
+    assert_eq!(pending.status, RunStatus::Running);
 }

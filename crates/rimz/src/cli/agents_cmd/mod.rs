@@ -332,7 +332,7 @@ enum AgentsSubcmd {
         /// Replay the transcript from the top before tailing.
         #[arg(long, requires = "stream")]
         from_start: bool,
-        /// Emit JSON; with `--stream`, emit NDJSON run events.
+        /// Emit a labeled result map for joins; with `--stream`, emit NDJSON run events.
         #[arg(long)]
         json: bool,
     },
