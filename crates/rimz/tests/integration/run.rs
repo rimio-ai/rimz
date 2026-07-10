@@ -418,7 +418,7 @@ fn red_verify_at_attempt_cap_exits_123_with_forensics() {
         "{stderr}"
     );
     assert!(stderr.contains("verify `"), "{stderr}");
-    assert!(stderr.contains("attempt 1 of 1"), "{stderr}");
+    assert!(stderr.contains("exited 1 (attempt 1)"), "{stderr}");
     assert!(stderr.contains("verify red"), "{stderr}");
     let stored = rimz::harness::run::load(store.paths(), &completed.run_id).expect("failed verify");
     assert_eq!(stored.status, RunStatus::VerifyFailed);
