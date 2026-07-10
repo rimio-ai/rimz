@@ -17,9 +17,9 @@ every = "day"
 # Keeps main synced with origin; assumes push rights on the remote.
 [tasks.sync-repo-rimz]
 agent = "codex"
-prompt = "Repair the scheduled repository sync, then rerun ./scripts/sync-repo --loop-check."
+prompt = "Repair the scheduled repository sync. Run cargo xtask install-dev after any code change, then rerun ./scripts/sync-repo --loop-check."
 check = "./scripts/sync-repo --loop-check"
 on = "fail"
 mode = "yolo"
 timeout = "2h"
-every = "15m"
+every = "5m"
