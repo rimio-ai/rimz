@@ -53,6 +53,11 @@ fn interrupted_native_ask_settles_waiting_to_idle() {
         "Esc-cancelling Claude's native ask clears false attention even with a budget park"
     );
     assert_eq!(
+        row.turn_error_label(),
+        None,
+        "an idle interrupted ask does not retain a misleading budget description"
+    );
+    assert_eq!(
         rollup_agent(&snapshot, "claude-ask").status,
         AgentStatus::Waiting,
         "the transcript marker refines only the display projection"

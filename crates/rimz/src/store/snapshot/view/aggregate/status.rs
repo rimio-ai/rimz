@@ -54,7 +54,7 @@ pub(super) fn project_display_status(
             .map(AgentState::effective_status)
             .unwrap_or(status);
         let budget_park = source_agent.and_then(|state| state.budget_park.as_ref());
-        if let Some(park) = budget_park {
+        if !waiting_interrupted && let Some(park) = budget_park {
             agent.turn_error_label = Some(park.label());
         }
         let resume_exhausted = source_agent.is_some_and(|state| {
