@@ -21,7 +21,7 @@ A worktree gives each line of work its own directory and branch, backed by the s
 Claude Code ships a taste of the fix: `claude --worktree` opens the session in a fresh tree, minimal and genuinely useful, but Claude's alone. RimZ gives every agent it drives the same flag and runs the whole lifecycle behind it:
 
 - **The whole layout lands in the tree.** `vim,codex+term` roots your editor, the agent, and a shell in one checkout, and a [team](./teams.md) isolates as a unit — everyone in the tree works on the same files.
-- **The tree opens ready to run.** Two committed manifests seed every new tree with the untracked files and shared build directories it needs ([seed the tree](#seed-the-tree)).
+- **The tree opens ready to run.** Two committed manifests seed every new tree with the untracked files and branch-independent shared directories it needs ([seed the tree](#seed-the-tree)).
 - **The tree is addressable.** Its name names a [channel](./messaging.md#channels), so `@coder#feat-a` reaches the coder in that tree, and the sidebar groups the tree's panes as one block.
 - **Cleanup proves the work landed.** A tree is reclaimed only once its content is verifiably on its base branch; dirty or pending work is kept ([cleanup](#cleanup-once-work-lands)).
 
@@ -59,7 +59,7 @@ It resolves the host's PR ref for you: GitHub, Gitea, and Forgejo use `refs/pull
 A tracked checkout alone rarely runs. Two committed, optional files at the repository root tell RimZ what else every new tree carries, so an agent can start working immediately:
 
 - **`.worktreeinclude`** lists globs for untracked files to copy in: `.env`, local config, credentials the tests need. One pattern per line.
-- **`.worktreelink`** lists directories to symlink-share rather than copy: the heavy machine-local ones like `node_modules`, `target`, `.venv`. One path per line. Sharing them keeps a new tree cheap instead of duplicating gigabytes.
+- **`.worktreelink`** lists directories to symlink-share rather than copy: heavy machine-local data whose contents are intentionally branch-independent, such as downloaded model or fixture caches. One path per line. Sharing them keeps a new tree cheap instead of duplicating gigabytes. Keep build outputs branch-local: Cargo contributors share compiler work through `sccache` and leave `target/` out of this file because divergent worktrees can overwrite its fingerprints and executables ([contributor cache setup](../../CONTRIBUTING.md#fast-local-builds)).
 
 Because both files are committed, every teammate's worktrees seed the same way, and every create reports what it brought in:
 
