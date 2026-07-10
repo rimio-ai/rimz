@@ -1,12 +1,9 @@
 //! Best-effort Qwen provider and credential-source presence probe.
 
-use std::path::PathBuf;
-
 use serde::Deserialize;
 
 use crate::agents::account::AccountProbe;
 use crate::agents::context::AgentAccount;
-use crate::agents::transcript_fs::home_dir;
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -26,20 +23,15 @@ struct Auth {
     selected_type: Option<String>,
 }
 
-fn settings_path() -> PathBuf {
-    std::env::var_os("QWEN_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".qwen"))
-        .join("settings.json")
-}
-
 fn env_present(name: &str) -> bool {
     std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
 pub(crate) fn probe() -> AccountProbe {
-    let Ok(bytes) = std::fs::read(settings_path()) else {
+    let Ok(path) = super::install::qwen_settings_path() else {
+        return AccountProbe::Unavailable;
+    };
+    let Ok(bytes) = std::fs::read(path) else {
         return AccountProbe::Unavailable;
     };
     let Ok(settings) = serde_json::from_slice::<Settings>(&bytes) else {
