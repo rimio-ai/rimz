@@ -416,10 +416,8 @@ impl Drop for TmuxServer {
     }
 }
 
-/// A live tmux client attached to a session on the test's private socket, held
-/// open on a PTY of the given size so `list-clients` reports it. Drop kills the
-/// client; server teardown stays with [`TmuxServer`]. Mirrors the Zellij
-/// backend suite's `AttachedClient`.
+/// A live tmux client held on a sized PTY so `list-clients` reports it.
+/// Drop kills the client; server teardown stays with [`TmuxServer`].
 pub(super) struct AttachedTmuxClient {
     pub(super) _master: Box<dyn portable_pty::MasterPty + Send>,
     pub(super) child: Box<dyn portable_pty::Child + Send + Sync>,
