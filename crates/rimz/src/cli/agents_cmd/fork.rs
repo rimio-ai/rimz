@@ -125,7 +125,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             },
             run_id: None,
             worktree_path: None,
-            close_pane_on_exit: true,
+            close_pane_on_exit: placement != Placement::SamePane,
             exit_on_run_completion: false,
             identity: rimz::harness::launch::ExecIdentity {
                 name: Some(launch.name.as_str()),
