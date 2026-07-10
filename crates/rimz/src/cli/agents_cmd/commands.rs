@@ -839,7 +839,6 @@ enum WaitTarget {
 struct TargetOutcome {
     name: String,
     status: RunStatus,
-    exit_code: i32,
     json: serde_json::Value,
 }
 
@@ -904,7 +903,6 @@ fn wait_multi(
                         Some(TargetOutcome {
                             name: name.clone(),
                             status: record.status,
-                            exit_code: record.status.exit_code(),
                             json: serde_json::to_value(record)?,
                         })
                     } else {
@@ -925,7 +923,6 @@ fn wait_multi(
                             Some(TargetOutcome {
                                 name: agent_name(agent).to_owned(),
                                 status: RunStatus::Completed,
-                                exit_code: RunStatus::Completed.exit_code(),
                                 json: serde_json::to_value(agent)?,
                             })
                         }
@@ -933,7 +930,6 @@ fn wait_multi(
                             Some(TargetOutcome {
                                 name: agent_name(agent).to_owned(),
                                 status: RunStatus::Failed,
-                                exit_code: RunStatus::Failed.exit_code(),
                                 json: serde_json::to_value(agent)?,
                             })
                         }
@@ -946,7 +942,6 @@ fn wait_multi(
                             Some(TargetOutcome {
                                 name: reference.clone(),
                                 status: RunStatus::Failed,
-                                exit_code: RunStatus::Failed.exit_code(),
                                 json: serde_json::json!({
                                     "reference": reference,
                                     "status": "failed",
@@ -968,7 +963,7 @@ fn wait_multi(
                     writeln!(render::out(), "{}", outcome.name)?;
                     print_wait_status(&mut render::err(), &outcome)?;
                 }
-                std::process::exit(outcome.exit_code);
+                std::process::exit(outcome.status.exit_code());
             }
             if json {
                 write_json_line(&outcome.json)?;
@@ -982,8 +977,8 @@ fn wait_multi(
             let exit_code = outcomes
                 .iter()
                 .flatten()
-                .find(|outcome| outcome.exit_code != 0)
-                .map_or(0, |outcome| outcome.exit_code);
+                .find(|outcome| outcome.status != RunStatus::Completed)
+                .map_or(0, |outcome| outcome.status.exit_code());
             std::process::exit(exit_code);
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
