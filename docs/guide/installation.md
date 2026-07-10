@@ -6,7 +6,7 @@ RimZ is a single binary for macOS and Linux. Pick one install path: [Homebrew](#
 
 - **macOS or Linux.**
 - **A terminal multiplexer** — Zellij 0.44 or newer, or tmux 3.5 or newer. One is enough; both are first-class. Distribution packages are often too old; [get a current Zellij or tmux](#get-a-current-zellij-or-tmux) has install recipes for current builds.
-- **The agent CLIs you plan to run** — Claude Code, Codex, Pi, or OpenCode, installed per their own docs. RimZ drives the stock CLIs and bundles none of them.
+- **The agent CLIs you plan to run** — Claude Code, Codex, Pi, OpenCode, or Droid, installed per their own docs. RimZ drives the stock CLIs and bundles none of them.
 - **Git** — agent worktrees and the sidebar's git status use it.
 
 RimZ refuses to start against a multiplexer below the minimum supported version, and `rimz doctor` reports the installed version and whether it clears that floor. On tmux, 3.6 or newer gives the best experience ([why](#rimz-doctor-flags-the-multiplexer-as-unsupported)).

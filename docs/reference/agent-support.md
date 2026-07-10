@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ watches the coding agents you already run — Claude Code, Codex, Copilot, Gemini CLI, Pi, OpenCode, and Cursor — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
+RimZ watches the coding agents you already run — Claude Code, Codex, Copilot, Gemini CLI, Pi, OpenCode, Cursor, and Droid — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
 
 The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
@@ -26,6 +26,7 @@ This page is the annotated read of that command.
 | Pi | beta | 7 wired · 3 derived · 6 unsupported | extension API · session `.jsonl` · `pi --session` |
 | OpenCode | alpha | 8 wired · 3 derived · 5 unsupported | plugin API · session `.jsonl` + SQLite |
 | Cursor | alpha | 4 wired · 2 derived · 10 unsupported | command hooks · opaque transcript metadata · `agent --resume` |
+| Droid | alpha | 5 wired · 11 unsupported | native hooks · `~/.factory/settings.json` · `droid --resume` |
 | Third-party plugin | bundle-defined | derived by `rimz coverage` | canonical event shim · optional executable probes |
 
 What the tiers promise:
@@ -34,7 +35,7 @@ What the tiers promise:
 - **beta** — the integration is complete and in daily use, with a handful of fields reconstructed by derivation rather than pushed natively. Expect correct routing and state, and a rougher edge on enrichment.
 - **alpha** — the integration works and reports live state, with the widest set of derived cells. Use it, and expect the surface to keep filling in as the agent exposes more.
 
-Every tier delivers the core promise where the agent exposes the required local signals. Cursor appears and reports work, but its stock local hooks cannot report that a native question is open, so it intentionally has no waiting row or ask routing.
+Every tier delivers the core promise where the agent exposes the required local signals. Cursor and Droid appear and report work, but their stock local hooks cannot report that a native question is open, so they intentionally have no waiting row or ask routing.
 
 ## The coverage matrix
 
@@ -51,6 +52,7 @@ One row per agent, so a new agent adds exactly one line:
 | Pi | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
+| Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 
 <sub>✓ wired · ◐ partial (derived) · ✗ unsupported. Run `rimz coverage` for the live grid with the exact reason printed on every ◐ and ✗ cell.</sub>
 
@@ -163,6 +165,20 @@ Cursor reports through its native command hooks and runs standalone in its pane.
 
 Mapping detail: [cursor.md](../internals/agents/cursor.md); upstream protocol: [cursor-reference.md](../externals/agent-adapter/cursor-reference.md).
 
+### Droid
+
+Droid is a basic-lifecycle integration over Factory's native `settings.json` hooks. Interactive Droid runs standalone in its pane; the hook child stamps its session and pane directly.
+
+- **Reports:** session start and end, turn start and clean stop, completed tools, compaction, and unstructured idle notifications.
+- **Eleven unsupported cells (✗):** Droid's stock hook wire exposes no structured permission, plan, question, answer, subagent identity, background-task, context/token, cost, account-spend, rich-context, or remote-control surface. `Notification` is only a display message, so RimZ does not guess whether it means permission attention or 60-second input idle.
+- **Turn outcomes:** `Stop` carries no error field and maps to a clean turn end. Provider failure has no native hook; the displayed-status ladder, stall window, and pane liveness own that gap.
+- **Resume and fork:** `droid --resume <id>` reopens a session under the replacement session id Factory assigns; `droid --fork <id>` branches one for `rimz agents fork`.
+- **Permission modes:** `droid`, `droid-ask`, and `droid-plan` use Droid's stock configured posture. `droid-auto` and `droid-yolo` are unavailable because interactive Droid has no corresponding launch flag; RimZ leaves persistent autonomy settings user-owned.
+- **Profiles:** `model` and `append-system-prompt-file` map to native flags. `effort` and replacement `system-prompt-file` fail profile validation.
+- **Install target:** `~/.factory/settings.json`, merged additively; RimZ leaves `statusLine` untouched and removes only its own hook entries on uninstall.
+
+Mapping detail: [droid.md](../internals/agents/droid.md); upstream protocol: [droid-reference.md](../externals/agent-adapter/droid-reference.md).
+
 ## The lifecycle hook surface
 
 Under the concern matrix sits the raw event surface: the eleven lifecycle signals RimZ folds into every agent's state machine, and the native event each agent fires for each one. `rimz coverage` prints this as its second grid, the hooks matrix; here it is with the native event names in place, one row per agent so a new agent adds a single line.
@@ -176,6 +192,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | ✗ | ✗ | ✗ | `session_before_compact` | `session_compact` | `session_shutdown` | ◐ derived |
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask` | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | ◐ derived | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
+| Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 
 `lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
@@ -191,7 +208,7 @@ Installing an agent's hooks edits that agent's own config — the install target
 
 ## Agents not yet supported
 
-An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Amp or Droid land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
+An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Amp or Kiro land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
 
 ## See also
 

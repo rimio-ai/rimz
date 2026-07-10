@@ -1,6 +1,6 @@
 # Factory Droid CLI protocol reference
 
-> RimZ does not yet ship a Droid adapter. This document records the current upstream surfaces needed to build one. The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
+> RimZ's shipped mapping is [droid.md](../../internals/agents/droid.md). This document records the upstream protocol facts that mapping is built on; the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **Factory Droid CLI upstream protocol surface** relevant to RimZ: lifecycle hooks, session identity and transcripts, permissions and questions, compaction, subagents and missions, model and autonomy settings, resume and fork behavior, non-interactive execution, the stream JSON-RPC transport, authentication, and usage.
 
@@ -10,7 +10,7 @@ Coverage targets the latest release only. It gives implementation depth for the 
 
 This mirror was refreshed against the latest release listed in Factory's release notes, **Droid CLI 0.121.0**, and the current public TypeScript SDK **0.6.0**, Factory protocol **1.51.0**, at source commit [`d960f18f3a5a3bdbbc867a2177275a794663b175`](https://github.com/Factory-AI/droid-sdk-typescript/tree/d960f18f3a5a3bdbbc867a2177275a794663b175).
 
-The executable is `droid`. `droid -v` or `droid --version` prints its version, and `droid update` installs the latest release. RimZ should reject versions other than the adapter's tested release until its hook goldens and structured protocol fixtures have been refreshed; this reference intentionally carries no compatibility contract for older Droid releases.
+The executable is `droid`. `droid -v` or `droid --version` prints its version, and `droid update` installs the latest release. RimZ records the tested release as a fixture-freshness boundary rather than applying a runtime version gate; refresh the hook goldens and protocol research when behavior drifts. This reference intentionally carries no compatibility contract for older Droid releases.
 
 Factory publishes the CLI as a proprietary binary. The public SDK is the official typed source for the `droid exec` JSON-RPC protocol, while the documentation is authoritative for the stock CLI, hook configuration, and command behavior.
 

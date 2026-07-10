@@ -76,12 +76,12 @@ enum HooksSubcmd {
         /// Preview the hook config diff without writing files.
         #[arg(long)]
         dry_run: bool,
-        /// Agent name (`claude`, `codex`, `copilot`, `gemini`, `pi`, `opencode`). Omit to install every detected agent.
+        /// Agent name (`claude`, `codex`, `copilot`, `gemini`, `pi`, `opencode`, `droid`). Omit to install every detected agent.
         agent: Option<String>,
     },
     /// Remove the adapter's Rimz-managed hook block.
     Uninstall {
-        /// Agent name (`claude`, `codex`, `copilot`, `gemini`, `pi`, `opencode`). Omit to remove every Rimz-managed hook set.
+        /// Agent name (`claude`, `codex`, `copilot`, `gemini`, `pi`, `opencode`, `droid`). Omit to remove every Rimz-managed hook set.
         agent: Option<String>,
     },
 }

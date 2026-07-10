@@ -15,7 +15,7 @@ rimz agents claude "Summarize what changed on this branch." -p    # the claude -
 rimz agents codex "Prepare the release checklist." -p             # the same grammar, any agent
 ```
 
-- **One grammar for every agent.** The same flags, exit codes, and output formats drive Claude, Codex, Pi, and OpenCode; swapping the model behind a pipeline is a one-word change.
+- **One grammar for every agent.** The same flags, exit codes, and output formats drive Claude, Codex, Pi, OpenCode, and Droid; swapping the model behind a pipeline is a one-word change.
 - **A pane instead of a headless process.** The turn runs the stock CLI in your room with a live card in the sidebar, so a scripted run is exactly as observable — and as steerable — as one you launched by hand ([a real agent, not a background job](#a-real-agent-not-a-background-job)).
 
 ## What a run does on your machine

@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor"
+                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor", "droid"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -436,6 +436,11 @@ mod tests {
                 "perm", "plan", "ask", "answer", "sub", "bg", "live$", "rich", "spend", "remote"
             ]
         );
+
+        let droid = agent_cells(&matrix, "droid");
+        assert_eq!(count(&droid, MatrixCellState::Ok), 5);
+        assert_eq!(count(&droid, MatrixCellState::Partial), 0);
+        assert_eq!(count(&droid, MatrixCellState::Absent), 11);
     }
 
     #[test]
@@ -456,7 +461,7 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor"
+                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor", "droid"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -471,6 +476,7 @@ mod tests {
                 MatrixCellState::Ok,
                 MatrixCellState::Ok,
                 MatrixCellState::Partial,
+                MatrixCellState::Ok,
                 MatrixCellState::Ok
             ]
         );
@@ -486,6 +492,7 @@ mod tests {
                 MatrixCellState::Absent,
                 MatrixCellState::Absent,
                 MatrixCellState::Ok,
+                MatrixCellState::Absent,
                 MatrixCellState::Absent
             ]
         );

@@ -89,7 +89,7 @@ Conformance, the descriptor subset test, and the registry uniqueness tests enrol
 ## Step 10 — Ship the documentation
 
 - Write `docs/internals/agents/<kind>.md` on the per-kind skeleton — *Hooks and lifecycle* (the native event → signal table is its core), *Context and transcript*, *Account and balance*, *Cost* — with [pi.md](../internals/agents/pi.md) as the small template and [claude.md](../internals/agents/claude.md) showing where marker subsections earn their place.
-- Link it everywhere the four existing kinds are linked: the per-kind lists in [model.md](../internals/agents/model.md) and [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), and the root [AGENTS.md](../../AGENTS.md) documentation map.
+- Link it everywhere the existing kinds are linked: the per-kind lists in [model.md](../internals/agents/model.md) and [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), and the root [AGENTS.md](../../AGENTS.md) documentation map.
 - Update [agent-support.md](../reference/agent-support.md): a coverage-matrix row, a per-agent detail section, and removal from *Agents not yet supported*.
 - Update the [README](../../README.md) agent compatibility matrix.
 

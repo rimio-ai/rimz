@@ -9,6 +9,7 @@ use super::codex::CodexAdapter;
 use super::copilot::CopilotAdapter;
 use super::cursor::CursorAdapter;
 use super::descriptor::AgentDescriptor;
+use super::droid::DroidAdapter;
 use super::gemini::GeminiAdapter;
 use super::opencode::OpencodeAdapter;
 use super::pi::PiAdapter;
@@ -24,6 +25,7 @@ pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &PiAdapter,
     &OpencodeAdapter,
     &CursorAdapter,
+    &DroidAdapter,
 ];
 
 /// Every built-in and valid machine-tier plugin adapter, in display order.

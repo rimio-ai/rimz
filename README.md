@@ -40,7 +40,7 @@ RimZ is a realtime dashboard for harnessing agentic coding: one human and tens o
 </p>
 
 
-RimZ stays out of your way: a single lightweight binary inside the Zellij or tmux you already run, with your keybinds intact, the agent CLIs stock, and the official web, desktop, and mobile apps untouched. The same footprint carries the primitives that **harness engineering** and **loop engineering** build on: the sidebar is the observability layer, one uniform interface reaches Claude Code, Codex, Copilot, Gemini CLI, Pi, OpenCode, and Cursor, a durable message system steers and queues agents, supervised runs carry exit codes into scripts and CI, and scheduled wakeups keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on those primitives.
+RimZ stays out of your way: a single lightweight binary inside the Zellij or tmux you already run, with your keybinds intact, the agent CLIs stock, and the official web, desktop, and mobile apps untouched. The same footprint carries the primitives that **harness engineering** and **loop engineering** build on: the sidebar is the observability layer, one uniform interface reaches Claude Code, Codex, Copilot, Gemini CLI, Pi, OpenCode, Cursor, and Droid, a durable message system steers and queues agents, supervised runs carry exit codes into scripts and CI, and scheduled wakeups keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on those primitives.
 
 ## Project status
 
@@ -76,9 +76,9 @@ Read that as: ready for personal, daily use today; for production workflows that
  terminal — ghostty · iterm2 · warp · kitty · vscode …
    zellij or tmux — your keybinds, your layout
 
-     ┌─────────┐       ┌──────────────────────────────────────────────────┐
-     │ sidebar │       │ claude · codex · copilot · gemini · pi · opencode │
-     └────▲────┘       └────▲────────────────────┬────────────────────────┘
+     ┌─────────┐       ┌───────────────────────────────────────────────────────────┐
+     │ sidebar │       │ claude · codex · copilot · gemini · pi · opencode · droid │
+     └────▲────┘       └────▲────────────────────┬─────────────────────────────────┘
           │                 │                    │
           │ renders         │ types into panes   │ hooks · transcripts (.jsonl) · oauth api
           │ the fleet       │ messages · -p runs │ statusline (claude) · app-server (codex)
@@ -166,7 +166,7 @@ git diff main | rimz message @reviewer --stdin "review this"       # instruction
 rimz message @all "summarize what changed at the next boundary"    # the whole channel
 ```
 
-**Script an agent like any CLI.** [`rimz agents -p`](./docs/guide/scripting.md) is `claude -p` for every agent: one supervised turn, one exit code a script or CI job branches on, the same flag for Claude, Codex, Gemini CLI, Pi, and OpenCode. The turn still runs in a real pane you can watch, answer, and steer while the pipeline waits on it.
+**Script an agent like any CLI.** [`rimz agents -p`](./docs/guide/scripting.md) is `claude -p` for every agent: one supervised turn, one exit code a script or CI job branches on, the same flag for Claude, Codex, Gemini CLI, Pi, OpenCode, and Droid. The turn still runs in a real pane you can watch, answer, and steer while the pipeline waits on it.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
@@ -252,6 +252,7 @@ The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent
 | Pi          | beta   | extension API · session `.jsonl` · `pi --session`                 |
 | OpenCode    | alpha  | extension API · session `.jsonl`                                  |
 | Cursor      | alpha  | command hooks · opaque transcript metadata · `agent --resume`     |
+| Droid       | alpha  | native hooks · `~/.factory/settings.json` · `droid --resume`      |
 
 Adapters are thin layers over the same hook and transcript primitives; the agents run stock, in your terminal, with the official apps untouched. Per-agent status, integration surface, and permission-mode mapping live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
 
@@ -284,7 +285,7 @@ Hooks are how agents report to the room. The first `rimz` run offers to install 
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # every detected agent (claude, codex, copilot, gemini, pi, opencode)
+rimz hooks install              # every detected agent (claude, codex, copilot, gemini, pi, opencode, droid)
 rimz doctor                     # verify backend, hooks, and room health
 ```
 

@@ -618,5 +618,27 @@ mod tests {
                 .realtime_usage
                 .windows_defer_to_fresh_realtime
         );
+
+        let droid = crate::agents::registry::descriptor_by_kind("droid").unwrap();
+        assert!(!droid.capabilities.blocking_asks);
+        assert!(droid.capabilities.native_ask_ui);
+        assert!(!droid.capabilities.rich_context);
+        assert!(!droid.capabilities.transcript_tail_context);
+        assert!(!droid.capabilities.context_usage);
+        assert!(!droid.capabilities.account_spend);
+        assert!(!droid.capabilities.subagents);
+        assert!(!droid.capabilities.background_tasks);
+        assert!(!droid.capabilities.registers_lazily);
+        assert!(!droid.capabilities.daemon_hooked_sessions);
+        assert!(droid.capabilities.hook_install);
+        assert!(!droid.capabilities.remote_control.pane_sessions);
+        assert!(!droid.capabilities.remote_control.background_sessions);
+        assert!(!droid.capabilities.realtime_usage.covers_account_while_live);
+        assert!(
+            !droid
+                .capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
     }
 }
