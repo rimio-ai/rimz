@@ -73,42 +73,45 @@ pub(super) fn launch_layout(
     agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
     let store = open_store(&workspace)?;
 
-    if let Some(team) = team_name.as_deref() {
-        let explicit_worktree_name = args
-            .worktree
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
-            .transpose()?;
-        if let Some(name) = explicit_worktree_name.as_deref()
-            && args.from_pr.is_none()
-        {
-            match reconcile::reconcile_named_team_launch(
-                &workspace,
-                &machine_config,
-                backend.as_ref(),
-                &store,
-                name,
-                team,
-            )? {
-                reconcile::Reconciled::Done => return Ok(()),
-                reconcile::Reconciled::Resume(path) => {
-                    return launch_resume_layout(
-                        args,
-                        globals,
-                        allow_in_place,
-                        &workspace,
-                        &machine_config,
-                        &teams,
-                        layout,
-                        team_name,
-                        single_cell,
-                        Some(&path),
-                    );
-                }
-                reconcile::Reconciled::Continue => {}
+    let explicit_worktree_name = args
+        .worktree
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
+        .transpose()?;
+    let cells = cohort_cells(&layout);
+    if let Some(name) = explicit_worktree_name.as_deref()
+        && args.from_pr.is_none()
+        && (team_name.is_some() || cells.len() >= 2)
+    {
+        let spec_display = args.spec.as_deref().unwrap_or("<spec>");
+        match reconcile::reconcile_cohort_launch(
+            &workspace,
+            &machine_config,
+            backend.as_ref(),
+            &store,
+            name,
+            spec_display,
+            team_name.as_deref(),
+            &cells,
+        )? {
+            reconcile::Reconciled::Done => return Ok(()),
+            reconcile::Reconciled::Resume(path) => {
+                return launch_resume_layout(
+                    args,
+                    globals,
+                    allow_in_place,
+                    &workspace,
+                    &machine_config,
+                    &teams,
+                    layout,
+                    team_name,
+                    single_cell,
+                    Some(&path),
+                );
             }
+            reconcile::Reconciled::Continue => {}
         }
     }
 
