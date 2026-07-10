@@ -174,6 +174,11 @@ fn path_scope_matches_directories_files_and_component_boundaries() {
         Path::new("/repo/crates/rimz/src/message/send.rs"),
         Path::new("crates/rimz/src/message/")
     ));
+    assert!(path_is_in_scope(
+        root,
+        Path::new("/repo/crates/rimz/src/message/send.rs"),
+        Path::new("./crates/rimz/src/message")
+    ));
 }
 
 #[test]

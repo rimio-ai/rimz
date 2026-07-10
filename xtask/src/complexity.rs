@@ -385,6 +385,7 @@ fn parse_complexity_args(args: &[String]) -> Result<Option<ComplexityArgs>> {
 }
 
 fn path_is_in_scope(root: &Path, file: &Path, scope: &Path) -> bool {
+    let scope = scope.strip_prefix(".").unwrap_or(scope);
     file.strip_prefix(root)
         .is_ok_and(|relative| relative.starts_with(scope))
 }
