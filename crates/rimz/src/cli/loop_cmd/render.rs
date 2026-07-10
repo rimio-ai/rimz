@@ -4,6 +4,14 @@ use super::*;
 
 const NOTE_MAX: usize = 60;
 
+struct ListRowContext<'a> {
+    pauses: &'a BTreeMap<String, PauseEntry>,
+    stats: &'a BTreeMap<String, run_log::LoopRunStats>,
+    stamps: &'a BTreeMap<String, Timestamp>,
+    now_zoned: &'a jiff::Zoned,
+    now: Timestamp,
+}
+
 // ---- list -------------------------------------------------------------------
 
 pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
@@ -39,68 +47,17 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         ])
         .right(&[6])
         .indent(2);
+        let context = ListRowContext {
+            pauses: &pause_entries,
+            stats: &stats,
+            stamps: &stamps,
+            now_zoned: &now_zoned,
+            now,
+        };
         for (name, entry, source) in entries {
             let blocked_state = blocked_project_state(source);
             blocked_count += usize::from(blocked_state.is_some());
-            let parsed = schedule::parse_schedule(name, entry);
-            let when = match &parsed {
-                Ok(schedule) => schedule.describe(),
-                Err(err) => format!("invalid: {err}"),
-            };
-            let window_reset = window_reset_for(entry);
-            let pause = pause_entries.get(name);
-            let next = match blocked_state {
-                Some(state) => blocked_next_cell(state),
-                None => match pause.filter(|entry| pauses::is_active(entry, now)) {
-                    Some(PauseEntry {
-                        until: None,
-                        strikes: Some(strikes),
-                    }) => ui::cell(format!("paused · {strikes} strikes")).fg(ui::palette::MUTED),
-                    Some(PauseEntry {
-                        until: None,
-                        strikes: None,
-                    }) => ui::cell("paused").fg(ui::palette::MUTED),
-                    Some(PauseEntry {
-                        until: Some(until), ..
-                    }) => ui::cell(format!("paused · {}", ui::rel_until(*until, now)))
-                        .fg(ui::palette::MUTED),
-                    None => parsed
-                        .ok()
-                        .and_then(|parsed| {
-                            next_fire_text(
-                                name,
-                                &parsed.schedule,
-                                &stamps,
-                                pause,
-                                &now_zoned,
-                                now,
-                                window_reset,
-                            )
-                        })
-                        .map(ui::cell)
-                        .unwrap_or_else(|| ui::cell("-").dash()),
-                },
-            };
-            let (last, status) = stats
-                .get(name)
-                .map(|stats| last_run_cells(stats, now))
-                .unwrap_or_else(|| (ui::cell("-").dash(), ui::cell("-").dash()));
-            let cost = list_cost_label(
-                entry,
-                stats.get(name).map_or(0.0, |stats| stats.spend_today_usd),
-            )
-            .map(ui::cell)
-            .unwrap_or_else(|| ui::cell("-").dash());
-            table.row([
-                ui::cell(name.as_str()).fg(ui::palette::ACCENT),
-                ui::cell(task_subject(entry)),
-                source_cell(source),
-                ui::cell(when),
-                last,
-                status,
-                cost,
-                next,
-            ]);
+            table.row(task_row(name, entry, source, blocked_state, &context));
         }
         table.render(&mut out)?;
     }
@@ -109,6 +66,95 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         write_blocked_footer(&mut out, blocked_count)?;
     }
     Ok(())
+}
+
+fn task_row(
+    name: &str,
+    entry: &TaskEntry,
+    source: TaskSource,
+    blocked_state: Option<TrustState>,
+    context: &ListRowContext<'_>,
+) -> Vec<ui::Cell> {
+    let parsed = schedule::parse_schedule(name, entry);
+    let when = match &parsed {
+        Ok(schedule) => schedule.describe(),
+        Err(err) => format!("invalid: {err}"),
+    };
+    let next = next_cell(
+        name,
+        entry,
+        blocked_state,
+        &parsed,
+        context.pauses.get(name),
+        context,
+    );
+    let (last, status) = context
+        .stats
+        .get(name)
+        .map(|stats| last_run_cells(stats, context.now))
+        .unwrap_or_else(|| (ui::cell("-").dash(), ui::cell("-").dash()));
+    let cost = list_cost_label(
+        entry,
+        context
+            .stats
+            .get(name)
+            .map_or(0.0, |stats| stats.spend_today_usd),
+    )
+    .map(ui::cell)
+    .unwrap_or_else(|| ui::cell("-").dash());
+    vec![
+        ui::cell(name).fg(ui::palette::ACCENT),
+        ui::cell(task_subject(entry)),
+        source_cell(source),
+        ui::cell(when),
+        last,
+        status,
+        cost,
+        next,
+    ]
+}
+
+fn next_cell(
+    name: &str,
+    entry: &TaskEntry,
+    blocked_state: Option<TrustState>,
+    parsed: &std::result::Result<schedule::ParsedSchedule, schedule::ScheduleErr>,
+    pause: Option<&PauseEntry>,
+    context: &ListRowContext<'_>,
+) -> ui::Cell {
+    if let Some(state) = blocked_state {
+        return blocked_next_cell(state);
+    }
+    match pause.filter(|entry| pauses::is_active(entry, context.now)) {
+        Some(PauseEntry {
+            until: None,
+            strikes: Some(strikes),
+        }) => ui::cell(format!("paused · {strikes} strikes")).fg(ui::palette::MUTED),
+        Some(PauseEntry {
+            until: None,
+            strikes: None,
+        }) => ui::cell("paused").fg(ui::palette::MUTED),
+        Some(PauseEntry {
+            until: Some(until), ..
+        }) => ui::cell(format!("paused · {}", ui::rel_until(*until, context.now)))
+            .fg(ui::palette::MUTED),
+        None => parsed
+            .as_ref()
+            .ok()
+            .and_then(|parsed| {
+                next_fire_text(
+                    name,
+                    &parsed.schedule,
+                    context.stamps,
+                    pause,
+                    context.now_zoned,
+                    context.now,
+                    window_reset_for(entry),
+                )
+            })
+            .map(ui::cell)
+            .unwrap_or_else(|| ui::cell("-").dash()),
+    }
 }
 
 fn blocked_project_state(source: TaskSource) -> Option<TrustState> {
@@ -430,17 +476,11 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .as_ref()
         .map(rimz::harness::schedule::last_stamps)
         .unwrap_or_default();
-    let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
     let blocked_state = blocked_project_state(source);
     let parsed = schedule::parse_schedule(&args.name, &entry);
-    let schedule_text = match &parsed {
-        Ok(parsed) => parsed.describe(),
-        Err(err) => format!("invalid: {err}"),
-    };
     let now = Timestamp::now();
     let pause = pauses::load().remove(&args.name);
     let active_pause = pause.as_ref().filter(|entry| pauses::is_active(entry, now));
-    let strike_count = strikes::load().get(&args.name).copied().unwrap_or(0);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let window_reset = window_reset_for(&entry);
     let next = if blocked_state.is_none() {
@@ -461,10 +501,61 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let records = run_log::task_records(&state_home(), &args.name);
 
     let mut out = ui::out();
+    write_show_headline(
+        &mut out,
+        &args.name,
+        &parsed,
+        blocked_state,
+        active_pause,
+        next.as_deref(),
+        now,
+    )?;
+    write_show_facts(
+        &mut out,
+        &args.name,
+        &entry,
+        source,
+        &records,
+        &now_zoned,
+        active_pause.is_some(),
+    )?;
+
+    if records.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
+        return Ok(());
+    }
+
+    write_runs_table(&mut out, &records, args.runs, now)?;
+    let (detail_idx, failure_idx) = detail_indices(&records);
+    if let Some(detail) = detail_idx.and_then(|idx| records.get(idx)) {
+        writeln!(out)?;
+        render_record_detail(&mut out, &entry, detail, "LAST RUN", now)?;
+    }
+    if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
+        writeln!(out)?;
+        render_record_detail(&mut out, &entry, failure, "LAST FAILURE", now)?;
+    }
+    Ok(())
+}
+
+fn write_show_headline(
+    out: &mut impl Write,
+    name: &str,
+    parsed: &std::result::Result<schedule::ParsedSchedule, schedule::ScheduleErr>,
+    blocked_state: Option<TrustState>,
+    active_pause: Option<&PauseEntry>,
+    next: Option<&str>,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    let schedule_text = match parsed {
+        Ok(parsed) => parsed.describe(),
+        Err(err) => format!("invalid: {err}"),
+    };
     write!(
         out,
         "{} — {}",
-        ui::paint(ui::palette::ACCENT.bold(), &args.name),
+        ui::paint(ui::palette::ACCENT.bold(), name),
         ui::paint(schedule_style(parsed.as_ref()), &schedule_text)
     )?;
     match blocked_state {
@@ -480,7 +571,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             }) => write!(
                 out,
                 " · paused after {strikes} strikes — resume with `rimz loop resume {}`",
-                args.name
+                name
             )?,
             Some(PauseEntry {
                 until: None,
@@ -504,11 +595,27 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             strikes: None,
         })
     ) {
-        writeln!(out, "  resume with `rimz loop resume {}`", args.name)?;
+        writeln!(out, "  resume with `rimz loop resume {name}`")?;
     }
+    Ok(())
+}
+
+fn write_show_facts(
+    out: &mut impl Write,
+    name: &str,
+    entry: &TaskEntry,
+    source: TaskSource,
+    records: &[LoopRunRecord],
+    now_zoned: &jiff::Zoned,
+    is_paused: bool,
+) -> std::io::Result<()> {
+    let root = entry.resolved_root();
+    let room_is_open = room_open(&root);
+    let blocked_state = blocked_project_state(source);
+    let strike_count = strikes::load().get(name).copied().unwrap_or(0);
     let mut kv = ui::KeyVals::new().indent(2);
-    kv.push("task", ui::cell(task_subject(&entry)));
-    if let Some(check) = check_summary(&entry) {
+    kv.push("task", ui::cell(task_subject(entry)));
+    if let Some(check) = check_summary(entry) {
         kv.push("check", ui::cell(check));
     }
     if let Some(verify) = entry.verify.as_deref() {
@@ -521,36 +628,37 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         );
     }
     kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
-    kv.push("source", ui::cell(source_detail(source, &entry)));
+    kv.push("source", ui::cell(source_detail(source, entry)));
     if let Some(state) = blocked_state {
         kv.push(
             "will not fire",
             ui::cell(blocked_notice(state)).fg(ui::status::trust(state)),
         );
     }
-    if let Some(budget) = budget_label(&entry) {
+    if let Some(budget) = budget_label(entry) {
         kv.push("budget", ui::cell(budget));
     }
-    if let Some(spend) = spend_label(&entry, &records, &now_zoned) {
+    if let Some(spend) = spend_label(entry, records, now_zoned) {
         kv.push("spend", ui::cell(spend));
     }
-    if active_pause.is_none()
+    if !is_paused
         && strike_count > 0
-        && let Some(max) = strikes::threshold(&entry)
+        && let Some(max) = strikes::threshold(entry)
     {
         kv.push(
             "strikes",
             ui::cell(format!("{strike_count}/{max}")).fg(ui::palette::MUTED),
         );
     }
-    kv.render(&mut out)?;
+    kv.render(out)
+}
 
-    if records.is_empty() {
-        writeln!(out)?;
-        writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
-        return Ok(());
-    }
-
+fn write_runs_table(
+    out: &mut impl Write,
+    records: &[LoopRunRecord],
+    limit: usize,
+    now: Timestamp,
+) -> std::io::Result<()> {
     writeln!(out)?;
     writeln!(
         out,
@@ -560,8 +668,8 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             &format!("RECENT RUNS ({} recorded)", records.len())
         )
     )?;
-    let rows = collapsed_run_rows(&records);
-    let start = rows.len().saturating_sub(args.runs);
+    let rows = collapsed_run_rows(records);
+    let start = rows.len().saturating_sub(limit);
     let visible_rows = &rows[start..];
     let show_note = visible_rows.iter().any(|row| row.key.note.is_some());
     let headers = if show_note {
@@ -597,18 +705,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         }
         table.row(cells);
     }
-    table.render(&mut out)?;
-
-    let (detail_idx, failure_idx) = detail_indices(&records);
-    if let Some(detail) = detail_idx.and_then(|idx| records.get(idx)) {
-        writeln!(out)?;
-        render_record_detail(&mut out, &entry, detail, "LAST RUN", now)?;
-    }
-    if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
-        writeln!(out)?;
-        render_record_detail(&mut out, &entry, failure, "LAST FAILURE", now)?;
-    }
-    Ok(())
+    table.render(out)
 }
 
 fn blocked_notice(state: TrustState) -> String {
@@ -944,6 +1041,27 @@ fn render_record_detail(
         write!(out, " · {exit}")?;
     }
     writeln!(out)?;
+    let run_record = record
+        .run_id
+        .as_deref()
+        .and_then(|run_id| run_record_for(entry, run_id));
+    write_check_section(out, record, run_record.as_ref())?;
+    write_verify_section(out, run_record.as_ref())?;
+    if let Some(spend) = record_spend_label(record) {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(ui::palette::MUTED, &format!("  cost: {spend}"))
+        )?;
+    }
+    write_run_links(out, record, run_record.as_ref())
+}
+
+fn write_check_section(
+    out: &mut impl Write,
+    record: &LoopRunRecord,
+    run_record: Option<&rimz::harness::run::RunRecord>,
+) -> std::io::Result<()> {
     if let Some(check) = &record.check {
         let first_style = if check.timed_out || check.code != Some(0) {
             Some(ui::palette::ALARM)
@@ -952,24 +1070,26 @@ fn render_record_detail(
         };
         write_gutter_block(out, first_style, &check.output)?;
     }
-    let run_record = record
-        .run_id
-        .as_deref()
-        .and_then(|run_id| run_record_for(entry, run_id));
     if let Some(error) = &record.error {
         write_detail_label(out, "error")?;
         write_gutter_block(out, None, error)?;
     }
-    if let Some(last_message) = record.last_message.as_ref().or_else(|| {
-        run_record
-            .as_ref()
-            .and_then(|record| record.last_message.as_ref())
-    }) {
+    if let Some(last_message) = record
+        .last_message
+        .as_ref()
+        .or_else(|| run_record.and_then(|record| record.last_message.as_ref()))
+    {
         write_detail_label(out, "last message")?;
         write_gutter_block(out, None, last_message)?;
     }
+    Ok(())
+}
+
+fn write_verify_section(
+    out: &mut impl Write,
+    run_record: Option<&rimz::harness::run::RunRecord>,
+) -> std::io::Result<()> {
     if let Some(verify) = run_record
-        .as_ref()
         .and_then(|record| record.verify.as_ref())
         .filter(|verify| !verify.passed)
     {
@@ -994,13 +1114,14 @@ fn render_record_detail(
         )?;
         write_gutter_block(out, Some(ui::palette::ALARM), &verify.output)?;
     }
-    if let Some(spend) = record_spend_label(record) {
-        writeln!(
-            out,
-            "{}",
-            ui::paint(ui::palette::MUTED, &format!("  cost: {spend}"))
-        )?;
-    }
+    Ok(())
+}
+
+fn write_run_links(
+    out: &mut impl Write,
+    record: &LoopRunRecord,
+    run_record: Option<&rimz::harness::run::RunRecord>,
+) -> std::io::Result<()> {
     if let Some(run_id) = &record.run_id {
         writeln!(
             out,
@@ -1008,17 +1129,13 @@ fn render_record_detail(
             ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
         )?;
         if let Some(tail) = run_record
-            .as_ref()
             .and_then(|record| record.failure_tail.as_deref())
             .filter(|tail| !tail.trim().is_empty())
         {
             write_detail_label(out, "output tail")?;
             write_gutter_block(out, None, tail)?;
         }
-        if let Some(transcript) = run_record
-            .as_ref()
-            .and_then(|record| record.transcript_path.as_deref())
-        {
+        if let Some(transcript) = run_record.and_then(|record| record.transcript_path.as_deref()) {
             writeln!(
                 out,
                 "{}",
