@@ -327,11 +327,35 @@ mod parse {
             })
         ));
 
+        let parsed = AgentsHarness::try_parse_from(["rimz", "wait", "otter", "fox", "hawk"])
+            .expect("parse multi-target wait");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Wait {
+                references,
+                any: false,
+                ..
+            }) if references == ["otter", "fox", "hawk"]
+        ));
+
+        let parsed = AgentsHarness::try_parse_from(["rimz", "wait", "otter", "fox", "--any"])
+            .expect("parse first-finisher wait");
+        assert!(matches!(
+            parsed.args.command,
+            Some(AgentsSubcmd::Wait {
+                references,
+                any: true,
+                ..
+            }) if references == ["otter", "fox"]
+        ));
+
         for argv in [
             &["rimz", "claude", "hi", "-p", "--stream"][..],
             &["rimz", "claude", "hi", "--output-format", "json"],
             &["rimz", "claude", "hi", "--max-turns", "3"],
             &["rimz", "wait", "codex", "--from-start"],
+            &["rimz", "wait", "otter", "--any", "--stream"],
+            &["rimz", "wait"],
             &["rimz", "claude", "--new-pane", "--new-tab"],
             &["rimz", "claude", "hi", "--resume"],
             &["rimz", "claude", "hi", "--continue"],

@@ -263,9 +263,13 @@ enum AgentsSubcmd {
     Top(TopArgs),
     /// Focus an agent pane.
     Focus { reference: String },
-    /// Wait for a supervised run or for an interactive agent to become idle.
+    /// Wait for supervised runs or interactive agents; several references join.
     Wait {
-        reference: String,
+        #[arg(required = true, num_args = 1..)]
+        references: Vec<String>,
+        /// Return when the first target finishes; print its name.
+        #[arg(long, conflicts_with = "stream")]
+        any: bool,
         /// Stop waiting after this duration.
         #[arg(long, value_parser = crate::cli::agents_cmd::supervised::parse_timeout)]
         timeout: Option<Duration>,
@@ -396,12 +400,15 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Top(args)) => return run_top(args, globals),
         Some(AgentsSubcmd::Focus { reference }) => return focus_agent(reference, globals),
         Some(AgentsSubcmd::Wait {
-            reference,
+            references,
+            any,
             timeout,
             stream,
             from_start,
             json,
-        }) => return wait_agent(reference, timeout, stream, from_start, json, globals),
+        }) => {
+            return wait_agent(references, any, timeout, stream, from_start, json, globals);
+        }
         Some(AgentsSubcmd::Stop { reference, all }) => return stop_agent(reference, all, globals),
         Some(AgentsSubcmd::Refresh(args)) => return run_refresh(args, globals),
         None => {}

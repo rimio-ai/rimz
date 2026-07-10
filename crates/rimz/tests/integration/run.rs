@@ -816,3 +816,210 @@ fn run_stream_timeout_stops_watching_without_timing_out_run() {
     let loaded = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
     assert_eq!(loaded.status, RunStatus::Running);
 }
+
+fn create_running_named_run(env: &Env, store: &rimz::Store, name: &str) -> RunRecord {
+    let mut record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        format!("task for {name}"),
+        env.project_root.clone(),
+    );
+    record.agent_name = Some(name.to_owned());
+    record.status = RunStatus::Running;
+    rimz::harness::run::create(store.paths(), &record).expect("create running run");
+    record
+}
+
+fn write_run_status(store: &rimz::Store, record: &mut RunRecord, status: RunStatus) {
+    record.status = status;
+    record.updated_at = Timestamp::now();
+    record.completed_at = status.is_terminal().then_some(record.updated_at);
+    rimz::store::run_store::write(&store.paths().runs_dir, record).expect("write run status");
+}
+
+#[test]
+fn wait_multi_blocks_until_all_terminal() {
+    let env = Env::new();
+    let store = env.store();
+    let mut otter = create_running_named_run(&env, &store, "swift-otter");
+    let mut fox = create_running_named_run(&env, &store, "quiet-fox");
+
+    let child = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn multi-target wait");
+    std::thread::sleep(Duration::from_millis(100));
+    write_run_status(&store, &mut otter, RunStatus::Completed);
+    std::thread::sleep(Duration::from_millis(600));
+    write_run_status(&store, &mut fox, RunStatus::Completed);
+
+    let out = child
+        .wait_with_output()
+        .expect("wait for multi-target wait");
+    assert!(
+        out.status.success(),
+        "multi-target wait failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "swift-otter completed\nquiet-fox completed\n"
+    );
+}
+
+#[test]
+fn wait_multi_exits_with_first_failed_code() {
+    let env = Env::new();
+    let store = env.store();
+    let mut completed = create_running_named_run(&env, &store, "swift-otter");
+    let mut failed = create_running_named_run(&env, &store, "quiet-fox");
+
+    let child = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn failed multi-target wait");
+    std::thread::sleep(Duration::from_millis(100));
+    write_run_status(&store, &mut completed, RunStatus::Completed);
+    write_run_status(&store, &mut failed, RunStatus::Failed);
+
+    let out = child.wait_with_output().expect("wait for failed join");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "failed join returned wrong status\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn wait_multi_json_emits_ndjson_records() {
+    let env = Env::new();
+    let store = env.store();
+    let mut otter = create_running_named_run(&env, &store, "swift-otter");
+    let mut fox = create_running_named_run(&env, &store, "quiet-fox");
+
+    let child = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn JSON multi-target wait");
+    std::thread::sleep(Duration::from_millis(100));
+    write_run_status(&store, &mut otter, RunStatus::Completed);
+    write_run_status(&store, &mut fox, RunStatus::Completed);
+
+    let out = child.wait_with_output().expect("wait for JSON join");
+    assert!(out.status.success());
+    let records = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("NDJSON run record"))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["agent_name"], "swift-otter");
+    assert_eq!(records[0]["status"], "completed");
+    assert_eq!(records[1]["agent_name"], "quiet-fox");
+    assert_eq!(records[1]["status"], "completed");
+}
+
+#[test]
+fn wait_any_prints_first_finisher_and_leaves_rest_running() {
+    let env = Env::new();
+    let store = env.store();
+    let otter = create_running_named_run(&env, &store, "swift-otter");
+    let mut fox = create_running_named_run(&env, &store, "quiet-fox");
+
+    let child = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox", "--any"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn first-finisher wait");
+    std::thread::sleep(Duration::from_millis(100));
+    write_run_status(&store, &mut fox, RunStatus::Completed);
+
+    let out = child.wait_with_output().expect("wait for first finisher");
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "quiet-fox\n");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "quiet-fox completed\n"
+    );
+    let other = rimz::harness::run::load(store.paths(), &otter.run_id).expect("load other run");
+    assert_eq!(other.status, RunStatus::Running);
+}
+
+#[test]
+fn wait_any_first_finisher_failure_is_nonzero() {
+    let env = Env::new();
+    let store = env.store();
+    let _otter = create_running_named_run(&env, &store, "swift-otter");
+    let mut fox = create_running_named_run(&env, &store, "quiet-fox");
+
+    let child = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox", "--any"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn failing first-finisher wait");
+    std::thread::sleep(Duration::from_millis(100));
+    write_run_status(&store, &mut fox, RunStatus::Failed);
+
+    let out = child
+        .wait_with_output()
+        .expect("wait for failed first finisher");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "quiet-fox\n");
+}
+
+#[test]
+fn wait_multi_rejects_stream() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox", "--stream"])
+        .output()
+        .expect("run invalid streamed join");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("--stream tails one target; wait on a single reference")
+    );
+}
+
+#[test]
+fn wait_multi_timeout_exits_124() {
+    let env = Env::new();
+    let store = env.store();
+    let otter = create_running_named_run(&env, &store, "swift-otter");
+    let fox = create_running_named_run(&env, &store, "quiet-fox");
+
+    let out = env
+        .rimz()
+        .args([
+            "agents",
+            "wait",
+            "swift-otter",
+            "quiet-fox",
+            "--timeout",
+            "0s",
+        ])
+        .output()
+        .expect("run timed multi-target wait");
+    assert_eq!(out.status.code(), Some(124));
+    for run_id in [&otter.run_id, &fox.run_id] {
+        let record = rimz::harness::run::load(store.paths(), run_id).expect("load running run");
+        assert_eq!(record.status, RunStatus::Running);
+    }
+}

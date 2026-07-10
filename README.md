@@ -162,6 +162,7 @@ cat build-error.txt | rimz agents claude -p 'explain the root cause'   # stdin a
 
 rimz agents claude "Run the migration audit." -p --bg       # returns now, prints the run's name
 rimz agents wait swift-otter --stream                       # block on it later, tail the answer
+rimz agents wait otter fox --any                            # race agents; first to finish wins, prints its name
 ```
 
 **Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. A `<kind>-ping` task primes budget windows: a lowest-effort turn starts the provider's window on your clock and skips when one is already counting down. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; add `--budget 20/day` to bound what hands-off work costs.

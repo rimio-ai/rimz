@@ -101,7 +101,7 @@ Permissions are a per-run choice, rendered through the agent's own flags: `-p` d
 
 ## Fire now, collect later
 
-For orchestration, decouple starting a run from waiting on it. `--bg` launches the supervised run and prints its agent name, returning immediately; `rimz agents wait` blocks on that name whenever you are ready.
+For orchestration, decouple starting a run from waiting on it. `--bg` launches the supervised run and prints its agent name, returning immediately; `rimz agents wait` blocks on one or several names whenever you are ready.
 
 ```sh
 name=$(rimz agents claude "Run the migration audit." -p --bg)   # returns now, prints e.g. swift-otter
@@ -109,7 +109,7 @@ name=$(rimz agents claude "Run the migration audit." -p --bg)   # returns now, p
 rimz agents wait "$name" --stream                               # block on it, tailing the transcript
 ```
 
-- `rimz agents wait <ref>` blocks on a run; `--stream` tails the answer as it lands.
+- `rimz agents wait <ref>...` blocks until every named run lands; `--stream` tails one run's answer as it lands.
 - `rimz agents show <ref>` reports a run's activity, context, and recent transcript.
 - `rimz agents stop <ref>` cancels a live run or closes its pane.
 
@@ -153,7 +153,16 @@ esac
 for pkg in api web worker; do
   rimz agents codex --worktree="audit-$pkg" -p --bg "Audit $pkg for the CVE and reply with the fix." >> runs.txt
 done
-while read -r name; do rimz agents wait "$name" --stream; done < runs.txt
+rimz agents wait $(cat runs.txt)
+```
+
+Race providers on isolated worktrees when the first finished result wins. `--any` prints that run's name and leaves the loser running for an explicit stop.
+
+```sh
+a=$(rimz agents claude --worktree=race-claude -p --bg "Fix the failing parser test.")
+b=$(rimz agents codex --worktree=race-codex -p --bg "Fix the failing parser test.")
+winner=$(rimz agents wait "$a" "$b" --any)
+if [ "$winner" = "$a" ]; then rimz agents stop "$b"; else rimz agents stop "$a"; fi
 ```
 
 ## Drive the room from a script

@@ -751,6 +751,30 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
 }
 
 pub(super) fn wait_agent(
+    mut references: Vec<String>,
+    any: bool,
+    timeout: Option<Duration>,
+    stream_output: bool,
+    from_start: bool,
+    json: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    if stream_output && references.len() > 1 {
+        bail!("--stream tails one target; wait on a single reference");
+    }
+    if references.len() == 1 && !any {
+        let reference = references
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("wait requires a reference"))?;
+        return wait_one(reference, timeout, stream_output, from_start, json, globals);
+    }
+
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let store = crate::cli::open_store(&workspace)?;
+    wait_multi(&store, &workspace, references, any, timeout, json)
+}
+
+fn wait_one(
     reference: String,
     timeout: Option<Duration>,
     stream_output: bool,
@@ -805,6 +829,180 @@ pub(super) fn wait_agent(
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+enum WaitTarget {
+    Run { run_id: rimz::RunId, name: String },
+    Agent { reference: String },
+}
+
+struct TargetOutcome {
+    name: String,
+    status: RunStatus,
+    exit_code: i32,
+    json: serde_json::Value,
+}
+
+fn wait_multi(
+    store: &rimz::Store,
+    workspace: &rimz::ResolvedWorkspace,
+    references: Vec<String>,
+    any: bool,
+    timeout: Option<Duration>,
+    json: bool,
+) -> Result<()> {
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let current_channel = crate::cli::current_channel(workspace);
+    let mut targets = Vec::with_capacity(references.len());
+    for reference in references {
+        let live_agent_result =
+            crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel.as_deref());
+        let live_agent = live_agent_result.as_ref().ok().copied();
+        if let Some(run) = newest_run_by_ref(store, &reference, live_agent)?
+            && (!run.status.is_terminal()
+                || live_agent.is_none()
+                || run.run_id.as_str() == reference)
+        {
+            let name = run
+                .agent_name
+                .clone()
+                .unwrap_or_else(|| run.run_id.as_str().to_owned());
+            targets.push(WaitTarget::Run {
+                run_id: run.run_id,
+                name,
+            });
+            continue;
+        }
+        if live_agent.is_none() {
+            live_agent_result?;
+        }
+        targets.push(WaitTarget::Agent { reference });
+    }
+
+    let deadline = timeout.map(|duration| Instant::now() + duration);
+    let mut outcomes: Vec<Option<TargetOutcome>> = std::iter::repeat_with(|| None)
+        .take(targets.len())
+        .collect();
+    loop {
+        let agent_snapshot = targets
+            .iter()
+            .zip(&outcomes)
+            .any(|(target, outcome)| {
+                outcome.is_none() && matches!(target, WaitTarget::Agent { .. })
+            })
+            .then(|| store.snapshot_cached().context("reading agent snapshot"))
+            .transpose()?;
+
+        for (index, target) in targets.iter().enumerate() {
+            if outcomes[index].is_some() {
+                continue;
+            }
+            let outcome = match target {
+                WaitTarget::Run { run_id, name } => {
+                    let record = rimz::harness::run::load(store.paths(), run_id)?;
+                    if record.status.is_terminal() {
+                        Some(TargetOutcome {
+                            name: name.clone(),
+                            status: record.status,
+                            exit_code: record.status.exit_code(),
+                            json: serde_json::to_value(record)?,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                WaitTarget::Agent { reference } => {
+                    let snapshot = agent_snapshot
+                        .as_ref()
+                        .context("pending agent target without snapshot")?;
+                    match crate::cli::resolve_agent_one(
+                        snapshot,
+                        reference,
+                        None,
+                        current_channel.as_deref(),
+                    ) {
+                        Ok(agent) if gate_open(DeliveryGate::Done, agent.status) => {
+                            Some(TargetOutcome {
+                                name: agent_name(agent).to_owned(),
+                                status: RunStatus::Completed,
+                                exit_code: RunStatus::Completed.exit_code(),
+                                json: serde_json::to_value(agent)?,
+                            })
+                        }
+                        Ok(agent) if agent.status == rimz::agents::AgentStatus::Failed => {
+                            Some(TargetOutcome {
+                                name: agent_name(agent).to_owned(),
+                                status: RunStatus::Failed,
+                                exit_code: RunStatus::Failed.exit_code(),
+                                json: serde_json::to_value(agent)?,
+                            })
+                        }
+                        Ok(_) => None,
+                        Err(_) => {
+                            writeln!(
+                                render::err(),
+                                "{reference}: agent disappeared while waiting"
+                            )?;
+                            Some(TargetOutcome {
+                                name: reference.clone(),
+                                status: RunStatus::Failed,
+                                exit_code: RunStatus::Failed.exit_code(),
+                                json: serde_json::json!({
+                                    "reference": reference,
+                                    "status": "failed",
+                                    "error": "agent disappeared while waiting",
+                                }),
+                            })
+                        }
+                    }
+                }
+            };
+
+            let Some(outcome) = outcome else {
+                continue;
+            };
+            if any {
+                if json {
+                    supervised::output::print_json(&outcome.json)?;
+                } else {
+                    writeln!(render::out(), "{}", outcome.name)?;
+                    print_wait_status(&mut render::err(), &outcome)?;
+                }
+                std::process::exit(outcome.exit_code);
+            }
+            if json {
+                write_json_line(&outcome.json)?;
+            } else {
+                print_wait_status(&mut render::out(), &outcome)?;
+            }
+            outcomes[index] = Some(outcome);
+        }
+
+        if outcomes.iter().all(Option::is_some) {
+            let exit_code = outcomes
+                .iter()
+                .flatten()
+                .find(|outcome| outcome.exit_code != 0)
+                .map_or(0, |outcome| outcome.exit_code);
+            std::process::exit(exit_code);
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            std::process::exit(RunStatus::TimedOut.exit_code());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn print_wait_status(out: &mut impl Write, outcome: &TargetOutcome) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{} {}",
+        render::paint(render::palette::ACCENT, &outcome.name),
+        render::paint(
+            render::status::run(outcome.status),
+            supervised::output::status_label(outcome.status)
+        ),
+    )
 }
 
 fn wait_interactive_agent_stream(

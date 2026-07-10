@@ -43,7 +43,7 @@ Each command around `rimz agents` has its own page: [`rimz message`](./message.m
 
 **One agent or many:**
 
-- The management verbs (`show`, `logs`, `focus`, `wait`, and `stop`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `stop --all` fans out to every match for the reference. `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
+- The management verbs (`show`, `logs`, `focus`, and `stop`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `wait` accepts one or more independently resolved references. `stop --all` fans out to every match for the reference. `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
 - `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`. A fan-out delivers to every match with no confirmation and prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
 The `@` sigil is required for `message`, where it also keeps a target from being read as a launch spec. `show`, `logs`, `wait`, `stop`, and `refresh` also accept a bare selector (`swift-otter`), and `transcript`, `wait`, and `stop` also accept a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
@@ -150,6 +150,7 @@ rimz agents logs swift-otter -f          # follow new transcript lines
 rimz agents top --once                   # one resource-ranked fleet table
 rimz agents focus @claude-2#cli-docs     # jump to the pane
 rimz agents wait swift-otter --stream    # block until it lands, tailing the transcript
+rimz agents wait otter fox --any         # race agents; print the first finisher
 rimz agents refresh                      # force-refresh the channel's live agent cards
 rimz agents refresh @codex               # force-refresh one agent card's local context
 rimz agents refresh --all                # force-refresh every live root agent card
@@ -164,7 +165,7 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 | `logs` | one agent | transcript tail; `-f` follows |
 | `top` | live root agents | resource-ranked fleet table |
 | `focus` | one agent | jumps to its pane |
-| `wait` | one run or agent | blocks until it lands |
+| `wait` | one or more runs or agents | blocks until all land; `--any` returns on the first |
 | `refresh` | one agent, the channel, or `--all` | force-refreshes card context |
 | `stop` | one run or agent; `--all` fans out | cancels a run or closes the pane |
 
@@ -200,7 +201,11 @@ Rows group under channel section headers: `⑂` marks a worktree-backed or isola
 
 #### `wait`
 
-`wait` blocks on a supervised run (by run id or pet name) or an interactive agent reaching an idle/success gate. A plain run wait prints the final assistant message at completion; `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing.
+`wait` blocks on supervised runs (by run id or pet name) and interactive agents reaching an idle/success gate. One reference keeps the answer-oriented behavior: a plain run wait prints the final assistant message, `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing.
+
+Several references form a join. Text mode prints `<name> <status>` in completion order, and `--json` emits one terminal run or agent record per line as NDJSON. The command succeeds when every target completes; otherwise it exits with the first non-completed target's status code in argument order. `--stream` accepts one target because one stdout stream has one transcript.
+
+`--any` returns on the first terminal target regardless of success or failure, prints the winner's bare name to stdout, and exits with that target's status code; JSON mode prints the winner's terminal record instead. The other targets keep running. `--timeout` caps the whole wait and exits `124` without changing pending targets.
 
 #### `refresh`
 
