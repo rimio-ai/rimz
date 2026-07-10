@@ -16,6 +16,7 @@ Re-fetch these pages â€” and, for the app-server, re-run the schema generators â
 | Hook executor (cwd/env semantics) | <https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/command_runner.rs> |
 | Config reference (`notify`, `[tui]` notifications) | <https://developers.openai.com/codex/config-reference> |
 | Advanced config (`notify` payload) | <https://developers.openai.com/codex/config-advanced> |
+| CLI reference (`resume`, `fork`) | <https://developers.openai.com/codex/cli/reference> |
 | App-server API (protocol, methods, notifications) | <https://developers.openai.com/codex/app-server> |
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
 | App-server control socket WebSocket transport | <https://github.com/openai/codex/pull/21843> |
@@ -28,6 +29,10 @@ The app-server protocol has no published version string; the canonical, version-
 codex app-server generate-ts --out DIR           # TypeScript bindings
 codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 ```
+
+## Session resume and fork
+
+`codex resume <id>` reopens a session in place. `codex fork <id>` copies its conversation into a provider-assigned new session id and leaves the source session untouched; the interactive `fork` subcommand accepts no initial prompt, so Rimz opens the fork idle in the source worktree.
 
 ## Hooks
 

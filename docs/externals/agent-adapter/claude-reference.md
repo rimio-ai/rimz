@@ -16,9 +16,14 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 | Statusline (full JSON schema, `subagentStatusLine`) | <https://code.claude.com/docs/en/statusline> |
 | Subagents | <https://code.claude.com/docs/en/sub-agents> |
 | Settings (`statusLine` / `hooks` config keys, `disableAgentView`) | <https://code.claude.com/docs/en/settings> |
+| Sessions (resume and fork CLI flags) | <https://code.claude.com/docs/en/sessions> |
 | Remote Control (`remote-control`, `--remote-control`, `/remote-control`, version floor, settings) | <https://code.claude.com/docs/en/remote-control> |
 | OAuth usage endpoint | Claude Code credential-file traffic; no public schema page |
 | Transcript JSONL | no official schema published — see [Transcript JSONL](#transcript-jsonl) below |
+
+## Session resume and fork
+
+`claude --resume <id>` reopens a session in place. `claude --resume <id> --fork-session` copies its conversation into a provider-assigned new session id and leaves the source session untouched; Rimz uses that native fork argv and sets the source worktree as the process cwd.
 
 ## Hooks
 

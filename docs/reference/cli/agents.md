@@ -17,7 +17,7 @@ Each command around `rimz agents` has its own page: [`rimz message`](./message.m
 
 ## Addressing agents
 
-`message`, `transcript`, `pane capture`/`send`/`focus`, and the `agents show`/`logs`/`history`/`focus`/`wait`/`stop`/`restart`/`refresh` verbs share one address grammar: `@<handle>` names who, an optional `#<channel>` names the stamped lane, and a raw pane id is the precise fallback. This is the one place it is spelled out; every agent-facing command assumes it.
+`message`, `transcript`, `pane capture`/`send`/`focus`, and the `agents show`/`logs`/`history`/`focus`/`fork`/`wait`/`stop`/`restart`/`refresh` verbs share one address grammar: `@<handle>` names who, an optional `#<channel>` names the stamped lane, and a raw pane id is the precise fallback. This is the one place it is spelled out; every agent-facing command assumes it.
 
 **Handles that name one agent:**
 
@@ -43,10 +43,10 @@ Each command around `rimz agents` has its own page: [`rimz message`](./message.m
 
 **One agent or many:**
 
-- The management verbs (`show`, `logs`, `history`, `focus`, `stop`, and `restart`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `wait` accepts one or more independently resolved references. `stop --all` fans out to every match for the reference. `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
+- The management verbs (`show`, `logs`, `history`, `focus`, `fork`, `stop`, and `restart`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `wait` accepts one or more independently resolved references. `stop --all` fans out to every match for the reference. `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
 - `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`. A fan-out delivers to every match with no confirmation and prefixes each delivery with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
 
-The `@` sigil is required for `message`, where it also keeps a target from being read as a launch spec. `show`, `logs`, `history`, `wait`, `stop`, `restart`, and `refresh` also accept a bare selector (`swift-otter`), and `transcript`, `wait`, and `stop` also accept a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
+The `@` sigil is required for `message`, where it also keeps a target from being read as a launch spec. `show`, `logs`, `history`, `fork`, `wait`, `stop`, `restart`, and `refresh` also accept a bare selector (`swift-otter`), and `transcript`, `wait`, and `stop` also accept a run id. The deeper resolution rules are in [harness.md → The address](../../internals/harness/harness.md#the-address).
 
 ## Agents
 
@@ -150,6 +150,7 @@ rimz agents logs swift-otter -f          # follow new transcript lines
 rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
 rimz agents top --once                   # one resource-ranked fleet table
 rimz agents focus @claude-2#cli-docs     # jump to the pane
+rimz agents fork @coder --name twin      # branch a conversation into a new agent
 rimz agents restart @claude-2#cli-docs   # replace its pane and resume it
 rimz agents wait swift-otter --stream    # block until it lands, tailing the transcript
 rimz agents wait otter fox --any         # race agents; print the first finisher
@@ -168,12 +169,13 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 | `history` | one live or stopped agent | per-turn duration, tokens, cost, and outcome |
 | `top` | live root agents | resource-ranked fleet table |
 | `focus` | one agent | jumps to its pane |
+| `fork` | one live or stopped root agent | branches its full conversation into a new agent |
 | `wait` | one or more runs or agents | blocks until all land; `--any` returns on the first |
 | `refresh` | one agent, the channel, or `--all` | force-refreshes card context |
 | `stop` | one run or agent; `--all` fans out | cancels a run or closes the pane |
 | `restart` | one live agent | replaces its pane and resumes its provider session |
 
-`list`, `show`, `logs`, `history`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `stop` ends an agent; `restart` deliberately ends and replaces one.
+`list`, `show`, `logs`, `history`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `fork` starts a new agent without changing its source, `stop` ends an agent, and `restart` deliberately ends and replaces one.
 
 #### `list`
 
@@ -206,6 +208,19 @@ Rows group under channel section headers: `⑂` marks a worktree-backed or isola
 #### `focus`
 
 `focus` jumps to an agent's pane.
+
+#### `fork`
+
+`fork <ref>` resolves one live agent in the current channel first, then falls back to the stopped-agent audit rollup, and opens a provider-native copy with the full conversation history under a new session id. The source stays untouched. The fork carries the source profile and channel, drops team and role identity so the original role handle stays unique, and lets the provider restore the conversation's model and effort.
+
+The fork always opens in the source agent's recorded worktree. `--name/-n <name>` pins its handle; `--new-pane`, `--new-tab`, and `--bg` override the configured `agents.placement` policy just as they do for a single-agent launch. Cross-worktree forks and a first prompt are outside this command; send the first new instruction with `rimz message` after the fork opens.
+
+| Agent | Native fork argv |
+| --- | --- |
+| Claude | `claude --resume <id> --fork-session` |
+| Codex | `codex fork <id>` |
+| Pi | `pi --fork <id>` |
+| OpenCode | `opencode --session <id> --fork` |
 
 #### `wait`
 

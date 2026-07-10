@@ -66,7 +66,7 @@ Claude is the reference integration and the fullest one, wired on all sixteen co
 - **Reports:** session start and end, every turn boundary, per-tool activity, subagents (the `Task` tool tree, each child as its own nested row), plan approvals, and permission prompts. `SessionEnd` tombstones the row the moment the session closes.
 - **Structured answers:** `rimz answer` drives `AskUserQuestion` picks, multi-select, and free text, permission `allow`, and caution-marked plan `approve`. Denial, persistent grants, keep-planning, refinement text, and manual-review approval stay in the Claude pane because their controls carry no confirming lifecycle event.
 - **Live context:** Claude's statusline is wrapped to push rich per-session data — context window, usage, cost, model display name — on its own cadence, so the card's context meter and dollar figure stay live rather than turn-grained. The context window is read from the model id, and a `[1m]` capability tag widens it.
-- **Resume:** `claude --resume`; `rimz agents claude --resume` reopens the freshest closed session.
+- **Resume and fork:** `claude --resume` reopens a session; adding `--fork-session` branches one for `rimz agents fork`.
 - **Permission modes:** `claude-{auto,ask,plan,yolo,ping}` as launch cells; on the command line `--ask` keeps Claude's own prompts and `--yolo` passes `--dangerously-skip-permissions`. Effort levels: `low|medium|high|xhigh|max`.
 - **Account:** probed with `claude auth status` for plan and login state, feeding the provider dashboard.
 - **Install target:** `~/.claude/settings.json`, edited additively and reversed exactly by `rimz hooks uninstall`.
@@ -82,7 +82,7 @@ Codex is a full integration with one structural difference: since 0.137 its hook
 - **Three unsupported cells (✗):** `plan` — no plan-approval gate, since `update_plan` is non-blocking (`codex-plan` keeps the default posture); `answer` — no mapped prompt choreography; `bg` — no background-task parking.
 - **Live context:** the rollout `.jsonl` tail is the native live source for tokens, cost, and effort, read under a stat gate so an unchanged file costs nothing; the read-only app-server methods supply account and rate-limit context. The context window comes from the rollout's `model_context_window`.
 - **Turn-death handling:** Codex can end a turn on a provider limit with no error record and no `Stop` hook. Rimz confirms these from a bounded pane capture plus the account budget, so a paused Codex reads as `⏸` rather than a false success or a stall ([turn-completion and turn-death markers](../internals/agents/codex.md#turn-completion-marker)); `rimz agents refresh @codex` re-runs the check on demand.
-- **Resume:** `codex resume`; `rimz agents codex --resume` reopens the freshest closed session.
+- **Resume and fork:** `codex resume` reopens a session; `codex fork <id>` branches one for `rimz agents fork`.
 - **Permission modes:** `codex-{auto,ask,plan,yolo,ping}` as launch cells; on the command line `--yolo` passes `--dangerously-bypass-approvals-and-sandbox`. Effort levels: `minimal|low|medium|high|xhigh`.
 - **Install target:** `~/.codex/config.toml`.
 
@@ -96,7 +96,7 @@ Pi runs in-process in its pane and reports through a Rimz-authored **extension**
 - **Three derived cells (◐):** `idle` — turn-end plus the stall window, without a native idle-timeout nudge; `live$` — the extension pushes a cumulative-cost figure and a turn-end walk sums the session transcript spend, so the in-process accumulator is best-effort and resets on resume while the turn-end walk reconciles to the authoritative session total; `rich` — the extension envelope carries model, effort, cost, and account windows, but rides the lifecycle channel with no out-of-band transport refreshing it between turns, unlike a statusline or app-server poll.
 - **Six unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (no native question tool), `answer` (no mapped prompt choreography), `sub` (no subagent hook surface), `bg` (no background-task parking), and `remote` (no remote-control surface).
 - **Blocking asks:** Pi has no native prompt UI, so its adapter declares `native_ask_ui` off. A blocking hook returns the neutral no-op — which for Pi *is* the allow — and Rimz records no waiting row, because there is no native prompt a `?` row could route you to. Pi's neutral semantics differ from Claude's and Codex's, so verify this per agent.
-- **Resume:** `pi --session`.
+- **Resume and fork:** `pi --session` reopens a session; `pi --fork <id>` branches one for `rimz agents fork`.
 - **Permission modes:** `pi-{ask,plan}` as launch cells. Effort levels: `off|minimal|low|medium|high|xhigh`.
 - **Account:** read from `~/.pi/agent/auth.json` — OAuth is a metered subscription, an API key is unmetered.
 - **Install target:** `~/.pi/agent/extensions/rimz.ts`.
@@ -111,7 +111,7 @@ OpenCode reports through a Rimz-authored **plugin** that maintains its context g
 - **Three derived cells (◐):** `end` — `dispose` is server-scoped and carries no session id, so the card leaves on pane liveness and the reaper rather than at exit; `idle` — turn-end, `permission.ask`, and the stall window, without a native idle-timeout nudge; `live$` — summed from the session store (SQLite) at turn end, a reconstructed figure rather than a provider-pushed realtime one.
 - **Five unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (the question tool has no contracted bus event in 1.15.13), `answer` (no mapped prompt choreography), `bg` (no background-task parking), and `remote` (no remote-control surface).
 - **Rich context:** the embedded server's `/config/providers` and `/session` endpoints, reached over the plugin's `serverUrl`, supply official model labels and account windows.
-- **Resume:** the session `.jsonl` carries the history; see [opencode.md](../internals/agents/opencode.md) for the current resume path.
+- **Resume and fork:** `opencode --session <id>` reopens a session; adding `--fork` branches one for `rimz agents fork`.
 - **Permission modes:** no launch-cell suffixes yet — launch OpenCode bare or through a profile (`rimz agents --help` lists the current flags).
 - **Account:** read from OpenCode's own `auth.json` — the probe reports the active provider, with OAuth as a metered subscription and an API key as unmetered. OpenCode exposes no plan tier or quota surface of its own, so usage bars come from the backing provider's endpoints, the same Anthropic and ChatGPT probes Claude and Codex use.
 - **Install target:** `~/.config/opencode/plugin/rimz.ts`.
