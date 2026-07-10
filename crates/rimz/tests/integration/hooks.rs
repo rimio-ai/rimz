@@ -879,6 +879,41 @@ fn statusline_feed_with_no_wrap_captures_context_and_folds_snapshot() {
     assert_eq!(agent["context"]["tokens"]["used_percentage"], 42);
 }
 
+#[test]
+fn statusline_feed_captures_claude_turn_interruption() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let transcript = env.project_root.join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            "{\"type\":\"user\",\"timestamp\":\"2026-06-04T03:01:00.000Z\",",
+            "\"message\":{\"content\":\"[Request interrupted by user]\"}}\n",
+            "{\"type\":\"system\",\"subtype\":\"turn_duration\"}\n",
+        ),
+    )
+    .unwrap();
+    let payload = json!({
+        "session_id": "sess-interrupted",
+        "transcript_path": transcript,
+    })
+    .to_string();
+
+    let out = env.run_statusline_feed("claude", &payload);
+    assert!(
+        out.status.success(),
+        "feed stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let contexts = env.agent_contexts();
+    let marker = contexts
+        .iter()
+        .find(|record| record.agent_id == "sess-interrupted")
+        .and_then(|record| record.context.turn_interrupted)
+        .expect("statusline feed persists the transcript interruption marker");
+    assert_eq!(marker, "2026-06-04T03:01:00Z".parse::<Timestamp>().unwrap());
+}
+
 /// The `--subagent` feed harvests every task in a `subagentStatusLine` payload
 /// into one per-child sidecar, keyed by the task id, and emits nothing when no
 /// wrap is configured (Claude renders its own child rows).
