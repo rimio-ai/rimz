@@ -33,6 +33,7 @@ pub(super) fn reconcile_action(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn reconcile_cohort_launch(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
