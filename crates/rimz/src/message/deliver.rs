@@ -48,6 +48,31 @@ pub enum DeliveryPolicy {
     Steer { force: bool },
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum DeliveryVerdict {
+    Scheduled {
+        not_before: Option<Timestamp>,
+    },
+    WaitingOnAfter {
+        address: String,
+        agent_present: bool,
+    },
+    BehindFifo {
+        blocker: Option<MessageId>,
+    },
+    ReceiverGone,
+    GateClosed {
+        gate: DeliveryGate,
+        status: Option<AgentStatus>,
+    },
+    ResumeUnrecovered,
+    AskWaiting,
+    NoPane {
+        pinned_pane_id: Option<PaneId>,
+    },
+    Ready,
+}
+
 pub fn deliver_one(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -62,34 +87,9 @@ pub fn deliver_one(
     let Some(candidate) = delivery_candidate(workspace, store, message_id, mux, policy)? else {
         return Ok(false);
     };
-    let claimed_head = match policy {
-        DeliveryPolicy::Boundary => {
-            store.claim_message_for_delivery(message_id, jiff::Timestamp::now())?
-        }
-        DeliveryPolicy::Steer { .. } => {
-            store.claim_message_for_steer(message_id, jiff::Timestamp::now())?
-        }
-    };
-    let Some(message) = claimed_head else {
+    let Some(claimed) = claim_batch(store, policy, &candidate)? else {
         return Ok(false);
     };
-    debug_assert!(
-        message.kind == candidate.message.kind && message.agent_id == candidate.message.agent_id
-    );
-    debug_assert_eq!(message.message_id, candidate.message.message_id);
-    let mut claimed = vec![message];
-    for tail in &candidate.batch_tail {
-        match store.claim_message_for_delivery(&tail.message_id, jiff::Timestamp::now())? {
-            Some(message) => claimed.push(message),
-            None => break,
-        }
-    }
-    if claimed.len() > 1 {
-        let batch_id = claimed[0].message_id.clone();
-        for message in &mut claimed {
-            message.batch_id = Some(batch_id.clone());
-        }
-    }
     // Hook delivery handles one claimed message; settle above owns any
     // pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {
@@ -132,31 +132,74 @@ pub fn deliver_one(
             Ok(false)
         }
         Err(err) => {
-            let mut head_failure_recorded = true;
-            for message in &claimed {
-                if message_recorded_as_sent(store, &message.message_id)? {
-                    continue;
-                }
-                let recorded = store.record_message_delivery_failure(
-                    &message.message_id,
-                    &err.to_string(),
-                    &workspace.session_name,
-                )?;
-                if message.message_id == claimed[0].message_id {
-                    head_failure_recorded = recorded.is_some();
-                }
-            }
-            if !head_failure_recorded {
-                store.record_send_error(
-                    &send_messages[0],
-                    &err.to_string(),
-                    &workspace.session_name,
-                )?;
-            }
+            record_batch_failure(workspace, store, &claimed, &send_messages, &err)?;
             register_message_wake(workspace, store)?;
             Ok(false)
         }
     }
+}
+
+fn claim_batch(
+    store: &Store,
+    policy: DeliveryPolicy,
+    candidate: &DeliveryCandidate,
+) -> Result<Option<Vec<MessageRecord>>> {
+    let claimed_head = match policy {
+        DeliveryPolicy::Boundary => {
+            store.claim_message_for_delivery(&candidate.message.message_id, Timestamp::now())?
+        }
+        DeliveryPolicy::Steer { .. } => {
+            store.claim_message_for_steer(&candidate.message.message_id, Timestamp::now())?
+        }
+    };
+    let Some(message) = claimed_head else {
+        return Ok(None);
+    };
+    debug_assert!(
+        message.kind == candidate.message.kind && message.agent_id == candidate.message.agent_id
+    );
+    debug_assert_eq!(message.message_id, candidate.message.message_id);
+    let mut claimed = vec![message];
+    for tail in &candidate.batch_tail {
+        match store.claim_message_for_delivery(&tail.message_id, Timestamp::now())? {
+            Some(message) => claimed.push(message),
+            None => break,
+        }
+    }
+    if claimed.len() > 1 {
+        let batch_id = claimed[0].message_id.clone();
+        for message in &mut claimed {
+            message.batch_id = Some(batch_id.clone());
+        }
+    }
+    Ok(Some(claimed))
+}
+
+fn record_batch_failure(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    claimed: &[MessageRecord],
+    send_messages: &[MessageRecord],
+    err: &send::SendErr,
+) -> Result<()> {
+    let mut head_failure_recorded = true;
+    for message in claimed {
+        if message_recorded_as_sent(store, &message.message_id)? {
+            continue;
+        }
+        let recorded = store.record_message_delivery_failure(
+            &message.message_id,
+            &err.to_string(),
+            &workspace.session_name,
+        )?;
+        if message.message_id == claimed[0].message_id {
+            head_failure_recorded = recorded.is_some();
+        }
+    }
+    if !head_failure_recorded {
+        store.record_send_error(&send_messages[0], &err.to_string(), &workspace.session_name)?;
+    }
+    Ok(())
 }
 
 pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>) -> Result<()> {
@@ -301,6 +344,62 @@ pub struct DeliveryCheck {
     pub gate: GateCheck,
     pub ask: AskCheck,
     pub pane: PaneCheck,
+}
+
+impl DeliveryCheck {
+    pub fn gate_ready(&self) -> bool {
+        self.gate.open && self.gate.resume_recovered != Some(false)
+    }
+
+    pub fn passes(&self) -> bool {
+        self.schedule.ready
+            && self.after.iter().all(|condition| condition.met)
+            && self.fifo.head
+            && self.agent.present
+            && self.gate_ready()
+            && !self.ask.waiting
+            && self.pane.present
+    }
+
+    pub fn verdict(&self) -> DeliveryVerdict {
+        if !self.schedule.ready {
+            return DeliveryVerdict::Scheduled {
+                not_before: self.schedule.not_before,
+            };
+        }
+        if let Some(condition) = self.after.iter().find(|condition| !condition.met) {
+            return DeliveryVerdict::WaitingOnAfter {
+                address: condition.address.clone(),
+                agent_present: condition.agent_present,
+            };
+        }
+        if !self.fifo.head {
+            return DeliveryVerdict::BehindFifo {
+                blocker: self.fifo.blocker.clone(),
+            };
+        }
+        if !self.agent.present {
+            return DeliveryVerdict::ReceiverGone;
+        }
+        if !self.gate.open {
+            return DeliveryVerdict::GateClosed {
+                gate: self.gate.gate,
+                status: self.gate.status,
+            };
+        }
+        if self.gate.resume_recovered == Some(false) {
+            return DeliveryVerdict::ResumeUnrecovered;
+        }
+        if self.ask.waiting {
+            return DeliveryVerdict::AskWaiting;
+        }
+        if !self.pane.present {
+            return DeliveryVerdict::NoPane {
+                pinned_pane_id: self.pane.pinned_pane_id.clone(),
+            };
+        }
+        DeliveryVerdict::Ready
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -501,23 +600,21 @@ fn delivery_candidate(
         return Ok(None);
     };
     let now = Timestamp::now();
-    if matches!(policy, DeliveryPolicy::Boundary) {
-        if !message.is_deliverable(now) {
-            return Ok(None);
-        }
-        let Some(head) = queue_head_for_message(pending.iter(), &message, now) else {
-            return Ok(None);
-        };
-        if head.message_id != *message_id {
-            return Ok(None);
-        }
-    }
     let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
     // The resolution snapshot carries live panes but not rich context sidecars.
     // Fold them here for smart-compact gauges and parked-status delivery gates.
     let runtime = RuntimePaths::for_workspace(message.workspace_id.clone()).ok();
     if let Some(runtime) = runtime.as_ref() {
         snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(runtime));
+    }
+    let check = explain(&message, &pending, &snapshot, now);
+    if matches!(policy, DeliveryPolicy::Boundary)
+        && (!message.is_deliverable(now) || !check.fifo.head || !check.gate_ready())
+    {
+        return Ok(None);
+    }
+    if check.ask.waiting && !matches!(policy, DeliveryPolicy::Steer { force: true }) {
+        return Ok(None);
     }
     let Some(agent) = snapshot
         .agents
@@ -527,27 +624,6 @@ fn delivery_candidate(
         return Ok(None);
     };
     let status = agent.effective_status();
-    if matches!(policy, DeliveryPolicy::Boundary) {
-        if !gate_open_for_agent(message.gate, agent, message.force) {
-            return Ok(None);
-        }
-        if message.gate == DeliveryGate::Resume
-            && !runtime
-                .as_ref()
-                .is_some_and(|runtime| crate::agents::resume_gate_recovered(runtime, agent, now))
-        {
-            return Ok(None);
-        }
-    }
-    // A waiting agent reserves the next input, so it defers delivery —
-    // unless the message was queued with `--force`, mirroring `message --steer --force`.
-    let force_waiting = match policy {
-        DeliveryPolicy::Boundary => message.force,
-        DeliveryPolicy::Steer { force } => message.force || force,
-    };
-    if !force_waiting && agent.is_awaiting_input() {
-        return Ok(None);
-    }
     let batch_tail = match policy {
         DeliveryPolicy::Boundary => queue_batch_tail(pending.iter(), &message, status, now)
             .into_iter()
@@ -696,10 +772,118 @@ mod tests {
         assert!(!check.after[0].met);
         assert!(check.after[0].agent_present);
         assert_eq!(check.after[0].status, Some(AgentStatus::Running));
+        assert_eq!(
+            check.verdict(),
+            DeliveryVerdict::WaitingOnAfter {
+                address: "@planner".to_owned(),
+                agent_present: true,
+            }
+        );
 
         dependency.agents[1].status = AgentStatus::Idle;
         let check = explain(&after, std::slice::from_ref(&after), &dependency, now);
         assert!(check.after[0].met);
+    }
+
+    #[test]
+    fn delivery_check_reports_first_blocker_and_passes_only_when_ready() {
+        let mut check = ready_check();
+        assert!(check.passes());
+        assert_eq!(check.verdict(), DeliveryVerdict::Ready);
+
+        let not_before = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(60);
+        check.schedule.ready = false;
+        check.schedule.not_before = Some(not_before);
+        check.after.push(AfterConditionCheck {
+            address: "@planner".to_owned(),
+            met: false,
+            met_at: None,
+            agent_present: false,
+            status: None,
+        });
+        assert_eq!(
+            check.verdict(),
+            DeliveryVerdict::Scheduled {
+                not_before: Some(not_before)
+            }
+        );
+
+        check.schedule.ready = true;
+        assert_eq!(
+            check.verdict(),
+            DeliveryVerdict::WaitingOnAfter {
+                address: "@planner".to_owned(),
+                agent_present: false,
+            }
+        );
+        check.after[0].met = true;
+        check.fifo.head = false;
+        check.fifo.blocker = Some(message_id(7));
+        assert_eq!(
+            check.verdict(),
+            DeliveryVerdict::BehindFifo {
+                blocker: Some(message_id(7))
+            }
+        );
+        check.fifo.head = true;
+        check.agent.present = false;
+        assert_eq!(check.verdict(), DeliveryVerdict::ReceiverGone);
+        check.agent.present = true;
+        check.gate.open = false;
+        assert_eq!(
+            check.verdict(),
+            DeliveryVerdict::GateClosed {
+                gate: DeliveryGate::Done,
+                status: Some(AgentStatus::Idle),
+            }
+        );
+        check.gate.open = true;
+        check.gate.resume_recovered = Some(false);
+        assert_eq!(check.verdict(), DeliveryVerdict::ResumeUnrecovered);
+        check.gate.resume_recovered = None;
+        check.ask.waiting = true;
+        assert_eq!(check.verdict(), DeliveryVerdict::AskWaiting);
+        check.ask.waiting = false;
+        check.pane.present = false;
+        check.pane.pinned_pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"));
+        assert_eq!(
+            check.verdict(),
+            DeliveryVerdict::NoPane {
+                pinned_pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_9"))
+            }
+        );
+        assert!(!check.passes());
+    }
+
+    fn ready_check() -> DeliveryCheck {
+        DeliveryCheck {
+            schedule: ScheduleCheck {
+                ready: true,
+                not_before: None,
+                retry_after: None,
+            },
+            after: Vec::new(),
+            fifo: FifoCheck {
+                head: true,
+                blocker: None,
+            },
+            agent: AgentCheck { present: true },
+            gate: GateCheck {
+                gate: DeliveryGate::Done,
+                status: Some(AgentStatus::Idle),
+                open: true,
+                resume_recovered: None,
+            },
+            ask: AskCheck {
+                waiting: false,
+                force: false,
+            },
+            pane: PaneCheck {
+                present: true,
+                pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_3")),
+                pinned_pane_id: None,
+            },
+        }
     }
 
     fn snapshot(agent: AgentState, with_pane: bool, now: Timestamp) -> SidebarSnapshot {
