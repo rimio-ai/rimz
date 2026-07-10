@@ -27,7 +27,7 @@ impl SidebarSnapshot {
     /// by today's spend; a *tabbed* dashboard (three or more providers under
     /// `auto`) is height-bounded by its active block, so it shows every
     /// discovered provider. The retained set paints in the registry's display
-    /// order (`claude, codex, gemini, pi, opencode`) — the panels are the dashboard's
+    /// order (`claude, codex, copilot, gemini, pi, opencode`) — the panels are the dashboard's
     /// tabs, so the row never reorders as spend shifts. An explicit
     /// `provider_list` overrides the shown set and order, with `all` expanding
     /// the remaining discovered providers (in that same display order) and
@@ -218,7 +218,7 @@ fn resolve_provider_panels(
             panels.truncate(max_provider_blocks);
         }
         // The shown set paints in the registry's canonical order (claude, codex,
-        // pi, opencode) — the panels are the dashboard's tabs, and a tab row must
+        // copilot, pi, opencode) — the panels are the dashboard's tabs, and a tab row must
         // not reorder as today's spend shifts between providers.
         panels.sort_by(display_order);
         return panels;
@@ -262,7 +262,7 @@ fn resolve_provider_panels(
 }
 
 /// Order two panels by the registry's canonical display order — each kind's slot
-/// in [`known_kinds`](crate::agents::known_kinds) (`claude, codex, gemini, pi, opencode`),
+/// in [`known_kinds`](crate::agents::known_kinds) (`claude, codex, copilot, gemini, pi, opencode`),
 /// an unregistered kind sorting last by name. The default dashboard and `all`
 /// expansion both use this, so the row reads in the canonical agent order rather
 /// than an alphabetical accident; an explicit `provider_list` overrides it.

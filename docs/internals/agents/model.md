@@ -265,7 +265,7 @@ Installing hooks edits the agent's own config, so it is a security surface, neve
 
 **The installed config shape.** Claude and Codex have no wildcard event key, so install writes one block per wired event; Copilot, Pi, and OpenCode instead own one whole integration file (see [copilot.md](./copilot.md), [pi.md](./pi.md), [opencode.md](./opencode.md)). Inside that shape it stays minimal:
 
-- **One command for every event**: `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`, with no `--event`. The helper reads the event from the payload's `hook_event_name`.
+- **One command for every event**: `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`. The helper reads the event from the payload's `hook_event_name`, or the installed command passes `--event <event>` when the agent omits that field.
 - **Idempotent, self-healing reclaim.** Install reclaims every rimz-owned entry by the stable command substring `rimz hooks feed --source <agent>`, then rewrites the canonical set, so duplicate or stale blocks never accumulate. User-authored hooks are untouched.
 
 **Trust.** Every hook command enters the executable-surface hash, so a tampered hook config demotes project trust to stale (see [trust.md](../harness/trust.md)).
