@@ -124,7 +124,7 @@ When a cron job, CI gate, PR hook, or script needs to drive one member and read 
 
 ## Dollar budget scopes
 
-The budget engine evaluates agent, room-fleet, and provider-account caps on every producer tick. Agent caps keep their per-session `budget.<digest>.json` ledger; the room writes `budget.fleet.json`; each provider login writes machine-shared `budget.account.<kind>.json`; and `budget.scopes.json` carries per-agent fleet/account waivers, park thresholds, and interrupt throttles. These are cache-class atomic files resolved from launch config, machine config, runtime overrides, and transcript-derived spend.
+The budget engine evaluates agent, room-fleet, and provider-account caps on every producer tick. Agent caps keep their per-session `budget.<digest>.json` ledger; the room writes `budget.fleet.json`; each provider login writes machine-shared `budget.account.<kind>.json`; and `budget.scopes.json` carries per-agent fleet/account waivers, park thresholds, and interrupt throttles. These are cache-class atomic files resolved from launch config, machine config, runtime overrides, and transcript-derived spend; scope-ledger locks let producer ticks merge only park state without clobbering a concurrent CLI cap change.
 
 Room and account caps use the spending walk's dedicated local-day windows rather than session baselines: the workspace cache excludes live sessions and the fold adds their current card costs back, while the shared provider cache publishes a walked per-kind day tally. A scope at or over cap stamps its park, interrupts a running pane through the hidden `agents budget-park` helper, and arms auto-continue for the next local day. Agent park display wins over fleet, which wins over account.
 

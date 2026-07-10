@@ -205,6 +205,14 @@ pub struct AccountBudgetLedger {
     pub parked: Option<BudgetParkStamp>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ScopeLedgerWriteError {
+    #[error(transparent)]
+    Lock(#[from] crate::store::lock::LockErr),
+    #[error(transparent)]
+    Write(#[from] crate::store::atomic::AtomicErr),
+}
+
 impl AccountBudgetLedger {
     pub fn effective_cap_usd(&self, kind: &AgentKind, config: &MachineConfig) -> Option<f64> {
         if self.disabled {
@@ -639,14 +647,14 @@ pub fn enforce(
         }
     }
 
-    if fleet != fleet_before
-        && let Err(err) = write_fleet_ledger(runtime, &fleet)
+    if fleet.parked != fleet_before.parked
+        && let Err(err) = merge_fleet_park(runtime, fleet.parked)
     {
         warn_write("fleet budget ledger", err);
     }
     for (kind, (ledger, before, _)) in accounts {
-        if ledger != before
-            && let Err(err) = write_account_ledger(runtime, &kind, &ledger)
+        if ledger.parked != before.parked
+            && let Err(err) = merge_account_park(runtime, &kind, ledger.parked)
         {
             warn_write("account budget ledger", err);
         }
@@ -773,7 +781,7 @@ fn scope_agent_key(agent: &AgentState) -> String {
     format!("{}:{}", agent.kind, agent.agent_id)
 }
 
-fn warn_write(label: &str, err: crate::store::atomic::AtomicErr) {
+fn warn_write(label: &str, err: impl std::error::Error + 'static) {
     tracing::warn!(
         tags.operation = "budget.write_ledger",
         error = &err as &dyn std::error::Error,
@@ -1094,6 +1102,10 @@ pub fn fleet_ledger_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("budget.fleet.json")
 }
 
+fn fleet_ledger_lock_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join("budget.fleet.lock")
+}
+
 pub fn read_fleet_ledger(runtime: &RuntimePaths) -> FleetBudgetLedger {
     std::fs::read(fleet_ledger_path(runtime))
         .ok()
@@ -1104,12 +1116,46 @@ pub fn read_fleet_ledger(runtime: &RuntimePaths) -> FleetBudgetLedger {
 pub fn write_fleet_ledger(
     runtime: &RuntimePaths,
     ledger: &FleetBudgetLedger,
+) -> Result<(), ScopeLedgerWriteError> {
+    let _guard = crate::store::lock::WorkspaceLock::acquire(&fleet_ledger_lock_path(runtime))?;
+    write_fleet_ledger_unlocked(runtime, ledger)?;
+    Ok(())
+}
+
+fn write_fleet_ledger_unlocked(
+    runtime: &RuntimePaths,
+    ledger: &FleetBudgetLedger,
 ) -> crate::store::atomic::Result<()> {
     write_temp_then_rename_cache(&fleet_ledger_path(runtime), ledger)
 }
 
+fn merge_fleet_park(
+    runtime: &RuntimePaths,
+    parked: Option<BudgetParkStamp>,
+) -> Result<(), ScopeLedgerWriteError> {
+    let _guard = crate::store::lock::WorkspaceLock::acquire(&fleet_ledger_lock_path(runtime))?;
+    let mut current = read_fleet_ledger(runtime);
+    current.parked = parked;
+    write_fleet_ledger_unlocked(runtime, &current)?;
+    Ok(())
+}
+
 pub fn account_ledger_path(runtime: &RuntimePaths, kind: &AgentKind) -> PathBuf {
-    let component = if kind
+    runtime.persistent_shared_root.join(format!(
+        "budget.account.{}.json",
+        account_ledger_component(kind)
+    ))
+}
+
+fn account_ledger_lock_path(runtime: &RuntimePaths, kind: &AgentKind) -> PathBuf {
+    runtime.shared_root.join(format!(
+        "budget.account.{}.lock",
+        account_ledger_component(kind)
+    ))
+}
+
+fn account_ledger_component(kind: &AgentKind) -> String {
+    if kind
         .as_str()
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
@@ -1119,10 +1165,7 @@ pub fn account_ledger_path(runtime: &RuntimePaths, kind: &AgentKind) -> PathBuf 
         let mut hasher = Sha256::new();
         hasher.update(kind.as_str().as_bytes());
         format!("kind-{}", &hex::encode(hasher.finalize())[..16])
-    };
-    runtime
-        .persistent_shared_root
-        .join(format!("budget.account.{component}.json"))
+    }
 }
 
 pub fn read_account_ledger(runtime: &RuntimePaths, kind: &AgentKind) -> AccountBudgetLedger {
@@ -1136,8 +1179,32 @@ pub fn write_account_ledger(
     runtime: &RuntimePaths,
     kind: &AgentKind,
     ledger: &AccountBudgetLedger,
+) -> Result<(), ScopeLedgerWriteError> {
+    let _guard =
+        crate::store::lock::WorkspaceLock::acquire(&account_ledger_lock_path(runtime, kind))?;
+    write_account_ledger_unlocked(runtime, kind, ledger)?;
+    Ok(())
+}
+
+fn write_account_ledger_unlocked(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    ledger: &AccountBudgetLedger,
 ) -> crate::store::atomic::Result<()> {
     write_temp_then_rename_cache(&account_ledger_path(runtime, kind), ledger)
+}
+
+fn merge_account_park(
+    runtime: &RuntimePaths,
+    kind: &AgentKind,
+    parked: Option<BudgetParkStamp>,
+) -> Result<(), ScopeLedgerWriteError> {
+    let _guard =
+        crate::store::lock::WorkspaceLock::acquire(&account_ledger_lock_path(runtime, kind))?;
+    let mut current = read_account_ledger(runtime, kind);
+    current.parked = parked;
+    write_account_ledger_unlocked(runtime, kind, &current)?;
+    Ok(())
 }
 
 pub fn scope_state_path(runtime: &RuntimePaths) -> PathBuf {
@@ -1447,6 +1514,15 @@ mod tests {
         };
         write_fleet_ledger(&runtime, &fleet).expect("fleet write");
         assert_eq!(read_fleet_ledger(&runtime), fleet);
+        merge_fleet_park(&runtime, None).expect("merge fleet park");
+        assert_eq!(
+            read_fleet_ledger(&runtime),
+            FleetBudgetLedger {
+                parked: None,
+                ..fleet.clone()
+            },
+            "producer park writes preserve CLI cap overrides"
+        );
 
         let kind = AgentKind::new_unchecked("claude");
         let account = AccountBudgetLedger {
@@ -1456,6 +1532,15 @@ mod tests {
         };
         write_account_ledger(&runtime, &kind, &account).expect("account write");
         assert_eq!(read_account_ledger(&runtime, &kind), account);
+        merge_account_park(&runtime, &kind, None).expect("merge account park");
+        assert_eq!(
+            read_account_ledger(&runtime, &kind),
+            AccountBudgetLedger {
+                parked: None,
+                ..account.clone()
+            },
+            "producer park writes preserve CLI cap raises"
+        );
 
         let fleet_label = BudgetPark {
             cap_usd: 25.0,
