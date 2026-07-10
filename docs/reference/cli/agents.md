@@ -77,7 +77,7 @@ A second positional that is itself a known cell is rejected with a `rimz agents 
 
 ### Resume a cohort
 
-`--resume` relaunches a prior cohort matching the same spec; `--continue` is the same visible alias. It reads identity, cwd, and channel from the store, so a closed cohort comes back where it was.
+`--resume` relaunches a prior cohort matching the same spec; `--continue` is the same visible alias. It reads identity, cwd, and channel from the store, so a closed cohort comes back where it was. Use the [place-first `resume` verb](#resume-a-lane-by-place) when the lane is known and the original spec is not.
 
 ```sh
 rimz agents forge --resume                           # reopen the newest closed forge cohort
@@ -93,6 +93,27 @@ What matches what:
 - Cleanly closed cohort members still match when their worktree exists. Cells with no resumable prior member launch fresh in the matched cohort's cwd and channel. A matched member that is still live refuses the command, so the room does not duplicate the same address.
 
 Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--model`, `--effort`, `--ask`, `--yolo`, `-p`, system-prompt flags, and passthrough args after `--`.
+
+### Resume a lane by place
+
+`resume [SCOPE]` makes one lane whole from its durable agent records without retyping the team or layout. Scope accepts the same `#channel`, worktree name, branch, directory name, and path spellings as `agents list`; `--from-pr <number|url>` resolves a RimZ worktree's recorded PR provenance first and the legacy `pr-<N>` name second. Resolution is local and performs no network request or worktree creation.
+
+```sh
+rimz agents resume '#docs'        # resume the docs lane
+rimz agents resume pr-69          # resume by worktree name
+rimz agents resume --from-pr 69   # resume the local worktree created from PR 69
+rimz agents resume                # inside a worktree: that lane; at project root: list lanes
+```
+
+| Lane state | Result |
+|---|---|
+| every member live | focuses the freshest member's pane and exits successfully |
+| some members live | splits only the closed members back into the live tab and reports each skipped live handle |
+| every member closed | rebuilds team layouts in declared order and restores stray agents as flat panes |
+
+`--bg` leaves focus where it is when panes or tabs open. Profiles and team layouts render from the current `agents.toml`, while session identity, role, team, channel, and working directory come from the durable records. This is place-first recovery; [spec-first `--resume`](#resume-a-cohort) remains the form for choosing a prior cohort by team or layout.
+
+Failures name the fix: an unknown scope reports `no lane '#docs' in this workspace`; a removed checkout reports `worktree for '#docs' was removed; recreate it with rimz agents <spec> -w docs`; a PR with no local worktree reports `PR 69 has no local worktree; start one with rimz agents <spec> --from-pr 69`; and a known lane without a saved resumable session reports `nothing to resume in '#docs'`.
 
 ### Shared launch params
 
@@ -158,6 +179,7 @@ rimz agents top --once                   # one resource-ranked fleet table
 rimz agents focus @claude-2#cli-docs     # jump to the pane
 rimz agents fork @coder --name twin      # branch a conversation into a new agent
 rimz agents restart @claude-2#cli-docs   # replace its pane and resume it
+rimz agents resume '#cli-docs'           # fill every closed place in one lane
 rimz agents wait swift-otter --stream    # block until it lands, tailing the transcript
 rimz agents wait otter fox --any         # race agents; print the first finisher
 rimz agents refresh                      # force-refresh the channel's live agent cards
@@ -180,8 +202,9 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 | `refresh` | one agent, the channel, or `--all` | force-refreshes card context |
 | `stop` | one run or agent; `--all` fans out | cancels a run or closes the pane |
 | `restart` | one live agent | replaces its pane and resumes its provider session |
+| `resume` | one lane | focuses a whole live lane or restores its closed members |
 
-`list`, `show`, `logs`, `history`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `fork` starts a new agent without changing its source, `stop` ends an agent, and `restart` deliberately ends and replaces one.
+`list`, `show`, `logs`, `history`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `fork` starts a new agent without changing its source, `stop` ends an agent, `restart` deliberately ends and replaces one, and `resume` restores the closed portion of a lane.
 
 #### `list`
 

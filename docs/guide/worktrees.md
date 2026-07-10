@@ -49,6 +49,7 @@ A branch-style name with a `/` names the branch directly and maps to `-` for the
 ```sh
 rimz agents claude --from-pr 42               # review PR 42 in its own tree
 rimz agents codex --from-pr 42 -w review-42   # name the tree yourself
+rimz agents resume --from-pr 42               # resume that PR's local lane later
 ```
 
 It resolves the host's PR ref for you: GitHub, Gitea, and Forgejo use `refs/pull/<N>/head`, GitLab uses `refs/merge-requests/<N>/head`.

@@ -90,6 +90,8 @@ rimz agents claude,codex --resume  # reopen the newest matching inline pair
 rimz agents claude --resume        # resume the freshest closed Claude session
 ```
 
+When the place is easier to name than the spec, `rimz agents resume '#feat-x'` restores the lane's saved team layout and stray agents without requiring the team name. This place-first form converges a partially live team by adding only its closed members; the spec-first `--resume` form selects a cohort by team or layout.
+
 ## One team, one line of work
 
 The room treats a team as a single line of work: the sidebar keeps its members as one contiguous block with one derived state, so one member asking for you lifts the whole block ([the sidebar guide → Teams read as one](./sidebar.md#teams-read-as-one)).

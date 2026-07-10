@@ -255,6 +255,8 @@ rimz agents stop @claude --all  # close every Claude in scope
 
 `stop` closes the agent's pane, ending the CLI process the way Ctrl+C would; sessions stay on disk in the provider's own format, so a stopped agent is one `--resume` away.
 
+**Restore a lane by place.** `rimz agents resume '#auth-refresh'` focuses the lane when every member is live, adds only closed members when part of it remains live, and rebuilds the saved team and stray panes when all are closed. Use `--from-pr 42` for a locally developed pull-request lane; bare `resume` targets the current worktree or lists resumable lanes at the project root.
+
 **Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current `agents.toml`, so edits take effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the allocated replacement handle instead of hiding a possible rename.
 
 **Fork an agent to try another approach.** `rimz agents fork @coder` opens the full conversation under a new provider-assigned session id beside the source agent in the same worktree, leaving the original untouched and preserving its permission mode. RimZ gives the fork a fresh pet name; use `rimz agents fork @coder --name twin` to pin `@twin` when you want both approaches to have memorable handles.
