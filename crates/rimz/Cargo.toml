@@ -183,6 +183,7 @@ tracing-subscriber.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
+rustix.workspace = true
 signal-hook.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -669,15 +669,23 @@ fn record_failure_tail_before_cleanup(
 fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<String> {
     match input_format {
         InputFormat::Text => {
-            let piped = crate::cli::send::read_piped_text_prompt()?;
+            let piped = if args.stdin {
+                crate::cli::send::read_stdin_prompt()?
+            } else {
+                crate::cli::send::warn_ignored_stdin();
+                None
+            };
             crate::cli::send::combine_text_prompt(args.prompt.as_deref(), piped.as_deref())
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "expected a prompt for `rimz agents <spec> -p` (positional PROMPT or piped stdin)"
+                        "expected a prompt for `rimz agents <spec> -p` (positional PROMPT or `--stdin`)"
                     )
                 })
         }
         InputFormat::StreamJson => {
+            if args.stdin {
+                bail!("--input-format stream-json already reads stdin; drop --stdin");
+            }
             if args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()) {
                 bail!(
                     "--input-format stream-json reads the prompt from stdin; drop the positional PROMPT"

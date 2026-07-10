@@ -2477,7 +2477,7 @@ fn steer_combines_inline_text_with_piped_stdin() {
     let mut cmd = env.rimz();
     cmd.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "review this"])
+        .args(["message", "--steer", "@claude", "--stdin", "review this"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2498,31 +2498,95 @@ fn steer_combines_inline_text_with_piped_stdin() {
 }
 
 #[test]
-fn message_rejects_piped_stdin_with_file() {
+fn message_rejects_stdin_with_file() {
     let env = Env::new();
     let prompt_file = env.project_root.join("prompt.txt");
     std::fs::write(&prompt_file, "file body\n").expect("write prompt file");
 
-    let mut cmd = env.rimz();
-    cmd.args([
-        "message",
-        "@claude",
-        "--file",
-        prompt_file.to_str().expect("utf-8 path"),
-    ])
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
     let out = env
-        .spawn_payload(cmd, "piped body\n")
-        .wait_with_output()
-        .expect("wait for conflicting prompt sources");
+        .rimz()
+        .args([
+            "message",
+            "@claude",
+            "--stdin",
+            "--file",
+            prompt_file.to_str().expect("utf-8 path"),
+        ])
+        .output()
+        .expect("run conflicting prompt sources");
     assert!(!out.status.success(), "conflicting sources should fail");
+    assert_eq!(out.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("pipe stdin or pass `--file`, not both"),
+        String::from_utf8_lossy(&out.stderr)
+            .contains("the argument '--stdin' cannot be used with '--file <PATH>'"),
         "unexpected stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn message_ignores_an_open_empty_stdin_without_the_flag() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-open-stdin", "feature-open-stdin", &[]);
+
+    let mut cmd = env.rimz();
+    cmd.args(["message", "@claude", "hi"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn message with open stdin");
+    let open_stdin = child.stdin.take().expect("child stdin");
+    let out = wait_with_output_bounded(child, Duration::from_secs(2));
+    drop(open_stdin);
+
+    assert!(
+        out.status.success(),
+        "message failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("waiting on piped stdin"),
+        "old wait notice survived: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let pending = env.store().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].text, "hi");
+}
+
+#[cfg(unix)]
+#[test]
+fn message_warns_when_ignoring_buffered_stdin() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-buffered-stdin", "feature-buffered-stdin", &[]);
+    let (read_end, write_end) = nix::unistd::pipe().expect("pipe");
+    nix::unistd::write(&write_end, b"ignored context\n").expect("prefill pipe");
+
+    let mut cmd = env.rimz();
+    cmd.args(["message", "@claude", "hi"])
+        .stdin(Stdio::from(read_end))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = cmd.spawn().expect("spawn message with buffered stdin");
+    let out = wait_with_output_bounded(child, Duration::from_secs(2));
+    drop(write_end);
+
+    assert!(
+        out.status.success(),
+        "message failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("stdin has data but --stdin was not passed; ignoring it"),
+        "missing ignored-stdin hint: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let pending = env.store().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].text, "hi");
 }
 
 #[test]
@@ -4361,6 +4425,28 @@ fn wait_for_message_event_count(env: &Env, method: &str, count: usize, timeout: 
             "timed out waiting for {count} {method} events"
         );
         std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_with_output_bounded(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> std::process::Output {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait().expect("poll child").is_some() {
+            return child.wait_with_output().expect("collect child output");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child.wait_with_output().expect("collect timed-out output");
+            panic!(
+                "child did not finish within {timeout:?}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

@@ -3086,6 +3086,7 @@ dependencies = [
  "proptest",
  "ratatui",
  "rusqlite",
+ "rustix 1.1.4",
  "sentry",
  "sentry-tracing",
  "serde",

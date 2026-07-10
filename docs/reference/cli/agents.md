@@ -159,12 +159,13 @@ Room and account caps gate automation before it launches: `agents -p` exits `125
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
 rimz agents claude "Run the long migration audit." -p --bg       # prints a pet name, returns now
 rimz agents claude "Review the diff." -p --effort high --system-prompt-file ./review-prompt.md
-cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
+cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause' > out.txt
 ```
 
 - `--bg` with `-p` prints the run's pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`. (Without `-p`, `--bg` is a placement flag — see [Channel, worktree, and placement](#channel-worktree-and-placement).)
 - `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--bg`). The JSON `run_id` opens the RimZ transcript log with `rimz transcript <run_id>`; the JSON `transcript_path` is the provider-native session file used for streaming, context, and spend enrichment.
-- `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it, wrapped in `<stdin>…</stdin>` tags when both are present; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt.
+- `--stdin` adds stdin to the text prompt and reads it to EOF, wrapping it in `<stdin>…</stdin>` tags after a positional `PROMPT` when both are present.
+- `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` plus explicit `--stdin` content; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt or `--stdin`.
 - `--max-turns <N>` caps the agentic turn count where the adapter exposes a native limit (Claude today); an agent without one refuses the run.
 - `--retries <N>` reruns only failed (exit `1`) turns, up to `N` more attempts, with the previous failure tail appended to the original prompt. `--timeout` and `--budget` apply per attempt; timeout, budget, and cancel results never retry; the final attempt decides the exit code. Retries require a blocking text or JSON run and refuse `--bg` and `--output-format stream-json`.
 - `--verify <CMD>` runs the command in the run cwd after every completed turn and re-prompts the same session with failure evidence until it passes. `--max-attempts <N>` is the total agent-turn cap, defaults to `3`, and must be at least `1`; exhaustion exits `123`. The verify command uses `--timeout` or a five-minute default, a timed-out verify is red, and both flags refuse `--bg` and `--output-format stream-json`.

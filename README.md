@@ -162,7 +162,7 @@ rimz message @coder --wait "did the migration land? one line"       # print the 
 rimz message @all --wait --json "status? one line"                   # gather a labeled reply map from the whole channel
 rimz message --steer @claude "stop: the parser test comes first"   # lands now
 rimz message --schedule 60m @codex#feat-b "run the smoke test"     # lands in an hour
-git diff main | rimz message @reviewer "review this"               # instruction plus piped context
+git diff main | rimz message @reviewer --stdin "review this"       # instruction plus stdin context
 rimz message @all "summarize what changed at the next boundary"    # the whole channel
 ```
 
@@ -170,7 +170,7 @@ rimz message @all "summarize what changed at the next boundary"    # the whole c
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
-cat build-error.txt | rimz agents claude -p 'explain the root cause'   # stdin appends to the prompt
+cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause'   # stdin appends to the prompt
 
 rimz agents claude "Run the migration audit." -p --bg       # returns now, prints the run's name
 rimz agents wait swift-otter --stream                       # block on it later, tail the answer

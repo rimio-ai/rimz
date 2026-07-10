@@ -11,7 +11,6 @@ use rimz::ids::AgentKind;
 use rimz::message::{AutoCompact, MessageSender};
 
 const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
-const STDIN_WAIT_NOTICE_DELAY: Duration = Duration::from_secs(10);
 
 /// The flags shared by immediate and parked message delivery.
 #[derive(Debug, Args)]
@@ -44,9 +43,13 @@ pub(crate) struct SendFlags {
     pub(crate) smart_compact: Option<AutoCompact>,
     /// Read the prompt verbatim from a file instead of inline argv. A file already
     /// carries real newlines and literal backslashes, so it is sent as-is with no
-    /// `\n`/`\\` interpretation. Conflicts with inline text and piped stdin.
+    /// `\n`/`\\` interpretation. Conflicts with inline text and `--stdin`.
     #[arg(long, value_name = "PATH")]
     pub(crate) file: Option<PathBuf>,
+    /// Read stdin to EOF as prompt content. With inline text, the instruction
+    /// goes first and stdin follows inside `<stdin>` tags. Conflicts with `--file`.
+    #[arg(long, conflicts_with = "file")]
+    pub(crate) stdin: bool,
     /// Deliver the text verbatim with no `from @sender:` prefix, even for an agent
     /// caller. No effect for a human caller, which is already verbatim.
     #[arg(long)]
@@ -113,19 +116,16 @@ impl WaitSpec {
     }
 }
 
-/// Resolve the prompt a send-style invocation carries from inline argv, piped
-/// stdin, or a `--file` path. A file is read verbatim (it already holds real
+/// Resolve the prompt a send-style invocation carries from inline argv,
+/// `--stdin`, or a `--file` path. A file is read verbatim (it already holds real
 /// newlines and literal backslashes), while inline argv goes through `\n`/`\\`
-/// interpretation. Piped stdin is also verbatim and follows an inline
+/// interpretation. Explicit stdin is also verbatim and follows an inline
 /// instruction inside `<stdin>` tags when both are present.
 pub(crate) fn resolve_message(
     parts: &[String],
     file: Option<&Path>,
     piped: Option<&str>,
 ) -> Result<String> {
-    if file.is_some() && piped.is_some_and(|text| !text.trim().is_empty()) {
-        bail!("pipe stdin or pass `--file`, not both");
-    }
     match file {
         Some(path) => {
             if !parts.is_empty() {
@@ -136,16 +136,14 @@ pub(crate) fn resolve_message(
         None => {
             let inline = message_text(parts);
             combine_text_prompt(inline.as_deref(), piped).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "expected non-empty text inline, from piped stdin, or with `--file`"
-                )
+                anyhow::anyhow!("expected non-empty text inline, from `--stdin`, or with `--file`")
             })
         }
     }
 }
 
 /// Build a text-mode prompt with the positional instruction first; when both
-/// positional text and piped stdin are present, wrap stdin in `<stdin>` tags.
+/// positional text and explicit stdin are present, wrap stdin in `<stdin>` tags.
 pub(crate) fn combine_text_prompt(positional: Option<&str>, piped: Option<&str>) -> Option<String> {
     let positional = positional
         .map(str::trim)
@@ -161,28 +159,11 @@ pub(crate) fn combine_text_prompt(positional: Option<&str>, piped: Option<&str>)
     }
 }
 
-pub(crate) fn read_piped_text_prompt() -> Result<Option<String>> {
-    use std::io::{IsTerminal as _, Read as _, Write as _};
+pub(crate) fn read_stdin_prompt() -> Result<Option<String>> {
+    use std::io::Read as _;
 
-    let stdin = std::io::stdin();
-    if stdin.is_terminal() {
-        return Ok(None);
-    }
-    #[cfg(unix)]
-    let data_ready = {
-        use std::os::fd::AsFd as _;
-        stdin_data_ready(stdin.as_fd(), STDIN_WAIT_NOTICE_DELAY)
-    };
-    #[cfg(not(unix))]
-    let data_ready = stdin_data_ready((), STDIN_WAIT_NOTICE_DELAY);
-    if !data_ready {
-        let _ = writeln!(
-            std::io::stderr().lock(),
-            "rimz: waiting on piped stdin; close stdin (for example, `</dev/null`) if nothing is coming"
-        );
-    }
     let mut buf = String::new();
-    stdin
+    std::io::stdin()
         .lock()
         .read_to_string(&mut buf)
         .context("reading stdin")?;
@@ -190,19 +171,29 @@ pub(crate) fn read_piped_text_prompt() -> Result<Option<String>> {
 }
 
 #[cfg(unix)]
-fn stdin_data_ready(fd: std::os::fd::BorrowedFd<'_>, timeout: Duration) -> bool {
-    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-
-    let mut fds = [PollFd::new(fd, PollFlags::POLLIN)];
-    let Ok(poll_timeout) = PollTimeout::try_from(timeout) else {
-        return true;
-    };
-    !matches!(poll(&mut fds, poll_timeout), Ok(0))
+fn buffered_stdin_bytes(fd: std::os::fd::BorrowedFd<'_>) -> Option<u64> {
+    rustix::io::ioctl_fionread(fd).ok()
 }
 
-#[cfg(not(unix))]
-fn stdin_data_ready(_fd: (), _deadline: Duration) -> bool {
-    true
+pub(crate) fn warn_ignored_stdin() {
+    use std::io::IsTerminal as _;
+
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::fd::AsFd as _;
+
+        if buffered_stdin_bytes(stdin.as_fd()).is_some_and(|bytes| bytes > 0) {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: stdin has data but --stdin was not passed; ignoring it"
+            );
+        }
+    }
 }
 
 /// The caller identity for `message`. Rimz-launched agents carry
@@ -330,23 +321,13 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn stdin_readiness_covers_data_and_eof() {
+    fn fionread_counts_buffered_pipe_bytes() {
         use std::os::fd::AsFd as _;
 
         let (read_end, write_end) = nix::unistd::pipe().unwrap();
-        assert!(!stdin_data_ready(
-            read_end.as_fd(),
-            Duration::from_millis(1)
-        ));
+        assert_eq!(buffered_stdin_bytes(read_end.as_fd()), Some(0));
         nix::unistd::write(&write_end, b"x").unwrap();
-        assert!(stdin_data_ready(read_end.as_fd(), Duration::from_millis(1)));
-
-        let (eof_read_end, eof_write_end) = nix::unistd::pipe().unwrap();
-        drop(eof_write_end);
-        assert!(stdin_data_ready(
-            eof_read_end.as_fd(),
-            Duration::from_millis(1)
-        ));
+        assert_eq!(buffered_stdin_bytes(read_end.as_fd()), Some(1));
     }
 
     #[test]
@@ -463,7 +444,7 @@ mod tests {
         let err = resolve_message(&[], None, None).expect_err("missing prompt source");
         let message = err.to_string();
         assert!(message.contains("inline"), "{message}");
-        assert!(message.contains("piped stdin"), "{message}");
+        assert!(message.contains("--stdin"), "{message}");
         assert!(message.contains("--file"), "{message}");
     }
 
@@ -485,13 +466,6 @@ mod tests {
             resolve_message(&["review this".to_owned()], None, Some("diff body\n")).unwrap(),
             "review this\n\n<stdin>\ndiff body\n</stdin>"
         );
-    }
-
-    #[test]
-    fn resolve_rejects_file_and_piped_text() {
-        let err = resolve_message(&[], Some(Path::new("/nope")), Some("diff body"))
-            .expect_err("piped stdin and file conflict");
-        assert_eq!(err.to_string(), "pipe stdin or pass `--file`, not both");
     }
 
     #[test]

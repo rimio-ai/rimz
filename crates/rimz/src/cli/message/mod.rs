@@ -36,7 +36,7 @@ pub struct MessageArgs {
         crate::cli::complete::message_targets
     ))]
     target: Option<String>,
-    /// The message, as one quoted argument. Omit it to pipe stdin or pass
+    /// The message, as one quoted argument. Omit it and pass `--stdin` or
     /// `--file` to deliver external contents verbatim.
     text: Option<String>,
     /// Deliver after a successful/idle turn (`done`) or after success/idle/failure (`any`).
@@ -241,7 +241,12 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                     "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, requeue <id>, remove <id>..., clear [target], or an @agent target"
                 );
             }
-            let piped = send::read_piped_text_prompt()?;
+            let piped = if args.send.stdin {
+                send::read_stdin_prompt()?
+            } else {
+                send::warn_ignored_stdin();
+                None
+            };
             let text = args.text.into_iter().collect();
             if args.steer {
                 steer_message(target, args.send, text, piped, globals)

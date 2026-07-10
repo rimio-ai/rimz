@@ -192,6 +192,10 @@ pub struct AgentsArgs {
     /// Run one supervised agent prompt and print its final answer.
     #[arg(short = 'p', long = "print")]
     print: bool,
+    /// Read stdin to EOF as prompt content. With a positional prompt, the
+    /// instruction goes first and stdin follows inside `<stdin>` tags.
+    #[arg(long, requires = "print")]
+    stdin: bool,
     /// Wait cap for `--print` or `wait`.
     #[arg(long, value_parser = crate::cli::agents_cmd::supervised::parse_timeout, requires = "print")]
     timeout: Option<Duration>,
@@ -204,7 +208,7 @@ pub struct AgentsArgs {
     /// How `--print` renders the supervised run (text, json, stream-json).
     #[arg(long, value_name = "FORMAT", requires = "print")]
     output_format: Option<OutputFormat>,
-    /// How `--print` reads the prompt (text positional plus piped stdin, or
+    /// How `--print` reads the prompt (text positional plus explicit stdin, or
     /// stream-json on stdin).
     #[arg(long, value_name = "FORMAT", requires = "print")]
     input_format: Option<InputFormat>,
@@ -242,7 +246,7 @@ pub(super) enum OutputFormat {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub(super) enum InputFormat {
-    /// The positional `PROMPT` argument plus piped non-TTY stdin.
+    /// The positional `PROMPT` argument plus stdin when `--stdin` is passed.
     #[default]
     Text,
     /// Stream-json user messages read from stdin until EOF.
@@ -624,6 +628,7 @@ impl AgentsArgs {
             effort: None,
             budget: None,
             print: false,
+            stdin: false,
             timeout: None,
             keep: false,
             json: false,
@@ -663,6 +668,7 @@ impl AgentsArgs {
             effort: task.effort,
             budget: task.budget,
             print: true,
+            stdin: false,
             timeout: task.timeout,
             keep: task.keep,
             json: false,

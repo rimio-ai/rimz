@@ -152,7 +152,7 @@ fn print_text_input_accepts_piped_prompt_without_positional() {
     );
 
     let mut cmd = env.rimz();
-    cmd.args(["agents", "codex", "-p"])
+    cmd.args(["agents", "codex", "-p", "--stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -177,7 +177,7 @@ fn print_text_input_accepts_piped_prompt_without_positional() {
     );
     assert!(
         !stderr.contains("expected a prompt"),
-        "piped stdin should satisfy text input\nstderr:\n{stderr}"
+        "explicit stdin should satisfy text input\nstderr:\n{stderr}"
     );
 }
 
@@ -222,6 +222,33 @@ fn print_stream_json_input_refuses_a_positional_prompt() {
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("drop the positional PROMPT"),
         "stderr should name the conflict\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn print_stream_json_input_refuses_stdin_flag() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args([
+            "agents",
+            "codex",
+            "-p",
+            "--stdin",
+            "--input-format",
+            "stream-json",
+        ])
+        .output()
+        .expect("spawn agents print stream-json input with stdin flag");
+    assert!(
+        !out.status.success(),
+        "redundant --stdin should be rejected"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("--input-format stream-json already reads stdin; drop --stdin"),
+        "unexpected stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 }

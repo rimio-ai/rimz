@@ -78,14 +78,14 @@ rimz agents codex "Fix the failing auth test." -p --verify "cargo xtask test aut
 
 ## Feed the prompt in
 
-The positional prompt is the base, and piped stdin appends to it — so build output, a diff, or a log becomes context without a temp file.
+The positional prompt is the base, and `--stdin` appends stdin to it — so build output, a diff, or a log becomes context without a temp file.
 
 ```sh
-cat build-error.txt | rimz agents claude -p 'explain the root cause'          # stdin folds in after the prompt
-git diff --staged | rimz agents codex -p 'review this diff; reply SHIP or HOLD'
+cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause'          # stdin folds in after the prompt
+git diff --staged | rimz agents codex -p --stdin 'review this diff; reply SHIP or HOLD'
 ```
 
-When both a prompt and stdin are present, RimZ wraps the piped bytes in `<stdin>…</stdin>` so the agent reads them as attached material. For a fully programmatic feed, `--input-format stream-json` reads user messages from stdin until EOF instead of taking a positional prompt.
+`--stdin` reads to EOF. When both a prompt and stdin are present, RimZ wraps the stdin bytes in `<stdin>…</stdin>` so the agent reads them as attached material. For a fully programmatic feed, `--input-format stream-json` reads user messages from stdin until EOF instead of taking a positional prompt; it already declares stdin as its source, so omit `--stdin`.
 
 ## Shape the output
 
@@ -139,7 +139,7 @@ A reference is the printed name, a run id, or any [agent address](./messaging.md
 
 ```sh
 # inside a Claude turn, via its shell tool: a cross-provider review
-git diff | rimz agents codex -p 'review this diff; reply SHIP or HOLD, with reasons'
+git diff | rimz agents codex -p --stdin 'review this diff; reply SHIP or HOLD, with reasons'
 ```
 
 Compare that with an agent's built-in subagents, which run headless inside the parent's harness. A `-p` child is a first-class member of your room: its own card and pane, a transcript that outlives the turn, and a question that routes to you instead of failing silently — the parent blocks on the exit code either way. Packaging the pattern for your agents is a few lines of skill or slash-command prompt around the one command; when the task belongs to a teammate that is already running, hand it over with [`rimz message`](./messaging.md) instead of spawning a fresh turn.

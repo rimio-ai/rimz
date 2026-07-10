@@ -147,10 +147,10 @@ Deliver a file's contents verbatim — a prompt with real newlines, no escaping 
 rimz message @claude --file review-notes.md
 ```
 
-Piped stdin is also verbatim and becomes the whole message when no inline text is present. Delivery waits for the pipe to close; when a pipe remains open without data for 10 seconds, RimZ reports the wait on stderr and continues waiting. Combine piped and inline text to put an instruction first and wrap the piped content in `<stdin>` tags; `--file` and piped stdin are mutually exclusive.
+`--stdin` reads stdin verbatim to EOF and makes it the whole message when no inline text is present. Combine it with inline text to put an instruction first and wrap the stdin content in `<stdin>` tags. The `--stdin` and `--file` flags are mutually exclusive.
 
 ```sh
-git diff main | rimz message @reviewer "review this"
+git diff main | rimz message @reviewer --stdin "review this"
 ```
 
 ## Agents message each other
