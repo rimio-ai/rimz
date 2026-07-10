@@ -81,7 +81,7 @@ The footer holds `? for help`, which opens the key and filter overlay in place. 
 Each agent is a small stacked card, four lines at rest:
 
 ```
-⣾ claude · Opus 4.8 · xhigh · 1m                $1.27    ← state · handle · model · effort · window · cost
+⢿ claude · Opus 4.8 · xhigh · 1m                $1.27    ← state · handle · model · effort · window · cost
   store refactor                                         ← what it is working on
   ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context meter: how full the window is
   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m    ← tokens in the window · last activity
@@ -107,13 +107,13 @@ Every card wears one state, and six cover the life of a session:
 | glyph | state | meaning | needs you |
 |-------|-------|---------|-----------|
 | `○` | idle | alive, nothing in flight | no |
-| `⠁` / `⢿` | running | working a turn: `⠁` while it reads and reasons, `⢿` once it starts editing files | no |
+| `⢿` | running | working a turn | no |
 | `?` | waiting | stopped mid-task for your answer: a permission, a plan approval, a question | **yes** |
 | `!` | failed | the turn errored, died on a provider API error, or a running agent went silent past the stall window | **yes** |
 | `⏸` | paused | stopped mid-turn on a provider rate limit or overload | when it recovers |
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
 
-The full glyph vocabulary, including the transient heads that ride over a running card (compacting, waiting on subagents, parked on background work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
+The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on subagents, parked on background work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
 A session's life traces one loop through those states:
 
@@ -126,7 +126,7 @@ A session's life traces one loop through those states:
 ```
 
 - A fresh agent is **idle** until its first prompt; a prompt you type (or a queued `rimz message`) starts a turn.
-- A **running** turn opens in the thinking head while the agent reads and plans, and switches to the working spinner at its first file edit; a research turn that never edits stays in the thinking head end to end.
+- A **running** turn wears the working spinner (`⢿`, animated in the live column) from first token to last.
 - An **ask pulls the card to `waiting`**, and answering it in the pane returns the agent to work; the card notices the answer even before the turn formally moves on.
 - A turn ends **done** or **failed**; either way the agent is ready for its next prompt, and the state tells you whether to collect a result or unblock a problem.
 
