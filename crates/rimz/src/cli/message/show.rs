@@ -557,6 +557,7 @@ pub(super) fn delivery_action_hint(
         )),
         deliver::DeliveryVerdict::WaitingOnAfter { .. }
         | deliver::DeliveryVerdict::BehindFifo { .. }
+        | deliver::DeliveryVerdict::ReceiverGone
         | deliver::DeliveryVerdict::GateClosed { .. }
         | deliver::DeliveryVerdict::ResumeUnrecovered => {
             Some(format!("force now: rimz message steer {message_id}"))
@@ -564,9 +565,7 @@ pub(super) fn delivery_action_hint(
         deliver::DeliveryVerdict::AskWaiting => Some(format!(
             "force now: rimz message steer {message_id} --force"
         )),
-        deliver::DeliveryVerdict::ReceiverGone
-        | deliver::DeliveryVerdict::NoPane { .. }
-        | deliver::DeliveryVerdict::Ready => None,
+        deliver::DeliveryVerdict::NoPane { .. } | deliver::DeliveryVerdict::Ready => None,
     }
 }
 
@@ -625,6 +624,15 @@ mod tests {
         assert_eq!(
             render_verdict(&check.verdict(), "@claude", Timestamp::now()),
             "waiting on @planner to finish (@planner not running)"
+        );
+
+        check.schedule.ready = true;
+        check.after.clear();
+        check.agent.present = false;
+        check.gate.open = false;
+        assert_eq!(
+            delivery_action_hint(&check.verdict(), &message_id),
+            Some("force now: rimz message steer msg_0000000000000001".to_owned())
         );
     }
 }
