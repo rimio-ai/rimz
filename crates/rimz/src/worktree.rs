@@ -215,10 +215,12 @@ pub fn create(
         name,
         path,
         branch,
-        base_branch,
-        base_ref,
+        MarkerProvenance {
+            base_branch,
+            base_ref,
+            from_pr: None,
+        },
         &checkout_base_ref,
-        None,
     )
 }
 
@@ -332,19 +334,23 @@ pub fn create_from_pr(
                 name,
                 path,
                 branch,
-                base_branch,
-                base_ref,
+                MarkerProvenance {
+                    base_branch,
+                    base_ref,
+                    from_pr: Some(pr.number),
+                },
                 &remote_ref,
-                Some(pr.number),
             ),
             LocalPrBranch::Existing => add_existing_and_seed(
                 repo_root,
                 name,
                 path,
                 branch,
-                base_branch,
-                base_ref,
-                Some(pr.number),
+                MarkerProvenance {
+                    base_branch,
+                    base_ref,
+                    from_pr: Some(pr.number),
+                },
             ),
         };
     }
@@ -438,10 +444,12 @@ fn add_pr_worktree(
         name,
         path,
         branch,
-        base_branch,
-        base_ref,
+        MarkerProvenance {
+            base_branch,
+            base_ref,
+            from_pr: Some(pr_number),
+        },
         checkout_ref,
-        Some(pr_number),
     )
 }
 
@@ -813,6 +821,12 @@ struct FreshWorktree {
     branch: Option<String>,
 }
 
+struct MarkerProvenance {
+    base_branch: Option<String>,
+    base_ref: String,
+    from_pr: Option<u64>,
+}
+
 enum WorktreeCreateTarget {
     Fresh(FreshWorktree),
     Reuse(CreatedWorktree),
@@ -865,10 +879,8 @@ fn add_and_seed(
     name: String,
     path: PathBuf,
     branch: String,
-    base_branch: Option<String>,
-    base_ref: String,
+    provenance: MarkerProvenance,
     checkout_ref: &str,
-    from_pr: Option<u64>,
 ) -> Result<CreatedWorktree> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -885,15 +897,7 @@ fn add_and_seed(
             checkout_ref,
         ],
     )?;
-    finish_worktree(
-        repo_root,
-        name,
-        path,
-        branch,
-        base_branch,
-        base_ref,
-        from_pr,
-    )
+    finish_worktree(repo_root, name, path, branch, provenance)
 }
 
 fn add_tracking_and_seed(
@@ -901,10 +905,8 @@ fn add_tracking_and_seed(
     name: String,
     path: PathBuf,
     branch: String,
-    base_branch: Option<String>,
-    base_ref: String,
+    provenance: MarkerProvenance,
     remote_ref: &str,
-    from_pr: Option<u64>,
 ) -> Result<CreatedWorktree> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -922,15 +924,7 @@ fn add_tracking_and_seed(
             remote_ref,
         ],
     )?;
-    finish_worktree(
-        repo_root,
-        name,
-        path,
-        branch,
-        base_branch,
-        base_ref,
-        from_pr,
-    )
+    finish_worktree(repo_root, name, path, branch, provenance)
 }
 
 fn add_existing_and_seed(
@@ -938,9 +932,7 @@ fn add_existing_and_seed(
     name: String,
     path: PathBuf,
     branch: String,
-    base_branch: Option<String>,
-    base_ref: String,
-    from_pr: Option<u64>,
+    provenance: MarkerProvenance,
 ) -> Result<CreatedWorktree> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -950,15 +942,7 @@ fn add_existing_and_seed(
         repo_root,
         ["worktree", "add", path_arg.as_str(), branch.as_str()],
     )?;
-    finish_worktree(
-        repo_root,
-        name,
-        path,
-        branch,
-        base_branch,
-        base_ref,
-        from_pr,
-    )
+    finish_worktree(repo_root, name, path, branch, provenance)
 }
 
 fn finish_worktree(
@@ -966,10 +950,13 @@ fn finish_worktree(
     name: String,
     path: PathBuf,
     branch: String,
-    base_branch: Option<String>,
-    base_ref: String,
-    from_pr: Option<u64>,
+    provenance: MarkerProvenance,
 ) -> Result<CreatedWorktree> {
+    let MarkerProvenance {
+        base_branch,
+        base_ref,
+        from_pr,
+    } = provenance;
     let marker = WorktreeMarker {
         version: MARKER_VERSION,
         name: name.clone(),
