@@ -18,10 +18,6 @@ pub(in crate::backend::zellij) const LIST_PANES_JSON_RETRY_DELAY: Duration =
 pub(in crate::backend::zellij) const ACTION_ATTEMPTS: u32 = 3;
 pub(in crate::backend::zellij) const ACTION_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 pub(in crate::backend::zellij) const ACTION_CONFIRM_STEP: Duration = Duration::from_millis(50);
-pub(in crate::backend::zellij) const CLIENT_ATTACH_CONFIRM_WINDOW: Duration =
-    Duration::from_millis(750);
-pub(in crate::backend::zellij) const CLIENT_ATTACH_PROBE_STEP: Duration =
-    Duration::from_millis(100);
 pub(in crate::backend::zellij) const DUMP_LAYOUT_ATTEMPTS: u32 = 10;
 pub(in crate::backend::zellij) const DUMP_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
 

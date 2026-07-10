@@ -82,26 +82,21 @@ fn sidebar_width_verdict_survives_birth_template_and_backend_tabs() {
     // Force the birth-tab sidebar well below the repair band. Reconcile keeps
     // the renderer and grows the pane until the first step that reaches or
     // crosses the canonical width.
-    let panes = expect_list_panes_json(xdg.path(), &name);
-    let sidebar_panes: Vec<&serde_json::Value> = panes
-        .as_array()
-        .expect("pane array")
+    let panes = expect_list_panes(xdg.path(), &name);
+    let sidebar_panes: Vec<_> = panes
+        .panes
         .iter()
-        .filter(|pane| {
-            pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
-                && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
-        })
+        .filter(|pane| pane.is_sidebar())
         .collect();
     let birth_sidebar_id = sidebar_panes
         .iter()
-        .min_by_key(|pane| pane.get("tab_id").and_then(|value| value.as_u64()))
-        .and_then(|pane| pane.get("id"))
-        .and_then(|value| value.as_u64())
+        .min_by_key(|pane| pane.tab_id)
+        .map(|pane| pane.id)
         .expect("birth sidebar id");
     let liveness = SidebarLiveness {
         claimed_panes: sidebar_panes
             .iter()
-            .filter_map(|pane| pane.get("id").and_then(|value| value.as_u64()))
+            .map(|pane| pane.id)
             .map(|id| PaneId::from_parts(MuxName::Zellij, format!("terminal_{id}")))
             .collect(),
         ..Default::default()

@@ -165,8 +165,9 @@ fn wait_for_tab_pane_count(xdg: &Path, session: &str, tab_name: &str, want: usiz
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut last = Vec::new();
     loop {
-        if let Ok(raw) = list_panes_json(xdg, session) {
-            last = pane_refs_from_list_panes_json(session, &raw)
+        if let Ok(snapshot) = list_panes(xdg, session) {
+            last = snapshot
+                .pane_refs()
                 .into_iter()
                 .filter(|pane| pane.view_name.as_deref() == Some(tab_name))
                 .collect();

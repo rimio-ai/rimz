@@ -117,8 +117,8 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     let before = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = sidebar_id_from(&before);
     assert!(
-        before.get("pane_x").and_then(|value| value.as_u64()) > Some(0),
-        "the recreated mis-mount starts off the left column: {before}",
+        before.pane_x > 0,
+        "the recreated mis-mount starts off the left column: {before:?}",
     );
 
     let project_root = std::env::temp_dir();
@@ -208,14 +208,10 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
     let before = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = sidebar_id_from(&before);
     assert_eq!(
-        before.get("pane_x").and_then(|value| value.as_u64()),
-        Some(0),
-        "the nested sidebar starts in the left row band: {before}",
+        before.pane_x, 0,
+        "the nested sidebar starts in the left row band: {before:?}",
     );
-    let sidebar_cols = before
-        .get("pane_columns")
-        .and_then(|value| value.as_u64())
-        .expect("sidebar columns before");
+    let sidebar_cols = before.pane_columns;
     let before_work = work_pane_geometry(&xdg, &name);
     let before_right_xs: BTreeSet<u64> = before_work
         .iter()
@@ -227,17 +223,14 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
             && before_work.iter().any(|pane| pane.x == 0)
             && before_right_xs.len() == 1,
         "fixture should start as a repairable nested sidebar: \
-         sidebar={before}, work={before_work:?}",
+         sidebar={before:?}, work={before_work:?}",
     );
     let original_id = before_work
         .iter()
         .find(|pane| pane.x >= sidebar_cols)
         .map(|pane| pane.id)
         .expect("right-side work pane");
-    let tab_id = before
-        .get("tab_id")
-        .and_then(|value| value.as_u64())
-        .expect("sidebar tab id");
+    let tab_id = before.tab_id;
     focus_nonplugin_pane_until(
         &xdg,
         &name,
@@ -334,10 +327,7 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
 
     let before_sidebar = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = sidebar_id_from(&before_sidebar);
-    let before_sidebar_cols = before_sidebar
-        .get("pane_columns")
-        .and_then(|value| value.as_u64())
-        .expect("sidebar columns before");
+    let before_sidebar_cols = before_sidebar.pane_columns;
     let before_work = work_pane_geometry(&xdg, &name);
     let before_ids: BTreeSet<u64> = before_work.iter().map(|pane| pane.id).collect();
     let before_right_xs: BTreeSet<u64> = before_work
@@ -348,7 +338,7 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
     assert!(
         before_work.iter().any(|pane| pane.x == 0) && before_right_xs.len() >= 2,
         "fixture should start as a nested sidebar with a multi-column work area: \
-         sidebar={before_sidebar}, work={before_work:?}",
+         sidebar={before_sidebar:?}, work={before_work:?}",
     );
 
     let opts = reconcile_opts(
@@ -376,10 +366,7 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
     assert_eq!(report.failed, 0);
 
     let after_sidebar = raw_sidebar_pane(&xdg, &name);
-    let after_sidebar_cols = after_sidebar
-        .get("pane_columns")
-        .and_then(|value| value.as_u64())
-        .expect("sidebar columns after");
+    let after_sidebar_cols = after_sidebar.pane_columns;
     let after_work = work_pane_geometry(&xdg, &name);
     let after_ids: BTreeSet<u64> = after_work.iter().map(|pane| pane.id).collect();
     let after_right_xs: BTreeSet<u64> = after_work
@@ -391,7 +378,7 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
     assert!(
         after_work.iter().any(|pane| pane.x == 0) && after_right_xs.len() >= 2,
         "reconcile must not collapse the user's multi-column work area: \
-         sidebar={after_sidebar}, work={after_work:?}",
+         sidebar={after_sidebar:?}, work={after_work:?}",
     );
     assert_sidebar_identity(&xdg, &name, sidebar_id, "the renderer pane is not rebuilt");
 }
@@ -506,20 +493,17 @@ fn claimed_liveness(raw_sidebar_id: u64) -> SidebarLiveness {
     liveness
 }
 
-fn sidebar_id_from(sidebar: &serde_json::Value) -> u64 {
-    sidebar
-        .get("id")
-        .and_then(|value| value.as_u64())
-        .expect("sidebar id")
+fn sidebar_id_from(sidebar: &ListedPane) -> u64 {
+    sidebar.id
 }
 
 fn assert_sidebar_identity(xdg: &Path, name: &str, sidebar_id: u64, message: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let after = raw_sidebar_pane(xdg, name);
-        let observed = after.get("id").and_then(|value| value.as_u64());
+        let observed = Some(after.id);
         if observed == Some(sidebar_id) || Instant::now() >= deadline {
-            assert_eq!(observed, Some(sidebar_id), "{message}: {after}");
+            assert_eq!(observed, Some(sidebar_id), "{message}: {after:?}");
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -530,10 +514,7 @@ fn wait_for_sidebar_width_at_most(xdg: &Path, name: &str, max_cols: u64) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let sidebar = raw_sidebar_pane(xdg, name);
-        let cols = sidebar
-            .get("pane_columns")
-            .and_then(|value| value.as_u64())
-            .expect("sidebar columns after redock");
+        let cols = sidebar.pane_columns;
         if cols <= max_cols {
             return;
         }

@@ -26,25 +26,13 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
     wait_for_pane_count(xdg.path(), &name, 2);
 
     let sidebar = raw_sidebar_pane(xdg.path(), &name);
-    let sidebar_id = sidebar
-        .get("id")
-        .and_then(|value| value.as_u64())
-        .expect("sidebar pane id");
-    let tab_id = sidebar
-        .get("tab_id")
-        .and_then(|value| value.as_u64())
-        .expect("sidebar tab id");
-    let work_id = expect_list_panes_json(xdg.path(), &name)
-        .as_array()
-        .expect("pane array")
+    let sidebar_id = sidebar.id;
+    let tab_id = sidebar.tab_id;
+    let work_id = expect_list_panes(xdg.path(), &name)
+        .panes
         .iter()
-        .find_map(|pane| {
-            (pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
-                && pane.get("tab_id").and_then(|value| value.as_u64()) == Some(tab_id)
-                && pane.get("title").and_then(|value| value.as_str()) != Some("rimz-sidebar"))
-            .then(|| pane.get("id").and_then(|value| value.as_u64()))
-            .flatten()
-        })
+        .find(|pane| !pane.is_plugin && pane.tab_id == tab_id && !pane.is_sidebar())
+        .map(|pane| pane.id)
         .expect("work pane id");
 
     let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);

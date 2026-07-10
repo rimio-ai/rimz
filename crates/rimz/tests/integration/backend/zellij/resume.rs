@@ -185,15 +185,12 @@ fn zellij_agent_exec_command(
 }
 
 fn close_all_sidebar_panes(xdg: &Path, session: &str) {
-    let panes = expect_list_panes_json(xdg, session);
+    let panes = expect_list_panes(xdg, session);
     let sidebar_ids: Vec<String> = panes
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .panes
         .iter()
-        .filter(|pane| pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false))
-        .filter(|pane| pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar"))
-        .filter_map(|pane| pane.get("id").and_then(|value| value.as_u64()))
+        .filter(|pane| pane.is_sidebar())
+        .map(|pane| pane.id)
         .map(|id| format!("terminal_{id}"))
         .collect();
     assert!(
@@ -224,16 +221,10 @@ fn close_all_sidebar_panes(xdg: &Path, session: &str) {
 fn wait_for_no_sidebar_panes(xdg: &Path, session: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let panes = expect_list_panes_json(xdg, session);
-        let has_sidebar = panes
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+        let has_sidebar = expect_list_panes(xdg, session)
+            .panes
             .iter()
-            .any(|pane| {
-                pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
-                    && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
-            });
+            .any(|pane| pane.is_sidebar());
         if !has_sidebar {
             return;
         }
