@@ -29,7 +29,9 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         view_kind: Some(crate::mux::view_kind(MuxName::Tmux)),
         view_name: trimmed_nonempty(7),
         is_focused: cols.get(6).is_some_and(|value| value.trim() == "1"),
-        is_floating: false,
+        // Added in tmux 3.7. On the supported 3.5/3.6 releases an unknown
+        // format expands empty, so the optional trailing column stays false.
+        is_floating: cols.get(9).is_some_and(|value| value.trim() == "1"),
         command: if cols
             .get(8)
             .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE)
@@ -102,6 +104,17 @@ pub(super) fn parse_client_view(stdout: &[u8]) -> ClientView {
     }
 }
 
+pub(super) fn parse_floating_pane_ids(stdout: &[u8]) -> Vec<PaneId> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| {
+            let (raw, floating) = line.split_once(',')?;
+            (floating.trim() == "1" && raw.trim().starts_with('%'))
+                .then(|| PaneId::from_parts(MuxName::Tmux, raw.trim()))
+        })
+        .collect()
+}
+
 pub(super) fn parse_new_window_ids(stdout: &[u8]) -> Result<(String, String)> {
     let raw = String::from_utf8_lossy(stdout);
     let mut cols = raw.split_whitespace();
@@ -124,7 +137,7 @@ mod tests {
     #[test]
     fn parse_pane_line_handles_full_short_and_invalid_rows() {
         // session, window_id, pane_id, command, cwd, pid, pane_active,
-        // window_name.
+        // window_name, pane_title, pane_floating_flag.
         let row = "rimz-qe,@1,%3,nvim,/home/u/qe,4242,1,qe";
         let pane = parse_pane_line(row).expect("full row parses");
         assert_eq!(pane.pane_id.raw(), "%3");
@@ -135,6 +148,7 @@ mod tests {
         assert_eq!(pane.cwd.as_deref(), Some("/home/u/qe"));
         assert_eq!(pane.pane_pid, Some(4242));
         assert!(pane.is_focused, "pane_active=1 is focused");
+        assert!(!pane.is_floating, "pre-3.7 rows default to tiled");
         assert_eq!(
             pane.pane_process_start, None,
             "tmux has no per-pane process-start variable; the /proc stamp owns it",
@@ -146,6 +160,10 @@ mod tests {
                 .expect("inactive row parses")
                 .is_focused
         );
+
+        let floating = parse_pane_line("rimz-qe,@1,%5,codex,/home/u/qe,4244,0,qe,,1")
+            .expect("floating row parses");
+        assert!(floating.is_floating);
 
         // A truncated row that still carries the three load-bearing columns
         // parses; the absent optional fields read as `None`/default.
@@ -203,6 +221,14 @@ mod tests {
         assert!(view.viewed_panes.is_empty());
         assert_eq!(view.presence.human_clients, 0);
         assert_eq!(view.presence.last_input_ms, None);
+    }
+
+    #[test]
+    fn parse_floating_panes_tolerates_pre_3_7_empty_flags() {
+        assert_eq!(
+            parse_floating_pane_ids(b"%1,0\n%2,1\n%3,\nmalformed\n@4,1\n"),
+            vec![PaneId::from_parts(MuxName::Tmux, "%2")],
+        );
     }
 
     #[test]

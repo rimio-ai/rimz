@@ -8,7 +8,9 @@ use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
     sidebar_serve_command, tmux_views_with_sidebars,
 };
-use super::parse::{parse_client_view, parse_new_window_ids, parse_pane_line};
+use super::parse::{
+    parse_client_view, parse_floating_pane_ids, parse_new_window_ids, parse_pane_line,
+};
 use super::window::sanitize_window_name;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
@@ -710,6 +712,34 @@ impl MuxBackend for TmuxBackend {
         self.kill_pane(pane)
     }
 
+    fn close_view_floating_panes(&self, session: &str, anchor: &PaneId) -> Result<Vec<PaneId>> {
+        ensure_pane_backend(anchor, MuxName::Tmux)?;
+        let output = self
+            .cmd()
+            .args([
+                "list-panes",
+                "-t",
+                anchor.raw(),
+                "-F",
+                "#{pane_id},#{pane_floating_flag}",
+            ])
+            .run()?;
+        let mut closed = Vec::new();
+        for pane in parse_floating_pane_ids(&output.stdout) {
+            match self.kill_pane(&pane) {
+                Ok(()) => closed.push(pane),
+                Err(err) => tracing::warn!(
+                    session,
+                    pane = %pane,
+                    tags.operation = "tmux.close_floating_pane",
+                    error = &err as &dyn std::error::Error,
+                    "could not close floating pane during sidebar self-close",
+                ),
+            }
+        }
+        Ok(closed)
+    }
+
     fn version(&self) -> Result<String> {
         memoized_version(&self.version, &self.cmd().arg("-V"))
     }
@@ -794,7 +824,7 @@ impl TmuxBackend {
     }
 
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
-        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{pane_active},#{s/,/_/g:window_name},#{s/,/_/g:pane_title}";
+        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{pane_active},#{s/,/_/g:window_name},#{s/,/_/g:pane_title},#{pane_floating_flag}";
         match session_name {
             Some(session) => self
                 .cmd()

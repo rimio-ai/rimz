@@ -14,7 +14,8 @@ const SUBSCRIPTION_COMMAND: &str = concat!(
     ",#{window_id}",
     ",#{s/,/_/g:pane_current_command}",
     ",#{pane_active}",
-    ",#{s/,/_/g:pane_title}\"\n",
+    ",#{s/,/_/g:pane_title}",
+    ",#{pane_floating_flag}\"\n",
 );
 
 /// A tmux control-mode line carrying pane-presence information.
@@ -26,6 +27,7 @@ pub enum ControlLine {
         command: Option<String>,
         active: bool,
         title: Option<String>,
+        floating: bool,
     },
     WindowClosed {
         window: String,
@@ -181,18 +183,20 @@ pub(super) fn classify_control_line(line: &str) -> ControlLine {
 
 fn parse_subscription(line: &str) -> Option<ControlLine> {
     let (_, value) = line.split_once(" : ")?;
-    let mut fields = value.splitn(5, ',');
+    let mut fields = value.splitn(6, ',');
     let pane = nonempty(fields.next()?)?;
     let window = nonempty(fields.next()?)?;
     let command = nonempty(fields.next()?);
     let active = fields.next()?.trim() == "1";
     let title = nonempty(fields.next().unwrap_or_default());
+    let floating = fields.next().is_some_and(|value| value.trim() == "1");
     Some(ControlLine::Subscription {
         pane,
         window,
         command,
         active,
         title,
+        floating,
     })
 }
 
@@ -338,13 +342,14 @@ mod tests {
     fn control_line_classifies_tmux_events_and_skips_noise() {
         let cases = vec![
             (
-                "%subscription-changed rimz-presence $0 @1 1 %2 : %2,@1,claude,1,rimz",
+                "%subscription-changed rimz-presence $0 @1 1 %2 : %2,@1,claude,1,rimz,1",
                 ControlLine::Subscription {
                     pane: "%2".to_owned(),
                     window: "@1".to_owned(),
                     command: Some("claude".to_owned()),
                     active: true,
                     title: Some("rimz".to_owned()),
+                    floating: true,
                 },
             ),
             (
@@ -355,6 +360,7 @@ mod tests {
                     command: None,
                     active: false,
                     title: None,
+                    floating: false,
                 },
             ),
             ("%window-add @5", ControlLine::Nudge),

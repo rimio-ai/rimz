@@ -448,6 +448,26 @@ fn list_session_panes(server: &TmuxServer, session: &str) -> Vec<PaneRef> {
         .collect()
 }
 
+fn tmux_supports_floating_panes() -> bool {
+    let Ok(output) = Command::new("tmux").arg("-V").output() else {
+        return false;
+    };
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let Some(version) = raw.trim().strip_prefix("tmux ") else {
+        return false;
+    };
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let minor = parts.next().and_then(|part| {
+        part.chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>()
+            .parse::<u32>()
+            .ok()
+    });
+    matches!((major, minor), (Some(major), Some(minor)) if (major, minor) >= (3, 7))
+}
+
 fn sidebar_pane_ids(server: &TmuxServer, session: &str, window_id: Option<&str>) -> Vec<PaneId> {
     list_session_panes(server, session)
         .into_iter()
@@ -586,6 +606,39 @@ fn show_session_environment(server: &TmuxServer, session: &str, name: &str) -> S
         String::from_utf8_lossy(&output.stderr),
     );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+#[test]
+fn floating_panes_are_classified_and_closed_with_their_view() {
+    require_tmux!();
+    if !tmux_supports_floating_panes() {
+        eprintln!("tmux predates 3.7 floating panes; skipping test");
+        return;
+    }
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("floating");
+    let anchor = list_session_panes(&server, "floating")[0].pane_id.clone();
+    server.tmux(&["new-pane", "-d", "-t", anchor.raw(), "sleep", "120"]);
+
+    let floating = list_session_panes(&server, "floating")
+        .into_iter()
+        .find(|pane| pane.is_floating)
+        .expect("tmux 3.7 floating pane is classified");
+    assert_ne!(floating.pane_id, anchor);
+
+    assert_eq!(
+        server
+            .backend
+            .close_view_floating_panes("floating", &anchor)
+            .expect("close floating panes"),
+        vec![floating.pane_id],
+    );
+    assert!(
+        list_session_panes(&server, "floating")
+            .iter()
+            .all(|pane| !pane.is_floating)
+    );
 }
 
 /// `ensure_session` applies the room options in one batched client invocation

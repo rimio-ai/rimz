@@ -708,9 +708,9 @@ pub trait MuxBackend: Send + Sync {
     /// best-effort cleanup.
     fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()>;
     /// Close any floating panes sharing `anchor`'s view, returning the closed
-    /// pane ids. A self-closing sidebar uses this to tear down Zellij overlays
-    /// that would otherwise keep an empty tab alive; tmux has no floating panes,
-    /// so the default is empty.
+    /// pane ids. A self-closing sidebar uses this to tear down multiplexer
+    /// overlays that would otherwise keep an empty view alive. Zellij and tmux
+    /// 3.7+ implement it; the default covers backends without floating panes.
     fn close_view_floating_panes(&self, session: &str, anchor: &PaneId) -> Result<Vec<PaneId>> {
         let _ = (session, anchor);
         Ok(Vec::new())

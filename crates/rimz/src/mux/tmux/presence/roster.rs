@@ -20,6 +20,16 @@ struct PaneEntry {
     active: bool,
     overlay_suppressed: bool,
     is_sidebar: bool,
+    floating: bool,
+}
+
+struct SubscriptionUpdate {
+    pane: String,
+    window: String,
+    command: Option<String>,
+    active: bool,
+    title: Option<String>,
+    floating: bool,
 }
 
 impl PresenceRoster {
@@ -31,7 +41,18 @@ impl PresenceRoster {
                 command,
                 active,
                 title,
-            } => self.apply_subscription(pane, window, command, active, title, seeding),
+                floating,
+            } => self.apply_subscription(
+                SubscriptionUpdate {
+                    pane,
+                    window,
+                    command,
+                    active,
+                    title,
+                    floating,
+                },
+                seeding,
+            ),
             ControlLine::WindowClosed { window } => self.close_window(&window),
             ControlLine::LayoutChange { window, panes } => self.apply_layout(&window, panes),
             ControlLine::WindowPaneChanged { window, pane } => {
@@ -47,13 +68,17 @@ impl PresenceRoster {
 
     fn apply_subscription(
         &mut self,
-        pane: String,
-        window: String,
-        command: Option<String>,
-        active: bool,
-        title: Option<String>,
+        update: SubscriptionUpdate,
         seeding: bool,
     ) -> Vec<SidebarEvent> {
+        let SubscriptionUpdate {
+            pane,
+            window,
+            command,
+            active,
+            title,
+            floating,
+        } = update;
         let is_sidebar = title
             .as_deref()
             .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE);
@@ -110,6 +135,7 @@ impl PresenceRoster {
                 active,
                 overlay_suppressed: suppress_overlay,
                 is_sidebar,
+                floating,
             },
         );
         events
@@ -188,23 +214,38 @@ impl PresenceRoster {
 
     fn apply_layout(&mut self, window: &str, panes: Vec<String>) -> Vec<SidebarEvent> {
         let present = panes.into_iter().collect::<BTreeSet<_>>();
+        let has_floating = self
+            .panes
+            .values()
+            .any(|entry| entry.window == window && entry.floating);
         let closed = self
             .panes
             .iter()
-            .filter(|(pane, entry)| entry.window == window && !present.contains(pane.as_str()))
+            // tmux 3.7 keeps floating panes outside `window_layout`. Preserve
+            // them here and nudge the authoritative poll below because this
+            // notification cannot prove whether one opened or closed.
+            .filter(|(pane, entry)| {
+                entry.window == window
+                    && !entry.floating
+                    && !present.contains(pane.as_str())
+            })
             .map(|(pane, entry)| (pane.clone(), entry.overlay_suppressed))
             .collect::<Vec<_>>();
         for (pane, _) in &closed {
             self.panes.remove(pane);
         }
-        closed
+        let mut events = closed
             .into_iter()
             .filter_map(|(pane, overlay_suppressed)| {
                 (!overlay_suppressed).then(|| SidebarEvent::PaneClosed {
                     pane_id: pane_id(&pane),
                 })
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if has_floating {
+            events.push(SidebarEvent::PanesChanged);
+        }
+        events
     }
 
     fn switch_window(
@@ -291,6 +332,18 @@ mod tests {
             command: command.map(ToOwned::to_owned),
             active,
             title: None,
+            floating: false,
+        }
+    }
+
+    fn floating_sub(pane: &str, window: &str, command: Option<&str>) -> ControlLine {
+        ControlLine::Subscription {
+            pane: pane.to_owned(),
+            window: window.to_owned(),
+            command: command.map(ToOwned::to_owned),
+            active: false,
+            title: None,
+            floating: true,
         }
     }
 
@@ -301,6 +354,7 @@ mod tests {
             command: Some("rimz".to_owned()),
             active,
             title: Some(SIDEBAR_CHROME_TITLE.to_owned()),
+            floating: false,
         }
     }
 
@@ -311,6 +365,7 @@ mod tests {
             command: Some("rimz".to_owned()),
             active,
             title: None,
+            floating: false,
         }
     }
 
@@ -662,6 +717,25 @@ mod tests {
         assert!(roster.panes.contains_key("%1"));
         assert!(!roster.panes.contains_key("%2"));
         assert!(roster.panes.contains_key("%3"));
+    }
+
+    #[test]
+    fn layout_change_preserves_floating_panes_omitted_from_tmux_layout() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), false), true);
+        roster.apply(floating_sub("%2", "@1", Some("codex")), true);
+        assert_eq!(
+            roster.apply(
+                ControlLine::LayoutChange {
+                    window: "@1".to_owned(),
+                    panes: vec!["%1".to_owned()],
+                },
+                false,
+            ),
+            vec![SidebarEvent::PanesChanged],
+        );
+        assert!(roster.panes.contains_key("%1"));
+        assert!(roster.panes.contains_key("%2"));
     }
 
     #[test]
