@@ -59,10 +59,10 @@ use history::history_agent;
 use launch::*;
 use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
+use register::{RegisterArgs, run_register};
 use restart::restart_agent;
 use resume::resume_lane;
 pub(crate) use supervised::stream::TranscriptCursor;
-use register::{RegisterArgs, run_register};
 use top::{TopArgs, run_top};
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);

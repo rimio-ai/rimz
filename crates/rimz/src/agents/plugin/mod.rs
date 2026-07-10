@@ -194,9 +194,11 @@ impl AgentAdapter for PluginAdapter {
                         .is_some_and(|name| self.descriptor.tools.editing.contains(&name));
                 LifecycleSignal::ToolUsed { mutates, edits }
             }
-            CanonicalEvent::AwaitingInput { ask, .. } => {
-                LifecycleSignal::AwaitingInput { kind: *ask }
-            }
+            CanonicalEvent::AwaitingInput { ask, .. } => LifecycleSignal::AwaitingInput {
+                kind: *ask,
+                ask_id: None,
+                detail: None,
+            },
             CanonicalEvent::CompactionStart => LifecycleSignal::Compacting,
             CanonicalEvent::CompactionEnd { trigger } => LifecycleSignal::CompactionEnded {
                 auto: trigger.map(|trigger| matches!(trigger, CompactionTrigger::Auto)),
@@ -289,6 +291,8 @@ impl AgentAdapter for PluginAdapter {
         (!question.is_empty()).then_some(vec![AskQuestion {
             question,
             options: Vec::new(),
+            multi_select: false,
+            has_option_previews: false,
         }])
     }
 
@@ -559,6 +563,12 @@ fn derive_coverage(
                 "canonical awaiting_input",
                 "canonical awaiting_input with native-ask-ui not declared",
             ),
+        ),
+        (
+            IntegrationConcern::Answer,
+            ConcernCoverage::Unsupported {
+                reason: "plugin prompts are answered in the agent's own UI",
+            },
         ),
         (
             IntegrationConcern::Compaction,
