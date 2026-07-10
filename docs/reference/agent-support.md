@@ -42,7 +42,7 @@ Every tier delivers the core promise: the agent appears in the sidebar, its bloc
 | `turn` | ✓ | ✓ | ✓ | ✓ | live status — session start and every turn boundary |
 | `perm` | ✓ | ✓ | ✓ | ✓ | permission prompts routed to your keyboard |
 | `plan` | ✓ | ✗ | ✗ | ✗ | a plan-approval gate raises a waiting row |
-| `ask` | ✓ | ✓ | ✗ | ✗ | the agent's ask-the-user tool raises a waiting row |
+| `ask` | ✓ | ✓ | ✗ | ✓ | the agent's ask-the-user tool raises a waiting row |
 | `answer` | ✓ | ✗ | ✗ | ✗ | structured answers drive supported native prompt actions |
 | `compact` | ✓ | ✓ | ✓ | ✓ | context compaction shows on the card |
 | `sub` | ✓ | ✓ | ✗ | ✓ | the subagent tree renders as nested rows |
@@ -110,9 +110,9 @@ Mapping detail: [pi.md](../internals/agents/pi.md); upstream protocol: [pi-refer
 
 OpenCode reports through a RimZ-authored **plugin** that maintains its context gauge from the agent's `message.updated` events and stamps the latest usage split, plus the model's context window from OpenCode's own catalog, onto each lifecycle envelope. Interactive OpenCode runs in-process in its pane and binds standalone.
 
-- **Reports:** turn boundaries, per-tool activity, subagents, and context usage per envelope.
-- **Three derived cells (◐):** `end` — `dispose` is server-scoped and carries no session id, so the card leaves on pane liveness and the reaper rather than at exit; `idle` — turn-end, `permission.ask`, and the stall window, without a native idle-timeout nudge; `live$` — summed from the session store (SQLite) at turn end, a reconstructed figure rather than a provider-pushed realtime one.
-- **Five unsupported cells (✗):** `plan` (no plan-approval gate), `ask` (the question tool has no contracted bus event in 1.15.13), `answer` (no mapped prompt choreography), `bg` (no background-task parking), and `remote` (no remote-control surface).
+- **Reports:** turn boundaries, per-tool activity, subagents, permission prompts, native user questions, and context usage per envelope.
+- **Three derived cells (◐):** `end` — `dispose` is server-scoped and carries no session id, so the card leaves on pane liveness and the reaper rather than at exit; `idle` — turn-end, native permission/question prompts, and the stall window, without a native idle-timeout nudge; `live$` — summed from the session store (SQLite) at turn end, a reconstructed figure rather than a provider-pushed realtime one.
+- **Four unsupported cells (✗):** `plan` (no plan-approval gate), `answer` (no mapped prompt choreography), `bg` (no background-task parking), and `remote` (no remote-control surface).
 - **Rich context:** the embedded server's `/config/providers` and `/session` endpoints, reached over the plugin's `serverUrl`, supply official model labels and account windows.
 - **Resume and fork:** `opencode --session <id>` reopens a session; adding `--fork` branches one for `rimz agents fork`.
 - **Permission modes:** no launch-cell suffixes yet — launch OpenCode bare or through a profile (`rimz agents --help` lists the current flags).

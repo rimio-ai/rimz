@@ -226,7 +226,10 @@ const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     (
         LifecycleSignalKind::AwaitingInput,
         HookCoverage::Native {
-            event: "permission_ask/question_ask",
+            // One representative installed event names the signal, the Codex
+            // precedent; `question_ask` is the other awaiting-user event and
+            // rides the separately-wired `UserQuestion` concern.
+            event: "permission_ask",
         },
     ),
     (
@@ -269,6 +272,9 @@ const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     ),
 ];
 
+// The awaiting-user events (`permission_ask`, `question_ask`) are absent by
+// design: `classify_hook` hands their `AskKind` to `classify_agent_hook`, which
+// short-circuits to `AwaitingUser` before ever consulting this list.
 const LIFECYCLE_EVENTS: &[&str] = &[
     "session_created",
     "chat_message",
@@ -279,7 +285,6 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "session_compacted",
     "SubagentStart",
     "SubagentStop",
-    "question_ask",
 ];
 
 const WIRED_EVENTS: &[&str] = &[
