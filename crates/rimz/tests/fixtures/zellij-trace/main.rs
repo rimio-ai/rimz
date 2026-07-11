@@ -1,15 +1,46 @@
-//! `zellij`-shaped trace shim used by `tests/integration/backend/zellij.rs`.
+//! Stateful `zellij`-shaped trace shim used across the integration suites.
 //!
-//! Writes one line per invocation to the file at `$RIMZ_TEST_ZELLIJ_LOG` of
-//! the form `argv0\targv1\t...\n`, then returns a small zellij-shaped response.
-//! Tests set `$RIMZ_TEST_ZELLIJ_MODE` for failure modes that need more than the
-//! default trace.
+//! Writes one `argv0\targv1\t...\n` line per invocation to `$RIMZ_TEST_ZELLIJ_LOG`, then returns a small zellij-shaped response or applies stateful filesystem side effects.
+//! Tests set `$RIMZ_TEST_ZELLIJ_MODE` for injected write and session-birth failures.
 
 use std::env;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+enum Invocation<'a> {
+    Version,
+    ListSessions,
+    Web(WebCommand<'a>),
+    ListClients,
+    ListPanes,
+    ShareSession(Option<&'a str>),
+    DumpTopology {
+        session: Option<&'a str>,
+        configuration: Option<&'a str>,
+    },
+    Write,
+    Birth,
+    Unhandled,
+}
+
+enum WebCommand<'a> {
+    Help,
+    Status,
+    ListTokens,
+    Start,
+    CreateToken { flag: &'a str, has_extra_args: bool },
+    OtherMutation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FailureMode {
+    Normal,
+    FailWrite,
+    SocketOverflowOnBirth,
+    BirthFails,
+}
 
 fn main() {
     let log_path = env::var_os("RIMZ_TEST_ZELLIJ_LOG").expect("RIMZ_TEST_ZELLIJ_LOG unset");
@@ -24,154 +55,160 @@ fn main() {
     writeln!(file, "{line}").expect("write trace line");
 
     let cli = &args[1..];
+    match classify_invocation(cli) {
+        Invocation::Version => write_stdout("zellij 0.44.3"),
+        Invocation::ListSessions => handle_list_sessions(&log_path),
+        Invocation::Web(command) => handle_web(command, &log_path),
+        Invocation::ListClients => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_CLIENTS"),
+        Invocation::ListPanes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
+        Invocation::ShareSession(session) => {
+            if let Some(session) = session {
+                write_web_clients_allowed_metadata(session);
+            }
+        }
+        Invocation::DumpTopology {
+            session,
+            configuration,
+        } => handle_dump_topology(session, configuration),
+        Invocation::Write => handle_write(&log_path),
+        Invocation::Birth => handle_birth(&log_path),
+        Invocation::Unhandled => {}
+    }
+}
+
+fn classify_invocation(cli: &[String]) -> Invocation<'_> {
     if cli.first().is_some_and(|arg| arg == "--version") {
-        write_stdout("zellij 0.44.3");
-        return;
+        return Invocation::Version;
     }
-
     if cli.first().is_some_and(|arg| arg == "list-sessions") {
-        let scripted = env::var("RIMZ_TEST_ZELLIJ_LIST_SESSIONS").ok();
-        let suppress_created = env::var_os("RIMZ_TEST_ZELLIJ_DISABLE_CREATED_SESSIONS").is_some()
-            || birth_mode_fails(&trace_mode(&log_path));
-        let created = if suppress_created {
-            Vec::new()
-        } else {
-            created_sessions(&log_path)
+        return Invocation::ListSessions;
+    }
+    if cli.first().is_some_and(|arg| arg == "web")
+        && let Some(command) = classify_web_command(&cli[1..])
+    {
+        return Invocation::Web(command);
+    }
+    if has_pair(cli, "action", "list-clients") {
+        return Invocation::ListClients;
+    }
+    if has_pair(cli, "action", "list-panes") {
+        return Invocation::ListPanes;
+    }
+    if has_pair(cli, "--name", "rimz:share_session") {
+        return Invocation::ShareSession(arg_after(cli, "--session"));
+    }
+    if has_pair(cli, "--name", "rimz:dump_topology") {
+        return Invocation::DumpTopology {
+            session: arg_after(cli, "--session"),
+            configuration: arg_after(cli, "--plugin-configuration"),
         };
-        if scripted.is_some() || !created.is_empty() {
-            let output = merge_list_sessions(scripted.as_deref().unwrap_or(""), &created);
-            write_stdout_raw(&output);
-            return;
-        }
-        write_stderr("No active zellij sessions found.");
-        std::process::exit(1);
     }
-
-    if cli.first().is_some_and(|arg| arg == "web") {
-        match cli.get(1).map(String::as_str) {
-            Some("--help") => {
-                write_stdout("zellij-web");
-                return;
-            }
-            Some("--status") => {
-                let status = web_status_output(&log_path);
-                write_stdout_raw(&status);
-                return;
-            }
-            Some("--list-tokens") => {
-                if let Ok(tokens) = env::var("RIMZ_TEST_ZELLIJ_WEB_TOKENS") {
-                    write_stdout_raw(&tokens);
-                }
-                return;
-            }
-            Some("--start")
-            | Some("--stop")
-            | Some("--create-token")
-            | Some("--create-read-only-token")
-            | Some("--revoke-token")
-            | Some("--revoke-all-tokens") => {
-                if matches!(
-                    cli.get(1).map(String::as_str),
-                    Some("--create-token" | "--create-read-only-token")
-                ) && cli.len() > 2
-                {
-                    write_stderr(&format!(
-                        "error: The argument '{}' cannot be used with one or more of the other specified arguments",
-                        cli[1]
-                    ));
-                    std::process::exit(1);
-                }
-                if cli.get(1).is_some_and(|arg| arg == "--start")
-                    && let Ok(stdout) = env::var("RIMZ_TEST_ZELLIJ_WEB_START_STDOUT")
-                {
-                    write_stdout_raw(&stdout);
-                }
-                if (cli.get(1).is_some_and(|arg| arg == "--create-token")
-                    || cli
-                        .get(1)
-                        .is_some_and(|arg| arg == "--create-read-only-token"))
-                    && let Ok(stdout) = env::var("RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN")
-                {
-                    write_stdout_raw(&stdout);
-                }
-                return;
-            }
-            _ => {}
-        }
-    }
-
     if cli
         .windows(2)
-        .any(|window| window[0] == "action" && window[1] == "list-clients")
+        .any(|window| window[0] == "action" && window[1].starts_with("write"))
     {
-        if let Ok(output) = env::var("RIMZ_TEST_ZELLIJ_LIST_CLIENTS") {
-            write_stdout_raw(&output);
-        }
+        return Invocation::Write;
+    }
+    if has_pair_at_start(cli, "attach", "--create-background") {
+        return Invocation::Birth;
+    }
+    Invocation::Unhandled
+}
+
+fn classify_web_command(cli: &[String]) -> Option<WebCommand<'_>> {
+    let (command, rest) = cli.split_first()?;
+    match command.as_str() {
+        "--help" => Some(WebCommand::Help),
+        "--status" => Some(WebCommand::Status),
+        "--list-tokens" => Some(WebCommand::ListTokens),
+        "--start" => Some(WebCommand::Start),
+        "--create-token" | "--create-read-only-token" => Some(WebCommand::CreateToken {
+            flag: command,
+            has_extra_args: !rest.is_empty(),
+        }),
+        "--stop" | "--revoke-token" | "--revoke-all-tokens" => Some(WebCommand::OtherMutation),
+        _ => None,
+    }
+}
+
+fn handle_list_sessions(log_path: &Path) {
+    let scripted = env::var("RIMZ_TEST_ZELLIJ_LIST_SESSIONS").ok();
+    let suppress_created = env::var_os("RIMZ_TEST_ZELLIJ_DISABLE_CREATED_SESSIONS").is_some()
+        || trace_mode(log_path).birth_fails();
+    let created = if suppress_created {
+        Vec::new()
+    } else {
+        created_sessions(log_path)
+    };
+    if scripted.is_some() || !created.is_empty() {
+        let output = merge_list_sessions(scripted.as_deref().unwrap_or(""), &created);
+        write_stdout_raw(&output);
         return;
     }
+    write_stderr("No active zellij sessions found.");
+    std::process::exit(1);
+}
 
-    if cli
-        .windows(2)
-        .any(|window| window[0] == "action" && window[1] == "list-panes")
-    {
-        if let Ok(fail_after) = env::var("RIMZ_TEST_ZELLIJ_LIST_PANES_FAIL_AFTER")
-            && command_count(&log_path, "action\tlist-panes") > fail_after.parse().unwrap_or(0)
-        {
-            write_stdout("There is no active session!");
-            return;
+fn handle_web(command: WebCommand<'_>, log_path: &Path) {
+    match command {
+        WebCommand::Help => write_stdout("zellij-web"),
+        WebCommand::Status => write_stdout_raw(&web_status_output(log_path)),
+        WebCommand::ListTokens => write_env_raw("RIMZ_TEST_ZELLIJ_WEB_TOKENS"),
+        WebCommand::Start => write_env_raw("RIMZ_TEST_ZELLIJ_WEB_START_STDOUT"),
+        WebCommand::CreateToken {
+            flag,
+            has_extra_args: true,
+        } => {
+            write_stderr(&format!(
+                "error: The argument '{flag}' cannot be used with one or more of the other specified arguments"
+            ));
+            std::process::exit(1);
         }
-        if let Ok(output) = env::var("RIMZ_TEST_ZELLIJ_LIST_PANES") {
-            write_stdout_raw(&output);
-        }
-        return;
+        WebCommand::CreateToken {
+            has_extra_args: false,
+            ..
+        } => write_env_raw("RIMZ_TEST_ZELLIJ_WEB_CREATE_TOKEN"),
+        WebCommand::OtherMutation => {}
     }
+}
 
-    if cli
-        .windows(2)
-        .any(|window| window[0] == "--name" && window[1] == "rimz:share_session")
+fn handle_dump_topology(session: Option<&str>, configuration: Option<&str>) {
+    if let Some(session) = session
+        && let Some(configuration) = configuration
+        && let Some(workspace_id) = configuration_value(configuration, "workspace_id")
     {
-        if let Some(session) = arg_after(cli, "--session") {
-            write_web_clients_allowed_metadata(session);
-        }
-        return;
+        write_topology_cache(session, workspace_id);
     }
+}
 
-    if cli
-        .windows(2)
-        .any(|window| window[0] == "--name" && window[1] == "rimz:dump_topology")
-    {
-        if let Some(session) = arg_after(cli, "--session")
-            && let Some(configuration) = arg_after(cli, "--plugin-configuration")
-            && let Some(workspace_id) = configuration_value(configuration, "workspace_id")
-        {
-            write_topology_cache(session, workspace_id);
-        }
-        return;
-    }
-
-    let mode = trace_mode(&log_path);
-    if mode == "fail-write"
-        && cli
-            .windows(2)
-            .any(|window| window[0] == "action" && window[1].starts_with("write"))
-    {
+fn handle_write(log_path: &Path) {
+    if trace_mode(log_path) == FailureMode::FailWrite {
         write_stderr("simulated zellij write failure");
         std::process::exit(7);
     }
-    if mode == "socket-overflow-on-birth"
-        && cli.first().is_some_and(|arg| arg == "attach")
-        && cli.get(1).is_some_and(|arg| arg == "--create-background")
-    {
-        write_stderr("failed to bind socket: File name too long");
-        std::process::exit(5);
+}
+
+fn handle_birth(log_path: &Path) {
+    match trace_mode(log_path) {
+        FailureMode::SocketOverflowOnBirth => {
+            write_stderr("failed to bind socket: File name too long");
+            std::process::exit(5);
+        }
+        FailureMode::BirthFails => {
+            write_stderr("simulated zellij birth failure");
+            std::process::exit(5);
+        }
+        FailureMode::Normal | FailureMode::FailWrite => {}
     }
-    if mode == "birth-fails"
-        && cli.first().is_some_and(|arg| arg == "attach")
-        && cli.get(1).is_some_and(|arg| arg == "--create-background")
-    {
-        write_stderr("simulated zellij birth failure");
-        std::process::exit(5);
-    }
+}
+
+fn has_pair(args: &[String], first: &str, second: &str) -> bool {
+    args.windows(2)
+        .any(|window| window[0] == first && window[1] == second)
+}
+
+fn has_pair_at_start(args: &[String], first: &str, second: &str) -> bool {
+    args.first().is_some_and(|arg| arg == first) && args.get(1).is_some_and(|arg| arg == second)
 }
 
 fn created_sessions(log_path: &Path) -> Vec<String> {
@@ -197,27 +234,45 @@ fn mode_path(log_path: &Path) -> std::path::PathBuf {
     log_path.with_extension("mode")
 }
 
-fn trace_mode(log_path: &Path) -> String {
+fn trace_mode(log_path: &Path) -> FailureMode {
     mode_from_log_path(log_path)
         .or_else(|| {
             env::var("RIMZ_TEST_ZELLIJ_MODE")
                 .ok()
                 .filter(|value| !value.is_empty())
+                .map(|value| FailureMode::from(value.as_str()))
         })
-        .or_else(|| std::fs::read_to_string(mode_path(log_path)).ok())
-        .unwrap_or_default()
+        .or_else(|| {
+            std::fs::read_to_string(mode_path(log_path))
+                .ok()
+                .map(|value| FailureMode::from(value.as_str()))
+        })
+        .unwrap_or(FailureMode::Normal)
 }
 
-fn birth_mode_fails(mode: &str) -> bool {
-    matches!(mode, "socket-overflow-on-birth" | "birth-fails")
-}
-
-fn mode_from_log_path(log_path: &Path) -> Option<String> {
+fn mode_from_log_path(log_path: &Path) -> Option<FailureMode> {
     let name = log_path.file_name()?.to_str()?;
     ["socket-overflow-on-birth", "birth-fails", "fail-write"]
         .into_iter()
         .find(|mode| name.contains(mode))
-        .map(str::to_owned)
+        .map(FailureMode::from)
+}
+
+impl FailureMode {
+    fn birth_fails(self) -> bool {
+        matches!(self, Self::SocketOverflowOnBirth | Self::BirthFails)
+    }
+}
+
+impl From<&str> for FailureMode {
+    fn from(value: &str) -> Self {
+        match value {
+            "fail-write" => Self::FailWrite,
+            "socket-overflow-on-birth" => Self::SocketOverflowOnBirth,
+            "birth-fails" => Self::BirthFails,
+            _ => Self::Normal,
+        }
+    }
 }
 
 fn merge_list_sessions(scripted: &str, created: &[String]) -> String {
@@ -318,13 +373,13 @@ fn web_status_output(log_path: &Path) -> String {
 }
 
 fn command_seen(log_path: &Path, needle: &str) -> bool {
-    command_count(log_path, needle) > 0
+    std::fs::read_to_string(log_path).is_ok_and(|log| log.lines().any(|line| line.contains(needle)))
 }
 
-fn command_count(log_path: &Path, needle: &str) -> usize {
-    std::fs::read_to_string(log_path)
-        .map(|log| log.lines().filter(|line| line.contains(needle)).count())
-        .unwrap_or(0)
+fn write_env_raw(name: &str) {
+    if let Ok(output) = env::var(name) {
+        write_stdout_raw(&output);
+    }
 }
 
 fn write_stdout(line: &str) {
