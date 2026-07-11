@@ -392,4 +392,8 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
         serde_json::json!({ "signal": "compaction_ended" }),
         LifecycleSignal::CompactionEnded { auto: None },
     );
+    assert_eq!(
+        serde_json::to_value(LifecycleSignal::CompactionEnded { auto: None }).unwrap(),
+        serde_json::json!({ "signal": "compaction_ended" })
+    );
 }
