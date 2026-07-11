@@ -610,8 +610,8 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "a sidebar narrower than the repair band grows",
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(32), &panes, &excluded, canonical_cols),
-        "a sidebar at the repair-band edge is left alone",
+        sidebar_geometry_off_spec(by_id(32), &panes, &excluded, canonical_cols),
+        "a sidebar wider than the two-column allowance shrinks",
     );
     assert_eq!(
         tab_view_cols(&panes, 7),

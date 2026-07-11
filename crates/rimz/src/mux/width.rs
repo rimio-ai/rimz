@@ -115,11 +115,12 @@ pub struct BirthSize {
 }
 
 /// Whether a live sidebar's width warrants repair toward the canonical
-/// verdict. The slack is one Zellij resize step (5% of the view), so a repair
-/// that stops on the near side of canonical never re-triggers the opposite
-/// direction next pass; it also lets a small manual resize stick.
+/// verdict. Width above canonical has only a two-column allowance because it
+/// violates the configured cap. Below canonical, one Zellij resize step (5%
+/// of the view) lets a repair stop on the near side without re-triggering and
+/// lets a small manual narrowing stick.
 pub fn sidebar_width_off_spec(cols: u64, canonical_cols: u64, view_cols: u64) -> bool {
-    cols.abs_diff(canonical_cols) > 2.max(view_cols / 20)
+    cols > canonical_cols + 2 || canonical_cols.saturating_sub(cols) > 2.max(view_cols / 20)
 }
 
 /// The invoking terminal's `(cols, rows)`, when stdout is attached to one.
@@ -187,11 +188,17 @@ mod tests {
 
     #[test]
     fn sidebar_width_repair_uses_one_resize_step_as_slack() {
-        // A 200-column view gets ten columns of slack on either side.
+        // A 200-column view gets ten columns of slack below canonical, while
+        // a pane more than two columns wider always violates the cap.
         assert!(!sidebar_width_off_spec(62, 72, 200));
-        assert!(!sidebar_width_off_spec(82, 72, 200));
+        assert!(sidebar_width_off_spec(82, 72, 200));
         assert!(sidebar_width_off_spec(61, 72, 200));
         assert!(sidebar_width_off_spec(83, 72, 200));
+
+        // A raw 30% detached birth against the live browser width exceeds the
+        // configured cap, while the first post-shrink crossing stays stable.
+        assert!(sidebar_width_off_spec(85, 72, 283));
+        assert!(!sidebar_width_off_spec(71, 72, 283));
 
         // Tiny or unknown-looking views retain a two-column minimum band.
         assert!(!sidebar_width_off_spec(70, 72, 0));
