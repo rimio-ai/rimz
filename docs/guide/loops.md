@@ -154,6 +154,8 @@ rimz loop resume pr-watch
 rimz loop remove pr-watch
 ```
 
+`rimz loop fire` streams agent messages as they land, then links the completed run and its transcript.
+
 Pause holds the elder's clock without deleting the task, and `--for` resumes it automatically. The schedule continues from the resume moment instead of replaying missed fires. Pause state belongs to one machine, so pausing a project task affects only your machine; an auto-pause adds its strike reason, and `rimz loop resume` clears that counter. `rimz loop fire` still runs a paused task for testing.
 
 Run mechanics (exit codes, output formats, `wait --stream`) are in [scripting.md](./scripting.md), and every flag is in the [loop CLI reference](../reference/cli/loop.md).

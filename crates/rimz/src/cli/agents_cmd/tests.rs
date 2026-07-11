@@ -1146,6 +1146,7 @@ mod automation {
             system_prompt_file: Some(PathBuf::from("/prompts/system.md")),
             timeout: Some(Duration::from_secs(90)),
             keep: true,
+            stream: true,
             verify: Some("cargo xtask test auth".to_owned()),
             max_attempts: Some(4),
         });
@@ -1172,6 +1173,7 @@ mod automation {
                 args.system_prompt_file.as_deref(),
                 args.timeout,
                 args.keep,
+                args.stream_text,
                 args.verify.as_deref(),
                 args.max_attempts,
                 args.print,
@@ -1182,12 +1184,33 @@ mod automation {
                 Some(Path::new("/prompts/system.md")),
                 Some(Duration::from_secs(90)),
                 true,
+                true,
                 Some("cargo xtask test auth"),
                 Some(4),
                 true,
                 false,
                 &[] as &[String]
             )
+        );
+
+        let unscoped = AgentsArgs::for_task(TaskRunArgs {
+            spec: "codex".to_owned(),
+            prompt: Some("check status".to_owned()),
+            worktree: None,
+            mode: None,
+            effort: None,
+            budget: None,
+            system_prompt_file: None,
+            timeout: None,
+            keep: true,
+            stream: false,
+            verify: None,
+            max_attempts: None,
+        });
+        assert_eq!(unscoped.worktree, None);
+        assert!(
+            unscoped.keep,
+            "manual loop fire can keep the transient pane"
         );
     }
 }

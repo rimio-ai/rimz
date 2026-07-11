@@ -672,11 +672,16 @@ fn write_runs_table(
     let start = rows.len().saturating_sub(limit);
     let visible_rows = &rows[start..];
     let show_note = visible_rows.iter().any(|row| row.key.note.is_some());
-    let headers = if show_note {
-        vec!["WHEN", "MODE", "STATUS", "TOOK", "COST", "NOTE"]
-    } else {
-        vec!["WHEN", "MODE", "STATUS", "TOOK", "COST"]
-    };
+    let show_tokens = visible_rows
+        .iter()
+        .any(|row| row.latest.input_tokens.is_some() || row.latest.output_tokens.is_some());
+    let mut headers = vec!["WHEN", "MODE", "STATUS", "TOOK", "COST"];
+    if show_tokens {
+        headers.push("TOKENS");
+    }
+    if show_note {
+        headers.push("NOTE");
+    }
     let mut table = ui::Table::new(headers).right(&[4]).indent(2);
     for row in visible_rows {
         let record = row.latest;
@@ -700,6 +705,15 @@ fn write_runs_table(
             )
             .dash(),
         ];
+        if show_tokens {
+            cells.push(
+                ui::cell(
+                    token_segments(record.input_tokens, record.output_tokens)
+                        .unwrap_or_else(|| "-".to_owned()),
+                )
+                .dash(),
+            );
+        }
         if show_note {
             cells.push(ui::cell(row.key.note.as_deref().unwrap_or("-")).dash());
         }
@@ -1165,6 +1179,13 @@ pub(super) fn spend_segments(
         .map(|cost| format!("${cost:.2}"))
         .into_iter()
         .collect::<Vec<_>>();
+    if let Some(tokens) = token_segments(input_tokens, output_tokens) {
+        segments.push(tokens);
+    }
+    (!segments.is_empty()).then(|| segments.join(" · "))
+}
+
+fn token_segments(input_tokens: Option<u64>, output_tokens: Option<u64>) -> Option<String> {
     let mut tokens = Vec::new();
     if let Some(input) = input_tokens {
         tokens.push(format!("↘ {}", ui::compact_count(input)));
@@ -1172,10 +1193,7 @@ pub(super) fn spend_segments(
     if let Some(output) = output_tokens {
         tokens.push(format!("↗ {}", ui::compact_count(output)));
     }
-    if !tokens.is_empty() {
-        segments.push(tokens.join(" "));
-    }
-    (!segments.is_empty()).then(|| segments.join(" · "))
+    (!tokens.is_empty()).then(|| tokens.join(" "))
 }
 
 fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
@@ -1504,6 +1522,31 @@ mod tests {
 
         assert_eq!(status.glyph, "✗");
         assert_eq!(status.label, "failed (exit 127)");
+    }
+
+    #[test]
+    fn runs_table_shows_tokens_only_when_present() {
+        let now = Timestamp::from_second(30).expect("timestamp");
+        let without_tokens = record(10, LoopRunResult::Completed);
+        let mut out = Vec::new();
+        write_runs_table(&mut out, &[without_tokens], 10, now).unwrap();
+        let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert!(!out.contains("TOKENS"), "{out}");
+
+        let mut with_tokens = record(20, LoopRunResult::Completed);
+        with_tokens.input_tokens = Some(14_000);
+        with_tokens.output_tokens = Some(269);
+        let without_tokens = record(10, LoopRunResult::Failed);
+        let mut out = Vec::new();
+        write_runs_table(&mut out, &[without_tokens, with_tokens], 10, now).unwrap();
+        let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+        assert!(out.contains("TOKENS"), "{out}");
+        assert!(out.contains("↘ 14k ↗ 269"), "{out}");
+        assert!(
+            out.lines()
+                .any(|line| line.contains("✗ failed") && line.ends_with('-')),
+            "{out}"
+        );
     }
 
     #[test]

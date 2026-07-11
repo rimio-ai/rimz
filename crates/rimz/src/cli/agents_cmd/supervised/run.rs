@@ -2,6 +2,7 @@ use super::super::*;
 use super::*;
 
 use crate::cli::render;
+use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::run_wake::{self, ExpectedRunFrame, SocketGuard};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +89,7 @@ struct BlockingAttempt {
     expected: ExpectedRunFrame,
     interrupt: Arc<AtomicBool>,
     socket_guard: Option<SocketGuard>,
+    stream_cursor: Option<TranscriptCursor>,
 }
 
 fn open_attempt_pane(
@@ -350,21 +352,58 @@ fn execute_attempt(
     let Some((sock, _sock_path)) = bound else {
         bail!("blocking run did not bind its completion socket");
     };
-    let mut wait_sock = Some(sock);
+    let wait_sock = Some(sock);
     let expected = ExpectedRunFrame {
         workspace_id: prepared.workspace.workspace_id.clone(),
         run_id: run_id.clone(),
     };
     let interrupt = interrupt.expect("blocking run has interrupt flag");
+    let mut stream_cursor = (prepared.output_format == OutputFormat::StreamJson
+        || args.stream_text)
+        .then(|| TranscriptCursor::new(true));
     let record = if prepared.output_format == OutputFormat::StreamJson {
+        let mut stdout = std::io::stdout().lock();
+        let mut sink = supervised::output::StreamSink::ndjson(&mut stdout);
         supervised::stream::stream_blocking_run(
-            wait_sock.take().expect("blocking run has wait socket"),
+            wait_sock
+                .as_ref()
+                .expect("blocking run has wait socket")
+                .try_clone()
+                .context("cloning run stream socket")?,
             expected.clone(),
             &prepared.store,
-            &run_id,
             prepared.adapter,
             args.timeout,
             &interrupt,
+            (
+                stream_cursor
+                    .as_mut()
+                    .expect("stream has transcript cursor"),
+                &mut sink,
+            ),
+        )?
+    } else if args.stream_text {
+        let mut stdout = render::out();
+        let mut gutter = render::GutterWriter::new(&mut stdout);
+        let mut stderr = render::err();
+        let mut sink = supervised::output::StreamSink::text(&mut gutter, &mut stderr);
+        supervised::stream::stream_blocking_run(
+            wait_sock
+                .as_ref()
+                .expect("blocking run has wait socket")
+                .try_clone()
+                .context("cloning run stream socket")?,
+            expected.clone(),
+            &prepared.store,
+            prepared.adapter,
+            args.timeout,
+            &interrupt,
+            (
+                stream_cursor
+                    .as_mut()
+                    .expect("stream has transcript cursor"),
+                &mut sink,
+            ),
         )?
     } else {
         let outcome = supervised::wait_for_run(
@@ -391,6 +430,7 @@ fn execute_attempt(
         expected,
         interrupt,
         socket_guard,
+        stream_cursor,
     }))
 }
 
@@ -398,16 +438,21 @@ fn verify_phase(
     prepared: &PreparedRun,
     room: &crate::cli::room::RunRoom,
     args: &AgentsArgs,
-    mut record: RunRecord,
-    wait_sock: Option<&std::os::unix::net::UnixDatagram>,
-    expected: &ExpectedRunFrame,
-    interrupt: &AtomicBool,
-) -> Result<(RunRecord, Option<anyhow::Error>)> {
+    blocking: BlockingAttempt,
+) -> Result<(RunRecord, Option<anyhow::Error>, Option<SocketGuard>)> {
+    let BlockingAttempt {
+        mut record,
+        wait_sock,
+        expected,
+        interrupt,
+        socket_guard,
+        mut stream_cursor,
+    } = blocking;
     let Some(cmd) = args.verify.as_deref() else {
-        return Ok((record, None));
+        return Ok((record, None, socket_guard));
     };
     if record.status != RunStatus::Completed {
-        return Ok((record, None));
+        return Ok((record, None, socket_guard));
     }
     let max_attempts = args.max_attempts.unwrap_or(3);
     let verify_timeout = args
@@ -487,20 +532,63 @@ fn verify_phase(
             verify_error = Some(err);
             break;
         }
-        let outcome = supervised::wait_for_run(
-            wait_sock
-                .context("verify run lost its wait socket")?
-                .try_clone()
-                .context("cloning verify run wait socket")?,
-            expected.clone(),
-            args.timeout,
-            interrupt,
-        )?;
-        record = supervised::terminal_record_after_wait(
-            prepared.store.paths(),
-            &record.run_id,
-            outcome,
-        )?;
+        record = if prepared.output_format == OutputFormat::StreamJson {
+            let mut stdout = std::io::stdout().lock();
+            let mut sink = supervised::output::StreamSink::ndjson(&mut stdout);
+            supervised::stream::stream_blocking_run(
+                wait_sock
+                    .as_ref()
+                    .context("verify run lost its wait socket")?
+                    .try_clone()
+                    .context("cloning verify run stream socket")?,
+                expected.clone(),
+                &prepared.store,
+                prepared.adapter,
+                args.timeout,
+                &interrupt,
+                (
+                    stream_cursor
+                        .as_mut()
+                        .context("verify stream lost its transcript cursor")?,
+                    &mut sink,
+                ),
+            )?
+        } else if args.stream_text {
+            let mut stdout = render::out();
+            let mut gutter = render::GutterWriter::new(&mut stdout);
+            let mut stderr = render::err();
+            let mut sink = supervised::output::StreamSink::text(&mut gutter, &mut stderr);
+            supervised::stream::stream_blocking_run(
+                wait_sock
+                    .as_ref()
+                    .context("verify run lost its wait socket")?
+                    .try_clone()
+                    .context("cloning verify run stream socket")?,
+                expected.clone(),
+                &prepared.store,
+                prepared.adapter,
+                args.timeout,
+                &interrupt,
+                (
+                    stream_cursor
+                        .as_mut()
+                        .context("verify stream lost its transcript cursor")?,
+                    &mut sink,
+                ),
+            )?
+        } else {
+            let outcome = supervised::wait_for_run(
+                wait_sock
+                    .as_ref()
+                    .context("verify run lost its wait socket")?
+                    .try_clone()
+                    .context("cloning verify run wait socket")?,
+                expected.clone(),
+                args.timeout,
+                &interrupt,
+            )?;
+            supervised::terminal_record_after_wait(prepared.store.paths(), &record.run_id, outcome)?
+        };
         record = record_failure_tail_before_cleanup(
             room.backend(),
             &prepared.store,
@@ -509,7 +597,7 @@ fn verify_phase(
         );
         verify_attempt += 1;
     }
-    Ok((record, verify_error))
+    Ok((record, verify_error, socket_guard))
 }
 
 fn close_attempt_pane(
@@ -574,22 +662,7 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
         else {
             return Ok(None);
         };
-        let BlockingAttempt {
-            record,
-            wait_sock,
-            expected,
-            interrupt,
-            socket_guard,
-        } = blocking;
-        let (record, verify_error) = verify_phase(
-            &prepared,
-            &room,
-            &args,
-            record,
-            wait_sock.as_ref(),
-            &expected,
-            &interrupt,
-        )?;
+        let (record, verify_error, socket_guard) = verify_phase(&prepared, &room, &args, blocking)?;
         if !args.keep {
             close_attempt_pane(&prepared, &room, &record);
         }

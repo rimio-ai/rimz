@@ -20,6 +20,7 @@ struct RunOutcome {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     skip_reason: Option<String>,
+    streamed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -67,6 +68,7 @@ impl RunOutcome {
             input_tokens: None,
             output_tokens: None,
             skip_reason: None,
+            streamed: false,
         }
     }
 }
@@ -531,6 +533,7 @@ fn execute_spawn_task(
         .effort
         .clone()
         .or_else(|| is_ping.then(|| "low".to_owned()));
+    let stream = execution.mode == LoopRunMode::Manual;
     let args = crate::cli::agents_cmd::AgentsArgs::for_task(crate::cli::agents_cmd::TaskRunArgs {
         spec: spec.to_owned(),
         prompt: Some(prompt),
@@ -545,6 +548,7 @@ fn execute_spawn_task(
         system_prompt_file,
         timeout,
         keep: execution.keep,
+        stream,
         verify: entry.verify.clone(),
         max_attempts: entry.max_attempts,
     });
@@ -561,6 +565,7 @@ fn execute_spawn_task(
             run.input_tokens = record.input_tokens;
             run.output_tokens = record.output_tokens;
             run.exit_code = Some(status.exit_code());
+            run.streamed = stream;
             Ok(run)
         }
         Ok(None) => {
@@ -818,7 +823,15 @@ fn write_scheduled_run_summary(
             "loop `{name}`: {}",
             ui::paint(result_style.bold(), &label)
         )?;
-        writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        if let Some(spend) = render::spend_segments(
+            outcome.cost_usd,
+            outcome.input_tokens,
+            outcome.output_tokens,
+        ) {
+            write!(out, " · {spend}")?;
+        }
+        writeln!(out)?;
         write_failure_forensics(out, name, outcome)?;
     } else {
         let result_label = success_result_label(outcome);
@@ -830,7 +843,15 @@ fn write_scheduled_run_summary(
         if let Some(exit_label) = exit_label.as_deref() {
             write!(out, " {exit_label}")?;
         }
-        writeln!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        if let Some(spend) = render::spend_segments(
+            outcome.cost_usd,
+            outcome.input_tokens,
+            outcome.output_tokens,
+        ) {
+            write!(out, " · {spend}")?;
+        }
+        writeln!(out)?;
         if outcome.result == LoopRunResult::Completed && outcome.run_id.is_some() {
             write_completion_detail(out, name, outcome)?;
         }
@@ -961,6 +982,15 @@ fn write_failure_forensics(
     if let Some(tail) = outcome_failure_tail(outcome) {
         write_failure_tail(out, &tail)?;
     }
+    write_run_links(out, outcome)?;
+    writeln!(
+        out,
+        "{}",
+        ui::paint(ui::palette::MUTED, &format!("  see: rimz loop show {name}"))
+    )
+}
+
+fn write_run_links(out: &mut impl Write, outcome: &RunOutcome) -> std::io::Result<()> {
     if let Some(run_id) = outcome.run_id.as_deref() {
         writeln!(
             out,
@@ -975,11 +1005,7 @@ fn write_failure_forensics(
             ui::paint(ui::palette::MUTED, &format!("  transcript: {transcript}"))
         )?;
     }
-    writeln!(
-        out,
-        "{}",
-        ui::paint(ui::palette::MUTED, &format!("  see: rimz loop show {name}"))
-    )
+    Ok(())
 }
 
 fn write_completion_detail(
@@ -987,22 +1013,25 @@ fn write_completion_detail(
     name: &str,
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
-    if let Some(message) = outcome
-        .last_message
-        .as_deref()
-        .filter(|msg| !msg.trim().is_empty())
-    {
-        render::write_gutter_block(out, None, message)
-    } else {
-        writeln!(
-            out,
-            "{}",
-            ui::paint(
-                ui::palette::MUTED,
-                &format!("  no final message; see: rimz loop show {name}")
-            )
-        )
+    if !outcome.streamed {
+        if let Some(message) = outcome
+            .last_message
+            .as_deref()
+            .filter(|msg| !msg.trim().is_empty())
+        {
+            render::write_gutter_block(out, None, message)?;
+        } else {
+            writeln!(
+                out,
+                "{}",
+                ui::paint(
+                    ui::palette::MUTED,
+                    &format!("  no final message; see: rimz loop show {name}")
+                )
+            )?;
+        }
     }
+    write_run_links(out, outcome)
 }
 
 fn outcome_exit_label(outcome: &RunOutcome) -> Option<String> {
@@ -1289,6 +1318,7 @@ mod tests {
         let mut outcome = RunOutcome::new(LoopRunResult::Completed);
         outcome.exit_code = Some(0);
         outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
+        outcome.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
         outcome.last_message = Some("pong\n".to_owned());
         outcome.cost_usd = Some(0.42);
         outcome.input_tokens = Some(12_000);
@@ -1303,7 +1333,62 @@ mod tests {
                 false,
                 &outcome,
             ),
-            "✓ completed in 3m · $0.42 · ↘ 12k ↗ 3k\n  │ pong\n  pane closed; rerun with --keep to watch\n"
+            "✓ completed in 3m · $0.42 · ↘ 12k ↗ 3k\n  │ pong\n  run: run_0123456789abcdef01234567\n  transcript: /tmp/transcript.jsonl\n  pane closed; rerun with --keep to watch\n"
+        );
+    }
+
+    #[test]
+    fn streamed_spawn_summary_skips_repeated_message_and_links_run() {
+        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
+        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
+        outcome.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
+        outcome.last_message = Some("already streamed".to_owned());
+        outcome.streamed = true;
+
+        assert_eq!(
+            summary(
+                "watchdog",
+                &spawn_entry(false, CheckOn::Fail),
+                1_000,
+                LoopRunMode::Manual,
+                true,
+                &outcome,
+            ),
+            "✓ completed in 1.0s\n  run: run_0123456789abcdef01234567\n  transcript: /tmp/transcript.jsonl\n"
+        );
+    }
+
+    #[test]
+    fn scheduled_summary_prints_run_spend() {
+        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
+        outcome.cost_usd = Some(0.09);
+        outcome.input_tokens = Some(14_000);
+        outcome.output_tokens = Some(269);
+
+        assert_eq!(
+            summary(
+                "watchdog",
+                &spawn_entry(false, CheckOn::Fail),
+                120_000,
+                LoopRunMode::Scheduled,
+                false,
+                &outcome,
+            ),
+            "loop `watchdog`: completed in 2m · $0.09 · ↘ 14k ↗ 269\n"
+        );
+
+        outcome.result = LoopRunResult::Failed;
+        outcome.exit_code = Some(1);
+        assert_eq!(
+            summary(
+                "watchdog",
+                &spawn_entry(false, CheckOn::Fail),
+                120_000,
+                LoopRunMode::Scheduled,
+                false,
+                &outcome,
+            ),
+            "loop `watchdog`: failed (exit 1) in 2m · $0.09 · ↘ 14k ↗ 269\n  see: rimz loop show watchdog\n"
         );
     }
 
@@ -1322,7 +1407,7 @@ mod tests {
                 false,
                 &outcome,
             ),
-            "✓ completed in 1.0s\n  no final message; see: rimz loop show watchdog\n  pane closed; rerun with --keep to watch\n"
+            "✓ completed in 1.0s\n  no final message; see: rimz loop show watchdog\n  run: run_0123456789abcdef01234567\n  pane closed; rerun with --keep to watch\n"
         );
     }
 

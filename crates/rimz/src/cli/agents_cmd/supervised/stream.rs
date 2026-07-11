@@ -13,38 +13,37 @@ pub(crate) fn stream_blocking_run(
     sock: std::os::unix::net::UnixDatagram,
     expected: ExpectedRunFrame,
     store: &rimz::Store,
-    run_id: &rimz::RunId,
     adapter: &dyn AgentAdapter,
     timeout: Option<Duration>,
     interrupt: &AtomicBool,
+    output: (&mut TranscriptCursor, &mut StreamSink<'_>),
 ) -> Result<RunRecord> {
+    let (cursor, sink) = output;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()
         .context("creating run stream runtime")?;
-    let mut stdout = std::io::stdout().lock();
-    let mut sink = StreamSink::ndjson(&mut stdout);
     runtime.block_on(async {
         let sock = run_wake::adopt(sock).context("adopting run socket")?;
         let deadline = timeout.map(|duration| Instant::now() + duration);
-        let mut cursor = TranscriptCursor::new(true);
         loop {
-            let record = rimz::harness::run::load(store.paths(), run_id)?;
-            emit_stream_updates(store, adapter, &mut cursor, &mut sink, &record)?;
+            let record = rimz::harness::run::load(store.paths(), &expected.run_id)?;
+            emit_stream_updates(store, adapter, cursor, sink, &record)?;
             if record.status.is_terminal() {
-                sink.end_record(&record)?;
+                sink.end_status(record.status, record.last_message.as_deref())?;
                 return Ok(record);
             }
             if interrupt.load(Ordering::SeqCst) {
-                let (canceled, _wrote) = rimz::harness::run::cancel(store.paths(), run_id)?;
-                sink.end_record(&canceled)?;
+                let (canceled, _wrote) =
+                    rimz::harness::run::cancel(store.paths(), &expected.run_id)?;
+                sink.end_status(canceled.status, canceled.last_message.as_deref())?;
                 return Ok(canceled);
             }
             let Some(wait) = next_stream_wait(deadline) else {
-                let timed_out = rimz::harness::run::timeout(store.paths(), run_id)?;
-                emit_stream_updates(store, adapter, &mut cursor, &mut sink, &timed_out)?;
-                sink.end_record(&timed_out)?;
+                let timed_out = rimz::harness::run::timeout(store.paths(), &expected.run_id)?;
+                emit_stream_updates(store, adapter, cursor, sink, &timed_out)?;
+                sink.end_status(timed_out.status, timed_out.last_message.as_deref())?;
                 return Ok(timed_out);
             };
             match run_wake::wait_for_run_completion(&sock, &expected, Some(wait))
@@ -52,15 +51,16 @@ pub(crate) fn stream_blocking_run(
                 .context("waiting for run stream tick")?
             {
                 RunWakeOutcome::Completed(_status) => {
-                    let record = rimz::harness::run::load(store.paths(), run_id)?;
-                    emit_stream_updates(store, adapter, &mut cursor, &mut sink, &record)?;
-                    sink.end_record(&record)?;
+                    let record = rimz::harness::run::load(store.paths(), &expected.run_id)?;
+                    emit_stream_updates(store, adapter, cursor, sink, &record)?;
+                    sink.end_status(record.status, record.last_message.as_deref())?;
                     return Ok(record);
                 }
                 RunWakeOutcome::Neutral => {
                     if interrupt.load(Ordering::SeqCst) {
-                        let (canceled, _wrote) = rimz::harness::run::cancel(store.paths(), run_id)?;
-                        sink.end_record(&canceled)?;
+                        let (canceled, _wrote) =
+                            rimz::harness::run::cancel(store.paths(), &expected.run_id)?;
+                        sink.end_status(canceled.status, canceled.last_message.as_deref())?;
                         return Ok(canceled);
                     }
                 }

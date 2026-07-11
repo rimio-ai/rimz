@@ -210,6 +210,8 @@ pub struct AgentsArgs {
     /// How `--print` renders the supervised run (text, json, stream-json).
     #[arg(long, value_name = "FORMAT", requires = "print")]
     output_format: Option<OutputFormat>,
+    #[arg(skip)]
+    stream_text: bool,
     /// How `--print` reads the prompt (text positional plus explicit stdin, or
     /// stream-json on stdin).
     #[arg(long, value_name = "FORMAT", requires = "print")]
@@ -635,6 +637,7 @@ impl AgentsArgs {
             keep: false,
             json: false,
             output_format: None,
+            stream_text: false,
             input_format: None,
             max_turns: None,
             retries: None,
@@ -675,6 +678,7 @@ impl AgentsArgs {
             keep: task.keep,
             json: false,
             output_format: None,
+            stream_text: task.stream,
             input_format: None,
             max_turns: None,
             retries: None,
@@ -695,6 +699,7 @@ pub(crate) struct TaskRunArgs {
     pub(crate) system_prompt_file: Option<PathBuf>,
     pub(crate) timeout: Option<Duration>,
     pub(crate) keep: bool,
+    pub(crate) stream: bool,
     pub(crate) verify: Option<String>,
     pub(crate) max_attempts: Option<u32>,
 }

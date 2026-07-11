@@ -17,6 +17,48 @@ use jiff::Timestamp;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+/// Prefix every written line with the loop output gutter.
+pub(crate) struct GutterWriter<W: Write> {
+    inner: W,
+    at_line_start: bool,
+    prefix: String,
+}
+
+impl<W: Write> GutterWriter<W> {
+    pub(crate) fn new(inner: W) -> Self {
+        Self {
+            inner,
+            at_line_start: true,
+            prefix: format!("  {}", paint(palette::FAINT, "│ ")),
+        }
+    }
+}
+
+impl<W: Write> Write for GutterWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.at_line_start {
+            self.inner.write_all(self.prefix.as_bytes())?;
+            self.at_line_start = false;
+        }
+        let end = buf
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(buf.len(), |idx| idx + 1);
+        let written = self.inner.write(&buf[..end])?;
+        if written > 0 {
+            self.at_line_start = buf[written - 1] == b'\n';
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Styled stdout for human command output. Lock it once and write the whole
 /// block through it.
 pub(crate) fn out() -> anstream::AutoStream<std::io::StdoutLock<'static>> {
@@ -552,6 +594,23 @@ mod tests {
     fn finish_propagates_a_non_broken_pipe_error() {
         let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         assert!(finish(Err(err)).is_err());
+    }
+
+    #[test]
+    fn gutter_writer_prefixes_lines_across_partial_writes() {
+        let mut out = Vec::new();
+        {
+            let mut gutter = GutterWriter::new(&mut out);
+            gutter.write_all(b"first\nsec").unwrap();
+            gutter.write_all(b"ond\nthird").unwrap();
+        }
+
+        let raw = String::from_utf8(out).unwrap();
+        assert!(raw.contains(&paint(palette::FAINT, "│ ")));
+        assert_eq!(
+            anstream::adapter::strip_str(&raw).to_string(),
+            "  │ first\n  │ second\n  │ third"
+        );
     }
 
     #[test]

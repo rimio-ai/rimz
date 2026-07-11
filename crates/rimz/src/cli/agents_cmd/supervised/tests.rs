@@ -171,15 +171,18 @@ fn blocking_stream_wakeup_reloads_terminal_record() {
             status: RunStatus::Completed,
         },
     );
+    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
+    let mut out = Vec::new();
+    let mut sink = output::StreamSink::ndjson(&mut out);
 
     let loaded = stream_blocking_run(
         sock,
         fixture.expected(),
         &fixture.store,
-        &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::from_secs(1)),
         &AtomicBool::new(false),
+        (&mut cursor, &mut sink),
     )
     .unwrap();
 
@@ -192,15 +195,18 @@ fn blocking_stream_timeout_marks_run_timed_out() {
     let fixture = RunFixture::new(RunStatus::Running);
     let run_id = fixture.run_id();
     let (sock, _sock_path) = fixture.bind();
+    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
+    let mut out = Vec::new();
+    let mut sink = output::StreamSink::ndjson(&mut out);
 
     let timed_out = stream_blocking_run(
         sock,
         fixture.expected(),
         &fixture.store,
-        &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::ZERO),
         &AtomicBool::new(false),
+        (&mut cursor, &mut sink),
     )
     .unwrap();
 
@@ -211,6 +217,30 @@ fn blocking_stream_timeout_marks_run_timed_out() {
             .status,
         RunStatus::TimedOut
     );
+}
+
+#[test]
+fn blocking_text_stream_leaves_forensics_to_its_caller() {
+    let fixture = RunFixture::new(RunStatus::Failed);
+    let (sock, _sock_path) = fixture.bind();
+    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut sink = output::StreamSink::text(&mut out, &mut err);
+
+    let failed = stream_blocking_run(
+        sock,
+        fixture.expected(),
+        &fixture.store,
+        &rimz::agents::CodexAdapter,
+        Some(Duration::from_secs(1)),
+        &AtomicBool::new(false),
+        (&mut cursor, &mut sink),
+    )
+    .unwrap();
+
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert!(err.is_empty());
 }
 
 #[test]
@@ -328,15 +358,18 @@ fn blocking_stream_interrupt_marks_run_canceled() {
     let run_id = fixture.run_id();
     let (sock, _sock_path) = fixture.bind();
     let interrupt = AtomicBool::new(true);
+    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
+    let mut out = Vec::new();
+    let mut sink = output::StreamSink::ndjson(&mut out);
 
     let canceled = stream_blocking_run(
         sock,
         fixture.expected(),
         &fixture.store,
-        &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::from_secs(1)),
         &interrupt,
+        (&mut cursor, &mut sink),
     )
     .unwrap();
 
