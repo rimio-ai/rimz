@@ -24,328 +24,265 @@ fn turn_end(errored: bool, parked_on_background: bool) -> LifecycleSignal {
     }
 }
 
-fn assert_step(
-    name: &str,
+#[track_caller]
+fn assert_next(
+    label: &str,
     prev: Option<LifecycleState>,
     signal: LifecycleSignal,
-    next: LifecycleState,
-    kind: TransitionKind,
-    compaction_closed: bool,
-    opened_turn: bool,
-) {
+    expected: LifecycleState,
+) -> Transition {
     let transition = step(prev.as_ref(), &signal);
-    assert_eq!(transition.next, next, "{name}: next");
-    assert_eq!(transition.kind, kind, "{name}: kind");
+    assert_eq!(transition.next, expected, "{label}");
+    transition
+}
+
+#[track_caller]
+fn assert_legacy(wire: serde_json::Value, expected: LifecycleSignal) {
     assert_eq!(
-        transition.compaction_closed, compaction_closed,
-        "{name}: compaction_closed"
+        serde_json::from_value::<LifecycleSignal>(wire).unwrap(),
+        expected
     );
-    assert_eq!(transition.opened_turn, opened_turn, "{name}: opened_turn");
 }
 
 #[test]
-fn core_turn_and_subagent_edges_follow_the_contract() {
+fn root_turn_edges_follow_the_contract() {
     let idle = state(AgentStatus::Idle, TurnPhase::Idle, false);
     let reasoning = state(AgentStatus::Running, TurnPhase::Reasoning, false);
     let acting = state(AgentStatus::Running, TurnPhase::Acting, false);
-    let parked = state(AgentStatus::Running, TurnPhase::Parked, false);
 
-    for (name, prev, signal, next, kind, opened_turn) in [
+    assert_next("registration", None, LifecycleSignal::Registered, idle);
+    let started = assert_next(
+        "turn start",
+        Some(idle),
+        LifecycleSignal::TurnStarted,
+        reasoning,
+    );
+    assert!(started.opened_turn);
+    for (label, prev, signal, expected) in [
+        ("non-editing work", reasoning, tool(false), reasoning),
+        ("first edit", reasoning, tool(true), acting),
+        ("no mid-turn re-arm", acting, tool(false), acting),
+    ] {
+        assert_next(label, Some(prev), signal, expected);
+    }
+    let reconciled = assert_next("resting tool", Some(idle), tool(true), acting);
+    assert_eq!(
+        (reconciled.kind, reconciled.opened_turn),
         (
-            "registration starts idle",
-            None,
-            LifecycleSignal::Registered,
-            idle,
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "turn starts reasoning",
-            Some(idle),
-            LifecycleSignal::TurnStarted,
-            reasoning,
-            TransitionKind::Normal,
-            true,
-        ),
-        (
-            "non-editing tool keeps reasoning",
-            Some(reasoning),
-            tool(false),
-            reasoning,
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "first file edit moves to acting",
-            Some(reasoning),
-            tool(true),
-            acting,
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "acting does not re-arm reasoning",
-            Some(acting),
-            tool(false),
-            acting,
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "clean turn end succeeds",
-            Some(reasoning),
-            turn_end(false, false),
-            state(AgentStatus::Success, TurnPhase::Idle, false),
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "errored turn end fails",
-            Some(acting),
-            turn_end(true, false),
-            state(AgentStatus::Failed, TurnPhase::Idle, false),
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "background park stays running",
-            Some(reasoning),
-            turn_end(false, true),
-            parked,
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "tool after park resumes acting",
-            Some(parked),
-            tool(false),
-            acting,
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "wake after park resumes the turn",
-            Some(parked),
-            LifecycleSignal::TurnStarted,
-            reasoning,
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "prompt on a live turn still re-stamps",
-            Some(reasoning),
-            LifecycleSignal::TurnStarted,
-            reasoning,
-            TransitionKind::Normal,
-            true,
-        ),
-        (
-            "subagent starts reasoning",
-            None,
-            LifecycleSignal::SubagentStarted,
-            reasoning,
-            TransitionKind::Normal,
-            true,
-        ),
-        (
-            "subagent stops clean",
-            Some(reasoning),
-            LifecycleSignal::SubagentStopped { errored: false },
-            state(AgentStatus::Success, TurnPhase::Idle, false),
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "subagent stop can fail",
-            Some(reasoning),
-            LifecycleSignal::SubagentStopped { errored: true },
-            state(AgentStatus::Failed, TurnPhase::Idle, false),
-            TransitionKind::Normal,
-            false,
-        ),
-        (
-            "tool while resting reconciles to running",
-            Some(idle),
-            tool(true),
-            acting,
             TransitionKind::Reconciled {
                 from: AgentStatus::Idle,
                 reason: "tool used outside a running turn",
             },
             true,
+        )
+    );
+    for (label, errored, parked, expected) in [
+        (
+            "clean end",
+            false,
+            false,
+            state(AgentStatus::Success, TurnPhase::Idle, false),
         ),
         (
-            "non-mutating tool clears waiting",
-            Some(state(AgentStatus::Waiting, TurnPhase::Idle, false)),
-            LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
-            },
-            state(AgentStatus::Running, TurnPhase::Acting, false),
-            TransitionKind::Normal,
+            "background park",
+            false,
             true,
+            state(AgentStatus::Running, TurnPhase::Parked, false),
+        ),
+        (
+            "error",
+            true,
+            false,
+            state(AgentStatus::Failed, TurnPhase::Idle, false),
+        ),
+        (
+            "error beats park",
+            true,
+            true,
+            state(AgentStatus::Failed, TurnPhase::Idle, false),
         ),
     ] {
-        assert_step(name, prev, signal, next, kind, false, opened_turn);
+        assert_next(label, Some(reasoning), turn_end(errored, parked), expected);
     }
-
-    let waiting_resume = step(
-        Some(&state(AgentStatus::Waiting, TurnPhase::Idle, false)),
-        &LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
-        },
-    );
-    assert!(waiting_resume.waiting_cleared);
-
-    let ended = step(Some(&reasoning), &LifecycleSignal::Ended);
-    assert_eq!(ended.next, reasoning);
-    assert!(matches!(ended.kind, TransitionKind::Ignored { .. }));
-    assert!(!ended.compaction_closed);
-    assert!(!ended.opened_turn);
-
-    let lost = step(Some(&reasoning), &LifecycleSignal::Lost);
-    assert_eq!(lost.next, reasoning);
-    assert!(matches!(lost.kind, TransitionKind::Ignored { .. }));
-    assert!(!lost.compaction_closed);
-    assert!(!lost.opened_turn);
 }
 
 #[test]
-fn compaction_edges_keep_the_head_orthogonal_to_status_and_phase() {
-    let running_reasoning = state(AgentStatus::Running, TurnPhase::Reasoning, false);
-    let running_acting = state(AgentStatus::Running, TurnPhase::Acting, false);
-    let running_parked = state(AgentStatus::Running, TurnPhase::Parked, false);
+fn parked_wake_and_answered_prompt_preserve_boundary_facts() {
+    let reasoning = state(AgentStatus::Running, TurnPhase::Reasoning, false);
+    let parked = state(AgentStatus::Running, TurnPhase::Parked, false);
+    let wake = assert_next(
+        "parked wake",
+        Some(parked),
+        LifecycleSignal::TurnStarted,
+        reasoning,
+    );
 
-    for (name, prev, signal, next, kind, compaction_closed, opened_turn) in [
+    let prompt = assert_next(
+        "live prompt",
+        Some(reasoning),
+        LifecycleSignal::TurnStarted,
+        reasoning,
+    );
+    assert_eq!((wake.opened_turn, prompt.opened_turn), (false, true));
+
+    let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
+    let answer = assert_next(
+        "answered prompt",
+        Some(waiting),
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+        },
+        state(AgentStatus::Running, TurnPhase::Acting, false),
+    );
+    assert_eq!((answer.waiting_cleared, answer.opened_turn), (true, true));
+}
+
+#[test]
+fn subagent_and_terminal_edges_follow_the_contract() {
+    let reasoning = state(AgentStatus::Running, TurnPhase::Reasoning, false);
+    let started = assert_next(
+        "child start",
+        None,
+        LifecycleSignal::SubagentStarted,
+        reasoning,
+    );
+    assert!(started.opened_turn);
+
+    for (label, errored, expected) in [
+        ("clean child", false, AgentStatus::Success),
+        ("errored child", true, AgentStatus::Failed),
+    ] {
+        assert_next(
+            label,
+            Some(reasoning),
+            LifecycleSignal::SubagentStopped { errored },
+            state(expected, TurnPhase::Idle, false),
+        );
+    }
+    for (label, signal, reason) in [
         (
-            "compacting preserves reasoning",
-            Some(running_reasoning),
-            LifecycleSignal::Compacting,
-            state(AgentStatus::Running, TurnPhase::Reasoning, true),
-            TransitionKind::Normal,
-            false,
-            false,
+            "ended",
+            LifecycleSignal::Ended,
+            "session ended (handled as removal)",
         ),
         (
-            "compacting preserves parked",
-            Some(running_parked),
-            LifecycleSignal::Compacting,
-            state(AgentStatus::Running, TurnPhase::Parked, true),
-            TransitionKind::Normal,
-            false,
-            false,
-        ),
-        (
-            "auto compaction resumes from idle",
-            Some(state(AgentStatus::Idle, TurnPhase::Idle, true)),
-            LifecycleSignal::CompactionEnded { auto: Some(true) },
-            state(AgentStatus::Running, TurnPhase::Reasoning, false),
-            TransitionKind::Reconciled {
-                from: AgentStatus::Idle,
-                reason: "auto-compaction resumed a turn",
-            },
-            true,
-            true,
-        ),
-        (
-            "auto compaction keeps running phase",
-            Some(state(AgentStatus::Running, TurnPhase::Acting, true)),
-            LifecycleSignal::CompactionEnded { auto: Some(true) },
-            running_acting,
-            TransitionKind::Normal,
-            true,
-            false,
-        ),
-        (
-            "auto compaction leaves attention status",
-            Some(state(AgentStatus::Failed, TurnPhase::Idle, true)),
-            LifecycleSignal::CompactionEnded { auto: Some(true) },
-            state(AgentStatus::Failed, TurnPhase::Idle, false),
-            TransitionKind::Normal,
-            true,
-            false,
-        ),
-        (
-            "manual compaction rests",
-            Some(state(AgentStatus::Running, TurnPhase::Acting, true)),
-            LifecycleSignal::CompactionEnded { auto: Some(false) },
-            state(AgentStatus::Idle, TurnPhase::Idle, false),
-            TransitionKind::Normal,
-            true,
-            false,
-        ),
-        (
-            "unknown compaction end only clears head",
-            Some(state(AgentStatus::Running, TurnPhase::Reasoning, true)),
-            LifecycleSignal::CompactionEnded { auto: None },
-            running_reasoning,
-            TransitionKind::Normal,
-            true,
-            false,
-        ),
-        (
-            "unbracketed unknown close is ignored",
-            Some(running_reasoning),
-            LifecycleSignal::CompactionEnded { auto: None },
-            running_reasoning,
-            TransitionKind::Ignored {
-                reason: "compaction end without an open bracket",
-            },
-            false,
-            false,
-        ),
-        (
-            "unbracketed manual close still applies",
-            Some(running_acting),
-            LifecycleSignal::CompactionEnded { auto: Some(false) },
-            state(AgentStatus::Idle, TurnPhase::Idle, false),
-            TransitionKind::Normal,
-            false,
-            false,
-        ),
-        (
-            "next non-compaction signal closes open head",
-            Some(state(AgentStatus::Running, TurnPhase::Acting, true)),
-            LifecycleSignal::TurnStarted,
-            running_reasoning,
-            TransitionKind::Normal,
-            true,
-            true,
-        ),
-        (
-            "parked wake closes open head without re-stamping",
-            Some(state(AgentStatus::Running, TurnPhase::Parked, true)),
-            LifecycleSignal::TurnStarted,
-            running_reasoning,
-            TransitionKind::Normal,
-            true,
-            false,
-        ),
-        (
-            "compacting while compacting does not close",
-            Some(state(AgentStatus::Running, TurnPhase::Reasoning, true)),
-            LifecycleSignal::Compacting,
-            state(AgentStatus::Running, TurnPhase::Reasoning, true),
-            TransitionKind::Normal,
-            false,
-            false,
+            "lost",
+            LifecycleSignal::Lost,
+            "session lost (legacy replay marker)",
         ),
     ] {
-        assert_step(
-            name,
-            prev,
-            signal,
-            next,
-            kind,
-            compaction_closed,
-            opened_turn,
+        let transition = assert_next(label, Some(reasoning), signal, reasoning);
+        assert_eq!(
+            transition.kind,
+            TransitionKind::Ignored { reason },
+            "{label}"
         );
     }
 }
 
 #[test]
-fn state_machine_is_total_and_keeps_phase_axis_valid() {
+fn compaction_bracket_follows_trigger_and_counts_one_close() {
+    let reasoning = state(AgentStatus::Running, TurnPhase::Reasoning, false);
+    let acting = state(AgentStatus::Running, TurnPhase::Acting, false);
+    let opened = assert_next(
+        "open",
+        Some(acting),
+        LifecycleSignal::Compacting,
+        state(AgentStatus::Running, TurnPhase::Acting, true),
+    );
+    assert!(!opened.compaction_closed);
+
+    for (label, prev, auto, expected) in [
+        (
+            "automatic",
+            state(AgentStatus::Running, TurnPhase::Acting, true),
+            Some(true),
+            acting,
+        ),
+        (
+            "manual",
+            state(AgentStatus::Running, TurnPhase::Acting, true),
+            Some(false),
+            state(AgentStatus::Idle, TurnPhase::Idle, false),
+        ),
+        (
+            "unknown",
+            state(AgentStatus::Running, TurnPhase::Reasoning, true),
+            None,
+            reasoning,
+        ),
+        (
+            "attention",
+            state(AgentStatus::Failed, TurnPhase::Idle, true),
+            Some(true),
+            state(AgentStatus::Failed, TurnPhase::Idle, false),
+        ),
+    ] {
+        let transition = assert_next(
+            label,
+            Some(prev),
+            LifecycleSignal::CompactionEnded { auto },
+            expected,
+        );
+        assert!(transition.compaction_closed, "{label}");
+    }
+
+    let resumed = assert_next(
+        "auto from idle",
+        Some(state(AgentStatus::Idle, TurnPhase::Idle, true)),
+        LifecycleSignal::CompactionEnded { auto: Some(true) },
+        reasoning,
+    );
+    assert_eq!(
+        (resumed.kind, resumed.compaction_closed, resumed.opened_turn,),
+        (
+            TransitionKind::Reconciled {
+                from: AgentStatus::Idle,
+                reason: "auto-compaction resumed a turn"
+            },
+            true,
+            true,
+        )
+    );
+
+    let ignored = assert_next(
+        "unbracketed unknown",
+        Some(reasoning),
+        LifecycleSignal::CompactionEnded { auto: None },
+        reasoning,
+    );
+    assert_eq!(
+        (ignored.kind, ignored.compaction_closed),
+        (
+            TransitionKind::Ignored {
+                reason: "compaction end without an open bracket"
+            },
+            false,
+        )
+    );
+    let manual = assert_next(
+        "unbracketed manual",
+        Some(acting),
+        LifecycleSignal::CompactionEnded { auto: Some(false) },
+        state(AgentStatus::Idle, TurnPhase::Idle, false),
+    );
+    assert!(!manual.compaction_closed);
+
+    let ordinary = assert_next(
+        "ordinary close",
+        Some(state(AgentStatus::Running, TurnPhase::Acting, true)),
+        LifecycleSignal::TurnStarted,
+        reasoning,
+    );
+    assert_eq!(
+        (ordinary.compaction_closed, ordinary.opened_turn),
+        (true, true)
+    );
+}
+
+#[test]
+fn all_state_signal_pairs_preserve_machine_invariants() {
     let statuses = [
         AgentStatus::Running,
         AgentStatus::Waiting,
@@ -360,41 +297,29 @@ fn state_machine_is_total_and_keeps_phase_axis_valid() {
         TurnPhase::Acting,
         TurnPhase::Parked,
     ];
+    let states = [None]
+        .into_iter()
+        .chain(statuses.into_iter().flat_map(|status| {
+            phases.into_iter().flat_map(move |phase| {
+                [false, true].map(move |compacting| Some(state(status, phase, compacting)))
+            })
+        }));
     let signals = all_signals();
 
-    for signal in &signals {
-        let _ = step(None, signal);
-    }
-
-    for status in statuses {
-        for phase in phases {
-            for compacting in [false, true] {
-                let prev = state(status, phase, compacting);
-                for signal in &signals {
-                    let transition = step(Some(&prev), signal);
-                    if !matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
-                        && transition.next.status != AgentStatus::Running
-                    {
-                        assert_eq!(
-                            transition.next.phase,
-                            TurnPhase::Idle,
-                            "{status:?}/{phase:?}/{compacting} + {signal:?}"
-                        );
-                    }
-                    if !compacting {
-                        assert!(
-                            !transition.compaction_closed,
-                            "{signal:?} must not close an absent bracket"
-                        );
-                    }
-                    if matches!(signal, LifecycleSignal::TurnStarted) {
-                        assert_eq!(
-                            transition.opened_turn,
-                            !(status == AgentStatus::Running && phase == TurnPhase::Parked),
-                            "{status:?}/{phase:?}/{compacting} + {signal:?}"
-                        );
-                    }
-                }
+    for prev in states {
+        for signal in &signals {
+            let transition = step(prev.as_ref(), signal);
+            if !matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
+                && transition.next.status != AgentStatus::Running
+            {
+                assert_eq!(
+                    transition.next.phase,
+                    TurnPhase::Idle,
+                    "{prev:?} + {signal:?}"
+                );
+            }
+            if prev.is_none_or(|state| !state.compacting) {
+                assert!(!transition.compaction_closed, "{prev:?} + {signal:?}");
             }
         }
     }
@@ -402,54 +327,69 @@ fn state_machine_is_total_and_keeps_phase_axis_valid() {
 
 #[test]
 fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
-    for signal in all_signals() {
+    let signals = [
+        (LifecycleSignal::Registered, "registered"),
+        (LifecycleSignal::TurnStarted, "turn_started"),
+        (turn_end(false, true), "turn_ended"),
+        (tool(true), "tool_used"),
+        (
+            LifecycleSignal::AwaitingInput {
+                kind: AskKind::Question,
+                ask_id: None,
+                detail: None,
+            },
+            "awaiting_input",
+        ),
+        (LifecycleSignal::SubagentStarted, "subagent_started"),
+        (
+            LifecycleSignal::SubagentStopped { errored: true },
+            "subagent_stopped",
+        ),
+        (LifecycleSignal::Compacting, "compacting"),
+        (
+            LifecycleSignal::CompactionEnded { auto: Some(true) },
+            "compaction_ended",
+        ),
+        (LifecycleSignal::Ended, "ended"),
+        (LifecycleSignal::Lost, "lost"),
+    ];
+    for (signal, tag) in signals {
         let wire = serde_json::to_value(&signal).unwrap();
-        assert_eq!(wire["signal"], signal.tag(), "{signal:?}");
-        let back: LifecycleSignal = serde_json::from_value(wire).unwrap();
-        assert_eq!(signal, back);
+        assert_eq!(
+            (
+                wire["signal"].as_str(),
+                signal.tag(),
+                serde_json::from_value::<LifecycleSignal>(wire.clone()).unwrap(),
+            ),
+            (Some(tag), tag, signal)
+        );
     }
 
-    for phase in [
-        TurnPhase::Idle,
-        TurnPhase::Reasoning,
-        TurnPhase::Acting,
-        TurnPhase::Parked,
+    for (phase, wire) in [
+        (TurnPhase::Idle, "idle"),
+        (TurnPhase::Reasoning, "reasoning"),
+        (TurnPhase::Acting, "acting"),
+        (TurnPhase::Parked, "parked"),
     ] {
-        let wire = serde_json::to_value(phase).unwrap();
-        let back: TurnPhase = serde_json::from_value(wire).unwrap();
-        assert_eq!(phase, back);
+        assert_eq!(
+            (
+                serde_json::to_value(phase).unwrap(),
+                serde_json::from_value::<TurnPhase>(serde_json::json!(wire)).unwrap(),
+            ),
+            (serde_json::json!(wire), phase)
+        );
     }
-    assert_eq!(
-        serde_json::to_value(TurnPhase::Reasoning).unwrap(),
-        serde_json::json!("reasoning"),
-    );
 
-    let tool_without_edits: LifecycleSignal =
-        serde_json::from_value(serde_json::json!({ "signal": "tool_used", "mutates": true }))
-            .unwrap();
-    assert_eq!(
-        tool_without_edits,
-        LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: false,
-        }
+    assert_legacy(
+        serde_json::json!({ "signal": "tool_used", "mutates": true }),
+        tool(false),
     );
-
-    let subagent_without_error: LifecycleSignal =
-        serde_json::from_value(serde_json::json!({ "signal": "subagent_stopped" })).unwrap();
-    assert_eq!(
-        subagent_without_error,
-        LifecycleSignal::SubagentStopped { errored: false }
+    assert_legacy(
+        serde_json::json!({ "signal": "subagent_stopped" }),
+        LifecycleSignal::SubagentStopped { errored: false },
     );
-
-    let compaction_without_auto: LifecycleSignal =
-        serde_json::from_value(serde_json::json!({ "signal": "compaction_ended" })).unwrap();
-    assert_eq!(
-        compaction_without_auto,
-        LifecycleSignal::CompactionEnded { auto: None }
-    );
-    assert_eq!(
-        serde_json::to_value(compaction_without_auto).unwrap(),
-        serde_json::json!({ "signal": "compaction_ended" })
+    assert_legacy(
+        serde_json::json!({ "signal": "compaction_ended" }),
+        LifecycleSignal::CompactionEnded { auto: None },
     );
 }
