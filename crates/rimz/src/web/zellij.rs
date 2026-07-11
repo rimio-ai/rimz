@@ -6,8 +6,6 @@
 
 use std::env;
 use std::io;
-use std::net::TcpListener;
-use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -18,11 +16,9 @@ use crate::config::{InlinePalette, parse_hex};
 use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
-pub const WEB_SCHEMA_VERSION: &str = "rimz.web.v1";
 pub const DEFAULT_ZELLIJ_WEB_BASE_URL: &str = "http://127.0.0.1:8082";
 pub const DEFAULT_ZELLIJ_WEB_IP: &str = "127.0.0.1";
 pub const DEFAULT_ZELLIJ_WEB_PORT: u16 = 8082;
-pub const LOCAL_PORT_RANGE: RangeInclusive<u16> = 8300..=8399;
 const WEB_LOGIN_TOKEN_CACHE_FILE: &str = "web-login-token.json";
 
 /// Binary override for tests, mirroring the Zellij backend.
@@ -71,69 +67,6 @@ pub struct WebServerStatus {
     pub online: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WebOpenPayload {
-    pub version: String,
-    pub url: String,
-    pub session: String,
-    pub base_url: String,
-    pub ip: String,
-    pub port: u16,
-    pub token_count: usize,
-}
-
-impl WebOpenPayload {
-    pub fn new(
-        url: String,
-        session: String,
-        base_url: String,
-        endpoint: ZellijWebEndpoint,
-        token_count: usize,
-    ) -> Self {
-        Self {
-            version: WEB_SCHEMA_VERSION.to_owned(),
-            url,
-            session,
-            base_url,
-            ip: endpoint.ip,
-            port: endpoint.port,
-            token_count,
-        }
-    }
-
-    pub fn version_ok(&self) -> bool {
-        self.version == WEB_SCHEMA_VERSION
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WebStatusPayload {
-    pub version: String,
-    pub online: bool,
-    pub base_url: String,
-    pub ip: String,
-    pub port: u16,
-    pub token_count: usize,
-}
-
-impl WebStatusPayload {
-    pub fn new(
-        online: bool,
-        base_url: String,
-        endpoint: ZellijWebEndpoint,
-        token_count: usize,
-    ) -> Self {
-        Self {
-            version: WEB_SCHEMA_VERSION.to_owned(),
-            online,
-            base_url,
-            ip: endpoint.ip,
-            port: endpoint.port,
-            token_count,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -402,11 +335,6 @@ pub fn web_token_spec(command: &WebTokenCommand) -> CommandSpec {
     spec
 }
 
-pub fn join_session_url(base_url: &str, session: &str) -> String {
-    let base = base_url.trim_end_matches('/');
-    format!("{base}/{}", encode_path_segment(session))
-}
-
 pub fn effective_base_url(configured: Option<&str>, status: Option<&str>) -> String {
     configured
         .map(str::trim)
@@ -451,47 +379,10 @@ fn token_name_from_line(line: &str) -> Option<&str> {
     Some(line.split_once(':').map_or(line, |(name, _)| name).trim())
 }
 
-pub fn parse_web_open_payload(stdout: &[u8]) -> Result<WebOpenPayload, serde_json::Error> {
-    serde_json::from_slice(stdout)
-}
-
 pub fn endpoint_from_status_base(status_base_url: Option<&str>) -> ZellijWebEndpoint {
     status_base_url
         .and_then(endpoint_from_url)
         .unwrap_or_default()
-}
-
-pub fn derive_local_port(session: &str) -> u16 {
-    let span = u32::from(*LOCAL_PORT_RANGE.end()) - u32::from(*LOCAL_PORT_RANGE.start()) + 1;
-    let offset = crc32fast::hash(session.as_bytes()) % span;
-    *LOCAL_PORT_RANGE.start() + u16::try_from(offset).expect("offset fits in port range")
-}
-
-pub fn choose_local_port(session: &str, override_port: Option<u16>) -> io::Result<u16> {
-    if let Some(port) = override_port {
-        probe_local_port(port)?;
-        return Ok(port);
-    }
-    let preferred = derive_local_port(session);
-    for port in port_scan(preferred) {
-        if probe_local_port(port).is_ok() {
-            return Ok(port);
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AddrNotAvailable,
-        "no free local Zellij web tunnel port in 8300..8399",
-    ))
-}
-
-fn probe_local_port(port: u16) -> io::Result<()> {
-    TcpListener::bind(("127.0.0.1", port)).map(|_| ())
-}
-
-fn port_scan(preferred: u16) -> impl Iterator<Item = u16> {
-    let start = *LOCAL_PORT_RANGE.start();
-    let end = *LOCAL_PORT_RANGE.end();
-    (preferred..=end).chain(start..preferred)
 }
 
 fn checked_url(raw: &str) -> Option<String> {
@@ -535,19 +426,6 @@ fn default_port_for_scheme(scheme: &str) -> u16 {
         "http" => 80,
         _ => DEFAULT_ZELLIJ_WEB_PORT,
     }
-}
-
-fn encode_path_segment(segment: &str) -> String {
-    let mut out = String::new();
-    for byte in segment.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(char::from(byte));
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
 }
 
 fn web_client_node(font: &str, colors: &WebClientColors) -> KdlNode {
@@ -677,25 +555,8 @@ fn existing_file(path: PathBuf) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{InlineAnsiColors, InlinePalette, InlinePrimaryColors};
-
     use super::*;
-
-    #[test]
-    fn joins_base_url_and_session_as_one_path_segment() {
-        assert_eq!(
-            join_session_url("http://127.0.0.1:8082", "rimz-terrain-a1b2c3"),
-            "http://127.0.0.1:8082/rimz-terrain-a1b2c3"
-        );
-        assert_eq!(
-            join_session_url("https://devbox.example/zellij/", "rimz-terrain-a1b2c3"),
-            "https://devbox.example/zellij/rimz-terrain-a1b2c3"
-        );
-        assert_eq!(
-            join_session_url("https://devbox.example/zellij", "rimz/a b"),
-            "https://devbox.example/zellij/rimz%2Fa%20b"
-        );
-    }
+    use crate::config::{InlineAnsiColors, InlinePalette, InlinePrimaryColors};
 
     #[test]
     fn parses_zellij_status_output() {
@@ -812,29 +673,6 @@ mod tests {
 
         let token = web_token_spec(&WebTokenCommand::Create { read_only: true });
         assert_eq!(token.args, ["web", "--create-read-only-token"]);
-    }
-
-    #[test]
-    fn web_json_round_trips_and_version_checks() {
-        let payload = WebOpenPayload::new(
-            "http://127.0.0.1:8082/rimz-test-a1b2c3".to_owned(),
-            "rimz-test-a1b2c3".to_owned(),
-            "http://127.0.0.1:8082".to_owned(),
-            ZellijWebEndpoint::default(),
-            2,
-        );
-        let json = serde_json::to_vec(&payload).expect("json");
-        let parsed = parse_web_open_payload(&json).expect("parse");
-        assert_eq!(parsed, payload);
-        assert!(parsed.version_ok());
-    }
-
-    #[test]
-    fn local_port_derivation_is_stable_and_in_range() {
-        let a = derive_local_port("rimz-project-a1b2c3");
-        let b = derive_local_port("rimz-project-a1b2c3");
-        assert_eq!(a, b);
-        assert!(LOCAL_PORT_RANGE.contains(&a));
     }
 
     #[test]

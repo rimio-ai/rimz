@@ -6,6 +6,40 @@ fn zellij_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
 
+fn ttyd_shim() -> PathBuf {
+    crate::common::cargo_bin("ttyd-trace", env!("CARGO_BIN_EXE_ttyd-trace"))
+}
+
+#[cfg(unix)]
+fn tmux_shim(env: &Env) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin_dir = env.home_root.join("web-bin");
+    std::fs::create_dir_all(&bin_dir).expect("mkdir web bin");
+    let bin = bin_dir.join("tmux");
+    std::fs::write(
+        &bin,
+        r#"#!/bin/sh
+if [ "$1" = "-V" ]; then
+  printf 'tmux 3.5\n'
+elif [ "$1" = "list-sessions" ]; then
+  printf '%s\n' "$RIMZ_TEST_TMUX_SESSION"
+elif [ "$1" = "list-panes" ]; then
+  printf '%s,@1,%%1,sh,%s,%s,1,main,rimz-sidebar,0\n' "$RIMZ_TEST_TMUX_SESSION" "$RIMZ_TEST_TMUX_CWD" "$$"
+fi
+printf '%s\n' "$*" >> "$RIMZ_TEST_TMUX_LOG"
+exit 0
+"#,
+    )
+    .expect("write tmux shim");
+    let mut permissions = std::fs::metadata(&bin)
+        .expect("tmux metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&bin, permissions).expect("chmod tmux shim");
+    (bin_dir, env.project_root.join("tmux-web.log"))
+}
+
 fn materialized_room_panes_json() -> &'static str {
     r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#
 }
@@ -89,16 +123,11 @@ fn web_open_disabled_fails_before_room_side_effects() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Zellij web access is disabled")
+        stderr.contains("Browser access is disabled")
             && stderr.contains("machine serving this room"),
         "stderr should name the serving-machine config fix: {stderr}"
     );
-    let log = std::fs::read_to_string(log).expect("read zellij log");
-    assert!(log.contains("web\t--help"), "{log}");
-    assert!(!log.contains("\tattach\t"), "{log}");
-    assert!(!log.contains("web\t--start"), "{log}");
-    assert!(!log.contains("web\t--status"), "{log}");
-    assert!(!log.contains("\tpipe\t"), "{log}");
+    assert!(!log.exists(), "disabled web should not invoke the backend");
 }
 
 #[test]
@@ -547,18 +576,154 @@ fn web_url_json_prints_offline_server_url_without_starting() {
 }
 
 #[test]
-fn web_refuses_tmux_backend() {
+#[cfg(unix)]
+fn web_tmux_open_fails_fast_when_ttyd_is_missing() {
     let env = Env::new();
+    env.record(&env.project_root);
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let (bin_dir, tmux_log) = tmux_shim(&env);
     let output = env
         .rimz()
-        .args(["--mux", "tmux", "web", "status"])
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .arg("--print")
+        .env("PATH", &bin_dir)
+        .env("RIMZ_TEST_TMUX_LOG", tmux_log)
+        .env("RIMZ_TEST_TMUX_SESSION", &workspace.session_name)
+        .env("RIMZ_TEST_TMUX_CWD", &env.project_root)
         .bounded_output()
-        .expect("run rimz web status on tmux");
+        .expect("run rimz web open on tmux");
 
-    assert!(!output.status.success(), "tmux should be unsupported");
+    assert!(!output.status.success(), "missing ttyd should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("supports Zellij only"),
-        "stderr should name the backend boundary: {stderr}"
+        stderr.contains("ttyd is required")
+            && stderr.contains("brew install ttyd")
+            && stderr.contains("apt install ttyd"),
+        "stderr should carry the ttyd install fix: {stderr}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn web_tmux_open_status_rotation_and_stop_use_ttyd() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let (bin_dir, tmux_log) = tmux_shim(&env);
+    let ttyd_log = env.project_root.join("ttyd-web.log");
+    let command = || {
+        let mut command = env.rimz();
+        command
+            .env("PATH", &bin_dir)
+            .env("RIMZ_TTYD_BIN", ttyd_shim())
+            .env("RIMZ_TEST_TTYD_LOG", &ttyd_log)
+            .env("RIMZ_TEST_TMUX_LOG", &tmux_log)
+            .env("RIMZ_TEST_TMUX_SESSION", &workspace.session_name)
+            .env("RIMZ_TEST_TMUX_CWD", &env.project_root);
+        command
+    };
+
+    let mut open = command();
+    let output = open
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("open tmux web");
+    assert!(
+        output.status.success(),
+        "tmux open succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("open json");
+    assert_eq!(json["engine"], "ttyd");
+    assert_eq!(json["session"], workspace.session_name);
+    assert_eq!(
+        json["port"]
+            .as_u64()
+            .map(|port| (8200..=8299).contains(&port)),
+        Some(true)
+    );
+
+    let mut status = command();
+    let status = status
+        .args(["web", "status", "--json"])
+        .bounded_output()
+        .expect("status tmux web");
+    assert!(status.status.success(), "status succeeds");
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json");
+    assert_eq!(
+        status_json["tmux_instances"][0]["session"],
+        workspace.session_name
+    );
+
+    let first_log = std::fs::read_to_string(&ttyd_log).expect("first ttyd log");
+    assert!(first_log.contains("-W\t-O\t-c\trimz:"), "{first_log}");
+    assert!(
+        first_log.contains(&format!(
+            "-b\t/{}\ttmux\tattach\t-t",
+            workspace.session_name
+        )),
+        "{first_log}"
+    );
+
+    let mut rotate = command();
+    let rotate = rotate
+        .args(["--mux", "tmux", "web", "token", "create"])
+        .bounded_output()
+        .expect("rotate ttyd credential");
+    assert!(
+        rotate.status.success(),
+        "rotation succeeds: {}",
+        String::from_utf8_lossy(&rotate.stderr)
+    );
+    let rotated_log = std::fs::read_to_string(&ttyd_log).expect("rotated ttyd log");
+    assert_eq!(rotated_log.lines().count(), 2, "{rotated_log}");
+
+    let mut stop = command();
+    let stop = stop
+        .args(["web", "stop"])
+        .bounded_output()
+        .expect("stop ttyd");
+    assert!(
+        stop.status.success(),
+        "stop succeeds: {}",
+        String::from_utf8_lossy(&stop.stderr)
+    );
+    assert!(String::from_utf8_lossy(&stop.stdout).contains("1 ttyd instance"));
+}
+
+#[cfg(unix)]
+#[test]
+fn web_tmux_no_start_refuses_without_an_instance() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let (bin_dir, tmux_log) = tmux_shim(&env);
+    let ttyd_log = env.project_root.join("ttyd-no-start.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .args(["--print", "--no-start"])
+        .env("PATH", &bin_dir)
+        .env("RIMZ_TTYD_BIN", ttyd_shim())
+        .env("RIMZ_TEST_TTYD_LOG", &ttyd_log)
+        .env("RIMZ_TEST_TMUX_LOG", tmux_log)
+        .env("RIMZ_TEST_TMUX_SESSION", &workspace.session_name)
+        .env("RIMZ_TEST_TMUX_CWD", &env.project_root)
+        .bounded_output()
+        .expect("open tmux web without start");
+    assert!(!output.status.success(), "offline ttyd should fail");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("is not serving tmux session"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!ttyd_log.exists(), "--no-start must not spawn ttyd");
 }

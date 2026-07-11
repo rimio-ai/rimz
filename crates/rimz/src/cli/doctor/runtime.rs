@@ -146,6 +146,7 @@ pub(super) fn collect_mux(
         duplicate_sessions: None,
         presence: None,
         topology_writer: None,
+        ttyd: (mux == MuxName::Tmux).then(collect_ttyd),
     };
     if mux == MuxName::Tmux {
         report.socket = Some(tmux_mod::default_server_socket_path().display().to_string());
@@ -162,6 +163,26 @@ pub(super) fn collect_mux(
         }
     }
     model::Probe::Ready(report)
+}
+
+fn collect_ttyd() -> model::Probe<model::TtydWeb> {
+    let path = match rimz::web::ttyd::ttyd_program() {
+        Ok(path) => path,
+        Err(err) => {
+            return model::Probe::Unavailable {
+                error: err.to_string(),
+            };
+        }
+    };
+    match rimz::web::ttyd::version() {
+        Ok(version) => model::Probe::Ready(model::TtydWeb {
+            path: path.display().to_string(),
+            version,
+        }),
+        Err(err) => model::Probe::Unavailable {
+            error: err.to_string(),
+        },
+    }
 }
 
 fn collect_mux_binaries(mux: MuxName) -> model::MuxBinaries {

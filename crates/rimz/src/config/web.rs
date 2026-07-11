@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Browser-access preferences for host-local Zellij web access.
+/// Browser-access preferences for host-local room access.
 ///
 /// These are per-machine preferences: base URLs can name private hostnames,
 /// loopback tunnels, or reverse-proxy paths, and no field executes a command;
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct WebPrefs {
     pub enabled: bool,
     pub zellij: ZellijWebPrefs,
+    pub tmux: TmuxWebPrefs,
 }
 
 impl Default for WebPrefs {
@@ -19,6 +20,25 @@ impl Default for WebPrefs {
         Self {
             enabled: true,
             zellij: ZellijWebPrefs::default(),
+            tmux: TmuxWebPrefs::default(),
+        }
+    }
+}
+
+/// tmux browser-terminal preferences.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TmuxWebPrefs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    pub auto_start: bool,
+}
+
+impl Default for TmuxWebPrefs {
+    fn default() -> Self {
+        Self {
+            base_url: None,
+            auto_start: true,
         }
     }
 }

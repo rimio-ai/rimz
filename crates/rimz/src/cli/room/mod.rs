@@ -211,7 +211,13 @@ pub(crate) fn ensure_workspace_room_for_web(
     validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
-    let mux = MuxName::Zellij;
+    let mux = pick_mux_for_session(
+        &workspace.session_name,
+        globals.mux,
+        MissingSessionReport::Silent,
+    )?;
+    ensure_single_backend_room(mux, &workspace.session_name)?;
+    preflight_web_engine(mux)?;
     setup::ensure_default_config()?;
     prepare_room(
         RoomEntry::StartWeb {
@@ -225,6 +231,7 @@ pub(crate) fn ensure_workspace_room_for_web(
     Ok(WebRoom {
         session_name: workspace.session_name,
         workspace_id: workspace.workspace_id,
+        mux,
     })
 }
 
@@ -250,7 +257,9 @@ pub(crate) fn ensure_session_room_for_web(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<WebRoom> {
-    let record = workspace_record_for_web_session(session)?;
+    let mux = pick_mux_for_session(session, globals.mux, MissingSessionReport::Silent)?;
+    let record = workspace_record_for_web_session(session, mux)?;
+    preflight_web_engine(mux)?;
     prepare_room(
         RoomEntry::WebSession {
             record: &record,
@@ -262,14 +271,17 @@ pub(crate) fn ensure_session_room_for_web(
     Ok(WebRoom {
         session_name: record.session_name,
         workspace_id: record.workspace_id,
+        mux,
     })
 }
 
-pub(crate) fn web_room_for_session(session: &str) -> Result<WebRoom> {
-    let record = workspace_record_for_web_session(session)?;
+pub(crate) fn web_room_for_session(session: &str, globals: &GlobalFlags) -> Result<WebRoom> {
+    let mux = pick_mux_for_session(session, globals.mux, MissingSessionReport::Silent)?;
+    let record = workspace_record_for_web_session(session, mux)?;
     Ok(WebRoom {
         session_name: record.session_name,
         workspace_id: record.workspace_id,
+        mux,
     })
 }
 
@@ -286,22 +298,35 @@ pub(crate) fn existing_web_room_for_path(path: &Path, globals: &GlobalFlags) -> 
             path.display(),
         );
     };
-    ensure_single_backend_room(MuxName::Zellij, &record.session_name)?;
+    let mux = pick_mux_for_session(
+        &record.session_name,
+        globals.mux,
+        MissingSessionReport::Silent,
+    )?;
+    ensure_single_backend_room(mux, &record.session_name)?;
     Ok(WebRoom {
         session_name: record.session_name,
         workspace_id: record.workspace_id,
+        mux,
     })
 }
 
-fn workspace_record_for_web_session(session: &str) -> Result<WorkspaceRecord> {
+fn workspace_record_for_web_session(session: &str, mux: MuxName) -> Result<WorkspaceRecord> {
     let record = workspace_record_for_session(session).context("checking Rimz workspace record")?;
     let Some(record) = record else {
         bail!(
             "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
         );
     };
-    ensure_single_backend_room(MuxName::Zellij, session)?;
+    ensure_single_backend_room(mux, session)?;
     Ok(record)
+}
+
+fn preflight_web_engine(mux: MuxName) -> Result<()> {
+    if mux == MuxName::Tmux {
+        rimz::web::ttyd::ttyd_program()?;
+    }
+    Ok(())
 }
 
 fn ensure_default_config_for_start() -> Result<bool> {
@@ -329,6 +354,7 @@ fn report_initialized_config() -> Result<()> {
 pub(crate) struct WebRoom {
     pub session_name: String,
     pub workspace_id: WorkspaceId,
+    pub mux: MuxName,
 }
 
 pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
@@ -392,7 +418,11 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
     let mux = match &entry {
         RoomEntry::Start { mux, .. } | RoomEntry::StartWeb { mux, .. } => *mux,
-        RoomEntry::WebSession { .. } => MuxName::Zellij,
+        RoomEntry::WebSession { record, .. } => pick_mux_for_session(
+            &record.session_name,
+            globals.mux,
+            MissingSessionReport::Silent,
+        )?,
         RoomEntry::AttachCwd { workspace, .. } => pick_mux_for_session(
             &workspace.session_name,
             globals.mux,

@@ -133,6 +133,14 @@ pub(super) struct Mux {
     pub(super) presence: Option<Presence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) topology_writer: Option<TopologyWriterHealth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) ttyd: Option<Probe<TtydWeb>>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct TtydWeb {
+    pub(super) path: String,
+    pub(super) version: String,
 }
 
 #[derive(Debug, Serialize)]

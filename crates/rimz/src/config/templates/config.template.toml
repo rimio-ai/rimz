@@ -82,6 +82,12 @@
 # font = "JetBrainsMono Nerd Font Mono" # browser terminal font for zellij web (web_client)
 # style_client = true                 # style the browser terminal (font + colors) from [theme]; false keeps your Zellij web_client config
 
+[web.tmux]
+# tmux browser access through ttyd. base_url is the URL users open when a
+# reverse proxy serves the per-room ttyd process under a public host or path.
+## base_url = "https://devbox.example/tmux"
+# auto_start = true                   # `rimz web open` starts ttyd for the room when needed
+
 [mux]
 ## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux
 

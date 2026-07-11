@@ -75,7 +75,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
                 no_resume: remote.no_resume,
             },
         ),
-        "preparing remote Zellij web",
+        "preparing remote web access",
         remote.target.host_display(),
         remote.origin.as_str(),
     )?;
@@ -87,7 +87,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
             payload.version
         );
     }
-    relay_web_token(remote);
+    relay_web_token(remote, payload.engine);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
     let tunnel_spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
@@ -112,12 +112,12 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     guard.wait()
 }
 
-fn relay_web_token(remote: &RemoteConnect) {
-    let spec = rimz::remote::web::web_token_ensure_spec(&remote.target);
+fn relay_web_token(remote: &RemoteConnect, engine: rimz::web::WebEngine) {
+    let spec = rimz::remote::web::web_token_ensure_spec(&remote.target, engine);
     let output = match spec.to_command().output() {
         Ok(output) => output,
         Err(err) => {
-            write_web_token_error(remote.target.host_display(), &err.to_string());
+            write_web_token_error(remote.target.host_display(), engine, &err.to_string());
             return;
         }
     };
@@ -126,25 +126,35 @@ fn relay_web_token(remote: &RemoteConnect) {
         if detail.is_empty() {
             detail = output.status.to_string();
         }
-        write_web_token_error(remote.target.host_display(), &detail);
+        write_web_token_error(remote.target.host_display(), engine, &detail);
         return;
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if token.is_empty() {
-        write_web_token_error(remote.target.host_display(), "empty token");
+        write_web_token_error(remote.target.host_display(), engine, "empty token");
         return;
     }
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "rimz: login token for {}: {token}",
-        remote.target.host_display(),
-    );
+    let line = match engine {
+        rimz::web::WebEngine::Zellij => format!(
+            "rimz: login token for {}: {token}",
+            remote.target.host_display()
+        ),
+        rimz::web::WebEngine::Ttyd => format!(
+            "rimz: basic auth for {}: user rimz, password {token}",
+            remote.target.host_display()
+        ),
+    };
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
 }
 
-fn write_web_token_error(host: &str, detail: &str) {
+fn write_web_token_error(host: &str, engine: rimz::web::WebEngine, detail: &str) {
+    let engine = match engine {
+        rimz::web::WebEngine::Zellij => "Zellij web login token",
+        rimz::web::WebEngine::Ttyd => "ttyd basic-auth credential",
+    };
     let _ = writeln!(
         std::io::stderr().lock(),
-        "rimz: could not mint a Zellij web login token on {host} ({detail}); create one with `rimz web token create` on the remote host.",
+        "rimz: could not mint a {engine} on {host} ({detail}); create one with `rimz web token create` on the remote host.",
     );
 }
 

@@ -69,7 +69,10 @@ fn template_covers_serialized_default_leaves() {
         );
     }
 
-    let allowed_template_only = BTreeSet::from(["web.zellij.base_url".to_owned()]);
+    let allowed_template_only = BTreeSet::from([
+        "web.tmux.base_url".to_owned(),
+        "web.zellij.base_url".to_owned(),
+    ]);
     for path in template.difference(&expected) {
         assert!(
             allowed_template_only.contains(path),

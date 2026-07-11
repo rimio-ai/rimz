@@ -293,6 +293,26 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     if let Some(writer) = &mux.topology_writer {
         push_topology_writer(&mut kv, tally, writer);
     }
+    if let Some(ttyd) = &mux.ttyd {
+        match ttyd {
+            Probe::Ready(ttyd) => kv.push(
+                "ttyd web",
+                verdict(
+                    tally,
+                    Health::Ok,
+                    format!("{} ({})", ttyd.version, ttyd.path),
+                ),
+            ),
+            Probe::Unavailable { error } => kv.push(
+                "ttyd web",
+                verdict(
+                    tally,
+                    Health::Warn,
+                    format!("missing — rimz web needs it; {error}"),
+                ),
+            ),
+        }
+    }
     kv.render(w)?;
 
     render_mux_binary_notes(w, mux, tally)?;
@@ -1253,6 +1273,7 @@ mod tests {
             duplicate_sessions: None,
             presence: None,
             topology_writer: None,
+            ttyd: None,
         }
     }
 

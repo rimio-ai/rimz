@@ -1,9 +1,10 @@
-//! SSH argv builders for remote Zellij web access.
+//! SSH argv builders for remote browser access.
 //!
 //! The CLI owns process I/O and supervision. This module keeps shell quoting
 //! and argv construction testable beside the existing remote attach builders.
 
 use crate::mux::CommandSpec;
+use crate::web::WebEngine;
 
 use super::{
     RemoteSpec, RemoteTarget, quote_remote_path, remote_exec_snippet, sh_quote, ssh_program,
@@ -32,8 +33,12 @@ pub fn web_prep_spec(target: &RemoteTarget, options: WebPrepOptions) -> CommandS
     one_shot_spec(target, &format!("rimz web {rimz_args}"))
 }
 
-pub fn web_token_ensure_spec(target: &RemoteTarget) -> CommandSpec {
-    one_shot_spec(target, "rimz web token ensure")
+pub fn web_token_ensure_spec(target: &RemoteTarget, engine: WebEngine) -> CommandSpec {
+    let mux = match engine {
+        WebEngine::Zellij => "zellij",
+        WebEngine::Ttyd => "tmux",
+    };
+    one_shot_spec(target, &format!("rimz --mux {mux} web token ensure"))
 }
 
 pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16) -> CommandSpec {
@@ -143,9 +148,9 @@ mod tests {
 
     #[test]
     fn web_token_ensure_builds_one_shot() {
-        let spec = web_token_ensure_spec(&parse("dev-box:query-engine"));
+        let spec = web_token_ensure_spec(&parse("dev-box:query-engine"), WebEngine::Ttyd);
         assert!(
-            spec.args[4].ends_with("exec rimz web token ensure"),
+            spec.args[4].ends_with("exec rimz --mux tmux web token ensure"),
             "{}",
             spec.args[4]
         );

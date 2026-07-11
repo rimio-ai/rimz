@@ -64,6 +64,15 @@ required-features = ["testkit"]
 test = false
 bench = false
 
+# Test-only ttyd-shaped TCP server. It records argv, binds the requested port,
+# and stays alive until the integration test stops it through `rimz web`.
+[[bin]]
+name = "ttyd-trace"
+path = "tests/fixtures/ttyd-trace/main.rs"
+required-features = ["testkit"]
+test = false
+bench = false
+
 # Test-only fixture: a `codex app-server`-shaped JSON-RPC stub. Used by
 # `tests/integration/hooks.rs` to exercise `rimz codex refresh-context` without
 # the real `codex` binary (pointed at via `RIMZ_CODEX_BIN`).
