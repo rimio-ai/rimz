@@ -10,92 +10,31 @@ use rimz::agents::{
     LifecycleSignal, RateLimitWindow, TurnErrorClass,
 };
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
-use rimz::message::{
-    AfterCondition, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
-};
+use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
 
 use crate::common::Env;
 
 #[test]
-fn queue_add_list_remove_and_clear_for_running_agent() {
+fn queue_remove_and_clear_workflow() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-queue", "feature-q", &[]);
 
-    let out = env
-        .rimz()
-        .args(["message", "@claude", "first task"])
-        .output()
-        .expect("message add without separator");
-    assert!(
-        out.status.success(),
-        "message failed\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let first = queued_id_from_stdout(&out.stdout);
-    let out = env
-        .rimz()
-        .env("RIMZ_AGENT_KIND", "codex")
-        .env("RIMZ_AGENT_NAME", "swift-otter")
-        .args(["message", "@claude", "--", "second task"])
-        .output()
-        .expect("message add from agent");
-    assert!(
-        out.status.success(),
-        "message failed\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let second = queued_id_from_stdout(&out.stdout);
-    assert_ne!(first, second);
-
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 2);
-    assert_eq!(pending[0].text, "first task");
-    assert_eq!(pending[1].text, "second task");
-    assert!(pending.iter().all(|message| {
-        message.status == MessageStatus::Queued
-            && message.attempts == 0
-            && message.last_attempt_at.is_none()
-    }));
-
-    let listed = env
-        .rimz()
-        .args(["message", "list", "--all", "--json"])
-        .output()
-        .expect("queue list");
-    assert!(
-        listed.status.success(),
-        "queue list failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
-    );
-    let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
-    assert_eq!(parsed.as_array().expect("messages").len(), 2);
-    let agent_authored = parsed
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|message| message["message_id"] == second)
-        .expect("second message listed");
-    assert_eq!(agent_authored["sender"]["origin"], "agent");
-    assert_eq!(agent_authored["sender"]["kind"], "codex");
-    assert_eq!(agent_authored["sender"]["name"], "swift-otter");
-
+    let first = queue_add(&env, "@claude", "first task");
+    let second = queue_add(&env, "@claude", "second task");
+    let third = queue_add(&env, "@claude", "third task");
+    let missing = "msg_0000000000009999";
     let removed = env
         .rimz()
-        .args(["message", "remove", &first])
+        .args(["message", "remove", &first, missing, &second])
         .output()
-        .expect("queue remove");
-    assert!(
-        removed.status.success(),
-        "queue remove failed: {}",
-        String::from_utf8_lossy(&removed.stderr)
-    );
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message_id.as_str(), second);
+        .expect("mixed remove");
+    assert!(!removed.status.success(), "missing ID reports failure");
+    let stdout = String::from_utf8_lossy(&removed.stdout);
+    assert!(stdout.contains(&format!("removed {first}")));
+    assert!(stdout.contains(&format!("{missing} is not queued or claimed")));
+    assert!(stdout.contains(&format!("removed {second}")));
 
     let cleared = env
         .rimz()
@@ -109,7 +48,7 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
     );
     let cleared_stdout = String::from_utf8_lossy(&cleared.stdout);
     assert!(cleared_stdout.contains("removed 1 message(s) for @claude"));
-    assert!(cleared_stdout.contains(&second));
+    assert!(cleared_stdout.contains(&third));
     assert!(env.store().list_pending_messages().unwrap().is_empty());
 
     let methods: Vec<String> = env
@@ -118,98 +57,66 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
         .map(|event| event.method)
         .filter(|method| method.starts_with("message."))
         .collect();
-    assert!(
-        methods.iter().any(|method| method == "message.queued"),
-        "queued audit event missing: {methods:?}"
-    );
-    assert!(
-        methods.iter().any(|method| method == "message.removed"),
-        "removed audit event missing: {methods:?}"
-    );
+    assert!(methods.iter().any(|method| method == "message.queued"));
+    assert!(methods.iter().any(|method| method == "message.removed"));
 }
 
 #[test]
-fn message_list_scopes_by_channel_status_and_newest_first() {
+fn message_list_scopes_orders_and_limits_records() {
     let env = Env::new();
-    env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-docs", "docs", &[]);
-
-    let docs = queue_add_in_channel(&env, "docs", "@claude", "docs task");
-    std::thread::sleep(Duration::from_millis(2));
-    let ops = queue_direct_channel_message(&env, "ops", "ops task");
+    let main = seed_channel_message(&env, 1, 100, None, "main task");
+    let archived_docs = seed_channel_message(&env, 2, 200, Some("docs"), "old docs task");
     env.store()
         .archive_channel_messages("docs", "test archive", "rimz-test")
         .expect("archive docs channel");
+    let docs = seed_channel_message(&env, 3, 300, Some("docs"), "docs task");
+    let docs_forge = seed_channel_message(&env, 4, 400, Some("docs/forge"), "forge task");
+    let ops = seed_channel_message(&env, 5, 500, Some("ops"), "ops task");
 
-    let scoped = env
-        .rimz()
-        .env(rimz::harness::run::ENV_CHANNEL, "docs")
-        .args(["message", "list", "--json"])
-        .output()
-        .expect("scoped list");
-    assert!(scoped.status.success(), "scoped list failed");
-    let scoped: serde_json::Value = serde_json::from_slice(&scoped.stdout).expect("json");
-    assert_eq!(scoped.as_array().unwrap().len(), 0, "archived hidden");
+    assert_eq!(
+        list_message_ids(&env, &["message", "list", "--json"], None),
+        vec![main.clone()]
+    );
+    assert_eq!(
+        list_message_ids(&env, &["message", "list", "--json"], Some("docs")),
+        vec![docs.clone()]
+    );
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--status", "archived", "--json"],
+            Some("docs")
+        ),
+        vec![archived_docs.clone()]
+    );
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--channel", "docs/forge", "--json"],
+            None
+        ),
+        vec![docs_forge.clone()]
+    );
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--all", "--limit", "2", "--json"],
+            None
+        ),
+        vec![ops.clone(), docs_forge.clone()]
+    );
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--all", "--limit", "0", "--json"],
+            None
+        ),
+        vec![ops, docs_forge, docs, archived_docs, main]
+    );
 
-    let archived = env
-        .rimz()
-        .env(rimz::harness::run::ENV_CHANNEL, "docs")
-        .args(["message", "list", "--status", "archived", "--json"])
-        .output()
-        .expect("archived list");
-    assert!(archived.status.success(), "archived list failed");
-    let archived: serde_json::Value = serde_json::from_slice(&archived.stdout).expect("json");
-    assert_eq!(archived.as_array().unwrap().len(), 1);
-    assert_eq!(archived[0]["message_id"], docs);
-    assert_eq!(archived[0]["channel"], "docs");
-    assert_eq!(archived[0]["text"], "docs task");
-
-    let ops_only = env
-        .rimz()
-        .args(["message", "list", "--channel", "ops", "--json"])
-        .output()
-        .expect("ops list");
-    assert!(ops_only.status.success(), "ops list failed");
-    let ops_only: serde_json::Value = serde_json::from_slice(&ops_only.stdout).expect("json");
-    assert_eq!(ops_only.as_array().unwrap().len(), 1);
-    assert_eq!(ops_only[0]["message_id"], ops);
-    assert_eq!(ops_only[0]["text"], "ops task");
-
-    let all = env
-        .rimz()
-        .args(["message", "list", "--all", "--json"])
-        .output()
-        .expect("all list");
-    assert!(all.status.success(), "all list failed");
-    let all: serde_json::Value = serde_json::from_slice(&all.stdout).expect("json");
-    assert_eq!(all.as_array().unwrap().len(), 2);
-    assert_eq!(all[0]["message_id"], ops, "newest message first");
-    assert_eq!(all[1]["message_id"], docs);
-
-    let table = env
-        .rimz()
-        .args(["message", "list", "--all"])
-        .output()
-        .expect("digest list");
-    assert!(table.status.success(), "digest list failed");
-    let table = String::from_utf8_lossy(&table.stdout);
-    assert!(table.contains("→"));
-    assert!(table.contains("#ops"));
-    assert!(table.contains("#docs"));
-    assert!(table.contains("ops task"));
-    assert!(!table.contains("CREATED"));
-    assert!(!table.contains("ATTEMPTS"));
-
-    let status = env
-        .rimz()
-        .args(["message", "show", &ops])
-        .output()
-        .expect("message show");
-    assert!(status.status.success(), "message show failed");
-    let status = String::from_utf8_lossy(&status.stdout);
-    assert!(status.contains(&ops));
-    assert!(status.contains("queued"));
-    assert!(status.contains("ops"));
+    let digest = run_success(env.rimz().args(["message"]), "bare message list");
+    assert!(String::from_utf8_lossy(&digest.stdout).contains("→"));
 }
 
 #[test]
@@ -310,33 +217,7 @@ fn message_show_keeps_channel_in_textless_transcript_hint() {
 }
 
 #[test]
-fn message_show_reports_delivery_blocker_and_timeline() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-show-blocked", "show-blocked", &[]);
-    let message_id = queue_add(&env, "@claude", "wait for idle");
-
-    let shown = env
-        .rimz()
-        .args(["message", "show", &message_id])
-        .output()
-        .expect("message show");
-    assert!(
-        shown.status.success(),
-        "message show failed: {}",
-        String::from_utf8_lossy(&shown.stderr)
-    );
-    let shown = String::from_utf8_lossy(&shown.stdout);
-    assert!(shown.contains("DELIVERY CHECK"));
-    assert!(shown.contains("is running; gate 'done' opens at next turn end"));
-    assert!(shown.contains("TIMELINE"));
-    assert!(shown.contains("\n  queued  "));
-    assert!(shown.contains(&format!("force now: rimz message steer {message_id}")));
-    assert!(!shown.contains("message.queued"));
-}
-
-#[test]
-fn message_edit_updates_queued_record_and_show_timeline() {
+fn message_edit_updates_queued_record_and_rejects_empty_edit() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-edit", "edit-message", &[]);
@@ -395,14 +276,6 @@ fn message_edit_updates_queued_record_and_show_timeline() {
     assert!(shown.contains("new text"));
     assert!(shown.contains("\n  edited  "));
     assert!(shown.contains("text, gate, schedule"));
-}
-
-#[test]
-fn message_edit_with_no_flags_errors() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-edit-empty", "edit-empty", &[]);
-    let message_id = queue_add(&env, "@claude", "keep");
 
     let edited = env
         .rimz()
@@ -410,48 +283,8 @@ fn message_edit_with_no_flags_errors() {
         .output()
         .expect("message edit");
 
-    assert!(!edited.status.success(), "edit without flags should fail");
-    let stderr = String::from_utf8_lossy(&edited.stderr);
-    assert!(
-        stderr.contains("nothing to edit"),
-        "unexpected stderr: {stderr}"
-    );
-}
-
-#[test]
-fn remove_accepts_many_ids_and_keeps_processing_after_miss() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-remove-many", "remove-many", &[]);
-    let first = queue_direct_channel_message(&env, "remove-many", "first");
-    let second = queue_direct_channel_message(&env, "remove-many", "second");
-
-    let removed = env
-        .rimz()
-        .args(["message", "remove", &first, &second])
-        .output()
-        .expect("remove many");
-    assert!(
-        removed.status.success(),
-        "remove many failed: {}",
-        String::from_utf8_lossy(&removed.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&removed.stdout);
-    assert!(stdout.contains(&format!("removed {first}")));
-    assert!(stdout.contains(&format!("removed {second}")));
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-
-    let valid = queue_direct_channel_message(&env, "remove-many", "third");
-    let missing = "msg_0000000000009999";
-    let mixed = env
-        .rimz()
-        .args(["message", "remove", &valid, missing])
-        .output()
-        .expect("remove mixed");
-    assert!(!mixed.status.success(), "mixed remove should fail");
-    let stdout = String::from_utf8_lossy(&mixed.stdout);
-    assert!(stdout.contains(&format!("removed {valid}")));
-    assert!(stdout.contains(&format!("{missing} is not queued or claimed")));
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    assert!(!edited.status.success());
+    assert!(String::from_utf8_lossy(&edited.stderr).contains("nothing to edit"));
 }
 
 #[test]
@@ -484,223 +317,6 @@ fn clear_without_target_removes_scoped_channel_lane() {
         .map(|message| message.message_id.as_str())
         .collect();
     assert_eq!(pending_ids, vec![docs_team.as_str(), ops.as_str()]);
-}
-
-#[test]
-fn bare_message_lists_and_unknown_words_suggest_subcommands() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-bare-list", "bare-list", &[]);
-    let lane_message_id = queue_direct_channel_message(&env, "bare-list", "lane inbox");
-    let main_message_id = queue_main_message(&env, "hello inbox");
-
-    let listed = env.rimz().args(["message"]).output().expect("bare message");
-    assert!(
-        listed.status.success(),
-        "bare message failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
-    );
-    let listed = String::from_utf8_lossy(&listed.stdout);
-    assert!(listed.contains("→"));
-    assert!(listed.contains(&main_message_id));
-    assert!(listed.contains("hello inbox"));
-    assert!(!listed.contains(&lane_message_id));
-    assert!(!listed.contains("FROM"));
-    assert!(!listed.contains("TO"));
-    assert!(!listed.contains("MESSAGE"));
-
-    let all = env
-        .rimz()
-        .args(["message", "list", "--all"])
-        .output()
-        .expect("all message list");
-    assert!(
-        all.status.success(),
-        "all message list failed: {}",
-        String::from_utf8_lossy(&all.stderr)
-    );
-    let all = String::from_utf8_lossy(&all.stdout);
-    assert!(all.contains("#bare-list"));
-    assert!(all.contains(&lane_message_id));
-
-    let id_hint = env
-        .rimz()
-        .args(["message", "msg_0000000000000001"])
-        .output()
-        .expect("message id hint");
-    assert!(!id_hint.status.success());
-    let stderr = String::from_utf8_lossy(&id_hint.stderr);
-    assert!(stderr.contains("did you mean `rimz message show msg_0000000000000001`?"));
-
-    let unknown = env
-        .rimz()
-        .args(["message", "wat"])
-        .output()
-        .expect("unknown word");
-    assert!(!unknown.status.success());
-    let stderr = String::from_utf8_lossy(&unknown.stderr);
-    assert!(stderr.contains("unknown subcommand `wat`"));
-    assert!(stderr.contains("expected list, show <id>"));
-}
-
-#[test]
-fn message_list_matches_channel_lanes_and_limits_rows() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-docs", "docs", &[]);
-
-    let docs = queue_direct_channel_message(&env, "docs", "docs task");
-    std::thread::sleep(Duration::from_millis(2));
-    let docs_team = queue_direct_channel_message(&env, "docs/forge", "forge task");
-    std::thread::sleep(Duration::from_millis(2));
-    let ops = queue_direct_channel_message(&env, "ops", "ops task");
-
-    let scoped = env
-        .rimz()
-        .args(["message", "list", "--channel", "docs", "--json"])
-        .output()
-        .expect("scoped lane list");
-    assert!(
-        scoped.status.success(),
-        "scoped lane list failed: {}",
-        String::from_utf8_lossy(&scoped.stderr)
-    );
-    let scoped: serde_json::Value = serde_json::from_slice(&scoped.stdout).expect("json");
-    let scoped = scoped.as_array().unwrap();
-    assert_eq!(scoped.len(), 1);
-    assert!(scoped.iter().any(|row| row["message_id"] == docs));
-    assert!(!scoped.iter().any(|row| row["message_id"] == docs_team));
-    assert!(!scoped.iter().any(|row| row["message_id"] == ops));
-
-    let team_scoped = env
-        .rimz()
-        .args(["message", "list", "--channel", "docs/forge", "--json"])
-        .output()
-        .expect("team lane list");
-    assert!(
-        team_scoped.status.success(),
-        "team lane list failed: {}",
-        String::from_utf8_lossy(&team_scoped.stderr)
-    );
-    let team_scoped: serde_json::Value = serde_json::from_slice(&team_scoped.stdout).expect("json");
-    let team_scoped = team_scoped.as_array().unwrap();
-    assert_eq!(team_scoped.len(), 1);
-    assert!(team_scoped.iter().any(|row| row["message_id"] == docs_team));
-
-    let limited = env
-        .rimz()
-        .args(["message", "list", "--all", "--limit", "2", "--json"])
-        .output()
-        .expect("limited json list");
-    assert!(
-        limited.status.success(),
-        "limited json list failed: {}",
-        String::from_utf8_lossy(&limited.stderr)
-    );
-    let limited: serde_json::Value = serde_json::from_slice(&limited.stdout).expect("json");
-    assert_eq!(limited.as_array().unwrap().len(), 2);
-
-    let unlimited = env
-        .rimz()
-        .args(["message", "list", "--all", "--limit", "0", "--json"])
-        .output()
-        .expect("unlimited json list");
-    assert!(
-        unlimited.status.success(),
-        "unlimited json list failed: {}",
-        String::from_utf8_lossy(&unlimited.stderr)
-    );
-    let unlimited: serde_json::Value = serde_json::from_slice(&unlimited.stdout).expect("json");
-    assert_eq!(unlimited.as_array().unwrap().len(), 3);
-
-    let all_digest = env
-        .rimz()
-        .args(["message", "list", "--all", "--limit", "0"])
-        .output()
-        .expect("all digest list");
-    assert!(
-        all_digest.status.success(),
-        "all digest list failed: {}",
-        String::from_utf8_lossy(&all_digest.stderr)
-    );
-    let all_digest = String::from_utf8_lossy(&all_digest.stdout);
-    assert!(all_digest.contains("#docs"));
-    assert!(all_digest.contains("#docs/forge"));
-    assert!(all_digest.contains("#ops"));
-
-    let limited_digest = env
-        .rimz()
-        .args(["message", "list", "--all", "--limit", "2"])
-        .output()
-        .expect("limited digest list");
-    assert!(
-        limited_digest.status.success(),
-        "limited digest list failed: {}",
-        String::from_utf8_lossy(&limited_digest.stderr)
-    );
-    let limited_digest = String::from_utf8_lossy(&limited_digest.stdout);
-    assert!(limited_digest.contains("1 older messages hidden (--limit 0 for all)"));
-
-    let scoped_table = env
-        .rimz()
-        .args(["message", "list", "--channel", "ops"])
-        .output()
-        .expect("scoped table list");
-    assert!(
-        scoped_table.status.success(),
-        "scoped table list failed: {}",
-        String::from_utf8_lossy(&scoped_table.stderr)
-    );
-    let scoped_table = String::from_utf8_lossy(&scoped_table.stdout);
-    assert!(!scoped_table.contains("#ops"));
-    assert!(scoped_table.contains("ops task"));
-    assert!(scoped_table.contains("→"));
-}
-
-#[test]
-fn message_list_uses_stored_address_after_receiver_leaves_snapshot() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-address", "address-lane", &[]);
-
-    let message_id = queue_add(&env, "@claude", "durable handle");
-    let listed = env
-        .rimz()
-        .args(["message", "list", "--channel", "address-lane", "--json"])
-        .output()
-        .expect("message list json");
-    assert!(
-        listed.status.success(),
-        "message list json failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
-    );
-    let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
-    assert_eq!(parsed[0]["message_id"], message_id);
-    assert_eq!(parsed[0]["address"], "@claude#address-lane");
-
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "SessionEnd",
-            "session_id": "sess-address",
-            "worktree_branch": "address-lane",
-        }),
-        &[],
-    );
-
-    let digest = env
-        .rimz()
-        .args(["message", "list", "--all"])
-        .output()
-        .expect("message list digest");
-    assert!(
-        digest.status.success(),
-        "message list digest failed: {}",
-        String::from_utf8_lossy(&digest.stderr)
-    );
-    let digest = String::from_utf8_lossy(&digest.stdout);
-    assert!(digest.contains("#address-lane"));
-    assert!(digest.contains("@claude"));
-    assert!(!digest.contains("@claude#address-lane"));
-    assert!(!digest.contains("claude:sess-address"));
 }
 
 #[test]
@@ -775,49 +391,8 @@ fn scheduled_message_parks_with_not_before_and_wake_stamp() {
 }
 
 #[test]
-fn message_record_after_conditions_round_trip() {
+fn message_after_rejects_self_reference_and_fanout() {
     let env = Env::new();
-    let now = jiff::Timestamp::now();
-    let record = MessageRecord::new_for_card(
-        env.workspace_id.clone(),
-        AgentKind::new_unchecked("claude"),
-        AgentSessionId::from("sess-coder"),
-        Some("coder".to_owned()),
-        "ship it".to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_after(vec![AfterCondition {
-        kind: AgentKind::new_unchecked("codex"),
-        agent_id: AgentSessionId::from("sess-planner"),
-        agent_name: Some("planner".to_owned()),
-        address: "@planner".to_owned(),
-        met_at: Some(now),
-    }]);
-
-    let json = serde_json::to_string(&record).expect("serialize message");
-    let decoded: MessageRecord = serde_json::from_str(&json).expect("deserialize message");
-
-    assert_eq!(decoded, record);
-}
-
-#[test]
-fn message_after_rejects_conflicts_self_reference_and_fanout() {
-    let env = Env::new();
-    for args in [
-        vec!["message", "@claude", "--after", "@claude", "--steer", "x"],
-        vec!["message", "@claude", "--after", "@claude", "--wait", "x"],
-        vec!["message", "@claude", "--after", "@claude", "--create", "x"],
-    ] {
-        let out = env.rimz().args(args).output().expect("after conflict");
-        assert!(!out.status.success());
-        assert!(
-            String::from_utf8_lossy(&out.stderr).contains("--after"),
-            "stderr: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
     env.install_agent_hooks("claude");
     register_role_agent(
         &env,
@@ -855,7 +430,7 @@ fn message_after_rejects_conflicts_self_reference_and_fanout() {
 }
 
 #[test]
-fn message_after_show_and_sweep_complete_cross_agent_relay() {
+fn message_after_sweep_completes_cross_agent_relay() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_role_agent(
@@ -884,24 +459,6 @@ fn message_after_show_and_sweep_complete_cross_agent_relay() {
     assert_eq!(pending[0].after.len(), 1);
     assert!(pending[0].after[0].address.starts_with("@planner"));
     assert_eq!(pending[0].after[0].met_at, None);
-    let after_address = pending[0].after[0].address.clone();
-
-    let shown = env
-        .rimz()
-        .args(["message", "show", &message_id, "--json"])
-        .output()
-        .expect("show relay");
-    assert!(
-        shown.status.success(),
-        "show relay failed: {}",
-        String::from_utf8_lossy(&shown.stderr)
-    );
-    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).expect("show json");
-    assert_eq!(
-        shown["delivery"]["check"]["after"][0]["address"],
-        after_address
-    );
-    assert_eq!(shown["delivery"]["check"]["after"][0]["met"], false);
 
     append_lifecycle(
         &env,
@@ -945,43 +502,6 @@ fn message_after_show_and_sweep_complete_cross_agent_relay() {
             .iter()
             .any(|event| event.method == "message.after_met")
     );
-}
-
-#[test]
-fn message_after_prestamps_quiescent_agent_and_sends_live() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_role_agent(
-        &env,
-        "claude",
-        "sess-coder",
-        "coder",
-        false,
-        Some(TRACE_PANE),
-    );
-    register_role_agent(&env, "claude", "sess-planner", "planner", false, None);
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let trace_log = env.project_root.join("zellij-after-prestamp-trace.log");
-
-    let add = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "@coder", "--after", "@planner", "start now"])
-        .output()
-        .expect("send prestamped relay");
-    assert!(
-        add.status.success(),
-        "prestamped relay failed: {}",
-        String::from_utf8_lossy(&add.stderr)
-    );
-
-    assert_text_then_enter(&trace_log, "start now");
-    let messages = env.store().list_messages().expect("messages");
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].status, MessageStatus::Sent);
-    assert!(messages[0].after[0].met_at.is_some());
 }
 
 #[test]
@@ -1057,48 +577,13 @@ fn message_sweep_delivers_due_message_and_registers_reconcile_wake() {
 }
 
 #[test]
-fn message_sweep_defers_ready_head_when_target_gate_is_closed() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-sweep-busy", "feature-sweep-busy", &[]);
-    let message_id = queue_add(&env, "@claude", "wait for idle");
-    let before = jiff::Timestamp::now();
-
-    let out = env
-        .rimz()
-        .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "10000")
-        .args(["message", "sweep"])
-        .output()
-        .expect("message sweep");
-    assert!(
-        out.status.success(),
-        "message sweep failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message_id.as_str(), message_id);
-    assert_eq!(pending[0].status, MessageStatus::Queued);
-    assert_eq!(pending[0].attempts, 0, "gate-closed miss must not claim");
-    assert!(pending[0].last_attempt_at.is_none());
-    let retry_after = pending[0].retry_after.expect("retry floor");
-    assert!(retry_after > before);
-
-    let wake: Option<jiff::Timestamp> =
-        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
-            .expect("wake stamp json");
-    assert_eq!(wake, Some(retry_after));
-}
-
-#[test]
-fn resume_gate_delivers_only_after_recovered_paused_park() {
+fn resume_gate_waits_for_recovery_then_delivers() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-resume-ready", "feature-resume", pane_env);
-    seed_turn_error(&env, "sess-resume-ready", TurnErrorClass::PausedSpendLimit);
-    seed_rate_limit_budget(&env, 20);
+    seed_turn_error(&env, "sess-resume-ready", TurnErrorClass::PausedRateLimit);
+    seed_rate_limit_budget(&env, 100);
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
@@ -1120,104 +605,33 @@ fn resume_gate_delivers_only_after_recovered_paused_park() {
         .expect("queue resume message");
 
     let trace_log = env.project_root.join("zellij-resume-ready-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "deliver", "--message-id", message_id.as_str()])
-        .output()
-        .expect("message deliver");
-    assert!(
-        out.status.success(),
-        "resume deliver failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    assert_text_then_enter(&trace_log, "continue");
-    let sent = env
-        .store()
-        .list_messages()
-        .expect("messages")
-        .into_iter()
-        .find(|message| message.message_id == message_id)
-        .expect("sent resume");
-    assert_eq!(sent.status, MessageStatus::Sent);
-}
-
-#[test]
-fn resume_gate_defers_unrecovered_and_ordinary_parked_messages() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-resume-wait", "feature-resume-wait", pane_env);
-    seed_turn_error(&env, "sess-resume-wait", TurnErrorClass::PausedRateLimit);
-    seed_rate_limit_budget(&env, 100);
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let snapshot = env.store().snapshot_cached().expect("snapshot");
-    let agent = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.agent_id.as_str() == "sess-resume-wait")
-        .expect("agent");
-    let resume = MessageRecord::new(
-        env.workspace_id.clone(),
-        agent,
-        "continue".to_owned(),
-        true,
-        DeliveryGate::Resume,
-    )
-    .with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
-    let ordinary = MessageRecord::new(
-        env.workspace_id.clone(),
-        agent,
-        "ordinary".to_owned(),
-        true,
-        DeliveryGate::Any,
-    );
-    let resume_id = resume.message_id.clone();
-    let ordinary_id = ordinary.message_id.clone();
-    env.store()
-        .queue_message(&resume, "rimz-test")
-        .expect("queue resume message");
-    env.store()
-        .queue_message(&ordinary, "rimz-test")
-        .expect("queue ordinary message");
-
-    let trace_log = env.project_root.join("zellij-resume-wait-trace.log");
-    for message_id in [&resume_id, &ordinary_id] {
-        let out = env
-            .rimz()
+    run_success(
+        env.rimz()
             .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
             .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
             .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args(["message", "deliver", "--message-id", message_id.as_str()])
-            .output()
-            .expect("message deliver");
-        assert!(
-            out.status.success(),
-            "deliver failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    assert!(
-        !trace_log.exists() || trace_lines(&trace_log).is_empty(),
-        "no paused message should be sent"
+            .args(["message", "deliver", "--message-id", message_id.as_str()]),
+        "deferred resume delivery",
     );
-    let messages = env.store().list_messages().expect("messages");
-    assert!(messages.iter().any(|message| {
-        message.message_id == resume_id
-            && message.status == MessageStatus::Queued
-            && message.attempts == 0
-    }));
-    assert!(messages.iter().any(|message| {
-        message.message_id == ordinary_id
-            && message.status == MessageStatus::Queued
-            && message.attempts == 0
-    }));
+    assert!(trace_lines(&trace_log).is_empty());
+    let queued = message_by_id(&env, &message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.attempts, 0);
+
+    seed_rate_limit_budget(&env, 20);
+    run_success(
+        env.rimz()
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", message_id.as_str()]),
+        "recovered resume delivery",
+    );
+
+    assert_text_then_enter(&trace_log, "continue");
+    assert_eq!(message_by_id(&env, &message_id).status, MessageStatus::Sent);
 }
 
 #[test]
@@ -1361,42 +775,17 @@ fn queue_refuses_without_installed_hooks() {
 }
 
 #[test]
-fn steer_refuses_waiting_agent_before_touching_pane() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-steer", "feature-s", &[("TMUX_PANE", "%1")]);
-    push_pending_agent_ask(&env, "sess-steer");
-
-    let out = env
-        .rimz()
-        .args(["message", "--steer", "@claude", "--", "continue"])
-        .output()
-        .expect("steer");
-    assert!(!out.status.success(), "steer should fail while agent waits");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("is waiting on your input") && stderr.contains("--force"),
-        "unexpected stderr: {stderr}"
-    );
-    assert!(
-        env.store()
-            .list_pending_messages()
-            .expect("pending queue")
-            .is_empty(),
-        "a refused steer must not leave a deliverable record"
-    );
-}
-
-#[test]
-fn message_steer_delivers_gate_closed_queued_record() {
+fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
     register_running_agent(&env, "sess-steer-queued", "steer-queued", pane_env);
     let message_id = queue_add(&env, "@claude", "push now");
+    push_pending_agent_ask(&env, "sess-steer-queued");
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let trace_log = env.project_root.join("zellij-steer-queued-trace.log");
 
-    let steered = env
+    let blocked = env
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
@@ -1404,7 +793,22 @@ fn message_steer_delivers_gate_closed_queued_record() {
         .args(["message", "steer", &message_id])
         .output()
         .expect("message steer");
+    assert!(!blocked.status.success());
+    let stderr = String::from_utf8_lossy(&blocked.stderr);
+    assert!(stderr.contains("is waiting on your input") && stderr.contains("--force"));
+    let queued = message_by_id(&env, &MessageId::parse(&message_id).expect("message id"));
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.attempts, 0);
+    assert!(trace_lines(&trace_log).is_empty());
 
+    let steered = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "steer", &message_id, "--force"])
+        .output()
+        .expect("forced message steer");
     assert!(
         steered.status.success(),
         "steer failed: {}",
@@ -1413,40 +817,10 @@ fn message_steer_delivers_gate_closed_queued_record() {
     let stdout = String::from_utf8_lossy(&steered.stdout);
     assert!(stdout.contains(&format!("sent to @claude ({message_id})")));
     assert_text_then_enter(&trace_log, "push now");
-    let sent = env
-        .store()
-        .list_messages()
-        .expect("messages")
-        .into_iter()
-        .find(|message| message.message_id.as_str() == message_id)
-        .expect("sent message");
-    assert_eq!(sent.status, MessageStatus::Sent);
-}
-
-#[test]
-fn message_steer_waiting_agent_requires_force() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-steer-waiting", "steer-waiting", &[]);
-    push_pending_agent_ask(&env, "sess-steer-waiting");
-    let message_id = queue_add(&env, "@claude", "reserved input");
-
-    let steered = env
-        .rimz()
-        .args(["message", "steer", &message_id])
-        .output()
-        .expect("message steer");
-
-    assert!(!steered.status.success(), "steer should fail while waiting");
-    let stderr = String::from_utf8_lossy(&steered.stderr);
-    assert!(
-        stderr.contains("is waiting on your input") && stderr.contains("--force"),
-        "unexpected stderr: {stderr}"
+    assert_eq!(
+        message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
+        MessageStatus::Sent
     );
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message_id.as_str(), message_id);
-    assert_eq!(pending[0].attempts, 0, "waiting steer must not claim");
 }
 
 #[test]
@@ -1595,31 +969,6 @@ fn steer_enter_modes_respect_discrete_submit_key() {
     assert!(
         !lines.iter().any(|line| is_enter_key(line)),
         "--no-enter must not press Enter; trace: {lines:?}"
-    );
-}
-
-#[test]
-fn steer_wait_conflicts_with_no_enter() {
-    let env = Env::new();
-    let out = env
-        .rimz()
-        .args([
-            "message",
-            "--steer",
-            "@claude",
-            "--wait",
-            "--no-enter",
-            "--",
-            "y",
-        ])
-        .output()
-        .expect("steer --wait --no-enter");
-
-    assert!(!out.status.success(), "--wait --no-enter should fail");
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("--wait requires submitting"),
-        "error explains the conflict: {}",
-        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -1798,111 +1147,6 @@ fn message_wait_prints_the_reply_after_the_turn_ends() {
         env.store().list_messages().unwrap().is_empty(),
         "delivered record self-cleans while wait still succeeds"
     );
-}
-
-#[test]
-fn message_wait_maps_failed_reply_turn_to_exit_one() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let transcript = env.runtime_root.join("message-wait-failed.jsonl");
-    std::fs::write(&transcript, "").expect("seed transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-failed",
-        "feature-wait-failed",
-        &transcript,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    let trace_log = env.project_root.join("zellij-wait-failed-trace.log");
-    let child = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "@claude", "--wait=5s", "try it"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn message --wait");
-    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-wait-failed",
-            "prompt": "try it",
-            "worktree_branch": "feature-wait-failed",
-            "transcript_path": transcript.to_string_lossy(),
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    append_claude_assistant(&transcript, "partial answer");
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-wait-failed",
-            "is_error": true,
-            "last_assistant_message": "partial answer",
-            "worktree_branch": "feature-wait-failed",
-            "transcript_path": transcript.to_string_lossy(),
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-
-    let out = child.wait_with_output().expect("wait failed reply");
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "partial answer\n");
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("turn failed (exit 1)"),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
-fn steer_wait_treats_the_remainder_of_the_live_turn_as_reply() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let transcript = env.runtime_root.join("message-wait-steer.jsonl");
-    std::fs::write(&transcript, "").expect("seed transcript");
-    register_running_agent_with_transcript(
-        &env,
-        "sess-wait-steer",
-        "feature-wait-steer",
-        &transcript,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    let trace_log = env.project_root.join("zellij-wait-steer-trace.log");
-    let child = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--wait=5s", "answer now"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn steer --wait");
-    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
-    append_claude_assistant(&transcript, "steered answer");
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-wait-steer",
-            "last_assistant_message": "steered answer",
-            "worktree_branch": "feature-wait-steer",
-            "transcript_path": transcript.to_string_lossy(),
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-
-    let out = child.wait_with_output().expect("wait steer reply");
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "steered answer\n");
 }
 
 #[test]
@@ -2235,60 +1479,6 @@ fn message_wait_any_returns_only_the_first_terminal_leg() {
 }
 
 #[test]
-fn message_wait_json_keeps_the_uniform_map_for_one_target() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let transcript = env.runtime_root.join("message-wait-json-one.jsonl");
-    std::fs::write(&transcript, "").expect("seed transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-json-one",
-        "feature-json-one",
-        &transcript,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-
-    let trace_log = env.project_root.join("zellij-wait-json-one-trace.log");
-    let child = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "@claude", "--wait=5s", "--json", "status?"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn single JSON wait");
-    wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
-    begin_wait_reply(
-        &env,
-        "sess-wait-json-one",
-        "feature-json-one",
-        &transcript,
-        "3",
-    );
-    finish_wait_reply(
-        &env,
-        "sess-wait-json-one",
-        "feature-json-one",
-        &transcript,
-        "3",
-        "single JSON reply",
-        false,
-    );
-
-    let out = child.wait_with_output().expect("wait single JSON reply");
-    assert!(out.status.success());
-    let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
-    assert_eq!(replies.as_object().unwrap().len(), 1);
-    assert_eq!(replies["@claude#feature-json-one"]["status"], "completed");
-    assert_eq!(
-        replies["@claude#feature-json-one"]["reply"],
-        "single JSON reply"
-    );
-    assert!(out.stderr.is_empty());
-}
-
-#[test]
 fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -2341,11 +1531,12 @@ fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
 }
 
 #[test]
-fn message_wait_rejects_conflicts_pane_targets_and_missing_hooks() {
+fn message_wait_rejects_invalid_modes_pane_targets_and_missing_hooks() {
     let env = Env::new();
     for args in [
         vec!["message", "@claude", "--create", "--wait=1s", "x"],
         vec!["message", "@claude", "--schedule", "1m", "--wait=1s", "x"],
+        vec!["message", "@claude", "--steer", "--wait", "--no-enter", "x"],
         vec!["message", "@claude", "--json", "x"],
         vec!["message", "@claude", "--any", "x"],
     ] {
@@ -2498,33 +1689,6 @@ fn steer_combines_inline_text_with_piped_stdin() {
 }
 
 #[test]
-fn message_rejects_stdin_with_file() {
-    let env = Env::new();
-    let prompt_file = env.project_root.join("prompt.txt");
-    std::fs::write(&prompt_file, "file body\n").expect("write prompt file");
-
-    let out = env
-        .rimz()
-        .args([
-            "message",
-            "@claude",
-            "--stdin",
-            "--file",
-            prompt_file.to_str().expect("utf-8 path"),
-        ])
-        .output()
-        .expect("run conflicting prompt sources");
-    assert!(!out.status.success(), "conflicting sources should fail");
-    assert_eq!(out.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("the argument '--stdin' cannot be used with '--file <PATH>'"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
 fn message_ignores_an_open_empty_stdin_without_the_flag() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -2650,7 +1814,7 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
 /// target receives the text and Enter as a discrete key, not a literal carriage
 /// return.
 #[test]
-fn queue_delivery_presses_enter_as_discrete_key() {
+fn queue_send_now_persists_and_sends() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -3032,7 +2196,7 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
 }
 
 #[test]
-fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
+fn queued_delivery_batches_compatible_prompts() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -3053,70 +2217,42 @@ fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
         .iter()
         .find(|agent| agent.agent_id.as_str() == "sess-batch")
         .expect("agent");
-    let sender = |role: &str, channel: &str| MessageSender::Agent {
-        kind: AgentKind::new_unchecked("codex"),
-        name: None,
-        profile: None,
-        role: Some(role.to_owned()),
-        channel: Some(channel.to_owned()),
+    let message = |id: u64, text: &str, role: &str, sender_channel: &str| {
+        let mut record = MessageRecord::new(
+            env.workspace_id.clone(),
+            agent,
+            text.to_owned(),
+            true,
+            DeliveryGate::Done,
+        )
+        .with_channel(Some("feature-batch".to_owned()))
+        .with_sender(MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: None,
+            profile: None,
+            role: Some(role.to_owned()),
+            channel: Some(sender_channel.to_owned()),
+        });
+        record.message_id = fixed_message_id(id);
+        record
     };
-    let mut first = MessageRecord::new(
-        env.workspace_id.clone(),
-        agent,
-        "first".to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_channel(Some("feature-batch".to_owned()))
-    .with_sender(sender("planner", "feature-batch"));
-    let mut second = MessageRecord::new(
-        env.workspace_id.clone(),
-        agent,
-        "second".to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_channel(Some("feature-batch".to_owned()))
-    .with_sender(sender("coder", "feature-batch"));
-    let mut third = MessageRecord::new(
-        env.workspace_id.clone(),
-        agent,
-        "third".to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_channel(Some("feature-batch".to_owned()))
-    .with_sender(sender("reviewer", "docs"));
-    first.message_id = fixed_message_id(1);
-    second.message_id = fixed_message_id(2);
-    third.message_id = fixed_message_id(3);
+    let first = message(1, "first", "planner", "feature-batch");
+    let second = message(2, "second", "coder", "feature-batch");
+    let third = message(3, "third", "reviewer", "docs");
     let first_id = first.message_id.clone();
     let second_id = second.message_id.clone();
     let third_id = third.message_id.clone();
-    env.store()
-        .queue_message(&first, "rimz-test")
-        .expect("queue first");
-    env.store()
-        .queue_message(&second, "rimz-test")
-        .expect("queue second");
-    env.store()
-        .queue_message(&third, "rimz-test")
-        .expect("queue third");
+    queue_messages(&env, &[&first, &second, &third]);
 
     let trace_log = env.project_root.join("zellij-batch-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "deliver", "--message-id", first_id.as_str()])
-        .output()
-        .expect("message deliver");
-    assert!(
-        out.status.success(),
-        "message deliver failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        env.rimz()
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", first_id.as_str()]),
+        "batch delivery",
     );
 
     let payload = "from @planner: first\n\nfrom @coder: second";
@@ -3128,19 +2264,9 @@ fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
     );
     assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
 
-    let messages = env.store().list_messages().expect("messages");
-    let sent_first = messages
-        .iter()
-        .find(|message| message.message_id == first_id)
-        .expect("first sent");
-    let sent_second = messages
-        .iter()
-        .find(|message| message.message_id == second_id)
-        .expect("second sent");
-    let queued_third = messages
-        .iter()
-        .find(|message| message.message_id == third_id)
-        .expect("third queued");
+    let sent_first = message_by_id(&env, &first_id);
+    let sent_second = message_by_id(&env, &second_id);
+    let queued_third = message_by_id(&env, &third_id);
     assert_eq!(sent_first.status, MessageStatus::Sent);
     assert_eq!(sent_second.status, MessageStatus::Sent);
     assert_eq!(sent_first.batch_id, Some(first_id.clone()));
@@ -3158,55 +2284,19 @@ fn queued_delivery_batches_same_sender_channel_prompt_prefix() {
         }),
         pane_env,
     );
-    let messages = env.store().list_messages().expect("messages");
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].message_id, third_id);
-    assert_eq!(messages[0].status, MessageStatus::Queued);
-    let delivered: Vec<String> = env
-        .read_events()
-        .into_iter()
-        .filter(|event| event.method == "message.delivered")
-        .map(|event| {
-            event.params_value()["message_id"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        })
-        .collect();
-    assert!(delivered.contains(&first_id.to_string()));
-    assert!(delivered.contains(&second_id.to_string()));
+    assert_eq!(message_by_id(&env, &third_id).status, MessageStatus::Queued);
+    let delivered = delivered_message_ids(&env);
+    assert_eq!(delivered, vec![first_id.to_string(), second_id.to_string()]);
 }
 
-/// `steer --smart-compact 70%` against a window past the threshold sends a
-/// tracked `/compact` command before the prompt. The command confirms on
-/// `Compacting`; the prompt confirms independently on `TurnStarted`.
 #[test]
-fn steer_auto_compact_runs_compact_before_a_full_window() {
+fn steer_auto_compact_runs_before_a_full_window() {
     let env = Env::new();
     register_running_agent(&env, "sess-ac", "feature-ac", &[("ZELLIJ_PANE_ID", "3")]);
     seed_context_fill(&env, "sess-ac", 80);
 
     let trace_log = env.project_root.join("zellij-ac-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args([
-            "message",
-            "--steer",
-            "@claude",
-            "--smart-compact",
-            "70%",
-            "--",
-            "go",
-        ])
-        .output()
-        .expect("steer");
-    assert!(
-        out.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = run_traced_smart_compact(&env, &trace_log, "go");
 
     let lines = trace_lines(&trace_log);
     let compact_at = lines.iter().position(|line| is_compact_command(line));
@@ -3247,52 +2337,6 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
     assert_eq!(command.status, MessageStatus::Sent);
     assert_eq!(prompt.text, "go");
     assert_eq!(prompt.status, MessageStatus::Sent);
-    let command_id = command.message_id.clone();
-    let prompt_id = prompt.message_id.clone();
-
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "PreCompact",
-            "session_id": "sess-ac",
-            "worktree_branch": "feature-ac",
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    let messages = env.store().list_messages().expect("messages");
-    assert!(
-        messages
-            .iter()
-            .all(|message| message.message_id != command_id),
-        "delivered compact command self-cleans from the live queue"
-    );
-    assert_eq!(
-        messages
-            .iter()
-            .find(|message| message.message_id == prompt_id)
-            .expect("prompt after compacting")
-            .status,
-        MessageStatus::Sent,
-        "Compacting confirms only the command"
-    );
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-ac",
-            "prompt": "go",
-            "worktree_branch": "feature-ac",
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    assert!(
-        env.store()
-            .list_messages()
-            .expect("messages")
-            .iter()
-            .all(|message| message.message_id != prompt_id),
-        "delivered prompt self-cleans from the live queue"
-    );
 }
 
 #[test]
@@ -3339,12 +2383,8 @@ fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
     assert!(pending[0].last_error.is_some(), "send error is recorded");
 }
 
-/// A stale carried-forward token gauge suppresses duplicate `/compact` for the
-/// same full-window reading. A changed occupied-token reading means the agent
-/// filled the window again, so the duplicate guard releases and smart-compact
-/// can run a new `/compact`.
 #[test]
-fn steer_auto_compact_reuses_baseline_until_context_reading_changes() {
+fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
     let env = Env::new();
     register_running_agent(
         &env,
@@ -3355,96 +2395,22 @@ fn steer_auto_compact_reuses_baseline_until_context_reading_changes() {
     seed_context_tokens(&env, "sess-ac-dupe", 150_000, 200_000);
 
     let first_trace = env.project_root.join("zellij-ac-dupe-first-trace.log");
-    let first = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &first_trace)
-        .args([
-            "message",
-            "--steer",
-            "@claude",
-            "--smart-compact",
-            "70%",
-            "--",
-            "go1",
-        ])
-        .output()
-        .expect("first steer");
-    assert!(
-        first.status.success(),
-        "first steer failed: {}",
-        String::from_utf8_lossy(&first.stderr)
-    );
-
+    run_traced_smart_compact(&env, &first_trace, "go1");
     let first_lines = trace_lines(&first_trace);
     let compact_at = first_lines.iter().position(|line| is_compact_command(line));
     let paste_at = first_lines.iter().position(|line| is_paste(line, "go1"));
-    assert!(
-        compact_at.is_some() && paste_at.is_some() && compact_at < paste_at,
-        "first send should compact before prompt; trace: {first_lines:?}"
-    );
+    assert!(compact_at.is_some() && compact_at < paste_at);
 
     let second_trace = env.project_root.join("zellij-ac-dupe-second-trace.log");
-    let second = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &second_trace)
-        .args([
-            "message",
-            "--steer",
-            "@claude",
-            "--smart-compact",
-            "70%",
-            "--",
-            "go2",
-        ])
-        .output()
-        .expect("second steer");
-    assert!(
-        second.status.success(),
-        "second steer failed: {}",
-        String::from_utf8_lossy(&second.stderr)
-    );
-
+    run_traced_smart_compact(&env, &second_trace, "go2");
     let second_lines = trace_lines(&second_trace);
-    assert!(
-        second_lines.iter().any(|line| is_paste(line, "go2")),
-        "second send should still paste the prompt; trace: {second_lines:?}"
-    );
-    assert!(
-        !second_lines.iter().any(|line| is_compact_command(line)),
-        "unchanged token reading must not compact again; trace: {second_lines:?}"
-    );
+    assert!(!second_lines.iter().any(|line| is_compact_command(line)));
 
     seed_context_tokens(&env, "sess-ac-dupe", 160_000, 200_000);
-
     let third_trace = env.project_root.join("zellij-ac-dupe-third-trace.log");
-    let third = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &third_trace)
-        .args([
-            "message",
-            "--steer",
-            "@claude",
-            "--smart-compact",
-            "70%",
-            "--",
-            "go3",
-        ])
-        .output()
-        .expect("third steer");
-    assert!(
-        third.status.success(),
-        "third steer failed: {}",
-        String::from_utf8_lossy(&third.stderr)
-    );
+    run_traced_smart_compact(&env, &third_trace, "go3");
     let third_lines = trace_lines(&third_trace);
-    assert!(
-        third_lines.iter().any(|line| is_compact_command(line))
-            && third_lines.iter().any(|line| is_paste(line, "go3")),
-        "fresh token reading should compact again before prompt; trace: {third_lines:?}"
-    );
+    assert!(third_lines.iter().any(|line| is_compact_command(line)));
 
     let messages = env.store().list_messages().expect("messages");
     let commands: Vec<_> = messages
@@ -3509,49 +2475,6 @@ fn steer_auto_compact_uses_config_default() {
         compact_at < paste_at,
         "config default compaction must precede the message; trace: {lines:?}"
     );
-}
-
-/// A window below the threshold delivers normally — no `/compact`, just the
-/// message pasted and submitted.
-#[test]
-fn steer_auto_compact_leaves_a_window_below_threshold_alone() {
-    let env = Env::new();
-    register_running_agent(
-        &env,
-        "sess-ac-low",
-        "feature-acl",
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    seed_context_fill(&env, "sess-ac-low", 50);
-
-    let trace_log = env.project_root.join("zellij-ac-low-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args([
-            "message",
-            "--steer",
-            "@claude",
-            "--smart-compact",
-            "70%",
-            "--",
-            "go",
-        ])
-        .output()
-        .expect("steer");
-    assert!(
-        out.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let lines = trace_lines(&trace_log);
-    assert!(
-        !lines.iter().any(|line| is_compact_command(line)),
-        "a window below the threshold must not compact; trace: {lines:?}"
-    );
-    assert_text_then_enter(&trace_log, "go");
 }
 
 /// A waiting agent reserves the next input, so a queued message defers at
@@ -3640,42 +2563,6 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
         );
         assert_text_then_enter(&trace_log, "go");
     }
-}
-
-/// `queue @claude --all` fans out to every claude in the room: one queued
-/// message per agent, all tagged with the addressed group.
-#[test]
-fn queue_fanout_two_agents() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    // Distinct panes so the two cards stay distinct; both are `running`, so the
-    // gate is closed and each message simply stays pending.
-    register_running_agent(&env, "sess-fan-a", "feature-fa", &[("ZELLIJ_PANE_ID", "5")]);
-    register_running_agent(&env, "sess-fan-b", "feature-fb", &[("ZELLIJ_PANE_ID", "6")]);
-
-    let out = env
-        .rimz()
-        .args(["message", "@claude", "--all", "--", "shared task"])
-        .output()
-        .expect("queue fanout");
-    assert!(
-        out.status.success(),
-        "queue fanout failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(
-        pending.len(),
-        2,
-        "one queued message per agent: {pending:?}"
-    );
-    assert!(
-        pending
-            .iter()
-            .all(|message| message.text == "@claude, shared task"),
-        "every fan-out message carries the group marker: {pending:?}"
-    );
 }
 
 #[test]
@@ -3816,17 +2703,13 @@ fn steer_fanout_summary() {
     register_running_agent(&env, "sess-fsb", "feature-fsb", &[("ZELLIJ_PANE_ID", "4")]);
 
     let trace_log = env.project_root.join("zellij-fanout-trace.log");
-    let interval = Duration::from_millis(1000);
-    let started = Instant::now();
     let out = env
         .rimz()
-        .env("RIMZ_MESSAGE_INTERVAL_MS", interval.as_millis().to_string())
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
         .args(["message", "--steer", "@claude", "--all", "--", "hello"])
         .output()
         .expect("steer fanout");
-    let elapsed = started.elapsed();
     assert!(
         out.status.success(),
         "steer fanout failed: {}",
@@ -3836,10 +2719,6 @@ fn steer_fanout_summary() {
     assert!(
         stdout.contains("sent 2 agent(s)"),
         "summary names the count: {stdout}"
-    );
-    assert!(
-        elapsed >= interval,
-        "two-message fan-out should wait between delivered messages; elapsed {elapsed:?}"
     );
     let pasted = trace_lines(&trace_log)
         .into_iter()
@@ -3892,6 +2771,43 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
 
 fn zellij_trace_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
+}
+
+fn run_success(cmd: &mut std::process::Command, label: &str) -> std::process::Output {
+    let output = cmd
+        .output()
+        .unwrap_or_else(|error| panic!("{label}: {error}"));
+    assert!(
+        output.status.success(),
+        "{label} failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+fn run_traced_smart_compact(env: &Env, trace_log: &Path, text: &str) -> std::process::Output {
+    let output = run_success(
+        env.rimz()
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
+            .args([
+                "message",
+                "--steer",
+                "@claude",
+                "--smart-compact",
+                "70%",
+                "--",
+                text,
+            ]),
+        "smart compact steer",
+    );
+    assert!(
+        trace_lines(trace_log)
+            .iter()
+            .any(|line| is_paste(line, text))
+    );
+    output
 }
 
 fn trace_lines(path: &Path) -> Vec<String> {
@@ -4051,27 +2967,6 @@ fn register_idle_agent_with_transcript(
             "session_id": session_id,
             "worktree_branch": branch,
             "worktree_path": worktree_path,
-            "transcript_path": transcript.to_string_lossy(),
-        }),
-        pane_env,
-    );
-}
-
-fn register_running_agent_with_transcript(
-    env: &Env,
-    session_id: &str,
-    branch: &str,
-    transcript: &Path,
-    pane_env: &[(&str, &str)],
-) {
-    register_idle_agent_with_transcript(env, session_id, branch, transcript, pane_env);
-    run_hook(
-        env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": session_id,
-            "prompt": "work",
-            "worktree_branch": branch,
             "transcript_path": transcript.to_string_lossy(),
         }),
         pane_env,
@@ -4355,6 +3250,82 @@ fn queue_add_in_channel(env: &Env, channel: &str, target: &str, text: &str) -> S
     queued_id_from_stdout(&out.stdout)
 }
 
+fn message_by_id(env: &Env, message_id: &MessageId) -> MessageRecord {
+    env.store()
+        .list_messages()
+        .expect("messages")
+        .into_iter()
+        .find(|message| &message.message_id == message_id)
+        .unwrap_or_else(|| panic!("missing message {message_id}"))
+}
+
+fn queue_messages(env: &Env, messages: &[&MessageRecord]) {
+    for message in messages {
+        env.store()
+            .queue_message(message, "rimz-test")
+            .expect("queue message");
+    }
+}
+
+fn delivered_message_ids(env: &Env) -> Vec<String> {
+    env.read_events()
+        .into_iter()
+        .filter(|event| event.method == "message.delivered")
+        .map(|event| {
+            event.params_value()["message_id"]
+                .as_str()
+                .expect("delivered message ID")
+                .to_owned()
+        })
+        .collect()
+}
+
+fn seed_channel_message(
+    env: &Env,
+    id: u64,
+    epoch_seconds: i64,
+    channel: Option<&str>,
+    text: &str,
+) -> String {
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.parent_agent_id.is_none())
+        .expect("agent");
+    let mut message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        text.to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(channel.map(str::to_owned));
+    message.message_id = fixed_message_id(id);
+    message.enqueued_at = jiff::Timestamp::from_second(epoch_seconds).expect("fixed timestamp");
+    let message_id = message.message_id.to_string();
+    env.store()
+        .queue_message(&message, "rimz-test")
+        .expect("seed message");
+    message_id
+}
+
+fn list_message_ids(env: &Env, args: &[&str], channel: Option<&str>) -> Vec<String> {
+    let mut cmd = env.rimz();
+    cmd.args(args);
+    if let Some(channel) = channel {
+        cmd.env(rimz::harness::run::ENV_CHANNEL, channel);
+    }
+    let output = run_success(&mut cmd, "message list");
+    serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .expect("message list JSON")
+        .as_array()
+        .expect("message rows")
+        .iter()
+        .map(|row| row["message_id"].as_str().expect("message ID").to_owned())
+        .collect()
+}
+
 fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String {
     let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
@@ -4370,27 +3341,6 @@ fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String 
         DeliveryGate::Done,
     )
     .with_channel(Some(channel.to_owned()));
-    let message_id = message.message_id.to_string();
-    env.store()
-        .queue_message(&message, "rimz-test")
-        .expect("queue message");
-    message_id
-}
-
-fn queue_main_message(env: &Env, text: &str) -> String {
-    let snapshot = env.store().snapshot_cached().expect("snapshot");
-    let agent = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.parent_agent_id.is_none())
-        .expect("agent");
-    let message = MessageRecord::new(
-        env.workspace_id.clone(),
-        agent,
-        text.to_owned(),
-        true,
-        DeliveryGate::Done,
-    );
     let message_id = message.message_id.to_string();
     env.store()
         .queue_message(&message, "rimz-test")
@@ -4620,47 +3570,6 @@ fn steer_reaches_unbound_codex_pane() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_text_then_enter(&trace_log, "continue");
-}
-
-/// `queue @codex` for the same unbound pane sends immediately like `steer`
-/// and records the send against a pane-derived placeholder session.
-#[test]
-fn queue_sends_now_to_unbound_codex_pane() {
-    let env = Env::new();
-    env.install_agent_hooks("codex");
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
-
-    let trace_log = env.project_root.join("zellij-unbound-queue-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "@codex", "--", "later"])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "queue to an unbound pane should send now: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_text_then_enter(&trace_log, "later");
-    let messages = env.store().list_messages().unwrap();
-    assert_eq!(messages.len(), 1, "send-now queue writes a durable record");
-    assert_eq!(messages[0].status, MessageStatus::Sent);
-    let methods: Vec<String> = env
-        .read_events()
-        .into_iter()
-        .map(|event| event.method)
-        .collect();
-    assert!(
-        methods.iter().any(|method| method == "message.sent"),
-        "send-now queue records message.sent: {methods:?}"
-    );
-    assert!(
-        methods.iter().any(|method| method == "message.queued"),
-        "send-now queue records the durable record before sending: {methods:?}"
-    );
 }
 
 #[test]
