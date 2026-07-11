@@ -684,6 +684,36 @@ fn web_tmux_open_status_rotation_and_stop_use_ttyd() {
     let rotated_log = std::fs::read_to_string(&ttyd_log).expect("rotated ttyd log");
     assert_eq!(rotated_log.lines().count(), 2, "{rotated_log}");
 
+    let mut revoke = command();
+    let revoke = revoke
+        .args(["--mux", "tmux", "web", "token", "revoke-all"])
+        .bounded_output()
+        .expect("revoke ttyd credential");
+    assert!(
+        revoke.status.success(),
+        "revoke succeeds: {}",
+        String::from_utf8_lossy(&revoke.stderr)
+    );
+    assert!(
+        !env.state_root()
+            .join("rimz/web-ttyd-credential.json")
+            .exists(),
+        "revoke-all clears the ttyd credential"
+    );
+
+    let mut reopen = command();
+    let reopen = reopen
+        .args(["--mux", "tmux", "web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .args(["--print", "--json"])
+        .bounded_output()
+        .expect("reopen tmux web after revoke");
+    assert!(
+        reopen.status.success(),
+        "reopen succeeds: {}",
+        String::from_utf8_lossy(&reopen.stderr)
+    );
+
     let mut stop = command();
     let stop = stop
         .args(["web", "stop"])

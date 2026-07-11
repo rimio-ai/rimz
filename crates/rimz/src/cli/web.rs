@@ -191,7 +191,6 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
             (payload, None)
         }
         MuxName::Tmux => {
-            ttyd::ttyd_program()?;
             let (instance, credential) =
                 ttyd::ensure_instance(&session, config.web.tmux.auto_start && !args.no_start)?;
             let base_url = tmux_base_url(config.web.tmux.base_url.as_deref(), instance.port);
@@ -468,10 +467,19 @@ fn stop() -> Result<()> {
     }
     let ttyd_stopped = ttyd::stop_all()?;
     let mut stdout = std::io::stdout().lock();
+    let zellij_summary = if zellij_stopped {
+        "1 Zellij server"
+    } else {
+        "0 Zellij servers"
+    };
+    let ttyd_noun = if ttyd_stopped == 1 {
+        "ttyd instance"
+    } else {
+        "ttyd instances"
+    };
     writeln!(
         stdout,
-        "stopped {} Zellij server and {ttyd_stopped} ttyd instance(s)",
-        usize::from(zellij_stopped)
+        "stopped {zellij_summary} and {ttyd_stopped} {ttyd_noun}"
     )?;
     Ok(())
 }
