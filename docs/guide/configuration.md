@@ -205,11 +205,17 @@ base_url = "https://devbox.example/zellij"
 auto_start = true
 font = "JetBrainsMono Nerd Font Mono"
 style_client = true
+
+[web.tmux]
+base_url = "https://devbox.example/tmux"
+auto_start = true
 ```
 
 `[web] enabled` defaults to true and gates `rimz web open` plus `rimz remote connect --web`. RimZ always seeds Zellij's permission cache for its own presence plugin's pane-topology permissions; when web is enabled it also seeds the web-sharing permission so runtime browser sharing works without a one-time prompt. When disabled, web commands fail before any room change and tell you to change the config on the machine serving the room.
 
 `[web.zellij]` tunes browser access through Zellij's web server. `base_url` is the URL prefix RimZ prints for `rimz web open` and `rimz web url`, useful when a reverse proxy serves Zellij under a public host or path. `auto_start` lets `rimz web open` run `zellij web --start --daemonize` when the server is offline; set it to `false` when another supervisor owns the server. `style_client` lets RimZ write a generated Zellij `web_client` block on server start so the browser terminal uses `[theme]`; `font` sets that browser terminal font. These keys are per-machine and outside the project trust hash because they run no command and often name private hostnames or tunnels. Command detail is in [web.md](../reference/cli/web.md), and remote browser tunnels in [remote.md](../internals/remote.md#web-access).
+
+`[web.tmux]` tunes browser access through ttyd. `base_url` is the reverse-proxy prefix for per-room ttyd routes, and `auto_start` lets `rimz web open` start the room's loopback ttyd process. The ttyd engine is selected by the room's tmux backend; install it with `brew install ttyd` or `apt install ttyd`. These keys execute nothing and stay outside the trust hash.
 
 ### Daemon view
 

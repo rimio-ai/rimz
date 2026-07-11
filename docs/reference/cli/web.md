@@ -1,6 +1,6 @@
 # Web CLI
 
-`rimz web` opens a Zellij-backed RimZ room in the browser. Zellij serves the terminal and owns authentication; RimZ only resolves the workspace, ensures the normal sidebar room exists, constructs the URL, and reports unsupported backend or version problems before returning a route — the web server itself is `zellij web`, which `web start`/`web stop` drive. The login token is Zellij's; RimZ caches it as a plaintext mode-0600 file and keeps it out of URLs, and `web token revoke` clears it. This is a local browser onto your own machine; reaching a room on another host in the browser is [`rimz remote connect --web`](./remote.md#remote-rooms-in-the-browser). Why and when to use browser access is the [web guide](../../guide/web.md).
+`rimz web` opens a RimZ room in the browser through the room's backend: `zellij web` for Zellij and ttyd for tmux.
 
 ```sh
 rimz web open [PATH] [--session <name>] [--print] [--no-start] [--no-resume] [--json]
@@ -14,33 +14,34 @@ rimz web token revoke <name>
 rimz web token revoke-all
 ```
 
-`rimz web` is `rimz web open`. `open` starts from `PATH` or `.` and ensures the RimZ room exists, then loads and grants the presence plugin before asking it to enable browser sharing at runtime. Human output prints the URL and the serving machine's cached Zellij login token; a missing cache mints one token, stores it as plaintext mode 0600 at `$XDG_STATE_HOME/rimz/web-login-token.json`, and prints it. Login tokens stay out of URLs.
+`rimz web` is `rimz web open`.
+
+`open` resolves or births the room, verifies that its session is addressable on the selected backend, starts the backend's web engine when allowed, prints the URL and credential, and opens the browser.
 
 | Flag | Effect |
 | --- | --- |
-| `--session <name>` | Target an existing RimZ workspace session by exact session name |
-| `--print` | Skip the browser launch; print the URL only |
-| `--no-start` | Refuse when `zellij web` is offline instead of starting it |
+| `--session <name>` | Target an existing RimZ workspace session by exact name |
+| `--print` | Skip the browser launch |
+| `--no-start` | Refuse when the engine is offline |
 | `--no-resume` | Skip recovering the room's prior agents |
-| `--json` | Emit the `rimz.web.v1` payload without provisioning a token |
+| `--json` | Emit `rimz.web.v1` without printing the credential |
 
-`url` reads only: it prints the route without birthing a room or starting the server. It requires an existing RimZ workspace record, so a script never receives a URL that would create a bare Zellij session without the RimZ sidebar.
+`url` requires an existing workspace record and prints its route without birthing a room, starting a server, or provisioning a credential.
 
-`status`, `start`, `stop`, and the `token` commands delegate to Zellij's web CLI. `web stop` stops the server; successful `token revoke` and `token revoke-all` clear the plaintext cache, so the next `open` mints fresh.
+`status` and `stop` are machine-wide across both engines.
 
-Configure reverse-proxy URLs under per-machine config:
+`start` controls the machine-wide Zellij server; under tmux selection it directs the user to `rimz web open` because ttyd servers are per room.
 
-```toml
-[web]
-enabled = true
+Token commands dispatch through normal mux selection.
 
-[web.zellij]
-base_url = "https://devbox.example/zellij"
-auto_start = true
-font = "JetBrainsMono Nerd Font Mono"
-style_client = true
-```
+Zellij supports named read/write or read-only tokens.
 
-`[web] enabled` defaults to true. Set it to false to make `rimz web open` and `rimz remote connect --web` fail before room changes or permission-cache seeding. `style_client` defaults to true, deriving Zellij's browser-terminal `web_client` font and colors from `[theme]` when RimZ starts the server; set it to false to leave your own Zellij `web_client` config in charge. `font` defaults to `JetBrainsMono Nerd Font Mono`.
+ttyd exposes one credential named `rimz`; `create` rotates it and restarts live instances, `list` prints its creation time, and revoke stops live instances before clearing it.
 
-Remote browser access is [`rimz remote connect <target> --web`](./remote.md#remote-rooms-in-the-browser); the tunnel and token relay are in [web internals](../../internals/web.md#remote-rooms).
+ttyd read-only credentials are refused because ttyd's read-only setting belongs to the whole process.
+
+JSON `open` and `url` payloads include `version`, `engine`, `url`, `session`, `base_url`, `ip`, `port`, and `token_count`; a missing `engine` from an older peer defaults to `zellij`.
+
+`status --json` adds `tmux_instances`, whose rows contain `session`, `pid`, and `port`.
+
+Configure public URL prefixes under `[web.zellij]` and `[web.tmux]`; see the [web guide](../../guide/web.md) and [configuration guide](../../guide/configuration.md#web-access).

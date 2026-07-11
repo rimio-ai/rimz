@@ -92,6 +92,12 @@ Open a fresh terminal window that is not attached to Zellij or tmux, then run `r
 
 RimZ needs Zellij 0.44+ or tmux 3.5+ on the machine, and pixel-perfect pets add tmux 3.6+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.0 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
 
+### ttyd is missing or a tmux web room will not start
+
+tmux browser access requires ttyd on the serving machine. Install it with `brew install ttyd` or `apt install ttyd`; `rimz doctor --mux tmux` reports the resolved path and version in `ttyd web`.
+
+If ttyd is installed but `rimz web open` times out, run `rimz web status`, then `rimz web stop` and open again. Check that ports 8200–8299 are available on loopback and that `[web.tmux] auto_start = true` unless another supervisor owns the process.
+
 ## An agent isn't showing as a card
 
 ### It shows as a plain process row

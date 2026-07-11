@@ -1,86 +1,122 @@
 # Web
 
-A RimZ room can render in a browser instead of a terminal: the same sidebar, panes, and agents, open at a URL. This runs on Zellij's own web server, so RimZ stays thin. On the machine running the room, RimZ turns that server on and points your browser at the right room. From your laptop, RimZ tunnels the remote server down over SSH. Either way the web server, the browser terminal, the login page, and the TLS are Zellij's; RimZ resolves which room you mean and wires up the plumbing.
+A RimZ room can render in a browser instead of a terminal: the same sidebar, panes, and agents, open at one URL on either Zellij or tmux.
 
-Browser access is a Zellij capability, so the serving machine needs Zellij 0.44.3 or newer with web support built in. A tmux room has no equivalent: reattach it over SSH ([Remote](./remote.md)), or run the project under Zellij to serve it to a browser.
+RimZ keeps the engine behind the command: Zellij rooms use `zellij web`, while tmux rooms use one loopback-only [ttyd](https://github.com/tsl0922/ttyd) process per room.
 
-## What RimZ adds, and what Zellij owns
+## Install the serving engine
 
-Everything security-sensitive stays inside Zellij's web server, which is mature machinery RimZ does not reimplement:
+Zellij browser access needs Zellij 0.44.3 or newer with web support.
 
-- **Zellij owns** the web server process, the terminal you see in the browser, the session transport, the login token, cookies, TLS, and the listening socket.
-- **RimZ owns** the mapping from a project directory to its room, birthing that room with the normal sidebar layout, turning on browser sharing, building the URL, and (for a remote room) the SSH tunnel.
-
-So the browser talks to Zellij, not to RimZ. RimZ gets you to the door and Zellij guards it.
-
-## Serve the room on this machine
-
-On the host running the room, `rimz web` starts Zellij's web server, turns on browser sharing for the room, and opens it in your browser:
+tmux browser access needs ttyd on the machine serving the room:
 
 ```sh
-rimz web            # start the server if offline, print the URL and token, open the browser
-rimz web url        # print the room's URL without touching the server
-rimz web status     # whether the server is running, and where
-rimz web stop       # stop the server
+brew install ttyd        # macOS or Linuxbrew
+apt install ttyd         # Debian or Ubuntu
 ```
 
-`rimz web` is `rimz web open`. It ensures the room exists, starts `zellij web` when it is offline, prints the URL and a login token, and opens your browser. This is the whole of the local feature: your browser connects straight to Zellij's server on `127.0.0.1`, and RimZ relays no terminal traffic of its own.
+`rimz doctor` reports the detected backend's browser capability, and a tmux `rimz web open` refuses with the install commands when ttyd is missing.
 
-The browser lands on Zellij's "Security Token Required" page. Paste the token RimZ printed in the terminal, and the room loads with its sidebar and panes. The [token section](#the-login-token) covers where that token lives and how to rotate it.
-
-`rimz web url` prints the route for a room that already exists without starting or touching the server, so a script never receives a URL that would spin up a bare Zellij session with no sidebar.
-
-## Open a remote room in your browser
-
-From your laptop, add `--web` to a remote connect and RimZ tunnels the server's room into your local browser over SSH:
+## Serve a local room
 
 ```sh
-rimz remote connect dev --web              # open the remote room at 127.0.0.1
+rimz web            # ensure the room and server, print URL + credential, open browser
+rimz web url        # print the existing room's URL without starting anything
+rimz web status     # report Zellij plus every live ttyd room server
+rimz web stop       # stop both engines on this machine
+```
+
+`rimz web` is `rimz web open`.
+
+RimZ resolves the room's live backend first when no explicit mux is selected, then follows the normal `--mux`, environment, config, and installed-backend selection.
+
+### Zellij rooms
+
+RimZ starts the machine-wide `zellij web` server when needed, enables web sharing for the room through the presence plugin, and prints the room route under the Zellij base URL.
+
+The browser shows Zellij's “Security Token Required” page; paste the login token RimZ prints.
+
+Zellij owns the server, terminal transport, cookies, TLS, sharing policy, and token store.
+
+### tmux rooms
+
+RimZ starts a ttyd process bound to `127.0.0.1` for that room, with the route `/<session>` and an attached `tmux attach -t <session>` child.
+
+The browser shows a Basic-Auth prompt; use the printed user `rimz` and password.
+
+ttyd servers are per room, so `rimz web start` remains a Zellij-server command; use `rimz web open` to start a tmux room server.
+
+## Open a remote room
+
+```sh
+rimz remote connect dev --web
 rimz remote connect dev --web --web-port 8443
 ```
 
-The remote web server stays bound to the remote host's own loopback and never listens on a public interface. RimZ starts that server when needed, opens an SSH local-forward from a port on your laptop's `127.0.0.1` to the remote's `127.0.0.1:<web-port>`, and opens your browser at `http://127.0.0.1:<local-port>/<session>`. Your browser hits your own machine; SSH carries the bytes to the remote server. Nothing about the room is exposed on the network between the two hosts.
+The remote room selects its own engine and returns the same `rimz.web.v1` prep payload.
 
-RimZ stays in the foreground supervising the tunnel until Ctrl-C, and the tunnel rides the same self-healing link as a terminal attach, so a dropped connection reconnects on its own. Without `--web-port`, RimZ derives a stable local port from the session name, so the browser origin and its cookies survive reconnects and repeat runs. The target and saved aliases behave exactly as for a terminal connect; see [Remote](./remote.md).
+RimZ relays that engine's credential, opens an SSH local-forward from your laptop's `127.0.0.1` to the remote loopback listener, and opens `http://127.0.0.1:<local-port>/<session>`.
 
-## The login token
+The tunnel stays in the foreground, reconnects with the normal remote-link policy, and uses a stable port from 8300–8399 unless `--web-port` overrides it.
 
-A browser-attached room is shell access as the room's user, so Zellij gates it behind a login token, the same way it would for `zellij web` on its own. The token is Zellij's, and RimZ only manages it for you:
+## Credentials
+
+The verbs follow the selected backend:
 
 ```sh
-rimz web token create            # mint a login token (--read-only for a watcher)
-rimz web token list              # token names and creation dates
-rimz web token revoke <name>     # revoke one by name
-rimz web token revoke-all        # revoke every token
+rimz web token create
+rimz web token list
+rimz web token revoke <name>
+rimz web token revoke-all
 ```
 
-The first time you serve a room, RimZ asks Zellij to mint a token (`zellij web --create-token` under the hood), then caches the value on the serving machine as plaintext JSON at mode `0600`, alongside Zellij's own hashed token store. Every later `rimz web` reuses that cached token instead of minting a fresh one, so the value you paste stays stable across opens. The token stays out of URLs, logs, and store events; treat it like an SSH private key on that machine.
+Zellij keeps its normal token store; RimZ caches the current plaintext token at mode 0600 so later local and remote opens can show it again.
 
-For a local room the serving machine is your own, so the token is minted, cached, and printed right there in your terminal. For a remote room the serving machine is the remote host: RimZ reads that host's cached token over the same SSH connection and relays it to your local browser, so a remote session reuses the server's token rather than minting a new one on your laptop.
+ttyd has one credential named `rimz` per serving machine; `create` rotates it and restarts live ttyd room servers, while either revoke command stops those servers and clears the credential.
+
+`--read-only` works for Zellij tokens.
+
+ttyd read-only mode is a process policy rather than a credential policy, so this release refuses `rimz --mux tmux web token create --read-only` instead of presenting a misleading watcher credential.
+
+Credentials stay out of URLs, logs, store events, and workspace state; treat either value like an SSH private key.
+
+## Configuration
+
+```toml
+[web]
+enabled = true
+
+[web.zellij]
+base_url = "https://devbox.example/zellij"
+auto_start = true
+font = "JetBrainsMono Nerd Font Mono"
+style_client = true
+
+[web.tmux]
+base_url = "https://devbox.example/tmux"
+auto_start = true
+```
+
+Each `base_url` is the prefix RimZ prints when a reverse proxy mounts that engine; the room session remains the final path segment.
 
 ## Security boundary
 
-The feature is safe to run because the exposure is narrow and the guard is Zellij's, not a RimZ invention. Two facts define the boundary:
+Both engines bind to loopback by default and require authentication.
 
-- The server listens on `127.0.0.1` by default. Locally, only your machine reaches it. Remotely, only your SSH tunnel reaches it, because the remote server stays on the remote's loopback.
-- Authentication is mandatory and it is Zellij's token gate. No token, no room.
+RimZ invokes ttyd with write access, origin checks, mandatory Basic Auth, and an explicit loopback bind; Zellij keeps its own mandatory token gate.
 
-Keep the rest in view:
+The browser session is shell access as the serving user, and terminal output can contain secrets even when a Zellij token is read-only.
 
-- A read-only token is observation-only, but terminal output can still carry secrets, so a read-only viewer is not a safe way to share a room with sensitive scrollback.
-- A revoke through RimZ clears the plaintext cache. A token revoked directly in Zellij leaves the cache in place, so revoke through RimZ, or delete the cache file, before the next `open`.
-- To reach a room from beyond loopback, put HTTPS in front. A reverse proxy with rate limiting is the supported public shape:
+Put HTTPS and rate limiting in front before exposing either listener beyond loopback:
 
 ```text
-browser  ->  HTTPS reverse proxy with rate limiting  ->  zellij web on 127.0.0.1
+browser -> HTTPS reverse proxy with rate limiting -> loopback web engine
 ```
 
 ## See also
 
-- [Remote](./remote.md) — the SSH link the `--web` tunnel rides, saved aliases, and reconnect.
-- [Web CLI reference](../reference/cli/web.md) — every `rimz web` subcommand and flag.
-- [Configuration](./configuration.md#web-access) — the `[web]` keys and reverse-proxy `base_url`.
-- [Web internals](../internals/web.md) — the token model, server lifecycle, and remote-tunnel mechanics.
-- [Troubleshooting](./troubleshooting.md) — a room that will not start or serve.
-</content>
-</invoke>
+- [Remote](./remote.md) — saved aliases and reconnect behavior.
+- [Web CLI reference](../reference/cli/web.md) — every subcommand and flag.
+- [Configuration](./configuration.md#web-access) — per-machine settings.
+- [Web internals](../internals/web.md) — state files, ports, and remote relay.
+- [Troubleshooting](./troubleshooting.md) — missing engines and failed starts.
