@@ -36,17 +36,19 @@ fn sidebar_width_steps_move_the_left_dock_border() {
 }
 
 #[test]
-fn sidebar_width_verdict_survives_resize_and_reconcile() {
+fn sidebar_widths_converge_per_window_and_refresh_future_births() {
     require_tmux!();
     let server = TmuxServer::new();
-    ensure_rimz_session(&server, "verdict", Some((200, 50)));
+    ensure_rimz_session(&server, "verdict", Some((120, 50)));
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = sidebar_opts("verdict", stub, Some(200));
+    let opts = sidebar_opts("verdict", stub, Some(120));
     server
         .backend
         .open_sidebar(&opts, None)
         .expect("open_sidebar");
-    // The terminal "grows": windows born from now on adopt 340 columns.
+    // The terminal "grows": windows born from now on adopt 340 columns. The
+    // existing hook option still carries the 120-column birth target until a
+    // width convergence observes the new live view.
     server.tmux(&["set-option", "-t", "verdict", "default-size", "340x50"]);
     server.tmux(&["new-window", "-t", "verdict"]);
     assert_eq!(
@@ -56,34 +58,61 @@ fn sidebar_width_verdict_survives_resize_and_reconcile() {
     );
     assert_eq!(
         left_pane_width(&server, "verdict:1"),
-        Some(60),
-        "a window opened after the terminal grew must be born at the start \
-         verdict (60 columns), not a re-evaluated percentage of 340",
+        Some(36),
+        "the pre-convergence hook still carries the 36-column birth seed",
     );
-    let mut reload_opts = opts;
-    reload_opts.birth_size = SidebarWidth::default().birth_size(None);
-    server
-        .backend
-        .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
-        .expect("reconcile_sidebars");
+    let sync = rimz::mux::WidthSyncOptions {
+        session_name: "verdict".to_owned(),
+        workspace_id: opts.workspace_id.clone(),
+        width: opts.width,
+        width_override: None,
+    };
+    assert_eq!(
+        server
+            .backend
+            .converge_sidebar_widths(&sync)
+            .expect("converge live widths"),
+        1,
+        "only the 340-column window needs to grow from the seed to the cap",
+    );
+    assert_eq!(left_pane_width(&server, "verdict:1"), Some(72));
     server.tmux(&["new-window", "-t", "verdict"]);
     assert_eq!(
         left_pane_width(&server, "verdict:2"),
-        Some(60),
-        "fallback reload preserves the original 60-column verdict",
+        Some(72),
+        "the refreshed hook births the next wide window at the live cap",
     );
 
-    reload_opts.width_override = std::num::NonZeroU16::new(55);
-    server
-        .backend
-        .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
-        .expect("reconcile room override");
+    let mut override_sync = sync;
+    override_sync.width_override = std::num::NonZeroU16::new(55);
+    assert_eq!(
+        server
+            .backend
+            .converge_sidebar_widths(&override_sync)
+            .expect("propagate room override"),
+        3,
+        "the override resizes every existing window",
+    );
+    for window in 0..=2 {
+        assert_eq!(
+            left_pane_width(&server, &format!("verdict:{window}")),
+            Some(55)
+        );
+    }
     server.tmux(&["new-window", "-t", "verdict"]);
     assert_eq!(
         left_pane_width(&server, "verdict:3"),
         Some(55),
-        "room override outranks the hook verdict for later windows",
+        "future windows inherit the refreshed absolute override",
     );
+
+    let mut reload_opts = opts;
+    reload_opts.birth_size = SidebarWidth::default().birth_size(None);
+    reload_opts.width_override = std::num::NonZeroU16::new(55);
+    server
+        .backend
+        .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
+        .expect("reconcile_sidebars");
 }
 
 #[test]

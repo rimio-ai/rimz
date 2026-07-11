@@ -131,6 +131,7 @@ fn open_tab_rejects_an_empty_layout() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-empty")),
         project_root: PathBuf::from("/tmp/rimz-empty"),
         cwd: PathBuf::from("/tmp/rimz-empty"),
+        width,
         birth_size: width.birth_size(Some(80)),
         width_override: None,
         rimz_bin: PathBuf::from("/bin/true"),
@@ -214,24 +215,25 @@ fn sidebar_geometry_probe_is_one_session_scoped_command() {
             "-t",
             "rimz-room",
             "-F",
-            "#{pane_id} #{window_id} #{pane_width} #{window_width}",
+            "#{pane_id} #{window_id} #{pane_width} #{window_width} #{==:#{pane_title},rimz-sidebar}",
         ],
     );
 }
 
 #[test]
-fn sidebar_geometry_probe_parser_requires_four_typed_fields() {
+fn sidebar_geometry_probe_parser_requires_five_typed_fields() {
     use super::window::{TmuxPaneGeometry, parse_tmux_pane_geometry};
 
     assert_eq!(
-        parse_tmux_pane_geometry("%3 @1 72 240"),
+        parse_tmux_pane_geometry("%3 @1 72 240 1"),
         Some(TmuxPaneGeometry {
             pane_id: "%3".to_owned(),
             window_id: "@1".to_owned(),
             pane_width: 72,
             window_width: 240,
+            is_sidebar: true,
         }),
     );
-    assert_eq!(parse_tmux_pane_geometry("%3 @1 wide 240"), None);
-    assert_eq!(parse_tmux_pane_geometry("%3 @1 72 240 extra"), None);
+    assert_eq!(parse_tmux_pane_geometry("%3 @1 wide 240 1"), None);
+    assert_eq!(parse_tmux_pane_geometry("%3 @1 72 240 0 extra"), None);
 }

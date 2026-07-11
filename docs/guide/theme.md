@@ -113,7 +113,7 @@ Two rules keep the palette honest: `alarm` red marks danger, and one warm `cauti
 | key | does |
 | --- | --- |
 | `refresh_ms` | the animation/paint grid in milliseconds (clamped internally); data polling keeps its own cadence |
-| `max_cols` | cap on sidebar birth width when no room-runtime width override is selected; `a`/`d` selections may exceed it |
+| `max_cols` | live cap on the sidebar's 30%-of-view width; applies at the next convergence, while room-wide `a`/`d` selections may exceed it |
 | `scrollbar` | `auto` shows the overflow indicator only while the view moves; `always` / `never` pin it |
 | `card_density` | `auto` keeps the standard card; `expanded` shows every card's subagents; `compact` trims resting cards |
 | `provider_tabs` | how the dashboard stacks vs. tabs provider blocks (`auto` / `always` / `never`) |

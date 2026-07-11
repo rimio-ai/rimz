@@ -296,10 +296,9 @@ fn reconcile_live(
         workspace_id: ws.workspace_id.clone(),
         project_root: ws.project_root.clone(),
         cwd: ws.project_root.clone(),
-        // A reload can run from a terminal (or no terminal) unrelated to the
-        // session's clients, so the bare cap is only a fallback. Reconcile
-        // recovers the session's fixed canonical width from the live Zellij
-        // template or tmux hook before adding or repairing panes.
+        width,
+        // A reload can run from a terminal unrelated to the session's clients,
+        // so the bare cap only seeds a pane whose view geometry is unavailable.
         birth_size: width.birth_size(None),
         width_override: crate::sidebar::width_override::load(runtime),
         rimz_bin: rimz_bin.to_path_buf(),

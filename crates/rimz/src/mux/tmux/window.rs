@@ -16,6 +16,7 @@ pub(super) struct TmuxPaneGeometry {
     pub(super) window_id: String,
     pub(super) pane_width: u64,
     pub(super) window_width: u64,
+    pub(super) is_sidebar: bool,
 }
 
 /// A tmux window name with its reserved separators neutralized. tmux parses a
@@ -112,12 +113,12 @@ impl TmuxBackend {
             "-t",
             session,
             "-F",
-            "#{pane_id} #{window_id} #{pane_width} #{window_width}",
+            "#{pane_id} #{window_id} #{pane_width} #{window_width} #{==:#{pane_title},rimz-sidebar}",
         ])
     }
 
     /// Resize a freshly-born tab up to the widest attached client and
-    /// re-assert the hook-docked sidebar to its fixed birth width, so agent column
+    /// re-assert the hook-docked sidebar to its live target, so agent column
     /// splits land even at full width. Returns whether it resized the window;
     /// the caller must then restore autosizing after placing the splits.
     ///
@@ -159,9 +160,8 @@ impl TmuxBackend {
         if let Some(sidebar_pane) = self.leftmost_pane(window_id)
             && sidebar_pane != first_pane
         {
-            let sidebar_cols = self
-                .after_new_window_hook_cols(&sidebar.session_name)
-                .unwrap_or(sidebar.birth_size.cols);
+            let sidebar_cols =
+                crate::mux::width::live_target_cols(sidebar.width, sidebar.width_override, full_w);
             let _ = self
                 .cmd()
                 .args([
@@ -588,6 +588,7 @@ pub(super) fn parse_tmux_pane_geometry(line: &str) -> Option<TmuxPaneGeometry> {
         window_id: fields.next()?.to_owned(),
         pane_width: fields.next()?.parse().ok()?,
         window_width: fields.next()?.parse().ok()?,
+        is_sidebar: fields.next()? == "1",
     };
     fields.next().is_none().then_some(geometry)
 }

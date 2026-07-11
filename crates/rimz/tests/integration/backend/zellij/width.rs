@@ -1,8 +1,5 @@
 use rimz::ids::{MuxName, PaneId};
-use rimz::mux::{
-    LayoutPanes, MuxBackend, PaneCmd, SidebarLiveness, SidebarWidth, TabOptions, WidthAdjust,
-    ZellijBackend,
-};
+use rimz::mux::{MuxBackend, SidebarWidth, WidthAdjust, WidthSyncOptions, ZellijBackend};
 use tempfile::TempDir;
 
 use super::support::*;
@@ -59,11 +56,8 @@ fn sidebar_width_steps_use_zellij_native_resize() {
     );
 }
 
-/// The live width verdict survives session birth, a native tab from
-/// `new_tab_template`, and a backend-opened tab whose caller carries a stale
-/// sidebar-width verdict.
 #[test]
-fn sidebar_width_verdict_survives_birth_template_and_backend_tabs() {
+fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
@@ -81,93 +75,76 @@ fn sidebar_width_verdict_survives_birth_template_and_backend_tabs() {
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
-    // A real-size client: the detached birth geometry is tiny, so the cap only
-    // shows once the session adopts the attaching terminal's 340 columns. The
-    // birth tab is the derived 21% — within a column or two of the cap.
-    let _client = AttachedClient::attach(xdg.path(), &name, 340, 80);
+    // The launch seed came from a 340-column terminal, but this attached client
+    // is only 210 columns wide. The detached percentage seed therefore lands
+    // near 44 columns while the live target is 63.
+    let _client = AttachedClient::attach(xdg.path(), &name, 210, 60);
     wait_for_attached_client(xdg.path(), &name);
+    write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
+    let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[71..=73]),
-        "the attached session must land the birth sidebar within rounding of \
-         the 72-column cap, got {:?}",
+        wait_for_sidebar_columns(xdg.path(), &name, &[42..=46]),
+        "the capped launch seed rescales onto the smaller client, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 
-    // A user-opened tab instantiates the `new_tab_template` at live geometry:
-    // the fixed spelling lands exactly at the cap.
+    let mut sync = WidthSyncOptions {
+        session_name: name.clone(),
+        workspace_id: sidebar.workspace_id.clone(),
+        width,
+        width_override: None,
+    };
+    assert_eq!(
+        backend
+            .converge_sidebar_widths(&sync)
+            .expect("converge attached birth"),
+        1,
+    );
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[53..=65]),
+        "the birth pane converges near the smaller view's 63-column target, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    // A native tab starts from the policy percentage at the live client width.
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 2);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[71..=73, 72..=72]),
-        "a tab opened from an attached client must be born at exactly the \
-         72-column cap, got {:?}",
+        wait_for_sidebar_columns(xdg.path(), &name, &[53..=65, 60..=65]),
+        "the native template births the new tab near 30% of the live view, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
-
-    // A backend-opened tab targets an existing live session, so a stale caller
-    // verdict from the invoking pane must not replace the session's birth
-    // verdict.
-    let mut stale_sidebar = sidebar.clone();
-    stale_sidebar.birth_size = width.birth_size(Some(110));
-    backend
-        .open_tab(&TabOptions {
-            session_name: name.clone(),
-            title: "agents".to_owned(),
-            cwd: cwd.path().to_path_buf(),
-            panes: LayoutPanes {
-                columns: vec![tiled_column(vec![PaneCmd {
-                    argv: vec!["sleep".to_owned(), "600".to_owned()],
-                }])],
-            },
-            focus: true,
-            dock_sidebar: true,
-            sidebar: stale_sidebar,
-        })
-        .expect("open_tab");
-
-    assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[71..=73, 72..=72, 69..=72]),
-        "backend tab should mirror the live session width, not the stale \
-         33-column caller verdict, got {:?}",
-        sidebar_columns_by_tab(xdg.path(), &name),
+    assert_eq!(
+        backend
+            .converge_sidebar_widths(&sync)
+            .expect("verify new tab target"),
+        0,
     );
 
-    // Force the birth-tab sidebar well below the repair band. Reconcile keeps
-    // the renderer and grows the pane until the first step that reaches or
-    // crosses the canonical width.
-    let panes = expect_list_panes(xdg.path(), &name);
-    let sidebar_panes: Vec<_> = panes
-        .panes
-        .iter()
-        .filter(|pane| pane.is_sidebar())
-        .collect();
-    let birth_sidebar_id = sidebar_panes
-        .iter()
-        .min_by_key(|pane| pane.tab_id)
-        .map(|pane| pane.id)
-        .expect("birth sidebar id");
-    let liveness = SidebarLiveness {
-        claimed_panes: sidebar_panes
-            .iter()
-            .map(|pane| pane.id)
-            .map(|id| PaneId::from_parts(MuxName::Zellij, format!("terminal_{id}")))
-            .collect(),
-        ..Default::default()
-    };
-    resize_pane_steps(xdg.path(), &name, birth_sidebar_id, "decrease", 3);
-    assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[1..=54, 1..=100, 1..=100]),
-        "test setup must narrow the birth sidebar beyond the repair band, got {:?}",
-        sidebar_columns_by_tab(xdg.path(), &name),
+    // A room override becomes the target for every existing and future tab.
+    sync.width_override = std::num::NonZeroU16::new(40);
+    assert_eq!(
+        backend
+            .converge_sidebar_widths(&sync)
+            .expect("propagate override"),
+        2,
     );
-
-    write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
-    let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
-    let report = reconcile_until_converged(xdg.path(), &sidebar, &liveness);
-    assert_eq!(report.redocked, 1, "the narrow sidebar grows in place");
+    assert!(wait_for_sidebar_columns(
+        xdg.path(),
+        &name,
+        &[30..=42, 30..=42]
+    ));
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 3);
+    assert_eq!(
+        backend
+            .converge_sidebar_widths(&sync)
+            .expect("converge overridden new tab"),
+        1,
+    );
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[72..=89, 72..=72, 69..=72]),
-        "the repaired sidebar must land inside one Zellij step of the verdict, got {:?}",
+        wait_for_sidebar_columns(xdg.path(), &name, &[30..=42, 30..=42, 30..=42]),
+        "the override propagates to every tab, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 }

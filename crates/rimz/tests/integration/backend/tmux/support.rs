@@ -39,6 +39,7 @@ pub(super) fn sidebar_opts(
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
         project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
+        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(detected_cols),
         width_override: None,
         rimz_bin: stub,

@@ -1752,3 +1752,10 @@ fn failed_anomaly_send_preserves_carried_drop_count() {
         "a consecutive full-channel commit keeps accumulating without losing the carried count or pending roster retry"
     );
 }
+#[test]
+fn width_sync_schedules_only_for_a_new_settled_width() {
+    assert!(settled_width_changed(Some(72), Some(63)));
+    assert!(settled_width_changed(None, Some(63)));
+    assert!(!settled_width_changed(Some(63), Some(63)));
+    assert!(!settled_width_changed(Some(63), None));
+}

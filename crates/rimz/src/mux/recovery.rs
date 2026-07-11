@@ -632,6 +632,7 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(&root),
             project_root: root.clone(),
             cwd: root,
+            width,
             birth_size: width.birth_size(None),
             width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),

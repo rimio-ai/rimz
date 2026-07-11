@@ -25,6 +25,7 @@ fn open_tab_unfocused_restores_attached_client_focus() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(200)),
         width_override: None,
         rimz_bin: stub,
@@ -119,6 +120,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-gallery")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(220)),
         width_override: None,
         rimz_bin: stub,
@@ -188,6 +190,7 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-worksplit")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
+        width,
         birth_size: width.birth_size(Some(298)),
         width_override: None,
         rimz_bin: stub,
@@ -205,6 +208,14 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
     let client_rows: u16 = 46;
     let _client = AttachedClient::attach(xdg.path(), &name, client_columns, client_rows);
     wait_for_attached_client(xdg.path(), &name);
+    write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
+    let _mirror = topology_cache_mirror(xdg.path(), &sidebar.workspace_id, &name);
+    let width_sync = rimz::mux::WidthSyncOptions {
+        session_name: name.clone(),
+        workspace_id: sidebar.workspace_id.clone(),
+        width,
+        width_override: None,
+    };
     let work_pane = || PaneCmd {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
     };
@@ -228,12 +239,13 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
         .expect("open backend tab layout");
 
     assert_work_panes_reopen_in_survivor_after_closing_first(
+        &backend,
+        &width_sync,
         xdg.path(),
         &name,
         backend_tab,
         cwd.path(),
-        client_columns,
-        client_rows,
+        (client_columns, client_rows),
     );
 
     let overflow_tab = "backend overflow split";
@@ -358,11 +370,12 @@ fn native_focused_splits_preserve_sidebar_in_backend_and_native_tabs() {
     );
 
     assert_work_panes_reopen_in_survivor_after_closing_first(
+        &backend,
+        &width_sync,
         xdg.path(),
         &name,
         &native_tab,
         cwd.path(),
-        client_columns,
-        client_rows,
+        (client_columns, client_rows),
     );
 }

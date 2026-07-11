@@ -13,6 +13,7 @@ fn sidebar_opts(
         workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
         project_root: PathBuf::from("/proj/root"),
         cwd: PathBuf::from("/proj/worktree"),
+        width,
         birth_size: width.birth_size(detected_cols),
         width_override: None,
         rimz_bin: PathBuf::from("/usr/bin/rimz"),
@@ -150,7 +151,7 @@ fn session_layout_renders_terminal_template_bar_and_runtime_args() {
 }
 
 #[test]
-fn session_layout_pins_fixed_cols_attached_and_percent_detached() {
+fn session_layout_uses_policy_percent_for_template_and_seed_for_birth() {
     let opts = sidebar_opts("rimz-width", None, Some(120));
     let layout = render_session_layout(&opts, None, &[]).expect("render layout");
     assert!(
@@ -158,10 +159,12 @@ fn session_layout_pins_fixed_cols_attached_and_percent_detached() {
         "the explicit birth tab instantiates detached, so the verdict is \
              its percentage share:\n{layout}",
     );
-    assert!(
-        layout.contains(r#"pane size=36 name="rimz-sidebar" borderless=true"#),
-        "the new_tab_template instantiates attached, so it pins the fixed \
-             verdict:\n{layout}",
+    assert_eq!(
+        layout
+            .matches(r#"pane size="30%" name="rimz-sidebar" borderless=true"#)
+            .count(),
+        2,
+        "birth and template both use 30% below the cap:\n{layout}",
     );
     let capped = sidebar_opts("rimz-width", None, Some(340));
     let layout = render_session_layout(&capped, None, &[]).expect("render layout");
@@ -170,19 +173,14 @@ fn session_layout_pins_fixed_cols_attached_and_percent_detached() {
         "the explicit birth tab instantiates detached, so a capped width \
              is its derived percentage:\n{layout}",
     );
-    assert!(
-        layout.contains(r#"pane size=72 name="rimz-sidebar" borderless=true"#),
-        "the new_tab_template instantiates attached, so a capped width is \
-             the fixed `max_cols` cap:\n{layout}",
-    );
     let new_tab_template = layout
         .split("new_tab_template")
         .nth(1)
         .and_then(|section| section.split("\n    tab").next())
         .expect("layout carries a new_tab_template");
     assert!(
-        !new_tab_template.contains('%'),
-        "the new_tab_template carries no percentage:\n{layout}",
+        new_tab_template.contains(r#"size="30%""#),
+        "the new_tab_template carries the policy percentage:\n{layout}",
     );
     let birth_tab = layout
         .split("    tab focus=true")
@@ -264,7 +262,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
 }
 
 #[test]
-fn tab_layout_renders_columns_and_can_mirror_template_width() {
+fn tab_layout_renders_columns_at_an_explicit_live_width() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
         session_name: sidebar.session_name.clone(),
@@ -303,12 +301,11 @@ fn tab_layout_renders_columns_and_can_mirror_template_width() {
     let layout = render_tab_layout(&opts, NonZeroU16::new(60)).expect("render tab layout");
     assert!(
         layout.contains(r#"pane size=60 name="rimz-sidebar" borderless=true"#),
-        "custom tab layouts must be able to mirror the live \
-             new_tab_template instead of this command's pane-width probe:\n{layout}",
+        "custom tab layouts accept the backend's live column target:\n{layout}",
     );
     assert!(
         layout.matches("pane size=60").count() == 1,
-        "the visible sidebar must mirror the live width:\n{layout}",
+        "the visible sidebar must use the live width once:\n{layout}",
     );
 }
 

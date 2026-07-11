@@ -474,6 +474,7 @@ fn reconcile_opts(
         workspace_id: WorkspaceId::from_project_root(Path::new(workspace_root)),
         project_root: project_root.to_path_buf(),
         cwd: cwd.to_path_buf(),
+        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),
         width_override: None,
         rimz_bin: stub,

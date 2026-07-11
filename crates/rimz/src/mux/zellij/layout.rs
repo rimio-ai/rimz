@@ -47,20 +47,16 @@ const COMPACT_BAR_KDL: &str = r#"pane size=1 borderless=true {
         plugin location="zellij:compact-bar"
     }"#;
 
-/// Which geometry a layout's panes instantiate at, picking the spelling of
-/// the [`BirthSize`](crate::mux::BirthSize) verdict. `Detached` covers panes that can materialize on
-/// the background session's small default geometry — session-birth tabs and
-/// `new-tab --layout` views — where a fixed size wider than that geometry
-/// kills the session; they spell the verdict's percentage share of the probed
-/// terminal and land on the verdict when the launching client attaches.
-/// `Attached` covers panes only an attached client instantiates — the
-/// `new_tab_template` behind every tab the user opens — which pin the
-/// verdict's fixed columns exactly, whatever the live geometry. (A client
-/// narrower than the fixed width refuses the new tab until widened.)
+/// Which geometry a layout's panes instantiate at. `Detached` uses the birth
+/// seed's derived percentage so a background session's small default geometry
+/// remains viable. `Template` uses the width policy percentage so a future tab
+/// starts near its live target on any attached client. `Fixed` covers explicit
+/// layouts whose current view geometry has already resolved a column target.
 #[derive(Clone, Copy)]
 enum BirthGeometry {
     Detached,
-    Attached,
+    Template,
+    Fixed,
 }
 
 /// The left `rimz sidebar serve` pane every Zellij view carries, as a KDL `pane`
@@ -75,11 +71,11 @@ fn sidebar_pane_kdl(
 ) -> Result<String> {
     let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
     // The layout grammar spells a fixed size (bare integer, columns) or a
-    // percentage (quoted string) — the launch path already resolved the width
-    // verdict via `SidebarWidth::birth_size`, and `geometry` picks the
-    // spelling that survives where the pane instantiates ([`BirthGeometry`]).
+    // percentage (quoted string); `geometry` picks the spelling that survives
+    // where the pane instantiates ([`BirthGeometry`]).
     let size = match geometry {
-        BirthGeometry::Attached => fixed_cols.unwrap_or(opts.birth_size.cols).to_string(),
+        BirthGeometry::Fixed => fixed_cols.unwrap_or(opts.birth_size.cols).to_string(),
+        BirthGeometry::Template => kdl_string(&format!("{}%", opts.width.percent.clamp(10, 90)))?,
         BirthGeometry::Detached => kdl_string(&format!("{}%", opts.birth_size.percent))?,
     };
     let pane_name = kdl_string(SIDEBAR_CHROME_TITLE)?;
@@ -131,7 +127,7 @@ pub(super) fn render_session_layout(
     // The explicit tabs instantiate on the detached background session at
     // birth; only the `new_tab_template` waits for an attached client.
     let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached, None)?;
-    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached, None)?;
+    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Template, None)?;
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
@@ -282,7 +278,7 @@ pub(super) fn render_tab_layout(
     let sidebar = sidebar_pane_kdl(
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
-        BirthGeometry::Attached,
+        BirthGeometry::Fixed,
         template_sidebar_cols,
     )?;
     let mut focused = false;

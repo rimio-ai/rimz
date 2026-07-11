@@ -135,6 +135,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(120)),
         width_override: None,
         rimz_bin: stub,

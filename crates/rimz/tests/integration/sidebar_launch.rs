@@ -125,6 +125,7 @@ impl SidebarHarness {
             workspace_id: self.workspace_id.clone(),
             project_root: self.cwd.clone(),
             cwd: self.cwd.clone(),
+            width,
             birth_size: width.birth_size(None),
             width_override: None,
             rimz_bin: PathBuf::from("rimz"),
@@ -259,6 +260,13 @@ impl MuxBackend for FakeBackend {
         _dir: rimz::mux::WidthAdjust,
     ) -> rimz::mux::Result<()> {
         Ok(())
+    }
+
+    fn converge_sidebar_widths(
+        &self,
+        _opts: &rimz::mux::WidthSyncOptions,
+    ) -> rimz::mux::Result<usize> {
+        Ok(0)
     }
 
     fn capture_pane(

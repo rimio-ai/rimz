@@ -178,6 +178,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         pet_render_caps,
         config.mux == MuxName::Tmux,
     );
+    // Zellij's percentage template needs a startup trim on capped wide views.
+    // tmux births through its live absolute-column hook; its resize wakeups
+    // own later convergence, avoiding a startup resize that can reflow the
+    // sidebar's scrollback before the self-close paint hold is armed.
+    if initial_width.is_some() && config.mux == MuxName::Zellij {
+        spawn_width_sync(&config, &runtime);
+    }
     // Monotonic base for the animation frame. Deriving the phase from elapsed
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
     // across re-fetches and store deltas, so no redraw path can stall it.
@@ -591,6 +598,62 @@ fn spawn_width_adjust(pane_id: PaneId, session_name: &str, dir: crate::mux::Widt
         let backend = crate::mux::backend_for(pane_id.mux());
         if let Err(err) = backend.resize_sidebar_width(&session_name, &pane_id, dir) {
             debug!(pane = %pane_id, error = %err, "sidebar width resize failed");
+        }
+    });
+}
+
+const WIDTH_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+fn clear_width_sync_cooldown(runtime: &RuntimePaths) {
+    let _ = std::fs::remove_file(runtime.root.join("width-sync.stamp"));
+}
+
+/// Converge room widths on a detached, room-scoped single flight so every
+/// renderer may react to the same resize without stampeding the mux server.
+fn spawn_width_sync(config: &ServeConfig, runtime: &RuntimePaths) {
+    let mux = config.mux;
+    let session_name = config.session_name.clone();
+    let workspace_id = config.workspace_id.clone();
+    let runtime = runtime.clone();
+    std::thread::spawn(move || {
+        let stamp = runtime.root.join("width-sync.stamp");
+        let lock = runtime.root.join("width-sync.lock");
+        let fresh = || {
+            stamp
+                .metadata()
+                .ok()?
+                .modified()
+                .ok()?
+                .elapsed()
+                .ok()
+                .filter(|age| *age < WIDTH_SYNC_MIN_INTERVAL)
+                .map(|_| ())
+        };
+        let crate::store::single_flight::Coalesced::Produce(_guard) =
+            crate::store::single_flight::coalesce(&lock, Duration::from_millis(20), 5, fresh)
+        else {
+            return;
+        };
+        let machine = crate::config::MachineConfig::load_lenient();
+        let opts = crate::mux::WidthSyncOptions {
+            session_name,
+            workspace_id,
+            width: crate::mux::SidebarWidth::from_config(&machine.theme.display),
+            width_override: crate::sidebar::width_override::load(&runtime),
+        };
+        let backend = crate::mux::backend_for(mux);
+        match backend.converge_sidebar_widths(&opts) {
+            Ok(resized) => {
+                // Disposable latency stamp, not durable truth. Stamp only an
+                // actual resize: a detached Zellij startup returns zero, and
+                // its later attach resize must remain eligible to converge.
+                // The held guard still collapses concurrent no-op probes.
+                if resized > 0 {
+                    let _ = std::fs::write(&stamp, []);
+                }
+                debug!(resized, "sidebar width sync complete");
+            }
+            Err(err) => debug!(error = %err, "sidebar width sync failed"),
         }
     });
 }

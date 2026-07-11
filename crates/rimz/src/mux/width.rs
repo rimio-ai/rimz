@@ -1,8 +1,7 @@
-//! Sidebar sizing math: the width the session-birth command resolves once and
-//! every pane of the session is born with. Commands targeting a live session
-//! mirror the verdict the mux already carries and use the probe-less cap only as
-//! a fallback. Pure domain arithmetic — the backends spell the verdict into
-//! layouts, splits, and hooks; this file only computes it.
+//! Sidebar sizing math: a birth seed for panes that materialize before their
+//! view geometry is known, and the canonical live target for panes in a sized
+//! view. Pure domain arithmetic — the backends spell seeds into layouts,
+//! splits, and hooks, then converge live panes here; this file only computes it.
 
 use std::num::NonZeroU16;
 
@@ -15,29 +14,29 @@ pub enum WidthAdjust {
     Wider,
 }
 
-/// Resolve the room's canonical width: explicit runtime choice, then the
-/// verdict mirrored by the live mux, then the caller's birth fallback.
-pub(crate) fn canonical_sidebar_cols(
+/// Resolve the canonical width for one live view: the room-runtime override
+/// verbatim when present, otherwise the configured percentage capped at
+/// `max_cols`.
+pub(crate) fn live_target_cols(
+    width: SidebarWidth,
     width_override: Option<NonZeroU16>,
-    mirrored: Option<NonZeroU16>,
-    birth: NonZeroU16,
-) -> NonZeroU16 {
-    width_override.or(mirrored).unwrap_or(birth)
+    view_cols: u64,
+) -> u64 {
+    width_override.map_or_else(
+        || width.target_cols(view_cols),
+        |cols| u64::from(cols.get()),
+    )
 }
 
 /// Default sidebar width as a percentage of the view. The single source of
 /// truth for both the CLI launch paths and the user-wide reload reconcile.
-const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
+pub(crate) const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 
-/// Sidebar pane width: a percentage of the view, capped at `max_cols` columns
-/// (`theme.display.max_cols`). The width is resolved once by the command that
-/// births the session: the birth path probes its terminal ([`detect_terminal_size`])
-/// and [`SidebarWidth::birth_size`] turns the probe into the one [`BirthSize`]
-/// verdict every pane of the session is born with — constant for the session's
-/// life. Commands targeting a live session mirror that verdict from the mux
-/// (Zellij's template or live docked sidebars, tmux's hook) and fall back to
-/// `birth_size(None)`. Birth-time only: a `max_cols` edit applies at the next
-/// launch.
+/// Sidebar pane width: a percentage of each live view, capped at `max_cols`
+/// columns (`theme.display.max_cols`). [`SidebarWidth::birth_size`] seeds panes
+/// whose view geometry is not yet known; once live, the canonical width is
+/// [`live_target_cols`] of the current view and room-runtime override. A
+/// `max_cols` edit therefore applies on the next convergence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarWidth {
     /// Percentage of the view width — tracks terminal size below the cap.
@@ -132,15 +131,10 @@ impl Default for SidebarWidth {
     }
 }
 
-/// The one width verdict every sidebar pane of a launch is born with —
-/// resolved once per command by [`SidebarWidth::birth_size`] from the
-/// session-birth terminal, then constant for the session's life. Two spellings of
-/// the same verdict: `cols` pins panes that instantiate at known geometry
-/// (the Zellij `new_tab_template` an attached client opens tabs from, the
-/// tmux `after-new-window` hook), and `percent` covers panes that materialize
-/// at unknown geometry — the detached Zellij birth, where a fixed size wider
-/// than the background session's default geometry kills the session — and
-/// rescales to `cols` when the launching client attaches.
+/// The width seed a launch uses before a pane's live view geometry is known.
+/// `cols` seeds fixed-column split and explicit-layout paths; `percent` keeps a
+/// detached Zellij birth safe on its small background geometry. Live repair
+/// replaces either spelling with the per-view target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BirthSize {
     /// The verdict in columns: `min(percent × probed width, max_cols)`, the
@@ -199,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn birth_size_resolves_one_fixed_verdict_per_launch() {
+    fn birth_size_seeds_each_launch_from_detected_geometry() {
         let width = SidebarWidth::default();
         let birth = |cols: u16, percent: u16| BirthSize {
             cols: NonZeroU16::new(cols).expect("nonzero"),
@@ -248,20 +242,13 @@ mod tests {
     }
 
     #[test]
-    fn canonical_width_prefers_runtime_then_mux_then_birth() {
+    fn live_target_prefers_override_then_tracks_capped_view_share() {
         let runtime = NonZeroU16::new(90).expect("nonzero");
-        let mirrored = NonZeroU16::new(72).expect("nonzero");
-        let birth = NonZeroU16::new(36).expect("nonzero");
+        let width = SidebarWidth::default();
 
-        assert_eq!(
-            canonical_sidebar_cols(Some(runtime), Some(mirrored), birth),
-            runtime
-        );
-        assert_eq!(
-            canonical_sidebar_cols(None, Some(mirrored), birth),
-            mirrored
-        );
-        assert_eq!(canonical_sidebar_cols(None, None, birth), birth);
+        assert_eq!(live_target_cols(width, Some(runtime), 120), 90);
+        assert_eq!(live_target_cols(width, None, 120), 36);
+        assert_eq!(live_target_cols(width, None, 300), 72);
     }
 
     #[test]
@@ -286,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn live_targets_do_not_change_the_session_birth_verdict() {
+    fn live_targets_can_differ_from_the_birth_seed() {
         let width = SidebarWidth::default();
         let birth = width.birth_size(Some(300));
 
@@ -294,7 +281,7 @@ mod tests {
         assert_eq!(
             width.target_cols(190),
             57,
-            "live geometry can differ from the fixed session verdict",
+            "live geometry can differ from the launch seed",
         );
         assert_ne!(u64::from(birth.cols.get()), width.target_cols(190));
     }

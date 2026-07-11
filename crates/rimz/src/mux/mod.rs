@@ -311,13 +311,15 @@ pub struct SidebarPaneOptions {
     /// (tmux pins through [`SessionOptions`] at `new-session` instead).
     pub project_root: PathBuf,
     pub cwd: PathBuf,
-    /// The width verdict freshly-born panes are spelled with in layouts,
-    /// splits, hooks, and in-place sidebar repairs — resolved once per command
-    /// by [`SidebarWidth::birth_size_with_override`] and constant for the
-    /// session's life.
+    /// Live per-view width policy. The birth seed below gets panes onto the
+    /// screen; this policy owns their canonical width thereafter.
+    pub width: SidebarWidth,
+    /// The width seed freshly-born panes are spelled with in layouts, splits,
+    /// and hooks, resolved once per command by
+    /// [`SidebarWidth::birth_size_with_override`].
     pub birth_size: BirthSize,
-    /// Room-runtime width chosen from the sidebar. It outranks the mux-mirrored
-    /// canonical width and the configured birth verdict.
+    /// Room-runtime width chosen from the sidebar. It applies verbatim to every
+    /// view and outranks the live percentage/cap policy.
     pub width_override: Option<std::num::NonZeroU16>,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
@@ -338,6 +340,15 @@ pub struct SidebarPaneOptions {
     /// is intentionally not persisted; crash recovery rebuilds argv from
     /// workspace state and returns to `[sidebar].refresh_ms`.
     pub refresh_ms: Option<u16>,
+}
+
+/// Minimal room identity and width policy for renderer-triggered convergence.
+#[derive(Clone, Debug)]
+pub struct WidthSyncOptions {
+    pub session_name: String,
+    pub workspace_id: WorkspaceId,
+    pub width: SidebarWidth,
+    pub width_override: Option<std::num::NonZeroU16>,
 }
 
 /// The `rimz sidebar serve` argv after the program name — the one spelling
@@ -598,6 +609,11 @@ pub trait MuxBackend: Send + Sync {
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
     /// Step the sidebar pane width without blocking the renderer loop.
     fn resize_sidebar_width(&self, session: &str, pane: &PaneId, dir: WidthAdjust) -> Result<()>;
+    /// Converge each existing sidebar to its live per-view target and return
+    /// the number of panes resized. Renderer startup and settled resize wakeups
+    /// call this through a room-scoped single flight; attach/reload reconciliation
+    /// remains the structural repair path.
+    fn converge_sidebar_widths(&self, opts: &WidthSyncOptions) -> Result<usize>;
     /// Register the chord that focuses the sidebar from any pane — the
     /// `[sidebar] focus_key` toggle. tmux binds it as a root-table `bind-key`
     /// whose command resolves the pressing session at keypress, so one
@@ -687,9 +703,9 @@ pub trait MuxBackend: Send + Sync {
     /// orphan sidebar-only view (no working pane, no daemon host) close every
     /// sidebar pane so a wedged renderer that never self-closed collapses with its
     /// view; leave the daemon view alone. All in place, without disturbing working
-    /// panes. In-place adds and repairs size to the session's fixed birth
-    /// verdict (recovered from the live template/hook on reload), never a live
-    /// percentage recomputation. One best-effort pass: a view whose add fails is
+    /// panes. In-place adds and repairs size to each view's live target: the
+    /// room override verbatim, otherwise the configured percentage capped at
+    /// `max_cols`. One best-effort pass: a view whose add fails is
     /// logged and skipped, never retried, never a session rebirth. Unlike
     /// [`Self::open_sidebar`], this never deletes or recreates the session.
     fn reconcile_sidebars(

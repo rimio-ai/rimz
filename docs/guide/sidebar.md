@@ -71,7 +71,7 @@ With several providers the panel tabs, following whichever agent you have select
 
 The footer holds `? for help`, which opens the key and filter overlay in place. When you have been away, a quiet `zᶻ idle` badge appears; over SSH, a link-health badge shows the round-trip time. If the sidebar ever cannot read the room, a sticky alert takes the bottom line and says so, because a blank column should never masquerade as an empty room.
 
-Press `a` to make the sidebar narrower and `d` to make it wider. RimZ remembers the settled width for this room across launches, reloads, and session rebirths until the room runtime is reset; an explicit width may exceed `[theme.display].max_cols`. These chords are configurable under `[sidebar.keys]`. Filters use `A` for all and `s` for success/done.
+The sidebar follows its attached view at `min(30% × view width, [theme.display].max_cols)`. Press `a` to make it narrower and `d` to make it wider; the settled width becomes a room-wide absolute column count that every tab follows across launches, reloads, and session rebirths until the room runtime is reset, and it may exceed `max_cols`. These chords are configurable under `[sidebar.keys]`. Filters use `A` for all and `s` for success/done.
 
 ## The agent card
 

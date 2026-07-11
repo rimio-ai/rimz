@@ -75,35 +75,6 @@ pub(in crate::backend::zellij) fn action_until(
     );
 }
 
-pub(in crate::backend::zellij) fn resize_pane_steps(
-    xdg: &Path,
-    session: &str,
-    pane_id: u64,
-    direction: &str,
-    steps: u32,
-) {
-    for _ in 0..steps {
-        let output = scoped_zellij(xdg)
-            .args([
-                "--session",
-                session,
-                "action",
-                "resize",
-                direction,
-                "right",
-                "--pane-id",
-                &format!("terminal_{pane_id}"),
-            ])
-            .bounded_output()
-            .expect("resize pane action");
-        assert!(
-            output.status.success(),
-            "resize pane failed for {session}: {}",
-            String::from_utf8_lossy(&output.stderr),
-        );
-    }
-}
-
 pub(in crate::backend::zellij) fn open_new_tab(xdg: &Path, session: &str) {
     let before = PaneSnapshot::expect(xdg, session).tab_ids();
     let args = ["action".to_owned(), "new-tab".to_owned()];

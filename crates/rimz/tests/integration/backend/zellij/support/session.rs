@@ -40,6 +40,7 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
         project_root: cwd.to_path_buf(),
         cwd: cwd.to_path_buf(),
+        width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),
         width_override: None,
         rimz_bin: stub,

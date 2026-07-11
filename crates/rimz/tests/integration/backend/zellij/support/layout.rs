@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::common::CommandTimeoutExt;
+use rimz::mux::{MuxBackend, WidthSyncOptions, ZellijBackend};
 
 use super::actions::{poll_until, spawn_sleep_pane};
 use super::panes::{PaneGeometry, PaneSnapshot, list_panes};
@@ -313,13 +314,15 @@ pub(in crate::backend::zellij) fn wait_for_sidebar_columns(
 }
 
 pub(in crate::backend::zellij) fn assert_work_panes_reopen_in_survivor_after_closing_first(
+    backend: &ZellijBackend,
+    width_sync: &WidthSyncOptions,
     xdg: &Path,
     session: &str,
     tab_name: &str,
     cwd: &Path,
-    client_columns: u16,
-    client_rows: u16,
+    client_size: (u16, u16),
 ) {
+    let (client_columns, client_rows) = client_size;
     let work = wait_for_named_work_pane_count(xdg, session, tab_name, 2);
     let closed = scoped_zellij(xdg)
         .args([
@@ -374,11 +377,16 @@ pub(in crate::backend::zellij) fn assert_work_panes_reopen_in_survivor_after_clo
         split.iter().all(inside),
         "work panes escaped survivor bounds {bounds:?}: {split:?}"
     );
+    backend
+        .converge_sidebar_widths(width_sync)
+        .expect("converge sidebar after native split/close");
     let sidebar = wait_for_named_sidebar_pane(xdg, session, tab_name).expect("work tab sidebar");
     assert_eq!(sidebar.x, 0);
+    let target = 72_u64;
+    let lower = target.saturating_sub(u64::from(client_columns) / 20);
     assert!(
-        (68..=76).contains(&sidebar.columns),
-        "sidebar width drifted: {sidebar:?}"
+        (lower..=target + 2).contains(&sidebar.columns),
+        "sidebar width left the live convergence band: {sidebar:?}"
     );
     let bar = wait_for_named_compact_bar_pane(xdg, session, tab_name).expect("compact bar");
     assert_eq!(

@@ -1,18 +1,16 @@
 //! Zellij sidebar birth, in-place recovery, and geometry convergence.
 
 use std::collections::{BTreeSet, HashSet};
-use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout};
 use super::parse::{
-    SessionState, classify_session_not_found, is_session_not_found, new_tab_template_sidebar_cols,
+    SessionState, classify_session_not_found, is_session_not_found,
     parse_focused_terminal_client_ids, strip_ansi,
 };
 use super::raw_pane::{
-    SidebarDock, docked_sidebar_cols, is_sidebar_pane, leftmost_live_work_pane,
-    mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids,
-    sidebar_dock_verdict, tab_view_cols,
+    SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane, parse_new_pane_id,
+    parse_terminal_id, repairable_nested_work_pane_ids, sidebar_dock_verdict, tab_view_cols,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -20,9 +18,10 @@ use super::{
     TAB_NAMES_RETRY_DELAY, ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::sidebar_width_off_spec;
+use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
 use crate::mux::{
-    DaemonView, MuxErr, PresencePluginOptions, Result, SidebarPaneOptions, sidebar_serve_args,
+    DaemonView, MuxErr, PresencePluginOptions, Result, SidebarPaneOptions, WidthSyncOptions,
+    sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::timing::RECONCILE_LIST_TIMEOUT;
@@ -412,8 +411,8 @@ impl ZellijBackend {
     /// between steps — `move-pane left` swaps one position per call) until the
     /// pane reaches the left column or stops progressing, a narrow nested-row
     /// repair that stacks work panes into the right column when the surrounding
-    /// layout is safe to rewrite, then a resize toward the session's fixed birth
-    /// width when it sits outside the repair band. Returns the last successful
+    /// layout is safe to rewrite, then a resize toward the tab's live width
+    /// target when it sits outside the repair band. Returns the last successful
     /// repair action timestamp. Best-effort: geometry is cosmetic, so any
     /// failure just leaves the pane where it is for the next pass.
     pub(super) fn converge_sidebar_geometry(
@@ -456,7 +455,28 @@ impl ZellijBackend {
         if let Some(action_ms) = self.stack_nested_work_panes(opts, tab_position, raw_id, floor) {
             floor = Some(action_ms);
         }
-        let target_cols = u64::from(opts.birth_size.cols.get());
+        let sync = WidthSyncOptions {
+            session_name: opts.session_name.clone(),
+            workspace_id: opts.workspace_id.clone(),
+            width: opts.width,
+            width_override: opts.width_override,
+        };
+        let (width_floor, _) = self.converge_sidebar_width(&sync, tab_position, raw_id, floor);
+        width_floor
+    }
+
+    /// Converge one sidebar to the target computed from its current tab width.
+    /// Returns the latest topology floor and whether at least one resize action
+    /// succeeded. Structural reconcile and renderer-triggered width sync share
+    /// this primitive so their tolerance and coarse-step behavior cannot drift.
+    pub(super) fn converge_sidebar_width(
+        &self,
+        opts: &WidthSyncOptions,
+        tab_position: u64,
+        raw_id: u64,
+        floor: Option<u64>,
+    ) -> (Option<u64>, bool) {
+        let mut floor = floor;
         if let Ok(panes) = self.topology_panes_for_workspace(
             &opts.session_name,
             &opts.workspace_id,
@@ -470,19 +490,24 @@ impl ZellijBackend {
             });
             let view_cols = tab_view_cols(&panes, tab_position);
             if cols.zip(view_cols).is_some_and(|(cols, view_cols)| {
+                let target_cols = live_target_cols(opts.width, opts.width_override, view_cols);
                 sidebar_width_off_spec(cols, target_cols, view_cols)
             }) {
+                let target_cols =
+                    live_target_cols(opts.width, opts.width_override, view_cols.unwrap_or(0));
+                let before = floor;
                 floor = self.resize_sidebar_toward(
                     &opts.session_name,
                     &opts.workspace_id,
                     tab_position,
-                    &pane_raw,
+                    &format!("terminal_{raw_id}"),
                     target_cols,
                     floor,
                 );
+                return (floor, floor != before);
             }
         }
-        floor
+        (floor, false)
     }
 
     pub(super) fn sidebar_dock_outcome(
@@ -680,7 +705,7 @@ impl ZellijBackend {
         Ok(parse_new_pane_id(&String::from_utf8_lossy(&output.stdout)))
     }
 
-    /// Converge a sidebar toward the session's fixed birth width. Zellij's
+    /// Converge a sidebar toward its live per-view target. Zellij's
     /// resize step is coarse, so the target can fall between two reachable
     /// widths; stop when the pane first crosses or reaches the target from its
     /// starting side. Bounded and best-effort: it stops at the target, when
@@ -863,50 +888,6 @@ impl ZellijBackend {
     /// carries it is skipped.
     pub(super) fn session_has_named_tab(&self, session: &str, tab_name: &str) -> Result<bool> {
         Ok(self.tab_names(session)?.iter().any(|name| name == tab_name))
-    }
-
-    /// The session's fixed sidebar width. `rimz agents <spec>` supplies its own
-    /// layout and therefore bypasses the template, so it mirrors the session's
-    /// width explicitly: first from the `new_tab_template`, then from live docked
-    /// sidebars when Zellij cannot report the template.
-    pub(super) fn session_sidebar_cols(&self, session: &str) -> Option<NonZeroU16> {
-        match self.new_tab_template_sidebar_cols(session) {
-            Ok(Some(cols)) => return Some(cols),
-            Ok(None) => tracing::debug!(
-                session = %session,
-                "dump-layout did not report a new_tab_template sidebar width; falling back to live sidebars",
-            ),
-            Err(err) => tracing::debug!(
-                session = %session,
-                error = &err as &dyn std::error::Error,
-                "dump-layout failed; falling back to live sidebars",
-            ),
-        }
-        let panes = match self.topology_panes(session, None, RECONCILE_LIST_TIMEOUT) {
-            Ok(panes) => panes,
-            Err(err) => {
-                tracing::debug!(
-                    session = %session,
-                    error = &err as &dyn std::error::Error,
-                    "topology read failed while resolving the session sidebar width",
-                );
-                return None;
-            }
-        };
-        docked_sidebar_cols(&panes)
-    }
-
-    /// The fixed sidebar width carried by Zellij's `new_tab_template`.
-    pub(super) fn new_tab_template_sidebar_cols(
-        &self,
-        session: &str,
-    ) -> Result<Option<NonZeroU16>> {
-        let output = self
-            .zellij_action(session)
-            .arg("dump-layout")
-            .run_with_timeout(RECONCILE_LIST_TIMEOUT)?;
-        let layout = String::from_utf8_lossy(&output.stdout);
-        Ok(new_tab_template_sidebar_cols(&layout))
     }
 }
 

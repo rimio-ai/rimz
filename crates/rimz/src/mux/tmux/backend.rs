@@ -1,27 +1,101 @@
 //! tmux [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
 use super::TmuxBackend;
 use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
-    sidebar_serve_command, tmux_views_with_sidebars,
+    sidebar_serve_command, sidebar_width_option_set_cmd, tmux_views_with_sidebars,
 };
 use super::parse::{
     parse_client_view, parse_floating_pane_ids, parse_new_window_ids, parse_pane_line,
 };
-use super::window::sanitize_window_name;
+use super::window::{TmuxPaneGeometry, sanitize_window_name};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
-use crate::mux::width::{canonical_sidebar_cols, sidebar_width_off_spec};
+use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
 use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend,
     MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionOptions,
     SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
-    TabOptions, WidthAdjust, ensure_pane_backend, execute_adds, execute_closes, memoized_version,
+    TabOptions, WidthAdjust, WidthSyncOptions, ensure_pane_backend, execute_adds, execute_closes,
+    memoized_version,
 };
+
+fn live_cols_u16(
+    width: crate::mux::SidebarWidth,
+    width_override: Option<std::num::NonZeroU16>,
+    view_cols: u64,
+) -> std::num::NonZeroU16 {
+    u16::try_from(live_target_cols(width, width_override, view_cols))
+        .ok()
+        .and_then(std::num::NonZeroU16::new)
+        .unwrap_or(width.max_cols)
+}
+
+impl TmuxBackend {
+    /// Resize exactly-one-sidebar windows from one geometry snapshot. The
+    /// optional pane set scopes structural reconcile to panes it elected to
+    /// keep; renderer-triggered sync passes `None` and covers the room.
+    fn converge_live_sidebar_geometries(
+        &self,
+        opts: &WidthSyncOptions,
+        geometries: &[TmuxPaneGeometry],
+        only: Option<&HashSet<String>>,
+    ) -> usize {
+        let mut by_window: HashMap<&str, Vec<&TmuxPaneGeometry>> = HashMap::new();
+        for geometry in geometries {
+            by_window
+                .entry(&geometry.window_id)
+                .or_default()
+                .push(geometry);
+        }
+        let mut resized = 0;
+        for window in by_window.into_values() {
+            if window.len() < 2 {
+                continue;
+            }
+            let sidebars: Vec<_> = window
+                .into_iter()
+                .filter(|geometry| geometry.is_sidebar)
+                .collect();
+            let [geometry] = sidebars.as_slice() else {
+                continue;
+            };
+            if only.is_some_and(|only| !only.contains(&geometry.pane_id)) {
+                continue;
+            }
+            let target = live_target_cols(opts.width, opts.width_override, geometry.window_width);
+            if !sidebar_width_off_spec(geometry.pane_width, target, geometry.window_width) {
+                continue;
+            }
+            match self
+                .cmd()
+                .args([
+                    "resize-pane".to_owned(),
+                    "-t".to_owned(),
+                    geometry.pane_id.clone(),
+                    "-x".to_owned(),
+                    target.to_string(),
+                ])
+                .run()
+            {
+                Ok(_) => resized += 1,
+                Err(err) => tracing::warn!(
+                    session = %opts.session_name,
+                    pane = %geometry.pane_id,
+                    tags.operation = "tmux.converge.resize_sidebar",
+                    error = &err as &dyn std::error::Error,
+                    "sidebar width convergence failed; leaving it for the next pass",
+                ),
+            }
+        }
+        resized
+    }
+}
 
 impl MuxBackend for TmuxBackend {
     fn name(&self) -> MuxName {
@@ -243,6 +317,23 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
+    fn converge_sidebar_widths(&self, opts: &WidthSyncOptions) -> Result<usize> {
+        let geometries = self.session_pane_geometries(&opts.session_name)?;
+        let resized = self.converge_live_sidebar_geometries(opts, &geometries, None);
+        let view_cols = self
+            .window_width(&opts.session_name)
+            .or_else(|| geometries.first().map(|geometry| geometry.window_width));
+        if let Some(view_cols) = view_cols {
+            self.cmd()
+                .args(sidebar_width_option_set_cmd(
+                    &opts.session_name,
+                    live_cols_u16(opts.width, opts.width_override, view_cols),
+                ))
+                .run()?;
+        }
+        Ok(resized)
+    }
+
     fn register_focus_key(&self, binding: &super::super::FocusKeyBinding) -> Result<()> {
         // Root keytable (`-n`): the chord fires from any pane in the server, and
         // `run-shell -b` runs the focus command off the server so the pane never
@@ -330,21 +421,19 @@ impl MuxBackend for TmuxBackend {
         // `-d` keeps focus on the existing pane; `-b` places the new pane
         // before the target so the sidebar sits on the left. Workspace identity
         // is passed directly to the spawned renderer command.
-        // The split uses the fixed birth verdict. `ensure_session` birthed the
-        // detached room at the launch probe, and later windows get the same
-        // value from the hook.
+        // The initial split uses the birth seed. The renderer refreshes the
+        // hook's session option as live view geometry settles.
         let command = sidebar_serve_command(opts);
         // Cross-backend parity (DESIGN.md): a Zellij session's layout doubles
         // as its tab template, so every new tab is born with the same
         // sidebar+terminal split. tmux has no tab template, so we install a
         // session-scoped `after-new-window` hook that replays window options and
         // re-runs the same left split in each new window. `-b -d` keep the
-        // sidebar left and focus on the new window's terminal, matching the
-        // non-pristine initial split. The hook pins the verdict's fixed columns:
-        // a new window instantiates at the attached client's real geometry, and
-        // a raw percentage there would re-evaluate against it — exactly how the
-        // cap used to vanish.
+        // sidebar left and focus on the new window's terminal. The split reads
+        // an absolute-column session option so syncs can refresh future births
+        // without reconstructing the renderer command.
         let set_hook = after_new_window_hook_set_cmd(opts);
+        let set_width = sidebar_width_option_set_cmd(&opts.session_name, opts.birth_size.cols);
         if opts.pristine_birth {
             let sidebar_pane = self
                 .sole_current_window_pane(&opts.session_name)
@@ -359,6 +448,7 @@ impl MuxBackend for TmuxBackend {
                     &opts.cwd,
                     &command,
                 );
+                commands.push(set_width);
                 commands.push(set_hook);
                 // One client invocation respawns the pristine pane as sidebar,
                 // splits the focused work shell at its final width, and
@@ -408,7 +498,7 @@ impl MuxBackend for TmuxBackend {
         split.extend(command.iter().cloned());
 
         // One client invocation births the sidebar and installs the hook.
-        self.batch(&[split, set_hook])?;
+        self.batch(&[split, set_width, set_hook])?;
         // With the `after-new-window` hook installed, re-seed the reborn
         // session's prior agents: each becomes its own window, born
         // `sidebar | agent` as the hook docks the sidebar on its left.
@@ -421,14 +511,16 @@ impl MuxBackend for TmuxBackend {
         opts: &SidebarPaneOptions,
         live: &SidebarLiveness,
     ) -> Result<SidebarRecovery> {
-        let canonical = canonical_sidebar_cols(
-            opts.width_override,
-            self.after_new_window_hook_cols(&opts.session_name),
-            opts.birth_size.cols,
-        );
-        let mut opts = opts.clone();
-        opts.birth_size.cols = canonical;
-        if let Err(err) = self.cmd().args(after_new_window_hook_set_cmd(&opts)).run() {
+        let hook_cols = self
+            .window_width(&opts.session_name)
+            .map(|view_cols| live_cols_u16(opts.width, opts.width_override, view_cols))
+            .unwrap_or(opts.birth_size.cols);
+        let mut hook_opts = opts.clone();
+        hook_opts.birth_size.cols = hook_cols;
+        if let Err(err) = self.batch(&[
+            sidebar_width_option_set_cmd(&opts.session_name, hook_cols),
+            after_new_window_hook_set_cmd(&hook_opts),
+        ]) {
             tracing::warn!(
                 session = %opts.session_name,
                 tags.operation = "tmux.reconcile.install_hook",
@@ -442,8 +534,8 @@ impl MuxBackend for TmuxBackend {
         // dance and no session teardown is needed. `split-window` mounts fine on
         // a detached session, so tmux never defers an add the way the Zellij
         // backend must (its detached screen thread drops the mount). Kept panes
-        // that drift beyond the cross-backend repair band snap exactly back to
-        // the session's fixed width after the close/add phases.
+        // that drift beyond the cross-backend repair band snap toward their
+        // per-window targets after the close/add phases.
         let panes = self.list_panes(PaneListOptions {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()
@@ -470,67 +562,47 @@ impl MuxBackend for TmuxBackend {
             &plan,
             &failed_stale_close_views,
             &mut report,
-            |window, _restart| match self.add_sidebar_to_window(&opts, window) {
-                Ok(()) => AddOutcome::Added,
-                Err(err) => {
-                    tracing::warn!(
-                        session = %opts.session_name,
-                        window = %window,
-                        tags.operation = "tmux.reconcile.add",
-                        error = &err as &dyn std::error::Error,
-                        "sidebar reconcile: in-place add failed; leaving the window without a sidebar",
-                    );
-                    AddOutcome::Failed
+            |window, _restart| {
+                let mut add_opts = opts.clone();
+                if let Some(view_cols) = self.window_width(window) {
+                    add_opts.birth_size.cols =
+                        live_cols_u16(opts.width, opts.width_override, view_cols);
+                }
+                match self.add_sidebar_to_window(&add_opts, window) {
+                    Ok(()) => AddOutcome::Added,
+                    Err(err) => {
+                        tracing::warn!(
+                            session = %opts.session_name,
+                            window = %window,
+                            tags.operation = "tmux.reconcile.add",
+                            error = &err as &dyn std::error::Error,
+                            "sidebar reconcile: in-place add failed; leaving the window without a sidebar",
+                        );
+                        AddOutcome::Failed
+                    }
                 }
             },
         );
-        let kept: Vec<(&str, &PaneId)> = views
+        let kept: HashSet<String> = views
             .iter()
             .filter(|view| view.sidebar_panes.len() == 1)
             .filter(|view| !plan.add.contains(&view.view))
             .filter_map(|view| {
                 let pane = view.sidebar_panes.first()?;
-                (!plan.close.contains(pane)).then_some((view.view.as_str(), pane))
+                (!plan.close.contains(pane)).then(|| pane.raw().to_owned())
             })
             .collect();
         if !kept.is_empty() {
             match self.session_pane_geometries(&opts.session_name) {
                 Ok(geometries) => {
-                    let canonical_cols = u64::from(canonical.get());
-                    for (window, pane) in kept {
-                        let Some(geometry) = geometries.iter().find(|geometry| {
-                            geometry.pane_id == pane.raw() && geometry.window_id == window
-                        }) else {
-                            continue;
-                        };
-                        if !sidebar_width_off_spec(
-                            geometry.pane_width,
-                            canonical_cols,
-                            geometry.window_width,
-                        ) {
-                            continue;
-                        }
-                        match self
-                            .cmd()
-                            .args([
-                                "resize-pane".to_owned(),
-                                "-t".to_owned(),
-                                pane.raw().to_owned(),
-                                "-x".to_owned(),
-                                canonical_cols.to_string(),
-                            ])
-                            .run()
-                        {
-                            Ok(_) => report.redocked += 1,
-                            Err(err) => tracing::warn!(
-                                session = %opts.session_name,
-                                pane = %pane.as_str(),
-                                tags.operation = "tmux.reconcile.resize_sidebar",
-                                error = &err as &dyn std::error::Error,
-                                "sidebar reconcile: resizing an off-spec sidebar failed; leaving it",
-                            ),
-                        }
-                    }
+                    let sync = WidthSyncOptions {
+                        session_name: opts.session_name.clone(),
+                        workspace_id: opts.workspace_id.clone(),
+                        width: opts.width,
+                        width_override: opts.width_override,
+                    };
+                    report.redocked +=
+                        self.converge_live_sidebar_geometries(&sync, &geometries, Some(&kept));
                 }
                 Err(err) => tracing::warn!(
                     session = %opts.session_name,
@@ -584,12 +656,15 @@ impl MuxBackend for TmuxBackend {
             ])
             .args(first_content.argv.clone())
             .run()?;
-        let (_window_id, first_content) = parse_new_window_ids(&output.stdout)?;
+        let (window_id, first_content) = parse_new_window_ids(&output.stdout)?;
         let mut first_daemon_pane = None;
         if let Some((first, rest)) = opts.view.hosts.split_first() {
             let size = self
-                .after_new_window_hook_cols(session)
-                .unwrap_or(opts.sidebar.birth_size.cols)
+                .window_width(&window_id)
+                .map(|view_cols| {
+                    live_target_cols(opts.sidebar.width, opts.sidebar.width_override, view_cols)
+                })
+                .unwrap_or_else(|| u64::from(opts.sidebar.birth_size.cols.get()))
                 .to_string();
             let first_daemon = self.split_printed_with_reason(
                 "-h",

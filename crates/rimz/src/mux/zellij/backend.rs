@@ -15,18 +15,18 @@ use super::parse::{
 use super::raw_pane::{
     RawPane, RawPaneListing, SessionCleanliness, SidebarDock, floating_panes_in_anchor_view,
     is_sidebar_pane, own_zellij_pane_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
-    sidebar_geometry_off_spec, tabs_with_sidebars, views_with_sidebars,
+    sidebar_geometry_off_spec, tab_view_cols, tabs_with_sidebars, views_with_sidebars,
 };
 use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::canonical_sidebar_cols;
+use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
 use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
     MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth,
     SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection,
-    SplitPaneOptions, TabOptions, WidthAdjust, ensure_pane_backend, execute_adds, execute_closes,
-    memoized_version,
+    SplitPaneOptions, TabOptions, WidthAdjust, WidthSyncOptions, ensure_pane_backend, execute_adds,
+    execute_closes, memoized_version,
 };
 use crate::pane::PaneRef;
 use crate::store::RuntimePaths;
@@ -555,6 +555,56 @@ impl MuxBackend for ZellijBackend {
         self.resize_sidebar_step(session, pane.raw(), direction)
     }
 
+    fn converge_sidebar_widths(&self, opts: &WidthSyncOptions) -> Result<usize> {
+        if !self.session_has_attached_client(&opts.session_name) {
+            return Ok(0);
+        }
+        let panes = self
+            .topology_listing(
+                Some(&opts.session_name),
+                None,
+                Some(&opts.workspace_id),
+                None,
+                crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+            )?
+            .panes;
+        let mut sidebars: HashMap<u64, Vec<u64>> = HashMap::new();
+        for pane in panes
+            .iter()
+            .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
+        {
+            sidebars.entry(pane.tab_position).or_default().push(pane.id);
+        }
+        let mut resized = 0;
+        for (tab_position, pane_ids) in sidebars {
+            let [raw_id] = pane_ids.as_slice() else {
+                continue;
+            };
+            if !panes.iter().any(|pane| {
+                pane.tab_position == tab_position
+                    && pane.is_live_terminal()
+                    && !is_sidebar_pane(pane)
+            }) {
+                continue;
+            }
+            let Some(pane) = panes.iter().find(|pane| pane.id == *raw_id) else {
+                continue;
+            };
+            let Some((cols, view_cols)) =
+                pane.pane_columns.zip(tab_view_cols(&panes, tab_position))
+            else {
+                continue;
+            };
+            let target = live_target_cols(opts.width, opts.width_override, view_cols);
+            if !sidebar_width_off_spec(cols, target, view_cols) {
+                continue;
+            }
+            let (_, changed) = self.converge_sidebar_width(opts, tab_position, *raw_id, None);
+            resized += usize::from(changed);
+        }
+        Ok(resized)
+    }
+
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let mut spec = self.cmd().args(["action", "dump-screen"]);
@@ -731,8 +781,8 @@ impl MuxBackend for ZellijBackend {
         // Zellij docks the sidebar left only at session birth, but a left pane
         // can still be reached in a live session: close a stray sidebar by id,
         // and add one by splitting right, moving it left, and resizing it to the
-        // session's fixed birth width. This never rebirths the session, so the
-        // working panes survive.
+        // tab's live target. This never rebirths the session, so working panes
+        // survive.
         let listing = self.topology_listing(
             Some(&opts.session_name),
             None,
@@ -740,21 +790,13 @@ impl MuxBackend for ZellijBackend {
             None,
             crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
         )?;
-        let canonical = canonical_sidebar_cols(
-            opts.width_override,
-            self.session_sidebar_cols(&opts.session_name),
-            opts.birth_size.cols,
-        );
-        let mut opts = opts.clone();
-        opts.birth_size.cols = canonical;
         let panes = listing.panes;
         let views = views_with_sidebars(&panes);
         let plan = super::super::plan_reconcile(&views, live);
         // Kept sidebars (not planned for closing) whose geometry sits off the
         // layout's dock — the residue of a mis-mounted add — converge in place
         // this pass, renderer untouched.
-        let off_spec =
-            off_spec_sidebars(&panes, &plan.close, u64::from(opts.birth_size.cols.get()));
+        let off_spec = off_spec_sidebars(&panes, &plan.close, opts.width, opts.width_override);
         if plan.close.is_empty() && plan.add.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }
@@ -794,7 +836,7 @@ impl MuxBackend for ZellijBackend {
             for (tab_position, raw_id) in &off_spec {
                 repair_sidebar_geometry(
                     self,
-                    &opts,
+                    opts,
                     *tab_position,
                     *raw_id,
                     &focused_in_tab,
@@ -832,7 +874,7 @@ impl MuxBackend for ZellijBackend {
                         );
                         return AddOutcome::Failed;
                     }
-                    match self.add_sidebar_to_tab(&opts, tab_position) {
+                    match self.add_sidebar_to_tab(opts, tab_position) {
                         Ok(outcome) => {
                             occupied_tabs.insert(tab_position.to_string());
                             restore_tab_focus(
@@ -917,10 +959,25 @@ impl MuxBackend for ZellijBackend {
         let restore = (!opts.focus)
             .then(|| self.focus_restore_target(&opts.session_name, &opts.sidebar.workspace_id))
             .flatten();
-        let template_sidebar_cols = opts
-            .sidebar
-            .width_override
-            .or_else(|| self.session_sidebar_cols(&opts.session_name));
+        let template_sidebar_cols = opts.sidebar.width_override.or_else(|| {
+            let panes = self
+                .topology_panes(
+                    &opts.session_name,
+                    None,
+                    crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+                )
+                .ok()?;
+            let tab = panes
+                .iter()
+                .find(|pane| pane.is_live_terminal())?
+                .tab_position;
+            let view_cols = tab_view_cols(&panes, tab)?;
+            u16::try_from(live_target_cols(opts.sidebar.width, None, view_cols))
+                .ok()
+                .and_then(std::num::NonZeroU16::new)
+        });
+        let template_sidebar_cols =
+            Some(template_sidebar_cols.unwrap_or(opts.sidebar.birth_size.cols));
         let layout = TempLayoutFile::new(render_tab_layout(opts, template_sidebar_cols)?)?;
         let args = [
             "new-tab".to_owned(),
@@ -991,14 +1048,15 @@ impl MuxBackend for ZellijBackend {
 fn off_spec_sidebars(
     panes: &[RawPane],
     closing: &[PaneId],
-    canonical_cols: u64,
+    width: crate::mux::SidebarWidth,
+    width_override: Option<std::num::NonZeroU16>,
 ) -> Vec<(u64, u64)> {
     let closing: HashSet<u64> = closing.iter().filter_map(parse_zellij_raw).collect();
     panes
         .iter()
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
         .filter(|pane| !closing.contains(&pane.id))
-        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, canonical_cols))
+        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width, width_override))
         .map(|pane| (pane.tab_position, pane.id))
         .collect()
 }

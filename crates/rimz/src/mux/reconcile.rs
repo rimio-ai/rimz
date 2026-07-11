@@ -31,7 +31,7 @@ pub struct SidebarRecovery {
     /// thread, so the next reconcile on an attached session performs them.
     pub deferred: usize,
     /// Kept sidebar panes whose geometry was repaired in place — moved to the
-    /// left column and/or resized toward the session's fixed birth width —
+    /// left column and/or resized toward its view's live width target —
     /// renderer untouched.
     pub redocked: usize,
     /// Working sidebar panes that remain outside the verified full-height left

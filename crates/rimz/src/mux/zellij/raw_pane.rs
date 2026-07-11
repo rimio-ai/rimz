@@ -1,17 +1,16 @@
 //! Raw Zellij pane projection, topology-cache reads, and sidebar classification.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     env,
-    num::NonZeroU16,
 };
 
 use serde::Deserialize;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::width::sidebar_width_off_spec;
+use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
-use crate::mux::{ClientPresence, ClientView, PaneListing, ViewSidebars};
+use crate::mux::{ClientPresence, ClientView, PaneListing, SidebarWidth, ViewSidebars};
 use crate::pane::SIDEBAR_CHROME_TITLE;
 
 /// Cleanliness of a live room after a successful pane inspection.
@@ -68,38 +67,6 @@ pub(super) fn tabs_with_sidebars(panes: &[RawPane]) -> HashSet<String> {
         .filter(|view| !view.sidebar_panes.is_empty())
         .map(|view| view.view)
         .collect()
-}
-
-pub(super) fn docked_sidebar_cols(panes: &[RawPane]) -> Option<NonZeroU16> {
-    let excluded = HashSet::new();
-    let mut widths: BTreeMap<NonZeroU16, (usize, u64)> = BTreeMap::new();
-    for pane in panes.iter().filter(|pane| {
-        pane.is_live_terminal()
-            && is_sidebar_pane(pane)
-            && sidebar_dock_verdict(pane, panes, &excluded) == Some(SidebarDock::Docked)
-    }) {
-        let Some(cols) = pane
-            .pane_columns
-            .and_then(|cols| u16::try_from(cols).ok())
-            .and_then(NonZeroU16::new)
-        else {
-            continue;
-        };
-        let (count, first_tab) = widths.entry(cols).or_insert((0, pane.tab_position));
-        *count += 1;
-        *first_tab = (*first_tab).min(pane.tab_position);
-    }
-    widths
-        .into_iter()
-        .fold(None, |best, (cols, (count, first_tab))| match best {
-            Some((best_cols, best_count, best_first_tab))
-                if best_count > count || (best_count == count && best_first_tab <= first_tab) =>
-            {
-                Some((best_cols, best_count, best_first_tab))
-            }
-            _ => Some((cols, count, first_tab)),
-        })
-        .map(|(cols, _, _)| cols)
 }
 
 pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_position: u64) -> Option<u64> {
@@ -312,21 +279,27 @@ pub(super) fn repairable_nested_work_pane_ids(
 
 /// Whether a kept sidebar pane sits off the layout's dock: outside the
 /// full-height left column, nested beside a tiled pane that intrudes into its
-/// column band, or outside the tolerated band around the session's fixed birth
-/// width. Unknown geometry never reads off-spec.
+/// column band, or outside the tolerated band around its live per-view target.
+/// Unknown geometry never reads off-spec.
 pub(super) fn sidebar_geometry_off_spec(
     pane: &RawPane,
     panes: &[RawPane],
     excluded: &HashSet<u64>,
-    canonical_cols: u64,
+    width: SidebarWidth,
+    width_override: Option<std::num::NonZeroU16>,
 ) -> bool {
     let Some(verdict) = sidebar_dock_verdict(pane, panes, excluded) else {
         return false;
     };
     matches!(verdict, SidebarDock::SwapReachable | SidebarDock::NestedRow)
         || pane.pane_columns.is_some_and(|cols| {
-            tab_view_cols(panes, pane.tab_position)
-                .is_some_and(|view_cols| sidebar_width_off_spec(cols, canonical_cols, view_cols))
+            tab_view_cols(panes, pane.tab_position).is_some_and(|view_cols| {
+                sidebar_width_off_spec(
+                    cols,
+                    live_target_cols(width, width_override, view_cols),
+                    view_cols,
+                )
+            })
         })
 }
 
@@ -384,7 +357,7 @@ pub(super) struct RawPane {
     #[serde(default)]
     pub(super) tab_name: Option<String>,
     /// Column width of the pane, used by in-place sidebar recovery to resize a
-    /// freshly-split sidebar toward the session's fixed birth width.
+    /// freshly-split sidebar toward the tab's live width target.
     #[serde(default)]
     pub(super) pane_columns: Option<u64>,
     /// Column offset of the pane's left edge — `0` is the left column. Drives

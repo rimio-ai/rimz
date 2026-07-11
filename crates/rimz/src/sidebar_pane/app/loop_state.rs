@@ -32,6 +32,10 @@ pub(super) struct MaintenanceContext<'a> {
     pub(super) tick: Duration,
 }
 
+fn settled_width_changed(previous: Option<u16>, settled: Option<u16>) -> bool {
+    settled.is_some() && settled != previous
+}
+
 /// Compact projection of the glanceable sidebar content an off-screen pane
 /// keeps fresh. It deliberately skips animation state, turn phase, gauges,
 /// process metrics, spend, and git facts.
@@ -677,12 +681,15 @@ impl LoopState {
         // the sibling count. Before that first sibling observation, the grow is
         // startup sizing and the first frame should paint immediately.
         let settled_width = terminal.size().map(|s| s.width).ok();
+        let width_changed = settled_width_changed(self.prev_width, settled_width);
         if let Some(pending) = self.width_adjust_pending {
             if pending.elapsed() <= Duration::from_secs(3)
                 && let Some(cols) = settled_width.and_then(std::num::NonZeroU16::new)
-                && let Err(err) = crate::sidebar::width_override::write(runtime, cols)
             {
-                warn!(error = %err, "sidebar width override write failed");
+                match crate::sidebar::width_override::write(runtime, cols) {
+                    Ok(()) => clear_width_sync_cooldown(runtime),
+                    Err(err) => warn!(error = %err, "sidebar width override write failed"),
+                }
             }
             self.width_adjust_pending = None;
         }
@@ -694,6 +701,9 @@ impl LoopState {
             }
             None => false,
         };
+        if width_changed {
+            spawn_width_sync(config, runtime);
+        }
         if grew && self.self_close.seen_sibling {
             self.dirty = true;
             self.paint_hold

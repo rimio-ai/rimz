@@ -9,7 +9,7 @@ use crate::ids::MuxName;
 use crate::mux::{SidebarPaneOptions, ViewSidebars, sidebar_serve_args};
 use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
 
-use super::TmuxBackend;
+pub(super) const SIDEBAR_WIDTH_OPTION: &str = "@rimz_sidebar_cols";
 
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.
@@ -55,10 +55,7 @@ pub(super) fn birth_split_commands(
 /// after birth. Shared by launch and reconcile so the template cannot drift.
 pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<String> {
     let serve = sidebar_serve_command(opts).join(" ");
-    let split = format!(
-        "split-window -h -b -d -l {} '{serve}'",
-        opts.birth_size.cols
-    );
+    let split = format!("split-window -h -b -d -l '#{{{SIDEBAR_WIDTH_OPTION}}}' '{serve}'");
     let mut hook_commands: Vec<String> = tmux_window_options(&opts.config.tmux)
         .into_iter()
         .map(|(key, value)| format!("set-window-option {key} '{}'", value))
@@ -82,6 +79,22 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
     ]
 }
 
+/// Set the live absolute-column target consumed by the `after-new-window`
+/// hook. Keeping the mutable width in a session option lets renderer syncs
+/// refresh future births without reconstructing the renderer command.
+pub(super) fn sidebar_width_option_set_cmd(
+    session: &str,
+    cols: std::num::NonZeroU16,
+) -> Vec<String> {
+    vec![
+        "set-option".to_owned(),
+        "-t".to_owned(),
+        session.to_owned(),
+        SIDEBAR_WIDTH_OPTION.to_owned(),
+        cols.to_string(),
+    ]
+}
+
 /// One-shot hook for pristine tmux birth. The first real client attach respawns
 /// the birth work shell so its first prompt lands after the attach resize
 /// settles, then removes the hook. Control-mode clients only carry presence
@@ -98,41 +111,6 @@ pub(super) fn birth_shell_cleanup_hook_set_cmd(session: &str, work_pane: &str) -
         "client-attached".to_owned(),
         body,
     ]
-}
-
-pub(super) fn after_new_window_hook_cols_from_value(value: &str) -> Option<NonZeroU16> {
-    let words = shlex::split(value)?;
-    let mut in_split = false;
-    let mut words = words.iter();
-    while let Some(word) = words.next() {
-        match word.as_str() {
-            ";" => in_split = false,
-            "split-window" => in_split = true,
-            "-l" if in_split => {
-                return words.next()?.parse().ok().and_then(NonZeroU16::new);
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-impl TmuxBackend {
-    pub(super) fn after_new_window_hook_cols(&self, session: &str) -> Option<NonZeroU16> {
-        let output = self
-            .cmd()
-            .args([
-                "show-options".to_owned(),
-                "-t".to_owned(),
-                session.to_owned(),
-                "-Hqv".to_owned(),
-                "after-new-window".to_owned(),
-            ])
-            .run()
-            .ok()?;
-        let value = String::from_utf8_lossy(&output.stdout);
-        after_new_window_hook_cols_from_value(value.trim())
-    }
 }
 
 pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
@@ -285,6 +263,7 @@ mod tests {
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tmux-refresh")),
             project_root: PathBuf::from("/tmp/rimz-tmux-refresh"),
             cwd: PathBuf::from("/tmp/rimz-tmux-refresh"),
+            width,
             birth_size: width.birth_size(None),
             width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
@@ -383,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn after_new_window_hook_threads_refresh_override_birth_width_and_options() {
+    fn after_new_window_hook_threads_refresh_override_width_option_and_options() {
         let opts = sidebar_opts(Some(75));
         let command = after_new_window_hook_set_cmd(&opts);
         let serve = sidebar_serve_command(&opts).join(" ");
@@ -399,9 +378,8 @@ mod tests {
                 format!(
                     "set-window-option allow-passthrough 'on' ; \
                      set-window-option aggressive-resize 'on' ; \
-                     split-window -h -b -d -l {} '{serve}' ; \
-                     if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'",
-                    opts.birth_size.cols
+                     split-window -h -b -d -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
+                     if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'"
                 ),
             ],
         );
@@ -425,25 +403,19 @@ mod tests {
                      set-window-option pane-border-status 'top' ; \
                      set-window-option pane-border-format '{}' ; \
                      set-window-option pane-border-lines 'heavy' ; \
-                     split-window -h -b -d -l {} '{serve}' ; \
+                     split-window -h -b -d -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
                      if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'",
-                    sidebar_blanking_border_format(),
-                    opts.birth_size.cols
+                    sidebar_blanking_border_format()
                 ),
             ],
         );
     }
 
     #[test]
-    fn after_new_window_hook_cols_recovers_fixed_birth_width() {
-        let mut opts = sidebar_opts(None);
-        let width = SidebarWidth::default();
-        opts.birth_size = width.birth_size(Some(120));
-        let command = after_new_window_hook_set_cmd(&opts);
-
+    fn sidebar_width_option_sets_absolute_cols() {
         assert_eq!(
-            after_new_window_hook_cols_from_value(command.last().expect("hook body")),
-            Some(opts.birth_size.cols),
+            sidebar_width_option_set_cmd("room", NonZeroU16::new(36).expect("nonzero")),
+            vec!["set-option", "-t", "room", "@rimz_sidebar_cols", "36"],
         );
     }
 
