@@ -6,7 +6,7 @@ RimZ exposes one browser-access command and dispatches transport and authenticat
 
 ## Contract
 
-Normal mux resolution selects the engine: a live session wins when no explicit mux is supplied, then explicit selection, the active mux environment, configured default, and installed binaries apply.
+Normal mux resolution selects the engine: explicit `--mux` wins, otherwise a live session's backend applies before the active mux environment, configured default, and installed binaries.
 
 `WebEngine` serializes as `zellij` or `ttyd` in `rimz.web.v1`; deserialization defaults a missing field to `zellij` for older remote peers.
 
