@@ -1,10 +1,63 @@
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
-    LayoutPanes, MuxBackend, PaneCmd, SidebarLiveness, SidebarWidth, TabOptions, ZellijBackend,
+    LayoutPanes, MuxBackend, PaneCmd, SidebarLiveness, SidebarWidth, TabOptions, WidthAdjust,
+    ZellijBackend,
 };
 use tempfile::TempDir;
 
 use super::support::*;
+
+#[test]
+fn sidebar_width_steps_use_zellij_native_resize() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("widthstep");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let sidebar = sidebar_opts(&name, cwd.path(), stub, 120);
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend.open_sidebar(&sidebar, None).expect("open sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+    let _client = AttachedClient::attach(xdg.path(), &name, 120, 40);
+    wait_for_attached_client(xdg.path(), &name);
+    let listed = raw_sidebar_pane(xdg.path(), &name);
+    let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", listed.id));
+    let initial = listed.pane_columns;
+
+    backend
+        .resize_sidebar_width(&name, &pane, WidthAdjust::Wider)
+        .expect("widen sidebar");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while raw_sidebar_pane(xdg.path(), &name).pane_columns <= initial
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let wider = raw_sidebar_pane(xdg.path(), &name).pane_columns;
+    assert!(
+        wider > initial,
+        "native wider step did not grow {initial}: {wider}"
+    );
+
+    backend
+        .resize_sidebar_width(&name, &pane, WidthAdjust::Narrower)
+        .expect("narrow sidebar");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while raw_sidebar_pane(xdg.path(), &name).pane_columns >= wider
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        raw_sidebar_pane(xdg.path(), &name).pane_columns < wider,
+        "native narrower step did not shrink {wider}",
+    );
+}
 
 /// The live width verdict survives session birth, a native tab from
 /// `new_tab_template`, and a backend-opened tab whose caller carries a stale

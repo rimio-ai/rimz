@@ -286,6 +286,7 @@ mod tests {
             project_root: PathBuf::from("/tmp/rimz-tmux-refresh"),
             cwd: PathBuf::from("/tmp/rimz-tmux-refresh"),
             birth_size: width.birth_size(None),
+            width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             pristine_birth: false,

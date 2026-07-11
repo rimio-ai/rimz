@@ -89,6 +89,13 @@ fn row_status_key(row: &crate::SidebarRow) -> BackgroundRowStatusKey {
     }
 }
 
+const MIN_ADJUSTABLE_WIDTH: u16 = 24;
+
+fn width_adjust_allowed(dir: crate::mux::WidthAdjust, current_width: Option<u16>) -> bool {
+    dir != crate::mux::WidthAdjust::Narrower
+        || current_width.is_some_and(|width| width > MIN_ADJUSTABLE_WIDTH)
+}
+
 fn own_tab_viewed(
     snapshot: &SidebarSnapshot,
     own_view: &crate::SidebarOwnView,
@@ -134,6 +141,7 @@ pub(super) struct LoopState {
     last_self_close_check: Instant,
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
+    width_adjust_pending: Option<Instant>,
     pub(super) should_exit: bool,
     pub(super) exit_cause: Option<RendererExitCause>,
     pub(super) tab_emptied: bool,
@@ -219,6 +227,7 @@ impl LoopState {
             last_self_close_check: now,
             last_heartbeat: None,
             prev_width: initial_width,
+            width_adjust_pending: None,
             should_exit: false,
             exit_cause: None,
             tab_emptied: false,
@@ -656,6 +665,7 @@ impl LoopState {
     pub(super) fn on_resize(
         &mut self,
         config: &ServeConfig,
+        runtime: &RuntimePaths,
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         anim_start: Instant,
@@ -666,7 +676,17 @@ impl LoopState {
         // flash. Hold the paint until the next fresh pane-frame fold carries
         // the sibling count. Before that first sibling observation, the grow is
         // startup sizing and the first frame should paint immediately.
-        let grew = match terminal.size().map(|s| s.width).ok() {
+        let settled_width = terminal.size().map(|s| s.width).ok();
+        if let Some(pending) = self.width_adjust_pending {
+            if pending.elapsed() <= Duration::from_secs(3)
+                && let Some(cols) = settled_width.and_then(std::num::NonZeroU16::new)
+                && let Err(err) = crate::sidebar::width_override::write(runtime, cols)
+            {
+                warn!(error = %err, "sidebar width override write failed");
+            }
+            self.width_adjust_pending = None;
+        }
+        let grew = match settled_width {
             Some(width) => {
                 let grew = resize_grew(self.prev_width, width);
                 self.prev_width = Some(width);
@@ -724,6 +744,7 @@ impl LoopState {
         }
         let interacted = applied.redraw
             || applied.focus.is_some()
+            || applied.width.is_some()
             || applied.mark_read.is_some()
             || applied.mark_unread.is_some()
             || applied.mark_all_read;
@@ -738,6 +759,13 @@ impl LoopState {
             // verifies the optimistic focus on the next wakeup.
             self.record_focus_intent(config, pane.clone(), anim_start, diag)?;
             spawn_pane_focus(pane, &config.session_name);
+        }
+        if let (Some(dir), Some(pane)) = (applied.width, config.own_pane.clone()) {
+            let current_width = terminal.size().map(|size| size.width).ok();
+            if width_adjust_allowed(dir, current_width) {
+                self.width_adjust_pending = Some(Instant::now());
+                spawn_width_adjust(pane, &config.session_name, dir);
+            }
         }
         if let Some(row_id) = applied.mark_read {
             self.mark_row_read(fetch, &row_id, diag);

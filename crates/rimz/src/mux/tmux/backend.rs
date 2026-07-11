@@ -14,13 +14,13 @@ use super::parse::{
 use super::window::sanitize_window_name;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
-use crate::mux::width::sidebar_width_off_spec;
+use crate::mux::width::{canonical_sidebar_cols, sidebar_width_off_spec};
 use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend,
     MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionOptions,
     SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
-    TabOptions, ensure_pane_backend, execute_adds, execute_closes, memoized_version,
+    TabOptions, WidthAdjust, ensure_pane_backend, execute_adds, execute_closes, memoized_version,
 };
 
 impl MuxBackend for TmuxBackend {
@@ -231,6 +231,18 @@ impl MuxBackend for TmuxBackend {
         ])
     }
 
+    fn resize_sidebar_width(&self, _session: &str, pane: &PaneId, dir: WidthAdjust) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        let flag = match dir {
+            WidthAdjust::Narrower => "-L",
+            WidthAdjust::Wider => "-R",
+        };
+        self.cmd()
+            .args(["resize-pane", "-t", pane.raw(), flag, "5"])
+            .run()
+            .map(|_| ())
+    }
+
     fn register_focus_key(&self, binding: &super::super::FocusKeyBinding) -> Result<()> {
         // Root keytable (`-n`): the chord fires from any pane in the server, and
         // `run-shell -b` runs the focus command off the server so the pane never
@@ -409,9 +421,11 @@ impl MuxBackend for TmuxBackend {
         opts: &SidebarPaneOptions,
         live: &SidebarLiveness,
     ) -> Result<SidebarRecovery> {
-        let canonical = self
-            .after_new_window_hook_cols(&opts.session_name)
-            .unwrap_or(opts.birth_size.cols);
+        let canonical = canonical_sidebar_cols(
+            opts.width_override,
+            self.after_new_window_hook_cols(&opts.session_name),
+            opts.birth_size.cols,
+        );
         let mut opts = opts.clone();
         opts.birth_size.cols = canonical;
         if let Err(err) = self.cmd().args(after_new_window_hook_set_cmd(&opts)).run() {

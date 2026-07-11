@@ -75,11 +75,15 @@ pub fn default_focus_key() -> String {
     "Alt+p".to_owned()
 }
 
-/// Sidebar movement key bindings. Action keys stay fixed; these strings
-/// rebind the navigation family only.
+/// Sidebar movement and width key bindings. Action keys stay fixed; these
+/// strings rebind the navigation and width families only.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarKeys {
+    /// Steps the sidebar pane narrower; the settled width persists for the room.
+    pub narrower: String,
+    /// Steps the sidebar pane wider; the settled width persists for the room.
+    pub wider: String,
     pub up: String,
     pub down: String,
     pub top: String,
@@ -95,6 +99,8 @@ pub struct SidebarKeys {
 impl Default for SidebarKeys {
     fn default() -> Self {
         Self {
+            narrower: "a".to_owned(),
+            wider: "d".to_owned(),
             up: "k up".to_owned(),
             down: "j down".to_owned(),
             top: "g".to_owned(),

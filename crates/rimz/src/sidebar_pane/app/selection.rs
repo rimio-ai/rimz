@@ -3,6 +3,7 @@
 //! act on it, and the hit-test reader over the render-built line map.
 
 use crate::ids::PaneId;
+use crate::mux::WidthAdjust;
 use crate::{SidebarSnapshot, lead_unread_row, triage_key};
 
 use crate::sidebar_pane::render::{
@@ -21,6 +22,9 @@ const SCROLL_STEP: usize = 3;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct InputOutcome {
     pub(super) redraw: bool,
+    /// One resize step to dispatch after input handling. Resize wakeups own the
+    /// repaint and settled-width persistence.
+    pub(super) width: Option<WidthAdjust>,
     /// The pane to fire the one-way focus command at — `Some` only on a jump
     /// action. The handler resolves the target and returns it without moving
     /// the highlight: selection stays derived state, so there is nothing to
@@ -47,6 +51,13 @@ impl InputOutcome {
     pub(super) fn focus(pane: PaneId) -> Self {
         Self {
             focus: Some(pane),
+            ..Self::default()
+        }
+    }
+
+    fn width(width: WidthAdjust) -> Self {
+        Self {
+            width: Some(width),
             ..Self::default()
         }
     }
@@ -209,6 +220,8 @@ pub(super) fn handle_key(
     // jump banner, and a genuinely new unread re-arms the snap on its next fold.
     ui.unread_focus = None;
     match action {
+        KeyAction::WidthNarrower => InputOutcome::width(WidthAdjust::Narrower),
+        KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
         KeyAction::Up => {
             if ui.selected_index > 0 {
                 select_row(ui, snapshot, ui.selected_index - 1);

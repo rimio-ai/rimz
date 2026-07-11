@@ -19,12 +19,13 @@ use super::raw_pane::{
 };
 use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::mux::width::canonical_sidebar_cols;
 use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
     MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth,
     SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection,
-    SplitPaneOptions, TabOptions, ensure_pane_backend, execute_adds, execute_closes,
+    SplitPaneOptions, TabOptions, WidthAdjust, ensure_pane_backend, execute_adds, execute_closes,
     memoized_version,
 };
 use crate::pane::PaneRef;
@@ -545,6 +546,15 @@ impl MuxBackend for ZellijBackend {
         spec.arg(pane.raw()).run().map(|_| ())
     }
 
+    fn resize_sidebar_width(&self, session: &str, pane: &PaneId, dir: WidthAdjust) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Zellij)?;
+        let direction = match dir {
+            WidthAdjust::Narrower => "decrease",
+            WidthAdjust::Wider => "increase",
+        };
+        self.resize_sidebar_step(session, pane.raw(), direction)
+    }
+
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let mut spec = self.cmd().args(["action", "dump-screen"]);
@@ -730,9 +740,11 @@ impl MuxBackend for ZellijBackend {
             None,
             crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
         )?;
-        let canonical = self
-            .session_sidebar_cols(&opts.session_name)
-            .unwrap_or(opts.birth_size.cols);
+        let canonical = canonical_sidebar_cols(
+            opts.width_override,
+            self.session_sidebar_cols(&opts.session_name),
+            opts.birth_size.cols,
+        );
         let mut opts = opts.clone();
         opts.birth_size.cols = canonical;
         let panes = listing.panes;
@@ -905,7 +917,10 @@ impl MuxBackend for ZellijBackend {
         let restore = (!opts.focus)
             .then(|| self.focus_restore_target(&opts.session_name, &opts.sidebar.workspace_id))
             .flatten();
-        let template_sidebar_cols = self.session_sidebar_cols(&opts.session_name);
+        let template_sidebar_cols = opts
+            .sidebar
+            .width_override
+            .or_else(|| self.session_sidebar_cols(&opts.session_name));
         let layout = TempLayoutFile::new(render_tab_layout(opts, template_sidebar_cols)?)?;
         let args = [
             "new-tab".to_owned(),

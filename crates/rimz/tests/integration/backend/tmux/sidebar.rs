@@ -3,6 +3,39 @@
 use super::support::*;
 
 #[test]
+fn sidebar_width_steps_move_the_left_dock_border() {
+    require_tmux!();
+    let session = "width-step";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((120, 40)));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    server
+        .backend
+        .open_sidebar(&sidebar_opts(session, stub, Some(120)), None)
+        .expect("open sidebar");
+    let pane = wait_for_sidebar_pane(&server, session, None);
+    let width = || {
+        server
+            .display(pane.raw(), "#{pane_width}")
+            .parse::<u16>()
+            .expect("pane width")
+    };
+    let initial = width();
+
+    server
+        .backend
+        .resize_sidebar_width(session, &pane, WidthAdjust::Wider)
+        .expect("widen sidebar");
+    assert_eq!(width(), initial + 5);
+
+    server
+        .backend
+        .resize_sidebar_width(session, &pane, WidthAdjust::Narrower)
+        .expect("narrow sidebar");
+    assert_eq!(width(), initial);
+}
+
+#[test]
 fn sidebar_width_verdict_survives_resize_and_reconcile() {
     require_tmux!();
     let server = TmuxServer::new();
@@ -38,6 +71,18 @@ fn sidebar_width_verdict_survives_resize_and_reconcile() {
         left_pane_width(&server, "verdict:2"),
         Some(60),
         "fallback reload preserves the original 60-column verdict",
+    );
+
+    reload_opts.width_override = std::num::NonZeroU16::new(55);
+    server
+        .backend
+        .reconcile_sidebars(&reload_opts, &rimz::mux::SidebarLiveness::default())
+        .expect("reconcile room override");
+    server.tmux(&["new-window", "-t", "verdict"]);
+    assert_eq!(
+        left_pane_width(&server, "verdict:3"),
+        Some(55),
+        "room override outranks the hook verdict for later windows",
     );
 }
 

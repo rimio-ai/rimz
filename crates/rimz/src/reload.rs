@@ -301,6 +301,7 @@ fn reconcile_live(
         // recovers the session's fixed canonical width from the live Zellij
         // template or tmux hook before adding or repairing panes.
         birth_size: width.birth_size(None),
+        width_override: crate::sidebar::width_override::load(runtime),
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
         pristine_birth: false,

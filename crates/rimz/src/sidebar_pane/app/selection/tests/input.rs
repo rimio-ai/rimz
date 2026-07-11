@@ -1,4 +1,20 @@
 use super::*;
+use crate::mux::WidthAdjust;
+
+#[test]
+fn width_keys_dispatch_without_redrawing() {
+    let snapshot = snapshot(&workspace());
+    let mut ui = UiState::default();
+
+    assert_eq!(
+        handle_key(KeyAction::WidthNarrower, &mut ui, &snapshot).width,
+        Some(WidthAdjust::Narrower),
+    );
+    assert_eq!(
+        handle_key(KeyAction::WidthWider, &mut ui, &snapshot).width,
+        Some(WidthAdjust::Wider),
+    );
+}
 
 #[test]
 fn every_line_of_an_agent_block_routes_to_that_agent() {

@@ -277,6 +277,11 @@ impl RuntimePaths {
             .join(format!("sidebar.{}.json", instance_id.as_str()))
     }
 
+    /// Room-runtime sidebar width selected by the renderer.
+    pub fn sidebar_width_path(&self) -> PathBuf {
+        self.root.join("sidebar-width.json")
+    }
+
     /// The workspace-wide set of open unread episodes. The producer owns writes
     /// for status-derived opens and row-gone pruning; renderers and CLI commands
     /// write read receipts that derive this set back to read on the next fold.

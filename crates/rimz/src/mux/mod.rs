@@ -29,7 +29,9 @@ pub(crate) use reconcile::{
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
-pub use width::{BirthSize, SidebarWidth, detect_terminal_size, split_along_longer_edge};
+pub use width::{
+    BirthSize, SidebarWidth, WidthAdjust, detect_terminal_size, split_along_longer_edge,
+};
 pub use zellij::ZellijBackend;
 
 use std::collections::BTreeMap;
@@ -311,8 +313,12 @@ pub struct SidebarPaneOptions {
     pub cwd: PathBuf,
     /// The width verdict freshly-born panes are spelled with in layouts,
     /// splits, hooks, and in-place sidebar repairs — resolved once per command
-    /// by [`SidebarWidth::birth_size`] and constant for the session's life.
+    /// by [`SidebarWidth::birth_size_with_override`] and constant for the
+    /// session's life.
     pub birth_size: BirthSize,
+    /// Room-runtime width chosen from the sidebar. It outranks the mux-mirrored
+    /// canonical width and the configured birth verdict.
+    pub width_override: Option<std::num::NonZeroU16>,
     pub rimz_bin: PathBuf,
     pub replace_existing: bool,
     /// True only for a fresh room birth whose session was absent before
@@ -590,6 +596,8 @@ pub trait MuxBackend: Send + Sync {
     /// `ZELLIJ_SESSION_NAME` resolve it. tmux ignores the session because pane
     /// ids are server-global.
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
+    /// Step the sidebar pane width without blocking the renderer loop.
+    fn resize_sidebar_width(&self, session: &str, pane: &PaneId, dir: WidthAdjust) -> Result<()>;
     /// Register the chord that focuses the sidebar from any pane — the
     /// `[sidebar] focus_key` toggle. tmux binds it as a root-table `bind-key`
     /// whose command resolves the pressing session at keypress, so one

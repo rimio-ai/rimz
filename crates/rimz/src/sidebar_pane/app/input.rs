@@ -43,6 +43,8 @@ pub(super) enum Wakeup {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum KeyAction {
+    WidthNarrower,
+    WidthWider,
     Up,
     Down,
     WorktreeUp,
@@ -101,6 +103,8 @@ pub(super) const KEY_PAGE_UP: &str = "key:page_up";
 pub(super) const KEY_PAGE_DOWN: &str = "key:page_down";
 pub(super) const KEY_SCREEN_TOP: &str = "key:screen_top";
 pub(super) const KEY_SCREEN_BOTTOM: &str = "key:screen_bottom";
+pub(super) const KEY_WIDTH_NARROWER: &str = "key:width_narrower";
+pub(super) const KEY_WIDTH_WIDER: &str = "key:width_wider";
 
 pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) -> Option<String> {
     if let Some(wire) = keymap.wire_for(code, mods) {
@@ -121,7 +125,7 @@ pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) 
         KeyCode::Char('m') => "key:mark_toggle",
         KeyCode::Char('M') => "key:mark_all_read",
         KeyCode::Char('?') => "key:help",
-        KeyCode::Char('a') => "key:filter:all",
+        KeyCode::Char('A') => "key:filter:all",
         KeyCode::Char('u') => "key:filter:unread",
         KeyCode::Char('q') => "key:filter:waiting",
         KeyCode::Char('!') => "key:filter:failed",
@@ -129,7 +133,7 @@ pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) 
         KeyCode::Char('o') => "key:filter:idle",
         KeyCode::Char('p') => "key:filter:paused",
         KeyCode::Char('w') => "key:filter:running",
-        KeyCode::Char('d') => "key:filter:success",
+        KeyCode::Char('s') => "key:filter:success",
         KeyCode::Char('x') => "key:dismiss",
         KeyCode::Char(c @ '1'..='9') => return Some(format!("key:digit:{c}")),
         KeyCode::Char('r') => "key:reload",
@@ -185,6 +189,8 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         KEY_PAGE_DOWN => Wakeup::Key(KeyAction::PageDown),
         KEY_SCREEN_TOP => Wakeup::Key(KeyAction::ScreenTop),
         KEY_SCREEN_BOTTOM => Wakeup::Key(KeyAction::ScreenBottom),
+        KEY_WIDTH_NARROWER => Wakeup::Key(KeyAction::WidthNarrower),
+        KEY_WIDTH_WIDER => Wakeup::Key(KeyAction::WidthWider),
         "key:tab_prev" => Wakeup::Key(KeyAction::TabPrev),
         "key:tab_next" => Wakeup::Key(KeyAction::TabNext),
         "key:other" => Wakeup::Key(KeyAction::Other),
@@ -396,6 +402,18 @@ mod tests {
                 KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Enter),
             ),
+            (
+                "a → narrower",
+                KeyCode::Char('a'),
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::WidthNarrower),
+            ),
+            (
+                "d → wider",
+                KeyCode::Char('d'),
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::WidthWider),
+            ),
             // worktree-jump keys
             (
                 "J → worktree down",
@@ -492,9 +510,9 @@ mod tests {
             ),
             // filter keys
             (
-                "a → all",
-                KeyCode::Char('a'),
-                KeyModifiers::NONE,
+                "A → all",
+                KeyCode::Char('A'),
+                KeyModifiers::SHIFT,
                 Wakeup::Key(KeyAction::Filter(FilterAction::All)),
             ),
             (
@@ -544,8 +562,8 @@ mod tests {
                 ))),
             ),
             (
-                "d → success",
-                KeyCode::Char('d'),
+                "s → success",
+                KeyCode::Char('s'),
                 KeyModifiers::NONE,
                 Wakeup::Key(KeyAction::Filter(FilterAction::Status(
                     AgentStatus::Success,
@@ -557,7 +575,7 @@ mod tests {
             assert_eq!(decode_wakeup(encoded.as_bytes()), wakeup, "{label}");
         }
         assert_eq!(
-            encode_key(&keymap, KeyCode::Char('d'), KeyModifiers::CONTROL),
+            encode_key(&keymap, KeyCode::Char('s'), KeyModifiers::CONTROL),
             None,
             "modified fixed keys do not fall back to bare actions"
         );
@@ -600,14 +618,14 @@ mod tests {
             (KeyCode::Char('m'), KeyModifiers::NONE),
             (KeyCode::Char('M'), KeyModifiers::SHIFT),
             (KeyCode::Char('?'), KeyModifiers::SHIFT),
-            (KeyCode::Char('a'), KeyModifiers::NONE),
+            (KeyCode::Char('A'), KeyModifiers::SHIFT),
             (KeyCode::Char('q'), KeyModifiers::NONE),
             (KeyCode::Char('!'), KeyModifiers::SHIFT),
             (KeyCode::Char('e'), KeyModifiers::NONE),
             (KeyCode::Char('o'), KeyModifiers::NONE),
             (KeyCode::Char('p'), KeyModifiers::NONE),
             (KeyCode::Char('w'), KeyModifiers::NONE),
-            (KeyCode::Char('d'), KeyModifiers::NONE),
+            (KeyCode::Char('s'), KeyModifiers::NONE),
             (KeyCode::Char('x'), KeyModifiers::NONE),
             (KeyCode::Char('r'), KeyModifiers::NONE),
             (KeyCode::Char('1'), KeyModifiers::NONE),

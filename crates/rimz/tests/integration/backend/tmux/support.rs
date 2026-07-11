@@ -12,6 +12,7 @@ pub(super) use rimz::ids::{AgentKind, MuxName, PaneId, SidebarInstanceId, Worksp
 pub(super) use rimz::mux::{
     ClientFocusOptions, LayoutColumn, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
     SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
+    WidthAdjust,
 };
 pub(super) use rimz::pane::PaneRef;
 pub(super) use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, write_heartbeat};
@@ -39,6 +40,7 @@ pub(super) fn sidebar_opts(
         project_root: std::env::temp_dir(),
         cwd: std::env::temp_dir(),
         birth_size: SidebarWidth::default().birth_size(detected_cols),
+        width_override: None,
         rimz_bin: stub,
         replace_existing: false,
         pristine_birth: false,

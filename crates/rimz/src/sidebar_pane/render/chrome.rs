@@ -450,7 +450,14 @@ fn help_body_rows(
                 "x",
                 "dismiss",
             ),
-            None,
+            Some(movement(
+                format!(
+                    "{}/{}",
+                    chord_label(&keys.narrower),
+                    chord_label(&keys.wider)
+                ),
+                "width",
+            )),
         ),
     ];
     let filter_section = vec![
@@ -460,7 +467,7 @@ fn help_body_rows(
         ),
         (
             status_entry(theme, AgentStatus::Paused, "p", "paused"),
-            Some(status_entry(theme, AgentStatus::Success, "d", "done")),
+            Some(status_entry(theme, AgentStatus::Success, "s", "done")),
         ),
         (
             status_entry(theme, AgentStatus::Running, "w", "working"),
@@ -476,7 +483,7 @@ fn help_body_rows(
             Some(key_entry(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysAll)),
-                "a",
+                "A",
                 "all",
             )),
         ),
@@ -748,4 +755,26 @@ fn borderless_line(line: Line<'static>, width: usize) -> Line<'static> {
     spans.push(Span::raw(" "));
     spans.extend(line.spans);
     layout::pad_line_to(Line::from(spans).style(style), width)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_shows_width_chords_and_remapped_filters() {
+        let theme = Theme::fixed(false);
+        let text = help_body_rows(&theme, None, &SidebarKeys::default())
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("a/d"));
+        assert!(text.contains("width"));
+        assert!(text.contains("s"));
+        assert!(text.contains("done"));
+        assert!(text.contains("A"));
+        assert!(text.contains("all"));
+    }
 }

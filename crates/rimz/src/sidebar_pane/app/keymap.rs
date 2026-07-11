@@ -5,7 +5,7 @@ use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 use super::input::{
     KEY_BOTTOM, KEY_DOWN, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_SCREEN_BOTTOM, KEY_SCREEN_TOP, KEY_TOP,
-    KEY_UP, KEY_WORKTREE_DOWN, KEY_WORKTREE_UP,
+    KEY_UP, KEY_WIDTH_NARROWER, KEY_WIDTH_WIDER, KEY_WORKTREE_DOWN, KEY_WORKTREE_UP,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +105,8 @@ impl NavKeymap {
     pub fn from_config(keys: &SidebarKeys) -> Self {
         let mut bindings = Vec::new();
         for (spec, wire) in [
+            (keys.narrower.as_str(), KEY_WIDTH_NARROWER),
+            (keys.wider.as_str(), KEY_WIDTH_WIDER),
             (keys.up.as_str(), KEY_UP),
             (keys.down.as_str(), KEY_DOWN),
             (keys.top.as_str(), KEY_TOP),
@@ -239,6 +241,8 @@ mod tests {
     fn default_config_binds_all_motion_actions() {
         let keymap = NavKeymap::from_config(&SidebarKeys::default());
         let cases = [
+            (KeyCode::Char('a'), KeyModifiers::NONE, KEY_WIDTH_NARROWER),
+            (KeyCode::Char('d'), KeyModifiers::NONE, KEY_WIDTH_WIDER),
             (KeyCode::Char('k'), KeyModifiers::NONE, KEY_UP),
             (KeyCode::Up, KeyModifiers::NONE, KEY_UP),
             (KeyCode::Char('j'), KeyModifiers::NONE, KEY_DOWN),
@@ -257,5 +261,24 @@ mod tests {
         for (code, mods, wire) in cases {
             assert_eq!(keymap.wire_for(code, mods), Some(wire), "{code:?}");
         }
+    }
+
+    #[test]
+    fn configurable_width_bindings_shadow_fixed_actions() {
+        let keys = SidebarKeys {
+            narrower: "q".to_owned(),
+            wider: "x".to_owned(),
+            ..SidebarKeys::default()
+        };
+        let keymap = NavKeymap::from_config(&keys);
+
+        assert_eq!(
+            keymap.wire_for(KeyCode::Char('q'), KeyModifiers::NONE),
+            Some(KEY_WIDTH_NARROWER),
+        );
+        assert_eq!(
+            keymap.wire_for(KeyCode::Char('x'), KeyModifiers::NONE),
+            Some(KEY_WIDTH_WIDER),
+        );
     }
 }

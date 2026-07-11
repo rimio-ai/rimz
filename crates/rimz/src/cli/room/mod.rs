@@ -1319,12 +1319,17 @@ pub(crate) struct RoomTarget<'a> {
 }
 
 impl RoomTarget<'_> {
-    /// The width verdict this command's sidebar panes are born with —
-    /// `min(percent × launching terminal, max_cols)`, resolved once here and
-    /// constant for the session's life.
-    fn birth_size(&self) -> rimz::mux::BirthSize {
+    fn width_override(&self) -> Option<std::num::NonZeroU16> {
+        rimz::RuntimePaths::for_workspace(self.workspace_id.clone())
+            .ok()
+            .and_then(|runtime| rimz::sidebar::width_override::load(&runtime))
+    }
+
+    /// The width verdict this command's sidebar panes are born with: the
+    /// room-runtime override, or `min(percent × terminal, max_cols)`.
+    fn birth_size(&self, width_override: Option<std::num::NonZeroU16>) -> rimz::mux::BirthSize {
         self.width
-            .birth_size(self.detected_size.map(|(cols, _)| cols))
+            .birth_size_with_override(self.detected_size.map(|(cols, _)| cols), width_override)
     }
 }
 
@@ -1333,12 +1338,14 @@ pub(crate) fn build_sidebar_opts(
     resume_tabs: Vec<rimz::mux::ResumeTab>,
 ) -> Result<SidebarPaneOptions> {
     let rimz_bin = room_bin_for_workspace(target.workspace_id);
+    let width_override = target.width_override();
     Ok(SidebarPaneOptions {
         session_name: target.session_name.to_owned(),
         workspace_id: target.workspace_id.clone(),
         project_root: target.project_root.to_path_buf(),
         cwd: target.cwd.to_path_buf(),
-        birth_size: target.birth_size(),
+        birth_size: target.birth_size(width_override),
+        width_override,
         rimz_bin,
         replace_existing: false,
         pristine_birth: false,

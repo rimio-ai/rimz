@@ -38,6 +38,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         project_root: workspace.project_root.clone(),
         cwd: workspace.project_root.clone(),
         birth_size: SidebarWidth::default().birth_size(Some(160)),
+        width_override: None,
         rimz_bin: stub,
         replace_existing: false,
         pristine_birth: false,

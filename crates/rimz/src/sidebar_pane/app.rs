@@ -279,7 +279,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             // backstop poll runs there too.
             Wakeup::Tick => {}
             Wakeup::Resize => {
-                state.on_resize(&config, &mut fetch, &mut terminal, anim_start)?;
+                state.on_resize(&config, &runtime, &mut fetch, &mut terminal, anim_start)?;
             }
             Wakeup::Reload => {
                 state.clear_pending_fetch();
@@ -580,6 +580,17 @@ fn spawn_pane_focus(pane_id: PaneId, session_name: &str) {
         let backend = crate::mux::backend_for(pane_id.mux());
         if let Err(err) = backend.focus_pane(&pane_id, Some(&session_name)) {
             debug!(pane = %pane_id, error = %err, "sidebar pane focus failed");
+        }
+    });
+}
+
+/// Resize on a detached thread so a mux client never stalls the render loop.
+fn spawn_width_adjust(pane_id: PaneId, session_name: &str, dir: crate::mux::WidthAdjust) {
+    let session_name = session_name.to_owned();
+    std::thread::spawn(move || {
+        let backend = crate::mux::backend_for(pane_id.mux());
+        if let Err(err) = backend.resize_sidebar_width(&session_name, &pane_id, dir) {
+            debug!(pane = %pane_id, error = %err, "sidebar width resize failed");
         }
     });
 }

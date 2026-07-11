@@ -29,6 +29,7 @@ pub mod refresh;
 pub(crate) mod test_support;
 pub mod timing;
 pub mod unread;
+pub mod width_override;
 
 use std::collections::HashSet;
 use std::fs;

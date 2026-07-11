@@ -633,6 +633,7 @@ mod tests {
             project_root: root.clone(),
             cwd: root,
             birth_size: width.birth_size(None),
+            width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             pristine_birth: false,

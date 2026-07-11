@@ -56,6 +56,7 @@ fn build_daemon_view_options(
     // same global sidebar the working view runs (same session, workspace, and
     // `rimz` bin). The content column defaults to stats and keeps the view
     // useful even with no daemon host.
+    let width_override = room.width_override();
     BackgroundViewOptions {
         view: DaemonView {
             name: rimz::remote_control::VIEW_NAME.to_owned(),
@@ -67,7 +68,8 @@ fn build_daemon_view_options(
             workspace_id: workspace.workspace_id.clone(),
             project_root: workspace.project_root.clone(),
             cwd: workspace.worktree_root.clone(),
-            birth_size: room.birth_size(),
+            birth_size: room.birth_size(width_override),
+            width_override,
             rimz_bin,
             replace_existing: false,
             pristine_birth: false,

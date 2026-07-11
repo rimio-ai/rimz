@@ -8,6 +8,23 @@ use std::num::NonZeroU16;
 
 use super::SplitDirection;
 
+/// One user-requested sidebar width step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WidthAdjust {
+    Narrower,
+    Wider,
+}
+
+/// Resolve the room's canonical width: explicit runtime choice, then the
+/// verdict mirrored by the live mux, then the caller's birth fallback.
+pub(crate) fn canonical_sidebar_cols(
+    width_override: Option<NonZeroU16>,
+    mirrored: Option<NonZeroU16>,
+    birth: NonZeroU16,
+) -> NonZeroU16 {
+    width_override.or(mirrored).unwrap_or(birth)
+}
+
 /// Default sidebar width as a percentage of the view. The single source of
 /// truth for both the CLI launch paths and the user-wide reload reconcile.
 const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
@@ -85,6 +102,27 @@ impl SidebarWidth {
                 percent,
             },
         }
+    }
+
+    /// Pin a room-runtime override while retaining a percentage spelling for
+    /// Zellij births whose geometry is not known until attach.
+    pub fn birth_size_with_override(
+        self,
+        detected_cols: Option<u16>,
+        width_override: Option<NonZeroU16>,
+    ) -> BirthSize {
+        let Some(cols) = width_override else {
+            return self.birth_size(detected_cols);
+        };
+        let percent = match detected_cols {
+            Some(total) if total > 0 => {
+                let total = u64::from(total);
+                let derived = ((u64::from(cols.get()) * 100 + total / 2) / total).clamp(1, 100);
+                u16::try_from(derived).unwrap_or(self.percent.clamp(10, 90))
+            }
+            _ => self.percent.clamp(10, 90),
+        };
+        BirthSize { cols, percent }
     }
 }
 
@@ -184,6 +222,46 @@ mod tests {
         // cap with the raw percentage for unknown-geometry panes.
         assert_eq!(width.birth_size(None), birth(72, 30));
         assert_eq!(width.birth_size(Some(0)), birth(72, 30));
+    }
+
+    #[test]
+    fn room_override_pins_cols_and_derives_birth_percent() {
+        let width = SidebarWidth::default();
+        let cols = NonZeroU16::new(90).expect("nonzero");
+
+        assert_eq!(
+            width.birth_size_with_override(Some(300), Some(cols)),
+            BirthSize { cols, percent: 30 },
+        );
+        assert_eq!(
+            width.birth_size_with_override(Some(240), Some(cols)),
+            BirthSize { cols, percent: 38 },
+        );
+        assert_eq!(
+            width.birth_size_with_override(None, Some(cols)),
+            BirthSize { cols, percent: 30 },
+        );
+        assert_eq!(
+            width.birth_size_with_override(Some(120), None),
+            width.birth_size(Some(120)),
+        );
+    }
+
+    #[test]
+    fn canonical_width_prefers_runtime_then_mux_then_birth() {
+        let runtime = NonZeroU16::new(90).expect("nonzero");
+        let mirrored = NonZeroU16::new(72).expect("nonzero");
+        let birth = NonZeroU16::new(36).expect("nonzero");
+
+        assert_eq!(
+            canonical_sidebar_cols(Some(runtime), Some(mirrored), birth),
+            runtime
+        );
+        assert_eq!(
+            canonical_sidebar_cols(None, Some(mirrored), birth),
+            mirrored
+        );
+        assert_eq!(canonical_sidebar_cols(None, None, birth), birth);
     }
 
     #[test]

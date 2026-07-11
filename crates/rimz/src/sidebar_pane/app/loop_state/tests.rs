@@ -1,4 +1,14 @@
 use super::*;
+
+#[test]
+fn narrower_stops_before_the_minimum_frame_width() {
+    use crate::mux::WidthAdjust;
+
+    assert!(!width_adjust_allowed(WidthAdjust::Narrower, None));
+    assert!(!width_adjust_allowed(WidthAdjust::Narrower, Some(24)));
+    assert!(width_adjust_allowed(WidthAdjust::Narrower, Some(25)));
+    assert!(width_adjust_allowed(WidthAdjust::Wider, None));
+}
 use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot_with_panes, workspace};
 use crate::sidebar_pane::app::input::KeyAction;
 use std::collections::HashSet;

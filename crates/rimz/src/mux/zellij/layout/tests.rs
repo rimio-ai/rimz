@@ -14,6 +14,7 @@ fn sidebar_opts(
         project_root: PathBuf::from("/proj/root"),
         cwd: PathBuf::from("/proj/worktree"),
         birth_size: width.birth_size(detected_cols),
+        width_override: None,
         rimz_bin: PathBuf::from("/usr/bin/rimz"),
         replace_existing: false,
         pristine_birth: false,

@@ -151,7 +151,7 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 - **Scope paths.** The workspace scope is path-prefix based over the project root and grouped worktree roots; a checkout reached through a different symlink spelling than the transcript's `cwd` can read as outside the room until the paths agree.
 - **The make-up — split by who might want you.** The **left cluster** counts who needs an answer: `?` waiting, `!` failed, `⏸` paused, `✓` done. The **right cluster** is the live-capacity tail: `⢿` working (every running agent, whatever head it wears) and `○` idle. Every bucket always shows, zeros included, each in its semantic tone. A bucket carries the [unread signal](#reading-the-glyphs) only when it owns the lead unread row, so the make-up line mirrors the inbox without ever putting more than that one bucket in motion.
 - **The unread jump banner — the agent that needs you, one click away.** The `↑ N need you` line appears when the lead unread card has scrolled out of view and stays hidden while that card is on screen, toned by the lead's status — yellow for a waiting lead, red for a failed one. Clicking it scrolls the card list back to the top, where the lead ranks, and pins that view; the inbox key (`n`/`Space`) jumps to and focuses the lead. It is the steady companion to the viewport's snap — when an unread arrives the cards scroll to reveal it, and once you scroll or navigate past it this banner is how you get back. It clears the moment nothing is awaiting you.
-- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero, or jumping to any card — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets and the unread count: `u` unread, `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip for colored statuses — dark ink on the fill, bold, with one space on each side like the dashboard tab — while idle keeps the soft stat gray and adds reverse video and weight; the picked unread lens paints the cockpit `(N)` count as the same chip. Under `NO_COLOR`, reverse video marks the same fixed cells. The counts always span the full room, filtered or not, so the line stays the room's honest tally while the body narrows.
+- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero, or jumping to any card — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets and the unread count: `u` unread, `q` waiting, `!`/`e` attention, `p` paused, `s` done, `w` working, `o` idle, `A` all. The waiting key is `q` (question), leaving `?` as the footer's help key; lowercase `a`/`d` resize the sidebar. The picked bucket paints as a padded chip for colored statuses — dark ink on the fill, bold, with one space on each side like the dashboard tab — while idle keeps the soft stat gray and adds reverse video and weight; the picked unread lens paints the cockpit `(N)` count as the same chip. Under `NO_COLOR`, reverse video marks the same fixed cells. The counts always span the full room, filtered or not, so the line stays the room's honest tally while the body narrows.
 
 An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
 
@@ -325,7 +325,8 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 - `n`/`N` jump to the **next/previous thing that needs you** — unread needs-a-look rows first, oldest episode first, then read waiting/failed rows oldest first — and focus it to read. `␣` is an alias for `n`. One key tames a fleet; `N` walks back.
 - `1`–`9` jump by the row's visible position.
 - `m` toggles the selected row read/unread **without jumping**; `M` marks every row read.
-- `u`, `q`, `!`/`e`, `p`, `d`, `w`, and `o` filter the body to unread/waiting/attention/paused/done/working/idle; the active filter key toggles back to all, and `a` clears to all directly.
+- `u`, `q`, `!`/`e`, `p`, `s`, `w`, and `o` filter the body to unread/waiting/attention/paused/done/working/idle; the active filter key toggles back to all, and `A` clears to all directly.
+- `a`/`d` step the sidebar narrower/wider and remember the settled width for the room.
 - `←/→` switch the provider dashboard's tab when the dashboard is tabbed — a provider pick in place, never a jump.
 - A click anywhere in a card's block jumps to it.
 - The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.
@@ -443,13 +444,13 @@ These notices clear when the next accepted pane frame lands. A health alert take
 │ ⏎ 1-9 direct        ␣ n/N   needs-you  │
 │ ✉ m   read/unread   ✉ M     read all   │
 │ ↔ ←/→ account tabs  ⟳ r     reload     │
-│ ✕ x   dismiss                          │
+│ ✕ x   dismiss       ↕ a/d   width      │
 │                                        │
 │ filter                                 │
 │ ? q   waiting       ! e     attention  │
-│ ⏸︎ p   paused        ✓ d     done       │
+│ ⏸︎ p   paused        ✓ s     done       │
 │ ⢿ w   working       ○ o     idle       │
-│ ● u   unread        ≡ a     all        │
+│ ● u   unread        ≡ A     all        │
 │                                        │
 │ ▐ alt p sidebar                        │
 ╰─────────── any key to close ───────────╯

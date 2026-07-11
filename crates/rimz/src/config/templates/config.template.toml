@@ -60,6 +60,8 @@
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
 
 [sidebar.keys]
+# narrower = "a"
+# wider = "d"
 # up = "k up"
 # down = "j down"
 # top = "g"

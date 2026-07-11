@@ -126,6 +126,7 @@ impl SidebarHarness {
             project_root: self.cwd.clone(),
             cwd: self.cwd.clone(),
             birth_size: width.birth_size(None),
+            width_override: None,
             rimz_bin: PathBuf::from("rimz"),
             replace_existing: false,
             pristine_birth: false,
@@ -248,6 +249,15 @@ impl MuxBackend for FakeBackend {
     }
 
     fn focus_pane(&self, _pane: &PaneId, _session: Option<&str>) -> rimz::mux::Result<()> {
+        Ok(())
+    }
+
+    fn resize_sidebar_width(
+        &self,
+        _session: &str,
+        _pane: &PaneId,
+        _dir: rimz::mux::WidthAdjust,
+    ) -> rimz::mux::Result<()> {
         Ok(())
     }
 
