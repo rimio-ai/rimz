@@ -626,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_proc_btime_reads_boot_epoch() {
+    fn boot_epoch_parsers_accept_valid_source_and_reject_drift() {
         let stat = "\
 cpu  7705 0 3770 842810 99 0 123 0 0 0
 intr 114930548
@@ -637,10 +637,7 @@ processes 2915
         assert_eq!(parse_proc_btime(stat), Some("1780040667".to_owned()));
         assert_eq!(parse_proc_btime("cpu 1 2 3\nprocesses 2915\n"), None);
         assert_eq!(parse_proc_btime("btime nope\n"), None);
-    }
 
-    #[test]
-    fn parse_kern_boottime_reads_boot_epoch() {
         assert_eq!(
             parse_kern_boottime("{ sec = 1780040667, usec = 0 } Thu Jan 1 00:00:00 2026"),
             Some("1780040667".to_owned()),

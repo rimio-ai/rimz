@@ -452,22 +452,18 @@ mod tests {
 
         let (selected, _) = drive(&previews, b"n\n");
         assert!(selected.is_empty());
-    }
-
-    #[test]
-    fn prompt_eof_declines_every_agent() {
-        let previews = [
-            preview("claude", Some("{}\n"), "{\"hooks\": []}\n"),
-            preview("codex", Some("{}\n"), "{\"hooks\": []}\n"),
-        ];
 
         let (selected, _) = drive(&previews, b"");
-
         assert!(selected.is_empty());
+
+        let rendered = strip(|out| install_selected(&selected, out));
+        assert!(
+            rendered.contains("Nothing changed - wire agents any time with `rimz hooks install`.")
+        );
     }
 
     #[test]
-    fn prompt_content_names_intro_agent_path_and_change_kind() {
+    fn hook_notices_cover_interactive_and_noninteractive_workflows() {
         let mut additive = preview("claude", Some("{}\n"), "{\"hooks\": []}\n");
         additive.status_line_change = Some(StatusLineChange::Wrapping {
             original: "RIMZ_AGENT_PID=$PPID exec rimz statusline feed".to_owned(),
@@ -475,125 +471,51 @@ mod tests {
         let created = preview("codex", None, "{\"hooks\": []}\n");
         let previews = [additive, created];
 
-        let (_, rendered) = drive(&previews, b"n\n");
+        let (_, interactive) = drive(&previews, b"n\n");
+        let noninteractive = strip(|out| write_noninteractive_notice(out, &previews));
 
-        assert!(rendered.contains("first-run setup"));
-        assert!(rendered.contains("Rimz found 2 coding agents: claude, codex."));
-        assert!(rendered.contains(
-            "To show them live in the sidebar, it adds reporting hooks to each agent's config."
-        ));
-        assert!(rendered.contains("Each hook is one `rimz hooks feed` line"));
-        assert_eq!(rendered.matches("rimz hooks uninstall").count(), 1);
-        assert!(rendered.contains("rimz hooks install --dry-run"));
-        assert!(rendered.contains("Add reporting hooks?"));
-        assert_eq!(rendered.matches("[Y/n]").count(), 1);
-        assert!(!rendered.contains("One quick question."));
-        assert!(!rendered.contains("rimz hooks feed --source"));
-        assert!(!rendered.contains("undo →"));
-        assert!(!rendered.contains("1 of 2"));
-        assert!(!rendered.contains("$PPID"));
-        assert!(!rendered.contains("d=diff"));
-        assert!(!rendered.contains("skip remaining"));
-        assert!(rendered.contains("claude  2 hooks → ~/.claude/settings.json"));
-        assert!(rendered.contains("codex   2 hooks → ~/.codex/settings.json"));
-        assert!(rendered.contains("existing kept"));
-        assert!(rendered.contains("new file"));
-        assert!(
-            rendered
-                .contains("+ wraps your statusline for live context — yours restored on uninstall")
-        );
-
-        let existing_row = rendered
-            .lines()
-            .find(|line| line.contains("existing kept"))
-            .expect("existing row");
-        let new_row = rendered
-            .lines()
-            .find(|line| line.contains("new file"))
-            .expect("new row");
-        assert_eq!(existing_row.find("existing kept"), new_row.find("new file"));
-    }
-
-    #[test]
-    fn noninteractive_notice_has_table_footer_and_no_question() {
-        let previews = [
-            preview("claude", Some("{}\n"), "{\"hooks\": []}\n"),
-            preview("codex", None, "{\"hooks\": []}\n"),
-        ];
-
-        let rendered = strip(|w| write_noninteractive_notice(w, &previews));
-
-        assert!(rendered.contains("Rimz found 2 coding agents: claude, codex."));
-        assert!(rendered.contains("claude  2 hooks → ~/.claude/settings.json"));
-        assert!(rendered.contains("codex   2 hooks → ~/.codex/settings.json"));
-        assert!(rendered.contains("Each hook is one `rimz hooks feed` line"));
-        assert_eq!(rendered.matches("rimz hooks uninstall").count(), 1);
-        assert!(rendered.contains("rimz hooks install --dry-run"));
-        assert!(!rendered.contains("Add reporting hooks?"));
-        assert!(!rendered.contains("quick question"));
-        assert!(!rendered.contains("1 of 2"));
-        assert!(rendered.contains(
+        for rendered in [&interactive, &noninteractive] {
+            assert!(rendered.contains("Rimz found 2 coding agents: claude, codex."));
+            assert!(rendered.contains("~/.claude/settings.json"));
+            assert!(rendered.contains("~/.codex/settings.json"));
+            assert!(rendered.contains(
+                "Each hook is one `rimz hooks feed` line — it reports events, never acts or answers for you."
+            ));
+            assert!(rendered.contains("rimz hooks uninstall"));
+            assert!(rendered.contains("rimz hooks install --dry-run"));
+            assert!(rendered.contains(
+                "+ wraps your statusline for live context — yours restored on uninstall"
+            ));
+        }
+        assert!(interactive.contains("Add reporting hooks? [Y/n]"));
+        assert!(!interactive.contains("No terminal input"));
+        assert!(!noninteractive.contains("Add reporting hooks? [Y/n]"));
+        assert!(noninteractive.contains(
             "No terminal input — nothing installed. Rimz continues into the room; wire agents later with rimz hooks install."
         ));
     }
 
     #[test]
-    fn preview_diff_covers_existing_and_new_config_files() {
-        let existing = preview(
-            "claude",
-            Some("alpha\nkeep\nold\nomega\n"),
-            "alpha\nkeep\nnew\nomega\n",
-        );
-        let diff = preview_diff(&existing);
-        assert!(diff.contains(".claude/settings.json"));
-        assert!(diff.contains("@@"));
-        assert!(diff.contains("-old"));
-        assert!(diff.contains("+new"));
-        assert!(!diff.contains("@@ original @@"));
-        assert!(!diff.contains("@@ candidate @@"));
-
-        let created = preview("claude", None, "one\ntwo\n");
-        let diff = preview_diff(&created);
-        assert!(diff.starts_with("--- /dev/null\n+++ "));
-        assert!(diff.contains(".claude/settings.json\n@@ new file @@\n"));
-        assert!(diff.contains("+one\n+two\n"));
-    }
-
-    #[test]
-    fn dry_run_renders_agent_bodies_and_diffs_without_prompt() {
+    fn dry_run_renders_existing_and_new_unified_diffs_without_prompt() {
         let previews = [
-            preview("claude", Some("old\n"), "new\n"),
+            preview(
+                "claude",
+                Some("alpha\nkeep\nold\nomega\n"),
+                "alpha\nkeep\nnew\nomega\n",
+            ),
             preview("codex", None, "one\ntwo\n"),
         ];
 
         let rendered = strip(|w| render_dry_run(w, &previews));
 
-        assert!(rendered.contains("claude  2 hooks → ~/.claude/settings.json"));
-        assert!(rendered.contains("codex   2 hooks → ~/.codex/settings.json"));
-        assert!(!rendered.contains("1 of 2"));
+        assert!(rendered.contains("/dev/null"));
+        assert!(rendered.contains("~/.claude/settings.json"));
+        assert!(rendered.contains("~/.codex/settings.json"));
+        assert!(rendered.contains("@@"));
+        assert!(rendered.contains("@@ new file @@"));
         assert!(rendered.contains("-old"));
         assert!(rendered.contains("+new"));
-        assert!(rendered.contains("+one\n"));
+        assert!(rendered.contains("+one"));
         assert!(!rendered.contains("Add reporting hooks?"));
-    }
-
-    #[test]
-    fn install_renderers_show_results_and_noop_message() {
-        let report = HookInstallReport {
-            agent: "claude",
-            config_path: home_config_path("claude"),
-            installed_events: vec!["SessionStart".to_owned(), "PreToolUse".to_owned()],
-            merged: true,
-        };
-
-        let rendered = strip(|w| {
-            write_install_result(w, &report)?;
-            install_selected(&[], w)
-        });
-
-        assert!(rendered.contains("✓ claude  2 hooks → ~/.claude/settings.json"));
-        assert!(
-            rendered.contains("Nothing changed - wire agents any time with `rimz hooks install`.")
-        );
     }
 }

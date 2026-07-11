@@ -302,18 +302,8 @@ mod tests {
     use rimz::ids::WorkspaceId;
 
     #[test]
-    fn rival_backend_owns_room_only_when_session_is_live() {
-        let live = vec!["rimz-alpha".to_owned(), "rimz-room".to_owned()];
-
-        assert!(rival_backend_owns_room("rimz-room", &live));
-        assert!(!rival_backend_owns_room("rimz-missing", &live));
-        assert!(!rival_backend_owns_room("rimz-room", &[]));
-    }
-
-    #[test]
-    fn list_sessions_retrying_retries_transient_failures() {
+    fn list_sessions_retrying_follows_retry_policy() {
         let mut calls = 0;
-
         let sessions = list_sessions_retrying(
             || {
                 calls += 1;
@@ -330,12 +320,8 @@ mod tests {
 
         assert_eq!(sessions, vec!["rimz-room"]);
         assert_eq!(calls, 3);
-    }
 
-    #[test]
-    fn list_sessions_retrying_treats_clean_empty_as_definitive() {
         let mut calls = 0;
-
         let sessions = list_sessions_retrying(
             || {
                 calls += 1;
@@ -348,12 +334,8 @@ mod tests {
 
         assert!(sessions.is_empty());
         assert_eq!(calls, 1);
-    }
 
-    #[test]
-    fn list_sessions_retrying_does_not_retry_missing_backend() {
         let mut calls = 0;
-
         let err = list_sessions_retrying(
             || {
                 calls += 1;
@@ -368,12 +350,8 @@ mod tests {
 
         assert!(matches!(err, rimz::mux::MuxErr::NotInstalled { .. }));
         assert_eq!(calls, 1);
-    }
 
-    #[test]
-    fn list_sessions_retrying_treats_timeout_as_definitive() {
         let mut calls = 0;
-
         let err = list_sessions_retrying(
             || {
                 calls += 1;

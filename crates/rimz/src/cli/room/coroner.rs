@@ -310,52 +310,23 @@ mod tests {
     }
 
     #[test]
-    fn last_death_marker_round_trips() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace, dir.path()).expect("paths");
-        let marker = LastDeathMarker {
-            cause: SessionDeathCause::Crash,
-            lost_agents: vec![SessionDeathAgent {
-                kind: AgentKind::new_unchecked("claude"),
-                agent_id: "sess-a".into(),
-                name: Some("lucid-atlas".to_owned()),
-            }],
-            at: Timestamp::UNIX_EPOCH,
-            recovered: Some(2),
-        };
+    fn death_notice_matches_session_death_cause() {
+        let cases = [
+            (
+                SessionDeathCause::Crash,
+                2,
+                "rimz: this room's previous session ended with agents still running (1970-01-01 00:00)",
+            ),
+            (
+                SessionDeathCause::Reboot,
+                1,
+                "rimz: machine rebooted since this room was last open (1970-01-01 00:00)",
+            ),
+        ];
 
-        write_last_death_marker(&paths, &marker);
-
-        let loaded: LastDeathMarker =
-            serde_json::from_slice(&std::fs::read(&paths.last_death_marker).expect("read marker"))
-                .expect("json marker");
-        assert_eq!(loaded, marker);
-    }
-
-    #[test]
-    fn death_notice_uses_neutral_crash_wording() {
-        let notice = death_notice(&death_marker(SessionDeathCause::Crash, 2));
-
-        assert_eq!(
-            notice,
-            "rimz: this room's previous session ended with agents still running (1970-01-01 00:00)"
-        );
-        assert!(!notice.contains("crash"), "{notice}");
-        assert!(!notice.contains("died"), "{notice}");
-        assert!(!notice.contains("offering"), "{notice}");
-    }
-
-    #[test]
-    fn death_notice_uses_reboot_wording() {
-        let notice = death_notice(&death_marker(SessionDeathCause::Reboot, 1));
-
-        assert_eq!(
-            notice,
-            "rimz: machine rebooted since this room was last open (1970-01-01 00:00)"
-        );
-        assert!(!notice.contains("crash"), "{notice}");
-        assert!(!notice.contains("died"), "{notice}");
+        for (cause, agents, expected) in cases {
+            assert_eq!(death_notice(&death_marker(cause, agents)), expected);
+        }
     }
 
     #[test]

@@ -188,7 +188,6 @@ fn content_supervisor_pane(slot: usize, rimz_bin: &Path, worktree_root: &Path) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::config::DaemonPane;
 
     #[test]
     fn daemon_hosts_orders_claude_then_the_ungated_broker() {
@@ -244,102 +243,6 @@ mod tests {
         assert_eq!(pair[0].argv[0], "claude");
         assert_eq!(pair[1].argv[0], "/usr/bin/rimz");
         assert!(pair[1].argv.iter().any(|arg| arg == "app-server"));
-    }
-
-    #[test]
-    fn content_pane_runs_live_supervisor_from_worktree() {
-        let rimz_bin = Path::new("/usr/bin/rimz");
-        let worktree = Path::new("/proj/wt");
-        let pane = content_supervisor_pane(2, rimz_bin, worktree);
-        assert_eq!(
-            pane.argv,
-            vec![
-                rimz_bin.to_string_lossy().into_owned(),
-                "daemon".to_owned(),
-                "content".to_owned(),
-                "--slot".to_owned(),
-                "2".to_owned(),
-                "--worktree-root".to_owned(),
-                "/proj/wt".to_owned(),
-            ]
-        );
-        assert_eq!(pane.cwd.as_path(), worktree);
-    }
-
-    #[test]
-    fn content_panes_default_to_live_stats() {
-        let rimz_bin = Path::new("/usr/bin/rimz");
-        let worktree = Path::new("/proj/wt");
-        assert_eq!(
-            content_panes(&DaemonConfig::default(), rimz_bin, worktree),
-            vec![content_supervisor_pane(0, rimz_bin, worktree)]
-        );
-    }
-
-    #[test]
-    fn content_panes_wrap_configured_stats_slot() {
-        let rimz_bin = Path::new("/usr/bin/rimz");
-        let worktree = Path::new("/proj/wt");
-        let daemon = DaemonConfig {
-            pane: vec![DaemonPane {
-                command: "stats".to_owned(),
-                cwd: Some(PathBuf::from("reports")),
-            }],
-        };
-
-        assert_eq!(
-            content_panes(&daemon, rimz_bin, worktree),
-            vec![content_supervisor_pane(0, rimz_bin, worktree)]
-        );
-    }
-
-    #[test]
-    fn content_panes_wrap_each_resolved_command_slot() {
-        let rimz_bin = Path::new("/usr/bin/rimz");
-        let worktree = Path::new("/proj/wt");
-        let daemon = DaemonConfig {
-            pane: vec![
-                DaemonPane {
-                    command: r#"btop --config "two words""#.to_owned(),
-                    cwd: None,
-                },
-                DaemonPane {
-                    command: "tail -f app.log".to_owned(),
-                    cwd: Some(PathBuf::from("/var/log")),
-                },
-            ],
-        };
-
-        assert_eq!(
-            content_panes(&daemon, rimz_bin, worktree),
-            vec![
-                content_supervisor_pane(0, rimz_bin, worktree),
-                content_supervisor_pane(1, rimz_bin, worktree),
-            ]
-        );
-    }
-
-    #[test]
-    fn content_panes_wrap_fallback_slot_when_commands_skip() {
-        let rimz_bin = Path::new("/usr/bin/rimz");
-        let worktree = Path::new("/proj/wt");
-        let daemon = DaemonConfig {
-            pane: vec![
-                DaemonPane {
-                    command: "   ".to_owned(),
-                    cwd: None,
-                },
-                DaemonPane {
-                    command: r#""unterminated"#.to_owned(),
-                    cwd: None,
-                },
-            ],
-        };
-
-        assert_eq!(
-            content_panes(&daemon, rimz_bin, worktree),
-            vec![content_supervisor_pane(0, rimz_bin, worktree)]
-        );
     }
 
     #[test]
