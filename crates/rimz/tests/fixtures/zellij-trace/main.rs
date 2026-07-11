@@ -13,8 +13,7 @@ enum Invocation<'a> {
     Version,
     ListSessions,
     Web(WebCommand<'a>),
-    ListClients,
-    ListPanes,
+    ActionQuery(ActionQuery),
     ShareSession(Option<&'a str>),
     DumpTopology {
         session: Option<&'a str>,
@@ -23,6 +22,11 @@ enum Invocation<'a> {
     Write,
     Birth,
     Unhandled,
+}
+
+enum ActionQuery {
+    Clients,
+    Panes,
 }
 
 enum WebCommand<'a> {
@@ -59,13 +63,8 @@ fn main() {
         Invocation::Version => write_stdout("zellij 0.44.3"),
         Invocation::ListSessions => handle_list_sessions(&log_path),
         Invocation::Web(command) => handle_web(command, &log_path),
-        Invocation::ListClients => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_CLIENTS"),
-        Invocation::ListPanes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
-        Invocation::ShareSession(session) => {
-            if let Some(session) = session {
-                write_web_clients_allowed_metadata(session);
-            }
-        }
+        Invocation::ActionQuery(query) => handle_action_query(query),
+        Invocation::ShareSession(session) => handle_share_session(session),
         Invocation::DumpTopology {
             session,
             configuration,
@@ -77,42 +76,48 @@ fn main() {
 }
 
 fn classify_invocation(cli: &[String]) -> Invocation<'_> {
+    if let Some(invocation) = classify_leading_invocation(cli) {
+        return invocation;
+    }
+    classify_nested_invocation(cli).unwrap_or(Invocation::Unhandled)
+}
+
+fn classify_leading_invocation(cli: &[String]) -> Option<Invocation<'_>> {
     if cli.first().is_some_and(|arg| arg == "--version") {
-        return Invocation::Version;
+        return Some(Invocation::Version);
     }
     if cli.first().is_some_and(|arg| arg == "list-sessions") {
-        return Invocation::ListSessions;
+        return Some(Invocation::ListSessions);
     }
-    if cli.first().is_some_and(|arg| arg == "web")
-        && let Some(command) = classify_web_command(&cli[1..])
-    {
-        return Invocation::Web(command);
+    if cli.first().is_some_and(|arg| arg == "web") {
+        return classify_web_command(&cli[1..]).map(Invocation::Web);
     }
+    None
+}
+
+fn classify_nested_invocation(cli: &[String]) -> Option<Invocation<'_>> {
     if has_pair(cli, "action", "list-clients") {
-        return Invocation::ListClients;
+        return Some(Invocation::ActionQuery(ActionQuery::Clients));
     }
     if has_pair(cli, "action", "list-panes") {
-        return Invocation::ListPanes;
+        return Some(Invocation::ActionQuery(ActionQuery::Panes));
     }
     if has_pair(cli, "--name", "rimz:share_session") {
-        return Invocation::ShareSession(arg_after(cli, "--session"));
+        return Some(Invocation::ShareSession(arg_after(cli, "--session")));
     }
     if has_pair(cli, "--name", "rimz:dump_topology") {
-        return Invocation::DumpTopology {
+        return Some(Invocation::DumpTopology {
             session: arg_after(cli, "--session"),
             configuration: arg_after(cli, "--plugin-configuration"),
-        };
+        });
     }
-    if cli
-        .windows(2)
-        .any(|window| window[0] == "action" && window[1].starts_with("write"))
-    {
-        return Invocation::Write;
+    if has_prefixed_pair(cli, "action", "write") {
+        return Some(Invocation::Write);
     }
     if has_pair_at_start(cli, "attach", "--create-background") {
-        return Invocation::Birth;
+        return Some(Invocation::Birth);
     }
-    Invocation::Unhandled
+    None
 }
 
 fn classify_web_command(cli: &[String]) -> Option<WebCommand<'_>> {
@@ -172,6 +177,19 @@ fn handle_web(command: WebCommand<'_>, log_path: &Path) {
     }
 }
 
+fn handle_action_query(query: ActionQuery) {
+    match query {
+        ActionQuery::Clients => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_CLIENTS"),
+        ActionQuery::Panes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
+    }
+}
+
+fn handle_share_session(session: Option<&str>) {
+    if let Some(session) = session {
+        write_web_clients_allowed_metadata(session);
+    }
+}
+
 fn handle_dump_topology(session: Option<&str>, configuration: Option<&str>) {
     if let Some(session) = session
         && let Some(configuration) = configuration
@@ -205,6 +223,11 @@ fn handle_birth(log_path: &Path) {
 fn has_pair(args: &[String], first: &str, second: &str) -> bool {
     args.windows(2)
         .any(|window| window[0] == first && window[1] == second)
+}
+
+fn has_prefixed_pair(args: &[String], first: &str, second_prefix: &str) -> bool {
+    args.windows(2)
+        .any(|window| window[0] == first && window[1].starts_with(second_prefix))
 }
 
 fn has_pair_at_start(args: &[String], first: &str, second: &str) -> bool {
