@@ -11,6 +11,7 @@ use super::cursor::CursorAdapter;
 use super::descriptor::AgentDescriptor;
 use super::droid::DroidAdapter;
 use super::gemini::GeminiAdapter;
+use super::kiro::KiroAdapter;
 use super::opencode::OpencodeAdapter;
 use super::pi::PiAdapter;
 use super::{AgentAdapter, AgentErr, Result};
@@ -26,6 +27,7 @@ pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &OpencodeAdapter,
     &CursorAdapter,
     &DroidAdapter,
+    &KiroAdapter,
 ];
 
 /// Every built-in and valid machine-tier plugin adapter, in display order.

@@ -26,6 +26,7 @@ pub mod droid;
 pub mod gemini;
 pub(crate) mod hook_types;
 pub(crate) mod identity;
+pub mod kiro;
 pub mod lifecycle;
 pub(crate) mod locate;
 pub(crate) mod managed_source;
@@ -110,6 +111,7 @@ pub use copilot::CopilotAdapter;
 pub use cursor::CursorAdapter;
 pub use droid::DroidAdapter;
 pub use gemini::GeminiAdapter;
+pub use kiro::KiroAdapter;
 pub use opencode::OpencodeAdapter;
 pub use pi::PiAdapter;
 

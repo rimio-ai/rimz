@@ -640,5 +640,15 @@ mod tests {
                 .realtime_usage
                 .windows_defer_to_fresh_realtime
         );
+
+        let kiro = crate::agents::registry::descriptor_by_kind("kiro").unwrap();
+        assert_eq!(kiro.bin_names, &["kiro-cli"]);
+        assert!(!kiro.capabilities.blocking_asks);
+        assert!(kiro.capabilities.native_ask_ui);
+        assert!(!kiro.capabilities.rich_context);
+        assert!(!kiro.capabilities.context_usage);
+        assert!(!kiro.capabilities.account_spend);
+        assert!(!kiro.capabilities.remote_control.pane_sessions);
+        assert!(!kiro.capabilities.remote_control.background_sessions);
     }
 }

@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor", "droid"
+                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor", "droid", "kiro"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -441,6 +441,15 @@ mod tests {
         assert_eq!(count(&droid, MatrixCellState::Ok), 5);
         assert_eq!(count(&droid, MatrixCellState::Partial), 0);
         assert_eq!(count(&droid, MatrixCellState::Absent), 11);
+
+        let kiro = agent_cells(&matrix, "kiro");
+        assert_eq!(count(&kiro, MatrixCellState::Ok), 2);
+        assert_eq!(count(&kiro, MatrixCellState::Partial), 2);
+        assert_eq!(count(&kiro, MatrixCellState::Absent), 12);
+        assert_eq!(
+            agent_labels(&matrix, "kiro", MatrixCellState::Partial),
+            ["end", "idle"]
+        );
     }
 
     #[test]
@@ -461,7 +470,7 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor", "droid"
+                "claude", "codex", "copilot", "gemini", "pi", "opencode", "cursor", "droid", "kiro"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -470,14 +479,15 @@ mod tests {
         assert_eq!(
             states(ended),
             [
-                MatrixCellState::Ok,
-                MatrixCellState::Partial,
-                MatrixCellState::Ok,
-                MatrixCellState::Ok,
-                MatrixCellState::Ok,
-                MatrixCellState::Partial,
-                MatrixCellState::Ok,
-                MatrixCellState::Ok
+                MatrixCellState::Ok,      // claude
+                MatrixCellState::Partial, // codex
+                MatrixCellState::Ok,      // copilot
+                MatrixCellState::Ok,      // gemini
+                MatrixCellState::Ok,      // pi
+                MatrixCellState::Partial, // opencode
+                MatrixCellState::Ok,      // cursor
+                MatrixCellState::Ok,      // droid
+                MatrixCellState::Partial, // kiro
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -486,14 +496,15 @@ mod tests {
         assert_eq!(
             states(subagent_started),
             [
-                MatrixCellState::Ok,
-                MatrixCellState::Ok,
-                MatrixCellState::Absent,
-                MatrixCellState::Absent,
-                MatrixCellState::Absent,
-                MatrixCellState::Ok,
-                MatrixCellState::Absent,
-                MatrixCellState::Absent
+                MatrixCellState::Ok,     // claude
+                MatrixCellState::Ok,     // codex
+                MatrixCellState::Absent, // copilot
+                MatrixCellState::Absent, // gemini
+                MatrixCellState::Absent, // pi
+                MatrixCellState::Ok,     // opencode
+                MatrixCellState::Absent, // cursor
+                MatrixCellState::Absent, // droid
+                MatrixCellState::Absent, // kiro
             ]
         );
     }
