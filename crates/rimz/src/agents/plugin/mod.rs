@@ -30,8 +30,8 @@ use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
-    LaunchPreset, PresetErr, PriceBook, Result, RootIdentity, SubagentIdentity,
-    positional_prompt_argv, resolve_root_identity, resolve_subagent_identity,
+    LaunchPreset, PresetArgMatcher, PresetErr, PresetField, PriceBook, Result, RootIdentity,
+    SubagentIdentity, positional_prompt_argv, resolve_root_identity, resolve_subagent_identity,
 };
 use crate::harness::run::PermissionMode;
 use crate::transcript::AskQuestion;
@@ -411,6 +411,16 @@ impl AgentAdapter for PluginAdapter {
             });
         }
         Ok(args)
+    }
+
+    fn preset_arg_matcher(&self, field: PresetField) -> Option<PresetArgMatcher> {
+        let launch = self.manifest.launch.as_ref()?;
+        let flag = match field {
+            PresetField::Model => launch.model_flag.as_ref(),
+            PresetField::Effort => launch.effort_flag.as_ref(),
+            PresetField::SystemPromptFile | PresetField::AppendSystemPromptFile => None,
+        }?;
+        Some(PresetArgMatcher::Flag(vec![flag.clone()]))
     }
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
@@ -1028,6 +1038,14 @@ setup-doc = "README.md"
                 })
                 .unwrap(),
             vec!["--model", "m", "--effort", "high"]
+        );
+        assert_eq!(
+            adapter.preset_arg_matcher(PresetField::Model),
+            Some(PresetArgMatcher::Flag(vec!["--model".into()]))
+        );
+        assert_eq!(
+            adapter.preset_arg_matcher(PresetField::Effort),
+            Some(PresetArgMatcher::Flag(vec!["--effort".into()]))
         );
     }
 

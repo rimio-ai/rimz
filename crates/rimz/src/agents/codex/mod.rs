@@ -557,6 +557,24 @@ impl AgentAdapter for CodexAdapter {
         Ok(argv)
     }
 
+    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
+        match field {
+            super::PresetField::Model => Some(super::PresetArgMatcher::Flag(vec![
+                "--model".to_owned(),
+                "-m".to_owned(),
+            ])),
+            super::PresetField::Effort => Some(super::PresetArgMatcher::ConfigKey {
+                flags: vec!["-c".to_owned(), "--config".to_owned()],
+                key: "model_reasoning_effort".to_owned(),
+            }),
+            super::PresetField::SystemPromptFile => Some(super::PresetArgMatcher::ConfigKey {
+                flags: vec!["-c".to_owned(), "--config".to_owned()],
+                key: "model_instructions_file".to_owned(),
+            }),
+            super::PresetField::AppendSystemPromptFile => None,
+        }
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         Some(super::positional_prompt_argv("codex", extra_args, prompt))
     }

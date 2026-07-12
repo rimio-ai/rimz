@@ -10,11 +10,84 @@ use std::path::{Path, PathBuf};
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::{
     ADAPTERS, AgentAdapter, AgentHookClass, AskReply, ClassificationSample, ConcernCoverage,
-    HookCoverage, IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
+    HookCoverage, IntegrationConcern, LaunchPreset, PresetArgMatcher, PresetField, PriceBook,
+    SpendFixture, SpendFixtureBody,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
 use crate::transcript::{AskOption, AskQuestion};
+
+#[test]
+fn rendered_preset_flags_have_matching_argv_declarations() {
+    let fields = [
+        (PresetField::Model, "model"),
+        (PresetField::Effort, "high"),
+        (PresetField::SystemPromptFile, "/tmp/system.md"),
+        (PresetField::AppendSystemPromptFile, "/tmp/append-system.md"),
+    ];
+    for adapter in ADAPTERS {
+        for (field, value) in fields {
+            let preset = preset_for_field(field, value);
+            match adapter.render_preset(&preset) {
+                Ok(argv) => {
+                    let matcher = adapter.preset_arg_matcher(field).unwrap_or_else(|| {
+                        panic!(
+                            "{} renders {field:?} without declaring its argv matcher",
+                            adapter.descriptor().kind
+                        )
+                    });
+                    assert!(
+                        matcher_consumes(&matcher, &argv),
+                        "{} {field:?} matcher {matcher:?} does not consume {argv:?}",
+                        adapter.descriptor().kind
+                    );
+                }
+                Err(_) => assert!(
+                    adapter.preset_arg_matcher(field).is_none(),
+                    "{} declares a matcher for unsupported {field:?}",
+                    adapter.descriptor().kind
+                ),
+            }
+        }
+    }
+}
+
+fn preset_for_field(field: PresetField, value: &str) -> LaunchPreset {
+    let mut preset = LaunchPreset::default();
+    match field {
+        PresetField::Model => preset.model = Some(value.to_owned()),
+        PresetField::Effort => preset.effort = Some(value.to_owned()),
+        PresetField::SystemPromptFile => preset.system_prompt_file = Some(value.into()),
+        PresetField::AppendSystemPromptFile => {
+            preset.append_system_prompt_file = Some(value.into());
+        }
+    }
+    preset
+}
+
+fn matcher_consumes(matcher: &PresetArgMatcher, argv: &[String]) -> bool {
+    match matcher {
+        PresetArgMatcher::Flag(flags) => match argv {
+            [flag, _value] => flags.contains(flag),
+            [joined] => flags.iter().any(|flag| {
+                joined
+                    .strip_prefix(flag)
+                    .is_some_and(|rest| rest.starts_with('='))
+            }),
+            _ => false,
+        },
+        PresetArgMatcher::ConfigKey { flags, key } => match argv {
+            [flag, value] => flags.contains(flag) && value.starts_with(&format!("{key}=")),
+            [joined] => flags.iter().any(|flag| {
+                joined
+                    .strip_prefix(flag)
+                    .and_then(|rest| rest.strip_prefix('='))
+                    .is_some_and(|value| value.starts_with(&format!("{key}=")))
+            }),
+            _ => false,
+        },
+    }
+}
 
 #[test]
 fn classify_matches_corpus() {

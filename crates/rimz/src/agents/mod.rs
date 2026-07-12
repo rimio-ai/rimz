@@ -170,6 +170,23 @@ impl LaunchPreset {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresetField {
+    Model,
+    Effort,
+    SystemPromptFile,
+    AppendSystemPromptFile,
+}
+
+/// How a launch-preset field appears in the agent's own CLI argv.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PresetArgMatcher {
+    /// A single-use named flag: `--model VALUE` or `--model=VALUE`.
+    Flag(Vec<String>),
+    /// A repeatable config override carrying the field as `<flag> <key>=VALUE`.
+    ConfigKey { flags: Vec<String>, key: String },
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PresetErr {
     #[error(
@@ -886,6 +903,11 @@ pub trait AgentAdapter: Send + Sync {
             });
         }
         Ok(Vec::new())
+    }
+
+    /// Describe the provider-native argv spelling rendered for a preset field.
+    fn preset_arg_matcher(&self, _field: PresetField) -> Option<PresetArgMatcher> {
+        None
     }
 
     /// The argv that launches a fresh interactive session of this agent in the

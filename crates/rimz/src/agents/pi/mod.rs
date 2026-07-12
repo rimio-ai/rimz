@@ -629,6 +629,17 @@ impl AgentAdapter for PiAdapter {
         Ok(argv)
     }
 
+    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
+        let flag = match field {
+            super::PresetField::Model => "--model",
+            super::PresetField::Effort => "--thinking",
+            super::PresetField::SystemPromptFile | super::PresetField::AppendSystemPromptFile => {
+                return None;
+            }
+        };
+        Some(super::PresetArgMatcher::Flag(vec![flag.to_owned()]))
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         Some(super::positional_prompt_argv("pi", extra_args, prompt))
     }

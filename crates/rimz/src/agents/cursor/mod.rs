@@ -443,6 +443,11 @@ impl AgentAdapter for CursorAdapter {
         Ok(argv)
     }
 
+    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
+        (field == super::PresetField::Model)
+            .then(|| super::PresetArgMatcher::Flag(vec!["--model".to_owned()]))
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         let bin = locate_binary(self.descriptor())
             .map(|path| path.to_string_lossy().into_owned())

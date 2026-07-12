@@ -672,6 +672,11 @@ impl AgentAdapter for GeminiAdapter {
         Ok(args)
     }
 
+    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
+        (field == super::PresetField::Model)
+            .then(|| super::PresetArgMatcher::Flag(vec!["--model".to_owned(), "-m".to_owned()]))
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         Some(super::positional_prompt_argv("gemini", extra_args, prompt))
     }

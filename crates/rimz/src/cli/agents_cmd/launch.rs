@@ -609,6 +609,9 @@ pub(super) fn prepare_launch_layout(
     if let Some(budget) = args.budget {
         apply_launch_budget(&mut layout, budget);
     }
+    for warning in reconcile_preset_args(&mut layout) {
+        let _ = writeln!(std::io::stderr(), "{warning}");
+    }
     apply_default_launch_models(&mut layout)?;
     Ok(PreparedLaunch {
         profiles: launch.profiles,
@@ -974,6 +977,207 @@ fn apply_launch_budget(layout: &mut LayoutSpec, spec: rimz::harness::budget::Bud
                 *budget = Some(canonical.clone());
             }
         }
+    }
+}
+
+#[derive(Debug)]
+struct PresetArgOccurrence {
+    start: usize,
+    end: usize,
+    value: String,
+}
+
+/// Reconcile provider-native preset flags already present in a cell's argv.
+/// Declared RimZ fields win; an args-only model becomes the cell identity.
+pub(super) fn reconcile_preset_args(layout: &mut LayoutSpec) -> Vec<String> {
+    use rimz::agents::PresetField;
+
+    let mut warnings = Vec::new();
+    for column in &mut layout.columns {
+        for cell in &mut column.rows {
+            let Cell::Agent {
+                kind,
+                args,
+                model,
+                effort,
+                system_prompt_file,
+                append_system_prompt_file,
+                profile,
+                ..
+            } = cell
+            else {
+                continue;
+            };
+            let Some(adapter) = rimz::agents::find_adapter(kind) else {
+                continue;
+            };
+            let label = profile.as_deref().unwrap_or(kind.as_str());
+            let declared = [
+                (PresetField::Model, model.clone()),
+                (PresetField::Effort, effort.clone()),
+                (
+                    PresetField::SystemPromptFile,
+                    system_prompt_file
+                        .as_deref()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                ),
+                (
+                    PresetField::AppendSystemPromptFile,
+                    append_system_prompt_file
+                        .as_deref()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                ),
+            ];
+
+            for (field, value) in declared {
+                let Some(matcher) = adapter.preset_arg_matcher(field) else {
+                    continue;
+                };
+                let occurrences = preset_arg_occurrences(args, &matcher);
+                let Some(declared_value) = value else {
+                    if field == PresetField::Model
+                        && let Some(winner) = occurrences.last()
+                    {
+                        for occurrence in &occurrences[..occurrences.len() - 1] {
+                            if occurrence.value != winner.value {
+                                warnings.push(format!(
+                                    "warning: profile `{label}` args set {}; later model {} wins",
+                                    format_preset_setting(&matcher, &occurrence.value),
+                                    winner.value
+                                ));
+                            }
+                        }
+                        *model = Some(winner.value.clone());
+                        remove_occurrences(args, &occurrences[..occurrences.len() - 1]);
+                    }
+                    continue;
+                };
+                if occurrences.len() <= 1 {
+                    continue;
+                }
+                for occurrence in &occurrences {
+                    if occurrence.value != declared_value {
+                        warnings.push(format!(
+                            "warning: profile `{label}` args set {}; declared {} {} wins",
+                            format_preset_setting(&matcher, &occurrence.value),
+                            preset_field_name(field),
+                            declared_value
+                        ));
+                    }
+                }
+                // A matcher is declared only for fields this adapter renders;
+                // the registry-wide conformance test keeps the two in sync.
+                let canonical = adapter
+                    .render_preset(&single_field_preset(field, declared_value.clone()))
+                    .unwrap_or_else(|err| {
+                        unreachable!("matched preset field failed render: {err}")
+                    });
+                remove_occurrences(args, &occurrences);
+                args.extend(canonical);
+            }
+        }
+    }
+    warnings
+}
+
+fn single_field_preset(
+    field: rimz::agents::PresetField,
+    value: String,
+) -> rimz::agents::LaunchPreset {
+    use rimz::agents::PresetField;
+
+    let mut preset = rimz::agents::LaunchPreset::default();
+    match field {
+        PresetField::Model => preset.model = Some(value),
+        PresetField::Effort => preset.effort = Some(value),
+        PresetField::SystemPromptFile => preset.system_prompt_file = Some(value.into()),
+        PresetField::AppendSystemPromptFile => {
+            preset.append_system_prompt_file = Some(value.into())
+        }
+    }
+    preset
+}
+
+fn preset_field_name(field: rimz::agents::PresetField) -> &'static str {
+    match field {
+        rimz::agents::PresetField::Model => "model",
+        rimz::agents::PresetField::Effort => "effort",
+        rimz::agents::PresetField::SystemPromptFile => "system-prompt-file",
+        rimz::agents::PresetField::AppendSystemPromptFile => "append-system-prompt-file",
+    }
+}
+
+fn format_preset_setting(matcher: &rimz::agents::PresetArgMatcher, value: &str) -> String {
+    match matcher {
+        rimz::agents::PresetArgMatcher::Flag(flags) => format!("{} {value}", flags[0]),
+        rimz::agents::PresetArgMatcher::ConfigKey { key, .. } => format!("{key} {value}"),
+    }
+}
+
+fn preset_arg_occurrences(
+    args: &[String],
+    matcher: &rimz::agents::PresetArgMatcher,
+) -> Vec<PresetArgOccurrence> {
+    let mut occurrences = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let matched = match matcher {
+            rimz::agents::PresetArgMatcher::Flag(flags) => flags.iter().find_map(|flag| {
+                if args[index] == *flag {
+                    args.get(index + 1).map(|value| PresetArgOccurrence {
+                        start: index,
+                        end: index + 2,
+                        value: value.clone(),
+                    })
+                } else {
+                    args[index]
+                        .strip_prefix(flag)
+                        .and_then(|suffix| suffix.strip_prefix('='))
+                        .map(|value| PresetArgOccurrence {
+                            start: index,
+                            end: index + 1,
+                            value: value.to_owned(),
+                        })
+                }
+            }),
+            rimz::agents::PresetArgMatcher::ConfigKey { flags, key } => {
+                flags.iter().find_map(|flag| {
+                    let prefix = format!("{key}=");
+                    if args[index] == *flag {
+                        args.get(index + 1)
+                            .and_then(|value| value.strip_prefix(&prefix))
+                            .map(|value| PresetArgOccurrence {
+                                start: index,
+                                end: index + 2,
+                                value: value.to_owned(),
+                            })
+                    } else {
+                        args[index]
+                            .strip_prefix(flag)
+                            .and_then(|suffix| suffix.strip_prefix('='))
+                            .and_then(|value| value.strip_prefix(&prefix))
+                            .map(|value| PresetArgOccurrence {
+                                start: index,
+                                end: index + 1,
+                                value: value.to_owned(),
+                            })
+                    }
+                })
+            }
+        };
+        if let Some(occurrence) = matched {
+            index = occurrence.end;
+            occurrences.push(occurrence);
+        } else {
+            index += 1;
+        }
+    }
+    occurrences
+}
+
+fn remove_occurrences(args: &mut Vec<String>, occurrences: &[PresetArgOccurrence]) {
+    for occurrence in occurrences.iter().rev() {
+        args.drain(occurrence.start..occurrence.end);
     }
 }
 

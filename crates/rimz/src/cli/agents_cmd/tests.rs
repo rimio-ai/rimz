@@ -688,6 +688,129 @@ mod launch_options {
         );
     }
 
+    fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
+        Cell::Agent {
+            kind: AgentKind::new_unchecked(kind),
+            args: args.iter().map(|value| (*value).to_owned()).collect(),
+            mode: None,
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+            profile: Some(format!("{kind}-coder")),
+            role: None,
+            model: model.map(str::to_owned),
+            effort: effort.map(str::to_owned),
+            budget: None,
+        }
+    }
+
+    #[test]
+    fn args_only_model_becomes_identity_and_suppresses_default() {
+        let mut layout = LayoutSpec::single(preset_cell(
+            "codex",
+            &["--debug", "--model", "gpt-5.6-sol"],
+            None,
+            None,
+        ));
+        assert!(reconcile_preset_args(&mut layout).is_empty());
+        apply_default_launch_models(&mut layout).expect("apply defaults");
+        assert!(matches!(&layout.columns[0].rows[0],
+            Cell::Agent { args, model: Some(model), .. }
+                if model == "gpt-5.6-sol"
+                    && args == &["--debug", "--model", "gpt-5.6-sol"]));
+    }
+
+    #[test]
+    fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
+        let mut different = LayoutSpec::single(preset_cell(
+            "codex",
+            &["--model", "gpt-5.6-max", "--model=gpt-5.6-sol"],
+            Some("gpt-5.6-max"),
+            None,
+        ));
+        assert_eq!(
+            reconcile_preset_args(&mut different),
+            [
+                "warning: profile `codex-coder` args set --model gpt-5.6-sol; declared model gpt-5.6-max wins"
+            ]
+        );
+        assert!(matches!(&different.columns[0].rows[0],
+            Cell::Agent { args, .. } if args == &["--model", "gpt-5.6-max"]));
+
+        let mut equal = LayoutSpec::single(preset_cell(
+            "codex",
+            &["--model", "gpt-5.6-max", "-m", "gpt-5.6-max"],
+            Some("gpt-5.6-max"),
+            None,
+        ));
+        assert!(reconcile_preset_args(&mut equal).is_empty());
+        assert!(matches!(&equal.columns[0].rows[0],
+            Cell::Agent { args, .. } if args == &["--model", "gpt-5.6-max"]));
+    }
+
+    #[test]
+    fn args_only_model_uses_last_short_or_joined_occurrence() {
+        let mut layout = LayoutSpec::single(preset_cell(
+            "codex",
+            &["--model=first", "--debug", "-m", "second"],
+            None,
+            None,
+        ));
+        assert_eq!(reconcile_preset_args(&mut layout).len(), 1);
+        assert!(matches!(&layout.columns[0].rows[0],
+            Cell::Agent { args, model: Some(model), .. }
+                if model == "second" && args == &["--debug", "-m", "second"]));
+    }
+
+    #[test]
+    fn launch_model_override_wins_over_profile_and_args_models() {
+        let mut layout = LayoutSpec::single(preset_cell(
+            "codex",
+            &["--model", "profile", "--model", "raw"],
+            Some("profile"),
+            None,
+        ));
+        apply_launch_mode_and_passthrough(
+            &mut layout,
+            None,
+            &rimz::agents::LaunchPreset {
+                model: Some("override".into()),
+                ..Default::default()
+            },
+            &[],
+        )
+        .expect("apply override");
+        assert_eq!(reconcile_preset_args(&mut layout).len(), 2);
+        assert!(matches!(&layout.columns[0].rows[0],
+            Cell::Agent { args, model: Some(model), .. }
+                if model == "override" && args == &["--model", "override"]));
+    }
+
+    #[test]
+    fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags() {
+        let mut codex = LayoutSpec::single(preset_cell(
+            "codex",
+            &[
+                "-c",
+                "model_reasoning_effort=high",
+                "-c",
+                "web_search=cached",
+                "--config=model_reasoning_effort=low",
+            ],
+            None,
+            Some("high"),
+        ));
+        assert_eq!(reconcile_preset_args(&mut codex).len(), 1);
+        assert!(matches!(&codex.columns[0].rows[0],
+            Cell::Agent { args, .. }
+                if args == &["-c", "web_search=cached", "-c", "model_reasoning_effort=high"]));
+
+        let mut claude =
+            LayoutSpec::single(preset_cell("claude", &["--effort", "high"], None, None));
+        assert!(reconcile_preset_args(&mut claude).is_empty());
+        assert!(matches!(&claude.columns[0].rows[0],
+            Cell::Agent { args, effort: None, .. } if args == &["--effort", "high"]));
+    }
+
     #[test]
     fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
         let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));

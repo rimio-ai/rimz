@@ -497,6 +497,16 @@ impl AgentAdapter for ClaudeAdapter {
         Ok(argv)
     }
 
+    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
+        let flag = match field {
+            super::PresetField::Model => "--model",
+            super::PresetField::Effort => "--effort",
+            super::PresetField::SystemPromptFile => "--system-prompt-file",
+            super::PresetField::AppendSystemPromptFile => "--append-system-prompt-file",
+        };
+        Some(super::PresetArgMatcher::Flag(vec![flag.to_owned()]))
+    }
+
     fn max_turns_args(&self, limit: u32) -> Option<Vec<String>> {
         Some(vec!["--max-turns".to_owned(), limit.to_string()])
     }
