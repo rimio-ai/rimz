@@ -226,9 +226,13 @@ fn repaint_watch(globals: &GlobalFlags) -> Result<()> {
         terminal::{Clear, ClearType},
     };
 
-    execute!(std::io::stdout(), MoveTo(0, 0))?;
-    render_watch_frame(&mut ui::out(), globals)?;
-    execute!(std::io::stdout(), Clear(ClearType::FromCursorDown))?;
+    let mut frame = Vec::new();
+    render_watch_frame(&mut frame, globals)?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, MoveTo(0, 0))?;
+    rimz::tui::write_crlf(&mut stdout, &frame)?;
+    execute!(stdout, Clear(ClearType::FromCursorDown))?;
+    stdout.flush()?;
     Ok(())
 }
 

@@ -1,6 +1,7 @@
 //! Shared terminal-mode lifecycle for inline and pane-resident TUI surfaces.
 
 use std::io;
+use std::io::Write;
 use std::panic::{self, PanicHookInfo};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -63,6 +64,29 @@ impl TruecolorSignals {
 pub fn truecolor() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| TruecolorSignals::detect().truecolor())
+}
+
+/// Write a buffered terminal frame with raw-mode-safe line endings.
+pub fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+    let mut start = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        if index > start {
+            w.write_all(&bytes[start..index])?;
+        }
+        if index > 0 && bytes[index - 1] == b'\r' {
+            w.write_all(b"\n")?;
+        } else {
+            w.write_all(b"\r\n")?;
+        }
+        start = index + 1;
+    }
+    if start < bytes.len() {
+        w.write_all(&bytes[start..])?;
+    }
+    Ok(())
 }
 
 fn terminfo_truecolor() -> bool {
@@ -169,7 +193,7 @@ pub(crate) fn restore_terminal(mouse: MouseCapture) {
 
 #[cfg(test)]
 mod tests {
-    use super::TruecolorSignals;
+    use super::{TruecolorSignals, write_crlf};
 
     fn signals(colorterm: Option<&str>, terminfo: bool) -> TruecolorSignals {
         TruecolorSignals {
@@ -188,5 +212,14 @@ mod tests {
         assert!(!signals(Some("8bit"), false).truecolor());
         assert!(!signals(Some(""), false).truecolor());
         assert!(!signals(None, false).truecolor());
+    }
+
+    #[test]
+    fn raw_mode_writer_uses_crlf_line_endings() {
+        let mut out = Vec::new();
+
+        write_crlf(&mut out, b"head\nrow\r\ntail").expect("write frame");
+
+        assert_eq!(out, b"head\r\nrow\r\ntail");
     }
 }

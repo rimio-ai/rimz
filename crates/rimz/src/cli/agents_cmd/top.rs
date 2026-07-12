@@ -299,31 +299,9 @@ fn repaint(sample: &TopSample, rows: &[TopRow]) -> Result<()> {
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
     let mut frame = Vec::new();
     render_top(&mut frame, sample, rows)?;
-    write_crlf(&mut stdout, &frame)?;
+    rimz::tui::write_crlf(&mut stdout, &frame)?;
     execute!(stdout, Clear(ClearType::FromCursorDown))?;
     stdout.flush()?;
-    Ok(())
-}
-
-fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> std::io::Result<()> {
-    let mut start = 0;
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte != b'\n' {
-            continue;
-        }
-        if index > start {
-            w.write_all(&bytes[start..index])?;
-        }
-        if index > 0 && bytes[index - 1] == b'\r' {
-            w.write_all(b"\n")?;
-        } else {
-            w.write_all(b"\r\n")?;
-        }
-        start = index + 1;
-    }
-    if start < bytes.len() {
-        w.write_all(&bytes[start..])?;
-    }
     Ok(())
 }
 
@@ -442,15 +420,6 @@ mod tests {
         assert!(rows[0].cpu_pct.unwrap() > rows[1].cpu_pct.unwrap());
         assert_eq!(rows[0].io_bps, Some(1_000));
         assert_eq!(rows[2].cpu_pct, None);
-    }
-
-    #[test]
-    fn raw_mode_writer_uses_crlf_line_endings() {
-        let mut out = Vec::new();
-
-        write_crlf(&mut out, b"head\nrow\n").expect("write frame");
-
-        assert_eq!(out, b"head\r\nrow\r\n");
     }
 
     #[test]
