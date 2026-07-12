@@ -40,10 +40,7 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         } else {
             trimmed_nonempty(3)
         },
-        // tmux reports no spawn command; the sidebar producer backfills Rimz's
-        // supervised agent wrapper from `pane_pid` via `/proc`
-        // (`sidebar::produce::panes::backfill_wrapper_spawn_commands`).
-        spawn_command: None,
+        spawn_command: trimmed_nonempty(10),
         cwd: trimmed_nonempty(4),
         pane_pid: cols
             .get(5)
@@ -137,14 +134,18 @@ mod tests {
     #[test]
     fn parse_pane_line_handles_full_short_and_invalid_rows() {
         // session, window_id, pane_id, command, cwd, pid, pane_active,
-        // window_name, pane_title, pane_floating_flag.
-        let row = "rimz-qe,@1,%3,nvim,/home/u/qe,4242,1,qe";
+        // window_name, pane_title, pane_floating_flag, pane_start_command.
+        let row = "rimz-qe,@1,%3,rimz,/home/u/qe,4242,1,qe,,0,rimz loop watch --hold";
         let pane = parse_pane_line(row).expect("full row parses");
         assert_eq!(pane.pane_id.raw(), "%3");
         assert_eq!(pane.session_name, "rimz-qe");
         assert_eq!(pane.view_id.as_deref(), Some("@1"));
         assert_eq!(pane.view_name.as_deref(), Some("qe"));
-        assert_eq!(pane.command.as_deref(), Some("nvim"));
+        assert_eq!(pane.command.as_deref(), Some("rimz"));
+        assert_eq!(
+            pane.spawn_command.as_deref(),
+            Some("rimz loop watch --hold")
+        );
         assert_eq!(pane.cwd.as_deref(), Some("/home/u/qe"));
         assert_eq!(pane.pane_pid, Some(4242));
         assert!(pane.is_focused, "pane_active=1 is focused");
@@ -170,6 +171,7 @@ mod tests {
         let short = parse_pane_line("rimz-qe,@1,%3").expect("leading columns parse");
         assert_eq!(short.pane_id.raw(), "%3");
         assert_eq!(short.command, None);
+        assert_eq!(short.spawn_command, None);
         assert_eq!(short.view_name, None);
         assert!(!short.is_focused);
 

@@ -23,6 +23,13 @@ fn pane(command: Option<&str>, view_name: Option<&str>) -> PaneRef {
     }
 }
 
+fn spawned_pane(command: &str, spawn_command: &str, view_name: Option<&str>) -> PaneRef {
+    PaneRef {
+        spawn_command: Some(spawn_command.to_owned()),
+        ..pane(Some(command), view_name)
+    }
+}
+
 #[test]
 fn claude_command_uses_worktree_spawn() {
     assert_eq!(
@@ -356,14 +363,19 @@ fn daemon_view() -> DaemonView {
 #[test]
 fn missing_managed_panes_diffs_the_daemon_view_spec() {
     let present = [
-        pane(
-            Some("rimz daemon content --slot 0 --worktree-root /repo"),
+        spawned_pane(
+            "rimz",
+            "rimz daemon content --slot 0 --worktree-root /repo",
             Some(VIEW_NAME),
         ),
-        pane(Some("rimz codex app-server serve"), Some(VIEW_NAME)),
-        pane(Some("rimz loop watch --hold"), Some(VIEW_NAME)),
+        spawned_pane("rimz", "rimz codex app-server serve", Some(VIEW_NAME)),
+        spawned_pane("rimz", "rimz loop watch --hold", Some(VIEW_NAME)),
         pane(Some("user shell"), Some(VIEW_NAME)),
-        pane(Some("claude remote-control --spawn worktree"), Some("work")),
+        spawned_pane(
+            "claude",
+            "claude remote-control --spawn worktree",
+            Some("work"),
+        ),
     ];
 
     let missing = missing_managed_panes(&daemon_view(), &present)
@@ -383,20 +395,23 @@ fn missing_managed_panes_diffs_the_daemon_view_spec() {
 #[test]
 fn missing_managed_panes_is_empty_when_every_managed_pane_is_present() {
     let present = [
-        pane(
-            Some("rimz daemon content --slot 0 --worktree-root /repo"),
+        spawned_pane(
+            "rimz",
+            "rimz daemon content --slot 0 --worktree-root /repo",
             Some(VIEW_NAME),
         ),
-        pane(
-            Some("rimz daemon content --slot 1 --worktree-root /repo"),
+        spawned_pane(
+            "rimz",
+            "rimz daemon content --slot 1 --worktree-root /repo",
             Some(VIEW_NAME),
         ),
-        pane(Some("rimz codex app-server serve"), Some(VIEW_NAME)),
-        pane(
-            Some("claude remote-control --spawn worktree"),
+        spawned_pane("rimz", "rimz codex app-server serve", Some(VIEW_NAME)),
+        spawned_pane(
+            "claude",
+            "claude remote-control --spawn worktree",
             Some(VIEW_NAME),
         ),
-        pane(Some("rimz loop watch --hold"), Some(VIEW_NAME)),
+        spawned_pane("rimz", "rimz loop watch --hold", Some(VIEW_NAME)),
     ];
 
     assert!(missing_managed_panes(&daemon_view(), &present).is_empty());

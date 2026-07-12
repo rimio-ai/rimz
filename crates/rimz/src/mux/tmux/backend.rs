@@ -924,7 +924,7 @@ impl TmuxBackend {
     }
 
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
-        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{pane_active},#{s/,/_/g:window_name},#{s/,/_/g:pane_title},#{pane_floating_flag}";
+        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{pane_active},#{s/,/_/g:window_name},#{s/,/_/g:pane_title},#{pane_floating_flag},#{s/,/_/g:pane_start_command}";
         match session_name {
             Some(session) => self
                 .cmd()

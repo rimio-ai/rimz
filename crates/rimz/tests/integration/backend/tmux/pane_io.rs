@@ -44,6 +44,13 @@ fn split_pane_injects_env_vars() {
         .iter()
         .find(|p| p.pane_id.raw() != "%0")
         .expect("split created a new pane id");
+    assert!(
+        new_pane
+            .spawn_command
+            .as_deref()
+            .is_some_and(|command| command.contains("printf RIMZ_TEST_VAR")),
+        "split pane should expose its birth command, got {new_pane:?}",
+    );
     let capture = capture_pane_until(
         &server.backend,
         &new_pane.pane_id,
