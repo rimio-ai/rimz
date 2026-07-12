@@ -222,10 +222,9 @@ exit 1
 
 #[cfg(unix)]
 #[test]
-fn authoritative_list_panes_uses_zellij_server_json_and_merges_cache_enrichment() {
+fn authoritative_list_panes_enriches_matching_cache_geometry_only() {
     use crate::ids::WorkspaceId;
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::mux::{MuxBackend, PaneListOptions};
     use crate::sidebar::cache::write_pane_topology_cache;
     use crate::sidebar::timing::unix_now_ms;
     use crate::store::paths::RuntimePaths;
@@ -235,7 +234,7 @@ fn authoritative_list_panes_uses_zellij_server_json_and_merges_cache_enrichment(
 dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/zellij.log"
 if [ "$1" = "--session" ] && [ "$3" = "action" ] && [ "$4" = "list-panes" ]; then
-  printf '[{"id":7,"is_plugin":false,"is_focused":true,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"}]\n'
+  printf '[{"id":7,"is_plugin":false,"is_focused":true,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","title":"rimz-sidebar","terminal_command":"rimz"}]\n'
   exit 0
 fi
 exit 1
@@ -255,23 +254,59 @@ exit 1
             writer: None,
             focused_pane: None,
             clients: None,
-            panes: vec![PaneTopologyPane {
-                id: 7,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: false,
-                tab_position: 0,
-                tab_name: Some("old".to_owned()),
-                pane_columns: None,
-                pane_x: None,
-                title: None,
-                pane_command: Some("vim".to_owned()),
-                pane_cwd: Some(project_root.to_string_lossy().into_owned()),
-                terminal_command: None,
-            }],
+            panes: vec![
+                PaneTopologyPane {
+                    id: 7,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_floating: false,
+                    is_focused: false,
+                    tab_position: 0,
+                    tab_name: Some("old".to_owned()),
+                    pane_columns: Some(999),
+                    pane_x: Some(999),
+                    title: None,
+                    pane_command: Some("vim".to_owned()),
+                    pane_cwd: Some(project_root.to_string_lossy().into_owned()),
+                    terminal_command: None,
+                },
+                PaneTopologyPane {
+                    id: 8,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_floating: false,
+                    is_focused: false,
+                    tab_position: 1,
+                    tab_name: Some("background".to_owned()),
+                    pane_columns: Some(40),
+                    pane_x: Some(0),
+                    title: Some("rimz-sidebar".to_owned()),
+                    pane_command: Some("rimz-sidebar".to_owned()),
+                    pane_cwd: None,
+                    terminal_command: Some("rimz".to_owned()),
+                },
+                PaneTopologyPane {
+                    id: 9,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_floating: false,
+                    is_focused: false,
+                    tab_position: 2,
+                    tab_name: Some("gone".to_owned()),
+                    pane_columns: Some(50),
+                    pane_x: Some(0),
+                    title: Some("rimz-sidebar".to_owned()),
+                    pane_command: Some("rimz-sidebar".to_owned()),
+                    pane_cwd: None,
+                    terminal_command: Some("rimz".to_owned()),
+                },
+            ],
         },
     )
     .expect("write enrichment cache");
@@ -279,20 +314,35 @@ exit 1
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
         .with_presence_plugin_for_test(&shim);
     let listing = backend
-        .list_panes(PaneListOptions {
-            session_name: Some("rimz-test".to_owned()),
-            workspace_id: Some(workspace_id),
-            authoritative: true,
-            ..Default::default()
-        })
+        .authoritative_pane_listing(
+            "rimz-test",
+            None,
+            Some(&workspace_id),
+            std::time::Duration::from_secs(1),
+        )
         .expect("authoritative list panes");
 
-    assert_eq!(listing.panes.len(), 1);
-    assert_eq!(listing.panes[0].command.as_deref(), Some("vim"));
+    assert_eq!(listing.panes.len(), 2, "cache-only panes stay excluded");
+    let active = listing
+        .panes
+        .iter()
+        .find(|pane| pane.id == 7)
+        .expect("active");
+    assert_eq!(active.pane_columns, Some(100));
+    assert_eq!(active.pane_x, Some(0));
+    assert_eq!(active.pane_command.as_deref(), Some("vim"));
     assert_eq!(
-        listing.panes[0].cwd.as_deref(),
+        active.pane_cwd.as_deref(),
         Some(project_root.to_string_lossy().as_ref()),
     );
+    let background = listing
+        .panes
+        .iter()
+        .find(|pane| pane.id == 8)
+        .expect("background");
+    assert_eq!(background.pane_columns, Some(40));
+    assert_eq!(background.pane_x, Some(0));
+    assert_eq!(background.pane_command.as_deref(), Some("rimz-sidebar"));
     assert_eq!(
         listing.authoritative_focus.as_ref().map(|pane| pane.raw()),
         Some("terminal_7")
