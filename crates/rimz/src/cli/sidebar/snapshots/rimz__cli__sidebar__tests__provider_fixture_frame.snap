@@ -1,6 +1,6 @@
 ---
 source: crates/rimz/src/cli/sidebar/tests.rs
-assertion_line: 78
+assertion_line: 89
 expression: strip_sgr(&ansi)
 ---
  ⌘ query-engine                /srv/code/query-engine
@@ -28,8 +28,8 @@ expression: strip_sgr(&ansi)
  ─── Claude ──── Codex ──────────────────────────────
 
            ChatGPT Pro · v0.135.0
-  ▗▛███▜▖  ◎ 5  ◇ 214k ↘ 149k ↗ 42k ◌ 21k       $3.24
- ▐▜▌ ▚ ▐▛▌ api ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ∞
+  ▗▛▀▀▀▜▖  ◎ 5  ◇ 214k ↘ 149k ↗ 42k ◌ 21k       $3.24
+ ▐█ ▜▖  █▌ api ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ∞
   ▝▀▀▀▀▀▘
 
   ── Total: ─────────────────────────────────────────

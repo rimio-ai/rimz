@@ -72,8 +72,8 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     display_name: "Kimi",
     brand: Brand {
         emblem: None,
-        color: 141,
-        color_rgb: (0x8d, 0x6b, 0xff),
+        color: 33,
+        color_rgb: (0x17, 0x83, 0xff),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Kimi" },
     sub_providers: &[],
