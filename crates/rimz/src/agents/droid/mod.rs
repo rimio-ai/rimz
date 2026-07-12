@@ -453,6 +453,11 @@ impl AgentAdapter for DroidAdapter {
         Ok(argv)
     }
 
+    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
+        (field == super::PresetField::AppendSystemPromptFile)
+            .then(|| super::PresetArgMatcher::Flag(vec!["--append-system-prompt-file".to_owned()]))
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         Some(super::positional_prompt_argv("droid", extra_args, prompt))
     }

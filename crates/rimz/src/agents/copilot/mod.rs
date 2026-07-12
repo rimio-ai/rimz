@@ -585,6 +585,17 @@ impl AgentAdapter for CopilotAdapter {
         Ok(argv)
     }
 
+    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
+        let flag = match field {
+            super::PresetField::Model => "--model",
+            super::PresetField::Effort => "--effort",
+            super::PresetField::SystemPromptFile | super::PresetField::AppendSystemPromptFile => {
+                return None;
+            }
+        };
+        Some(super::PresetArgMatcher::Flag(vec![flag.to_owned()]))
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         let mut argv = std::iter::once("copilot".to_owned())
             .chain(extra_args.iter().cloned())
