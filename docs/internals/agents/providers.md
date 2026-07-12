@@ -138,7 +138,7 @@ With `[resume] auto_continue = true` (off by default), the producer resumes a [p
 
 **Fire.** Once the recorded deadline or the current backoff step passes and the agent is still idle, the record fires the nudge. Overload and transient API-error parks use a configurable backoff ramp (`auto_continue_backoff_secs`, default `[180, 300]`) whose last value repeats: by default the first attempt lands after 3 minutes and later attempts repeat every 5 minutes. Message events carry the queued, sent, delivered, timed-out, or failed trace.
 
-**Exhaust.** Rate-limit, spend-limit, overload, and transient API-error records share one cap (`auto_continue_max_retries`, default `13`), counted from evidenced hidden `DeliveryGate::Resume` messages since the park — helper spawns and pre-queue crashes only throttle pacing and backoff. At the default ramp, attempts span about 63 minutes before exhaustion promotes the row to actionable `failed`.
+**Exhaust.** Rate-limit, spend-limit, overload, and transient API-error records share one cap (`auto_continue_max_retries`, default `12`), counted from evidenced hidden `DeliveryGate::Resume` messages since the park — helper spawns and pre-queue crashes only throttle pacing and backoff. At the default ramp, attempts span about 58 minutes before exhaustion promotes the row to actionable `failed`.
 
 ### Not-started windows
 

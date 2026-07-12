@@ -133,7 +133,7 @@ on_rebirth = true
 max = 128
 auto_continue = false
 auto_continue_backoff_secs = [180, 300]
-auto_continue_max_retries = 13
+auto_continue_max_retries = 12
 auto_continue_text = "continue"
 ```
 
@@ -145,7 +145,7 @@ While the room is **live**, `auto_continue` (off by default) picks a parked turn
 
 - Rate-limit and spend-limit parks fire when the account's budget window resets.
 - Overload and transient API-error parks (stalled streams, timeouts, connection drops) fire on the retry ramp: `auto_continue_backoff_secs = [180, 300]` sends the first retry three minutes after the failure, then every five minutes.
-- Every park type stops retrying after `auto_continue_max_retries` (default 13, about an hour on the default ramp), leaving the row parked for you.
+- Every park type stops retrying after `auto_continue_max_retries` (default 12, about an hour on the default ramp), leaving the row parked for you.
 
 The rebirth path is in [sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth) and the live path in [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 

@@ -127,7 +127,7 @@ When RimZ rebuilds a room after a reboot or a multiplexer crash — a *rebirth* 
 [resume]
 auto_continue = true                       # off by default
 # auto_continue_backoff_secs = [180, 300]  # first retry after 3m, then every 5m
-# auto_continue_max_retries = 13           # stop after ~63 minutes of retries
+# auto_continue_max_retries = 12           # stop after ~58 minutes of retries
 # auto_continue_text = "continue"          # the nudge typed into the parked pane
 ```
 

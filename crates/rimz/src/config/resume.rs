@@ -11,9 +11,9 @@ pub const DEFAULT_AUTO_CONTINUE_TEXT: &str = "continue";
 pub const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[180, 300];
 
 /// The default ceiling on backoff auto-continue attempts. At the [default ramp][`DEFAULT_AUTO_CONTINUE_BACKOFF_SECS`]
-/// this spans ~63min (180 + 300x12) before the producer stops attempting
+/// this spans ~58min (180 + 300x11) before the producer stops attempting
 /// and leaves the row parked.
-pub const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 13;
+pub const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 12;
 
 /// Resume behavior, in two tenses. On session *rebirth* after a machine reboot
 /// — detected by boot id, or by boot time where the boot id is unreadable — or
