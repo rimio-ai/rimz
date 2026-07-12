@@ -132,9 +132,8 @@ impl SidebarSnapshot {
                 None => (defaults.color, defaults.color_rgb, None),
             };
             let remote_control = remote_control.get(&kind).copied().unwrap_or(false);
-            let spending = provider_spending.get(&kind).cloned();
-
             let tally = provider_spending.get(&kind);
+            let spending = tally.cloned();
             let rank = ProviderRank {
                 live: !sessions.is_empty(),
                 week_sessions: tally.map_or(0, |tally| tally.week.sessions),
