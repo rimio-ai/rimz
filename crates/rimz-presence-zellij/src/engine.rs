@@ -170,13 +170,17 @@ impl Engine {
             policy::apply_foreground_commands(&mut next_tabs, &self.foreground, &self.baseline);
             let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
             let focus_patch = policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
-            if let Some(focused) = focus_patch
+            let shortcut_focused = focus_patch
                 .as_ref()
-                .and_then(|patch| focused_patch_id(patch))
-            {
+                .and_then(|patch| focused_patch_id(patch));
+            if let Some(focused) = shortcut_focused {
                 self.session_focused_pane = Some(focused);
             }
             self.tabs = next_tabs;
+            let reconciled_focus_patch = shortcut_focused
+                .is_none()
+                .then(|| self.reconcile_manifest_focus_patch())
+                .flatten();
             // Poke every opened pane — `fold`, not `any`, so a manifest carrying
             // two new panes emits both card-create events.
             let emitted_open = opened.iter().fold(false, |emitted, pane| {
@@ -195,24 +199,19 @@ impl Engine {
                     &mut effects,
                 ) || emitted
             });
-            match focus_patch {
-                Some(patch) => {
-                    if self.run_wake(wire::WakeRequest::FocusChanged { patch }, now, &mut effects) {
-                        let hash = policy::manifest_hash(&self.tabs);
-                        self.policy.accept_manifest(hash);
-                        self.policy.on_optimistic_signal(now);
-                    } else if emitted_open {
-                        let hash = policy::manifest_hash(&self.tabs);
-                        self.policy.accept_manifest(hash);
-                    } else {
-                        self.fold(now);
-                    }
-                }
-                None if emitted_open => {
-                    let hash = policy::manifest_hash(&self.tabs);
-                    self.policy.accept_manifest(hash);
-                }
-                None => self.fold(now),
+            let focus_patch = focus_patch.or(reconciled_focus_patch);
+            let emitted_focus = focus_patch.is_some_and(|patch| {
+                self.run_wake(wire::WakeRequest::FocusChanged { patch }, now, &mut effects)
+            });
+            if emitted_focus {
+                let hash = policy::manifest_hash(&self.tabs);
+                self.policy.accept_manifest(hash);
+                self.policy.on_optimistic_signal(now);
+            } else if emitted_open {
+                let hash = policy::manifest_hash(&self.tabs);
+                self.policy.accept_manifest(hash);
+            } else {
+                self.fold(now);
             }
             self.resolve_focus_correction(now, true, &mut effects);
             self.active_focused_pane = policy::resolved_focused_pane_id(
@@ -465,6 +464,29 @@ impl Engine {
         self.policy.on_manifest(hash, now);
     }
 
+    fn reconcile_manifest_focus_patch(&mut self) -> Option<Vec<FocusPatch>> {
+        let focused = policy::manifest_focused_tiled(&self.tabs, self.active_tab)?;
+        let previous = self.session_focused_pane?;
+        if previous == focused {
+            return None;
+        }
+        self.session_focused_pane = Some(focused);
+        policy::focus_tiled_pane(&mut self.tabs, focused);
+
+        let mut patch = Vec::new();
+        if policy::is_card_pane_id(&self.tabs, previous) {
+            patch.push(FocusPatch {
+                id: previous,
+                is_focused: false,
+            });
+        }
+        patch.push(FocusPatch {
+            id: focused,
+            is_focused: true,
+        });
+        Some(patch)
+    }
+
     /// Resolve a switched-tab focus classification and publish the exact
     /// overlay the renderer needs before the next producer pull.
     fn resolve_focus_correction(
@@ -486,6 +508,7 @@ impl Engine {
             }
             CorrectionAction::FocusWorkingPane { focused, unfocused } => {
                 self.session_focused_pane = Some(focused);
+                policy::focus_tiled_pane(&mut self.tabs, focused);
                 let mut patch = vec![FocusPatch {
                     id: focused,
                     is_focused: true,

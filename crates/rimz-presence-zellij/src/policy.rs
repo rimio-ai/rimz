@@ -495,6 +495,40 @@ pub fn resolved_focused_pane_id(
     resolved_focused_pane(tabs, active_tab, session_focused_pane).map(|pane| pane.id)
 }
 
+pub fn manifest_focused_tiled(
+    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    active_tab: Option<usize>,
+) -> Option<u32> {
+    tabs.get(&active_tab?)?
+        .iter()
+        .find(|pane| pane.is_live_terminal() && pane.is_focused)
+        .map(|pane| pane.id)
+}
+
+pub fn focus_tiled_pane(tabs: &mut BTreeMap<usize, Vec<PaneFields>>, focused: u32) {
+    let Some(tab) = tabs.iter().find_map(|(tab, panes)| {
+        panes
+            .iter()
+            .any(|pane| pane.id == focused && pane.is_live_terminal())
+            .then_some(*tab)
+    }) else {
+        return;
+    };
+    if let Some(panes) = tabs.get_mut(&tab) {
+        for pane in panes {
+            if pane.is_live_terminal() {
+                pane.is_focused = pane.id == focused;
+            }
+        }
+    }
+}
+
+pub fn is_card_pane_id(tabs: &BTreeMap<usize, Vec<PaneFields>>, pane_id: u32) -> bool {
+    tabs.values()
+        .flatten()
+        .any(|pane| pane.id == pane_id && pane.is_card_pane())
+}
+
 fn resolved_focused_pane(
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     active_tab: Option<usize>,

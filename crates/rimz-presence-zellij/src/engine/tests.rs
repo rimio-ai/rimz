@@ -159,6 +159,13 @@ fn topology_json(argv: &[String]) -> serde_json::Value {
         .expect("topology JSON")
 }
 
+fn args_after<'a>(argv: &'a [String], flag: &str) -> Vec<&'a str> {
+    argv.windows(2)
+        .filter(|window| window[0] == flag)
+        .map(|window| window[1].as_str())
+        .collect()
+}
+
 fn has_timeout(effects: &[Effect], delay_ms: u64) -> bool {
     effects
         .iter()
@@ -278,6 +285,117 @@ fn focus_only_manifest_emits_patch_and_settle_changed() {
 
     let effects = engine.on_timer(30 + SETTLE_POKE_MS, &host);
     assert_eq!(reasons(&effects), vec!["panes-changed"]);
+}
+
+#[test]
+fn manifest_focus_reconciliation_repairs_stale_register_and_dual_focus() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let names = BTreeMap::from([(0, "tab-0".to_owned())]);
+    let _ = engine.on_tab_update(Some(0), names, 20, &host);
+    seed_manifest(
+        &mut engine,
+        tabs(vec![focused(pane(1)), focused(pane(2))]),
+        30,
+        &host,
+    );
+    engine.session_focused_pane = Some(1);
+    let manifest = tabs(vec![pane(1), focused(pane(2))]);
+
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 40, &host);
+
+    let focus_wake = run_commands(&effects)
+        .into_iter()
+        .find(|argv| arg_after(argv, "--reason") == Some("focus-changed"))
+        .expect("focus changed wake");
+    assert_eq!(
+        args_after(focus_wake, "--focused-pane-id"),
+        vec!["terminal_2"]
+    );
+    assert_eq!(
+        args_after(focus_wake, "--unfocused-pane-id"),
+        vec!["terminal_1"]
+    );
+    let topology = topology_json(focus_wake);
+    assert_eq!(topology["focused_pane"], 2);
+    let panes = topology["panes"].as_array().expect("topology panes");
+    assert_eq!(
+        panes
+            .iter()
+            .filter(|pane| pane["is_focused"].as_bool() == Some(true))
+            .map(|pane| pane["id"].as_u64().expect("pane id"))
+            .collect::<Vec<_>>(),
+        vec![2],
+    );
+    assert_eq!(engine.session_focused_pane, Some(2));
+}
+
+#[test]
+fn focus_correction_with_no_unfocused_pane_clears_tab_siblings() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let names = BTreeMap::from([(0, "tab-0".to_owned()), (1, "tab-1".to_owned())]);
+    let _ = engine.on_tab_update(Some(0), names.clone(), 20, &host);
+    seed_manifest(
+        &mut engine,
+        tabs_by_index(vec![
+            (0, vec![pane_in_tab(1, 0)]),
+            (
+                1,
+                vec![focused(pane_in_tab(11, 1)), focused(pane_in_tab(12, 1))],
+            ),
+        ]),
+        30,
+        &host,
+    );
+
+    let _ = engine.on_tab_update(Some(1), names, 100, &host);
+    let effects = engine.on_timer(100 + policy::FOCUS_SETTLE_MS, &host);
+
+    let focus_wake = run_commands(&effects)
+        .into_iter()
+        .find(|argv| arg_after(argv, "--reason") == Some("focus-changed"))
+        .expect("focus changed wake");
+    assert_eq!(
+        args_after(focus_wake, "--focused-pane-id"),
+        vec!["terminal_11"]
+    );
+    assert!(args_after(focus_wake, "--unfocused-pane-id").is_empty());
+    assert_eq!(
+        engine.tabs[&1]
+            .iter()
+            .filter(|pane| pane.is_focused)
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>(),
+        vec![11],
+    );
+}
+
+#[test]
+fn floating_focus_manifest_does_not_move_session_register() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let names = BTreeMap::from([(0, "tab-0".to_owned())]);
+    let _ = engine.on_tab_update(Some(0), names, 20, &host);
+    let mut floating = pane(2);
+    floating.is_floating = true;
+    seed_manifest(
+        &mut engine,
+        tabs(vec![focused(pane(1)), floating.clone()]),
+        30,
+        &host,
+    );
+    engine.session_focused_pane = Some(1);
+    floating.is_focused = true;
+    let manifest = tabs(vec![pane(1), floating]);
+
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 40, &host);
+
+    assert!(!reasons(&effects).contains(&"focus-changed"));
+    assert_eq!(engine.session_focused_pane, Some(1));
 }
 
 #[test]

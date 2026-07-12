@@ -178,6 +178,46 @@ fn published_topology_payload_carries_resolved_focus() {
 }
 
 #[test]
+fn manifest_focused_tiled_ignores_floating_focus() {
+    let mut floating = focused(pane(2));
+    floating.is_floating = true;
+    let manifest = tabs(vec![pane(1), floating]);
+
+    assert_eq!(manifest_focused_tiled(&manifest, Some(0)), None);
+}
+
+#[test]
+fn focus_tiled_pane_clears_siblings_in_the_focused_pane_tab() {
+    let mut manifest = tabs_by_index(vec![
+        (0, vec![focused(pane_in_tab(1, 0))]),
+        (
+            1,
+            vec![focused(pane_in_tab(11, 1)), focused(pane_in_tab(12, 1))],
+        ),
+    ]);
+
+    focus_tiled_pane(&mut manifest, 12);
+
+    assert_eq!(
+        manifest[&0]
+            .iter()
+            .filter(|pane| pane.is_focused)
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>(),
+        vec![1],
+        "per-tab focus memory outside the corrected tab stays intact",
+    );
+    assert_eq!(
+        manifest[&1]
+            .iter()
+            .filter(|pane| pane.is_focused)
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>(),
+        vec![12],
+    );
+}
+
+#[test]
 fn published_topology_payload_carries_writer() {
     let payload = published_topology_payload(
         "rimz-test",
