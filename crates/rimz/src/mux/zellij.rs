@@ -68,7 +68,7 @@ fn health_probe_timeout() -> Duration {
 
 /// Poll cadence while waiting for the presence plugin to publish a requested
 /// topology payload.
-const TOPOLOGY_CACHE_POLL_STEP: Duration = Duration::from_millis(50);
+pub(crate) const TOPOLOGY_CACHE_POLL_STEP: Duration = Duration::from_millis(50);
 
 /// Maximum reload wait for a newly loaded presence-plugin generation to prove
 /// it is publishing before stale instances are retired.

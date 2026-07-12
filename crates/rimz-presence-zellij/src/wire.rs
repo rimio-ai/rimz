@@ -159,6 +159,7 @@ pub struct PluginTelemetry {
     pub mem_pages: u64,
     pub uptime_ms: u64,
     pub commands_completed: u64,
+    pub commands_failed: u64,
     pub zellij_version: String,
 }
 
@@ -227,6 +228,8 @@ pub fn wake_argv(
             argv.push(telemetry.uptime_ms.to_string());
             argv.push("--plugin-commands".to_owned());
             argv.push(telemetry.commands_completed.to_string());
+            argv.push("--plugin-commands-failed".to_owned());
+            argv.push(telemetry.commands_failed.to_string());
             argv.push("--plugin-zellij-version".to_owned());
             argv.push(telemetry.zellij_version);
             if let Some(session_name) = ctx.session_name {
@@ -350,7 +353,6 @@ pub fn topology_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn ctx() -> WakeContext<'static> {
         WakeContext {
             rimz_bin: Some("/bin/rimz"),
@@ -358,11 +360,9 @@ mod tests {
             session_name: Some("session-1"),
         }
     }
-
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
     }
-
     fn pane(id: u32) -> PaneFields {
         PaneFields {
             id,
@@ -476,6 +476,7 @@ mod tests {
                     mem_pages: 12,
                     uptime_ms: 34,
                     commands_completed: 56,
+                    commands_failed: 7,
                     zellij_version: "0.44.3".to_owned(),
                 }),
                 None,
@@ -494,6 +495,8 @@ mod tests {
                 "34",
                 "--plugin-commands",
                 "56",
+                "--plugin-commands-failed",
+                "7",
                 "--plugin-zellij-version",
                 "0.44.3",
                 "--session-name",

@@ -23,6 +23,7 @@ pub struct PluginPresenceSample {
     pub bytes: u64,
     pub uptime_ms: u64,
     pub commands: u64,
+    pub commands_failed: u64,
     pub zellij_version: Option<String>,
 }
 
@@ -33,6 +34,7 @@ impl PluginPresenceSample {
         pages: u64,
         uptime_ms: u64,
         commands: u64,
+        commands_failed: u64,
         zellij_version: Option<String>,
     ) -> Self {
         Self {
@@ -42,6 +44,7 @@ impl PluginPresenceSample {
             bytes: pages.saturating_mul(WASM_PAGE_BYTES),
             uptime_ms,
             commands,
+            commands_failed,
             zellij_version,
         }
     }
@@ -60,11 +63,11 @@ mod tests {
 
     #[test]
     fn sample_derives_bytes_from_wasm_pages() {
-        let sample = PluginPresenceSample::new(1, None, 42, 1_000, 5, None);
+        let sample = PluginPresenceSample::new(1, None, 42, 1_000, 5, 2, None);
 
         assert_eq!(sample.bytes, 42 * WASM_PAGE_BYTES);
         assert_eq!(
-            PluginPresenceSample::new(1, None, u64::MAX, 1_000, 5, None).bytes,
+            PluginPresenceSample::new(1, None, u64::MAX, 1_000, 5, 2, None).bytes,
             u64::MAX
         );
     }

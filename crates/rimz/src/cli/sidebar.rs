@@ -144,6 +144,8 @@ enum SidebarSubcmd {
         #[arg(long, hide = true)]
         plugin_commands: Option<u64>,
         #[arg(long, hide = true)]
+        plugin_commands_failed: Option<u64>,
+        #[arg(long, hide = true)]
         plugin_zellij_version: Option<String>,
     },
     /// Write a read receipt for a sidebar row. Hidden — test/API machinery.
@@ -294,6 +296,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             plugin_mem_pages,
             plugin_uptime_ms,
             plugin_commands,
+            plugin_commands_failed,
             plugin_zellij_version,
         } => wake(
             globals,
@@ -309,6 +312,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 plugin_mem_pages,
                 plugin_uptime_ms,
                 plugin_commands,
+                plugin_commands_failed,
                 plugin_zellij_version,
             },
         ),
@@ -751,6 +755,7 @@ struct WakeCommand {
     plugin_mem_pages: Option<u64>,
     plugin_uptime_ms: Option<u64>,
     plugin_commands: Option<u64>,
+    plugin_commands_failed: Option<u64>,
     plugin_zellij_version: Option<String>,
 }
 
@@ -795,6 +800,7 @@ fn write_plugin_presence_sample(workspace_id: &WorkspaceId, command: &WakeComman
             pages,
             command.plugin_uptime_ms.unwrap_or_default(),
             command.plugin_commands.unwrap_or_default(),
+            command.plugin_commands_failed.unwrap_or_default(),
             command.plugin_zellij_version.clone(),
         ),
     );

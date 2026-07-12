@@ -7,6 +7,7 @@
 #[cfg(target_family = "wasm")]
 mod shell {
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::engine::{
@@ -22,13 +23,14 @@ mod shell {
     pub struct State {
         /// `None` until `load` runs (the `Default` the macro requires).
         engine: Option<Engine>,
-        /// `RunCommandResult` is a no-decision fast path; the shell owns the
-        /// counter and feeds it into telemetry.
+        /// The shell owns command counters and feeds them into telemetry.
         commands_completed: u64,
+        commands_failed: u64,
     }
 
     struct ShellHost {
         commands_completed: u64,
+        commands_failed: u64,
     }
 
     impl Host for ShellHost {
@@ -50,6 +52,7 @@ mod shell {
                 mem_pages: wasm_pages(),
                 uptime_ms: 0,
                 commands_completed: self.commands_completed,
+                commands_failed: self.commands_failed,
                 zellij_version: get_zellij_version(),
             }
         }
@@ -82,6 +85,7 @@ mod shell {
             let mut engine = Engine::new(now, config);
             let host = ShellHost {
                 commands_completed: self.commands_completed,
+                commands_failed: self.commands_failed,
             };
             execute(engine.on_load(now, &host));
             self.engine = Some(engine);
@@ -89,8 +93,19 @@ mod shell {
 
         fn update(&mut self, event: Event) -> bool {
             let now = now_ms();
-            if let Event::RunCommandResult(..) = event {
+            if let Event::RunCommandResult(exit_code, ..) = event {
                 self.commands_completed = self.commands_completed.saturating_add(1);
+                if exit_code != Some(0) {
+                    self.commands_failed = self.commands_failed.saturating_add(1);
+                }
+                let Some(engine) = self.engine.as_mut() else {
+                    return false;
+                };
+                let host = ShellHost {
+                    commands_completed: self.commands_completed,
+                    commands_failed: self.commands_failed,
+                };
+                execute(engine.on_run_command_result(exit_code, now, &host));
                 return false;
             }
             let Some(engine) = self.engine.as_mut() else {
@@ -98,6 +113,7 @@ mod shell {
             };
             let host = ShellHost {
                 commands_completed: self.commands_completed,
+                commands_failed: self.commands_failed,
             };
             let effects = match event {
                 Event::PermissionRequestResult(PermissionStatus::Granted) => {
@@ -165,6 +181,7 @@ mod shell {
             if pipe_message.name == DUMP_TOPOLOGY_PIPE {
                 let host = ShellHost {
                     commands_completed: self.commands_completed,
+                    commands_failed: self.commands_failed,
                 };
                 execute(engine.on_dump_topology_pipe(now, &host));
                 return false;
@@ -190,13 +207,19 @@ mod shell {
             match effect {
                 Effect::RunCommand(argv) => {
                     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-                    run_command(&refs, BTreeMap::new());
+                    run_command_with_env_variables_and_cwd(
+                        &refs,
+                        BTreeMap::new(),
+                        PathBuf::from("/"),
+                        BTreeMap::new(),
+                    );
                 }
                 Effect::HideSelf => hide_self(),
                 Effect::Reconfigure(kdl) => reconfigure(kdl, false),
                 Effect::ShareSession => share_current_session(),
                 Effect::CloseSelf => close_self(),
                 Effect::Unsubscribe => unsubscribe(&subscribed_events()),
+                Effect::Resubscribe => subscribe(&subscribed_events()),
                 Effect::SetTimeout(delay_ms) => set_timeout(delay_ms as f64 / 1_000.0),
                 Effect::ListClients => list_clients(),
             }

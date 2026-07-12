@@ -17,6 +17,7 @@ impl Default for FakeHost {
                 mem_pages: 12,
                 uptime_ms: 0,
                 commands_completed: 34,
+                commands_failed: 0,
                 zellij_version: "0.44.3".to_owned(),
             },
         }
@@ -744,6 +745,8 @@ fn active_tab_switch_requests_client_sample() {
 fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
     let host = FakeHost::default();
     let mut same_id = Engine::new(0, config());
+    grant(&mut same_id, 1, &host);
+    seed_manifest(&mut same_id, tabs(vec![pane(1)]), 2, &host);
 
     assert_eq!(
         same_id.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#)),
@@ -767,10 +770,48 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
             .is_empty()
     );
 
+    let effects = same_id.on_dump_topology_pipe(30, &host);
+    assert_eq!(effects.first(), Some(&Effect::Resubscribe));
+    assert_eq!(reasons(&effects), vec!["alive"]);
+    assert!(run_commands(&effects)[0].contains(&"--topology".to_owned()));
+    assert!(!same_id.on_focus_sidebar_pipe().is_empty());
+    assert_eq!(
+        same_id.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":40}"#)),
+        vec![Effect::Unsubscribe],
+        "a revived stale clone remains retireable",
+    );
+
     let mut different_id = Engine::new(0, config());
     assert_eq!(
         different_id.on_retire_pipe(Some(r#"{"plugin_id":10,"loaded_at_ms":10}"#)),
         vec![Effect::CloseSelf]
+    );
+}
+
+#[test]
+fn repeated_command_failures_fall_back_to_path_once_and_success_resets_the_streak() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+
+    assert!(engine.on_run_command_result(None, 10, &host).is_empty());
+    assert!(engine.on_run_command_result(Some(0), 20, &host).is_empty());
+    assert!(engine.on_run_command_result(Some(1), 30, &host).is_empty());
+    assert!(engine.on_run_command_result(None, 40, &host).is_empty());
+
+    let effects = engine.on_run_command_result(Some(1), 50, &host);
+    assert_eq!(reasons(&effects), vec!["alive"]);
+    assert_eq!(run_commands(&effects).len(), 1);
+    assert_eq!(
+        run_commands(&effects)[0].first().map(String::as_str),
+        Some("rimz")
+    );
+
+    assert!(engine.on_run_command_result(None, 60, &host).is_empty());
+    assert!(engine.on_run_command_result(None, 70, &host).is_empty());
+    assert!(
+        engine.on_run_command_result(None, 80, &host).is_empty(),
+        "PATH mode does not keep firing fallback pokes",
     );
 }
 

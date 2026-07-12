@@ -255,6 +255,86 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 }
 
 #[test]
+fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
+    require_zellij!();
+    let Some(wasm) = presence_wasm_artifact() else {
+        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        return;
+    };
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
+        _ => {
+            eprintln!("zellij below the presence-plugin floor; skipping test");
+            return;
+        }
+    }
+
+    let xdg = scoped_runtime_dir();
+    seed_presence_permissions(xdg.path(), &wasm);
+    let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
+    let name = unique_session_name("presence-cwd");
+    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
+    let launch_cwd = TempDir::new().expect("plugin launch cwd");
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
+    let runtime = rimz::store::RuntimePaths::under(workspace_id, session.xdg.path())
+        .expect("presence runtime paths");
+    let stamp_path = rimz::sidebar::cache::presence_stamp_path(&runtime);
+    let plugin_url = format!("file:{}", wasm.display());
+    let configuration = format!(
+        "workspace_id=ws_0123456789abcdef01234567,session_name={name},rimz_bin={},focus_follows_mouse=false,mouse_click_through=true",
+        real_rimz.display(),
+    );
+
+    let loaded = scoped_zellij(session.xdg.path())
+        .current_dir(launch_cwd.path())
+        .args([
+            "--session",
+            &name,
+            "pipe",
+            "--plugin",
+            &plugin_url,
+            "--plugin-configuration",
+            &configuration,
+            "--name",
+            "rimz_presence_boot",
+            "--",
+            "load",
+        ])
+        .status()
+        .expect("load presence plugin from disposable cwd");
+    assert!(loaded.success(), "presence plugin load command failed");
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let before = loop {
+        if let Ok(bytes) = std::fs::read(&stamp_path)
+            && let Ok(stamp) = serde_json::from_slice::<rimz::sidebar::cache::PresenceStamp>(&bytes)
+        {
+            break stamp.written_at_ms;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "presence plugin never wrote {}",
+            stamp_path.display(),
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    launch_cwd.close().expect("delete plugin launch cwd");
+    std::thread::sleep(Duration::from_millis(61_000));
+
+    let bytes = std::fs::read(&stamp_path).expect("presence stamp survives launch cwd deletion");
+    let after: rimz::sidebar::cache::PresenceStamp =
+        serde_json::from_slice(&bytes).expect("presence stamp JSON");
+    assert!(
+        after.written_at_ms > before,
+        "presence keepalive stopped after its launch cwd was deleted: before={before}, after={}",
+        after.written_at_ms,
+    );
+}
+
+#[test]
 fn share_web_session_enables_browser_clients_on_a_clientless_session() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {

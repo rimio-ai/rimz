@@ -54,6 +54,8 @@ pub fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
 pub struct ReloadOutcome {
     /// Live sessions reconciled.
     pub sessions: usize,
+    /// Zellij sessions whose presence channel did not publish after converge.
+    pub presence_dead: usize,
     /// Located sidebars already publishing the on-disk build before reload.
     pub already_current: usize,
     /// Located sidebars that published the on-disk build after the reload signal.
@@ -88,6 +90,7 @@ impl ReloadOutcome {
     fn merge(&mut self, delta: Self) {
         let Self {
             sessions,
+            presence_dead,
             already_current,
             reexeced,
             restarted,
@@ -103,6 +106,7 @@ impl ReloadOutcome {
             misdocked,
         } = delta;
         self.sessions += sessions;
+        self.presence_dead += presence_dead;
         self.already_current += already_current;
         self.reexeced += reexeced;
         self.restarted += restarted;
@@ -287,10 +291,47 @@ fn reconcile_live(
         }
     };
 
-    // 2. Reconcile panes: keep each view's live sidebar, close duplicates and
+    // 2. Converge the session's presence plugin onto the current wasm — reload
+    //    is the explicit upgrade verb. Stale instances retire only after the
+    //    replacement publishes topology from its new writer generation; a
+    //    detached or degraded session keeps its prior plugin and retries on a
+    //    later reload. Best-effort like every step here.
+    let mux_config = MultiplexerConfig::from(machine_config);
+    let presence_floor_ms = unix_now_ms();
+    if let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact() {
+        let presence = crate::mux::PresencePluginOptions {
+            session_name: ws.session_name.clone(),
+            workspace_id: ws.workspace_id.clone(),
+            wasm,
+            rimz_bin: rimz_bin.to_path_buf(),
+            converge: true,
+            seed_permissions: machine_config.web.enabled,
+            focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
+            focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
+            mouse_click_through: mux_config.zellij.mouse_click_through,
+        };
+        if let Err(err) = backend.ensure_presence_plugin(&presence) {
+            tracing::warn!(
+                session = %ws.session_name,
+                tags.operation = "reload.presence_converge",
+                error = &err as &dyn std::error::Error,
+                "reload: presence plugin convergence failed",
+            );
+        }
+    }
+
+    // 3. A Zellij reconcile depends on topology from this channel. Require a
+    // post-converge publication rather than accepting a merely-young frozen
+    // cache from a plugin whose host forks have stopped.
+    if !presence_channel_is_live(mux, runtime, &ws.session_name, presence_floor_ms) {
+        outcome.presence_dead += 1;
+        crate::sidebar::sweep_orphan_runtime(runtime);
+        return outcome;
+    }
+
+    // 4. Reconcile panes: keep each view's live sidebar, close duplicates and
     //    unresponsive ones, add to any working view left without one.
     let width = SidebarWidth::from_config(&machine_config.theme.display);
-    let mux_config = MultiplexerConfig::from(machine_config);
     let opts = SidebarPaneOptions {
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),
@@ -330,43 +371,48 @@ fn reconcile_live(
         }
     }
 
-    // 3. Converge the session's presence plugin onto the current wasm — reload
-    //    is the explicit upgrade verb. Stale instances retire only after the
-    //    replacement publishes topology from its new writer generation; a
-    //    detached or degraded session keeps its prior plugin and retries on a
-    //    later reload. Best-effort like every step here.
-    if let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact() {
-        let presence = crate::mux::PresencePluginOptions {
-            session_name: ws.session_name.clone(),
-            workspace_id: ws.workspace_id.clone(),
-            wasm,
-            rimz_bin: rimz_bin.to_path_buf(),
-            converge: true,
-            seed_permissions: machine_config.web.enabled,
-            focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
-            focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
-            mouse_click_through: mux_config.zellij.mouse_click_through,
-        };
-        if let Err(err) = backend.ensure_presence_plugin(&presence) {
-            tracing::warn!(
-                session = %ws.session_name,
-                tags.operation = "reload.presence_converge",
-                error = &err as &dyn std::error::Error,
-                "reload: presence plugin convergence failed",
-            );
-        }
-    }
-
-    // 4. Reap orphan sidebar processes whose pane is gone — the mux cannot close a
+    // 5. Reap orphan sidebar processes whose pane is gone — the mux cannot close a
     //    pane that no longer exists, so a wedged renderer would otherwise linger.
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), mux, ws);
 
-    // 5. Sweep runtime files whose owner is gone — stale heartbeats and
+    // 6. Sweep runtime files whose owner is gone — stale heartbeats and
     //    ownerless sockets accumulate in a live session too (every SIGKILLed or
     //    reaped renderer leaves a pair), and the sweep already spares anything
     //    fresh or still starting.
     crate::sidebar::sweep_orphan_runtime(runtime);
     outcome
+}
+
+const RELOAD_PRESENCE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn presence_channel_is_live(
+    mux: MuxName,
+    runtime: &RuntimePaths,
+    session_name: &str,
+    min_produced_at_ms: u64,
+) -> bool {
+    if mux != MuxName::Zellij {
+        return true;
+    }
+    let deadline = Instant::now() + RELOAD_PRESENCE_PROBE_TIMEOUT;
+    loop {
+        let now_ms = unix_now_ms();
+        if crate::sidebar::cache::read_pane_topology_cache(runtime, session_name).is_some_and(
+            |cache| {
+                crate::sidebar::cache::pane_topology_cache_is_fresh(
+                    &cache,
+                    now_ms,
+                    Some(min_produced_at_ms),
+                )
+            },
+        ) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(crate::mux::zellij::TOPOLOGY_CACHE_POLL_STEP);
+    }
 }
 
 fn record_live_room_bin(ws: &KnownWorkspace, rimz_bin: &Path) {
@@ -686,54 +732,57 @@ mod tests {
     fn reload_outcome_merge_sums_every_field() {
         let mut base = ReloadOutcome {
             sessions: 1,
-            already_current: 2,
-            reexeced: 3,
-            restarted: 4,
-            unverified: 5,
-            recovered: 6,
-            closed: 7,
-            reaped: 8,
-            dead_swept: 9,
-            stats_reloaded: 10,
-            failed: 11,
-            deferred: 12,
-            redocked: 13,
-            misdocked: 14,
+            presence_dead: 2,
+            already_current: 3,
+            reexeced: 4,
+            restarted: 5,
+            unverified: 6,
+            recovered: 7,
+            closed: 8,
+            reaped: 9,
+            dead_swept: 10,
+            stats_reloaded: 11,
+            failed: 12,
+            deferred: 13,
+            redocked: 14,
+            misdocked: 15,
         };
         base.merge(ReloadOutcome {
-            sessions: 15,
-            already_current: 16,
-            reexeced: 17,
-            restarted: 18,
-            unverified: 19,
-            recovered: 20,
-            closed: 21,
-            reaped: 22,
-            dead_swept: 23,
-            stats_reloaded: 24,
-            failed: 25,
-            deferred: 26,
-            redocked: 27,
-            misdocked: 28,
+            sessions: 16,
+            presence_dead: 17,
+            already_current: 18,
+            reexeced: 19,
+            restarted: 20,
+            unverified: 21,
+            recovered: 22,
+            closed: 23,
+            reaped: 24,
+            dead_swept: 25,
+            stats_reloaded: 26,
+            failed: 27,
+            deferred: 28,
+            redocked: 29,
+            misdocked: 30,
         });
 
         assert_eq!(
             base,
             ReloadOutcome {
-                sessions: 16,
-                already_current: 18,
-                reexeced: 20,
-                restarted: 22,
-                unverified: 24,
-                recovered: 26,
-                closed: 28,
-                reaped: 30,
-                dead_swept: 32,
-                stats_reloaded: 34,
-                failed: 36,
-                deferred: 38,
-                redocked: 40,
-                misdocked: 42,
+                sessions: 17,
+                presence_dead: 19,
+                already_current: 21,
+                reexeced: 23,
+                restarted: 25,
+                unverified: 27,
+                recovered: 29,
+                closed: 31,
+                reaped: 33,
+                dead_swept: 35,
+                stats_reloaded: 37,
+                failed: 39,
+                deferred: 41,
+                redocked: 43,
+                misdocked: 45,
             }
         );
     }

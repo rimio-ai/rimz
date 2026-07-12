@@ -22,7 +22,8 @@ pub trait Host {
 /// What the shell must execute, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    /// Fire-and-forget host fork: wake pokes and focus-sidebar.
+    /// Fire-and-forget host fork: wake pokes and focus-sidebar. The shell pins
+    /// its cwd to `/` so a deleted launch worktree cannot strand the plugin.
     RunCommand(Vec<String>),
     /// Hide the permission-prompt pane left by Zellij.
     HideSelf,
@@ -32,8 +33,10 @@ pub enum Effect {
     ShareSession,
     /// Close this plugin instance.
     CloseSelf,
-    /// Drop every subscription so a muted same-id clone stops waking.
+    /// Drop every subscription until a topology dump revives the same-id clone.
     Unsubscribe,
+    /// Restore every subscription after a topology dump revives a clone.
+    Resubscribe,
     /// Arm one host timer, in milliseconds from now.
     SetTimeout(u64),
     /// Ask Zellij to deliver focused client panes via `Event::ListClients`.
@@ -91,7 +94,10 @@ pub struct Engine {
     contested_focused_by_tab: BTreeMap<usize, Vec<u32>>,
     prior_focused_by_tab: BTreeMap<usize, u32>,
     retired: bool,
+    wake_fork_failures: u32,
 }
+
+const WAKE_FORK_FALLBACK_THRESHOLD: u32 = 3;
 
 impl Engine {
     pub fn new(now: u64, config: EngineConfig) -> Self {
@@ -123,6 +129,7 @@ impl Engine {
             contested_focused_by_tab: BTreeMap::new(),
             prior_focused_by_tab: BTreeMap::new(),
             retired: false,
+            wake_fork_failures: 0,
         }
     }
 
@@ -438,10 +445,12 @@ impl Engine {
     }
 
     pub fn on_dump_topology_pipe(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
-        if self.retired {
-            return Vec::new();
-        }
         let mut effects = Vec::new();
+        if self.retired {
+            self.retired = false;
+            self.last_raw_stable_hash = None;
+            effects.push(Effect::Resubscribe);
+        }
         if !self.granted {
             self.pending_pregrant_change = true;
             return effects;
@@ -478,6 +487,30 @@ impl Engine {
         } else {
             vec![Effect::CloseSelf]
         }
+    }
+
+    pub fn on_run_command_result(
+        &mut self,
+        exit_code: Option<i32>,
+        now: u64,
+        host: &impl Host,
+    ) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
+        if exit_code == Some(0) {
+            self.wake_fork_failures = 0;
+            return Vec::new();
+        }
+        self.wake_fork_failures = self.wake_fork_failures.saturating_add(1);
+        if self.wake_fork_failures < WAKE_FORK_FALLBACK_THRESHOLD || self.rimz_bin.is_none() {
+            return Vec::new();
+        }
+        self.rimz_bin = None;
+        self.wake_fork_failures = 0;
+        let mut effects = Vec::new();
+        self.poke(Poke::Alive, now, host, &mut effects);
+        effects
     }
 
     fn repair_contested_focus(&mut self, tabs: &mut BTreeMap<usize, Vec<PaneFields>>) {

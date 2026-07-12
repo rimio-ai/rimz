@@ -328,6 +328,7 @@ mod tests {
             plugin_mem_pages: None,
             plugin_uptime_ms: None,
             plugin_commands: None,
+            plugin_commands_failed: None,
             plugin_zellij_version: None,
         }
     }

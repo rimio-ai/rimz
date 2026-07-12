@@ -51,6 +51,13 @@ fn report(outcome: &ReloadOutcome) -> Result<()> {
             n(outcome.stats_reloaded, "stats dashboard")
         )?;
     }
+    if outcome.presence_dead > 0 {
+        writeln!(
+            out,
+            "No live presence channel for {}; sidebar reconcile skipped. Reattach or restart the session.",
+            n(outcome.presence_dead, "session"),
+        )?;
+    }
     if outcome.already_current > 0 {
         writeln!(
             out,
