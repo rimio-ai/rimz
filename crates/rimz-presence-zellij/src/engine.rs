@@ -177,10 +177,13 @@ impl Engine {
                 self.session_focused_pane = Some(focused);
             }
             self.tabs = next_tabs;
-            let reconciled_focus_patch = shortcut_focused
-                .is_none()
-                .then(|| self.reconcile_manifest_focus_patch())
-                .flatten();
+            let pending_correction_tab = self.focus_correction.pending_tab();
+            let correction_will_resolve_active_tab =
+                pending_correction_tab.is_some() && pending_correction_tab == self.active_tab;
+            let reconciled_focus_patch = (!correction_will_resolve_active_tab
+                && shortcut_focused.is_none())
+            .then(|| self.reconcile_manifest_focus_patch())
+            .flatten();
             // Poke every opened pane — `fold`, not `any`, so a manifest carrying
             // two new panes emits both card-create events.
             let emitted_open = opened.iter().fold(false, |emitted, pane| {

@@ -631,6 +631,17 @@ impl FocusCorrection {
             self.pending = None;
             return CorrectionAction::Clear;
         }
+        if manifest_fresh
+            && session_focused_pane.is_some_and(|focused| {
+                pending.previous_focused_pane != Some(focused)
+                    && resolved_focused_pane_id(tabs, Some(pending.tab), Some(focused))
+                        == Some(focused)
+                    && is_card_pane_id(tabs, focused)
+            })
+        {
+            self.pending = None;
+            return CorrectionAction::Clear;
+        }
         match stranded_sidebar_pane(tabs, Some(pending.tab), session_focused_pane) {
             Some(_) if now_ms < pending.deadline => CorrectionAction::Wait,
             Some(pane_id) => {
@@ -655,6 +666,10 @@ impl FocusCorrection {
 
     pub fn next_deadline(&self) -> Option<u64> {
         self.pending.map(|pending| pending.deadline)
+    }
+
+    pub fn pending_tab(&self) -> Option<usize> {
+        self.pending.map(|pending| pending.tab)
     }
 }
 

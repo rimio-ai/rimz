@@ -500,7 +500,12 @@ fn tab_switch_focus_correction_reports_stranded_sidebar_and_work_focus() {
         (1, vec![sidebar_pane(10), focused(pane_in_tab(11, 1))]),
     ]);
     let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 120, &host);
-    assert!(run_commands(&effects).iter().any(|argv| {
+    let focus_wakes = run_commands(&effects)
+        .into_iter()
+        .filter(|argv| arg_after(argv, "--reason") == Some("focus-changed"))
+        .collect::<Vec<_>>();
+    assert_eq!(focus_wakes.len(), 1, "tab-switch correction owns the wake");
+    assert!(focus_wakes.iter().any(|argv| {
         arg_after(argv, "--reason") == Some("focus-changed")
             && argv
                 .windows(2)
