@@ -48,3 +48,22 @@ The Code Assist `retrieveUserQuota` probe is deferred. It depends on an internal
 Session records carry token categories but no dollars. The spend fold prices every active Gemini message through the shared price book: uncached input is `input - cached`, cached input uses the cache-read rate, and billable output is `output + thoughts`. Rewinds and checkpoints can invalidate earlier messages, so each changed Gemini file cold-folds and replaces its cached entry set rather than appending a suffix.
 
 These figures are usage insight rather than billing truth. The transcript does not record the session's auth type, so Google-login Code Assist quota traffic and metered API or Vertex traffic receive the same uniform price-book estimate.
+
+## Deferred surfaces and future work
+
+This round lands the interactive-hook lifecycle, the transcript context and spend gauges, the local account-identity probe, and the launch, resume, permission, compaction, and ping surfaces. The gaps below are deliberate deferrals, each with the evidence it waits on. The upstream detail sits in [gemini-reference.md](../../externals/agent-adapter/gemini-reference.md); the live-verification list is that reference's implementation checklist.
+
+- **Turn-failure backstop.** `AfterAgent` fires only on a clean final response, so a provider or API error that bypasses it leaves the row `running` until the shared stall window settles it. No hook carries an error bit. A transcript backstop is the natural fix — a session line is `type: "error"` — routed through the same `LocalContextRefresh::turn_error` channel Codex and Claude use. It waits on a live-captured error record to pin the field names and to prove an `error` line is turn-fatal rather than a recoverable retry, so the current refresh leaves `turn_error`, `turn_complete`, and `turn_interrupted` unset.
+- **Subagents.** Gemini records child transcripts and parent `invoke_agent` calls but emits no child start/stop hook, so `subagents` stays off until hook firing inside a child context is live-verified. If child hooks fire, the parent recovers from the nested transcript path; if they do not, a bounded transcript watcher is the fallback, with its latency made explicit.
+- **Code Assist quota.** The `retrieveUserQuota` window depends on an internal API and OAuth material in OS secure storage, so `AccountSpend` stays partial and no rate-limit windows are published.
+- **Native structured answer.** `ask_user` carries typed questions and choices, retained as the ask detail, but `rimz answer` targets no native Gemini TUI action yet; text and choice answers go through pane send. `Answer` is unsupported.
+- **ACP and remote control.** `gemini --acp` owns a fresh stdio session rather than observing a running TUI pane, so it is not an out-of-band read channel for the interactive adapter; remote control stays unsupported.
+- **Rich context transport.** Gemini publishes no out-of-band per-session channel, so context and cost ride the transcript tail alone; `rich_context` stays off.
+- **Ping model pinning.** `ping_args` is empty, so a `gemini-ping` window primer inherits `auto` routing rather than pinning a cheap model the way Claude and Codex do. Pinning waits on a confirmed stable Flash model id, since an unknown `--model` id would break the primer rather than cheapen it.
+
+## Notes for the rimz abstraction
+
+Footprints for a future round that touches the shared model rather than this adapter alone.
+
+- **Multi-event ask provenance.** The `lifecycle_hooks` matrix names one native event per signal kind, but Gemini reaches `AwaitingInput` through two — typed questions and plan approval on `BeforeTool`, ordinary permissions on `Notification`. The descriptor names `Notification` while this adapter and the hooks table above carry the full mapping. A descriptor shape that accepts a native-event set would let the matrix state both; this adapter does not broaden the shared type alone.
+- **Provider-general turn-failure marker.** Wiring the turn-failure backstop above would exercise the `turn_error` merge in [`sidebar/refresh/sessions.rs`](../../../crates/rimz/src/sidebar/refresh/sessions.rs), whose confirmation ladder is Codex-specific today. A Gemini marker would take the general merge path, so that path's success-row and self-clear behaviour wants a conformance case before a second provider depends on it.
