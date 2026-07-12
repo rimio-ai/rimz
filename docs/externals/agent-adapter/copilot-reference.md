@@ -386,6 +386,7 @@ The docs publish no rate-limit/quota attributes in the OTel schema. Quota is vis
 | `--stream=on\|off` | progressive response or buffered output |
 | `--model`, `--effort` | pin model and reasoning effort |
 | `--mode=interactive\|plan\|autopilot`, `--plan`, `--autopilot` | initial behavior |
+| `--context=default\|long_context` | context-window tier; overrides the persisted setting, and bounds the gauge denominator once a transport reports the resolved model |
 | `--allow-tool`, `--deny-tool`, `--allow-url`, `--deny-url` | scoped permission rules |
 | `--allow-all`, `--yolo` | all tools, paths, and URLs; may be disabled by managed policy |
 | `--no-ask-user` | remove the `ask_user` tool |
