@@ -296,10 +296,9 @@ pub(super) fn context_tokens_line(
             split.output,
             tokens_int,
         ));
-    } else if let Some(total) = agent(row).and_then(|agent| agent.total_tokens) {
-        left.extend(context_total_spans(theme, severity, total, tokens_int));
     } else {
-        return None;
+        let total = agent(row).and_then(|agent| agent.total_tokens)?;
+        left.extend(context_total_spans(theme, severity, total, tokens_int));
     }
     left.extend(context_compaction_spans(
         theme,
