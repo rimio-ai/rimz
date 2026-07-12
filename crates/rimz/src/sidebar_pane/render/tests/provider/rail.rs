@@ -37,6 +37,35 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
     );
     assert!(tab_line.chars().count() <= 28, "the rail never wraps");
 }
+
+/// The active account keeps a chip even when its low-ranked position would put
+/// it beyond the ordinary greedy prefix; hits describe exactly those survivors.
+#[test]
+fn tab_rail_reserves_the_active_tab_before_fitting_the_ranked_rest() {
+    let theme = Theme::fixed(false);
+    let panels = vec![
+        provider_panel("claude", "Claude", 173, true, false, Some((25, 40))),
+        provider_panel("codex", "Codex", 33, false, false, None),
+        provider_panel("pi", "Pi", 28, false, false, None),
+    ];
+    let (lines, hits) = provider_panel_lines(
+        &theme,
+        &panels,
+        Some("pi"),
+        true,
+        20,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let tab_line = rail_text(&lines);
+    assert_eq!(tab_line, "─── Claude ──── Pi ─");
+    assert_eq!(
+        hits.iter()
+            .map(|hit| (hit.kind.as_str(), hit.col_start, hit.col_end))
+            .collect::<Vec<_>>(),
+        vec![("claude", 2, 12), ("pi", 14, 20)]
+    );
+}
 /// With color, the pick is fill and weight alone: whichever tab is active,
 /// the rail renders glyph-for-glyph identical text — no caps, no swap — and
 /// every hit covers the same edge-to-edge footprint, so a click moves color

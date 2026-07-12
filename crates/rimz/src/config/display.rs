@@ -86,10 +86,10 @@ pub struct DisplayConfig {
     /// rest of `[theme.display]`.
     pub provider_tabs: ProviderTabsMode,
     /// Provider kinds to show in the dashboard and their order. Empty means all
-    /// discovered providers in the registry's display order (`claude, codex, pi,
-    /// opencode, qwen`), still governed by `max_provider_blocks`; an explicit list
-    /// overrides both the set and the order. `"all"` expands to every remaining
-    /// discovered provider at that position (in that same display order);
+    /// discovered providers in usage-rank order, still governed by
+    /// `max_provider_blocks`; an explicit list overrides both the set and the
+    /// order. `"all"` expands to every remaining discovered provider at that
+    /// position in usage-rank order;
     /// without `"all"` this is a strict allowlist. An explicit list bypasses
     /// `max_provider_blocks`.
     #[serde(skip_serializing_if = "Vec::is_empty")]

@@ -16,24 +16,32 @@ pub(crate) fn probe() -> AccountProbe {
 
 fn probe_sources(api_key_present: bool, secret_path: Option<&Path>) -> AccountProbe {
     if api_key_present {
-        return AccountProbe::Found(pay_per_use_account());
+        return AccountProbe::Found(pay_per_use_account(None));
     }
     secret_path.map_or(AccountProbe::Unavailable, probe_path)
 }
 
-fn pay_per_use_account() -> AgentAccount {
+fn pay_per_use_account(credentials_updated_at_ms: Option<u64>) -> AgentAccount {
     AgentAccount {
         plan: None,
         account_id: None,
         metered: Some(false),
         version: None,
         sub_provider: None,
+        credentials_updated_at_ms,
     }
 }
 
 fn probe_path(path: &Path) -> AccountProbe {
     match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => AccountProbe::Found(pay_per_use_account()),
+        Ok(metadata) if metadata.is_file() => {
+            let credentials_updated_at_ms = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64);
+            AccountProbe::Found(pay_per_use_account(credentials_updated_at_ms))
+        }
         Ok(_) => AccountProbe::Unavailable,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => AccountProbe::LoggedOut,
         Err(_) => AccountProbe::Unavailable,
@@ -56,6 +64,7 @@ mod tests {
         };
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
+        assert!(account.credentials_updated_at_ms.is_some());
 
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
@@ -68,6 +77,7 @@ mod tests {
             panic!("AMP_API_KEY must report a pay-per-use account");
         };
         assert_eq!(account.metered, Some(false));
+        assert_eq!(account.credentials_updated_at_ms, None);
         assert!(matches!(
             probe_sources(false, None),
             AccountProbe::Unavailable

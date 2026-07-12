@@ -422,6 +422,7 @@ mod tests {
                 metered: Some(true),
                 version: None,
                 sub_provider: None,
+                credentials_updated_at_ms: None,
             }),
             turn_opened_by: Vec::new(),
             turn_error: None,

@@ -10,6 +10,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         metered: Some(true),
         version: Some("0.78.0".to_owned()),
         sub_provider: Some("openai".to_owned()),
+        credentials_updated_at_ms: None,
     };
     let mut probed: BTreeMap<String, AgentAccount> = BTreeMap::new();
     probed.insert("pi".to_owned(), account);

@@ -63,14 +63,6 @@ pub struct SidebarProviderPanel {
     pub windows: Vec<RateLimitWindow>,
 }
 
-impl SidebarProviderPanel {
-    /// The figure the dashboard ranks panels by: headline JSONL spend, so the
-    /// provider you are spending on in the configured window floats to the top.
-    pub(super) fn rank_cost(&self) -> f64 {
-        self.spending.as_ref().map_or(0.0, |s| s.headline.usd)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarWorktreeKind {

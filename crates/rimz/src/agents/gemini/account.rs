@@ -51,7 +51,7 @@ fn probe_at(settings_path: &Path, accounts_path: &Path) -> AccountProbe {
         return AccountProbe::LoggedOut;
     };
 
-    let (plan, account_id, metered) = match auth_type.as_str() {
+    let (plan, account_id, metered, credential_path) = match auth_type.as_str() {
         "oauth-personal" => {
             let Ok(accounts) = read_json::<GoogleAccounts>(accounts_path) else {
                 return AccountProbe::LoggedOut;
@@ -59,14 +59,19 @@ fn probe_at(settings_path: &Path, accounts_path: &Path) -> AccountProbe {
             let Some(active) = accounts.active.filter(|active| !active.trim().is_empty()) else {
                 return AccountProbe::LoggedOut;
             };
-            ("OAuth".to_owned(), Some(active), Some(true))
+            ("OAuth".to_owned(), Some(active), Some(true), accounts_path)
         }
-        "gemini-api-key" => ("API Key".to_owned(), None, Some(false)),
-        "vertex-ai" => ("Vertex AI".to_owned(), None, Some(false)),
-        "cloud-shell" => ("Cloud Shell".to_owned(), None, None),
-        "compute-default-credentials" => ("Compute Default Credentials".to_owned(), None, None),
-        "gateway" => ("Gateway".to_owned(), None, None),
-        other => (other.to_owned(), None, None),
+        "gemini-api-key" => ("API Key".to_owned(), None, Some(false), settings_path),
+        "vertex-ai" => ("Vertex AI".to_owned(), None, Some(false), settings_path),
+        "cloud-shell" => ("Cloud Shell".to_owned(), None, None, settings_path),
+        "compute-default-credentials" => (
+            "Compute Default Credentials".to_owned(),
+            None,
+            None,
+            settings_path,
+        ),
+        "gateway" => ("Gateway".to_owned(), None, None, settings_path),
+        other => (other.to_owned(), None, None, settings_path),
     };
     AccountProbe::Found(AgentAccount {
         plan: Some(plan),
@@ -74,6 +79,9 @@ fn probe_at(settings_path: &Path, accounts_path: &Path) -> AccountProbe {
         metered,
         version: None,
         sub_provider: None,
+        credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(
+            credential_path,
+        ),
     })
 }
 
@@ -109,6 +117,7 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("OAuth"));
         assert_eq!(account.account_id.as_deref(), Some("user@example.com"));
         assert_eq!(account.metered, Some(true));
+        assert!(account.credentials_updated_at_ms.is_some());
     }
 
     #[test]
@@ -123,6 +132,7 @@ mod tests {
         let account = found(probe_at(&settings, &dir.path().join("missing.json")));
         assert_eq!(account.plan.as_deref(), Some("API Key"));
         assert_eq!(account.metered, Some(false));
+        assert!(account.credentials_updated_at_ms.is_some());
     }
 
     #[test]

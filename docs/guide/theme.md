@@ -117,7 +117,7 @@ Two rules keep the palette honest: `alarm` red marks danger, and one warm `cauti
 | `scrollbar` | `auto` shows the overflow indicator only while the view moves; `always` / `never` pin it |
 | `card_density` | `auto` keeps the standard card; `expanded` shows every card's subagents; `compact` trims resting cards |
 | `provider_tabs` | how the dashboard stacks vs. tabs provider blocks (`auto` / `always` / `never`) |
-| `provider_list` | which providers appear and in what order; `"all"` expands the rest at that position |
+| `provider_list` | which providers appear and in what order; by default usage ranks running, recently used, then recently logged-in providers, while `"all"` expands the rest in that order |
 | `max_provider_blocks` | cap on *stacked* blocks (a tabbed dashboard shows all) |
 
 ```toml

@@ -370,6 +370,7 @@ mod tests {
                 metered: Some(true),
                 version: None,
                 sub_provider: Some("openai".to_owned()),
+                credentials_updated_at_ms: None,
             },
         );
 
@@ -482,6 +483,7 @@ mod tests {
                     metered: Some(true),
                     version: None,
                     sub_provider: None,
+                    credentials_updated_at_ms: None,
                 },
             );
             let now_ms = unix_now_ms();

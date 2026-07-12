@@ -66,6 +66,7 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
         },
         version: None,
         sub_provider: Some(provider.clone()),
+        credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
     })
 }
 
@@ -119,6 +120,7 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("Anthropic OAuth"));
         assert_eq!(account.metered, Some(true));
         assert_eq!(account.sub_provider.as_deref(), Some("anthropic"));
+        assert!(account.credentials_updated_at_ms.is_some());
 
         let path = write_auth(
             dir.path(),

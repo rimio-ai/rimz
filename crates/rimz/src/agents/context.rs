@@ -187,6 +187,11 @@ pub struct AgentAccount {
     /// Single-provider probes leave it `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub_provider: Option<String>,
+    /// Credential-file mtime in Unix milliseconds, when the probe reads a
+    /// file. The dashboard uses it as a login-recency signal; subprocess-only
+    /// probes leave it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_updated_at_ms: Option<u64>,
 }
 
 /// Cumulative spend for the session, as the agent reports it.

@@ -23,10 +23,22 @@ pub(crate) fn probe() -> AccountProbe {
     let Some(home) = super::app_server::codex_home() else {
         return AccountProbe::LoggedOut;
     };
-    match std::fs::read(home.join("auth.json")) {
-        Ok(bytes) => parse_codex_auth(&bytes),
+    let path = home.join("auth.json");
+    match std::fs::read(&path) {
+        Ok(bytes) => with_credentials_mtime(parse_codex_auth(&bytes), &path),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => probe_login_status(),
         Err(_) => AccountProbe::Unavailable,
+    }
+}
+
+fn with_credentials_mtime(probe: AccountProbe, path: &std::path::Path) -> AccountProbe {
+    match probe {
+        AccountProbe::Found(mut account) => {
+            account.credentials_updated_at_ms =
+                crate::agents::account::credentials_updated_at_ms(path);
+            AccountProbe::Found(account)
+        }
+        other => other,
     }
 }
 
@@ -82,6 +94,7 @@ fn parse_login_status(text: &str) -> AccountProbe {
         metered,
         version: None,
         sub_provider: None,
+        credentials_updated_at_ms: None,
     })
 }
 
@@ -121,6 +134,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
             metered: Some(false),
             version: None,
             sub_provider: None,
+            credentials_updated_at_ms: None,
         });
     }
     if auth
@@ -134,6 +148,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
             metered: Some(true),
             version: None,
             sub_provider: None,
+            credentials_updated_at_ms: None,
         });
     }
     AccountProbe::LoggedOut
@@ -181,6 +196,19 @@ mod tests {
             parse_codex_auth(b"not json"),
             AccountProbe::LoggedOut
         ));
+    }
+
+    #[test]
+    fn file_probe_carries_credential_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let json = br#"{ "OPENAI_API_KEY": "sk-abc" }"#;
+        std::fs::write(&path, json).unwrap();
+        let account = found(
+            with_credentials_mtime(parse_codex_auth(json), &path),
+            "file login",
+        );
+        assert!(account.credentials_updated_at_ms.is_some());
     }
 
     #[test]

@@ -54,6 +54,7 @@ pub(crate) fn probe_at(path: &Path) -> AccountProbe {
         metered: Some(true),
         version: None,
         sub_provider: None,
+        credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
     })
 }
 
@@ -68,4 +69,20 @@ fn expired(value: &serde_json::Value) -> bool {
                 .map(|value| value.as_second())
         });
     seconds.is_some_and(|seconds| seconds <= jiff::Timestamp::now().as_second())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_login_carries_credential_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kimi-code.json");
+        std::fs::write(&path, r#"{"refresh_token":"refresh"}"#).unwrap();
+        let AccountProbe::Found(account) = probe_at(&path) else {
+            panic!("refreshable credential must report an account");
+        };
+        assert!(account.credentials_updated_at_ms.is_some());
+    }
 }

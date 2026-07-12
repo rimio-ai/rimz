@@ -1,5 +1,7 @@
 //! Best-effort Qwen provider and credential-source presence probe.
 
+use std::path::Path;
+
 use serde::Deserialize;
 
 use crate::agents::account::AccountProbe;
@@ -31,6 +33,14 @@ pub(crate) fn probe() -> AccountProbe {
     let Ok(path) = super::install::qwen_settings_path() else {
         return AccountProbe::Unavailable;
     };
+    probe_at(&path)
+}
+
+fn probe_at(path: &Path) -> AccountProbe {
+    probe_at_with(path, env_present)
+}
+
+fn probe_at_with(path: &Path, env_present: impl Fn(&str) -> bool) -> AccountProbe {
     let Ok(bytes) = std::fs::read(path) else {
         return AccountProbe::Unavailable;
     };
@@ -62,5 +72,22 @@ pub(crate) fn probe() -> AccountProbe {
         metered: None,
         version: None,
         sub_provider: Some(provider.to_owned()),
+        credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_login_carries_credential_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"security":{"auth":{"selectedType":"openai"}}}"#).unwrap();
+        let AccountProbe::Found(account) = probe_at_with(&path, |_| true) else {
+            panic!("configured credential must report an account");
+        };
+        assert!(account.credentials_updated_at_ms.is_some());
+    }
 }

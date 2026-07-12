@@ -23,14 +23,14 @@ impl SidebarSnapshot {
     /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
     /// name) resolves from `self.theme.providers` over the built-in defaults, so
     /// the renderer gets a ready-to-paint block. With no explicit
-    /// `provider_list`, a *stacked* dashboard is capped to `max_provider_blocks`
-    /// by today's spend; a *tabbed* dashboard (three or more providers under
-    /// `auto`) is height-bounded by its active block, so it shows every
-    /// discovered provider. The retained set paints in the registry's display
-    /// order (`claude, codex, amp, copilot, gemini, pi, opencode, kiro, qwen, kimi`) — the panels are the dashboard's
-    /// tabs, so the row never reorders as spend shifts. An explicit
+    /// `provider_list`, providers paint in usage-rank order: live sessions,
+    /// then week/month/year session counts, then login and credential recency.
+    /// This deliberately ignores intra-day spend shifts. A *stacked* dashboard
+    /// caps that ranked list to `max_provider_blocks`; a *tabbed* dashboard
+    /// (three or more providers under `auto`) is height-bounded by its active
+    /// block, so it shows every discovered provider. An explicit
     /// `provider_list` overrides the shown set and order, with `all` expanding
-    /// the remaining discovered providers (in that same display order) and
+    /// the remaining discovered providers in usage-rank order and
     /// bypassing the cap. Producer-only: the pure reducer leaves `providers`
     /// empty.
     pub fn with_provider_aggregates(
@@ -40,7 +40,7 @@ impl SidebarSnapshot {
         provider_spending: &BTreeMap<String, SpendTally>,
     ) -> Self {
         let kinds = provider_kinds(&self.agents, probed_accounts);
-        let mut panels: Vec<SidebarProviderPanel> = Vec::new();
+        let mut panels = Vec::new();
         for kind in kinds {
             let sessions: Vec<&AgentState> = self
                 .agents
@@ -134,23 +134,40 @@ impl SidebarSnapshot {
             let remote_control = remote_control.get(&kind).copied().unwrap_or(false);
             let spending = provider_spending.get(&kind).cloned();
 
-            panels.push(SidebarProviderPanel {
-                kind,
-                product_name,
-                art,
-                color,
-                color_rgb,
-                color_role,
-                version,
-                plan,
-                metered,
-                remote_control,
-                spending,
-                day_budget: None,
-                extra_credits: None,
-                reset_credits: None,
-                windows,
-            });
+            let tally = provider_spending.get(&kind);
+            let rank = ProviderRank {
+                live: !sessions.is_empty(),
+                week_sessions: tally.map_or(0, |tally| tally.week.sessions),
+                month_sessions: tally.map_or(0, |tally| tally.month.sessions),
+                year_sessions: tally.map_or(0, |tally| tally.year.sessions),
+                logged_in: probed_accounts
+                    .get(&kind)
+                    .is_some_and(account_creates_provider_panel),
+                credentials_updated_at_ms: probed_accounts
+                    .get(&kind)
+                    .and_then(|account| account.credentials_updated_at_ms),
+            };
+
+            panels.push((
+                SidebarProviderPanel {
+                    kind,
+                    product_name,
+                    art,
+                    color,
+                    color_rgb,
+                    color_role,
+                    version,
+                    plan,
+                    metered,
+                    remote_control,
+                    spending,
+                    day_budget: None,
+                    extra_credits: None,
+                    reset_credits: None,
+                    windows,
+                },
+                rank,
+            ));
         }
 
         self.providers = resolve_provider_panels(
@@ -160,6 +177,33 @@ impl SidebarSnapshot {
             self.theme.display.provider_tabs,
         );
         self
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ProviderRank {
+    live: bool,
+    week_sessions: u32,
+    month_sessions: u32,
+    year_sessions: u32,
+    logged_in: bool,
+    credentials_updated_at_ms: Option<u64>,
+}
+
+impl ProviderRank {
+    fn compare(left: Self, right: Self) -> Ordering {
+        right
+            .live
+            .cmp(&left.live)
+            .then_with(|| right.week_sessions.cmp(&left.week_sessions))
+            .then_with(|| right.month_sessions.cmp(&left.month_sessions))
+            .then_with(|| right.year_sessions.cmp(&left.year_sessions))
+            .then_with(|| right.logged_in.cmp(&left.logged_in))
+            .then_with(|| {
+                right
+                    .credentials_updated_at_ms
+                    .cmp(&left.credentials_updated_at_ms)
+            })
     }
 }
 
@@ -191,23 +235,15 @@ fn account_creates_provider_panel(account: &AgentAccount) -> bool {
 }
 
 fn resolve_provider_panels(
-    mut panels: Vec<SidebarProviderPanel>,
+    mut panels: Vec<(SidebarProviderPanel, ProviderRank)>,
     provider_list: &[String],
     max_provider_blocks: usize,
     provider_tabs: ProviderTabsMode,
 ) -> Vec<SidebarProviderPanel> {
     if provider_list.is_empty() {
-        // Today's JSONL spend decides only *which* panels survive the cap — the
-        // provider you are actively spending on always earns its block, and a
-        // token-only provider (Codex) ranks on the same transcript-derived
-        // footing as a live-cost one. Ties break by registry display order, so a
-        // capped, stacked dashboard keeps the earlier-listed providers.
-        panels.sort_by(|left, right| {
-            right
-                .rank_cost()
-                .partial_cmp(&left.rank_cost())
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| display_order(left, right))
+        panels.sort_by(|(left_panel, left_rank), (right_panel, right_rank)| {
+            ProviderRank::compare(*left_rank, *right_rank)
+                .then_with(|| display_order(left_panel, right_panel))
         });
         // The cap bounds the *stacked* dashboard's height; a tabbed dashboard is
         // bounded by its single active block, so it shows every provider. The
@@ -217,20 +253,16 @@ fn resolve_provider_panels(
         if !provider_tabs.tabs(panels.len()) {
             panels.truncate(max_provider_blocks);
         }
-        // The shown set paints in the registry's canonical order (claude, codex,
-        // copilot, pi, opencode) — the panels are the dashboard's tabs, and a tab row must
-        // not reorder as today's spend shifts between providers.
-        panels.sort_by(display_order);
-        return panels;
+        return panels.into_iter().map(|(panel, _)| panel).collect();
     }
 
     let explicitly_named: BTreeSet<&str> = provider_list
         .iter()
         .filter_map(|kind| (kind != "all").then_some(kind.as_str()))
         .collect();
-    let by_kind: BTreeMap<String, SidebarProviderPanel> = panels
+    let by_kind: BTreeMap<String, (SidebarProviderPanel, ProviderRank)> = panels
         .into_iter()
-        .map(|panel| (panel.kind.clone(), panel))
+        .map(|entry| (entry.0.kind.clone(), entry))
         .collect();
     let mut resolved = Vec::new();
     let mut emitted_named = BTreeSet::new();
@@ -238,22 +270,25 @@ fn resolve_provider_panels(
     for kind in provider_list {
         if kind == "all" {
             if !emitted_all {
-                // `all` expands the not-yet-named providers in the same registry
-                // display order as the default dashboard, so `["all"]` matches an
-                // empty list.
-                let mut remaining: Vec<SidebarProviderPanel> = by_kind
+                // `all` expands the not-yet-named providers in the same usage
+                // order as the default dashboard, so `["all"]` matches an empty
+                // list.
+                let mut remaining: Vec<(SidebarProviderPanel, ProviderRank)> = by_kind
                     .values()
-                    .filter(|panel| !explicitly_named.contains(panel.kind.as_str()))
+                    .filter(|(panel, _)| !explicitly_named.contains(panel.kind.as_str()))
                     .cloned()
                     .collect();
-                remaining.sort_by(display_order);
-                resolved.extend(remaining);
+                remaining.sort_by(|(left_panel, left_rank), (right_panel, right_rank)| {
+                    ProviderRank::compare(*left_rank, *right_rank)
+                        .then_with(|| display_order(left_panel, right_panel))
+                });
+                resolved.extend(remaining.into_iter().map(|(panel, _)| panel));
                 emitted_all = true;
             }
             continue;
         }
         if emitted_named.insert(kind.as_str())
-            && let Some(panel) = by_kind.get(kind)
+            && let Some((panel, _)) = by_kind.get(kind)
         {
             resolved.push(panel.clone());
         }

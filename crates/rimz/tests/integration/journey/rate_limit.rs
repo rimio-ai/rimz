@@ -148,6 +148,7 @@ fn accounts() -> AccountsCache {
                 metered: Some(true),
                 version: Some("2.1.158".to_owned()),
                 sub_provider: None,
+                credentials_updated_at_ms: None,
             },
         )]),
         ok: true,

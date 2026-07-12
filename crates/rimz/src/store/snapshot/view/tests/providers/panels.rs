@@ -1,49 +1,66 @@
 use super::*;
 
 #[test]
-fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
+fn live_provider_outranks_heavier_history_and_cap_keeps_usage_leaders() {
     let claude = agent("claude", "c1", AgentStatus::Idle, 10);
-    let codex = agent("codex", "x1", AgentStatus::Idle, 20);
-    let pi = agent("pi", "p1", AgentStatus::Idle, 30);
-    let by_provider = provider_spend([("claude", 1.0), ("codex", 5.0), ("pi", 3.0)]);
+    let accounts = provider_accounts([("codex", 10), ("pi", 20)]);
+    let by_provider = provider_sessions([
+        ("claude", 0, 0, 0),
+        ("codex", 100, 100, 100),
+        ("pi", 50, 50, 50),
+    ]);
 
-    let mut snapshot = room(vec![claude.clone(), codex.clone(), pi.clone()]);
+    let mut snapshot = room(vec![claude.clone()]);
     // The cap only trims the stacked dashboard; pin `never` so it bites here.
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 3;
-    let snapshot =
-        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
+    let snapshot = snapshot.with_provider_aggregates(&accounts, &BTreeMap::new(), &by_provider);
 
-    // The panels are the dashboard's tabs, so they hold a stable kind order —
-    // Codex's larger headline spend (5.0) never reorders the row.
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
-    // Each panel still carries its own spending tally.
-    assert_eq!(
-        snapshot.providers[0]
-            .spending
-            .as_ref()
-            .unwrap()
-            .headline
-            .usd,
-        1.0
-    );
-    assert_eq!(
-        snapshot.providers[1]
-            .spending
-            .as_ref()
-            .unwrap()
-            .headline
-            .usd,
-        5.0
-    );
 
-    let mut snapshot = room(vec![claude, codex, pi]);
+    let mut snapshot = room(vec![claude]);
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 2;
-    let snapshot =
-        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
+    let snapshot = snapshot.with_provider_aggregates(&accounts, &BTreeMap::new(), &by_provider);
 
-    assert_eq!(provider_kinds(&snapshot), vec!["codex", "pi"]);
+    assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex"]);
+}
+
+#[test]
+fn session_windows_rank_lexicographically() {
+    let accounts = provider_accounts([("claude", 1), ("codex", 2), ("pi", 3)]);
+    let spending = provider_sessions([
+        ("claude", 1, 1, 1),
+        ("codex", 0, 100, 100),
+        ("pi", 0, 0, 1_000),
+    ]);
+    let snapshot =
+        room(Vec::new()).with_provider_aggregates(&accounts, &BTreeMap::new(), &spending);
+    assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
+}
+
+#[test]
+fn login_and_credential_recency_break_unused_live_ties() {
+    let agents = vec![
+        agent("claude", "c1", AgentStatus::Idle, 10),
+        agent("codex", "x1", AgentStatus::Idle, 20),
+        agent("pi", "p1", AgentStatus::Idle, 30),
+    ];
+    let accounts = provider_accounts([("codex", 10), ("pi", 20)]);
+    let snapshot =
+        room(agents).with_provider_aggregates(&accounts, &BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(provider_kinds(&snapshot), vec!["pi", "codex", "claude"]);
+}
+
+#[test]
+fn full_usage_tie_falls_back_to_registry_order() {
+    let snapshot = room(vec![
+        agent("pi", "p1", AgentStatus::Idle, 10),
+        agent("codex", "x1", AgentStatus::Idle, 20),
+        agent("claude", "c1", AgentStatus::Idle, 30),
+    ])
+    .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
 }
 
 #[test]
@@ -173,6 +190,20 @@ fn provider_list_filters_and_orders_dashboard_panels() {
 }
 
 #[test]
+fn provider_list_all_expands_remaining_in_usage_order() {
+    let agents = vec![
+        agent("claude", "c1", AgentStatus::Idle, 10),
+        agent("codex", "x1", AgentStatus::Idle, 20),
+        agent("pi", "p1", AgentStatus::Idle, 30),
+    ];
+    let spending = provider_sessions([("claude", 0, 0, 0), ("codex", 1, 1, 1), ("pi", 2, 2, 2)]);
+    let mut snapshot = room(agents);
+    snapshot.theme.display.provider_list = vec!["claude".to_owned(), "all".to_owned()];
+    let snapshot = snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &spending);
+    assert_eq!(provider_kinds(&snapshot), vec!["claude", "pi", "codex"]);
+}
+
+#[test]
 fn recorded_spend_attaches_only_after_provider_discovery() {
     let snapshot = room(Vec::new());
     let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
@@ -211,6 +242,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
             metered: Some(true),
             version: None,
             sub_provider: None,
+            credentials_updated_at_ms: None,
         },
     );
     let snapshot = snapshot.with_provider_aggregates(&probed, &BTreeMap::new(), &by_provider);
@@ -223,19 +255,46 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
     assert_eq!(claude.spending.as_ref().unwrap().year.usd, 9.0);
 }
 
-fn provider_spend(
-    entries: impl IntoIterator<Item = (&'static str, f64)>,
+fn provider_sessions(
+    entries: impl IntoIterator<Item = (&'static str, u32, u32, u32)>,
 ) -> BTreeMap<String, SpendTally> {
     entries
         .into_iter()
-        .map(|(kind, usd)| {
+        .map(|(kind, week, month, year)| {
             (
                 kind.to_owned(),
                 SpendTally {
-                    headline: SpendWindow {
-                        usd,
+                    week: SpendWindow {
+                        sessions: week,
                         ..Default::default()
                     },
+                    month: SpendWindow {
+                        sessions: month,
+                        ..Default::default()
+                    },
+                    year: SpendWindow {
+                        sessions: year,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
+}
+
+fn provider_accounts(
+    entries: impl IntoIterator<Item = (&'static str, u64)>,
+) -> BTreeMap<String, AgentAccount> {
+    entries
+        .into_iter()
+        .map(|(kind, credentials_updated_at_ms)| {
+            (
+                kind.to_owned(),
+                AgentAccount {
+                    plan: Some("pro".to_owned()),
+                    metered: Some(true),
+                    credentials_updated_at_ms: Some(credentials_updated_at_ms),
                     ..Default::default()
                 },
             )

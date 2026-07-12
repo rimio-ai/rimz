@@ -738,8 +738,10 @@ fn zip_provider_pet_lines(
 /// as the pick's shape instead. Labels are the kind slugs
 /// first-char-capitalized — the rail carries the product-name role the tabbed
 /// header drops. Holds to one screen row: a tab that would overflow `width` is
-/// dropped whole (label and hit together), so the hit map stays in lockstep
-/// with the frame however many kinds register or however narrow the pane.
+/// dropped whole (label and hit together), except that the active tab reserves
+/// its footprint first so the selected block always has a visible chip. The
+/// hit map stays in lockstep with the frame however many kinds register or
+/// however narrow the pane.
 /// Returns the line plus one [`ProviderTabHit`] per rendered tab (line index
 /// 0, columns over the full edge-to-edge footprint, so the click target holds
 /// still too) for the mouse hit-test.
@@ -758,16 +760,45 @@ fn provider_tab_rail(
     let stub = RAIL_STUB.min(width);
     spans.push(fill(stub));
     col += stub;
+
+    let tab_cells = |panel: &SidebarProviderPanel| tab_label(&panel.kind).chars().count() + 4;
+    let active_index = providers.iter().position(|panel| panel.kind == active_kind);
+    let mut selected = vec![false; providers.len()];
+    let mut used = stub;
+    if let Some(index) = active_index {
+        let cells = tab_cells(&providers[index]);
+        if used < width {
+            selected[index] = true;
+            used = (used + cells).min(width);
+        }
+    }
     for (index, panel) in providers.iter().enumerate() {
-        let gap = if index > 0 { RAIL_STUB } else { 0 };
+        if Some(index) == active_index {
+            continue;
+        }
+        let cells = tab_cells(panel);
+        let gap = if selected.iter().any(|selected| *selected) {
+            RAIL_STUB
+        } else {
+            0
+        };
+        if used + gap + cells <= width {
+            selected[index] = true;
+            used += gap + cells;
+        }
+    }
+
+    let mut rendered = 0;
+    for (index, panel) in providers.iter().enumerate() {
+        if !selected[index] {
+            continue;
+        }
+        let gap = if rendered > 0 { RAIL_STUB } else { 0 };
         let active = panel.kind == active_kind;
         // Kind labels are registry-fixed ASCII slugs, so chars == cells; the
         // footprint adds the two pad spaces and the two reserved rail cells.
         let label = tab_label(&panel.kind);
         let cells = label.chars().count() + 4;
-        if col + gap + cells > width {
-            break;
-        }
         if gap > 0 {
             spans.push(fill(gap));
             col += gap;
@@ -801,15 +832,16 @@ fn provider_tab_rail(
         hits.push(ProviderTabHit {
             line: 0,
             col_start: col as u16,
-            col_end: (col + cells) as u16,
+            col_end: (col + cells).min(width) as u16,
             kind: panel.kind.clone(),
         });
         col += cells;
+        rendered += 1;
     }
     if col < width {
         spans.push(fill(width - col));
     }
-    (Line::from(spans), hits)
+    (Line::from(trim_spans_to_width(spans, width)), hits)
 }
 
 /// Width of the tab rail's leading stub and inter-tab gaps.

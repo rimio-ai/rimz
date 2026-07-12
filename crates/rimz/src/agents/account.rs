@@ -24,6 +24,19 @@
 //!
 //! [`AgentAdapter::probe_account`]: super::AgentAdapter::probe_account
 
+use std::path::Path;
+
+/// Best-effort credential-file mtime for provider usage ranking.
+pub(crate) fn credentials_updated_at_ms(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis() as u64)
+}
+
 /// The outcome of an out-of-band account probe. The three arms drive the
 /// producer's cache TTL: a `Found` or `LoggedOut` answer is authoritative and
 /// rides the long success TTL, while `Unavailable` — a binary that would not run,

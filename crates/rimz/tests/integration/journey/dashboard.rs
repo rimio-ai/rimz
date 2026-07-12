@@ -103,6 +103,7 @@ fn accounts() -> AccountsCache {
                     metered: Some(true),
                     version: Some("2.1.158".to_owned()),
                     sub_provider: None,
+                    credentials_updated_at_ms: None,
                 },
             ),
             (
@@ -113,6 +114,7 @@ fn accounts() -> AccountsCache {
                     metered: Some(false),
                     version: Some("0.139.0".to_owned()),
                     sub_provider: None,
+                    credentials_updated_at_ms: None,
                 },
             ),
         ]),

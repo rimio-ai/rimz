@@ -271,6 +271,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             account_id: None,
             version: None,
             sub_provider: None,
+            credentials_updated_at_ms: None,
         });
         Ok((windows, account, credits, reset_credits))
     }
