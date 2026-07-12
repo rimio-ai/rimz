@@ -4,11 +4,11 @@
 
 This is the single home for the **Factory Droid CLI upstream protocol surface** relevant to RimZ: lifecycle hooks, session identity and transcripts, permissions and questions, compaction, subagents and missions, model and autonomy settings, resume and fork behavior, non-interactive execution, the stream JSON-RPC transport, authentication, and usage.
 
-Coverage targets the latest release only. It gives implementation depth for the stock interactive CLI's supported hook surface and the structured `droid exec` transport, and it calls out the places where Factory publishes no stable observation contract rather than promoting an inference into protocol.
+Stock-pane coverage targets the installed release named below. Structured `droid exec` coverage stays pinned to the public SDK revision named below until that transport is implemented and refreshed. This reference calls out the places where Factory publishes no stable observation contract rather than promoting an inference into protocol.
 
 ## Refresh target and product identity
 
-This mirror was refreshed against the latest release listed in Factory's release notes, **Droid CLI 0.121.0**, and the current public TypeScript SDK **0.6.0**, Factory protocol **1.51.0**, at source commit [`d960f18f3a5a3bdbbc867a2177275a794663b175`](https://github.com/Factory-AI/droid-sdk-typescript/tree/d960f18f3a5a3bdbbc867a2177275a794663b175).
+The stock CLI and hook surface were refreshed against an installed **Droid CLI 0.170.0** and Factory's live official documentation. The structured exec sections remain pinned to public TypeScript SDK **0.6.0**, Factory protocol **1.51.0**, at source commit [`d960f18f3a5a3bdbbc867a2177275a794663b175`](https://github.com/Factory-AI/droid-sdk-typescript/tree/d960f18f3a5a3bdbbc867a2177275a794663b175).
 
 The executable is `droid`. `droid -v` or `droid --version` prints its version, and `droid update` installs the latest release. RimZ records the tested release as a fixture-freshness boundary rather than applying a runtime version gate; refresh the hook goldens and protocol research when behavior drifts. This reference intentionally carries no compatibility contract for older Droid releases.
 
@@ -83,6 +83,10 @@ Treat all hook and JSON-RPC objects as forward-extensible: require the fields do
 | `--worktree [name]`, `-w [name]` | run in a native sibling Git worktree |
 | `--append-system-prompt <text>` | append text to the system prompt |
 | `--append-system-prompt-file <path>` | append a file to the system prompt |
+| `--settings <path>` | merge a runtime settings file for this process only |
+| `--auto low\|medium\|high` | start this interactive session at the selected autonomy level |
+| `--use-spec` | start this interactive session in specification mode |
+| `--cwd <path>` | set the working directory |
 
 `droid exec` is the non-interactive command. Its adapter-relevant flags are:
 
@@ -264,7 +268,7 @@ All structured outputs may carry:
 
 `PostToolUse` and `UserPromptSubmit` may return top-level `decision: "block"`, `reason`, and `hookSpecificOutput.additionalContext`. Post-tool blocking feeds corrective feedback after the action; prompt blocking erases the prompt and shows the reason only to the user. `Stop` and `SubagentStop` use `decision: "block"` plus a required `reason` to request another agent step. `stop_hook_active` prevents an infinite continuation loop.
 
-RimZ's observation hook emits none of these decisions. Golden-test byte-empty stdout, exit 0, and stderr-only diagnostics against Droid 0.121.0.
+RimZ's observation hook emits none of these decisions. Golden-test byte-empty stdout, exit 0, and stderr-only diagnostics against Droid 0.170.0.
 
 ## Waiting and structured asks
 
@@ -315,7 +319,16 @@ Current settings relevant to an adapter are:
 
 Spec mode is a read-only planning phase. Interactive Shift+Tab cycles Auto, Spec, and Mission; Ctrl+L cycles autonomy; Tab cycles reasoning effort; `/model` switches model during the session. Hook payload `permission_mode` reports `off`, `spec`, or `auto-<level>` at each event but omits model and reasoning effort.
 
-For supervised exec launches, map RimZ permission modes only to documented flags:
+The stock interactive CLI now accepts launch-scoped `--auto <level>` and `--use-spec`, while its unsafe bypass remains exec-only. Map interactive RimZ modes as follows:
+
+| RimZ mode | Interactive Droid launch |
+| --- | --- |
+| ask | omit an override and retain the configured autonomy/native prompt UI |
+| plan | `--use-spec` |
+| auto | `--auto medium` as the closest local-development tier |
+| yolo | unsupported; interactive Droid exposes no unsafe bypass |
+
+The structured exec path has its own permission mapping:
 
 | RimZ mode | Droid exec launch |
 | --- | --- |
@@ -324,7 +337,7 @@ For supervised exec launches, map RimZ permission modes only to documented flags
 | auto | `--auto medium` as the closest local-development tier |
 | yolo | `--skip-permissions-unsafe`, only under RimZ's existing explicit unsafe posture |
 
-For an ask-mode supervised run that may require mutation, use `stream-jsonrpc`, omit `--auto`, and answer `droid.request_permission`; plain one-shot exec cannot stop for a human and fails fast when requested work exceeds its authority. Do not rewrite persistent interactive settings to implement a one-pane launch suffix. The official CLI reference does not promise an isolated interactive-session autonomy flag equivalent to exec's tier flags. A future adapter should fail fast for unsupported interactive mode overrides rather than silently changing user configuration.
+For an ask-mode supervised exec run that may require mutation, use `stream-jsonrpc`, omit `--auto`, and answer `droid.request_permission`; plain one-shot exec cannot stop for a human and fails fast when requested work exceeds its authority. Keep persistent settings user-owned and fail fast when a requested posture has no launch-scoped equivalent.
 
 ### Status line is not an observation API
 
@@ -602,7 +615,7 @@ Factory publishes no `droid auth status --json` equivalent, supported credential
 
 Before enabling the adapter:
 
-1. Pin `droid --version` to 0.121.0 and protocol `factoryProtocolVersion` to 1.51.0.
+1. Pin stock-hook fixtures to `droid --version` 0.170.0 and structured exec fixtures to protocol `factoryProtocolVersion` 1.51.0.
 2. Install the minimal hook set: `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `PreCompact`, and `SessionEnd`; install `Notification` only for silent enrichment and `SubagentStop` only when a future payload supplies identity.
 3. Add trust-hash fixtures for every settings tier, matcher, command, timeout, and plugin hook that can execute.
 4. Golden-test every hook stdin payload and byte-empty success stdout on the pinned binary.

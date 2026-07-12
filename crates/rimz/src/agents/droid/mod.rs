@@ -392,11 +392,16 @@ impl AgentAdapter for DroidAdapter {
         ])
     }
 
-    fn permission_args(&self, _mode: PermissionMode) -> Vec<String> {
-        // Interactive Droid has no launch-only permission posture flag. Keep
-        // persistent Factory settings user-owned and let unsupported auto/yolo
-        // cells fail in the shared layout parser.
-        Vec::new()
+    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
+        match mode {
+            PermissionMode::Auto => vec!["--auto".to_owned(), "medium".to_owned()],
+            PermissionMode::Plan => vec!["--use-spec".to_owned()],
+            // Stock interactive mode keeps Droid's configured autonomy and
+            // native permission UI. The CLI exposes no interactive equivalent
+            // of exec's unsafe bypass, so an empty yolo posture remains
+            // unsupported in the shared layout parser.
+            PermissionMode::Ask | PermissionMode::Yolo => Vec::new(),
+        }
     }
 
     fn compact_command(&self) -> Option<&'static str> {

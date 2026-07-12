@@ -99,9 +99,24 @@ pub(super) fn hooks_installed_at(path: &Path) -> bool {
             .is_some_and(|entries| {
                 entries
                     .iter()
-                    .any(|entry| entry.as_object().is_some_and(entry_is_rimz_owned))
+                    .any(|entry| entry.as_object().is_some_and(canonical_entry_is_installed))
             })
     })
+}
+
+fn canonical_entry_is_installed(entry: &Map<String, Value>) -> bool {
+    if !entry_is_rimz_owned(entry) || entry.contains_key("matcher") {
+        return false;
+    }
+    let Some(commands) = entry.get("hooks").and_then(Value::as_array) else {
+        return false;
+    };
+    commands.len() == 1
+        && commands[0].as_object().is_some_and(|command| {
+            command.get("type").and_then(Value::as_str) == Some("command")
+                && command.get("command").and_then(Value::as_str) == Some(RIMZ_HOOK_COMMAND)
+                && command.get("timeout").and_then(Value::as_u64) == Some(DROID_HOOK_TIMEOUT_SECS)
+        })
 }
 
 pub(super) fn managed_artifacts_at(path: &Path) -> bool {

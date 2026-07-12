@@ -37,6 +37,16 @@ Droid exposes no supported transcript billing schema or cost field. The adapter 
 
 Fresh launch uses `droid -- <prompt>`, resume uses `droid --resume <id>`, fork uses `droid --fork <id>`, and `/compact` is the smart-compaction command. Profiles map `model` to `--model` and `append-system-prompt-file` to `--append-system-prompt-file`; `effort` and replacement `system-prompt-file` fail at profile validation.
 
-Interactive Droid documents no launch-only autonomy flag. `droid`, `droid-ask`, and `droid-plan` use the user's stock posture; `droid-auto` and `droid-yolo` are unavailable and fail layout parsing. RimZ does not rewrite `~/.factory/settings.json` autonomy settings. The similarly named `--auto`, `--use-spec`, and `--skip-permissions-unsafe` switches belong to `droid exec`, outside this adapter's interactive surface.
+Current interactive Droid accepts launch-scoped `--auto <level>` and `--use-spec`. `droid-auto` selects `--auto medium`, the closest fit for normal local development; `droid-plan` starts with `--use-spec`; and `droid`/`droid-ask` retain the user's configured autonomy and native permission UI. `droid-yolo` remains unavailable because `--skip-permissions-unsafe` belongs to `droid exec`; RimZ does not rewrite persistent autonomy settings.
 
-The wire fixtures and goldens are researched against Droid CLI 0.121.0. RimZ applies no runtime version gate; refresh the upstream reference and fixtures when Droid's hook behavior drifts.
+The stock CLI, hook wire fixtures, and goldens are researched against Droid CLI 0.170.0; the structured exec research remains pinned separately to the public SDK version named in the upstream reference. RimZ applies no runtime version gate; refresh the upstream reference and fixtures when Droid's behavior drifts.
+
+The 0.170.0 binary's help and the public docs verify the launch flags without authentication. A logged-in live-pane pass still needs to confirm hook delivery, session-id rotation, profile model selection, and the exact first-turn posture for each suffix.
+
+## Deferred integration work
+
+The current adapter deliberately stays on the stock interactive pane and its native hooks. A future supervised `droid exec` transport can add authoritative permission/question requests, context stats, token usage, model/effort updates, failed outcomes, and identified mission workers, but it needs a process-lifecycle and ask-answer path that is larger than this adapter.
+
+Compaction can rotate Droid's session id while one native event both closes the old bracket and introduces the replacement. `AgentAdapter::observe_lifecycle` emits one observation per event today, so the adapter records the close on the reported id and lets later activity establish the replacement row. Supporting a close-old/register-new pair requires a kind-agnostic multi-observation or explicit session-replacement abstraction.
+
+Factory recommends an absolute hook command because hook cwd can change, while RimZ's built-in installers currently use the shared PATH-resolved `rimz hooks feed` shape. Resolving and migrating the running RimZ executable belongs in the common hook-install abstraction so every built-in gets identical trust hashing, drift detection, and upgrades.

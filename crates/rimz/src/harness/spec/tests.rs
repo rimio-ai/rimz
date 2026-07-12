@@ -786,13 +786,11 @@ fn virtual_agent_modes_and_ping_work_without_config() {
         parse_layout_spec("pi-yolo", &no_profiles(), &no_commands()),
         Err(LayoutErr::UnknownCell { cell, .. }) if cell == "pi-yolo"
     ));
-    for unsupported in ["droid-auto", "droid-yolo"] {
-        assert!(matches!(
-            parse_layout_spec(unsupported, &no_profiles(), &no_commands()),
-            Err(LayoutErr::UnknownCell { cell, .. }) if cell == unsupported
-        ));
-    }
-    for supported in ["droid-ask", "droid-plan"] {
+    assert!(matches!(
+        parse_layout_spec("droid-yolo", &no_profiles(), &no_commands()),
+        Err(LayoutErr::UnknownCell { cell, .. }) if cell == "droid-yolo"
+    ));
+    for supported in ["droid-auto", "droid-ask", "droid-plan"] {
         assert!(parse_layout_spec(supported, &no_profiles(), &no_commands()).is_ok());
     }
 }

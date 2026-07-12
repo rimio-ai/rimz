@@ -173,7 +173,7 @@ Droid is a basic-lifecycle integration over Factory's native `settings.json` hoo
 - **Eleven unsupported cells (✗):** Droid's stock hook wire exposes no structured permission, plan, question, answer, subagent identity, background-task, context/token, cost, account-spend, rich-context, or remote-control surface. `Notification` is only a display message, so RimZ does not guess whether it means permission attention or 60-second input idle.
 - **Turn outcomes:** `Stop` carries no error field and maps to a clean turn end. Provider failure has no native hook; the displayed-status ladder, stall window, and pane liveness own that gap.
 - **Resume and fork:** `droid --resume <id>` reopens a session under the replacement session id Factory assigns; `droid --fork <id>` branches one for `rimz agents fork`.
-- **Permission modes:** `droid`, `droid-ask`, and `droid-plan` use Droid's stock configured posture. `droid-auto` and `droid-yolo` are unavailable because interactive Droid has no corresponding launch flag; RimZ leaves persistent autonomy settings user-owned.
+- **Permission modes:** `droid-auto` launches with `--auto medium`, `droid-plan` starts with `--use-spec`, and `droid`/`droid-ask` retain Droid's configured posture and native permission UI. `droid-yolo` stays unavailable because the unsafe bypass is exec-only; RimZ leaves persistent autonomy settings user-owned.
 - **Profiles:** `model` and `append-system-prompt-file` map to native flags. `effort` and replacement `system-prompt-file` fail profile validation.
 - **Install target:** `~/.factory/settings.json`, merged additively; RimZ leaves `statusLine` untouched and removes only its own hook entries on uninstall.
 

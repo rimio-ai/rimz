@@ -45,6 +45,16 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
     install_into(&path).unwrap();
     assert!(hooks_installed_at(&path));
 
+    let mut root: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    root["hooks"]["PostToolUse"][0]["hooks"][0]["timeout"] = json!(60);
+    std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
+    assert!(
+        !hooks_installed_at(&path),
+        "timeout drift must re-offer the canonical hook merge"
+    );
+    install_into(&path).unwrap();
+    assert!(hooks_installed_at(&path));
+
     let uninstall = uninstall_from(&path).unwrap();
     assert!(uninstall.existed);
     let root: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -200,14 +210,20 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
             "sess-1".to_owned()
         ])
     );
-    for mode in [
-        PermissionMode::Auto,
-        PermissionMode::Ask,
-        PermissionMode::Yolo,
-        PermissionMode::Plan,
-    ] {
-        assert!(DroidAdapter.permission_args(mode).is_empty());
-    }
+    assert_eq!(
+        DroidAdapter.permission_args(PermissionMode::Auto),
+        ["--auto", "medium"]
+    );
+    assert!(DroidAdapter.permission_args(PermissionMode::Ask).is_empty());
+    assert!(
+        DroidAdapter
+            .permission_args(PermissionMode::Yolo)
+            .is_empty()
+    );
+    assert_eq!(
+        DroidAdapter.permission_args(PermissionMode::Plan),
+        ["--use-spec"]
+    );
 
     assert_eq!(
         DroidAdapter.render_preset(&LaunchPreset {
