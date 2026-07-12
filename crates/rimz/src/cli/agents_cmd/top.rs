@@ -53,7 +53,6 @@ pub(super) fn run_top(args: TopArgs, globals: &GlobalFlags) -> Result<()> {
         .context("preparing runtime paths")?;
     let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
-    state.ensure_dirs().context("preparing state directories")?;
     let interval = args.interval.unwrap_or(DEFAULT_INTERVAL);
     let filter = channel_filter(args.all, args.worktree.as_deref(), &workspace);
     let first = sample(&state, &runtime, &workspace, filter.as_deref())?;

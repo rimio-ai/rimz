@@ -14,6 +14,42 @@ use serde_json::json;
 use crate::common::Env;
 
 #[test]
+fn sidebar_snapshot_does_not_create_an_abandoned_state_scaffold() {
+    let env = Env::new();
+
+    let output = env
+        .rimz()
+        .args([
+            "sidebar",
+            "snapshot",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--no-produce",
+            "--json",
+        ])
+        .output()
+        .expect("spawn sidebar snapshot");
+    assert!(
+        output.status.success(),
+        "snapshot failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("snapshot json");
+    assert_eq!(snapshot["agents"], json!([]));
+
+    let workspace_state = env
+        .state_root()
+        .join("rimz")
+        .join("workspaces")
+        .join(env.workspace_id.as_str());
+    assert!(
+        !workspace_state.exists(),
+        "read-only snapshot should not create a state scaffold"
+    );
+}
+
+#[test]
 fn gc_removes_stale_sidebar_heartbeat_and_leaves_unknown_file() {
     let env = Env::new();
     let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");

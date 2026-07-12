@@ -386,7 +386,6 @@ fn resolve_snapshot_context(
     };
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
-    state.ensure_dirs().context("preparing state paths")?;
     runtime.ensure_dirs().context("preparing runtime paths")?;
     let session_name = command
         .session_name
@@ -792,7 +791,6 @@ fn write_plugin_presence_sample(workspace_id: &WorkspaceId, command: &WakeComman
         return Ok(());
     };
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
-    let _ = state.ensure_dirs();
     rimz::diag::plugin_presence::log(&state.root).append(
         &rimz::diag::plugin_presence::PluginPresenceSample::new(
             rimz::sidebar::timing::unix_now_ms(),
@@ -1059,7 +1057,6 @@ fn resolve_sidebar_targets(
         .context("preparing state paths")?;
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
-    state.ensure_dirs().context("preparing state paths")?;
     runtime.ensure_dirs().context("preparing runtime paths")?;
     let channel = current_channel(&workspace);
     if let Ok(snapshot) = read_published_snapshot(

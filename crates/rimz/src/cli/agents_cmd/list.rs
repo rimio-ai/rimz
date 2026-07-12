@@ -21,7 +21,6 @@ pub(super) fn list_agents(
         .context("preparing runtime paths")?;
     let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
-    state.ensure_dirs().context("preparing state directories")?;
     let snapshot = rimz::sidebar::consumer::read_published_snapshot(
         &mut rimz::sidebar::consumer::RollupCursor::new(),
         &state,
