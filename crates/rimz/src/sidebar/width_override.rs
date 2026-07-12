@@ -36,6 +36,16 @@ pub fn write(runtime: &RuntimePaths, cols: NonZeroU16) -> atomic::Result<()> {
     atomic::write_temp_then_rename_cache(&runtime.sidebar_width_path(), &WidthOverrideFile { cols })
 }
 
+/// Drop any room-runtime width override so the next birth starts from config
+/// defaults. Idempotent: a missing file is success.
+pub fn clear(runtime: &RuntimePaths) -> std::io::Result<()> {
+    match fs::remove_file(runtime.sidebar_width_path()) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +71,17 @@ mod tests {
 
         fs::write(runtime.sidebar_width_path(), b"not json").expect("garbage file");
         assert_eq!(load(&runtime), None);
+    }
+
+    #[test]
+    fn clear_removes_an_override_and_accepts_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = runtime(dir.path());
+        let cols = NonZeroU16::new(81).expect("nonzero");
+        write(&runtime, cols).expect("write override");
+
+        clear(&runtime).expect("clear override");
+        assert_eq!(load(&runtime), None);
+        clear(&runtime).expect("clear missing override");
     }
 }

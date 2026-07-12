@@ -1392,6 +1392,13 @@ pub(crate) fn launch_sidebar_for_workspace(
             return rimz::sidebar::SidebarLaunchOutcome::Failed;
         }
     };
+    if pristine_birth && let Err(err) = rimz::sidebar::width_override::clear(&runtime) {
+        tracing::debug!(
+            workspace = %target.workspace_id,
+            error = %err,
+            "clearing room-runtime sidebar width override failed",
+        );
+    }
     let mut opts = match build_sidebar_opts(target, resume_tabs.to_vec()) {
         Ok(opts) => opts,
         Err(err) => {

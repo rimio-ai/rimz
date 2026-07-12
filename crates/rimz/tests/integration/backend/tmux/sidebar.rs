@@ -26,7 +26,7 @@ fn sidebar_width_steps_move_the_left_dock_border() {
         .backend
         .resize_sidebar_width(session, &pane, WidthAdjust::Wider)
         .expect("widen sidebar");
-    assert_eq!(width(), initial + 5);
+    assert_eq!(width(), initial + 2);
 
     server
         .backend

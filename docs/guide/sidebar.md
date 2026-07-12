@@ -71,7 +71,7 @@ With several providers the panel tabs, following whichever agent you have select
 
 The footer holds `? for help`, which opens the key and filter overlay in place. When you have been away, a quiet `zᶻ idle` badge appears; over SSH, a link-health badge shows the round-trip time. If the sidebar ever cannot read the room, a sticky alert takes the bottom line and says so, because a blank column should never masquerade as an empty room.
 
-The sidebar follows its attached view at `min(30% × view width, [theme.display].max_cols)`. Press `a` to make it narrower and `d` to make it wider; the settled width becomes a room-wide absolute column count that every tab follows across launches, reloads, and session rebirths until the room runtime is reset, and it may exceed `max_cols`. These chords are configurable under `[sidebar.keys]`. Filters use `A` for all and `s` for success/done.
+The sidebar follows its attached view at `min(30% × view width, [theme.display].max_cols)`. Press `a` to make it narrower and `d` to make it wider; each press moves the border by 2 columns on tmux or Zellij's built-in increment of roughly 5% of the view. The settled width becomes a room-wide absolute column count that every tab follows across reloads and reattaches for the life of the session, and it may exceed `max_cols`; a newly created session starts again from `min(30% × view width, max_cols)`. These chords are configurable under `[sidebar.keys]`. Filters use `A` for all and `s` for success/done.
 
 ## The agent card
 

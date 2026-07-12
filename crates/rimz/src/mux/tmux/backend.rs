@@ -25,6 +25,10 @@ use crate::mux::{
     memoized_version,
 };
 
+/// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
+/// column amount — its step is Zellij's own ~5%-of-view increment.
+const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
+
 fn live_cols_u16(
     width: crate::mux::SidebarWidth,
     width_override: Option<std::num::NonZeroU16>,
@@ -316,7 +320,13 @@ impl MuxBackend for TmuxBackend {
             WidthAdjust::Wider => "-R",
         };
         self.cmd()
-            .args(["resize-pane", "-t", pane.raw(), flag, "5"])
+            .args([
+                "resize-pane",
+                "-t",
+                pane.raw(),
+                flag,
+                &SIDEBAR_RESIZE_STEP_COLS.to_string(),
+            ])
             .run()
             .map(|_| ())
     }
