@@ -40,7 +40,7 @@ RimZ is a realtime dashboard for harnessing agentic coding: one human and tens o
 </p>
 
 
-RimZ stays out of your way: a single lightweight binary inside the Zellij or tmux you already run, with your keybinds intact, the agent CLIs stock, and the official web, desktop, and mobile apps untouched. The same footprint carries the primitives that **harness engineering** and **loop engineering** build on: the sidebar is the observability layer, one uniform interface reaches Claude Code, Codex, Amp, Copilot, Gemini CLI, Kimi Code, Pi, OpenCode, Cursor, Droid, Kiro, and Qwen Code, a durable message system steers and queues agents, supervised runs carry exit codes into scripts and CI, and scheduled wakeups keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on those primitives.
+RimZ stays out of your way: a single lightweight binary inside the Zellij or tmux you already run, with your keybinds intact, the agent CLIs stock, and the official web, desktop, and mobile apps untouched. The same footprint carries the primitives that **harness engineering** and **loop engineering** build on: the sidebar is the observability layer, one command grammar drives [every supported agent](#agent-compatibility-matrix) the same way, a durable message system steers and queues them, supervised runs carry exit codes into scripts and CI, and scheduled wakeups keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on those primitives.
 
 ## Project status
 
@@ -61,6 +61,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 - **Attention, Routed:** one glance at the cockpit line (`? 2  ! 1 …`) reads the whole fleet, the column below arrives already triaged, and one keypress drops you into the pane that is waiting
 - **Know Your Pace:** $ and token insight for today, week, and month, with every provider's plan and 5h/7d budget bars draining in real time; one look tells you where the week is going
 - **Worktrees, for every Agent:** open agents together, side by side in an isolated worktree with dynamic layout: `claude,codex` starts Claude planning beside Codex reviewing, `vim,codex+term` puts your editor, an agent, and a shell in one tab
+- **Teams, cross-Model by Design:** name roles once and launch the set with one word, each role on the model best at its job; different models miss different things, so a mixed team catches what a single one lets through, and a one-line skill makes any agent a subagent of any other
 - **Messages, agents chat as in Slack:** every agent answers to a handle (`@codex`, `@planner`); steer/queue delivery guarantees the message lands, respecting agent state and the context window, and agents talk to each other and to you inside channels
 - **Scriptable, End to End:** `rimz agents -p` is `claude -p` for every agent, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows
 - **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result), and notification handlers run your own command the moment a row needs eyes
@@ -76,9 +77,9 @@ Read that as: ready for personal, daily use today; for production workflows that
  terminal — ghostty · iterm2 · warp · kitty · vscode …
    zellij or tmux — your keybinds, your layout
 
-     ┌─────────┐       ┌──────────────────────────────────────────────────────────────────┐
-     │ sidebar │       │ claude · codex · copilot · gemini · pi · opencode · droid · kiro │
-     └────▲────┘       └────▲────────────────────┬─────────────────────────────────┘
+     ┌─────────┐       ┌────────────────────────────────────┐
+     │ sidebar │       │ claude · codex · pi · opencode · … │
+     └────▲────┘       └────▲────────────────────┬──────────┘
           │                 │                    │
           │ renders         │ types into panes   │ hooks · transcripts (.jsonl) · oauth api
           │ the fleet       │ messages · -p runs │ statusline (claude) · app-server (codex)
@@ -121,7 +122,7 @@ Hooks install on the first `rimz` run, with your consent and a diff preview. →
 
 The commands below run from any pane in the room, and from any script or CI job that reaches it. They compose: a profile becomes a team, the team lands in a worktree, the worktree's agents take messages, and a schedule fires the whole thing while you sleep.
 
-**Start agents by name.** Type `claude` in any pane and it joins the room: the stock CLI with your flags and its own session files, no `rimz` command in the path.
+**Run the official CLIs, untouched.** Every supported agent joins the room the same way: type its own command into any pane, exactly as you do today. The stock binary runs with your flags, your config, and its own session files; the hooks you approved at setup report it to the sidebar, and nothing sits between you and the CLI.
 
 ```sh
 claude
@@ -166,7 +167,7 @@ git diff main | rimz message @reviewer --stdin "review this"       # instruction
 rimz message @all "summarize what changed at the next boundary"    # the whole channel
 ```
 
-**Script an agent like any CLI.** [`rimz agents -p`](./docs/guide/scripting.md) is `claude -p` for every fully scripted adapter: one supervised turn, one exit code a script or CI job branches on, the same flag for Claude, Codex, Amp, Gemini CLI, Kimi Code, Pi, OpenCode, Droid, and Qwen. The turn still runs in a real pane you can watch, answer, and steer while the pipeline waits on it.
+**Script an agent like any CLI.** [`rimz agents -p`](./docs/guide/scripting.md) is `claude -p` with one grammar for every agent that can run headless: one supervised turn, one exit code a script or CI job branches on, and swapping the provider behind a pipeline is a one-word change. The turn still runs in a real pane you can watch, answer, and steer while the pipeline waits on it.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
@@ -196,50 +197,34 @@ rimz remote connect dev --web    # the same room in your browser at 127.0.0.1
 
 ## Configuration
 
-RimZ runs with zero configuration, and everything you can tune is plain TOML in files you own: no config daemon, no bespoke language, nothing new to learn. `rimz setup` detects the machine and writes the per-machine defaults under `~/.config/rimz/` — `config.toml` (behavior), `theme.toml` (appearance), `agents.toml` (profiles and teams), `loop.toml` (schedules), `remote.toml` (SSH aliases) — every key commented with its default and an inline note, so the files are their own reference. After that first pass, [`rimz config set`](./docs/guide/configuration.md) edits one dotted key: it routes the key to the owning file, validates the value, and writes it durably, so you change behavior without hand-editing TOML.
+RimZ runs with zero configuration, and everything you can tune is plain TOML in files you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.config/rimz/` (config, theme, agents, loop, remote), so the files are their own reference; after that, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
+
+For the best experience, we recommend one pass of these:
 
 ```sh
-rimz setup                                 # detect the machine, write the commented defaults
-rimz config set theme "Catppuccin Mocha"   # edit one key; `rimz list-themes` shows the choices
-```
+rimz setup                                    # once: detect the machine, write the commented defaults
 
-### True color, Nerd Font, and pets
+# Appearance: truecolor, sharper glyphs, a companion
+rimz config set theme "Catppuccin Mocha"      # any scheme from `rimz list-themes`
+rimz config set theme.style modern            # truecolor + Nerd Font icons
+rimz config set theme.pets.enabled true       # an animated pet; `rimz list-pets` previews them
 
-A terminal that advertises truecolor (Ghostty, WezTerm, Kitty, and Alacritty all do) gets 24-bit color out of the box, inside RimZ tmux rooms and over `rimz remote` too. With a Nerd Font in the terminal, [`theme.style`](./docs/guide/theme.md) turns on the sharper glyphs, and one more line adds a pet.
-
-```sh
-rimz config set theme.style modern        # truecolor + Nerd Font icons; "default" = auto color + Unicode
-rimz config set theme.pets.enabled true   # an animated companion on the provider dashboard
-rimz config set theme.pets.pet rocky      # `rimz list-pets` previews all pets
-```
-
-Pets render as crisp pixels in Ghostty and kitty terminals; inside tmux that also needs tmux 3.6+ with `allow-passthrough on`. Everywhere else, including Zellij, the same pet renders as cell art. The [pets guide](./docs/guide/pets.md) has the catalog, [petdex.dev](https://petdex.dev/) installs, and bring-your-own sheets.
-
-### Auto-continue and smart compaction
-
-Two settings keep agents working [while you are away](./docs/guide/loops.md#built-in-recovery). Auto-continue picks parked turns back up: a rate-limit park resumes the moment the provider's budget window resets, and a transient API error retries on a backoff ramp. Smart compaction makes `rimz message` compact-first: past the threshold, RimZ submits `/compact` ahead of your text, so a long turn lands against a fresh context window instead of dying at the ceiling.
-
-```sh
-rimz config set resume.auto_continue true     # off by default; resumes rate-limit and API-error parks
+# Hands-off work: recover and keep going while you're away
+rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
 rimz config set harness.smart_compact "70%"   # compact before a message once context passes 70%
-```
 
-Add a [scheduled ping](#everyday-moves) to start each provider's budget window on your clock, and the fleet only needs you for real decisions.
-
-[Bound dollar spend](./docs/guide/budget.md) at the scale you promise yourself: `rimz config set harness.budget 50/day` turns on a cap for each room's whole fleet, `[accounts.budget]` turns on one provider-login cap across rooms, and `rimz budget` shows or changes the live headroom.
-
-### Asks on your phone
-
-Claude Code and Codex ship remote control, the bridge their official mobile apps drive. Two toggles make the room bring it up at every start (`claude remote-control` as a background pane, the Codex remote-control daemon ensured once per machine) so a blocking ask pushes to your phone, your answer lands in the same session, and the turn continues in its pane as if you had typed it there:
-
-```sh
+# Asks on your phone: the providers' official mobile bridges
 rimz config set remote_control.claude true
 rimz config set remote_control.codex true
 ```
 
-Both are off by default, and the [agents guide](./docs/guide/agents.md#answer-asks-from-your-phone) shows exactly what each toggle runs.
+What each group does, with the depth one link away:
 
-The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, appearance, the hands-off behaviors, and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration guide](./docs/guide/configuration.md).
+- The modern look wants a truecolor terminal (Ghostty, WezTerm, Kitty, Alacritty) and a Nerd Font, inside RimZ tmux rooms and over `rimz remote` too. Pets render as crisp pixels in Ghostty and kitty (tmux additionally needs 3.6+ with `allow-passthrough on`) and as cell art everywhere else, Zellij included. → [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
+- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction sends `/compact` ahead of your text once context passes the threshold, so a long turn lands on a fresh window. Add a [scheduled ping](#everyday-moves) and the fleet only needs you for real decisions; cap what that freedom costs with `rimz config set harness.budget 50/day`. → [loops → built-in recovery](./docs/guide/loops.md#built-in-recovery) · [budgets](./docs/guide/budget.md)
+- The remote-control toggles bring up Claude's and Codex's own mobile-app bridges with every room start, so a blocking ask reaches your phone and your answer lands in the same session, in the same pane. Both are off by default, and the [agents guide](./docs/guide/agents.md#answer-asks-from-your-phone) shows exactly what each toggle runs.
+
+The [setup guide](./docs/guide/setup.md) walks the whole first pass, including agent hooks and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md); the full key catalog is the [configuration guide](./docs/guide/configuration.md).
 
 ## Documentation
 
@@ -270,7 +255,7 @@ Hooks are how agents report to the room. The first `rimz` run offers to install 
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # every detected agent (claude, codex, amp, copilot, gemini, kimi, pi, opencode, droid, kiro, qwen)
+rimz hooks install              # every agent detected on the machine
 rimz doctor                     # verify backend, hooks, and room health
 ```
 
@@ -278,7 +263,7 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 
 ## Agent compatibility matrix
 
-**Status** is how much the agent is actually run day to day: ✅ Supported · 🟢 Beta · 🟡 Alpha · 🧪 Experimental. The **surface** columns read at a glance — ● full · ◐ partial · ○ none — across hooks (live status from the agent's own events), transcript (session read for context and tokens), live (context health and cost on the card), and asks (blocking prompts routed to your keyboard).
+Twelve agents ship built in. **Status** tracks lived confidence, how much each one is actually driven in daily work: ✅ Supported · 🟢 Beta · 🟡 Alpha · 🧪 Experimental. The four **surface** columns show what each integration reports (● full · ◐ partial · ○ none): *hooks* is live status from the agent's own events, *transcript* the session read for context and tokens, *live* the context health and cost on the card, and *asks* the blocking prompts routed to your keyboard.
 
 | Agent       | Status          | Hooks | Transcript | Live | Asks |
 |-------------|-----------------|:-----:|:----------:|:----:|:----:|
@@ -295,15 +280,15 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 | Qwen Code   | 🧪 Experimental |   ●   |     ●      |  ◐   |  ●   |
 | Kimi        | 🧪 Experimental |   ●   |     ●      |  ●   |  ●   |
 
-Claude and Codex are the daily drivers; Pi and OpenCode get regular use. Everything marked experimental is wired and tested but not yet run in daily work — status tracks that lived confidence, not mechanical breadth, which is why an experimental row can still light up plenty of surfaces. Launch any of them and it mostly just works: the CLIs run stock in your terminal, official apps untouched. Hit a bug and please [open an issue](https://github.com/rimio-ai/rimz/issues) — that is how an agent graduates.
+Claude and Codex are the daily drivers, with Pi and OpenCode in regular rotation. An experimental row is wired and tested against the agent's documented surface, just not yet proven by daily use, which is why it can still light up most columns. In practice, launch any of them and it mostly just works: the CLI runs stock in your terminal and the official apps stay untouched. When one misbehaves, please [open an issue](https://github.com/rimio-ai/rimz/issues); reports are how an agent graduates a tier.
 
 Per-agent coverage, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
 
 ## Contributing
 
-Contributor rules and the gate stack live in [rust-conventions.md](./docs/contributing/rust-conventions.md); the working contract is [AGENTS.md](./AGENTS.md).
+Start with [AGENTS.md](./AGENTS.md), the working contract for humans and coding agents alike; the code shape and quality gates are in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 
-A candid note on agent coverage. Every adapter ships with unit and integration tests, but real confidence comes from dogfooding, and the author runs only Claude, Codex, Pi, and OpenCode in daily work. Supporting a dozen agents well takes real time, and the author holds paid subscriptions for only a few of them, so the rest are best-effort: they are wired against each agent's documented hook and transcript surface, yet largely unproven in anger. Expect rough edges on the experimental agents, and treat a bug there as expected rather than surprising. Issue reports — and fixes — are how each one earns a higher tier, and both are genuinely welcome.
+A candid note on agent coverage. Every adapter ships with unit and integration tests, but real confidence comes from dogfooding, and daily work here runs four agents: Claude, Codex, Pi, and OpenCode. The rest are built against each vendor's documented hook and transcript surfaces and maintained best-effort, because supporting a dozen agents well takes more hours and paid subscriptions than one author has. Treat a rough edge on an experimental agent as expected rather than surprising, and know that reporting it, or fixing it, is exactly how that agent earns a higher tier. Both are genuinely welcome.
 
 ## License
 
