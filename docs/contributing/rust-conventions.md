@@ -271,7 +271,7 @@ CI lives in two workflow trees: `.gitea/workflows/` for the Gitea origin and `.g
 - `externals` — the `deny`, `vet`, and `semver` gates as separate steps (locally: `cargo xtask externals`). They sit apart from `checks` because deny reads the baked advisory DB offline while vet and semver fetch crates.io directly, bypassing the runners' nexus mirror, so transient egress retries stay out of the main jobs.
 - `tests` — compile the suite once, then run the `gate`, `live`, and `journey` nextest profiles from that one build so each tier's timing reflects test execution, not the shared compile.
 
-The `tests` job compiles the suite (`cargo xtask test --no-run`) and runs the three profile steps in the same container, each guarded by `if: ${{ !cancelled() }}` plus a compile-success check so one failing tier still reports the others. The `tests` job is the branch-protection check on both forges.
+The `tests` job compiles the suite (`cargo xtask test --no-run`) and runs the three profile steps in the same container with `--no-fail-fast`, each guarded by `if: ${{ !cancelled() }}` plus a compile-success check so one failing test still lets its tier finish and one failing tier still reports the others. The `tests` job is the branch-protection check on both forges.
 
 The `live` profile runs both mux backends in one nextest process so tmux and Zellij co-schedule, while the per-backend `[test-groups]` in `.config/nextest.toml` bound concurrency. Runners are 64-core, so workflows leave nextest's global thread count uncapped. Every tier runs against a checkout at the same container path the suite was compiled from, so fixtures referenced through `env!("CARGO_MANIFEST_DIR")` resolve.
 

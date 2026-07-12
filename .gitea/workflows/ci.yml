@@ -217,19 +217,19 @@ jobs:
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile gate
+          mold -run cargo xtask test --profile gate --no-fail-fast
 
       - name: cargo xtask test (live)
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile live
+          mold -run cargo xtask test --profile live --no-fail-fast
 
       - name: cargo xtask test (journey)
         if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile journey
+          mold -run cargo xtask test --profile journey --no-fail-fast
 
       - name: sccache stats
         if: always()
