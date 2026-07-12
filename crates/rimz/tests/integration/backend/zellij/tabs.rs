@@ -168,7 +168,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     );
 }
 
-/// Backend and native tabs keep the fixed sidebar outside the user's work area,
+/// Backend and native tabs keep the docked sidebar outside the user's work area,
 /// while no-direction pane opens split the focused work pane and pane closes
 /// return space to the survivor.
 #[test]

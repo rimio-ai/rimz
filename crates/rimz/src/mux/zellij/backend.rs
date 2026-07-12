@@ -29,6 +29,7 @@ use crate::mux::{
     execute_closes, memoized_version,
 };
 use crate::pane::PaneRef;
+use crate::sidebar::timing::unix_now_ms;
 use crate::store::RuntimePaths;
 use serde::Deserialize;
 
@@ -130,7 +131,7 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
 }
 
 impl ZellijBackend {
-    fn authoritative_pane_listing(
+    pub(super) fn authoritative_pane_listing(
         &self,
         session_name: &str,
         runtime_paths: Option<&RuntimePaths>,
@@ -559,15 +560,35 @@ impl MuxBackend for ZellijBackend {
         if !self.session_has_attached_client(&opts.session_name) {
             return Ok(0);
         }
-        let panes = self
-            .topology_listing(
-                Some(&opts.session_name),
+        // Width repair follows local Zellij mutations closely. A topology-cache
+        // writer can stamp an older observation after the mutation has begun,
+        // so take the first verdict from Zellij itself and keep the cache only
+        // as a fallback for environments where the authoritative action fails.
+        let listing = self
+            .authoritative_pane_listing(
+                &opts.session_name,
                 None,
                 Some(&opts.workspace_id),
-                None,
                 crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
-            )?
-            .panes;
+            )
+            .or_else(|err| {
+                tracing::debug!(
+                    session = %opts.session_name,
+                    error = &err as &dyn std::error::Error,
+                    "authoritative Zellij width listing failed; falling back to topology cache",
+                );
+                self.topology_listing(
+                    Some(&opts.session_name),
+                    None,
+                    Some(&opts.workspace_id),
+                    Some(unix_now_ms()),
+                    crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+                )
+            })?;
+        // Keep the off-spec verdict and per-pane direction latch on this same
+        // post-trigger snapshot (or newer), never an ambient cache entry.
+        let floor = Some(listing.observed_at_ms);
+        let panes = listing.panes;
         let mut sidebars: HashMap<u64, Vec<u64>> = HashMap::new();
         for pane in panes
             .iter()
@@ -599,7 +620,7 @@ impl MuxBackend for ZellijBackend {
             if !sidebar_width_off_spec(cols, target, view_cols) {
                 continue;
             }
-            let (_, changed) = self.converge_sidebar_width(opts, tab_position, *raw_id, None);
+            let (_, changed) = self.converge_sidebar_width(opts, tab_position, *raw_id, floor);
             resized += usize::from(changed);
         }
         Ok(resized)
@@ -959,7 +980,7 @@ impl MuxBackend for ZellijBackend {
         let restore = (!opts.focus)
             .then(|| self.focus_restore_target(&opts.session_name, &opts.sidebar.workspace_id))
             .flatten();
-        let template_sidebar_cols = opts.sidebar.width_override.or_else(|| {
+        let sidebar_percent = (|| {
             let panes = self
                 .topology_panes(
                     &opts.session_name,
@@ -972,13 +993,16 @@ impl MuxBackend for ZellijBackend {
                 .find(|pane| pane.is_live_terminal())?
                 .tab_position;
             let view_cols = tab_view_cols(&panes, tab)?;
-            u16::try_from(live_target_cols(opts.sidebar.width, None, view_cols))
-                .ok()
-                .and_then(std::num::NonZeroU16::new)
-        });
-        let template_sidebar_cols =
-            Some(template_sidebar_cols.unwrap_or(opts.sidebar.birth_size.cols));
-        let layout = TempLayoutFile::new(render_tab_layout(opts, template_sidebar_cols)?)?;
+            let view_cols = u16::try_from(view_cols).ok()?;
+            Some(
+                opts.sidebar
+                    .width
+                    .birth_size_with_override(Some(view_cols), opts.sidebar.width_override)
+                    .percent,
+            )
+        })()
+        .unwrap_or_else(|| opts.sidebar.width.percent.clamp(10, 90));
+        let layout = TempLayoutFile::new(render_tab_layout(opts, sidebar_percent)?)?;
         let args = [
             "new-tab".to_owned(),
             "--layout".to_owned(),

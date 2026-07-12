@@ -1,11 +1,14 @@
 use rimz::ids::{MuxName, PaneId};
-use rimz::mux::{MuxBackend, SidebarWidth, WidthAdjust, WidthSyncOptions, ZellijBackend};
+use rimz::mux::{
+    LayoutPanes, MuxBackend, PaneCmd, SidebarWidth, TabOptions, WidthAdjust, WidthSyncOptions,
+    ZellijBackend,
+};
 use tempfile::TempDir;
 
 use super::support::*;
 
 #[test]
-fn sidebar_width_steps_use_zellij_native_resize() {
+fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
@@ -53,6 +56,46 @@ fn sidebar_width_steps_use_zellij_native_resize() {
     assert!(
         raw_sidebar_pane(xdg.path(), &name).pane_columns < wider,
         "native narrower step did not shrink {wider}",
+    );
+
+    // Explicit `new-tab --layout` sidebars must also remain resizable. Zellij
+    // pins panes whose KDL size is a bare integer, which was the old spelling
+    // on this path even though template-born panes already used a percentage.
+    let tab_name = "explicit width";
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: tab_name.to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                }])],
+            },
+            focus: true,
+            dock_sidebar: true,
+            sidebar: sidebar.clone(),
+        })
+        .expect("open explicit tab");
+    let explicit = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
+        .expect("explicit tab carries sidebar");
+    let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", explicit.id));
+    backend
+        .resize_sidebar_width(&name, &pane, WidthAdjust::Wider)
+        .expect("widen explicit-layout sidebar");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let resized = loop {
+        let resized = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
+            .expect("explicit tab keeps sidebar");
+        if resized.columns > explicit.columns || std::time::Instant::now() >= deadline {
+            break resized;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(
+        resized.columns > explicit.columns,
+        "explicit-layout sidebar stayed resize-pinned at {} columns",
+        explicit.columns,
     );
 }
 

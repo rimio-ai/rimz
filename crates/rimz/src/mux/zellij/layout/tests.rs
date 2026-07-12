@@ -73,6 +73,23 @@ fn pane_header_before<'a>(layout: &'a str, needle: &str) -> &'a str {
     &layout[pane_at..args_at]
 }
 
+fn assert_sidebar_sizes_are_percent(layout: &str) {
+    let sidebar_headers = layout
+        .lines()
+        .filter(|line| line.contains(r#"name="rimz-sidebar""#))
+        .collect::<Vec<_>>();
+    assert!(
+        !sidebar_headers.is_empty(),
+        "layout carries a sidebar:\n{layout}"
+    );
+    for header in sidebar_headers {
+        assert!(
+            header.contains(r#"pane size=""#) && header.contains(r#"%" name="rimz-sidebar""#),
+            "fixed-size Zellij sidebars are resize-pinned; use percentage spelling:\n{layout}",
+        );
+    }
+}
+
 fn assert_work_area_template(layout: &str, visible_compact_bars: usize, focused: usize) {
     assert!(layout.contains("compact-bar"), "{layout}");
     assert!(
@@ -190,6 +207,7 @@ fn session_layout_uses_policy_percent_for_template_and_seed_for_birth() {
         !birth_tab.contains("pane size=72 name=\"rimz-sidebar\""),
         "the explicit birth tab carries no fixed sidebar size:\n{layout}",
     );
+    assert_sidebar_sizes_are_percent(&layout);
 }
 
 #[test]
@@ -232,6 +250,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
         layout.contains(r#"name="rimz-sidebar" borderless=true"#),
         "{layout}"
     );
+    assert_sidebar_sizes_are_percent(&layout);
     assert!(layout.contains(r#""sidebar" "serve""#), "{layout}");
     assert!(layout.contains(r#"cwd="/proj/worktree""#), "{layout}");
     assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
@@ -262,7 +281,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
 }
 
 #[test]
-fn tab_layout_renders_columns_at_an_explicit_live_width() {
+fn tab_layout_derives_percent_from_an_explicit_live_width() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
         session_name: sidebar.session_name.clone(),
@@ -278,19 +297,13 @@ fn tab_layout_renders_columns_at_an_explicit_live_width() {
         dock_sidebar: true,
         sidebar,
     };
-    let layout = render_tab_layout(&opts, None).expect("render tab layout");
+    let layout = render_tab_layout(&opts, 21).expect("render tab layout");
     assert_work_area_template(&layout, 1, 1);
     assert!(
-        layout.contains(r#"pane size=72 name="rimz-sidebar" borderless=true"#),
-        "custom tab layouts instantiate from a live client, so the \
-             sidebar must pin the fixed max-cols verdict instead of \
-            re-evaluating a percentage against wide terminals:\n{layout}",
+        layout.contains(r#"pane size="21%" name="rimz-sidebar" borderless=true"#),
+        "custom tab layouts spell the live column target as a percentage:\n{layout}",
     );
-    assert!(
-        !layout.contains(r#"size="30%""#),
-        "custom tab layouts must not use detached percentage sizing:\n{layout}",
-    );
-    assert!(layout.contains("pane size=72"), "{layout}");
+    assert_sidebar_sizes_are_percent(&layout);
     assert!(
         layout.contains(r#"pane split_direction="horizontal""#),
         "{layout}"
@@ -298,15 +311,12 @@ fn tab_layout_renders_columns_at_an_explicit_live_width() {
     assert!(layout.contains(r#"command "codex""#), "{layout}");
     assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
 
-    let layout = render_tab_layout(&opts, NonZeroU16::new(60)).expect("render tab layout");
+    let layout = render_tab_layout(&opts, 25).expect("render tab layout");
     assert!(
-        layout.contains(r#"pane size=60 name="rimz-sidebar" borderless=true"#),
-        "custom tab layouts accept the backend's live column target:\n{layout}",
+        layout.contains(r#"pane size="25%" name="rimz-sidebar" borderless=true"#),
+        "custom tab layouts accept the backend's derived live percentage:\n{layout}",
     );
-    assert!(
-        layout.matches("pane size=60").count() == 1,
-        "the visible sidebar must use the live width once:\n{layout}",
-    );
+    assert_sidebar_sizes_are_percent(&layout);
 }
 
 #[test]
@@ -327,7 +337,7 @@ fn tab_layout_renders_tiled_and_stacked_columns() {
         sidebar,
     };
 
-    let layout = render_tab_layout(&opts, None).expect("render tab layout");
+    let layout = render_tab_layout(&opts, 30).expect("render tab layout");
 
     assert_work_area_template(&layout, 1, 1);
     assert!(
@@ -358,7 +368,7 @@ fn undocked_tab_layout_renders_stacked_columns() {
         sidebar,
     };
 
-    let layout = render_tab_layout(&opts, None).expect("render tab layout");
+    let layout = render_tab_layout(&opts, 30).expect("render tab layout");
 
     assert!(!layout.contains("rimz-sidebar"), "{layout}");
     assert!(
@@ -383,7 +393,7 @@ fn tab_layout_can_omit_sidebar_for_gallery_columns() {
         dock_sidebar: false,
         sidebar,
     };
-    let layout = render_tab_layout(&opts, None).expect("render gallery layout");
+    let layout = render_tab_layout(&opts, 30).expect("render gallery layout");
     assert!(!layout.contains("rimz-sidebar"), "{layout}");
     assert_undocked_work_area_template(&layout, 1, 1);
 }

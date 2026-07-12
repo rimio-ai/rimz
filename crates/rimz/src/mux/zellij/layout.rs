@@ -3,7 +3,6 @@
 //! the RAII temp file the async `--default-layout` parse reads from. Pure
 //! `&options → String` renderers — no backend state, no subprocess.
 
-use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 
 use crate::ids::MuxName;
@@ -47,18 +46,6 @@ const COMPACT_BAR_KDL: &str = r#"pane size=1 borderless=true {
         plugin location="zellij:compact-bar"
     }"#;
 
-/// Which geometry a layout's panes instantiate at. `Detached` uses the birth
-/// seed's derived percentage so a background session's small default geometry
-/// remains viable. `Template` uses the width policy percentage so a future tab
-/// starts near its live target on any attached client. `Fixed` covers explicit
-/// layouts whose current view geometry has already resolved a column target.
-#[derive(Clone, Copy)]
-enum BirthGeometry {
-    Detached,
-    Template,
-    Fixed,
-}
-
 /// The left `rimz sidebar serve` pane every Zellij view carries, as a KDL `pane`
 /// block. `cwd` is spelled only when the pane can't inherit the session's
 /// `--default-cwd` — the `new-tab --layout` path ([`render_background_view_layout`]).
@@ -66,18 +53,12 @@ enum BirthGeometry {
 fn sidebar_pane_kdl(
     opts: &SidebarPaneOptions,
     cwd: Option<&Path>,
-    geometry: BirthGeometry,
-    fixed_cols: Option<NonZeroU16>,
+    width_percent: u16,
 ) -> Result<String> {
     let rimz_bin = kdl_string(&opts.rimz_bin.to_string_lossy())?;
-    // The layout grammar spells a fixed size (bare integer, columns) or a
-    // percentage (quoted string); `geometry` picks the spelling that survives
-    // where the pane instantiates ([`BirthGeometry`]).
-    let size = match geometry {
-        BirthGeometry::Fixed => fixed_cols.unwrap_or(opts.birth_size.cols).to_string(),
-        BirthGeometry::Template => kdl_string(&format!("{}%", opts.width.percent.clamp(10, 90)))?,
-        BirthGeometry::Detached => kdl_string(&format!("{}%", opts.birth_size.percent))?,
-    };
+    // Fixed-size layout panes are resize-pinned by Zellij, so every sidebar
+    // must use percentage spelling even when its live target began as columns.
+    let size = kdl_string(&format!("{}%", width_percent.clamp(1, 100)))?;
     let pane_name = kdl_string(SIDEBAR_CHROME_TITLE)?;
     let cwd_attr = match cwd {
         Some(cwd) => format!(" cwd={}", kdl_string(&cwd.to_string_lossy())?),
@@ -126,8 +107,8 @@ pub(super) fn render_session_layout(
 ) -> Result<String> {
     // The explicit tabs instantiate on the detached background session at
     // birth; only the `new_tab_template` waits for an attached client.
-    let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached, None)?;
-    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Template, None)?;
+    let sidebar = sidebar_pane_kdl(opts, None, opts.birth_size.percent)?;
+    let new_tab_sidebar = sidebar_pane_kdl(opts, None, opts.width.percent.clamp(10, 90))?;
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
@@ -237,8 +218,7 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
     let sidebar = sidebar_pane_kdl(
         &opts.sidebar,
         Some(&opts.sidebar.cwd),
-        BirthGeometry::Detached,
-        None,
+        opts.sidebar.birth_size.percent,
     )?;
     let body = render_daemon_columns(
         &sidebar,
@@ -261,11 +241,9 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
 /// A user-opened tab born with the global sidebar docked on the left and the
 /// caller's columns to the right. Columns split vertically; rows inside a
 /// column either tile horizontally or render as a Zellij stack. Every command
-/// pane shares `opts.cwd`.
-pub(super) fn render_tab_layout(
-    opts: &TabOptions,
-    template_sidebar_cols: Option<NonZeroU16>,
-) -> Result<String> {
+/// pane shares `opts.cwd`. The sidebar uses the percentage derived from the
+/// current live target because Zellij resize-pins fixed-size layout panes.
+pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Result<String> {
     if opts.panes.columns.is_empty() {
         return Err(MuxErr::Output {
             program: "zellij".to_owned(),
@@ -275,12 +253,7 @@ pub(super) fn render_tab_layout(
     if !opts.dock_sidebar {
         return render_undocked_tab_layout(opts);
     }
-    let sidebar = sidebar_pane_kdl(
-        &opts.sidebar,
-        Some(&opts.sidebar.cwd),
-        BirthGeometry::Fixed,
-        template_sidebar_cols,
-    )?;
+    let sidebar = sidebar_pane_kdl(&opts.sidebar, Some(&opts.sidebar.cwd), sidebar_percent)?;
     let mut focused = false;
     let mut columns = String::new();
     for column in &opts.panes.columns {

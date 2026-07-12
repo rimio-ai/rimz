@@ -488,20 +488,18 @@ impl ZellijBackend {
                     .then_some(pane.pane_columns)
                     .flatten()
             });
-            let view_cols = tab_view_cols(&panes, tab_position);
-            if cols.zip(view_cols).is_some_and(|(cols, view_cols)| {
+            if let Some((cols, view_cols)) = cols.zip(tab_view_cols(&panes, tab_position)) {
                 let target_cols = live_target_cols(opts.width, opts.width_override, view_cols);
-                sidebar_width_off_spec(cols, target_cols, view_cols)
-            }) {
-                let target_cols =
-                    live_target_cols(opts.width, opts.width_override, view_cols.unwrap_or(0));
+                if !sidebar_width_off_spec(cols, target_cols, view_cols) {
+                    return (floor, false);
+                }
                 let before = floor;
                 floor = self.resize_sidebar_toward(
-                    &opts.session_name,
-                    &opts.workspace_id,
+                    opts,
                     tab_position,
                     &format!("terminal_{raw_id}"),
-                    target_cols,
+                    cols,
+                    view_cols,
                     floor,
                 );
                 return (floor, floor != before);
@@ -707,46 +705,66 @@ impl ZellijBackend {
 
     /// Converge a sidebar toward its live per-view target. Zellij's
     /// resize step is coarse, so the target can fall between two reachable
-    /// widths; stop when the pane first crosses or reaches the target from its
-    /// starting side. Bounded and best-effort: it stops at the target, when
+    /// widths; recompute direction from each fresh observation and stop inside
+    /// the shared tolerance band. `initial_cols` comes from the caller's
+    /// freshness-floored listing; later steps read post-action topology.
+    /// Bounded and best-effort: it stops when
     /// post-step topology proves a step made no progress (hit a real Zellij
-    /// minimum), or after [`RESIZE_MAX_STEPS`] — never a dead loop. Width is
-    /// cosmetic, so any failure leaves the pane for the next reconcile.
+    /// minimum or an older fixed-layout pane), after bounded transient
+    /// topology/action retries, or after [`RESIZE_MAX_STEPS`] — never a dead
+    /// loop. Width is cosmetic, so a persistent failure leaves the pane for
+    /// the next reconcile.
     pub(super) fn resize_sidebar_toward(
         &self,
-        session: &str,
-        workspace_id: &WorkspaceId,
+        opts: &WidthSyncOptions,
         tab_position: u64,
         pane_id: &str,
-        target_cols: u64,
+        initial_cols: u64,
+        view_cols: u64,
         min_topology_produced_at_ms: Option<u64>,
     ) -> Option<u64> {
         const RESIZE_MAX_STEPS: u32 = 64;
+        const TRANSIENT_MAX_RETRIES: u8 = 2;
+        let target_cols = live_target_cols(opts.width, opts.width_override, view_cols);
         let Some(target_raw) = parse_terminal_id(pane_id) else {
             return min_topology_produced_at_ms;
         };
         let mut floor = min_topology_produced_at_ms;
-        let mut grow = None;
         let mut last_cols = None;
+        let mut last_step_grow = None;
         let mut no_progress_retry = false;
+        let mut transient_retries = 0;
+        let mut next_cols = Some(initial_cols);
         for _ in 0..RESIZE_MAX_STEPS {
-            let Some(cols) =
-                self.sidebar_cols(session, workspace_id, tab_position, target_raw, floor)
-            else {
+            let Some(cols) = next_cols.take().or_else(|| {
+                self.sidebar_cols(
+                    &opts.session_name,
+                    &opts.workspace_id,
+                    tab_position,
+                    target_raw,
+                    floor,
+                )
+            }) else {
+                if transient_retries < TRANSIENT_MAX_RETRIES {
+                    transient_retries += 1;
+                    continue;
+                }
                 return floor;
             };
-            let grow = *grow.get_or_insert(cols < target_cols);
-            if cols == target_cols || (grow && cols > target_cols) || (!grow && cols < target_cols)
-            {
+            if !sidebar_width_off_spec(cols, target_cols, view_cols) {
                 return floor;
             }
-            let no_progress = last_cols.is_some_and(|last_cols| {
-                if grow {
-                    cols <= last_cols
-                } else {
-                    cols >= last_cols
-                }
-            });
+            let grow = cols < target_cols;
+            let no_progress =
+                last_cols
+                    .zip(last_step_grow)
+                    .is_some_and(|(last_cols, last_step_grow)| {
+                        if last_step_grow {
+                            cols <= last_cols
+                        } else {
+                            cols >= last_cols
+                        }
+                    });
             if no_progress {
                 // A cache produced after action start but before Zellij applies
                 // the resize can repeat once; require one newer read before
@@ -760,11 +778,25 @@ impl ZellijBackend {
             }
             no_progress_retry = false;
             last_cols = Some(cols);
+            last_step_grow = Some(grow);
             let action_floor = unix_now_ms();
             if self
-                .resize_sidebar_step(session, pane_id, if grow { "increase" } else { "decrease" })
+                .resize_sidebar_step(
+                    &opts.session_name,
+                    pane_id,
+                    if grow { "increase" } else { "decrease" },
+                )
                 .is_err()
             {
+                if transient_retries < TRANSIENT_MAX_RETRIES {
+                    transient_retries += 1;
+                    // The failed CLI may still have reached the server. Read
+                    // post-action geometry before deciding which step remains.
+                    floor = Some(action_floor);
+                    last_cols = None;
+                    last_step_grow = None;
+                    continue;
+                }
                 return floor;
             }
             floor = Some(action_floor);
@@ -800,6 +832,22 @@ impl ZellijBackend {
         target_raw: u64,
         min_topology_produced_at_ms: Option<u64>,
     ) -> Option<u64> {
+        // Active resize convergence needs the pane's live width after each
+        // action. The topology cache is still useful as a fallback, but a slow
+        // cache writer can publish stale geometry with a fresh timestamp.
+        if let Ok(listing) = self.authoritative_pane_listing(
+            session,
+            None,
+            Some(workspace_id),
+            RECONCILE_LIST_TIMEOUT,
+        ) && let Some(cols) = listing
+            .panes
+            .iter()
+            .find(|pane| pane.is_terminal() && pane.id == target_raw)
+            .and_then(|pane| pane.pane_columns)
+        {
+            return Some(cols);
+        }
         let panes = self
             .topology_panes_for_workspace(
                 session,

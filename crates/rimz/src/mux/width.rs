@@ -62,17 +62,16 @@ impl SidebarWidth {
         percent.min(self.cap_cols())
     }
 
-    /// The column cap alone — the threshold above which a pane is born fixed.
+    /// The configured column cap.
     pub fn cap_cols(self) -> u64 {
         u64::from(self.max_cols.get())
     }
 
     /// The width verdict a launch resolves on a terminal `detected_cols`
     /// wide: [`Self::target_cols`] of the probe — the percentage capped at
-    /// `max_cols` — as fixed columns, plus its percentage spelling for panes
-    /// that materialize at unknown geometry. An unknown width (`None` —
-    /// launch outside a tty) resolves to the bare cap with the raw
-    /// percentage.
+    /// `max_cols` — as columns for tmux and as a percentage spelling for
+    /// Zellij layouts. An unknown width (`None` — launch outside a tty)
+    /// resolves to the bare cap with the raw percentage.
     pub fn birth_size(self, detected_cols: Option<u16>) -> BirthSize {
         let percent = self.percent.clamp(10, 90);
         match detected_cols {
@@ -132,9 +131,9 @@ impl Default for SidebarWidth {
 }
 
 /// The width seed a launch uses before a pane's live view geometry is known.
-/// `cols` seeds fixed-column split and explicit-layout paths; `percent` keeps a
-/// detached Zellij birth safe on its small background geometry. Live repair
-/// replaces either spelling with the per-view target.
+/// `cols` seeds tmux split and hook paths; `percent` keeps every Zellij
+/// layout resizable and safe on detached background geometry. Live repair
+/// replaces either seed with the per-view target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BirthSize {
     /// The verdict in columns: `min(percent × probed width, max_cols)`, the
@@ -199,9 +198,8 @@ mod tests {
             cols: NonZeroU16::new(cols).expect("nonzero"),
             percent,
         };
-        // Below the cap the verdict is the percentage share, as fixed columns:
-        // 30% of 120 is 36 ≤ 72 — never a raw percentage that re-evaluates
-        // against whatever geometry instantiates a later tab.
+        // Below the cap the verdict is the percentage share: 30% of 120 is
+        // 36 ≤ 72.
         assert_eq!(width.birth_size(Some(120)), birth(36, 30));
         // Exactly at the cap: 30% of 240 is 72.
         assert_eq!(width.birth_size(Some(240)), birth(72, 30));
