@@ -682,12 +682,16 @@ impl LoopState {
         // startup sizing and the first frame should paint immediately.
         let settled_width = terminal.size().map(|s| s.width).ok();
         let width_changed = settled_width_changed(self.prev_width, settled_width);
+        let mut width_adjusted = false;
         if let Some(pending) = self.width_adjust_pending {
             if pending.elapsed() <= Duration::from_secs(3)
                 && let Some(cols) = settled_width.and_then(std::num::NonZeroU16::new)
             {
                 match crate::sidebar::width_override::write(runtime, cols) {
-                    Ok(()) => clear_width_sync_cooldown(runtime),
+                    Ok(()) => {
+                        clear_width_sync_cooldown(runtime);
+                        width_adjusted = true;
+                    }
                     Err(err) => warn!(error = %err, "sidebar width override write failed"),
                 }
             }
@@ -701,7 +705,7 @@ impl LoopState {
             }
             None => false,
         };
-        if width_changed {
+        if width_changed || width_adjusted {
             spawn_width_sync(config, runtime);
         }
         if grew && self.self_close.seen_sibling {

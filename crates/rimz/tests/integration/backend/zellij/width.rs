@@ -164,21 +164,31 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         0,
     );
 
-    // A room override becomes the target for every existing and future tab.
+    // Keep one tab active while three existing tabs need the room override.
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 3);
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[53..=65, 60..=65, 60..=65]),
+        "all three tabs start at policy width, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
+    );
+
+    // A room override becomes the target for every existing tab, including
+    // the two background tabs, and every future tab.
     sync.width_override = std::num::NonZeroU16::new(40);
     assert_eq!(
         backend
             .converge_sidebar_widths(&sync)
             .expect("propagate override"),
-        2,
+        3,
     );
     assert!(wait_for_sidebar_columns(
         xdg.path(),
         &name,
-        &[30..=42, 30..=42]
+        &[30..=42, 30..=42, 30..=42]
     ));
     open_new_tab(xdg.path(), &name);
-    wait_for_tab_count(xdg.path(), &name, 3);
+    wait_for_tab_count(xdg.path(), &name, 4);
     assert_eq!(
         backend
             .converge_sidebar_widths(&sync)
@@ -186,7 +196,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[30..=42, 30..=42, 30..=42]),
+        wait_for_sidebar_columns(xdg.path(), &name, &[30..=42, 30..=42, 30..=42, 30..=42]),
         "the override propagates to every tab, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );

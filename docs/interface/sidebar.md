@@ -326,7 +326,7 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 - `1`–`9` jump by the row's visible position.
 - `m` toggles the selected row read/unread **without jumping**; `M` marks every row read.
 - `u`, `q`, `!`/`e`, `p`, `s`, `w`, and `o` filter the body to unread/waiting/attention/paused/done/working/idle; the active filter key toggles back to all, and `A` clears to all directly.
-- `a`/`d` step the sidebar narrower/wider and remember the settled width for the life of the session; a newly created session resets it.
+- `a`/`d` step the sidebar narrower/wider, propagate the settled width across every tab for the life of the session, and reset it when a new session is created.
 - `←/→` switch the provider dashboard's tab when the dashboard is tabbed — a provider pick in place, never a jump.
 - A click anywhere in a card's block jumps to it.
 - The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.

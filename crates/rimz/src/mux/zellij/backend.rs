@@ -615,12 +615,34 @@ impl MuxBackend for ZellijBackend {
         if !self.session_has_attached_client(&opts.session_name) {
             return Ok(0);
         }
-        // Width repair follows local Zellij mutations closely. A topology-cache
-        // writer can stamp an older observation after the mutation has begun,
-        // so take the first verdict from Zellij itself and keep the cache only
-        // as a fallback for environments where the authoritative action fails.
-        let listing = self
-            .authoritative_pane_listing(
+        // A room override must reach background tabs, whose geometry is absent
+        // from Zellij's authoritative listing but present in the topology
+        // cache. Prefer that all-tab view for override propagation; ordinary
+        // policy repair still prefers live Zellij geometry because a cache
+        // writer can stamp an older observation after a mutation begins.
+        let listing = if opts.width_override.is_some() {
+            self.topology_listing(
+                Some(&opts.session_name),
+                None,
+                Some(&opts.workspace_id),
+                None,
+                crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+            )
+            .or_else(|err| {
+                tracing::debug!(
+                    session = %opts.session_name,
+                    error = &err as &dyn std::error::Error,
+                    "all-tab Zellij width listing failed; falling back to authoritative geometry",
+                );
+                self.authoritative_pane_listing(
+                    &opts.session_name,
+                    None,
+                    Some(&opts.workspace_id),
+                    crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+                )
+            })
+        } else {
+            self.authoritative_pane_listing(
                 &opts.session_name,
                 None,
                 Some(&opts.workspace_id),
@@ -639,7 +661,8 @@ impl MuxBackend for ZellijBackend {
                     Some(unix_now_ms()),
                     crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
                 )
-            })?;
+            })
+        }?;
         // Keep the off-spec verdict and per-pane direction latch on this same
         // post-trigger snapshot (or newer), never an ambient cache entry.
         let floor = Some(listing.observed_at_ms);
