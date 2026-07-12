@@ -106,7 +106,7 @@ An agent earns a live card only once its reporting hooks are installed. The hook
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # wire every detected agent (claude, codex, gemini, pi, opencode, droid)
+rimz hooks install              # wire every detected agent (claude, codex, gemini, pi, opencode, droid, kiro)
 rimz hooks install claude       # wire one agent by name
 ```
 

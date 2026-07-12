@@ -1,6 +1,6 @@
 # The agent model
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The per-provider native mappings (which native event means what for each agent) live in the adapter docs ([claude.md](./claude.md), [codex.md](./codex.md), [copilot.md](./copilot.md), [gemini.md](./gemini.md), [pi.md](./pi.md), [opencode.md](./opencode.md), [cursor.md](./cursor.md), [droid.md](./droid.md)); the account, balance, spend, and pricing model is [providers.md](./providers.md).
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The per-provider native mappings (which native event means what for each agent) live in the adapter docs ([claude.md](./claude.md), [codex.md](./codex.md), [copilot.md](./copilot.md), [gemini.md](./gemini.md), [pi.md](./pi.md), [opencode.md](./opencode.md), [cursor.md](./cursor.md), [droid.md](./droid.md), [kiro.md](./kiro.md)); the account, balance, spend, and pricing model is [providers.md](./providers.md).
 
 This doc owns how a running agent is *modeled*: the adapter boundary that produces the model's input, the fold that reduces it to one state per agent, and the live-context read path that enriches it. The model is a three-stage pipeline:
 
@@ -16,7 +16,7 @@ An adapter *produces* an [`AgentLifecycleObservation`](../../../crates/rimz/src/
 
 Four nouns carry the model:
 
-- An **agent kind** is a wired integration (`claude`, `codex`, `copilot`, `gemini`, `pi`, `opencode`, `cursor`, `droid`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
+- An **agent kind** is a wired integration (`claude`, `codex`, `copilot`, `gemini`, `pi`, `opencode`, `cursor`, `droid`, `kiro`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
 - An **agent instance** is presence: a live local pane running a known agent right now, read from the multiplexer every tick.
 - A **session** is identity: the id the agent's own hooks report, keyed `(kind, agent_id)`, where every durable fact attaches.
 - The **rollup entry** is the one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session that store replay derives: the durable record the sidebar enriches and renders.
@@ -308,7 +308,7 @@ The sidecar lives wholly off the durable path (store first; sidebar wakeups are 
 
 ## Adding an agent
 
-Claude, Codex, Copilot, Gemini, Pi, OpenCode, Cursor, and Droid are compiled-in integrations because Rimz owns their hook installers and provider-specific enrichment or native config migration. A third-party agent normally ships a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, native shim, and optional probes, with no Rimz source change. A new built-in remains appropriate when Rimz must own a native config migration or a protocol surface that the canonical wire cannot express; it lands as one directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md), one `registry::ADAPTERS` line, conformance coverage, and its adapter doc. The step-by-step sequence — from protocol reference to landed adapter, with the deliverables checklist — is [agent-adapters.md](../../contributing/agent-adapters.md); this section owns the model-level recipe it orders.
+Claude, Codex, Copilot, Gemini, Pi, OpenCode, Cursor, Droid, and Kiro are compiled-in integrations because Rimz owns their hook installers and provider-specific enrichment or native config migration. A third-party agent normally ships a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, native shim, and optional probes, with no Rimz source change. A new built-in remains appropriate when Rimz must own a native config migration or a protocol surface that the canonical wire cannot express; it lands as one directory under [`crates/rimz/src/agents/`](../../../crates/rimz/src/agents/AGENTS.md), one `registry::ADAPTERS` line, conformance coverage, and its adapter doc. The step-by-step sequence — from protocol reference to landed adapter, with the deliverables checklist — is [agent-adapters.md](../../contributing/agent-adapters.md); this section owns the model-level recipe it orders.
 
 The descriptor carries two declared matrices, both conformance-checked and both printed by `rimz coverage` (wired green, partial yellow, unsupported/absent dim, so absences are visible at a glance):
 

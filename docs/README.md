@@ -43,7 +43,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 ## Reference
 
 - [CLI](./reference/cli.md): the command map and conventions, with a page per scene: [getting started](./reference/cli/getting-started.md), [remote](./reference/cli/remote.md), [web](./reference/cli/web.md), [agents](./reference/cli/agents.md), [message](./reference/cli/message.md), [transcript](./reference/cli/transcript.md), [pane](./reference/cli/pane.md), [stats](./reference/cli/stats.md), [channels](./reference/cli/channel.md), [worktrees](./reference/cli/worktree.md), [loop](./reference/cli/loop.md), [hooks and trust](./reference/cli/hooks-trust.md), [config](./reference/cli/config.md), and [maintenance](./reference/cli/maintenance.md).
-- [Agent support](./reference/agent-support.md): per-agent status, integration surface, and permission-mode mapping for Claude Code, Codex, Pi, OpenCode, and Droid.
+- [Agent support](./reference/agent-support.md): per-agent status, integration surface, and permission-mode mapping for Claude Code, Codex, Pi, OpenCode, Droid, and Kiro.
 - [Agent plugins](./reference/agent-plugins.md): the external bundle manifest, canonical lifecycle wire, launch templates, and probe contracts for third-party agents.
 
 ## How it works

@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ watches the coding agents you already run — Claude Code, Codex, Copilot, Gemini CLI, Pi, OpenCode, Cursor, and Droid — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
+RimZ watches the coding agents you already run — Claude Code, Codex, Copilot, Gemini CLI, Pi, OpenCode, Cursor, Droid, and Kiro — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
 
 The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
@@ -27,6 +27,7 @@ This page is the annotated read of that command.
 | OpenCode | alpha | 8 wired · 3 derived · 5 unsupported | plugin API · session `.jsonl` + SQLite |
 | Cursor | alpha | 4 wired · 2 derived · 10 unsupported | command hooks · opaque transcript metadata · `agent --resume` |
 | Droid | alpha | 5 wired · 11 unsupported | native hooks · `~/.factory/settings.json` · `droid --resume` |
+| Kiro CLI | early | 2 wired · 2 derived · 12 unsupported | v3 command hooks · `kiro-cli chat --resume-id` |
 | Third-party plugin | bundle-defined | derived by `rimz coverage` | canonical event shim · optional executable probes |
 
 What the tiers promise:
@@ -34,8 +35,10 @@ What the tiers promise:
 - **✅ stable** — every product concern is carried by a native signal: live status, turn phase, task, context health, cost, subagents, resume, and blocking-ask routing all report end to end. This is the daily-driver path.
 - **beta** — the integration is complete and in daily use, with a handful of fields reconstructed by derivation rather than pushed natively. Expect correct routing and state, and a rougher edge on enrichment.
 - **alpha** — the integration works and reports live state, with the widest set of derived cells. Use it, and expect the surface to keep filling in as the agent exposes more.
+- **early** — the lifecycle-only integration reports live status and turn phase and supports resume. Blocking prompts do not route yet; they remain ordinary attention in the agent pane.
 
 Every tier delivers the core promise where the agent exposes the required local signals. Cursor and Droid appear and report work, but their stock local hooks cannot report that a native question is open, so they intentionally have no waiting row or ask routing.
+Early support carries only the surfaces its row declares.
 
 ## The coverage matrix
 
@@ -53,6 +56,7 @@ One row per agent, so a new agent adds exactly one line:
 | OpenCode | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
+| Kiro | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 
 <sub>✓ wired · ◐ partial (derived) · ✗ unsupported. Run `rimz coverage` for the live grid with the exact reason printed on every ◐ and ✗ cell.</sub>
 
@@ -179,6 +183,21 @@ Droid is a basic-lifecycle integration over Factory's native `settings.json` hoo
 
 Mapping detail: [droid.md](../internals/agents/droid.md); upstream protocol: [droid-reference.md](../externals/agent-adapter/droid-reference.md).
 
+### Kiro CLI
+
+Kiro support targets the early-access v3 engine and carries the root lifecycle milestone: live presence, turn phase, mutating file-tool activity, launch, and exact resume.
+
+- **Reports:** `SessionStart`, `UserPromptSubmit`, documented file-writing `PostToolUse` tools, and `Stop`. Session end derives from pane liveness and the reaper because v3 publishes no `SessionEnd` hook.
+- **Blocking prompts:** Kiro draws its own prompts, but v3 exposes no post-policy ask hook. Permission, plan, and question routing remain unsupported, so a prompt stays ordinary pane attention rather than becoming a `?` row.
+- **Context, account, and cost:** unsupported until Kiro publishes or live fixtures prove machine-readable schemas for hook context, transcripts, `whoami`, and credits.
+- **Supervised output:** `Stop` can settle a supervised turn, but the published hook contract carries no final assistant text. Useful text/JSON `-p` output remains deferred rather than scraping the pane.
+- **Launch and resume:** `kiro-cli chat --v3` starts the selected engine, with profile model and effort mapped to chat flags; adding `--resume-id <id>` reopens the exact session. `/rewind` remains interactive-only, so native fork is unsupported.
+- **Permission modes:** launch suffixes currently add no flags. Kiro v3 uses capability-policy files, and RimZ does not yet map its postures onto that executable configuration.
+- **Install target:** `${KIRO_HOME:-~/.kiro}/hooks/rimz.json`, owned as one file with an absolute-path hook command.
+- **Live verification open:** capture the unpublished stdin schema, session-id stability, `Stop` failure and cancellation paths, and canonical tool names on the pinned Kiro version.
+
+Mapping detail: [kiro.md](../internals/agents/kiro.md); upstream protocol: [kiro-reference.md](../externals/agent-adapter/kiro-reference.md).
+
 ## The lifecycle hook surface
 
 Under the concern matrix sits the raw event surface: the eleven lifecycle signals RimZ folds into every agent's state machine, and the native event each agent fires for each one. `rimz coverage` prints this as its second grid, the hooks matrix; here it is with the native event names in place, one row per agent so a new agent adds a single line.
@@ -193,8 +212,9 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask` | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | ◐ derived | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
+| Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 
-`lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
+`lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
 ## Versions
 
@@ -204,7 +224,7 @@ RimZ tracks each agent's own release surface, and behaviour can shift with the a
 
 Adding an agent is implementing one trait plus a descriptor and a single registry line; nothing else in RimZ changes, because status, ranking, liveness, cost, and blocking-ask routing all flow from the agent-agnostic observation the adapter emits. Two invariants keep the seam honest: the adapter only classifies and normalizes, leaving every store write to the hook runner, and downstream code reads only that normalized observation. The full boundary, the two hook channels, and the install mechanics are in [the agent model](../internals/agents/model.md#the-adapter-boundary).
 
-Installing an agent's hooks edits that agent's own config — the install target listed for each agent above — so it is a visible, consented step. `rimz start` offers it on first run with a diff preview, `rimz hooks install --dry-run` prints the patch and writes nothing, and `rimz hooks uninstall` reverses it exactly ([hooks and trust reference](./cli/hooks-trust.md)). The install is additive, so your existing hooks stay. An agent run before its hooks are installed simply reports nothing — it stays invisible in the sidebar rather than half-working, and one `rimz hooks install` wires it in.
+Installing an agent's hooks edits that agent's own config — the install target listed for each agent above — so it is a visible, consented step. `rimz start` offers it on first run with a diff preview, `rimz hooks install --dry-run` prints the patch and writes nothing, and `rimz hooks uninstall` reverses it exactly ([hooks and trust reference](./cli/hooks-trust.md)). Additive installers preserve existing entries; whole-file installers such as Kiro own one bounded RimZ file and refuse a user-authored file at that path. An agent run before its hooks are installed simply reports nothing — it stays invisible in the sidebar rather than half-working, and one `rimz hooks install` wires it in.
 
 ## Agents not yet supported
 

@@ -1,12 +1,16 @@
 # Kiro CLI protocol reference
 
-> RimZ does not yet ship a Kiro adapter. This document records the latest upstream surface needed to build one; the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
+> RimZ's Kiro adapter maps the first verified lifecycle milestone in [kiro.md](../../internals/agents/kiro.md). This document records the upstream surface and the gaps that remain; the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the **Kiro CLI upstream protocol surface** relevant to RimZ: the v3 command-hook seam, session and launch identity, capability permissions, the ACP server, authentication, model/context/credit reporting, subagents, local state, and the gaps that require live fixtures before implementation.
 
-Refresh baseline: **2026-07-10**, Kiro CLI **2.11.0** with its latest **v3 early-access engine** selected by `kiro-cli --v3`. This reference intentionally targets that engine only. It does not describe the embedded lowercase-hook protocol, trust flags, agent JSON, or session format from the older engine. Kiro ships v3 inside the current 2.x executable, so distinguish the package version from the selected engine in discovery and diagnostics.
+Refresh baseline: **2026-07-11**, Kiro CLI **2.12.1** with its latest **v3 early-access engine** selected by `kiro-cli chat --v3`. This reference intentionally targets that engine only. It does not describe the embedded lowercase-hook protocol, trust flags, agent JSON, or session format from the older engine. Kiro ships v3 inside the current 2.x executable, so distinguish the package version from the selected engine in discovery and diagnostics.
 
 Coverage is **depth on viable RimZ inputs, breadth as an index**. Official v3 documentation publishes the hook configuration and trigger semantics, but not the command-hook stdin schema, permission-prompt event, transcript schema, or machine-readable usage response. Those boundaries are called out instead of filling them with behavior from the older engine.
+
+### Lineage: Kiro CLI is the rebranded Amazon Q Developer CLI
+
+The installed 2.12.1 binaries build from `crates/q_cli/` and carry the Fig/figterm shell-integration heritage (the `kiro-cli-term` PTY daemon, `should-figterm-launch`, `_ pre-cmd` shell hooks). Kiro CLI is the rebranded **Amazon Q Developer CLI** (`aws/amazon-q-developer-cli`, open source). Its hook payload conventions (`conversation_id`, `cwd`, `tool_name`, `hook_event_name`) descend from Amazon Q, which is why the tolerant parser accepts `conversation_id`/`conversationId` session aliases. Treat the Amazon Q CLI source and docs as a strong secondary reference for the wire, but keep the v3 warning in force: the v3 engine capitalizes triggers (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`) where the older Q engine used lowercase (`agentSpawn`, `userPromptSubmit`, `preToolUse`, `postToolUse`, `stop`), and a captured v3 fixture still governs before any field is trusted.
 
 ## Upstream sources
 
@@ -35,7 +39,7 @@ The authoritative local companion to the rolling pages is the installed executab
 ```sh
 kiro-cli --version
 kiro-cli --help-all
-kiro-cli --v3 --help
+kiro-cli chat --v3 --help
 kiro-cli diagnostic --format json
 kiro-cli whoami --format json
 kiro-cli settings list --all --format json
@@ -52,7 +56,7 @@ Use **pane presence and process liveness** for instance registration before the 
 
 Use **ACP** as an optional structured sidecar or supervised-run transport only after a v3 fixture proves compatibility. ACP exposes session creation/loading, streaming text, tool-call updates, turn completion, cancellation, model selection, compaction notifications, and subagent termination. Running `kiro-cli acp` makes RimZ the protocol client rather than observing a user's stock TUI, so it is not the primary interactive adapter seam.
 
-The latest v3 engine explicitly removes the older supervised mode. Do not implement `rimz agents kiro -p` by copying the documented older `--no-interactive` flow. First establish whether v3 ACP can satisfy RimZ's supervised-run contract, including authentication, permission requests, final output, exit status, transcript retention, and cancellation.
+Do not implement `rimz agents kiro -p` by copying the older `--no-interactive` flow. The 2.12.1 `chat --v3` parser still accepts `--no-interactive` (the flag was not removed at the CLI surface, contrary to earlier read of the docs), but its v3 semantics — final assistant message on stdout, exit status, transcript retention, cancellation — are unverified. First establish whether v3 `--no-interactive` or ACP can satisfy RimZ's supervised-run contract, including authentication, permission requests, final output, exit status, transcript retention, and cancellation.
 
 The candidate transport matrix is:
 
@@ -73,7 +77,7 @@ The candidate transport matrix is:
 | subagents | `subagent` tool activity and persisted parent metadata | hooks do not fire in subagents; no child lifecycle hooks |
 | tokens and credits | `/usage` display and model credit table | no documented machine-readable live usage API |
 | authentication | `whoami --format json` | JSON schema is unpublished; capture a fixture |
-| supervised runs | candidate ACP client | v3 removes supervised mode |
+| supervised runs | `--no-interactive` (parse-accepted under v3) or candidate ACP client | v3 output/exit/transcript semantics unverified |
 
 The viable first milestone is therefore **presence + root lifecycle + native resume**. Awaiting-user state, compaction, child rows, live context, spend, and supervised runs remain capability-gated until the live-verification items at the end are satisfied.
 
@@ -82,8 +86,14 @@ The viable first milestone is therefore **presence + root lifecycle + native res
 Launch the latest engine as:
 
 ```sh
-kiro-cli --v3
+kiro-cli chat --v3
 ```
+
+Use the explicit `chat` subcommand before chat options. The 2.12.1 parser accepts `kiro-cli chat --v3 --model <model> --effort <level>` but rejects those chat-level flags when they follow the root-level `kiro-cli --v3` shortcut. The shortcut remains useful for a bare interactive launch; the explicit form composes correctly with RimZ profile and resume arguments.
+
+**Process tree and presence names.** The install ships three binaries: `kiro-cli` (119 MB launcher/CLI, the `bin`), `kiro-cli-chat` (691 MB v3 chat engine; clap reports its `bin_name` as `kiro-cli-chat` under `chat --help`), and `kiro-cli-term` (86 MB figterm PTY/shell-integration daemon). During the device-login phase the pane process observed as `kiro-cli chat --v3`; the heavy engine binary makes it likely the launcher execs into `kiro-cli-chat` once the TUI is active (unverified past login without an account). RimZ therefore matches presence on **both** `kiro-cli` and `kiro-cli-chat`, and deliberately excludes `kiro-cli-term` — that daemon runs for every integrated shell, so matching it would bind non-agent panes.
+
+**Trust flags still parse under v3 (correcting "removed").** Although the official v3 permissions page documents capability-rule files only, the 2.12.1 `chat --v3` parser still accepts `-a, --trust-all-tools`, `--trust-tools <TOOL_NAMES>`, and `--no-interactive` (verified: passing them under `--v3` proceeds to device login rather than a parse error). Whether they are honored at runtime by the v3 capability engine is unverified without an account, and the permissions page states restrictive rules win over any relaxation. Treat these as parse-accepted-but-unproven: do not map a RimZ permission posture onto `--trust-all-tools` until a live turn proves it overrides (or is overridden by) `permissions.yaml`.
 
 The v3 engine requires the terminal UI; the classic interface does not support it. The package auto-updates in the background unless `app.disableAutoupdates` is enabled, so persist the reported version with diagnostics and make protocol drift visible.
 
@@ -366,6 +376,8 @@ Interactive authentication supports Google, GitHub, AWS Builder ID, and organiza
 API-key authentication uses `KIRO_API_KEY` and is officially limited to non-interactive operation. Credential precedence is active browser session, then `KIRO_API_KEY`, then interactive sign-in. RimZ must never read, copy, or log the API key or undocumented browser credential storage.
 
 Use `whoami --format json` as the candidate account probe, but capture its JSON across Builder ID, social, Identity Center, API-key, expired, and logged-out states before defining a typed parser. The documentation promises structured output but does not publish its schema or stability.
+
+One state is already captured: on 2.12.1 with no session, `kiro-cli whoami --format json` prints `{"account":null}` and exits `0`. That pins the logged-out shape (a null `account` field), enough to detect signed-out, but the signed-in envelope — plan, method, expiry, rate-limit windows — still needs a live capture before a typed probe is safe.
 
 ## Models, context, credits, and quota
 
