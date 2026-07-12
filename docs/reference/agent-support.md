@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ watches the coding agents you already run — Claude Code, Codex, Amp, Copilot, Gemini CLI, Pi, OpenCode, Cursor, Droid, Kiro, and Qwen Code — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
+RimZ watches the coding agents you already run — Claude Code, Codex, Amp, Copilot, Gemini CLI, Kimi Code, Pi, OpenCode, Cursor, Droid, Kiro, and Qwen Code — so the question on install is a fair one: *will RimZ see my agent, and what exactly is it reading from it?* This page is the answer, and the compatibility matrix in the README is its one-line summary.
 
 The answer is one uniform adapter per agent. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
@@ -24,6 +24,7 @@ This page is the annotated read of that command.
 | Amp | alpha | 3 wired · 2 derived · 11 unsupported | plugin API · `amp threads continue` |
 | Copilot | alpha | 5 wired · 2 derived · 9 unsupported | command hooks · `copilot --resume` |
 | Gemini CLI | beta | 7 wired · 4 derived · 5 unsupported | hooks · session `.jsonl` · `gemini --resume` |
+| Kimi | alpha | 8 wired · 4 derived · 4 unsupported | hooks · durable agent-record `.jsonl` · `kimi --session` |
 | Pi | beta | 7 wired · 3 derived · 6 unsupported | extension API · session `.jsonl` · `pi --session` |
 | OpenCode | alpha | 8 wired · 3 derived · 5 unsupported | plugin API · session `.jsonl` + SQLite |
 | Cursor | alpha | 4 wired · 2 derived · 10 unsupported | command hooks · opaque transcript metadata · `agent --resume` |
@@ -55,6 +56,7 @@ One row per agent, so a new agent adds exactly one line:
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Gemini | ✓ | ✓ | ✓ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✗ | ✓ | ◐ | ✗ |
+| Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ |
 | Pi | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
@@ -142,6 +144,20 @@ Gemini reports through stock command hooks that run as children of the interacti
 - **Install target:** `~/.gemini/settings.json`, merged additively; uninstall removes only commands containing `rimz hooks feed --source gemini`.
 
 Mapping detail: [gemini.md](../internals/agents/gemini.md); upstream protocol: [gemini-reference.md](../externals/agent-adapter/gemini-reference.md).
+
+### Kimi
+
+Kimi Code runs in-process in its pane. Command hooks carry lifecycle boundaries and native approval waits, while a persisted cursor over the session's durable agent-record log supplies transcript, model, token, and recovery enrichment.
+
+- **Reports:** session and turn boundaries, mutating-tool activity, permission prompts, native questions, plan approvals, compaction, and context usage.
+- **Four derived cells (◐):** `sub` keeps parent activity but defers child rows until the session agent map is joined; `idle` combines turn boundaries, asks, and the stall window; `usage` derives fill from durable request input and post-compaction token counts because Kimi Code does not persist its exact live context ratio; `spend` prices every additive usage record and reads managed OAuth quota, while effective-provider attribution and non-USD balances await shared model support.
+- **Four unsupported cells (✗):** `answer` leaves the native Kimi UI in charge, `bg` has no mapped parking state, `rich` has no push transport, and `remote` has no remote-control surface.
+- **Resume and fork:** `kimi --session <id>` reopens a session; `--resume` remains a hidden alias, while interactive `/fork` has no launch argv, so `rimz agents fork` refuses.
+- **Permission modes:** `kimi-{auto,ask,plan,yolo,ping}`; auto passes `--auto`, ask keeps native manual mode, yolo passes `--yolo`, and plan passes `--plan`.
+- **Account:** read from `${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json`; the official managed usage endpoint supplies quota windows and USD Booster balance/monthly-cap data.
+- **Install target:** `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml`, edited as additive `[[hooks]]` entries.
+
+Mapping detail: [kimi.md](../internals/agents/kimi.md); upstream protocol: [kimi-reference.md](../externals/agent-adapter/kimi-reference.md).
 
 ### Pi
 
@@ -265,7 +281,7 @@ Installing an agent's hooks edits that agent's own config — the install target
 
 ## Agents not yet supported
 
-An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents such as Kimi or Qwen land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
+An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two other categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
 
 ## See also
 

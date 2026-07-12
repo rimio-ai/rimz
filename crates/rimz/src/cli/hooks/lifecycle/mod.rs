@@ -24,7 +24,7 @@ pub(super) use observe::append_lifecycle_event;
 #[cfg(test)]
 use observe::event_lifecycle_observation;
 
-pub(super) fn handle_lifecycle_hook(
+pub(crate) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &dyn AgentAdapter,

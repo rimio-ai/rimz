@@ -44,7 +44,7 @@ mod tests;
 use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
-use lifecycle::handle_lifecycle_hook;
+pub(crate) use lifecycle::handle_lifecycle_hook;
 use owner::{attach_agent_owner, attach_agent_pane};
 use payload_ids::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
 use proctree::sibling_agent_pins;
@@ -76,12 +76,12 @@ enum HooksSubcmd {
         /// Preview the hook config diff without writing files.
         #[arg(long)]
         dry_run: bool,
-        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `gemini`, `pi`, `opencode`, `droid`, `kiro`, `qwen`). Omit to install every detected agent.
+        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `gemini`, `kimi`, `pi`, `opencode`, `droid`, `kiro`, `qwen`). Omit to install every detected agent.
         agent: Option<String>,
     },
     /// Remove the adapter's Rimz-managed hook block.
     Uninstall {
-        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `gemini`, `pi`, `opencode`, `droid`, `kiro`, `qwen`). Omit to remove every Rimz-managed hook set.
+        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `gemini`, `kimi`, `pi`, `opencode`, `droid`, `kiro`, `qwen`). Omit to remove every Rimz-managed hook set.
         agent: Option<String>,
     },
 }

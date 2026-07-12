@@ -82,7 +82,7 @@ Treat hooks and file tails as at-least-once inputs. Deduplicate by session plus 
 
 `--continue` conflicts with `--session`; `--yolo` conflicts with `--auto`. Prompt mode conflicts with `--yolo`, `--auto`, and `--plan`, because it applies auto permission itself. The retired `--afk`, `--print`, `--input-format`, `--final-message-only`, `--quiet`, `--work-dir`, `--agent`, `--agent-file`, and `--wire` interfaces do not belong to Kimi Code.
 
-The normal process argv contains no generated session id. Bind the pane through `SessionStart.session_id`, and use pane/process liveness as instance truth. `/new` and `/sessions` switch identity in-process and produce the corresponding session hooks.
+The normal process argv contains no generated session id, and the runtime sets its process title to `kimi-code`. Bind the pane through `SessionStart.session_id`, and use pane/process liveness as instance truth. The official standalone installer places the executable under `~/.kimi-code/bin`; `/new` and `/sessions` switch identity in-process and produce the corresponding session hooks.
 
 ## Configuration and trust surface
 
@@ -130,7 +130,7 @@ $KIMI_CODE_HOME/                       # default ~/.kimi-code
 └── logs/kimi-code.log
 ```
 
-Each append-only `session_index.jsonl` line carries `sessionId`, absolute `sessionDir`, and `workDir`. Later valid lines win for the same id. Validate that the indexed directory stays inside `$KIMI_CODE_HOME/sessions`, ends in the stated session id, and matches the session's self-describing `state.json`; do not reimplement the bucket key to find a bound session.
+Each append-only `session_index.jsonl` line carries `sessionId`, absolute `sessionDir`, and `workDir`. Later valid lines win for the same id. Validate that the indexed directory stays inside `$KIMI_CODE_HOME/sessions` and ends in the stated session id. The index workdir can be stale, so use `state.json.workDir` as the authoritative workspace check; `state.json` carries no separate session-id field. Do not reimplement the bucket key to find a bound session.
 
 The bucket key is `wd_<slug>_<first-12-hex-of-sha256>`. A normal session id is `session_<uuid>`. `state.json` carries creation/update metadata, title, last prompt, work directory, fork origin, custom metadata, and an `agents` map. Each agent entry carries its home directory, agent type, parent id, and optional swarm item.
 
@@ -225,11 +225,11 @@ Adapter-relevant record families are:
 | `context.append_message` | `message` | model-facing transcript message |
 | `context.append_loop_event` | recorded loop event | step, content, tool call, and tool result |
 | `context.apply_compaction` | summary and token counts | rebuilt context state |
-| `usage.record` | `model`, four-way `usage`, optional scope | exact per-model token accounting |
+| `usage.record` | `model`, four-way `usage`, optional `usageScope` | additive per-request token accounting; `turn` also contributes to current-turn usage, while `session` covers work such as full compaction |
 | `llm.request` | provider/model/alias, effective options and hashes | request reconstruction and model attribution |
 | `llm.tools_snapshot` | hash and tool schemas | content-addressed request tool table |
 
-Recorded loop events are `step.begin`, `step.end`, `content.part`, `tool.call`, and `tool.result`. Retry, interruption, deltas, and progress are live-only SDK events. `step.end.usage` and `usage.record.usage` split `inputOther`, `output`, `inputCacheRead`, and `inputCacheCreation`; sum all three input fields for total input.
+Recorded loop events are `step.begin`, `step.end`, `content.part`, `tool.call`, and `tool.result`. Retry, interruption, deltas, and progress are live-only SDK events. `step.end.usage` and `usage.record.usage` split `inputOther`, `output`, `inputCacheRead`, and `inputCacheCreation`; sum all three input fields for total input. Every `usage.record` is additive session spend. `usageScope: "turn"` also updates current-turn usage, while the default `session` scope accounts for work outside a turn such as full compaction; it is not a cumulative session-total record.
 
 `wire.jsonl` does not durably record clean `turn.ended`, `PermissionRequest`, unanswered questions, or the live `agent.status.updated` snapshot. Hooks and pane/process truth supply those facts. Never parse the file as the old Python Wire protocol.
 
@@ -239,7 +239,7 @@ The terminal UI keeps the native prompt. RimZ observes it and routes the user to
 
 Approval hooks correlate on `tool_call_id`. `PermissionRequest` carries a structured `display` object and the original tool input; `PermissionResult` closes it with `approved`, `rejected`, `cancelled`, or `error`. The durable `permission.record_approval_result` is a restart backstop for completed approvals, not open-wait truth.
 
-`AskUserQuestion` is a tool whose protocol request supports one to four questions. Each question has a stable id, text, optional header/body, two to four options with stable ids, optional multi-select, and optional free-text choice. The question protocol accepts single, multi, other, multi-with-other, and skipped answers. Command hooks expose no `QuestionRequest` event, so a stock-pane adapter opens the question wait from `PreToolUse` for `AskUserQuestion` and closes it from the correlated post-tool hook, interrupt, or turn/session end.
+`AskUserQuestion` is a tool whose protocol request supports one to four questions. Each question has text, optional header, two to four options, and optional multi-select; the RPC layer assigns stable ids and adds the free-text choice. The question protocol accepts single, multi, other, multi-with-other, and skipped answers. Command hooks expose the original tool input rather than a separate `QuestionRequest` event, so a stock-pane adapter opens the foreground question wait from `PreToolUse` for `AskUserQuestion` and closes it from the correlated post-tool hook, interrupt, or turn/session end. `background: true` registers a background question task and returns immediately, so it must not park the main row.
 
 Plan mode writes plans under `agents/main/plans/<id>.md`. `ExitPlanMode` uses the normal approval runtime and always asks outside auto mode, including YOLO mode. Classify its `PermissionRequest` as `PlanApproval`; use its input/plan id to read the plan file when the body is needed.
 
@@ -249,7 +249,7 @@ Plan mode writes plans under `agents/main/plans/<id>.md`. `ExitPlanMode` uses th
 | --- | --- | --- |
 | `SessionStart` | `registered` | bind session and record tail |
 | `UserPromptSubmit` | `turn_started` | prompt is an array of content parts |
-| `PostToolUse` / `PostToolUseFailure` | `tool_used` | `Write` and `Edit` prove file editing; every completed tool proves work |
+| `PostToolUse` / `PostToolUseFailure` | `tool_used` | successful `Write` and `Edit` prove file editing; failure clears a native wait without claiming mutation |
 | `PermissionRequest` | `awaiting_input(Permission)` | specialize `ExitPlanMode` to plan approval |
 | `PreToolUse(AskUserQuestion)` | `awaiting_input(Question)` | close on correlated post-tool event |
 | `PermissionResult` / post-tool result | clear wait | does not end the turn |

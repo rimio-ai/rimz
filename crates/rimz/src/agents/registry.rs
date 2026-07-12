@@ -12,6 +12,7 @@ use super::cursor::CursorAdapter;
 use super::descriptor::AgentDescriptor;
 use super::droid::DroidAdapter;
 use super::gemini::GeminiAdapter;
+use super::kimi::KimiAdapter;
 use super::kiro::KiroAdapter;
 use super::opencode::OpencodeAdapter;
 use super::pi::PiAdapter;
@@ -26,6 +27,7 @@ pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &AmpAdapter,
     &CopilotAdapter,
     &GeminiAdapter,
+    &KimiAdapter,
     &PiAdapter,
     &OpencodeAdapter,
     &CursorAdapter,

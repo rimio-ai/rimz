@@ -348,8 +348,8 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "amp", "copilot", "gemini", "pi", "opencode", "cursor", "droid",
-                "kiro", "qwen"
+                "claude", "codex", "amp", "copilot", "gemini", "kimi", "pi", "opencode", "cursor",
+                "droid", "kiro", "qwen"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -420,6 +420,19 @@ mod tests {
         assert_eq!(
             agent_labels(&matrix, "gemini", MatrixCellState::Absent),
             ["answer", "sub", "bg", "rich", "remote"]
+        );
+
+        let kimi = agent_cells(&matrix, "kimi");
+        assert_eq!(count(&kimi, MatrixCellState::Ok), 8);
+        assert_eq!(count(&kimi, MatrixCellState::Partial), 4);
+        assert_eq!(count(&kimi, MatrixCellState::Absent), 4);
+        assert_eq!(
+            agent_labels(&matrix, "kimi", MatrixCellState::Partial),
+            ["sub", "idle", "usage", "spend"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "kimi", MatrixCellState::Absent),
+            ["answer", "bg", "rich", "remote"]
         );
 
         let pi = agent_cells(&matrix, "pi");
@@ -500,8 +513,8 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "amp", "copilot", "gemini", "pi", "opencode", "cursor", "droid",
-                "kiro", "qwen"
+                "claude", "codex", "amp", "copilot", "gemini", "kimi", "pi", "opencode", "cursor",
+                "droid", "kiro", "qwen"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -515,6 +528,7 @@ mod tests {
                 MatrixCellState::Partial, // amp
                 MatrixCellState::Ok,      // copilot
                 MatrixCellState::Ok,      // gemini
+                MatrixCellState::Ok,      // kimi
                 MatrixCellState::Ok,      // pi
                 MatrixCellState::Partial, // opencode
                 MatrixCellState::Ok,      // cursor
@@ -529,17 +543,18 @@ mod tests {
         assert_eq!(
             states(subagent_started),
             [
-                MatrixCellState::Ok,     // claude
-                MatrixCellState::Ok,     // codex
-                MatrixCellState::Absent, // amp
-                MatrixCellState::Absent, // copilot
-                MatrixCellState::Absent, // gemini
-                MatrixCellState::Absent, // pi
-                MatrixCellState::Ok,     // opencode
-                MatrixCellState::Absent, // cursor
-                MatrixCellState::Absent, // droid
-                MatrixCellState::Absent, // kiro
-                MatrixCellState::Ok,     // qwen
+                MatrixCellState::Ok,      // claude
+                MatrixCellState::Ok,      // codex
+                MatrixCellState::Absent,  // amp
+                MatrixCellState::Absent,  // copilot
+                MatrixCellState::Absent,  // gemini
+                MatrixCellState::Partial, // kimi
+                MatrixCellState::Absent,  // pi
+                MatrixCellState::Ok,      // opencode
+                MatrixCellState::Absent,  // cursor
+                MatrixCellState::Absent,  // droid
+                MatrixCellState::Absent,  // kiro
+                MatrixCellState::Ok,      // qwen
             ]
         );
     }

@@ -1,6 +1,6 @@
 # The agent model
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The per-provider native mappings (which native event means what for each agent) live in the adapter docs ([claude.md](./claude.md), [codex.md](./codex.md), [amp.md](./amp.md), [copilot.md](./copilot.md), [gemini.md](./gemini.md), [pi.md](./pi.md), [opencode.md](./opencode.md), [cursor.md](./cursor.md), [droid.md](./droid.md), [kiro.md](./kiro.md), [qwen.md](./qwen.md)); the account, balance, spend, and pricing model is [providers.md](./providers.md).
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The per-provider native mappings (which native event means what for each agent) live in the adapter docs ([claude.md](./claude.md), [codex.md](./codex.md), [amp.md](./amp.md), [copilot.md](./copilot.md), [gemini.md](./gemini.md), [kimi.md](./kimi.md), [pi.md](./pi.md), [opencode.md](./opencode.md), [cursor.md](./cursor.md), [droid.md](./droid.md), [kiro.md](./kiro.md), [qwen.md](./qwen.md)); the account, balance, spend, and pricing model is [providers.md](./providers.md).
 
 This doc owns how a running agent is *modeled*: the adapter boundary that produces the model's input, the fold that reduces it to one state per agent, and the live-context read path that enriches it. The model is a three-stage pipeline:
 
