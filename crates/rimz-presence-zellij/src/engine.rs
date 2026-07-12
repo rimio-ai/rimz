@@ -88,6 +88,7 @@ pub struct Engine {
     loaded_at_ms: u64,
     connected_clients: Option<usize>,
     client_sample: Option<policy::ClientSample>,
+    contested_focused_by_tab: BTreeMap<usize, Vec<u32>>,
     prior_focused_by_tab: BTreeMap<usize, u32>,
     retired: bool,
 }
@@ -119,6 +120,7 @@ impl Engine {
             loaded_at_ms: now,
             connected_clients: None,
             client_sample: None,
+            contested_focused_by_tab: BTreeMap::new(),
             prior_focused_by_tab: BTreeMap::new(),
             retired: false,
         }
@@ -179,6 +181,7 @@ impl Engine {
         self.last_raw_stable_hash = Some(raw_hash);
         if !stable_unchanged {
             let projected = project(&self.tab_names);
+            self.record_contested_focus(&projected);
             // Zellij can deliver partial pane manifests; omitted tabs retain
             // their previous state instead of collapsing the room.
             let mut next_tabs = policy::merged_room(&self.tabs, &projected);
@@ -409,9 +412,7 @@ impl Engine {
         let changed = self.client_sample.as_ref() != Some(&sample);
         self.client_sample = Some(sample);
         if changed {
-            let mut tabs = std::mem::take(&mut self.tabs);
-            self.repair_contested_focus(&mut tabs);
-            self.tabs = tabs;
+            self.apply_client_focus_to_recorded_contests();
             self.run_wake(wire::WakeRequest::Changed, now, &mut effects);
         }
         self.finish_update(now, host, effects)
@@ -480,6 +481,15 @@ impl Engine {
     }
 
     fn repair_contested_focus(&mut self, tabs: &mut BTreeMap<usize, Vec<PaneFields>>) {
+        let repaired_active_tab = self.active_tab.filter(|active_tab| {
+            tabs.get(active_tab).is_some_and(|panes| {
+                panes
+                    .iter()
+                    .filter(|pane| pane.is_focused && !pane.is_floating)
+                    .count()
+                    > 1
+            })
+        });
         let viewed = self
             .client_sample
             .as_ref()
@@ -495,9 +505,63 @@ impl Engine {
                     .map(|pane| (*tab, pane.id))
             })
             .collect();
-        if let Some(active_tab) = self.active_tab
+        if let Some(active_tab) = repaired_active_tab
             && let Some(focused) = self.prior_focused_by_tab.get(&active_tab).copied()
         {
+            self.session_focused_pane = Some(focused);
+        }
+    }
+
+    fn record_contested_focus(&mut self, projected: &BTreeMap<usize, Vec<PaneFields>>) {
+        for (tab, panes) in projected.iter().filter(|(_, panes)| !panes.is_empty()) {
+            let focused = panes
+                .iter()
+                .filter(|pane| pane.is_focused && !pane.is_floating)
+                .map(|pane| pane.id)
+                .collect::<Vec<_>>();
+            if focused.len() > 1 {
+                self.contested_focused_by_tab.insert(*tab, focused);
+            } else {
+                self.contested_focused_by_tab.remove(tab);
+            }
+        }
+    }
+
+    fn apply_client_focus_to_recorded_contests(&mut self) {
+        let Some(sample) = self.client_sample.as_ref() else {
+            return;
+        };
+        let viewed = sample.viewed_panes.iter().copied().collect::<BTreeSet<_>>();
+        let mut repaired_active = None;
+        for (tab, contenders) in &self.contested_focused_by_tab {
+            let Some(keep) = contenders
+                .iter()
+                .copied()
+                .filter(|pane_id| viewed.contains(pane_id))
+                .filter(|pane_id| {
+                    self.tabs.get(tab).is_some_and(|panes| {
+                        panes
+                            .iter()
+                            .any(|pane| pane.id == *pane_id && !pane.is_floating)
+                    })
+                })
+                .min()
+            else {
+                continue;
+            };
+            if let Some(panes) = self.tabs.get_mut(tab) {
+                for pane in panes {
+                    if !pane.is_floating {
+                        pane.is_focused = pane.id == keep;
+                    }
+                }
+            }
+            self.prior_focused_by_tab.insert(*tab, keep);
+            if self.active_tab == Some(*tab) {
+                repaired_active = Some(keep);
+            }
+        }
+        if let Some(focused) = repaired_active {
             self.session_focused_pane = Some(focused);
         }
     }

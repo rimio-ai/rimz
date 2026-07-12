@@ -634,6 +634,73 @@ fn manifest_focus_repair_prefers_client_view_and_updates_published_focus() {
 }
 
 #[test]
+fn late_client_sample_reselects_a_recorded_contested_focus() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let _ = engine.on_tab_update(
+        Some(0),
+        BTreeMap::from([(0, "tab-0".to_owned())]),
+        20,
+        &host,
+    );
+    seed_manifest(
+        &mut engine,
+        tabs(vec![focused(pane(1)), focused(pane(2))]),
+        30,
+        &host,
+    );
+    assert_eq!(engine.session_focused_pane, Some(1));
+
+    let effects = engine.on_list_clients(
+        vec![ProjectedClientFocus {
+            client_id: 1,
+            pane_id: 2,
+        }],
+        40,
+        &host,
+    );
+
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["focused_pane"], 2);
+    assert_eq!(
+        topology["panes"]
+            .as_array()
+            .expect("panes")
+            .iter()
+            .filter(|pane| pane["is_focused"].as_bool() == Some(true))
+            .map(|pane| pane["id"].as_u64().expect("pane id"))
+            .collect::<Vec<_>>(),
+        vec![2],
+    );
+}
+
+#[test]
+fn clean_focus_with_another_manifest_change_keeps_the_fast_overlay() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let _ = engine.on_tab_update(
+        Some(0),
+        BTreeMap::from([(0, "tab-0".to_owned())]),
+        20,
+        &host,
+    );
+    seed_manifest(
+        &mut engine,
+        tabs(vec![focused(pane(1)), pane(2)]),
+        30,
+        &host,
+    );
+    engine.session_focused_pane = Some(1);
+    let manifest = tabs(vec![pane(1), focused(pane(2)), pane(3)]);
+
+    let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 40, &host);
+
+    assert!(reasons(&effects).contains(&"focus-changed"));
+}
+
+#[test]
 fn session_update_and_keepalive_request_client_sample() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
