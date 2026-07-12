@@ -440,12 +440,7 @@ fn render_dashboard(
         if group.rows.is_empty() {
             continue;
         }
-        let lines_needed = groups[group_index..]
-            .iter()
-            .filter(|group| !group.rows.is_empty())
-            .map(|group| group.rows.len() + 1)
-            .sum::<usize>();
-        if remaining_rows == 1 && lines_needed > remaining_rows {
+        if remaining_rows == 1 {
             write_more(out, remaining_tasks, cols)?;
             break;
         }
