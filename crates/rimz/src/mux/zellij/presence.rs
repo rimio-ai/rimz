@@ -206,37 +206,7 @@ impl ZellijBackend {
             Err(err) => return Err(err),
         }
 
-        let runtime = match self.runtime_paths_for_workspace(opts.workspace_id.clone()) {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                tracing::debug!(
-                    session = %opts.session_name,
-                    error = %err,
-                    "presence retire skipped because replacement proof paths are unavailable",
-                );
-                return Ok(());
-            }
-        };
-        if !wait_for_presence_replacement(
-            &runtime,
-            &opts.session_name,
-            floor_ms,
-            timeout,
-            poll_step,
-        ) {
-            tracing::debug!(
-                session = %opts.session_name,
-                "presence retire skipped because the replacement was not proven live",
-            );
-            return Ok(());
-        }
-        if let Err(err) = self.broadcast_presence_retire_for(&opts.session_name, &opts.rimz_bin) {
-            tracing::debug!(
-                session = %opts.session_name,
-                error = %err,
-                "presence retire broadcast failed",
-            );
-        }
+        self.retire_proven_presence_plugin_for(opts, floor_ms, timeout, poll_step);
         Ok(())
     }
 
@@ -303,19 +273,62 @@ impl ZellijBackend {
         }
     }
 
+    pub(super) fn retire_proven_presence_plugin_for(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+        floor_ms: u64,
+        timeout: Duration,
+        poll_step: Duration,
+    ) {
+        let runtime = match self.runtime_paths_for_workspace(opts.workspace_id.clone()) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                tracing::debug!(
+                    session = %opts.session_name,
+                    error = %err,
+                    "presence retire skipped because replacement proof paths are unavailable",
+                );
+                return;
+            }
+        };
+        let Some(writer) = wait_for_presence_replacement(
+            &runtime,
+            &opts.session_name,
+            floor_ms,
+            timeout,
+            poll_step,
+        ) else {
+            tracing::debug!(
+                session = %opts.session_name,
+                "presence retire skipped because the replacement was not proven live",
+            );
+            return;
+        };
+        if let Err(err) = self.broadcast_presence_retire_for(&opts.session_name, &writer) {
+            tracing::debug!(
+                session = %opts.session_name,
+                error = %err,
+                "presence retire broadcast failed",
+            );
+        }
+        if let Err(err) = self.pipe_to_presence_plugin(opts, PRESENCE_BOOT_PIPE, "load") {
+            tracing::debug!(
+                session = %opts.session_name,
+                error = %err,
+                "presence boot pipe after retire failed",
+            );
+        }
+    }
+
     pub(super) fn broadcast_presence_retire_for(
         &self,
         session_name: &str,
-        rimz_bin: &Path,
+        writer: &crate::mux::zellij::pane_topology::TopologyWriter,
     ) -> Result<()> {
-        let payload = rimz_bin.to_string_lossy();
-        if payload.contains([',', '=']) {
-            tracing::debug!(
-                rimz_bin = %payload,
-                "presence retire broadcast skipped because the canonical Rimz path is not expressible in plugin configuration",
-            );
-            return Ok(());
-        }
+        let payload = serde_json::to_string(writer).map_err(|err| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("serializing presence retire generation failed: {err}"),
+        })?;
         self.cmd()
             .args([
                 "--session",
@@ -324,7 +337,7 @@ impl ZellijBackend {
                 "--name",
                 PRESENCE_RETIRE_PIPE,
                 "--",
-                payload.as_ref(),
+                &payload,
             ])
             .run_with_timeout(PRESENCE_PIPE_TIMEOUT)
             .map(|_| ())
@@ -372,17 +385,17 @@ fn wait_for_presence_replacement(
     floor_ms: u64,
     timeout: Duration,
     poll_step: Duration,
-) -> bool {
+) -> Option<crate::mux::zellij::pane_topology::TopologyWriter> {
     let deadline = Instant::now() + timeout;
     loop {
-        if read_pane_topology_cache(runtime, session_name)
+        if let Some(writer) = read_pane_topology_cache(runtime, session_name)
             .and_then(|cache| cache.writer)
-            .is_some_and(|writer| writer.loaded_at_ms >= floor_ms)
+            .filter(|writer| writer.loaded_at_ms >= floor_ms)
         {
-            return true;
+            return Some(writer);
         }
         if Instant::now() >= deadline {
-            return false;
+            return None;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         std::thread::sleep(remaining.min(poll_step));
@@ -722,8 +735,15 @@ fi
             "convergence should request replacement topology:\n{log}",
         );
         assert!(
-            log.contains("--name rimz:retire -- /home/user/.cargo/bin/rimz"),
+            log.contains(
+                "--name rimz:retire -- {\"plugin_id\":2,\"loaded_at_ms\":18446744073709551615}"
+            ),
             "a proven replacement should retire stale plugins:\n{log}",
+        );
+        assert_eq!(
+            log.matches("--name rimz_presence_boot -- load").count(),
+            2,
+            "retire convergence should heal with a post-retire boot pipe:\n{log}",
         );
     }
 

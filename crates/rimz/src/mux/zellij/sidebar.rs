@@ -15,7 +15,7 @@ use super::raw_pane::{
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
     MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT, TAB_NAMES_ATTEMPTS,
-    TAB_NAMES_RETRY_DELAY, ZellijBackend,
+    TAB_NAMES_RETRY_DELAY, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
@@ -201,10 +201,14 @@ impl ZellijBackend {
             focus_follows_mouse: opts.config.zellij.focus_follows_mouse,
             mouse_click_through: opts.config.zellij.mouse_click_through,
         };
+        let floor_ms = unix_now_ms();
         self.ensure_presence_plugin_for(&presence)?;
-        if let Err(err) = self.broadcast_presence_retire_for(&opts.session_name, &opts.rimz_bin) {
-            tracing::debug!(session = %opts.session_name, error = %err, "presence retire broadcast failed");
-        }
+        self.retire_proven_presence_plugin_for(
+            &presence,
+            floor_ms,
+            Duration::ZERO,
+            TOPOLOGY_CACHE_POLL_STEP,
+        );
         Ok(())
     }
 

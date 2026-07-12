@@ -34,7 +34,7 @@ mod wake;
 pub(crate) use wake::rimz_cli_program;
 
 use fixture::sidebar_fixture_snapshot;
-use wake::{session_name_from_record, wake_event, write_topology_cache};
+use wake::{TopologyWriteVerdict, session_name_from_record, wake_event, write_topology_cache};
 #[derive(Debug, Args)]
 pub struct SidebarArgs {
     #[command(subcommand)]
@@ -762,9 +762,13 @@ fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
     let runtime =
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
+    if write_topology_cache(&state, &runtime, command.topology.as_deref())
+        == TopologyWriteVerdict::RejectedStaleWriter
+    {
+        return Ok(());
+    }
     write_presence_stamp(&runtime);
     write_plugin_presence_sample(&workspace_id, &command)?;
-    write_topology_cache(&state, &runtime, command.topology.as_deref());
     let Some(event) = wake_event(
         command.reason,
         command.pane_id.as_deref(),

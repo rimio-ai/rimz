@@ -64,17 +64,7 @@ mod shell {
                 PermissionType::StartWebServer,
             ];
             request_permission(&permissions);
-            subscribe(&[
-                EventType::PaneUpdate,
-                EventType::TabUpdate,
-                EventType::CommandChanged,
-                EventType::PaneClosed,
-                EventType::Timer,
-                EventType::PermissionRequestResult,
-                EventType::RunCommandResult,
-                EventType::SessionUpdate,
-                EventType::ListClients,
-            ]);
+            subscribe(&subscribed_events());
             let now = now_ms();
             let config = EngineConfig {
                 workspace_id: configuration.get("workspace_id").cloned(),
@@ -206,10 +196,25 @@ mod shell {
                 Effect::Reconfigure(kdl) => reconfigure(kdl, false),
                 Effect::ShareSession => share_current_session(),
                 Effect::CloseSelf => close_self(),
+                Effect::Unsubscribe => unsubscribe(&subscribed_events()),
                 Effect::SetTimeout(delay_ms) => set_timeout(delay_ms as f64 / 1_000.0),
                 Effect::ListClients => list_clients(),
             }
         }
+    }
+
+    fn subscribed_events() -> [EventType; 9] {
+        [
+            EventType::PaneUpdate,
+            EventType::TabUpdate,
+            EventType::CommandChanged,
+            EventType::PaneClosed,
+            EventType::Timer,
+            EventType::PermissionRequestResult,
+            EventType::RunCommandResult,
+            EventType::SessionUpdate,
+            EventType::ListClients,
+        ]
     }
 
     fn project_pane_id(pane_id: PaneId) -> ProjectedPaneId {

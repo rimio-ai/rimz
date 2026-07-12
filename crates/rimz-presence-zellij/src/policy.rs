@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Floor between two `panes-changed` pokes — caps host forks under
 /// pathological manifest churn. A change that lands inside the floor is
@@ -136,7 +136,7 @@ pub struct ClientSample {
     pub viewed_panes: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopologyWriter {
     pub plugin_id: u32,
     pub loaded_at_ms: u64,
@@ -518,6 +518,43 @@ pub fn focus_tiled_pane(tabs: &mut BTreeMap<usize, Vec<PaneFields>>, focused: u3
         for pane in panes {
             if pane.is_live_terminal() {
                 pane.is_focused = pane.id == focused;
+            }
+        }
+    }
+}
+
+pub fn repair_contested_tab_focus(
+    tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
+    client_viewed: &[u32],
+    prior_focused_by_tab: &BTreeMap<usize, u32>,
+) {
+    let client_viewed: BTreeSet<u32> = client_viewed.iter().copied().collect();
+    for (tab, panes) in tabs {
+        let focused = panes
+            .iter()
+            .filter(|pane| pane.is_focused && !pane.is_floating)
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>();
+        if focused.len() <= 1 {
+            continue;
+        }
+        let keep = focused
+            .iter()
+            .copied()
+            .filter(|id| client_viewed.contains(id))
+            .min()
+            .or_else(|| {
+                prior_focused_by_tab
+                    .get(tab)
+                    .copied()
+                    .filter(|prior| focused.contains(prior))
+            })
+            .or_else(|| focused.iter().copied().min());
+        if let Some(keep) = keep {
+            for pane in panes {
+                if pane.is_focused && !pane.is_floating && pane.id != keep {
+                    pane.is_focused = false;
+                }
             }
         }
     }

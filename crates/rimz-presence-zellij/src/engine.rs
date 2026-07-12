@@ -32,6 +32,8 @@ pub enum Effect {
     ShareSession,
     /// Close this plugin instance.
     CloseSelf,
+    /// Drop every subscription so a muted same-id clone stops waking.
+    Unsubscribe,
     /// Arm one host timer, in milliseconds from now.
     SetTimeout(u64),
     /// Ask Zellij to deliver focused client panes via `Event::ListClients`.
@@ -86,6 +88,8 @@ pub struct Engine {
     loaded_at_ms: u64,
     connected_clients: Option<usize>,
     client_sample: Option<policy::ClientSample>,
+    prior_focused_by_tab: BTreeMap<usize, u32>,
+    retired: bool,
 }
 
 impl Engine {
@@ -115,6 +119,8 @@ impl Engine {
             loaded_at_ms: now,
             connected_clients: None,
             client_sample: None,
+            prior_focused_by_tab: BTreeMap::new(),
+            retired: false,
         }
     }
 
@@ -127,10 +133,16 @@ impl Engine {
     }
 
     pub fn on_load(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         self.finish_update(now, host, Vec::new())
     }
 
     pub fn on_permission_granted(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         self.apply_runtime_reconfigure(&mut effects);
@@ -141,6 +153,9 @@ impl Engine {
     }
 
     pub fn on_permission_denied(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         self.granted = false;
         self.finish_update(now, host, Vec::new())
     }
@@ -152,6 +167,9 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         // Application state flowing proves the (possibly cached) grant covers
         // us: Zellij sends no PermissionRequestResult when the grant comes from
@@ -168,6 +186,7 @@ impl Engine {
                 policy::panes_needing_baseline(&next_tabs, &self.foreground, &self.baseline);
             self.probe_baselines(baseline_ids, host);
             policy::apply_foreground_commands(&mut next_tabs, &self.foreground, &self.baseline);
+            self.repair_contested_focus(&mut next_tabs);
             let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
             let focus_patch = policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
             let shortcut_focused = focus_patch
@@ -240,6 +259,9 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         let previous_active = self.active_tab;
@@ -276,6 +298,9 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         match policy::foreground_command_update(&command, is_foreground) {
             ForegroundCommandUpdate::Remember(command_text) => {
@@ -311,6 +336,9 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         let closed_terminal = match pane {
@@ -340,6 +368,9 @@ impl Engine {
     }
 
     pub fn on_timer(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         self.timer_gate.on_fire(now);
         self.finish_update(now, host, Vec::new())
     }
@@ -350,6 +381,9 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         self.mark_granted(now, host, &mut effects);
         if let Some(connected_clients) = connected_clients
@@ -367,23 +401,35 @@ impl Engine {
         now: u64,
         host: &impl Host,
     ) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         let sample = client_sample(clients);
         let changed = self.client_sample.as_ref() != Some(&sample);
         self.client_sample = Some(sample);
         if changed {
+            let mut tabs = std::mem::take(&mut self.tabs);
+            self.repair_contested_focus(&mut tabs);
+            self.tabs = tabs;
             self.run_wake(wire::WakeRequest::Changed, now, &mut effects);
         }
         self.finish_update(now, host, effects)
     }
 
     pub fn on_focus_sidebar_pipe(&mut self) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         self.run_focus_sidebar(&mut effects);
         effects
     }
 
     pub fn on_share_session_pipe(&mut self) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         self.share_requested = true;
         // This can be dropped while the upgraded StartWebServer grant is
         // pending; PermissionRequestResult(Granted) replays it.
@@ -391,6 +437,9 @@ impl Engine {
     }
 
     pub fn on_dump_topology_pipe(&mut self, now: u64, host: &impl Host) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
         let mut effects = Vec::new();
         if !self.granted {
             self.pending_pregrant_change = true;
@@ -401,15 +450,55 @@ impl Engine {
         if self.probe_baselines(baseline_ids, host) {
             policy::apply_foreground_commands(&mut self.tabs, &self.foreground, &self.baseline);
         }
+        let mut tabs = std::mem::take(&mut self.tabs);
+        self.repair_contested_focus(&mut tabs);
+        self.tabs = tabs;
         self.poke(Poke::Alive, now, host, &mut effects);
         effects
     }
 
-    pub fn on_retire_pipe(&self, payload: Option<&str>) -> Vec<Effect> {
-        if wire::should_retire(self.rimz_bin.as_deref(), payload) {
-            vec![Effect::CloseSelf]
+    pub fn on_retire_pipe(&mut self, payload: Option<&str>) -> Vec<Effect> {
+        if self.retired {
+            return Vec::new();
+        }
+        let Some(generation) = wire::retire_generation(payload) else {
+            return Vec::new();
+        };
+        let own = policy::TopologyWriter {
+            plugin_id: self.plugin_id.unwrap_or_default(),
+            loaded_at_ms: self.loaded_at_ms,
+        };
+        if (own.loaded_at_ms, own.plugin_id) >= (generation.loaded_at_ms, generation.plugin_id) {
+            return Vec::new();
+        }
+        if own.plugin_id == generation.plugin_id {
+            self.retired = true;
+            vec![Effect::Unsubscribe]
         } else {
-            Vec::new()
+            vec![Effect::CloseSelf]
+        }
+    }
+
+    fn repair_contested_focus(&mut self, tabs: &mut BTreeMap<usize, Vec<PaneFields>>) {
+        let viewed = self
+            .client_sample
+            .as_ref()
+            .map(|sample| sample.viewed_panes.as_slice())
+            .unwrap_or_default();
+        policy::repair_contested_tab_focus(tabs, viewed, &self.prior_focused_by_tab);
+        self.prior_focused_by_tab = tabs
+            .iter()
+            .filter_map(|(tab, panes)| {
+                panes
+                    .iter()
+                    .find(|pane| pane.is_focused && !pane.is_floating)
+                    .map(|pane| (*tab, pane.id))
+            })
+            .collect();
+        if let Some(active_tab) = self.active_tab
+            && let Some(focused) = self.prior_focused_by_tab.get(&active_tab).copied()
+        {
+            self.session_focused_pane = Some(focused);
         }
     }
 

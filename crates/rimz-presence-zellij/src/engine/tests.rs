@@ -592,6 +592,48 @@ fn list_clients_change_emits_changed_wake_and_unchanged_reply_is_quiet() {
 }
 
 #[test]
+fn manifest_focus_repair_prefers_client_view_and_updates_published_focus() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 10, &host);
+    let _ = engine.on_tab_update(
+        Some(0),
+        BTreeMap::from([(0, "tab-0".to_owned())]),
+        20,
+        &host,
+    );
+    let _ = engine.on_list_clients(
+        vec![ProjectedClientFocus {
+            client_id: 1,
+            pane_id: 2,
+        }],
+        30,
+        &host,
+    );
+    seed_manifest(
+        &mut engine,
+        tabs(vec![focused(pane(1)), focused(pane(2))]),
+        40,
+        &host,
+    );
+
+    let effects = engine.on_dump_topology_pipe(50, &host);
+
+    let topology = topology_json(run_commands(&effects)[0]);
+    assert_eq!(topology["focused_pane"], 2);
+    assert_eq!(
+        topology["panes"]
+            .as_array()
+            .expect("panes")
+            .iter()
+            .filter(|pane| pane["is_focused"].as_bool() == Some(true))
+            .map(|pane| pane["id"].as_u64().expect("pane id"))
+            .collect::<Vec<_>>(),
+        vec![2],
+    );
+}
+
+#[test]
 fn session_update_and_keepalive_request_client_sample() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
@@ -632,14 +674,54 @@ fn active_tab_switch_requests_client_sample() {
 }
 
 #[test]
-fn retire_pipe_only_closes_for_different_canonical_bin() {
-    let engine = Engine::new(0, config());
+fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
+    let host = FakeHost::default();
+    let mut same_id = Engine::new(0, config());
 
     assert_eq!(
-        engine.on_retire_pipe(Some("/other/rimz")),
+        same_id.on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#)),
+        vec![Effect::Unsubscribe]
+    );
+    assert!(same_id.on_focus_sidebar_pipe().is_empty());
+    assert!(same_id.on_timer(KEEPALIVE_MS, &host).is_empty());
+    assert!(
+        same_id
+            .on_pane_manifest(
+                raw_hash(&tabs(vec![pane(1)])),
+                |_| tabs(vec![pane(1)]),
+                20,
+                &host
+            )
+            .is_empty()
+    );
+    assert!(
+        same_id
+            .on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":20}"#))
+            .is_empty()
+    );
+
+    let mut different_id = Engine::new(0, config());
+    assert_eq!(
+        different_id.on_retire_pipe(Some(r#"{"plugin_id":10,"loaded_at_ms":10}"#)),
         vec![Effect::CloseSelf]
     );
-    assert!(engine.on_retire_pipe(Some("/bin/rimz")).is_empty());
+}
+
+#[test]
+fn retire_pipe_ignores_equal_newer_and_invalid_generations() {
+    let mut engine = Engine::new(10, config());
+
+    assert!(
+        engine
+            .on_retire_pipe(Some(r#"{"plugin_id":9,"loaded_at_ms":10}"#))
+            .is_empty()
+    );
+    assert!(
+        engine
+            .on_retire_pipe(Some(r#"{"plugin_id":8,"loaded_at_ms":10}"#))
+            .is_empty()
+    );
+    assert!(engine.on_retire_pipe(Some("garbage")).is_empty());
     assert!(engine.on_retire_pipe(None).is_empty());
 }
 

@@ -24,15 +24,12 @@ pub const SHARE_SESSION_PIPE: &str = "rimz:share_session";
 /// without broadcasting a sidebar event.
 pub const DUMP_TOPOLOGY_PIPE: &str = "rimz:dump_topology";
 
-/// Pipe message name the host broadcasts after loading the canonical plugin
-/// instance. A plugin configured with a different `rimz_bin` closes itself.
+/// Pipe message name the host broadcasts after proving the newest topology
+/// writer. Older plugin instances retire by generation.
 pub const RETIRE_PIPE: &str = "rimz:retire";
 
-pub fn should_retire(configured_rimz_bin: Option<&str>, canonical_rimz_bin: Option<&str>) -> bool {
-    matches!(
-        (configured_rimz_bin, canonical_rimz_bin),
-        (Some(configured), Some(canonical)) if configured != canonical
-    )
+pub fn retire_generation(payload: Option<&str>) -> Option<policy::TopologyWriter> {
+    serde_json::from_str(payload?).ok()
 }
 
 /// The modifier half of a focus-key chord.
@@ -836,10 +833,18 @@ mod tests {
     }
 
     #[test]
-    fn retire_predicate_requires_two_different_bins() {
-        assert!(should_retire(Some("/old/rimz"), Some("/new/rimz")));
-        assert!(!should_retire(Some("/new/rimz"), Some("/new/rimz")));
-        assert!(!should_retire(None, Some("/new/rimz")));
-        assert!(!should_retire(Some("/old/rimz"), None));
+    fn retire_generation_parses_writer_payload() {
+        let writer = retire_generation(Some(r#"{"plugin_id":9,"loaded_at_ms":1000}"#))
+            .expect("writer parses");
+
+        assert_eq!(
+            writer,
+            policy::TopologyWriter {
+                plugin_id: 9,
+                loaded_at_ms: 1000,
+            }
+        );
+        assert_eq!(retire_generation(None), None);
+        assert_eq!(retire_generation(Some("garbage")), None);
     }
 }

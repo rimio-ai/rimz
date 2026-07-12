@@ -218,6 +218,57 @@ fn focus_tiled_pane_clears_siblings_in_the_focused_pane_tab() {
 }
 
 #[test]
+fn repair_contested_tab_focus_keeps_client_viewed_mark() {
+    let mut manifest = tabs(vec![focused(pane(1)), focused(pane(2)), focused(pane(3))]);
+
+    repair_contested_tab_focus(&mut manifest, &[2], &BTreeMap::new());
+
+    assert_eq!(focused_ids(&manifest, 0), vec![2]);
+}
+
+#[test]
+fn repair_contested_tab_focus_keeps_prior_mark_when_no_client_matches() {
+    let mut manifest = tabs(vec![focused(pane(1)), focused(pane(2))]);
+    let prior = BTreeMap::from([(0, 2)]);
+
+    repair_contested_tab_focus(&mut manifest, &[99], &prior);
+
+    assert_eq!(focused_ids(&manifest, 0), vec![2]);
+}
+
+#[test]
+fn repair_contested_tab_focus_falls_back_to_lowest_id_deterministically() {
+    let mut manifest = tabs(vec![focused(pane(3)), focused(pane(1)), focused(pane(2))]);
+
+    repair_contested_tab_focus(&mut manifest, &[], &BTreeMap::new());
+
+    assert_eq!(focused_ids(&manifest, 0), vec![1]);
+}
+
+#[test]
+fn repair_contested_tab_focus_leaves_floating_and_clean_tabs_alone() {
+    let mut floating = focused(pane(9));
+    floating.is_floating = true;
+    let mut manifest = tabs_by_index(vec![
+        (0, vec![focused(pane_in_tab(1, 0)), floating]),
+        (1, vec![focused(pane_in_tab(11, 1))]),
+    ]);
+
+    repair_contested_tab_focus(&mut manifest, &[], &BTreeMap::new());
+
+    assert_eq!(focused_ids(&manifest, 0), vec![1, 9]);
+    assert_eq!(focused_ids(&manifest, 1), vec![11]);
+}
+
+fn focused_ids(tabs: &BTreeMap<usize, Vec<PaneFields>>, tab: usize) -> Vec<u32> {
+    tabs[&tab]
+        .iter()
+        .filter(|pane| pane.is_focused)
+        .map(|pane| pane.id)
+        .collect()
+}
+
+#[test]
 fn published_topology_payload_carries_writer() {
     let payload = published_topology_payload(
         "rimz-test",
