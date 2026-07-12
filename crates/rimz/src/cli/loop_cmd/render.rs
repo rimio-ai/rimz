@@ -1,8 +1,11 @@
 //! List and show loop tasks plus recorded run details.
 
 use super::*;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const NOTE_MAX: usize = 60;
+const WATCH_NARROW: usize = 44;
+const WATCH_WIDE: usize = 68;
 
 struct ListRowContext<'a> {
     pauses: &'a BTreeMap<String, PauseEntry>,
@@ -239,44 +242,26 @@ fn repaint_watch(globals: &GlobalFlags) -> Result<()> {
 fn render_watch_frame(out: &mut impl Write, globals: &GlobalFlags) -> Result<()> {
     let tasks = load_all_tasks(globals)?;
     let now = Timestamp::now();
-    writeln!(
-        out,
-        "{}",
-        ui::paint(ui::palette::ACCENT.bold(), "rimz loop watch")
-    )?;
-    writeln!(
-        out,
-        "{}",
-        ui::paint(ui::palette::MUTED, "press q to quit · updates every second")
-    )?;
-    if tasks.is_empty() {
-        writeln!(out)?;
-        writeln!(out, "no loop tasks; add one with `rimz loop add …`")?;
-        return Ok(());
-    }
-
     let pause_entries = pauses::load();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
-    let mut groups: BTreeMap<PathBuf, Vec<(&String, &TaskEntry, TaskSource)>> = BTreeMap::new();
+    let mut entries_by_root: BTreeMap<PathBuf, Vec<(&String, &TaskEntry, TaskSource)>> =
+        BTreeMap::new();
     for (name, (entry, source)) in &tasks {
-        groups
+        entries_by_root
             .entry(entry.resolved_root())
             .or_default()
             .push((name, entry, *source));
     }
 
-    for (idx, (root, entries)) in groups.into_iter().enumerate() {
+    let mut groups = Vec::new();
+    for (root, entries) in entries_by_root {
         let runtime = runtime_for_root(&root);
         let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
         let stamps = runtime
             .as_ref()
             .map(rimz::harness::schedule::last_stamps)
             .unwrap_or_default();
-        if idx > 0 {
-            writeln!(out)?;
-        }
-        write_root_heading(out, &root, room_is_open)?;
         let context = ListRowContext {
             pauses: &pause_entries,
             stats: &stats,
@@ -284,58 +269,421 @@ fn render_watch_frame(out: &mut impl Write, globals: &GlobalFlags) -> Result<()>
             now_zoned: &now_zoned,
             now,
         };
-        let mut table = ui::Table::new([
-            "NAME", "TASK", "SCHEDULE", "RUNNING", "LAST", "STATUS", "NEXT",
-        ])
-        .indent(2);
+        let mut rows = Vec::new();
         for (name, entry, source) in entries {
-            table.row(watch_row(name, entry, source, &context));
+            rows.push(watch_row_model(name, entry, source, &context));
         }
-        table.render(out)?;
+        groups.push(WatchGroup {
+            root,
+            room_is_open,
+            rows,
+        });
     }
+    let (cols, rows) = rimz::mux::detect_terminal_size().unwrap_or((80, 24));
+    render_dashboard(out, &groups, usize::from(cols), usize::from(rows), now)?;
     Ok(())
 }
 
-fn watch_row(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowState {
+    Running,
+    Due,
+    Paused,
+    Blocked,
+    Upcoming(Timestamp),
+    NeverRun,
+}
+
+#[derive(Clone)]
+struct WatchRow {
+    name: String,
+    glyph: &'static str,
+    glyph_style: anstyle::Style,
+    state: RowState,
+    failed: bool,
+    next_ts: Option<Timestamp>,
+    next_text: String,
+    last_text: String,
+    status_text: String,
+}
+
+struct WatchGroup {
+    root: PathBuf,
+    room_is_open: bool,
+    rows: Vec<WatchRow>,
+}
+
+fn watch_row_model(
     name: &str,
     entry: &TaskEntry,
     source: TaskSource,
     context: &ListRowContext<'_>,
-) -> Vec<ui::Cell> {
+) -> WatchRow {
     let parsed = schedule::parse_schedule(name, entry);
-    let when = match &parsed {
-        Ok(schedule) => schedule.describe(),
-        Err(err) => format!("invalid: {err}"),
-    };
-    let (last, status) = context
-        .stats
+    let pause = context
+        .pauses
         .get(name)
-        .map(|stats| last_run_cells(stats, context.now))
-        .unwrap_or_else(|| (ui::cell("-").dash(), ui::cell("-").dash()));
-    vec![
-        ui::cell(name).fg(ui::palette::ACCENT),
-        ui::cell(task_subject(entry)),
-        ui::cell(when),
-        running_cell(name, entry),
-        last,
-        status,
-        next_cell(
+        .filter(|pause| pauses::is_active(pause, context.now));
+    let blocked = blocked_project_state(source).is_some();
+    let next_ts = parsed.as_ref().ok().and_then(|parsed| {
+        next_fire_timestamp(
             name,
-            entry,
-            blocked_project_state(source),
-            &parsed,
+            &parsed.schedule,
+            context.stamps,
             context.pauses.get(name),
-            context,
+            context.now_zoned,
+            context.now,
+            window_reset_for(entry),
+        )
+    });
+    let running = matches!(acquire_run_lock(name, entry), Ok(None));
+    let state = if running {
+        RowState::Running
+    } else if blocked {
+        RowState::Blocked
+    } else if pause.is_some() {
+        RowState::Paused
+    } else if next_ts.is_some_and(|next| next <= context.now) {
+        RowState::Due
+    } else if let Some(next) = next_ts {
+        RowState::Upcoming(next)
+    } else {
+        RowState::NeverRun
+    };
+    let (glyph, glyph_style, failed, last_text, status_text) = context.stats.get(name).map_or(
+        (
+            "○",
+            ui::palette::FAINT,
+            false,
+            "—".to_owned(),
+            "never run".to_owned(),
         ),
-    ]
+        |stats| {
+            let status = run_status(&stats.last);
+            (
+                status.glyph,
+                status.style,
+                status.style == ui::palette::ALARM,
+                ui::rel_age(stats.last.at, context.now),
+                status.label,
+            )
+        },
+    );
+    let next_text = match state {
+        RowState::Running => "running now".to_owned(),
+        RowState::Paused => pause.map_or_else(
+            || "paused".to_owned(),
+            |pause| match pause.until {
+                Some(until) => format!("paused · {}", ui::rel_until(until, context.now)),
+                None => pause.strikes.map_or_else(
+                    || "paused".to_owned(),
+                    |strikes| format!("paused · {strikes} strikes"),
+                ),
+            },
+        ),
+        RowState::Blocked => "blocked · trust".to_owned(),
+        RowState::Due => "due".to_owned(),
+        RowState::Upcoming(next) => ui::rel_until(next, context.now),
+        RowState::NeverRun => "—".to_owned(),
+    };
+    WatchRow {
+        name: name.to_owned(),
+        glyph,
+        glyph_style,
+        state,
+        failed,
+        next_ts,
+        next_text,
+        last_text,
+        status_text,
+    }
 }
 
-fn running_cell(name: &str, entry: &TaskEntry) -> ui::Cell {
-    match acquire_run_lock(name, entry) {
-        Ok(None) => ui::cell("now").fg(ui::palette::GOOD),
-        Ok(Some(_guard)) => ui::cell("-").dash(),
-        Err(_) => ui::cell("?").fg(ui::palette::WARN),
+fn next_fire_timestamp(
+    name: &str,
+    schedule: &schedule::Schedule,
+    stamps: &BTreeMap<String, Timestamp>,
+    pause: Option<&PauseEntry>,
+    now_zoned: &jiff::Zoned,
+    now: Timestamp,
+    window_reset: Option<Timestamp>,
+) -> Option<Timestamp> {
+    let stamp = pauses::effective_last_fire(*stamps.get(name)?, pause, now);
+    schedule.next_after(stamp, now_zoned, window_reset)
+}
+
+fn render_dashboard(
+    out: &mut impl Write,
+    groups: &[WatchGroup],
+    cols: usize,
+    rows: usize,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    write_watch_band(out, groups, cols, now)?;
+    if rows <= 2 {
+        return Ok(());
     }
+    writeln!(out)?;
+    let mut remaining_rows = rows - 2;
+    let mut remaining_tasks = groups.iter().map(|group| group.rows.len()).sum::<usize>();
+
+    if remaining_tasks == 0 {
+        writeln!(
+            out,
+            "{}",
+            clip_watch_text("no loop tasks; add one with `rimz loop add …`", cols)
+        )?;
+        return Ok(());
+    }
+
+    for (group_index, group) in groups.iter().enumerate() {
+        if group.rows.is_empty() {
+            continue;
+        }
+        let lines_needed = groups[group_index..]
+            .iter()
+            .filter(|group| !group.rows.is_empty())
+            .map(|group| group.rows.len() + 1)
+            .sum::<usize>();
+        if remaining_rows == 1 && lines_needed > remaining_rows {
+            write_more(out, remaining_tasks, cols)?;
+            break;
+        }
+        write_dashboard_heading(out, &group.root, group.room_is_open, cols)?;
+        remaining_rows -= 1;
+
+        let mut ranked = group.rows.iter().collect::<Vec<_>>();
+        ranked.sort_by_key(|row| watch_rank(row));
+        let later_lines = groups[group_index + 1..]
+            .iter()
+            .filter(|group| !group.rows.is_empty())
+            .map(|group| group.rows.len() + 1)
+            .sum::<usize>();
+        let all_fit = ranked.len() + later_lines <= remaining_rows;
+        let visible = if all_fit {
+            ranked.len()
+        } else {
+            ranked.len().min(remaining_rows.saturating_sub(1))
+        };
+        if visible > 0 {
+            render_watch_rows(out, &ranked[..visible], cols)?;
+            remaining_rows -= visible;
+            remaining_tasks -= visible;
+        }
+        if !all_fit && visible < ranked.len() {
+            write_more(out, remaining_tasks, cols)?;
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn watch_rank(row: &WatchRow) -> (u8, Option<Timestamp>, &str) {
+    let rank = if row.state == RowState::Running {
+        0
+    } else if row.failed {
+        1
+    } else {
+        match row.state {
+            RowState::Due => 2,
+            RowState::Upcoming(_) => 3,
+            RowState::Paused | RowState::Blocked => 4,
+            RowState::NeverRun => 5,
+            RowState::Running => 0,
+        }
+    };
+    let next = match row.state {
+        RowState::Upcoming(next) => Some(next),
+        _ => None,
+    };
+    (rank, next, &row.name)
+}
+
+fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> std::io::Result<()> {
+    let headers = if cols < WATCH_NARROW {
+        vec!["", "", ""]
+    } else if cols < WATCH_WIDE {
+        vec!["", "", "", ""]
+    } else {
+        vec!["", "", "", "", ""]
+    };
+    let mut table = ui::Table::new(headers)
+        .headerless()
+        .indent(2)
+        .clip_last(cols);
+    for row in rows {
+        let next_style = match row.state {
+            RowState::Running => ui::palette::ACCENT,
+            RowState::Paused | RowState::Blocked => ui::palette::MUTED,
+            RowState::NeverRun => ui::palette::FAINT,
+            RowState::Due => ui::palette::WARN,
+            RowState::Upcoming(_) => anstyle::Style::new(),
+        };
+        let name = clip_watch_text(&row.name, (cols / 4).max(1));
+        let next = clip_watch_text(&row.next_text, (cols / 4).max(1));
+        let mut cells = vec![
+            ui::cell(row.glyph).fg(row.glyph_style),
+            ui::cell(name).fg(ui::palette::ACCENT),
+            ui::cell(next).fg(next_style),
+        ];
+        if cols >= WATCH_NARROW {
+            cells.push(ui::cell(clip_watch_text(&row.last_text, 12)));
+        }
+        if cols >= WATCH_WIDE {
+            cells.push(ui::cell(&row.status_text).fg(row.glyph_style));
+        }
+        table.row(cells);
+    }
+    table.render(out)
+}
+
+fn write_watch_band(
+    out: &mut impl Write,
+    groups: &[WatchGroup],
+    cols: usize,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    let all = groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .collect::<Vec<_>>();
+    let total = all.len();
+    let running = all
+        .iter()
+        .filter(|row| row.state == RowState::Running)
+        .count();
+    let failed = all
+        .iter()
+        .filter(|row| row.state != RowState::Running && row.failed)
+        .count();
+    let paused = all
+        .iter()
+        .filter(|row| !row.failed && matches!(row.state, RowState::Paused | RowState::Blocked))
+        .count();
+    let ok = total.saturating_sub(running + failed + paused);
+    let next = all
+        .iter()
+        .filter(|row| !matches!(row.state, RowState::Paused | RowState::Blocked))
+        .filter_map(|row| row.next_ts.map(|next| (*row, next)))
+        .min_by_key(|(_, next)| *next);
+
+    let prefix = format!("loop · {total} tasks");
+    if prefix.width() > cols {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(ui::palette::ACCENT.bold(), &clip_watch_text(&prefix, cols))
+        )?;
+        return Ok(());
+    }
+    let mut segments = vec![(prefix, ui::palette::ACCENT.bold())];
+    let mut candidates = Vec::new();
+    for (count, label, style) in [
+        (running, "▸", ui::palette::ACCENT),
+        (failed, "✗", ui::palette::ALARM),
+        (paused, "○", ui::palette::MUTED),
+        (ok, "●", ui::palette::GOOD),
+    ] {
+        if count > 0 {
+            let noun = match label {
+                "▸" => "running",
+                "✗" => "failed",
+                "○" => "paused",
+                _ => "ok",
+            };
+            candidates.push((format!("{label} {count} {noun}"), style));
+        }
+    }
+    if let Some((row, next)) = next {
+        candidates.push((
+            format!("next: {} {}", row.name, ui::rel_until(next, now)),
+            ui::palette::MUTED,
+        ));
+    }
+    candidates.push(("q quit".to_owned(), ui::palette::FAINT));
+    for (text, style) in candidates {
+        if !push_band_segment(&mut segments, text, style, cols) {
+            break;
+        }
+    }
+
+    for (index, (text, style)) in segments.iter().enumerate() {
+        if index > 0 {
+            write!(out, "{}", ui::paint(ui::palette::FAINT, " · "))?;
+        }
+        write!(out, "{}", ui::paint(*style, text))?;
+    }
+    writeln!(out)
+}
+
+fn push_band_segment(
+    segments: &mut Vec<(String, anstyle::Style)>,
+    text: String,
+    style: anstyle::Style,
+    cols: usize,
+) -> bool {
+    let width = segments.iter().map(|(text, _)| text.width()).sum::<usize>()
+        + 3 * segments.len()
+        + text.width();
+    if width <= cols {
+        segments.push((text, style));
+        true
+    } else {
+        false
+    }
+}
+
+fn write_dashboard_heading(
+    out: &mut impl Write,
+    root: &Path,
+    room_is_open: bool,
+    cols: usize,
+) -> std::io::Result<()> {
+    let room = room_label(room_is_open);
+    let suffix = format!(" · {room}");
+    let root = ui::home_relative(root.to_string_lossy().as_ref());
+    let root_budget = cols.saturating_sub(suffix.width());
+    write!(
+        out,
+        "{}",
+        ui::paint(
+            ui::palette::ACCENT.bold(),
+            &clip_watch_text(&root, root_budget)
+        )
+    )?;
+    if root_budget > 0 && suffix.width() <= cols {
+        write!(out, " · {}", ui::paint(room_style(room_is_open), room))?;
+    }
+    writeln!(out)
+}
+
+fn write_more(out: &mut impl Write, count: usize, cols: usize) -> std::io::Result<()> {
+    let text = clip_watch_text(&format!("+{count} more"), cols);
+    writeln!(out, "{}", ui::paint(ui::palette::FAINT, &text))
+}
+
+fn clip_watch_text(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    if width == 1 {
+        return "…".to_owned();
+    }
+    let mut clipped = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(0);
+        if used + char_width > width - 1 {
+            break;
+        }
+        clipped.push(ch);
+        used += char_width;
+    }
+    clipped.push('…');
+    clipped
 }
 
 fn write_root_heading(
@@ -571,8 +919,7 @@ fn next_fire_text(
     now: Timestamp,
     window_reset: Option<Timestamp>,
 ) -> Option<String> {
-    let stamp = pauses::effective_last_fire(*stamps.get(name)?, pause, now);
-    let next = schedule.next_after(stamp, now_zoned, window_reset)?;
+    let next = next_fire_timestamp(name, schedule, stamps, pause, now_zoned, now, window_reset)?;
     Some(ui::rel_until(next, now))
 }
 
@@ -1414,6 +1761,41 @@ fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::harness::run:
 mod tests {
     use super::*;
 
+    fn dashboard_row(name: &str, state: RowState, failed: bool) -> WatchRow {
+        WatchRow {
+            name: name.to_owned(),
+            glyph: if failed { "✗" } else { "✓" },
+            glyph_style: if failed {
+                ui::palette::ALARM
+            } else {
+                ui::palette::GOOD
+            },
+            state,
+            failed,
+            next_ts: match state {
+                RowState::Due => Some(Timestamp::from_second(90).unwrap()),
+                RowState::Upcoming(next) => Some(next),
+                _ => None,
+            },
+            next_text: name.repeat(8),
+            last_text: "LAST-COLUMN".to_owned(),
+            status_text: "STATUS-COLUMN".to_owned(),
+        }
+    }
+
+    fn dashboard(group: &WatchGroup, cols: usize, rows: usize) -> String {
+        let mut out = anstream::StripStream::new(Vec::new());
+        render_dashboard(
+            &mut out,
+            std::slice::from_ref(group),
+            cols,
+            rows,
+            Timestamp::from_second(100).unwrap(),
+        )
+        .unwrap();
+        String::from_utf8(out.into_inner()).unwrap()
+    }
+
     fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         LoopRunRecord {
             task: "wake".to_owned(),
@@ -1431,6 +1813,54 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
         }
+    }
+
+    #[test]
+    fn watch_dashboard_adapts_band_columns_rank_height_and_width() {
+        let group = WatchGroup {
+            root: PathBuf::from("/a/very/long/project/root/that/must/be/clipped"),
+            room_is_open: true,
+            rows: vec![
+                dashboard_row("never", RowState::NeverRun, false),
+                dashboard_row("paused", RowState::Paused, false),
+                dashboard_row(
+                    "later",
+                    RowState::Upcoming(Timestamp::from_second(300).unwrap()),
+                    false,
+                ),
+                dashboard_row(
+                    "sooner",
+                    RowState::Upcoming(Timestamp::from_second(200).unwrap()),
+                    false,
+                ),
+                dashboard_row("due", RowState::Due, false),
+                dashboard_row(
+                    "failed",
+                    RowState::Upcoming(Timestamp::from_second(150).unwrap()),
+                    true,
+                ),
+                dashboard_row("running", RowState::Running, false),
+            ],
+        };
+        let wide = dashboard(&group, 100, 20);
+        assert!(
+            wide.starts_with("loop · 7 tasks · ▸ 1 running · ✗ 1 failed"),
+            "{wide}"
+        );
+        let body = wide.lines().skip(3).collect::<Vec<_>>().join("\n");
+        let positions = [
+            "running", "failed", "due", "sooner", "later", "paused", "never",
+        ]
+        .map(|name| body.find(name).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{wide}");
+        assert!(!dashboard(&group, WATCH_NARROW - 1, 20).contains("LAST-COLUMN"));
+        assert!(dashboard(&group, WATCH_NARROW, 20).contains("LAST-COLUMN"));
+        assert!(dashboard(&group, WATCH_WIDE, 20).contains("STATUS-COLUMN"));
+        let short = dashboard(&group, 30, 6);
+        assert_eq!(short.lines().count(), 6, "{short}");
+        assert!(short.contains("+5 more"), "{short}");
+        assert!(short.lines().all(|line| line.width() <= 30), "{short}");
+        assert_eq!(dashboard(&group, 14, 2).lines().count(), 1);
     }
 
     #[test]

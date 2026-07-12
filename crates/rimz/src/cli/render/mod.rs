@@ -359,6 +359,7 @@ enum Body {
 /// column-aligned.
 pub(crate) struct Table {
     headers: Vec<String>,
+    header: bool,
     align: Vec<Align>,
     rows: Vec<Body>,
     indent: usize,
@@ -375,11 +376,18 @@ impl Table {
         let align = vec![Align::Left; headers.len()];
         Table {
             headers,
+            header: true,
             align,
             rows: Vec::new(),
             indent: 0,
             clip_last_width: None,
         }
+    }
+
+    /// Render body rows without a header or letting header labels size columns.
+    pub(crate) fn headerless(mut self) -> Self {
+        self.header = false;
+        self
     }
 
     /// Mark these column indexes right-aligned, for numeric columns.
@@ -422,7 +430,11 @@ impl Table {
 
     pub(crate) fn render(&self, w: &mut impl Write) -> std::io::Result<()> {
         let cols = self.headers.len();
-        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.width()).collect();
+        let mut widths: Vec<usize> = if self.header {
+            self.headers.iter().map(|h| h.width()).collect()
+        } else {
+            vec![0; cols]
+        };
         for body in &self.rows {
             if let Body::Row(row) = body {
                 for (col, cell) in row.iter().enumerate().take(cols) {
@@ -435,7 +447,7 @@ impl Table {
         {
             let last = cols - 1;
             let gaps = 2 * last;
-            let fixed: usize = widths.iter().take(last).sum::<usize>() + gaps;
+            let fixed: usize = widths.iter().take(last).sum::<usize>() + gaps + self.indent;
             let available = max_total_width.saturating_sub(fixed);
             if available < widths[last] {
                 widths[last] = available.max(1).min(widths[last]);
@@ -446,7 +458,9 @@ impl Table {
             .iter()
             .map(|h| cell(h.clone()).fg(palette::HEADER))
             .collect();
-        self.write_row(w, &header_cells, &widths)?;
+        if self.header {
+            self.write_row(w, &header_cells, &widths)?;
+        }
         for body in &self.rows {
             match body {
                 Body::Row(row) => self.write_row(w, row, &widths)?,
@@ -588,6 +602,15 @@ mod tests {
     #[test]
     fn finish_passes_success_through() {
         assert!(finish(Ok(())).is_ok());
+    }
+
+    #[test]
+    fn headerless_table_sizes_columns_from_body_only() {
+        let mut table = Table::new(["VERY LONG HEADER", "NEXT"]).headerless();
+        table.row([cell("a"), cell("now")]);
+        table.row([cell("bb"), cell("later")]);
+
+        assert_eq!(strip(|out| table.render(out)), "a   now\nbb  later\n");
     }
 
     #[test]
