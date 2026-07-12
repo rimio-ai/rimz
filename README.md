@@ -205,7 +205,6 @@ For the best experience, we recommend one pass of these:
 rimz setup                                    # once: detect the machine, write the commented defaults
 
 # Appearance: truecolor, sharper glyphs, a companion
-rimz config set theme "Catppuccin Mocha"      # any scheme from `rimz list-themes`
 rimz config set theme.style modern            # truecolor + Nerd Font icons
 rimz config set theme.pets.enabled true       # an animated pet; `rimz list-pets` previews them
 
@@ -220,7 +219,7 @@ rimz config set remote_control.codex true
 
 What each group does, with the depth one link away:
 
-- The modern look wants a truecolor terminal (Ghostty, WezTerm, Kitty, Alacritty) and a Nerd Font, inside RimZ tmux rooms and over `rimz remote` too. Pets render as crisp pixels in Ghostty and kitty (tmux additionally needs 3.6+ with `allow-passthrough on`) and as cell art everywhere else, Zellij included. → [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
+- The modern look wants a truecolor terminal (Ghostty, WezTerm, Kitty, Alacritty) and a Nerd Font, inside RimZ tmux rooms and over `rimz remote` too. The color scheme defaults to TokyoNight Night; `rimz config set theme "Catppuccin Mocha"` picks any bundled scheme from `rimz list-themes`. Pets render as crisp pixels in Ghostty and kitty (tmux additionally needs 3.6+ with `allow-passthrough on`) and as cell art everywhere else, Zellij included. → [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
 - Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction sends `/compact` ahead of your text once context passes the threshold, so a long turn lands on a fresh window. Add a [scheduled ping](#everyday-moves) and the fleet only needs you for real decisions; cap what that freedom costs with `rimz config set harness.budget 50/day`. → [loops → built-in recovery](./docs/guide/loops.md#built-in-recovery) · [budgets](./docs/guide/budget.md)
 - The remote-control toggles bring up Claude's and Codex's own mobile-app bridges with every room start, so a blocking ask reaches your phone and your answer lands in the same session, in the same pane. Both are off by default, and the [agents guide](./docs/guide/agents.md#answer-asks-from-your-phone) shows exactly what each toggle runs.
 
