@@ -39,28 +39,22 @@ Every tier delivers the core promise where the agent exposes the required local 
 
 `rimz coverage` scores each agent against sixteen product concerns. A cell reads **wired** (✓, native signals carry the full concern), **partial** (◐, native coverage is incomplete and RimZ reconstructs the rest from another signal or state), or **unsupported** (✗, unreachable from the agent's current protocol). A partial cell still shows you a live figure, and the command names the exact gap that derivation leaves.
 
-| Concern | Claude | Codex | Gemini | Pi | OpenCode | Cursor | What it drives |
-| --- | :--: | :--: | :--: | :--: | :--: | :--: | --- |
-| `turn` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | live status — session start and every turn boundary |
-| `perm` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | permission prompts routed to your keyboard |
-| `plan` | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ | a plan-approval gate raises a waiting row |
-| `ask` | ✓ | ✓ | ✓ | ✗ | ✓ | ✗ | the agent's ask-the-user tool raises a waiting row |
-| `answer` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | structured answers drive supported native prompt actions |
-| `compact` | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | context compaction shows on the card |
-| `sub` | ✓ | ✓ | ✗ | ✗ | ✓ | ✗ | the subagent tree renders as nested rows |
-| `bg` | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | a turn parked on background work stays tracked |
-| `end` | ✓ | ◐ | ✓ | ✓ | ◐ | ✓ | the card tombstones when the session closes |
-| `idle` | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ | an idle nudge when the agent goes quiet on you |
-| `usage` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | context-window fill and token counts |
-| `live$` | ✓ | ✓ | ◐ | ◐ | ◐ | ✗ | the live dollar figure on the card |
-| `rich` | ✓ | ✓ | ✗ | ◐ | ✓ | ✗ | provider extras — official model labels, account windows |
-| `install` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RimZ can install the reporting hooks |
-| `spend` | ✓ | ✓ | ◐ | ✓ | ✓ | ✗ | account spend for the [token-insight](../guide/insight.md) dashboard |
-| `remote` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | drive or spawn a session with no local pane |
+One row per agent, so a new agent adds exactly one line:
+
+| Agent | `turn` | `perm` | `plan` | `ask` | `answer` | `compact` | `sub` | `bg` | `end` | `idle` | `usage` | `live$` | `rich` | `install` | `spend` | `remote` |
+| --- | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: |
+| Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Codex | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Gemini | ✓ | ✓ | ✓ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✗ | ✓ | ◐ | ✗ |
+| Pi | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
+| OpenCode | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
+| Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
 
 <sub>✓ wired · ◐ partial (derived) · ✗ unsupported. Run `rimz coverage` for the live grid with the exact reason printed on every ◐ and ✗ cell.</sub>
 
-The columns thin out from left to right for a reason: Claude Code is the reference integration and carries every concern natively, and each other agent exposes less of its internals to a local observer. A ✗ is an honest declared absence — the sidebar and `rimz doctor` read the same declaration, so a missing surface renders as a stated gap rather than a silent bug.
+What each concern column drives: `turn` live status (session start and every turn boundary), `perm` permission prompts routed to your keyboard, `plan` a plan-approval gate raising a waiting row, `ask` the agent's ask-the-user tool raising a waiting row, `answer` structured answers driving supported native prompt actions, `compact` context compaction on the card, `sub` the subagent tree as nested rows, `bg` a turn parked on background work, `end` the card tombstoning when the session closes, `idle` an idle nudge when the agent goes quiet, `usage` context-window fill and token counts, `live$` the live dollar figure, `rich` provider extras (official model labels, account windows), `install` RimZ installing the reporting hooks, `spend` account spend for the [token-insight](../guide/insight.md) dashboard, and `remote` driving or spawning a session with no local pane.
+
+The rows thin out from top to bottom for a reason: Claude Code is the reference integration and carries every concern natively, and each other agent exposes less of its internals to a local observer. A ✗ is an honest declared absence — the sidebar and `rimz doctor` read the same declaration, so a missing surface renders as a stated gap rather than a silent bug.
 
 ## Per-agent detail
 
@@ -155,21 +149,16 @@ Mapping detail: [cursor.md](../internals/agents/cursor.md); upstream protocol: [
 
 ## The lifecycle hook surface
 
-Under the concern matrix sits the raw event surface: the eleven lifecycle signals RimZ folds into every agent's state machine, and the native event each agent fires for each one. `rimz coverage` prints this as its second grid, the hooks matrix; here it is with the native event names in place.
+Under the concern matrix sits the raw event surface: the eleven lifecycle signals RimZ folds into every agent's state machine, and the native event each agent fires for each one. `rimz coverage` prints this as its second grid, the hooks matrix; here it is with the native event names in place, one row per agent so a new agent adds a single line.
 
-| Signal | Claude | Codex | Gemini | Pi | OpenCode | Cursor |
-| --- | --- | --- | --- | --- | --- | --- |
-| `registered` | `SessionStart` | `SessionStart` | `SessionStart` | `session_start` | `session_created` | `sessionStart` |
-| `turn_started` | `UserPromptSubmit` | `UserPromptSubmit` | `BeforeAgent` | `before_agent_start` | `chat_message` | `beforeSubmitPrompt` |
-| `turn_ended` | `Stop` | `Stop` | `AfterAgent` | `agent_settled` (`agent_end` before Pi 0.80.4) | `session_idle` | `stop` |
-| `tool_used` | `PostToolUse` | `PostToolUse` | `AfterTool` | `tool_execution_end` | `tool_after` | `postToolUse` |
-| `awaiting_input` | `PermissionRequest` | `PermissionRequest` | `Notification` | ✗ | `permission_ask` | ✗ |
-| `subagent_started` | `SubagentStart` | `SubagentStart` | ✗ | ✗ | `SubagentStart` | ✗ |
-| `subagent_stopped` | `SubagentStop` | `SubagentStop` | ✗ | ✗ | `SubagentStop` | ✗ |
-| `compacting` | `PreCompact` | `PreCompact` | `PreCompress` | `session_before_compact` | `session_compacting` | `preCompact` |
-| `compaction_ended` | `PostCompact` | `PostCompact` | ◐ derived | `session_compact` | `session_compacted` | ◐ derived |
-| `ended` | `SessionEnd` | ◐ derived | `SessionEnd` | `session_shutdown` | ◐ derived | `sessionEnd` |
-| `lost` | ◐ derived | ◐ derived | ◐ derived | ◐ derived | ◐ derived | ◐ derived |
+| Agent | `registered` | `turn_started` | `turn_ended` | `tool_used` | `awaiting_input` | `subagent_started` | `subagent_stopped` | `compacting` | `compaction_ended` | `ended` | `lost` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| Codex | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
+| Gemini | `SessionStart` | `BeforeAgent` | `AfterAgent` | `AfterTool` | `Notification` | ✗ | ✗ | `PreCompress` | ◐ derived | `SessionEnd` | ◐ derived |
+| Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | ✗ | ✗ | ✗ | `session_before_compact` | `session_compact` | `session_shutdown` | ◐ derived |
+| OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask` | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | ◐ derived | ◐ derived |
+| Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 
 `lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
