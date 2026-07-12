@@ -99,6 +99,21 @@ tar -xzf tmux-3.7.tar.gz && cd tmux-3.7
 ./configure && make -j"$(nproc)" && sudo make install
 ```
 
+## Truecolor terminal and a Nerd Font (optional)
+
+RimZ's `modern` style paints in 24-bit color and draws with Nerd Font icons, and the first-run probe switches it on only when your terminal renders both — otherwise it stays on plain colors and Unicode glyphs, which read at any depth. Truecolor is on by default in Ghostty, kitty, WezTerm, iTerm2, and Alacritty; the icons need a [Nerd Font](https://www.nerdfonts.com/font-downloads) installed and selected as your terminal font.
+
+Ghostty and kitty get you the fullest experience: they also draw crisp [pixel pets](./pets.md#crisp-pixels-and-cell-art) through the kitty graphics protocol, where every other terminal falls back to the portable cell-art tier. For truecolor, Nerd Font icons, and pixel pets in one terminal, pick one of these two.
+
+On macOS, Homebrew installs Ghostty and a couple of patched fonts in one step:
+
+```sh
+brew install --cask ghostty
+brew install --cask font-cascadia-code-nf font-jetbrains-maple-mono-nf
+```
+
+Set the installed font as your terminal font, then rerun `rimz setup` to opt into the rich look. The [theming guide](./theme.md#style-preset) has the color-depth and glyph knobs, and the [pets guide](./pets.md) covers the pixel and cell-art tiers.
+
 ## Build from source
 
 The source build is for contributing to RimZ or installing on a platform the prebuilt paths miss. Beyond the [prerequisites](#prerequisites) above it needs a C toolchain, Git, and Rust through `rustup`:

@@ -61,7 +61,7 @@ Every source uses the petdex sheet geometry — a `1536x1872` image holding an `
 
 ## Crisp pixels and cell art
 
-Two tiers render the same sheet. **Pixel** draws the sprite through the kitty graphics protocol, crisp at native resolution: it needs a Ghostty or kitty terminal, and inside tmux also tmux 3.6+ with `allow-passthrough on` (or `all`). **Sextant** draws the sprite as cell art, each terminal cell split into a 2x3 pixel grid, and works everywhere: Zellij, SSH, and any terminal that shows color.
+Two tiers render the same sheet. **Pixel** draws the sprite through the kitty graphics protocol, crisp at native resolution: it needs a Ghostty or kitty terminal ([installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional) sets one up), and inside tmux also tmux 3.6+ with `allow-passthrough on` (or `all`). **Sextant** draws the sprite as cell art, each terminal cell split into a 2x3 pixel grid, and works everywhere: Zellij, SSH, and any terminal that shows color.
 
 <p align="center">
   <img src="../rimz-pets-sexant.png" alt="rimz list-pets in Alacritty: the same built-in pets rendered as sextant cell art" width="100%">

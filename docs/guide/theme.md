@@ -25,6 +25,8 @@ A [scheme](#color-scheme) restyles the whole column, the [style preset](#style-p
 
 `[theme] style` is the one-line headline that pairs a color depth with a glyph set. `modern` is truecolor plus the [Nerd Font glyphs](#glyphs); `default` is [auto color depth](#color-depth) plus the shipped Unicode glyphs. An explicit `[theme] mode` or `[theme.glyphs] set` overrides the matching half, so you can take the Nerd Font icons at `256` color or pin truecolor with Unicode glyphs.
 
+`modern` expects a terminal that renders both halves — 24-bit color and a Nerd Font face — and the first-run probe writes it only when yours does; where either is missing each degrades on its own to the `default` behaviour. [Installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional) lists terminals and fonts that qualify.
+
 ```toml
 [theme]
 style = "modern"   # truecolor + Nerd Font; or "default" for auto color + Unicode
@@ -62,7 +64,7 @@ cyan = "#7dcfff"
 
 ## Color depth
 
-`[theme] mode` sets the palette depth: `auto` (default) emits truecolor when `COLORTERM` or the `$TERM` terminfo advertises direct color, otherwise quantizes the RGB tones to xterm 256 indexes; `truecolor` forces RGB; `256` pins indexed output. Inside a RimZ tmux room, RimZ stamps `COLORTERM=truecolor` at birth when the launcher advertises it, so `auto` resolves to truecolor despite tmux's `tmux-256color` default.
+`[theme] mode` sets the palette depth: `auto` (default) emits truecolor when `COLORTERM` or the `$TERM` terminfo advertises direct color (Ghostty, kitty, WezTerm, iTerm2, and Alacritty do), otherwise quantizes the RGB tones to xterm 256 indexes; `truecolor` forces RGB; `256` pins indexed output. Inside a RimZ tmux room, RimZ stamps `COLORTERM=truecolor` at birth when the launcher advertises it, so `auto` resolves to truecolor despite tmux's `tmux-256color` default.
 
 ```toml
 [theme]
@@ -211,7 +213,7 @@ total = "◇"
 | `keys` | help-overlay action leads |
 | `chrome` | framing, spines, tabs, badges, and the help-box frame |
 
-The `status` group sets head *shapes*; their color, effect, and speed stay in [`[theme.animations]`](#animations). Two names read across to animation roles: `status.attention` is the role `failed`, and `status.done` is `success`. The drawn gauges, the box-drawing chrome, the `worktree.dotted` seal, and the `compacting` wave keep their box-drawing glyphs in every preset, because the terminal grid draws them more precisely than any icon. Nerd Font mode assumes a Nerd Font v3+ face is active; on a non-`Mono` build that draws icons double-width, pad the alignment-sensitive glyphs with a trailing space.
+The `status` group sets head *shapes*; their color, effect, and speed stay in [`[theme.animations]`](#animations). Two names read across to animation roles: `status.attention` is the role `failed`, and `status.done` is `success`. The drawn gauges, the box-drawing chrome, the `worktree.dotted` seal, and the `compacting` wave keep their box-drawing glyphs in every preset, because the terminal grid draws them more precisely than any icon. Nerd Font mode assumes a Nerd Font v3+ face is active — install one from [Nerd Fonts](https://www.nerdfonts.com/font-downloads), or a Homebrew cask ([installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional)), and select it as your terminal font. On a non-`Mono` build that draws icons double-width, pad the alignment-sensitive glyphs with a trailing space.
 
 ## Provider styling
 
