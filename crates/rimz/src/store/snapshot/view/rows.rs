@@ -53,21 +53,11 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             context_severity: None,
             registered_at: agent.registered_at,
             sub_agents: Vec::new(),
-            compacting: is_compacting(agent, now),
+            compacting: agent.is_compacting(now),
             compaction_count: agent.compaction_count,
             turn_error_label: None,
         })),
     }
-}
-
-/// Whether the agent is mid-compaction: it stamped `compacting_since` and the
-/// marker is still fresh. The rollup's next lifecycle signal clears the stamp;
-/// this window is the display backstop for a session that dies mid-compact and
-/// never produces another signal.
-fn is_compacting(agent: &AgentState, now: Timestamp) -> bool {
-    agent.compacting_since.is_some_and(|since| {
-        now.duration_since(since).as_secs() < crate::agents::COMPACTING_WINDOW_SECS
-    })
 }
 
 fn agent_context_window(agent: &AgentState) -> Option<u64> {

@@ -33,6 +33,41 @@ fn claim_moves_message_out_of_pending_until_send_failure_requeues() {
 }
 
 #[test]
+fn release_claim_undoes_attempt_without_abandon_penalty() {
+    let (_dir, store, workspace_id) = store();
+    let mut message = message(&workspace_id)
+        .with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"))
+        .with_auto_compact(Some(AutoCompact::Percent(70)));
+    message.batch_id = Some(message.message_id.clone());
+    store.queue_message(&message, "session").unwrap();
+    let claimed = store
+        .claim_message_for_delivery(&message.message_id, Timestamp::now())
+        .unwrap()
+        .expect("claimed");
+    assert_eq!(claimed.attempts, 1);
+
+    let released = store
+        .release_message_claim(
+            &message.message_id,
+            "parked: waiting for compaction to finish",
+            "session",
+        )
+        .unwrap()
+        .expect("released");
+
+    assert_eq!(released.status, MessageStatus::Queued);
+    assert_eq!(released.attempts, 0);
+    assert_eq!(released.last_attempt_at, None);
+    assert_eq!(released.pane_id, None);
+    assert_eq!(released.batch_id, None);
+    assert_eq!(released.auto_compact, None);
+    assert_eq!(
+        released.last_error.as_deref(),
+        Some("parked: waiting for compaction to finish")
+    );
+}
+
+#[test]
 fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     let (_dir, store, workspace_id) = store();
     let queued = message(&workspace_id);
@@ -646,7 +681,7 @@ fn stale_sent_message_requeues_before_attempt_cap() {
     store.record_sent_message(&message, "session").unwrap();
 
     let report = store
-        .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3)
+        .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3, |_| false)
         .unwrap();
 
     assert_eq!(report.requeued, 1);
@@ -672,6 +707,26 @@ fn stale_sent_message_requeues_before_attempt_cap() {
 }
 
 #[test]
+fn stale_sent_message_is_deferred_while_receiver_compacts() {
+    let (_dir, store, workspace_id) = store();
+    let message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    store.record_sent_message(&message, "session").unwrap();
+    let now = Timestamp::now() + Duration::from_secs(60);
+    let window = Duration::from_secs(30);
+
+    let report = store
+        .reconcile_stale_sent_messages("session", now, window, 3, |_| true)
+        .unwrap();
+
+    assert_eq!(report, ReconcileReport::default());
+    let messages = store.list_messages().unwrap();
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+    assert_eq!(messages[0].unconfirmed_sends, 0);
+    assert_eq!(messages[0].retry_after, Some(now + window));
+    assert_eq!(messages[0].wake_deadline(now, window), Some(now + window));
+}
+
+#[test]
 fn stale_sent_message_times_out_at_attempt_cap() {
     let (_dir, store, workspace_id) = store();
     let mut message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
@@ -679,7 +734,7 @@ fn stale_sent_message_times_out_at_attempt_cap() {
     store.record_sent_message(&message, "session").unwrap();
 
     let report = store
-        .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3)
+        .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3, |_| false)
         .unwrap();
 
     assert_eq!(report.requeued, 0);
@@ -702,7 +757,13 @@ fn fresh_sent_message_waits_for_reconcile_deadline() {
     store.record_sent_message(&message, "session").unwrap();
 
     let report = store
-        .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::from_secs(60), 3)
+        .reconcile_stale_sent_messages(
+            "session",
+            Timestamp::now(),
+            Duration::from_secs(60),
+            3,
+            |_| false,
+        )
         .unwrap();
 
     assert_eq!(report, ReconcileReport::default());

@@ -61,6 +61,7 @@ pub enum DeliveryVerdict {
         blocker: Option<MessageId>,
     },
     ReceiverGone,
+    Compacting,
     GateClosed {
         gate: DeliveryGate,
         status: Option<AgentStatus>,
@@ -94,6 +95,7 @@ pub fn deliver_one(
     // pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {
         force: claimed[0].force || matches!(policy, DeliveryPolicy::Steer { force: true }),
+        steer: matches!(policy, DeliveryPolicy::Steer { .. }),
         pacer: send::Pacer::new(message_interval_from_env()),
     };
     let send_messages: Vec<MessageRecord> = claimed
@@ -129,6 +131,20 @@ pub fn deliver_one(
                     &workspace.session_name,
                 )?;
             }
+            Ok(false)
+        }
+        Ok(send::SentPrompt {
+            outcome: send::Outcome::CompactionPending { .. },
+            ..
+        }) => {
+            for message in &claimed {
+                store.release_message_claim(
+                    &message.message_id,
+                    "parked: waiting for compaction to finish",
+                    &workspace.session_name,
+                )?;
+            }
+            register_message_wake(workspace, store)?;
             Ok(false)
         }
         Err(err) => {
@@ -209,20 +225,40 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     };
     let now = Timestamp::now();
     let delivery_window = delivery_window_from_env();
+    let live = store.list_messages()?;
+    let needs_snapshot = live.iter().any(|message| {
+        message.status == MessageStatus::Sent
+            || (message.status == MessageStatus::Queued && !message.after_met())
+    });
+    let snapshot = if needs_snapshot {
+        let snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
+        Some(snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime)))
+    } else {
+        None
+    };
     store.reconcile_stale_sent_messages(
         &workspace.session_name,
         now,
         delivery_window,
         max_delivery_attempts_from_env(),
+        |message| {
+            snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot
+                    .agents
+                    .iter()
+                    .any(|agent| message.same_agent_card(agent) && agent.is_compacting(now))
+            })
+        },
     )?;
     let live = store.list_messages()?;
     if live
         .iter()
         .any(|message| message.status == MessageStatus::Queued && !message.after_met())
     {
-        let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
-        snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime));
-        evaluate_after_conditions(workspace, store, &snapshot, &live, now)?;
+        let snapshot = snapshot
+            .as_ref()
+            .expect("unmet after conditions require a resolution snapshot");
+        evaluate_after_conditions(workspace, store, snapshot, &live, now)?;
     }
     let pending = store.list_pending_messages()?;
     let mut heads_seen = std::collections::BTreeSet::new();
@@ -381,6 +417,9 @@ impl DeliveryCheck {
         if !self.agent.present {
             return DeliveryVerdict::ReceiverGone;
         }
+        if self.gate.compacting {
+            return DeliveryVerdict::Compacting;
+        }
         if !self.gate.open {
             return DeliveryVerdict::GateClosed {
                 gate: self.gate.gate,
@@ -439,6 +478,7 @@ pub struct GateCheck {
     pub gate: DeliveryGate,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
+    pub compacting: bool,
     pub open: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_recovered: Option<bool>,
@@ -511,7 +551,9 @@ pub fn explain(
         .iter()
         .find(|agent| message.same_agent_card(agent));
     let status = agent.map(crate::agents::AgentState::effective_status);
-    let open = agent.is_some_and(|agent| gate_open_for_agent(message.gate, agent, message.force));
+    let compacting = agent.is_some_and(|agent| agent.is_compacting(now));
+    let open =
+        agent.is_some_and(|agent| gate_open_for_agent(message.gate, agent, message.force, now));
     let resume_recovered =
         match (message.gate, agent, open) {
             (DeliveryGate::Resume, Some(agent), true) => {
@@ -542,6 +584,7 @@ pub fn explain(
         gate: GateCheck {
             gate: message.gate,
             status,
+            compacting,
             open,
             resume_recovered,
         },
@@ -871,6 +914,7 @@ mod tests {
             gate: GateCheck {
                 gate: DeliveryGate::Done,
                 status: Some(AgentStatus::Idle),
+                compacting: false,
                 open: true,
                 resume_recovered: None,
             },

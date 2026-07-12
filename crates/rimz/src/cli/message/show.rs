@@ -519,6 +519,9 @@ pub(super) fn render_verdict(
             .map(|blocker| format!("blocked: behind {blocker}"))
             .unwrap_or_else(|| "blocked: FIFO head unavailable".to_owned()),
         deliver::DeliveryVerdict::ReceiverGone => format!("stuck: receiver {target} is gone"),
+        deliver::DeliveryVerdict::Compacting => {
+            format!("waiting: {target} is compacting its context")
+        }
         deliver::DeliveryVerdict::GateClosed { gate, status } => {
             let status = status
                 .as_ref()
@@ -558,6 +561,7 @@ pub(super) fn delivery_action_hint(
         deliver::DeliveryVerdict::WaitingOnAfter { .. }
         | deliver::DeliveryVerdict::BehindFifo { .. }
         | deliver::DeliveryVerdict::ReceiverGone
+        | deliver::DeliveryVerdict::Compacting
         | deliver::DeliveryVerdict::GateClosed { .. }
         | deliver::DeliveryVerdict::ResumeUnrecovered => {
             Some(format!("force now: rimz message steer {message_id}"))
@@ -594,6 +598,7 @@ mod tests {
             gate: deliver::GateCheck {
                 gate: DeliveryGate::Done,
                 status: Some(AgentStatus::Idle),
+                compacting: false,
                 open: true,
                 resume_recovered: None,
             },

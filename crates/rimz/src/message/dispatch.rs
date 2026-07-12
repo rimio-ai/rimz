@@ -97,6 +97,10 @@ pub enum DispatchOutcome {
         label: String,
         message_id: MessageId,
     },
+    CompactionPending {
+        label: String,
+        message_id: MessageId,
+    },
     SkippedWaiting {
         label: String,
         message_id: MessageId,
@@ -149,6 +153,9 @@ enum LiveAttempt {
     SkippedWaiting {
         message_id: MessageId,
     },
+    CompactionPending {
+        message_id: MessageId,
+    },
     ParkInstead,
 }
 
@@ -187,7 +194,8 @@ impl QueueTarget<'_> {
         let open = match self.bound(snapshot) {
             None => true,
             Some(agent) => {
-                gate_open_for_agent(gate, agent, force) && (force || !agent.is_awaiting_input())
+                gate_open_for_agent(gate, agent, force, now)
+                    && (force || !agent.is_awaiting_input())
             }
         };
         if !open {
@@ -360,7 +368,7 @@ fn agent_needs_live_queue_resolution(
 ) -> bool {
     agent.agent_id.is_provisional()
         || agent_kind_registers_lazily(agent)
-        || (gate_open_for_agent(gate, agent, force)
+        || (gate_open_for_agent(gate, agent, force, now)
             && (force || !agent.is_awaiting_input())
             && queue_head(
                 pending.iter(),
@@ -441,6 +449,7 @@ pub fn dispatch_for_targets(
 ) -> Result<DispatchResult> {
     let mut live_send = send::LiveSend {
         force: mode.force(),
+        steer: mode.is_steer(),
         pacer: send::Pacer::new(message_interval_from_env()),
     };
     let mut outcomes = Vec::with_capacity(targets.len());
@@ -547,6 +556,22 @@ pub fn dispatch_for_targets(
                     });
                     continue;
                 }
+                LiveAttempt::CompactionPending { message_id } => {
+                    let released = ctx
+                        .store
+                        .release_message_claim(
+                            &message_id,
+                            "parked: waiting for compaction to finish",
+                            &ctx.workspace.session_name,
+                        )?
+                        .unwrap_or(message);
+                    push_pending(&mut ctx.pending, released);
+                    outcomes.push(DispatchOutcome::CompactionPending {
+                        label: handle,
+                        message_id,
+                    });
+                    continue;
+                }
             }
         }
         if !park {
@@ -645,6 +670,9 @@ fn send_live_with_recovery(
         }),
         send::Outcome::SkippedWaiting { message_id, .. } => {
             Ok(LiveAttempt::SkippedWaiting { message_id })
+        }
+        send::Outcome::CompactionPending { message_id, .. } => {
+            Ok(LiveAttempt::CompactionPending { message_id })
         }
     }
 }

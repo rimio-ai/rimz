@@ -30,12 +30,25 @@ fn delivery_gates_follow_agent_lifecycle() {
     running.status = AgentStatus::Running;
     running.phase = crate::agents::TurnPhase::Reasoning;
     running.context = Some(settle_context(None, Some(running.last_activity)));
-    assert!(gate_open_for_agent(DeliveryGate::Done, &running, false));
-    assert!(gate_open_for_agent(DeliveryGate::Any, &running, false));
+    let now = Timestamp::now();
+    assert!(gate_open_for_agent(
+        DeliveryGate::Done,
+        &running,
+        false,
+        now
+    ));
+    assert!(gate_open_for_agent(DeliveryGate::Any, &running, false, now));
 
     let mut stale = running.clone();
     stale.last_activity += jiff::SignedDuration::from_secs(2);
-    assert!(!gate_open_for_agent(DeliveryGate::Done, &stale, false));
+    assert!(!gate_open_for_agent(DeliveryGate::Done, &stale, false, now));
+
+    let mut compacting = agent("sess-compacting", None);
+    compacting.status = AgentStatus::Idle;
+    compacting.compacting_since = Some(now);
+    for gate in [DeliveryGate::Done, DeliveryGate::Any, DeliveryGate::Resume] {
+        assert!(!gate_open_for_agent(gate, &compacting, true, now));
+    }
 }
 
 #[test]
@@ -53,6 +66,9 @@ fn delivery_checkpoint_requires_unparked_turn_end() {
         parked_on_background: true,
     }));
     assert!(!delivery_checkpoint(&LifecycleSignal::Registered));
+    assert!(delivery_checkpoint(&LifecycleSignal::CompactionEnded {
+        auto: None,
+    }));
     assert!(!delivery_checkpoint(&LifecycleSignal::SubagentStopped {
         errored: false
     }));
@@ -459,6 +475,7 @@ fn wake_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
 fn sender_render_uses_attributed_address_precedence() {
     let cases = [
         (MessageSender::Human, "you"),
+        (MessageSender::System, "rimz"),
         (
             MessageSender::Agent {
                 kind: AgentKind::new_unchecked("claude"),

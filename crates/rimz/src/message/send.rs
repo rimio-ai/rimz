@@ -46,12 +46,17 @@ pub enum Outcome {
         label: String,
         message_id: MessageId,
     },
+    CompactionPending {
+        label: String,
+        message_id: MessageId,
+    },
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
 /// state.
 pub struct LiveSend {
     pub force: bool,
+    pub steer: bool,
     pub pacer: Pacer,
 }
 
@@ -155,12 +160,24 @@ pub fn send_batch_to_live_pane(
         ) {
             Ok(Outcome::Sent { message_id, .. }) => {
                 compacted = Some(message_id);
+                if !send.steer {
+                    return Ok(SentPrompt {
+                        outcome: Outcome::CompactionPending {
+                            label: handle_for_pane_target(snapshot, target, bound),
+                            message_id: head.message_id.clone(),
+                        },
+                        compacted,
+                    });
+                }
             }
             Ok(skipped @ Outcome::SkippedWaiting { .. }) => {
                 return Ok(SentPrompt {
                     outcome: skipped,
                     compacted: None,
                 });
+            }
+            Ok(Outcome::CompactionPending { .. }) => {
+                unreachable!("write_batch only returns pane-write outcomes")
             }
             Err(err) => {
                 store.record_send_error(&command, &err.to_string(), &workspace.session_name)?;
@@ -321,8 +338,8 @@ pub fn compact_message_for_target(
             address: prompt.address.clone(),
             enter: true,
             gate: prompt.gate,
-            sender: prompt.sender.clone(),
-            automated: prompt.automated,
+            sender: MessageSender::System,
+            automated: true,
             force: prompt.force,
             auto_compact: None,
             after: Vec::new(),

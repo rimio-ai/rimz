@@ -817,7 +817,8 @@ pub struct AgentState {
     /// of its most-recent compaction-start signal (`PreCompact` or Pi
     /// `session_before_compact`). Set by the rollup, cleared by the session's
     /// next lifecycle signal; the sidebar renders a transient "compacting" head
-    /// while it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
+    /// while it is recent (see [`COMPACTING_WINDOW_SECS`]); delivery also
+    /// treats a recent marker as busy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
     /// How many times this session has condensed its context window — the count
@@ -980,6 +981,12 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    /// Whether this agent is inside the bounded compaction window.
+    pub fn is_compacting(&self, now: Timestamp) -> bool {
+        self.compacting_since
+            .is_some_and(|since| now.duration_since(since).as_secs() < COMPACTING_WINDOW_SECS)
+    }
+
     /// Minimal test fixture with stable identity fields and empty enrichment.
     #[cfg(any(test, feature = "testkit"))]
     pub fn stub(kind: &str, id: &str, status: AgentStatus) -> Self {
@@ -1282,6 +1289,19 @@ pub fn looks_like_control_text(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compacting_marker_expires_after_delivery_window() {
+        let now = Timestamp::from_second(1_000).unwrap();
+        let mut agent = AgentState::stub("claude", "sess-compact", AgentStatus::Idle);
+        agent.compacting_since =
+            Some(now - jiff::SignedDuration::from_secs(COMPACTING_WINDOW_SECS - 1));
+        assert!(agent.is_compacting(now));
+
+        agent.compacting_since =
+            Some(now - jiff::SignedDuration::from_secs(COMPACTING_WINDOW_SECS));
+        assert!(!agent.is_compacting(now));
+    }
 
     #[test]
     fn legacy_agent_pid_deserializes_to_runtime_owner() {

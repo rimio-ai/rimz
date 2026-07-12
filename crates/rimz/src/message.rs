@@ -46,19 +46,21 @@ pub enum MessageSender {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         channel: Option<String>,
     },
+    System,
 }
 
 impl MessageSender {
     pub fn attributed(&self) -> Option<Self> {
         match self {
             Self::Human => None,
-            Self::Agent { .. } => Some(self.clone()),
+            Self::Agent { .. } | Self::System => Some(self.clone()),
         }
     }
 
     pub fn render(&self) -> String {
         match self {
             Self::Human => "you".to_owned(),
+            Self::System => "rimz".to_owned(),
             Self::Agent {
                 kind,
                 profile,
@@ -583,7 +585,9 @@ impl MessageRecord {
                     .or(self.retry_after)
                     .unwrap_or(self.updated_at),
             ),
-            MessageStatus::Sent => self.sent_reconcile_deadline(window),
+            MessageStatus::Sent => self
+                .retry_after
+                .or_else(|| self.sent_reconcile_deadline(window)),
             _ => None,
         }
     }
@@ -591,7 +595,7 @@ impl MessageRecord {
     pub fn batch_key(&self) -> Option<&str> {
         match &self.sender {
             MessageSender::Agent { channel, .. } => channel.as_deref(),
-            MessageSender::Human => self.channel.as_deref(),
+            MessageSender::Human | MessageSender::System => self.channel.as_deref(),
         }
     }
 
@@ -643,7 +647,7 @@ pub fn after_condition_open(
     }) else {
         return false;
     };
-    gate_open(gate, agent.effective_status())
+    gate_open_for_agent(gate, agent, false, now)
         && !pending.iter().any(|message| {
             !message.status.is_terminal()
                 && message.is_ready(now)
@@ -655,9 +659,15 @@ pub fn after_condition_open(
         })
 }
 
-pub fn gate_open_for_agent(gate: DeliveryGate, agent: &AgentState, force: bool) -> bool {
-    gate_open(gate, agent.effective_status())
-        || (force && gate != DeliveryGate::Resume && agent.is_awaiting_input())
+pub fn gate_open_for_agent(
+    gate: DeliveryGate,
+    agent: &AgentState,
+    force: bool,
+    now: Timestamp,
+) -> bool {
+    !agent.is_compacting(now)
+        && (gate_open(gate, agent.effective_status())
+            || (force && gate != DeliveryGate::Resume && agent.is_awaiting_input()))
 }
 
 /// The oldest ordinary queued message for one logical agent card, the next to
@@ -795,7 +805,7 @@ pub fn delivery_checkpoint(signal: &LifecycleSignal) -> bool {
         LifecycleSignal::TurnEnded {
             parked_on_background: false,
             ..
-        }
+        } | LifecycleSignal::CompactionEnded { .. }
     )
 }
 

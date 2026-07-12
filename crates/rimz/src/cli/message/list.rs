@@ -355,7 +355,9 @@ pub(super) fn message_digest_groups(
 pub(super) fn rendered_sender(sender: &MessageSender, rendered: &str) -> String {
     match sender {
         MessageSender::Human => render::paint(render::palette::COOL, rendered),
-        MessageSender::Agent { .. } => render::paint(render::palette::META.bold(), rendered),
+        MessageSender::Agent { .. } | MessageSender::System => {
+            render::paint(render::palette::META.bold(), rendered)
+        }
     }
 }
 
@@ -735,6 +737,14 @@ mod tests {
         );
         assert_eq!(collapse_home_in_snippet_to(Some("/"), "/tmp"), "/tmp");
         assert_eq!(collapse_home_in_snippet_to(Some(""), "/tmp"), "/tmp");
+    }
+
+    #[test]
+    fn system_sender_renders_like_rimz_attribution() {
+        assert_eq!(
+            rendered_sender(&MessageSender::System, "rimz"),
+            rendered_sender(&agent_sender("rimz", None), "rimz")
+        );
     }
 
     fn workspace_id() -> WorkspaceId {

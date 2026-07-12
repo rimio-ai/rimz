@@ -60,6 +60,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                             jiff::Timestamp::now(),
                             rimz::message::delivery_window_from_env(),
                             rimz::message::max_delivery_attempts_from_env(),
+                            |_| false,
                         )
                         .context("reconciling sent messages")?;
                     spinner.set("pruning store caches...");

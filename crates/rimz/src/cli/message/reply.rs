@@ -79,6 +79,10 @@ impl Leg {
                 debug_assert_eq!(label, &target.label);
                 (message_id.clone(), MessageStatus::Queued, None, None)
             }
+            DispatchOutcome::CompactionPending { label, message_id } => {
+                debug_assert_eq!(label, &target.label);
+                (message_id.clone(), MessageStatus::Queued, None, None)
+            }
             DispatchOutcome::SkippedWaiting { label, message_id } => {
                 debug_assert_eq!(label, &target.label);
                 (

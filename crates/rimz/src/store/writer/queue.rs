@@ -90,6 +90,7 @@ pub enum EditOutcome {
 
 enum MessageUpdate {
     Keep,
+    SilentRewrite,
     Rewrite {
         method: MessageEventMethod,
         reason: Option<String>,
@@ -168,6 +169,9 @@ impl Store {
         for message in &mut messages {
             match update(message) {
                 MessageUpdate::Keep => {}
+                MessageUpdate::SilentRewrite => {
+                    updated.push(message.clone());
+                }
                 MessageUpdate::Rewrite { method, reason } => {
                     updated.push(message.clone());
                     events.push(EventEnvelope::message_event(
@@ -416,6 +420,44 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn release_message_claim(
+        &self,
+        message_id: &MessageId,
+        note: &str,
+        session_name: &str,
+    ) -> Result<Option<MessageRecord>> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            let now = Timestamp::now();
+            let updated = self.update_messages_locked(txn, session_name, now, |message| {
+                if message.message_id != *message_id
+                    || !matches!(
+                        message.status,
+                        MessageStatus::Queued | MessageStatus::Claimed
+                    )
+                {
+                    return MessageUpdate::Keep;
+                }
+                message.status = MessageStatus::Queued;
+                message.attempts = message.attempts.saturating_sub(1);
+                message.last_attempt_at = None;
+                message.pane_id = None;
+                message.batch_id = None;
+                message.retry_after = None;
+                // This claim was released because its compact command already
+                // fired; the fresh-window delivery must not fire it again.
+                message.auto_compact = None;
+                message.last_error = Some(note.to_owned());
+                message.updated_at = now;
+                MessageUpdate::Rewrite {
+                    method: MessageEventMethod::Queued,
+                    reason: Some(note.to_owned()),
+                }
+            })?;
+            Ok(updated.into_iter().next())
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn defer_message_wake(&self, message_id: &MessageId, until: Timestamp) -> Result<()> {
         self.commit(PublishPolicy::Skip, |txn| {
             let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
@@ -539,6 +581,7 @@ impl Store {
         now: Timestamp,
         window: Duration,
         max_attempts: u32,
+        defer: impl Fn(&MessageRecord) -> bool,
     ) -> Result<ReconcileReport> {
         self.commit(PublishPolicy::Skip, |txn| {
             let mut report = ReconcileReport::default();
@@ -549,6 +592,10 @@ impl Store {
                 let age = now.duration_since(message.updated_at);
                 if !age.is_negative() && age.as_millis() < window.as_millis() as i128 {
                     return MessageUpdate::Keep;
+                }
+                if defer(message) {
+                    message.retry_after = Some(now + window);
+                    return MessageUpdate::SilentRewrite;
                 }
                 if message.unconfirmed_sends < max_attempts {
                     message.status = MessageStatus::Queued;

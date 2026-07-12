@@ -64,7 +64,7 @@ A record stores:
 | `kind`, `agent_id`, `agent_name` | receiver identity; name enables provisional-to-registered FIFO folding |
 | `address` | receiver handle resolved at enqueue, used by `message list` and `message show` after the live card leaves |
 | `channel` | receiver channel at enqueue time |
-| `sender` | `Human` or `Agent { kind, name, profile, role, channel }`, attribution only, never the body |
+| `sender` | `Human`, `Agent { kind, name, profile, role, channel }`, or `System`; system bookkeeping such as smart-compact commands renders as `rimz` |
 | `body` | `Prompt` (default) or `Command` (a `/compact` or adapter command) |
 | `text` | the message content |
 | `enter` | whether to submit with Enter after the paste |
@@ -78,7 +78,7 @@ A record stores:
 | `last_error` | latest delivery or reconciliation error |
 | `not_before` | earliest delivery time for scheduled messages |
 | `after` | referenced agent cards and enqueue-time addresses; `met_at` durably stamps each satisfied condition |
-| `retry_after` | wake-only retry floor set by the elder sweep; it never gates FIFO readiness |
+| `retry_after` | wake-only retry floor set by the elder sweep; it never gates queued FIFO readiness and also postpones the next `Sent` reconcile wake |
 | `auto_compact` | context-fill threshold that triggers a `/compact` before delivery |
 | `compacted_context_tokens` | baseline reading that suppresses duplicate compaction |
 | `batch_id` | records sent in one batched paste share the head's id; one turn start confirms them all |
@@ -109,7 +109,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
 
 A parked message delivers when all six conditions hold:
 
-1. Gate is open. `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`; hidden `DeliveryGate::Resume` opens only on `Paused` after the account-budget resume guard passes. A hookless settled turn counts here: rollout completion projects a falsely-`running` row to `Success`, and rollout interruption projects it to `Idle`. `Running`, `Waiting`, and `Paused` keep ordinary delivery closed.
+1. Gate is open. `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`; hidden `DeliveryGate::Resume` opens only on `Paused` after the account-budget resume guard passes. A hookless settled turn counts here: rollout completion projects a falsely-`running` row to `Success`, and rollout interruption projects it to `Idle`. `Running`, `Waiting`, and `Paused` keep ordinary delivery closed. A receiver with a `compacting_since` marker inside the 90-second compaction window closes every gate, including `Resume`; the expiry keeps a lost compaction-end signal from wedging delivery forever.
 2. Cross-agent conditions are stamped. Each `after` card reaches the same gate and has no non-terminal schedule-ready message. Future scheduled work does not count; `Queued`, `Claimed`, and `Sent` ready work does. A stamp stays met across later turns.
 3. Not waiting. An agent holding an open blocking prompt ([`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs)) reserves the next input for your answer. `--force` bypasses the reservation, mirroring `message --steer --force`; without it the skip reports `is waiting on your input in its pane; answer it or pass --force`.
 4. FIFO head. The message is the oldest deliverable queued record for its card and lane. `msg_` id string order is FIFO order; future scheduled messages and unmet `after` records are filtered out, so they never block a later deliverable message on the same card. Resume nudges use a control lane so a parked-turn wakeup does not wait behind ordinary user text that cannot deliver until after the wakeup.
@@ -134,7 +134,7 @@ Enqueue resolves every `after` address against the same live-plus-durable view a
 
 ### Delivery trigger
 
-Only unparked root turn ends trigger ordinary parked delivery. `Registered`, subagent stops, compaction events, and parked background turn ends (`TurnEnded { parked_on_background: true }`) do not check the queue. The lifecycle hook records the event, loads pending messages, finds the FIFO head for the agent's card, and spawns a detached `rimz message deliver --message-id <id>` helper with nulled stdio. Auto-continue is the producer-driven exception: when a persisted park reaches its reset or backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message or redelivers the prior queued resume message, then runs the same one-message delivery helper for that message id.
+Unparked root turn ends and `CompactionEnded` trigger ordinary parked delivery. `Registered`, subagent stops, compaction-start events, and parked background turn ends (`TurnEnded { parked_on_background: true }`) do not check the queue. The lifecycle hook records the event, loads pending messages, finds the FIFO head for the agent's card, and spawns a detached `rimz message deliver --message-id <id>` helper with nulled stdio. A compaction-end helper re-validates the fresh snapshot, so automatic compaction that resumes a running turn safely no-ops. Auto-continue is the producer-driven exception: when a persisted park reaches its reset or backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message or redelivers the prior queued resume message, then runs the same one-message delivery helper for that message id.
 
 ### The deliver helper
 
@@ -143,7 +143,7 @@ The helper follows a strict sequence:
 1. **Settle**: wait a short delay (400 ms default, `RIMZ_MESSAGE_SETTLE_MS` overrides for tests) for the agent state to stabilize.
 2. **Candidate check**: read the queued head, verify `not_before` has passed, the gate is open against a fresh snapshot, the receiver is not waiting on input (skipped under `force`), and a live pane exists.
 3. **Claim**: under the workspace lock, transition the record from `Queued` to `Claimed` and increment the pre-send attempt count. The claim moves the record out of the queued scan immediately before sending.
-4. **Send**: write text to the live pane through the same bracketed-paste path as `--steer`. Smart compaction prepends a fresh `Command` record at delivery time before the claimed prompt.
+4. **Send**: write text to the live pane through the same bracketed-paste path as `--steer`. When smart compaction fires, send the fresh `Command` record alone and release the claimed prompt batch back to `Queued` without an attempt penalty.
 5. **Record send**: a successful pane write moves the record to `Sent`, still live until the agent confirms it or the reconciler times it out.
 
 `rimz message steer <id>` uses the same helper with a steer policy. The candidate check still requires the named queued record, a receiver card, and a live pane, but it ignores `not_before`, FIFO head, ordinary gate, and resume-recovery checks. It claims only the named record with `claim_message_for_steer`, which keeps the claim TTL guard and skips the FIFO-head compare. Waiting input still defers unless the stored record or the command carries `--force`.
@@ -152,7 +152,7 @@ The helper follows a strict sequence:
 
 When a queued prompt head delivers, the helper extends the claim through the contiguous ready FIFO prefix of that head's lane. Batch members must be prompt bodies that submit with Enter, avoid leading `/`, have their own gate open, match the head's `force` flag, and share one batch key: an agent sender's channel, while a human message counts as the receiver channel as if typed in the pane. `Command` bodies, slash text, no-enter drafts, force mismatches, closed gates, and cross-channel senders stop the batch. Resume control messages live in their own lane and stay outside ordinary batching.
 
-The batch lands as one bracketed paste and one submit. Each member keeps its own `from @sender:` prefix and the sections are separated by one blank line. The first member whose `auto_compact` threshold fires may type one `/compact` command ahead of the whole batch; later members ride the same fresh window.
+The batch lands as one bracketed paste and one submit. Each member keeps its own `from @sender:` prefix and the sections are separated by one blank line. The first member whose `auto_compact` threshold fires may type one `/compact` command, release the whole claimed batch to `Queued`, and let `CompactionEnded` deliver that batch against the fresh window.
 
 ### Delivery confirmation
 
@@ -161,12 +161,12 @@ The agent's next body-matching lifecycle hook confirms the oldest `Sent` record 
 - `TurnStarted` confirms a `Prompt` body to `Delivered`.
 - `Compacting` confirms a `Command` body to `Delivered`.
 
-One cannot confirm the other. Batched prompt records carry a shared `batch_id`, so the first matching `TurnStarted` confirms every `Sent` prompt record with that stamp on the same card. A smart-compact send owns two records: the `/compact` command confirms on `Compacting`, and the prompt confirms on `TurnStarted`. A `Sent` record that remains unconfirmed for `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` returns to `Queued` through the sweep reconciler while incrementing `unconfirmed_sends` up to `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` (3 by default), then becomes `TimedOut`. The pre-send `attempts` counter stays separate.
+One cannot confirm the other. Batched prompt records carry a shared `batch_id`, so the first matching `TurnStarted` confirms every `Sent` prompt record with that stamp on the same card. A smart-compact boundary send owns two records in sequence: the `/compact` command confirms on `Compacting`, then the queued prompt sends after `CompactionEnded` and confirms on `TurnStarted`. A `Sent` record that remains unconfirmed for `RIMZ_MESSAGE_DELIVERY_WINDOW_MS` returns to `Queued` through the sweep reconciler while incrementing `unconfirmed_sends` up to `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` (3 by default), then becomes `TimedOut`. The pre-send `attempts` counter stays separate.
 
 ### Retry and failure
 
 - **Pre-send failure** (pane gone, gate closed, a waiting agent reserves input): the record stays or returns to `Queued` with `last_error` and no pane affinity, so the next qualifying turn boundary re-resolves a pane. A delivery helper claim increments `attempts`; an initial send-now failure records the error before any claim exists.
-- **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id and batch id, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever same-lane prefix is ready at the next boundary. After the unconfirmed-send cap, the record becomes `TimedOut`.
+- **Unconfirmed send** (bytes were written but no matching lifecycle confirmation arrives): the sweep reconciler clears the pane id and batch id, increments `unconfirmed_sends`, records `delivery unconfirmed; re-queued`, and retries through the normal FIFO path. A requeued batch member reforms with whatever same-lane prefix is ready at the next boundary. While the receiver is compacting, the reconciler keeps a `Sent` record in place and moves its wake hint one delivery window ahead: confirmation is delayed rather than lost, and requeuing composer-held text would guarantee a duplicate paste. After the unconfirmed-send cap, the record becomes `TimedOut`.
 - **Independent caps**: `unconfirmed_sends` gates the unconfirmed-send cap (`RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS`, 3 by default); `attempts` gates the pre-send cap (`MAX_DELIVERY_ATTEMPTS`, 5). A claim increments `attempts` only, and a stale-`Sent` requeue increments `unconfirmed_sends` only.
 - **Claim TTL**: a `Claimed` record older than 15 s (`CLAIM_TTL`) is treated as expired, so a crash after claim leaves a redeliverable record. `message list --all` surfaces it.
 - A state miss, where the message is queued but the agent has not reached a qualifying boundary, leaves the message queued for a later transition.
@@ -196,11 +196,11 @@ Scheduled and parked messages need an open room for wakeups:
 2. The elected sidebar elder reads that cache and, when due, spawns a detached `rimz message sweep`.
 3. The sweep helper reconciles stale `Sent` records, finds ready FIFO heads whose gates are open, calls the same one-message delivery path as lifecycle hooks, then rewrites the wake cache to the next future schedule, ready queued retry, or reconcile deadline, or removes it.
 
-Ready `Queued` heads arm the wake stamp as a backstop even when `not_before` is absent or already elapsed. A fresh ready message contributes its `updated_at` timestamp, so the elder sweep recovers an idle-agent message that missed the live send path. When a sweep cannot deliver the FIFO head because the gate is closed, a waiting agent reserves input, or the pane is unavailable, it writes `retry_after = now + RIMZ_MESSAGE_DELIVERY_WINDOW_MS`; the elder then retries at most once per delivery window instead of every tick. `retry_after` is a wake hint only: it does not affect `is_ready`, FIFO, claim leases, or the turn-end hook, so lifecycle delivery still runs immediately when the target finishes. Future scheduled messages still arm their `not_before`, and `Sent` records still arm their reconcile deadline.
+Ready `Queued` heads arm the wake stamp as a backstop even when `not_before` is absent or already elapsed. A fresh ready message contributes its `updated_at` timestamp, so the elder sweep recovers an idle-agent message that missed the live send path. When a sweep cannot deliver the FIFO head because the gate is closed, a waiting agent reserves input, compaction is active, or the pane is unavailable, it writes `retry_after = now + RIMZ_MESSAGE_DELIVERY_WINDOW_MS`; the elder then retries at most once per delivery window instead of every tick. `retry_after` is a wake hint only: it does not affect `is_ready`, FIFO, claim leases, or lifecycle delivery, while a compacting receiver's `Sent` record uses it as the next reconcile wake. Future scheduled messages still arm their `not_before`, and other `Sent` records still arm their normal reconcile deadline.
 
 ## Smart compaction
 
-`--smart-compact <PCT|TOKENS>` lands a message against a fresh context window. When the agent's context fill has reached the threshold, RimZ sends a tracked `/compact` command message first, waits one message interval, then sends the prompt message so it runs after compaction instead of racing the agent's own auto-compaction mid-turn.
+`--smart-compact <PCT|TOKENS>` lands a message against a fresh context window. When the agent's context fill has reached the threshold, RimZ sends a tracked `/compact` command message by itself, keeps the prompt queued while the receiver compacts, and delivers it when `CompactionEnded` opens the fresh window. The 90-second compaction-window expiry and elder sweep recover a lost end signal. `--steer` preserves immediate semantics by typing `/compact` and then pasting the prompt into the composer now; reconciliation keeps that `Sent` prompt in place while compaction delays its confirmation.
 
 Threshold forms:
 
@@ -212,7 +212,7 @@ An omitted flag falls back to the [`[harness] smart_compact`](../../guide/config
 
 A percent threshold reads the same fill gauge the sidebar card renders ([`context_fill_pct`](../../../crates/rimz/src/agents/state.rs)); a token threshold reads occupied tokens ([`occupied_context_tokens`](../../../crates/rimz/src/agents/state.rs)): the folded statusline breakdown where present, else the per-call split (cache reads plus cache writes plus fresh input), else the carried `total_tokens` gauge.
 
-Compact-first path: the `/compact` command rides the raw type path, not the bracketed paste, because a composer treats pasted text as literal content, so a pasted `/compact` would land as a prompt rather than run. The command and its submit land as one atomic interaction, and the prompt follows one message interval later as its own paste and submit ([Bracketed-paste submit](#bracketed-paste-submit)), so the prompt queues behind the compaction instead of racing it.
+Compact-first path: the `/compact` command rides the raw type path, not the bracketed paste, because a composer treats pasted text as literal content, so a pasted `/compact` would land as a prompt rather than run. The command and its submit land as one interaction under the system sender `rimz`; boundary delivery then releases the prompt claim to `Queued` and `CompactionEnded` starts a new delivery. A steer instead follows one message interval later with its own paste and submit ([Bracketed-paste submit](#bracketed-paste-submit)).
 
 Baseline tracking: `compacted_context_tokens` records the token reading the trigger fired on. While a carried-forward stale gauge still equals this baseline, the send path suppresses duplicate `/compact` commands; a new reading re-enables compaction.
 

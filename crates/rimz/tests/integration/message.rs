@@ -2334,9 +2334,144 @@ fn steer_auto_compact_runs_before_a_full_window() {
         .find(|message| message.body == MessageBody::Prompt)
         .expect("prompt message");
     assert_eq!(command.text, "/compact");
+    assert_eq!(command.sender, MessageSender::System);
+    assert!(command.automated);
     assert_eq!(command.status, MessageStatus::Sent);
     assert_eq!(prompt.text, "go");
     assert_eq!(prompt.status, MessageStatus::Sent);
+}
+
+#[test]
+fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-ac-boundary",
+            "worktree_branch": "feature-ac-boundary",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-ac-boundary", 80);
+
+    let trace_log = env.project_root.join("zellij-ac-boundary-trace.log");
+    let out = run_success(
+        env.rimz()
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+            .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
+            .args([
+                "message",
+                "@claude",
+                "--smart-compact",
+                "70%",
+                "--",
+                "go after compact",
+            ]),
+        "boundary smart compact",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("delivers when compaction completes"),
+        "{stdout}"
+    );
+    let lines = trace_lines(&trace_log);
+    assert_eq!(
+        lines.iter().filter(|line| is_compact_command(line)).count(),
+        1
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, "go after compact"))
+            .count(),
+        0
+    );
+
+    let messages = env.store().list_messages().expect("messages");
+    let command = messages
+        .iter()
+        .find(|message| message.body == MessageBody::Command)
+        .expect("compact command");
+    let prompt = messages
+        .iter()
+        .find(|message| message.body == MessageBody::Prompt)
+        .expect("deferred prompt");
+    assert_eq!(command.status, MessageStatus::Sent);
+    assert_eq!(command.sender, MessageSender::System);
+    assert_eq!(prompt.status, MessageStatus::Queued);
+    assert_eq!(prompt.attempts, 0);
+    let prompt_id = prompt.message_id.clone();
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "PreCompact",
+            "session_id": "sess-ac-boundary",
+            "worktree_branch": "feature-ac-boundary",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let shim = zellij_trace_shim();
+    let shim = shim.to_str().expect("utf-8 shim path");
+    let trace = trace_log.to_str().expect("utf-8 trace path");
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "PostCompact",
+            "session_id": "sess-ac-boundary",
+            "trigger": "manual",
+            "worktree_branch": "feature-ac-boundary",
+        }),
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim),
+            ("RIMZ_TEST_ZELLIJ_LOG", trace),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+            ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
+        ],
+    );
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(5));
+
+    let lines = trace_lines(&trace_log);
+    assert_eq!(
+        lines.iter().filter(|line| is_compact_command(line)).count(),
+        1
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| is_paste(line, "go after compact"))
+            .count(),
+        1
+    );
+    let sent = message_by_id(&env, &prompt_id);
+    assert_eq!(sent.status, MessageStatus::Sent);
+    assert_eq!(sent.attempts, 1);
+    assert_eq!(sent.unconfirmed_sends, 0);
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-ac-boundary",
+            "prompt": "go after compact",
+            "worktree_branch": "feature-ac-boundary",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let delivered = env
+        .store()
+        .list_message_history()
+        .expect("history")
+        .into_iter()
+        .find(|message| message.message_id == prompt_id)
+        .expect("delivered prompt");
+    assert_eq!(delivered.status, MessageStatus::Delivered);
+    assert_eq!(delivered.attempts, 1);
+    assert_eq!(delivered.unconfirmed_sends, 0);
 }
 
 #[test]

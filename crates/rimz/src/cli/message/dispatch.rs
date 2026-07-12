@@ -679,6 +679,9 @@ pub(super) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<Strin
         DispatchOutcome::Queued { label, message_id } => {
             Some(format!("queued for {label} ({message_id})"))
         }
+        DispatchOutcome::CompactionPending { label, message_id } => Some(format!(
+            "compacting {label}; queued {message_id} (delivers when compaction completes)"
+        )),
         DispatchOutcome::SkippedWaiting { .. } => None,
     }
 }
@@ -736,6 +739,9 @@ fn report_steer(
             DispatchOutcome::Queued { label, message_id } => {
                 queued.push(format!("{label} ({message_id})"));
             }
+            DispatchOutcome::CompactionPending { label, message_id } => {
+                queued.push(format!("{label} ({message_id}; waiting for compaction)"));
+            }
             DispatchOutcome::SkippedWaiting { label, message_id } => {
                 pending.push(format!("{label} ({message_id})"));
             }
@@ -763,6 +769,9 @@ fn report_steer(
                 bail!(
                     "{label} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
                 )
+            }
+            Some(DispatchOutcome::CompactionPending { .. }) => {
+                unreachable!("compaction-pending outcomes are included in the queued summary")
             }
             _ => bail!("no agent matches `{target}`"),
         }
