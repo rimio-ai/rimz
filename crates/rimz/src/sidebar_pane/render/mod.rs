@@ -91,6 +91,10 @@ pub fn nerd_font_probe_glyphs() -> [&'static str; 8] {
     theme::nerd_font_probe_glyphs()
 }
 
+pub fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
+    theme::nerd_font_probe_gradient(width)
+}
+
 pub fn draw_with_ui(
     frame: &mut Frame<'_>,
     snapshot: &SidebarSnapshot,

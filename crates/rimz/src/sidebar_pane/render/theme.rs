@@ -81,6 +81,37 @@ pub(crate) fn nerd_font_probe_glyphs() -> [&'static str; 8] {
     ]
 }
 
+/// The setup probe's color sweep: the sidebar's identity hues resampled to
+/// `width` cells, each cell blended in OKLab from the surrounding anchors so
+/// neighbours step evenly to the eye. Sampling between the anchors is what makes
+/// the bar read as one smooth gradient rather than a row of distinct swatches.
+pub(crate) fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
+    const ANCHORS: &[(u8, u8, u8)] = &[
+        (125, 207, 255),
+        (105, 192, 255),
+        (122, 162, 247),
+        (146, 138, 255),
+        (187, 154, 247),
+        (247, 118, 142),
+        (255, 158, 100),
+        (224, 175, 104),
+        (158, 206, 106),
+        (115, 218, 202),
+        (42, 195, 222),
+        (125, 207, 255),
+    ];
+    (0..width)
+        .map(|cell| {
+            let amount = if width <= 1 {
+                0.0
+            } else {
+                cell as f32 / (width - 1) as f32
+            };
+            ramp_tone(ANCHORS, amount)
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
     no_color: bool,

@@ -56,9 +56,26 @@ pub(crate) fn ask(
         writeln!(out, "{line}")?;
     }
     writeln!(out)?;
+    writeln!(
+        out,
+        "{}",
+        render::paint(
+            render::palette::MUTED,
+            "  Y turns on the rich look above. Pick N if you see flat color bands,"
+        )
+    )?;
+    writeln!(
+        out,
+        "{}",
+        render::paint(
+            render::palette::MUTED,
+            "  boxes, or ? marks — RimZ falls back to plain colors and text glyphs."
+        )
+    )?;
+    writeln!(out)?;
 
     let Some(modern_style) = prompt_bool(
-        "  Icons and gradient render cleanly?",
+        "  Enable the rich sidebar look?",
         defaults.modern_style,
         input,
         out,
@@ -148,28 +165,18 @@ fn header_rule(term_cols: usize) -> String {
     "─".repeat(term_cols.min(HEADER_RULE_WIDTH))
 }
 
+const GRADIENT_WIDTH: usize = 36;
+
 fn probe_lines() -> Vec<String> {
-    let gradient = [
-        (125, 207, 255),
-        (105, 192, 255),
-        (122, 162, 247),
-        (146, 138, 255),
-        (187, 154, 247),
-        (247, 118, 142),
-        (255, 158, 100),
-        (224, 175, 104),
-        (158, 206, 106),
-        (115, 218, 202),
-        (42, 195, 222),
-        (125, 207, 255),
-    ]
-    .into_iter()
-    .map(|(r, g, b)| format!("\x1b[48;2;{r};{g};{b}m▐\x1b[0m"))
-    .collect::<String>();
+    let gradient = rimz::sidebar_pane::render::nerd_font_probe_gradient(GRADIENT_WIDTH)
+        .into_iter()
+        .map(|(r, g, b)| format!("\x1b[38;2;{r};{g};{b}m█"))
+        .chain(std::iter::once(String::from("\x1b[0m")))
+        .collect::<String>();
     let glyphs = rimz::sidebar_pane::render::nerd_font_probe_glyphs().join("  ");
     vec![
-        format!("  {gradient}  (smooth color gradient)"),
-        format!("  {glyphs}  (distinct icons)"),
+        format!("  {gradient}  ← a full spread of colors (truecolor)"),
+        format!("  {glyphs}  ← eight distinct icons (glyph font)"),
     ]
 }
 
@@ -237,7 +244,7 @@ mod tests {
 
         assert!(answers.modern_style);
         assert!(!answers.pet_enabled);
-        assert!(rendered.contains("Icons and gradient render cleanly?"));
+        assert!(rendered.contains("Enable the rich sidebar look?"));
         assert!(rendered.contains("Want a pet?"));
         assert_eq!(rendered.matches("[y/N]").count(), 2);
     }
@@ -253,7 +260,7 @@ mod tests {
 
         assert!(answers.modern_style);
         assert!(answers.pet_enabled);
-        assert!(rendered.contains("Icons and gradient render cleanly?"));
+        assert!(rendered.contains("Enable the rich sidebar look?"));
         assert!(!rendered.contains("Want a pet?"));
     }
 
@@ -276,10 +283,30 @@ mod tests {
         let lines = probe_lines().join("\n");
         let sample = rimz::sidebar_pane::render::nerd_font_probe_glyphs()[0];
 
-        assert!(lines.contains("\x1b[48;2;"));
-        assert!(lines.contains("(smooth color gradient)"));
+        assert!(lines.contains("\x1b[38;2;"));
+        assert!(lines.contains('█'));
+        assert!(lines.contains("a full spread of colors (truecolor)"));
         assert!(lines.contains(sample));
-        assert!(lines.contains("(distinct icons)"));
+        assert!(lines.contains("eight distinct icons (glyph font)"));
+    }
+
+    #[test]
+    fn probe_gradient_steps_smoothly_between_cells() {
+        let stops = rimz::sidebar_pane::render::nerd_font_probe_gradient(GRADIENT_WIDTH);
+
+        assert_eq!(stops.len(), GRADIENT_WIDTH);
+        // Adjacent cells differ by small perceptual steps: interpolating the
+        // anchors keeps neighbours close, which is what reads as one sweep
+        // rather than the hard bands the raw anchor list produced.
+        for pair in stops.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let delta = (i32::from(a.0) - i32::from(b.0)).abs()
+                + (i32::from(a.1) - i32::from(b.1)).abs()
+                + (i32::from(a.2) - i32::from(b.2)).abs();
+            // Raw adjacent anchors jump by ~200; interpolation keeps every
+            // cell-to-cell step well under this bound.
+            assert!(delta <= 80, "harsh jump {a:?} -> {b:?} (delta {delta})");
+        }
     }
 
     #[test]
@@ -291,12 +318,7 @@ mod tests {
 
         let (_, rendered) = drive(defaults, b"\n\n");
 
-        assert_eq!(
-            rendered
-                .matches("Icons and gradient render cleanly?")
-                .count(),
-            1
-        );
+        assert_eq!(rendered.matches("Enable the rich sidebar look?").count(), 1);
         assert_eq!(rendered.matches("Want a pet?").count(), 1);
     }
 

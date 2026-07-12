@@ -94,7 +94,7 @@ style = "modern"       # truecolor + Nerd Font icons; "default" = auto color + U
 
 Schemes, palette slots, and the full display model are in [theming](./theme.md).
 
-The first-run glyph probe writes `style = "modern"` for you when the gradient is smooth and the sampled sidebar icons render cleanly.
+The first-run probe prints a truecolor sweep and the sampled sidebar icons, then asks whether to enable the rich look; answering yes writes `style = "modern"`, and no falls back to plain colors and text glyphs.
 
 ## Pets
 

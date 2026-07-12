@@ -295,8 +295,8 @@ fn setup_without_tty_reports_and_writes_nothing() {
 
     assert!(stdout.contains("Rimz setup"));
     assert!(stdout.contains("changed nothing"));
-    assert!(!stdout.contains("Icons and gradient render cleanly?"));
-    assert!(!stderr.contains("Icons and gradient render cleanly?"));
+    assert!(!stdout.contains("Enable the rich sidebar look?"));
+    assert!(!stderr.contains("Enable the rich sidebar look?"));
     assert!(!stdout.contains("Want a pet?"));
     assert!(!stderr.contains("Want a pet?"));
 
@@ -317,8 +317,8 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("Wrote"));
     assert!(stdout.contains("No hooks or trust grants were changed"));
-    assert!(!stdout.contains("Icons and gradient render cleanly?"));
-    assert!(!stderr.contains("Icons and gradient render cleanly?"));
+    assert!(!stdout.contains("Enable the rich sidebar look?"));
+    assert!(!stderr.contains("Enable the rich sidebar look?"));
     assert!(!stdout.contains("Want a pet?"));
     assert!(!stderr.contains("Want a pet?"));
 
@@ -343,7 +343,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
 
     let output = run_setup_pty(&env, "y\ny\n");
 
-    assert!(output.contains("Icons and gradient render cleanly?"));
+    assert!(output.contains("Enable the rich sidebar look?"));
     assert!(output.contains("Want a pet?"));
     assert!(output.contains("modern style"));
     assert!(output.contains("rocky joins the room"));
@@ -360,7 +360,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     let output = run_setup_pty(&env, "\nn\nn\n");
 
     assert!(output.contains("Keep your current config? [Y/n]"));
-    assert!(output.contains("Icons and gradient render cleanly?"));
+    assert!(output.contains("Enable the rich sidebar look?"));
     assert!(output.contains("Want a pet? It lives in the sidebar and reacts to your fleet."));
     assert!(output.matches("[Y/n]").count() >= 3);
     assert!(output.contains("default style"));
