@@ -15,6 +15,7 @@ pub(crate) struct AmpHookPayload {
     pub status: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub last_assistant_message: Option<String>,
 }
 
 pub(crate) fn parse_payload(payload: &Value) -> AmpHookPayload {

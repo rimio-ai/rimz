@@ -157,6 +157,26 @@ fn files_modified_flag_precedes_static_tool_fallback() {
 }
 
 #[test]
+fn agent_end_extracts_the_supervised_final_answer() {
+    let payload = json!({
+        "session_id": "T-abc123",
+        "status": "done",
+        "last_assistant_message": "  Fixed the race.  "
+    });
+    let observation = AmpAdapter.observe_lifecycle("agent_end", &payload).unwrap();
+    assert_eq!(
+        AmpAdapter
+            .last_assistant_message("agent_end", &payload, &observation)
+            .as_deref(),
+        Some("Fixed the race.")
+    );
+    assert_eq!(
+        AmpAdapter.last_assistant_message("tool_result", &payload, &observation),
+        None
+    );
+}
+
+#[test]
 fn ask_classification_and_neutral_output_are_pinned() {
     let classified =
         AmpAdapter.classify_hook("permission_ask", &json!({ "session_id": "T-abc123" }));
@@ -245,6 +265,9 @@ fn plugin_source_pins_active_thread_observation_wire_and_pid() {
     assert!(PLUGIN_SOURCE.contains("amp.activeThread.current"));
     assert!(PLUGIN_SOURCE.contains("awaiting-approval"));
     assert!(PLUGIN_SOURCE.contains("filesModifiedByToolCall"));
+    assert!(PLUGIN_SOURCE.contains("sendQueue = sendQueue.then"));
+    assert!(PLUGIN_SOURCE.contains("lastAssistantMessage(event.messages)"));
+    assert!(PLUGIN_SOURCE.contains("files == null ? undefined"));
     assert!(!PLUGIN_SOURCE.contains("amp.on(\"tool.call\""));
     for event in ["session.start", "agent.start", "tool.result", "agent.end"] {
         assert!(PLUGIN_SOURCE.contains(event), "plugin missing {event}");

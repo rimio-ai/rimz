@@ -22,7 +22,7 @@ use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, AskKind, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, PresetErr, Result, SessionOrigin, classify_agent_hook,
-    sanitize_user_prompt,
+    non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -372,6 +372,19 @@ impl AgentAdapter for AmpAdapter {
 
     fn moves_on(&self, event_name: &str) -> bool {
         matches!(event_name, "agent_start" | "agent_end")
+    }
+
+    fn last_assistant_message(
+        &self,
+        event_name: &str,
+        payload: &Value,
+        _observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        (event_name == "agent_end")
+            .then(|| payloads::parse_payload(payload).last_assistant_message)
+            .flatten()
+            .as_deref()
+            .and_then(non_empty_trimmed)
     }
 
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {

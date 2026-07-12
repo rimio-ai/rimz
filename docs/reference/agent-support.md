@@ -107,7 +107,7 @@ Amp reports through a RimZ-authored observation-only **plugin**. One Amp CLI can
 - **Blocking asks:** entering Amp's `awaiting-approval` thread state raises a waiting row with no prompt detail. Answer in Amp's own UI; `rimz answer` is unsupported because the state carries no resolver, and the plugin does not join the undocumented `tool.call` decision chain.
 - **Resume:** `amp threads continue <T-id>` reopens a thread. Amp exposes no fork command or manual compaction command.
 - **Permission modes:** all four RimZ postures pass no extra flag. Amp runs tools by default; approval policy remains in Amp settings or user plugins. Profiles map `model` to Amp's mode dial (`--mode`) and `effort` to `--effort`.
-- **Account:** presence-only detection checks `~/.local/share/amp/secrets.json` without reading secret material. Amp's human-readable usage output does not feed spend or balance bars.
+- **Account:** presence-only detection checks `AMP_API_KEY` and `~/.local/share/amp/secrets.json` without reading secret material. Amp's human-readable usage output does not feed spend or balance bars.
 - **Install target:** `~/.config/amp/plugins/rimz.ts`.
 
 Mapping detail: [amp.md](../internals/agents/amp.md); upstream protocol: [amp-reference.md](../externals/agent-adapter/amp-reference.md).

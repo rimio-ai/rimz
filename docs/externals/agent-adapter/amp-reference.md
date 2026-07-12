@@ -2,9 +2,9 @@
 
 > RimZ's landed mapping is [amp.md](../../internals/agents/amp.md). This document records the upstream surface behind it; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Amp CLI upstream protocol surface** relevant to RimZ: the Plugin API lifecycle and decision seam, thread identity and state, transcript access, tool classification, execute-mode JSONL, permissions, configuration and trust, authentication and usage, remote control, runners, and launch modes. It is an implementation research record, not a claim that RimZ currently supports Amp.
+This is the single home for the **Amp CLI upstream protocol surface** relevant to RimZ: the Plugin API lifecycle and decision seam, thread identity and state, transcript access, tool classification, execute-mode JSONL, permissions, configuration and trust, authentication and usage, remote control, runners, and launch modes. It is the implementation research and drift-check record; current RimZ support claims live in [amp.md](../../internals/agents/amp.md) and [agent-support.md](../../reference/agent-support.md).
 
-Refresh baseline: Amp CLI [`@ampcode/cli` 0.0.1783715322-g80d9f1](https://www.npmjs.com/package/@ampcode/cli/v/0.0.1783715322-g80d9f1), released **2026-07-10**, and the rolling official Amp manual and generated `@ampcode/plugin` type reference available on **2026-07-10**. The exact CLI reports `0.0.1783715322-g80d9f1 (released 2026-07-10T20:28:42.000Z)`, and `amp plugins show-docs` is the binary-pinned companion to the web reference.
+Refresh baseline: Amp CLI [`@ampcode/cli` 0.0.1783785389-g0da70d](https://www.npmjs.com/package/@ampcode/cli/v/0.0.1783785389-g0da70d), released **2026-07-11**, and the rolling official Amp manual and generated `@ampcode/plugin` type reference available on **2026-07-11**. The exact CLI reports `0.0.1783785389-g0da70d (released 2026-07-11T15:56:29.000Z)`, and `amp plugins show-docs` is the binary-pinned companion to the web reference.
 
 This reference supports **the current post-rebuild Amp architecture only**. Amp calls that architecture “Neo” in its May 2026 launch material, then dropped the name when it became the only current architecture. Do not carry forward pre-rebuild hooks, local thread schemas, toolbox behavior, `--take-me-back`, or the old `smart` / `deep` / `rush` / `large` mode contract. The current modes are `low`, `medium`, `high`, and `ultra`; old mode names exist only as deprecated compatibility inputs or separately installable classic plugins.
 
@@ -348,7 +348,7 @@ type AgentReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xh
 
 For a built-in agent, record the stable mode and optional effort; the definition does not expose the backing model. For a custom plugin agent, record its explicit model and effort. Execute stream `system.init` separately carries `agent_mode?` and `reasoning_effort?`.
 
-The current CLI exposes `-m/--mode` and `--effort`, but validate accepted values with the exact supported binary because the mode migration landed recently and `--help` may lag the web/manual surface. RimZ profile launch should pass a mode only when the user configured one. Suggested permission posture mapping is: `auto` and `yolo` use Amp's upstream default; `ask` requires the explicit RimZ/plugin approval policy; `plan` has no native flag and requires prompt-level “do not edit” guidance rather than pretending Amp has a plan state.
+The current CLI exposes `-m/--mode` and `--effort`. On the refresh binary the two surfaces disagree: `amp --help` advertises `-m, --mode (low, medium, high)`, while `amp plugins show-docs` still types `BuiltinAgentMode = 'low' | 'medium' | 'high' | 'ultra' | 'smart' | 'deep' | 'rush'`. Treat the plugin type as the wider truth and the help line as a lagging summary; RimZ profile launch passes a configured mode verbatim rather than validating it against the narrower help set, and passes a mode only when the user configured one. Suggested permission posture mapping is: `auto` and `yolo` use Amp's upstream default; `ask` requires the explicit RimZ/plugin approval policy; `plan` has no native flag and requires prompt-level “do not edit” guidance rather than pretending Amp has a plan state.
 
 ## Subagents and concurrent threads
 
@@ -449,7 +449,7 @@ interface User {
 
 `user == null` is the machine-readable live unauthenticated signal. Do not persist email or names in RimZ state when the opaque ID and workspace identity suffice.
 
-`amp usage` prints the signed-in identity and current individual/workspace credit balance. `amp threads usage <T-id>` prints detailed per-thread cost when available. Neither command has a documented JSON option or output schema, so a production account probe must either parse explicitly version-gated human output or remain unsupported. `PluginThread.messages` and plugin events carry no costs.
+`amp usage` prints the signed-in identity and current individual/workspace credit balance. `amp threads usage <T-id>` prints detailed per-thread cost when available. Verified on the refresh binary: neither `amp usage --help` nor `amp threads usage --help` exposes a `--json` flag or any machine-schema option, so a production account probe must either parse explicitly version-gated human output or remain unsupported. (`amp tools list --json` does exist, so the absence on the spend commands is a deliberate gap, not a blanket policy.) `PluginThread.messages` and plugin events carry no costs.
 
 Amp is pay-as-you-go rather than a subscription plan: individual and non-enterprise workspace usage is passed through at provider cost, credits are pooled for a workspace, and Enterprise has different pricing and optional entitlements. Model providers vary by Amp mode, so count Amp as the provider/account while retaining model IDs only where upstream exposes them.
 
@@ -507,7 +507,8 @@ Before implementation, capture these unresolved contracts against the exact supp
 4. Whether built-in subagent work fires plugin events under the parent thread ID, a hidden child ID, or only as the parent `Task` call/result.
 5. How plugin process identity can be joined to the correct RimZ pane when two Amp CLIs run in the same cwd; no documented payload field carries PID or pane identity.
 6. Exact CLI exit codes for successful, errored, cancelled, permission-denied, timed-out, and plugin-readiness-failed execute runs.
-7. The versioned output shapes, if RimZ chooses to use `amp usage`, `amp threads usage`, `amp threads export`, or `amp threads raw`.
-8. Whether `ultra` is accepted by `--mode` on the exact release and account even when a generated help line lists a narrower set.
+7. The versioned output shapes, if RimZ chooses to use `amp usage`, `amp threads usage`, `amp threads export`, or `amp threads raw`. *(Partly settled on the refresh binary: `amp usage` and `amp threads usage` expose no `--json`; their output stays human text.)*
+8. Whether `ultra` is accepted by `--mode` at runtime even when the help line lists only `low, medium, high`. *(Partly settled: the help line is narrow, but `amp plugins show-docs` still types `ultra` in `BuiltinAgentMode`. Runtime acceptance on a live account is still unverified.)*
+9. Whether `amp -x` auto-archiving (default) leaves a thread that `amp threads continue <T-id>` can still resume, or whether RimZ must pass `--no-archive-after-execute` to keep supervised-run sessions resumable. The `amp review` code-review agent mode shares the same archive-after-run posture.
 
 The primary architectural risk is Amp's one-client/many-thread model. Solve pane binding first: lifecycle normalization is straightforward once each event is assigned to the correct visible or background instance.

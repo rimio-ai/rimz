@@ -1,6 +1,11 @@
 // _rimz_managed: Amp plugin owned by Rimz. Do not edit by hand.
 import { spawn } from "node:child_process";
-import type { PluginAPI, PluginThread, ThreadState } from "@ampcode/plugin";
+import type {
+  PluginAPI,
+  PluginThread,
+  ThreadMessage,
+  ThreadState,
+} from "@ampcode/plugin";
 
 type ThreadGauge = {
   model?: string;
@@ -15,12 +20,14 @@ type Envelope = Record<string, unknown> & {
 
 const RIMZ = process.env.RIMZ_BIN || "rimz";
 const RIMZ_ARGS = ["hooks", "feed", "--source", "amp"];
+const SEND_TIMEOUT_MS = 10_000;
 
 export default function (amp: PluginAPI) {
   const gauges = new Map<string, ThreadGauge>();
   const states = new Map<string, ThreadState>();
   const subscribedThreads = new Set<string>();
   const registeredThreads = new Set<string>();
+  let sendQueue = Promise.resolve();
 
   function cwd(): string {
     const root = amp.system.workspaceRoot;
@@ -46,19 +53,42 @@ export default function (amp: PluginAPI) {
     };
   }
 
-  function send(payload: Envelope): void {
-    const child = spawn(RIMZ, RIMZ_ARGS, {
-      cwd: payload.cwd,
-      env: {
-        ...process.env,
-        RIMZ_AGENT_PID: String(process.pid),
-      },
-      stdio: ["pipe", "ignore", "ignore"],
+  function sendNow(payload: Envelope): Promise<void> {
+    return new Promise((resolve) => {
+      const child = spawn(RIMZ, RIMZ_ARGS, {
+        cwd: payload.cwd,
+        env: {
+          ...process.env,
+          RIMZ_AGENT_PID: String(process.pid),
+        },
+        stdio: ["pipe", "ignore", "ignore"],
+      });
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        child.kill();
+        finish();
+      }, SEND_TIMEOUT_MS);
+      timeout.unref();
+      child.once("error", finish);
+      child.once("close", finish);
+      child.stdin.on("error", () => {});
+      child.stdin.end(`${JSON.stringify(payload)}\n`);
     });
-    child.on("error", () => {});
-    child.on("close", () => {});
-    child.stdin.on("error", () => {});
-    child.stdin.end(`${JSON.stringify(payload)}\n`);
+  }
+
+  function send(payload: Envelope): void {
+    // Separate hook helpers can otherwise race registration behind the first
+    // turn event. Keep Amp non-blocking while preserving its event order.
+    sendQueue = sendQueue.then(
+      () => sendNow(payload),
+      () => sendNow(payload),
+    );
   }
 
   function forward(
@@ -81,35 +111,41 @@ export default function (amp: PluginAPI) {
     }
   }
 
-  async function bindThread(thread: PluginThread): Promise<void> {
+  function bindThread(thread: PluginThread): void {
     if (subscribedThreads.has(thread.id)) return;
     subscribedThreads.add(thread.id);
     thread.state.subscribe((state) => observeState(thread, state));
-    try {
-      const state = await thread.state.get();
-      if (!states.has(thread.id)) observeState(thread, state);
-    } catch {
-      // State is enrichment; lifecycle events remain authoritative.
-    }
+    void thread.state
+      .get()
+      .then((state) => {
+        if (!states.has(thread.id)) observeState(thread, state);
+      })
+      .catch(() => {
+        // State is enrichment; lifecycle events remain authoritative.
+      });
   }
 
-  amp.on("session.start", async (event, ctx) => {
+  amp.on("session.start", (event, ctx) => {
     const threadID = event.thread.id;
-    try {
-      const definition = (await ctx.thread.agent()).definition;
-      gauges.set(threadID, {
-        model: definition.kind === "builtin-agent" ? definition.mode : definition.model,
-        effort: definition.reasoningEffort,
-      });
-    } catch {
-      gauges.delete(threadID);
-    }
-    await bindThread(ctx.thread);
-    forward("session_start", threadID);
+    // Registration is the ordering boundary. Agent metadata and state reads
+    // are enrichment and must not delay it or let a focus switch drop it.
     registeredThreads.add(threadID);
-    if (states.get(threadID) === "awaiting-approval") {
-      forward("permission_ask", threadID);
-    }
+    forward("session_start", threadID);
+    bindThread(ctx.thread);
+    void ctx.thread
+      .agent()
+      .then(({ definition }) => {
+        gauges.set(threadID, {
+          model:
+            definition.kind === "builtin-agent"
+              ? definition.mode
+              : definition.model,
+          effort: definition.reasoningEffort,
+        });
+      })
+      .catch(() => {
+        gauges.delete(threadID);
+      });
   });
 
   amp.on("agent.start", (event) => {
@@ -117,15 +153,38 @@ export default function (amp: PluginAPI) {
   });
 
   amp.on("tool.result", (event) => {
-    const files = amp.helpers.filesModifiedByToolCall(event);
+    let filesModified: boolean | undefined;
+    try {
+      const files = amp.helpers.filesModifiedByToolCall(event);
+      filesModified = files == null ? undefined : files.length > 0;
+    } catch {
+      // Omit the hint so the adapter's static vocabulary remains the fallback.
+    }
     forward("tool_result", event.thread.id, {
       tool_name: event.tool,
       status: event.status,
-      files_modified: files != null && files.length > 0,
+      files_modified: filesModified,
     });
   });
 
   amp.on("agent.end", (event) => {
-    forward("agent_end", event.thread.id, { status: event.status });
+    forward("agent_end", event.thread.id, {
+      status: event.status,
+      last_assistant_message: lastAssistantMessage(event.messages),
+    });
   });
+}
+
+function lastAssistantMessage(messages: ThreadMessage[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    const text = message.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+    if (text) return text;
+  }
+  return undefined;
 }
