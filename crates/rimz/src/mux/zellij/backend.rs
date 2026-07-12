@@ -75,8 +75,13 @@ struct RawListedPane {
     is_floating: bool,
     #[serde(default)]
     is_focused: bool,
-    #[serde(alias = "tab_id")]
-    tab_position: u64,
+    /// Stable Zellij tab id accepted by `new-pane --tab-id`.
+    #[serde(default)]
+    tab_id: Option<u64>,
+    /// Current on-screen tab position. Older Zellij versions exposed only
+    /// `tab_id`, where that value also served as the position.
+    #[serde(default)]
+    tab_position: Option<u64>,
     #[serde(default)]
     tab_name: Option<String>,
     #[serde(default)]
@@ -99,7 +104,7 @@ impl From<RawListedPane> for PaneTopologyPane {
             is_suppressed: pane.is_suppressed,
             is_floating: pane.is_floating,
             is_focused: pane.is_focused,
-            tab_position: pane.tab_position,
+            tab_position: pane.tab_position.or(pane.tab_id).unwrap_or_default(),
             tab_name: pane.tab_name,
             pane_columns: pane.pane_columns,
             pane_x: pane.pane_x,
@@ -131,6 +136,30 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
 }
 
 impl ZellijBackend {
+    fn tab_id_for_pane(&self, session_name: &str, pane: &PaneId) -> Result<u64> {
+        let pane_id = pane.creation_ordinal().ok_or_else(|| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: format!("target pane `{pane}` has no numeric Zellij id"),
+        })?;
+        let output = self
+            .zellij_action(session_name)
+            .args(["list-panes", "--all", "--json"])
+            .run()?;
+        let listed: Vec<RawListedPane> =
+            serde_json::from_slice(&output.stdout).map_err(|err| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("parsing `list-panes --all --json`: {err}"),
+            })?;
+        listed
+            .into_iter()
+            .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
+            .and_then(|candidate| candidate.tab_id.or(candidate.tab_position))
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("target pane `{pane}` is absent from session `{session_name}`"),
+            })
+    }
+
     pub(super) fn authoritative_pane_listing(
         &self,
         session_name: &str,
@@ -501,6 +530,18 @@ impl MuxBackend for ZellijBackend {
         if let Some(target) = &target {
             ensure_pane_backend(target, MuxName::Zellij)?;
         }
+        // Pane listings carry positional `tab_N` view ids because the presence
+        // plugin cannot see Zellij's stable tab id. Resolve the target pane
+        // through Zellij before using `--tab-id`; positions diverge after a tab
+        // move or close and would otherwise route the split into the wrong tab.
+        let target_tab_id = match (
+            opts.session_name.as_deref(),
+            target.as_ref(),
+            opts.target_view_id.as_deref(),
+        ) {
+            (Some(session), Some(target), Some(_)) => Some(self.tab_id_for_pane(session, target)?),
+            (_, _, view_id) => view_id.and_then(zellij_numeric_id),
+        };
         let mut spec = match opts.session_name.as_deref() {
             Some(session) => self.zellij_action(session).arg("new-pane"),
             None => self.cmd().args(["action", "new-pane"]),
@@ -521,7 +562,7 @@ impl MuxBackend for ZellijBackend {
                 .unwrap_or_else(|| target.raw().to_owned());
             spec = spec.env("ZELLIJ_PANE_ID", pane_id);
         }
-        if let Some(tab_id) = opts.target_view_id.as_deref().and_then(zellij_numeric_id) {
+        if let Some(tab_id) = target_tab_id {
             spec = spec.args(["--tab-id".to_owned(), tab_id.to_string()]);
         }
         if let Some(cwd) = opts.cwd {

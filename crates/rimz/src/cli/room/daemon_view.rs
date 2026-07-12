@@ -137,6 +137,7 @@ fn repair_daemon_view(
         session_name: Some(workspace.session_name.clone()),
         workspace_id: Some(workspace.workspace_id.clone()),
         command_timeout: Some(std::time::Duration::from_millis(500)),
+        authoritative: true,
         ..Default::default()
     }) {
         Ok(listing) => listing,

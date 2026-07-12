@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use rimz::mux::{
-    ClientFocusOptions, MuxBackend, NamedKey, SplitDirection, SplitPaneOptions, ZellijBackend,
+    ClientFocusOptions, MuxBackend, NamedKey, PaneListOptions, SplitDirection, SplitPaneOptions,
+    ZellijBackend,
 };
 use tempfile::TempDir;
 
@@ -171,15 +172,64 @@ fn split_pane_targets_non_focused_tab() {
     let _client = AttachedClient::attach(xdg.path(), &name, 120, 40);
     wait_for_attached_client(xdg.path(), &name);
     let first = wait_for_pane_count(xdg.path(), &name, 1)[0].clone();
-    let first_tab = first.view_id.clone().expect("target tab id");
+    scoped_zellij(xdg.path())
+        .args([
+            "--session",
+            &name,
+            "action",
+            "new-pane",
+            "--direction",
+            "right",
+            "--",
+            "sleep",
+            "60",
+        ])
+        .bounded_output()
+        .expect("second target pane");
+    let target = wait_for_pane_count(xdg.path(), &name, 2)
+        .into_iter()
+        .find(|pane| pane.pane_id != first.pane_id)
+        .expect("second target pane");
+    ZellijBackend::with_runtime_dir(xdg.path())
+        .focus_pane(&first.pane_id, Some(&name))
+        .expect("focus first pane");
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 2);
+    scoped_zellij(xdg.path())
+        .args(["--session", &name, "action", "move-tab", "left"])
+        .bounded_output()
+        .expect("move focused tab left");
+    let target = poll_until(
+        Duration::from_secs(10),
+        || Ok(expect_list_panes(xdg.path(), &name).pane_refs()),
+        |panes| {
+            panes
+                .iter()
+                .any(|pane| pane.pane_id == target.pane_id && pane.view_id != target.view_id)
+        },
+        "target tab moved away from its stable Zellij tab id",
+    )
+    .into_iter()
+    .find(|pane| pane.pane_id == target.pane_id)
+    .expect("moved target pane");
+    let first_tab = target.view_id.clone().expect("moved target tab id");
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let authoritative = backend
+        .list_panes(PaneListOptions {
+            session_name: Some(name.clone()),
+            authoritative: true,
+            ..Default::default()
+        })
+        .expect("authoritative pane listing after tab move");
+    assert!(authoritative.panes.iter().any(|pane| {
+        pane.pane_id == target.pane_id && pane.view_id.as_deref() == Some(first_tab.as_str())
+    }));
 
-    ZellijBackend::with_runtime_dir(xdg.path())
+    backend
         .split_pane(SplitPaneOptions {
             session_name: Some(name.clone()),
-            target_view_id: first.view_id.clone(),
-            target_pane_id: Some(first.pane_id.clone()),
+            target_view_id: target.view_id.clone(),
+            target_pane_id: Some(target.pane_id.clone()),
             cwd: Some(cwd.path().to_string_lossy().into_owned()),
             command: Some(vec!["sleep".to_owned(), "5".to_owned()]),
             env: BTreeMap::new(),
@@ -197,7 +247,7 @@ fn split_pane_targets_non_focused_tab() {
                 .iter()
                 .filter(|pane| pane.view_id.as_deref() == Some(first_tab.as_str()))
                 .count()
-                >= 2
+                >= 3
         },
         "targeted split in non-focused Zellij tab",
     );
@@ -206,8 +256,34 @@ fn split_pane_targets_non_focused_tab() {
             .iter()
             .filter(|pane| pane.view_id.as_deref() == Some(first_tab.as_str()))
             .count(),
-        2,
+        3,
         "targeted split should land beside the target pane, not in the focused tab: {panes:?}",
+    );
+    let snapshot = expect_list_panes(xdg.path(), &name);
+    let target_id = target
+        .pane_id
+        .creation_ordinal()
+        .expect("numeric target id");
+    let target_geometry = snapshot
+        .panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.id == target_id)
+        .expect("target pane geometry");
+    let new_geometry = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.terminal_command.as_deref() == Some("sleep 5"))
+        .expect("new pane geometry");
+    assert_eq!(
+        (new_geometry.pane_x, new_geometry.pane_columns),
+        (target_geometry.pane_x, target_geometry.pane_columns),
+        "stacked split should use the requested pane's column: {:?}",
+        snapshot.panes,
+    );
+    assert_eq!(
+        new_geometry.pane_rows, 1,
+        "unfocused native-stack child should collapse to its title row: {:?}",
+        snapshot.panes,
     );
 }
 

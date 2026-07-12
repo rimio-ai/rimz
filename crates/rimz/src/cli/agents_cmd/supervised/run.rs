@@ -110,22 +110,24 @@ fn open_attempt_pane(
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
     let room_target = room.target(&prepared.workspace, &prepared.launch.cwd);
-    let sidebar = crate::cli::room::build_sidebar_opts(&room_target, Vec::new())?;
-    let tab = || {
-        room.backend().open_tab(&TabOptions {
-            session_name: prepared.workspace.session_name.clone(),
-            title: format!("run {}", prepared.adapter.descriptor().kind),
-            cwd: prepared.launch.cwd.clone(),
-            panes: LayoutPanes {
-                columns: vec![LayoutColumn {
-                    panes: vec![pane.clone()],
-                    stacked: false,
-                }],
-            },
-            focus: false,
-            dock_sidebar: true,
-            sidebar: sidebar.clone(),
-        })
+    let tab = || -> Result<()> {
+        let sidebar = crate::cli::room::build_sidebar_opts(&room_target, Vec::new())?;
+        room.backend()
+            .open_tab(&TabOptions {
+                session_name: prepared.workspace.session_name.clone(),
+                title: format!("run {}", prepared.adapter.descriptor().kind),
+                cwd: prepared.launch.cwd.clone(),
+                panes: LayoutPanes {
+                    columns: vec![LayoutColumn {
+                        panes: vec![pane.clone()],
+                        stacked: false,
+                    }],
+                },
+                focus: false,
+                dock_sidebar: true,
+                sidebar,
+            })
+            .map_err(anyhow::Error::from)
     };
     let open_result = match run_placement(args.new_tab, target.is_some(), args.loop_zone) {
         RunPlacement::Split => room
@@ -148,9 +150,9 @@ fn open_attempt_pane(
             .map_err(anyhow::Error::from),
         RunPlacement::LoopZone => match open_loop_zone_pane(prepared, room, args, pane)? {
             true => Ok(()),
-            false => tab().map_err(anyhow::Error::from),
+            false => tab(),
         },
-        RunPlacement::Tab => tab().map_err(anyhow::Error::from),
+        RunPlacement::Tab => tab(),
     };
     if let Err(err) = open_result {
         let _ = rimz::harness::run::fail(prepared.store.paths(), run_id);
@@ -229,6 +231,7 @@ fn list_loop_zone_panes(
         session_name: Some(prepared.workspace.session_name.clone()),
         workspace_id: Some(prepared.workspace.workspace_id.clone()),
         command_timeout: Some(Duration::from_millis(500)),
+        authoritative: true,
         ..Default::default()
     }) {
         Ok(listing) => Some(listing),
