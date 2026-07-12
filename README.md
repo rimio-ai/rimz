@@ -66,7 +66,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 - **Scriptable, End to End:** `rimz agents -p` is `claude -p` for every agent, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows
 - **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result), and notification handlers run your own command the moment a row needs eyes
 - **Auto Continue, while you're Away:** a rate-limit pause resumes the moment the budget window resets and transient API overload retries on a backoff ramp; agents recover themselves and keep working while you're gone
-- **Answer from your Phone:** official remote control puts your terminal sessions in the Claude and ChatGPT mobile apps: kick off a task at your desk, answer its questions from your phone, come back and review in the pane; one seamless session, end to end
+- **Answer from your Phone:** when an agent stops to ask, the question reaches the official Claude and ChatGPT mobile apps through each provider's own remote control; answer there and it lands in the same session, the turn moving on in its pane as if you had typed it, with RimZ never between you and the official apps
 - **Pets, your beloved Companion:** an animated sprite on the provider dashboard that keeps you company, running while the agents run and waving when one waits
 - **Local or Remote, Continuously:** start on your MacBook or a server, close the laptop, and reattach from anywhere; the link heals itself every time you reconnect
 - **Extremely Lightweight:** a single binary that hooks the agents you already run, inside your familiar Zellij or tmux: same keybinds, same terminal, zero learning curve; all the official web, desktop, and mobile apps keep working
@@ -195,6 +195,15 @@ rimz remote connect dev          # the room rebuilds, every agent where you left
 rimz remote connect dev --web    # the same room in your browser at 127.0.0.1
 ```
 
+**Answer from your phone.** A fleet that runs while you are out still stops to ask: a permission prompt, a plan approval, a question only you can decide. Claude Code and Codex ship remote control, the bridge behind their official mobile apps, and two toggles make every room keep that bridge up. The ask reaches your phone as a push from the provider's own app, your answer lands in the same session on the machine running the room, and the turn continues in its pane as if you had typed it there. Leave the room on a server, go to dinner, and a 9 p.m. question is one tap instead of a fleet stalled until morning. RimZ stays out of the path: the toggles start the provider's own command with the room and nothing more, so everything official keeps working exactly as the vendor built it.
+
+```sh
+rimz config set remote_control.claude true    # keep `claude remote-control` up with the room
+rimz config set remote_control.codex true     # ensure codex's remote-control daemon, once per machine
+```
+
+Both are off by default, and setting one back to `false` undoes it. The [agents guide](./docs/guide/agents.md#answer-asks-from-your-phone) shows exactly what each toggle runs.
+
 ## Configuration
 
 RimZ runs with zero configuration, and everything you can tune is plain TOML in files you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.config/rimz/` (config, theme, agents, loop, remote), so the files are their own reference; after that, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
@@ -212,7 +221,7 @@ rimz config set theme.pets.enabled true       # an animated pet; `rimz list-pets
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
 rimz config set harness.smart_compact "70%"   # compact before a message once context passes 70%
 
-# Asks on your phone: the providers' official mobile bridges
+# Answer asks from your phone (the move above)
 rimz config set remote_control.claude true
 rimz config set remote_control.codex true
 ```
@@ -221,7 +230,7 @@ What each group does, with the depth one link away:
 
 - The modern look wants a truecolor terminal (Ghostty, WezTerm, Kitty, Alacritty) and a Nerd Font, inside RimZ tmux rooms and over `rimz remote` too. The color scheme defaults to TokyoNight Night; `rimz config set theme "Catppuccin Mocha"` picks any bundled scheme from `rimz list-themes`. Pets render as crisp pixels in Ghostty and kitty (tmux additionally needs 3.6+ with `allow-passthrough on`) and as cell art everywhere else, Zellij included. → [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
 - Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction sends `/compact` ahead of your text once context passes the threshold, so a long turn lands on a fresh window. Add a [scheduled ping](#everyday-moves) and the fleet only needs you for real decisions; cap what that freedom costs with `rimz config set harness.budget 50/day`. → [loops → built-in recovery](./docs/guide/loops.md#built-in-recovery) · [budgets](./docs/guide/budget.md)
-- The remote-control toggles bring up Claude's and Codex's own mobile-app bridges with every room start, so a blocking ask reaches your phone and your answer lands in the same session, in the same pane. Both are off by default, and the [agents guide](./docs/guide/agents.md#answer-asks-from-your-phone) shows exactly what each toggle runs.
+- The remote-control toggles are the [answer-from-your-phone move](#everyday-moves) above; the [agents guide](./docs/guide/agents.md#answer-asks-from-your-phone) shows exactly what each one runs.
 
 The [setup guide](./docs/guide/setup.md) walks the whole first pass, including agent hooks and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md); the full key catalog is the [configuration guide](./docs/guide/configuration.md).
 
