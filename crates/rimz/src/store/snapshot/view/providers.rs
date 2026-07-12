@@ -330,8 +330,8 @@ pub(super) fn fresh_windows<'a>(
 
 /// Built-in provider style, read from the adapter's brand descriptor
 /// ([`crate::agents::Brand`]); used when the per-machine config overrides none
-/// of it. An unregistered kind renders title-cased with no emblem in neutral
-/// grey (244).
+/// of it. An unregistered kind renders title-cased with the shared fallback
+/// emblem in neutral grey (244).
 struct ProviderStyleDefaults {
     product_name: String,
     art: Vec<String>,
@@ -346,17 +346,21 @@ fn default_provider_style(kind: &str) -> ProviderStyleDefaults {
             art: descriptor
                 .brand
                 .emblem
-                .trim_matches('\n')
-                .lines()
-                .map(ToOwned::to_owned)
-                .collect(),
+                .map(|emblem| {
+                    emblem
+                        .trim_matches('\n')
+                        .lines()
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_else(|| crate::agents::emblem_lines(kind)),
             color: descriptor.brand.color,
             color_rgb: Some(descriptor.brand.color_rgb),
         };
     }
     ProviderStyleDefaults {
         product_name: provider_title_case(kind),
-        art: Vec::new(),
+        art: crate::agents::fallback_emblem(),
         color: 244,
         color_rgb: None,
     }

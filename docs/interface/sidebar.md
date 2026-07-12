@@ -364,7 +364,7 @@ These are **sliding windows** that begin counting only on your first token, so u
 
 When RimZ is reading only cached budgets and the longest cached window has already reset, the balance is unknown until the provider refreshes. The panel keeps the account and window labels, but every cached budget row becomes a dim empty track with no countdown, so it does not claim either a refreshed full budget or an exhausted one. A metered account whose window list has not arrived yet paints the same dim empty track with a blank label slot, preserving the budget grid without inventing a window.
 
-Provider blocks stacked (`theme.display.provider_tabs = "never"`). Claude and Codex use account-global provider totals; Pi is shown as an idle API-key block to pin its built-in emblem:
+Provider blocks stacked (`theme.display.provider_tabs = "never"`). Claude and Codex use account-global provider totals; Pi is shown as an idle API-key block to pin its curated catalog emblem:
 
 ```
   Claude v2.1.169 · Claude Max                   ⇅ rc
@@ -387,7 +387,7 @@ An **unmetered** account (an API key) shows an `api` bar: trailing-month transcr
 
 A **Pi block** names its version and the backing account it runs on — `Pi v0.80.6 · Anthropic OAuth`. Pi keeps its budget readings under the `pi` provider: live sessions publish response-header windows, idle OAuth accounts refresh out-of-band, and an API key gets the `api` paid-usage row instead ([provider.md → Per-provider mapping](../internals/agents/providers.md#per-provider-mapping)).
 
-Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — host infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[theme.providers.<kind>]`, see [theme.md](../guide/theme.md#provider-styling)).
+Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — host infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem resolves from the embedded catalog with a shared fallback, while emblem, color, and name remain configurable through `[theme.providers.<kind>]` (see [theme.md](../guide/theme.md#provider-styling)).
 
 ### The fleet store
 

@@ -71,7 +71,7 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "kimi",
     display_name: "Kimi",
     brand: Brand {
-        emblem: "\n ▗▟███▙▖\n▐██▘ ▝██▌\n ▝▜███▛▘",
+        emblem: None,
         color: 141,
         color_rgb: (0x8d, 0x6b, 0xff),
     },

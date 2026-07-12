@@ -35,10 +35,7 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "copilot",
     display_name: "Copilot",
     brand: Brand {
-        emblem: "
- +--+ +--+
- |  +-+  |
- +-------+",
+        emblem: None,
         color: 140,
         color_rgb: (0x89, 0x57, 0xe5),
     },

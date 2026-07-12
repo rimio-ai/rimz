@@ -333,6 +333,8 @@
 
 [theme.providers]
 # Provider styles are keyed by agent kind and every field is optional.
+# Every provider follows this shape. Shipped defaults live in the embedded
+# emblem catalog and each field here overrides its corresponding default.
 ## [theme.providers.claude]
 ## product_name = "Claude"
 ## color = "#d97757"

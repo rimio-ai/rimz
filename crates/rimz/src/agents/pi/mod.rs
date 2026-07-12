@@ -64,10 +64,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "pi",
     display_name: "Pi",
     brand: Brand {
-        emblem: "
- █▜███▛█
-▝▜▛▀▀▀▜▛▘
- ▝▘   ▝▘",
+        emblem: None,
         color: 29,
         color_rgb: (0x27, 0xa0, 0x77),
     },

@@ -33,10 +33,7 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     bin_names: &["kiro-cli"],
     display_name: "Kiro",
     brand: Brand {
-        emblem: "
- ▗▟█▙▖
-▐█▖ ▗█▌
- ▝▘ ▝▘",
+        emblem: None,
         color: 92,
         color_rgb: (0x79, 0x0e, 0xcb),
     },

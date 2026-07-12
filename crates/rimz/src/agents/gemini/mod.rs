@@ -54,10 +54,7 @@ static GEMINI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "gemini",
     display_name: "Gemini",
     brand: Brand {
-        emblem: "
-  ◆
-◆ G ◆
-  ◆",
+        emblem: None,
         color: 33,
         color_rgb: (0x42, 0x85, 0xf4),
     },

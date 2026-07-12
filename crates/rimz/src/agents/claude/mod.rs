@@ -75,10 +75,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "claude",
     display_name: "Claude",
     brand: Brand {
-        emblem: "
- ▐▛███▜▌
-▝▜█████▛▘
-  ▘▘ ▝▝",
+        emblem: None,
         color: 173,
         color_rgb: (0xd9, 0x77, 0x57),
     },

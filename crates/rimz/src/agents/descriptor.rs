@@ -140,11 +140,9 @@ pub enum ThreadKey {
 /// Brand styling for the provider dashboard panel.
 #[derive(Debug)]
 pub struct Brand {
-    /// Multi-line ASCII emblem, written as drawn (one row per line). The
-    /// literal opens with a bare newline so the art starts at column 0 with
-    /// its leading spaces intact — a `\` continuation would eat them — and
-    /// the read path trims the surrounding newlines.
-    pub emblem: &'static str,
+    /// Optional plugin-supplied emblem override. Built-in agents resolve their
+    /// art from the embedded emblem catalog by kind.
+    pub emblem: Option<&'static str>,
     /// 256-color index.
     pub color: u8,
     /// Truecolor brand tone for renderers using RGB depth.

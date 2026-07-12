@@ -35,10 +35,7 @@ static DROID_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "droid",
     display_name: "Droid",
     brand: Brand {
-        emblem: "
- ▄▄▄▄▄
-▐ ● ● ▌
- ▀▀▀▀▀",
+        emblem: None,
         color: 252,
         color_rgb: (0xd8, 0xd8, 0xd8),
     },

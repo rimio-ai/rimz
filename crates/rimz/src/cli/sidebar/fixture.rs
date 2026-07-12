@@ -2240,15 +2240,24 @@ fn provider_panel(
                 descriptor
                     .brand
                     .emblem
-                    .trim_matches('\n')
-                    .lines()
-                    .map(ToOwned::to_owned)
-                    .collect(),
+                    .map(|emblem| {
+                        emblem
+                            .trim_matches('\n')
+                            .lines()
+                            .map(ToOwned::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_else(|| rimz::agents::emblem_lines(kind)),
                 descriptor.brand.color,
                 Some(descriptor.brand.color_rgb),
             )
         } else {
-            (provider_title_case(kind), Vec::new(), 244, None)
+            (
+                provider_title_case(kind),
+                rimz::agents::fallback_emblem(),
+                244,
+                None,
+            )
         };
     rimz::SidebarProviderPanel {
         kind: kind.to_owned(),

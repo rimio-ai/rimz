@@ -30,9 +30,7 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "amp",
     display_name: "Amp",
     brand: Brand {
-        emblem: "
- /\\
-/__\\",
+        emblem: None,
         color: 255,
         color_rgb: (0xee, 0xee, 0xee),
     },

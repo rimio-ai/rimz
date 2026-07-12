@@ -44,10 +44,7 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     display_name: "Qwen Code",
     bin_names: &["qwen"],
     brand: Brand {
-        emblem: "
-  ◢██◣
- ◢████◣
-  ◥██◤",
+        emblem: None,
         color: 99,
         color_rgb: (0x61, 0x5c, 0xed),
     },

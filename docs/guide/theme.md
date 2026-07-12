@@ -215,7 +215,7 @@ The `status` group sets head *shapes*; their color, effect, and speed stay in [`
 
 ## Provider styling
 
-`[theme.providers.<kind>]` restyles a provider's dashboard block over the built-in defaults: display name, ASCII emblem, and brand color (Claude clay `#d97757`, Codex blue `#2fb1d1`, Pi green `#27a077`, Open Code orange `#ff8700`). Each field is optional, so a color override leaves the shipped art intact.
+`[theme.providers.<kind>]` restyles a provider's dashboard block over the built-in defaults: display name, ASCII emblem, and brand color (Claude clay `#d97757`, Codex blue `#2fb1d1`, Pi green `#27a077`, Open Code orange `#ff8700`). Shipped art resolves through the embedded emblem catalog: curated kinds use their entry and every other kind uses the shared fallback. Each field is optional, so a color override leaves that resolved art intact.
 
 ```toml
 [theme.providers.claude]

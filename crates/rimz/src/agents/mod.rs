@@ -24,6 +24,7 @@ pub mod credits;
 pub mod cursor;
 pub mod descriptor;
 pub mod droid;
+mod emblems;
 pub mod gemini;
 pub(crate) mod hook_types;
 pub(crate) mod identity;
@@ -72,6 +73,7 @@ pub use descriptor::{
     PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
     program_names_kind,
 };
+pub use emblems::{emblem_lines, fallback_emblem};
 pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };

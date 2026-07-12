@@ -60,7 +60,7 @@ emits = ["session_start", "turn_start", "turn_end", "context"]
 setup-doc = "README.md"
 
 [brand]
-emblem = "[mb]"                 # optional; defaults to [agent]
+emblem = "[mb]"                 # optional; defaults to the shared fallback
 color = 141                     # terminal 256-color index
 color-rgb = [175, 135, 255]
 

@@ -30,10 +30,7 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "cursor",
     display_name: "Cursor",
     brand: Brand {
-        emblem: "
-  ◢█◣
- ◢██◤
-  ◥◤",
+        emblem: None,
         color: 255,
         color_rgb: (0xe8, 0xe8, 0xe8),
     },

@@ -46,8 +46,6 @@ pub use load::{
 };
 pub use manifest::valid_kind;
 
-const GENERIC_EMBLEM: &str = "[agent]";
-
 pub struct PluginAdapter {
     manifest: &'static PluginManifest,
     plugin_dir: &'static Path,
@@ -490,8 +488,7 @@ fn build_descriptor(
                 .brand
                 .emblem
                 .as_ref()
-                .map(|emblem| leak_string(emblem.clone()))
-                .unwrap_or(GENERIC_EMBLEM),
+                .map(|emblem| leak_string(emblem.clone())),
             color: manifest.brand.color,
             color_rgb: manifest.brand.color_rgb.into(),
         },
