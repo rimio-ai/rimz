@@ -241,25 +241,6 @@ Both are off by default, and the [agents guide](./docs/guide/agents.md#answer-as
 
 The [setup guide](./docs/guide/setup.md) covers the first pass end to end: agent hooks, appearance, the hands-off behaviors, and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md). The full key catalog is the [configuration guide](./docs/guide/configuration.md).
 
-## Agent compatibility matrix
-
-| Agent       | Status | Integration                                                       |
-|-------------|:------:|-------------------------------------------------------------------|
-| Claude Code | ✅     | hooks · statusline · `.jsonl` transcripts · `claude --resume`     |
-| Codex       | ✅     | hooks + `notify` · app-server · rollout `.jsonl` · `codex resume` |
-| Amp         | alpha  | plugin API · `amp threads continue`                               |
-| Copilot     | alpha  | hooks · `copilot --resume`                                        |
-| Gemini CLI  | beta   | hooks · session `.jsonl` · `gemini --resume`                      |
-| Kimi        | alpha  | hooks · durable agent records · `kimi --session`                  |
-| Pi          | beta   | extension API · session `.jsonl` · `pi --session`                 |
-| OpenCode    | alpha  | extension API · session `.jsonl`                                  |
-| Cursor      | alpha  | command hooks · opaque transcript metadata · `agent --resume`     |
-| Droid       | alpha  | native hooks · `~/.factory/settings.json` · `droid --resume`      |
-| Kiro CLI    | early  | v3 command hooks · `kiro-cli chat --resume-id`                    |
-| Qwen Code   | beta   | hooks · statusline · session `.jsonl` · `qwen --resume`            |
-
-Adapters are thin layers over the same hook and transcript primitives; the agents run stock, in your terminal, with the official apps untouched. Per-agent status, integration surface, and permission-mode mapping live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
-
 ## Documentation
 
 The [documentation index](./docs/README.md) maps the whole set. Highlights:
@@ -295,9 +276,34 @@ rimz doctor                     # verify backend, hooks, and room health
 
 The install is additive (your existing hooks stay), and `rimz hooks uninstall` undoes it. RimZ is pre-release ([project status](#project-status)): the agent adapters, both multiplexer backends, and the sidebar are implemented in-tree.
 
+## Agent compatibility matrix
+
+**Status** is how much the agent is actually run day to day: ✅ Supported · 🟢 Beta · 🟡 Alpha · 🧪 Experimental. The **surface** columns read at a glance — ● full · ◐ partial · ○ none — across hooks (live status from the agent's own events), transcript (session read for context and tokens), live (context health and cost on the card), and asks (blocking prompts routed to your keyboard).
+
+| Agent       | Status          | Hooks | Transcript | Live | Asks |
+|-------------|-----------------|:-----:|:----------:|:----:|:----:|
+| Claude Code | ✅ Supported    |   ●   |     ●      |  ●   |  ●   |
+| Codex       | ✅ Supported    |   ●   |     ●      |  ●   |  ●   |
+| Pi          | 🟢 Beta         |   ●   |     ●      |  ◐   |  ○   |
+| OpenCode    | 🟡 Alpha        |   ●   |     ●      |  ◐   |  ●   |
+| Gemini CLI  | 🧪 Experimental |   ●   |     ●      |  ◐   |  ●   |
+| Copilot     | 🧪 Experimental |   ●   |     ○      |  ○   |  ●   |
+| Droid       | 🧪 Experimental |   ●   |     ○      |  ○   |  ○   |
+| Cursor      | 🧪 Experimental |   ●   |     ◐      |  ○   |  ○   |
+| Amp         | 🧪 Experimental |   ●   |     ○      |  ○   |  ○   |
+| Kiro CLI    | 🧪 Experimental |   ●   |     ○      |  ○   |  ○   |
+| Qwen Code   | 🧪 Experimental |   ●   |     ●      |  ◐   |  ●   |
+| Kimi        | 🧪 Experimental |   ●   |     ●      |  ●   |  ●   |
+
+Claude and Codex are the daily drivers; Pi and OpenCode get regular use. Everything marked experimental is wired and tested but not yet run in daily work — status tracks that lived confidence, not mechanical breadth, which is why an experimental row can still light up plenty of surfaces. Launch any of them and it mostly just works: the CLIs run stock in your terminal, official apps untouched. Hit a bug and please [open an issue](https://github.com/rimio-ai/rimz/issues) — that is how an agent graduates.
+
+Per-agent coverage, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
+
 ## Contributing
 
 Contributor rules and the gate stack live in [rust-conventions.md](./docs/contributing/rust-conventions.md); the working contract is [AGENTS.md](./AGENTS.md).
+
+A candid note on agent coverage. Every adapter ships with unit and integration tests, but real confidence comes from dogfooding, and the author runs only Claude, Codex, Pi, and OpenCode in daily work. Supporting a dozen agents well takes real time, and the author holds paid subscriptions for only a few of them, so the rest are best-effort: they are wired against each agent's documented hook and transcript surface, yet largely unproven in anger. Expect rough edges on the experimental agents, and treat a bug there as expected rather than surprising. Issue reports — and fixes — are how each one earns a higher tier, and both are genuinely welcome.
 
 ## License
 
