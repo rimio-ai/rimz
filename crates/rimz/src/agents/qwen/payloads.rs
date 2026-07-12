@@ -136,6 +136,51 @@ pub struct QwenCompact {
     pub trigger: CompactTrigger,
 }
 
+/// One Qwen session-JSONL record, in the Google `Content` shape Qwen persists.
+/// Only the fields RimZ reads to reconstruct the main-thread conversation are
+/// typed; every other key is tolerated and ignored.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TranscriptRecord {
+    pub r#type: Option<String>,
+    pub timestamp: Option<String>,
+    pub message: TranscriptContent,
+    #[serde(rename = "isSidechain")]
+    pub is_sidechain: Option<bool>,
+    #[serde(rename = "agentId")]
+    pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TranscriptContent {
+    pub parts: Vec<TranscriptPart>,
+}
+
+impl TranscriptContent {
+    /// Join the record's visible text, newest model thinking excluded. Thought
+    /// parts (`thought: true`) and `functionCall`/`functionResponse` parts carry
+    /// no user-visible prose, so only non-thought `text` parts contribute.
+    pub fn visible_text(&self) -> String {
+        self.parts
+            .iter()
+            .filter(|part| part.thought != Some(true))
+            .filter_map(|part| {
+                let text = part.text.as_deref()?.trim();
+                (!text.is_empty()).then_some(text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TranscriptPart {
+    pub text: Option<String>,
+    pub thought: Option<bool>,
+}
+
 macro_rules! parse_fn {
     ($name:ident, $ty:ty) => {
         pub fn $name(payload: &Value) -> $ty {

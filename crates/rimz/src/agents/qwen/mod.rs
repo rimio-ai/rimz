@@ -28,6 +28,7 @@ use super::hook_types::{BackgroundTask, SessionSource};
 use super::lifecycle::{AskKind, LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
+use super::transcript::{TranscriptMessage, TranscriptRole};
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, PresetErr, Result, RootIdentity,
@@ -518,6 +519,10 @@ impl AgentAdapter for QwenAdapter {
             .and_then(non_empty_trimmed)
     }
 
+    fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
+        parse_messages(lines)
+    }
+
     fn wrapped_status_line_command(&self) -> Option<String> {
         let root = read_existing_json(&qwen_settings_path().ok()?).ok()?;
         wrapped_status_line_command_from(&root)
@@ -734,6 +739,40 @@ fn observation_identity(
         RootIdentity::Root { agent_id } => Some((agent_id, None)),
         RootIdentity::ForeignChild => None,
     }
+}
+
+/// Normalize Qwen's session JSONL into main-thread conversation messages,
+/// newest last. Qwen persists the Google `Content` shape, so a `user`/`assistant`
+/// record's visible text comes from its non-thought `text` parts; tool
+/// call/result records, system records, and sidechain/subagent records
+/// (`isSidechain` or an `agentId`) stay out of the root stream. This drives
+/// `rimz agents history`, `rimz message --wait`, and `-p --stream` reply
+/// extraction.
+fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
+    lines
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let record = serde_json::from_str::<payloads::TranscriptRecord>(line).ok()?;
+            if record.is_sidechain == Some(true) || record.agent_id.is_some() {
+                return None;
+            }
+            let role = match record.r#type.as_deref() {
+                Some("user") => TranscriptRole::User,
+                Some("assistant") => TranscriptRole::Assistant,
+                _ => return None,
+            };
+            let text = non_empty_trimmed(&record.message.visible_text())?;
+            Some(TranscriptMessage {
+                role,
+                at: record.timestamp.as_deref().and_then(|raw| raw.parse().ok()),
+                text,
+            })
+        })
+        .collect()
 }
 
 #[derive(Default)]

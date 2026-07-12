@@ -218,6 +218,40 @@ fn transcript_tail_and_statusline_supply_context() {
 }
 
 #[test]
+fn parses_main_thread_transcript_and_excludes_sidechains() {
+    let adapter = QwenAdapter;
+    let lines = concat!(
+        r#"{"type":"user","timestamp":"2026-06-02T10:00:00Z","message":{"role":"user","parts":[{"text":"hello"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"role":"model","parts":[{"text":"thinking...","thought":true},{"text":"hi there"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","agentId":"child","message":{"role":"model","parts":[{"text":"child work"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","isSidechain":true,"message":{"role":"model","parts":[{"text":"sidechain"}]}}"#,
+        "\n",
+        r#"{"type":"tool_result","message":{"role":"user","parts":[{"functionResponse":{}}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"role":"model","parts":[{"functionCall":{"name":"edit"}}]}}"#,
+    );
+    let messages = adapter.parse_transcript_messages(lines);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(
+        messages[0].role,
+        crate::agents::transcript::TranscriptRole::User
+    );
+    assert_eq!(messages[0].text, "hello");
+    assert!(messages[0].at.is_some());
+    assert_eq!(
+        messages[1].role,
+        crate::agents::transcript::TranscriptRole::Assistant
+    );
+    // Thought parts and tool-call-only records leave no visible prose.
+    assert_eq!(messages[1].text, "hi there");
+    // Streaming filters to assistant text for `--wait`/`-p --stream`.
+    assert_eq!(adapter.stream_assistant_messages(lines), vec!["hi there"]);
+}
+
+#[test]
 fn stop_failure_maps_retryable_classes() {
     let adapter = QwenAdapter;
     assert_eq!(

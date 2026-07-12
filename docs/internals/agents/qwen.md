@@ -26,6 +26,8 @@ The hook-time tail scan takes the newest root `assistant` record with `usageMeta
 
 Command-mode `ui.statusLine` is wrapped so `rimz statusline feed --source qwen` receives Qwen's rich JSON. It supplies the provider-selected context window and percentage, latest prompt-token gauge, model display name, version, Vim mode, and file-line totals. Cumulative `metrics.models` token totals stay out of the live gauge because they span the session and every routed model. A preset statusline has no command transport, so install leaves it untouched and context falls back to the transcript tail.
 
+Main-thread conversation replay reads the same session JSONL. Each `user`/`assistant` record carries the Google `Content` shape, so a message's visible text joins its non-thought `text` parts, dropping thought parts and `functionCall`/`functionResponse` parts that hold no prose; `tool_result` and `system` records, and any record marked `isSidechain` or carrying an `agentId`, stay out of the root stream. This feeds `rimz agents history`, `rimz message --wait` reply extraction, and `-p --stream` assistant streaming. The parser walks physical records in file order; it does not yet reconstruct the active `parentUuid` branch, so a transcript replayed after `/rewind` can surface an abandoned branch's messages.
+
 Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
 
 ## Account and balance
