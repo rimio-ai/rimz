@@ -30,8 +30,8 @@ pub struct Semantic {
     pub selection: (u8, u8, u8),
     /// The selected card's background band. Derived from the scheme's
     /// `colors.selection.background`, subdued toward the background, or a blue
-    /// tint when the scheme ships none. Used only by the sidebar renderer's band
-    /// fill; the CLI presentation layer ignores it.
+    /// tint when the scheme ships none. Used by the sidebar renderer's band fill
+    /// and by CLI chips as their contrasting foreground.
     pub selection_bg: (u8, u8, u8),
 }
 
