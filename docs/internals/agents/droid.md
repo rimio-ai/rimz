@@ -35,17 +35,19 @@ Droid exposes no supported transcript billing schema or cost field. The adapter 
 
 ## Launch, resume, fork, and permissions
 
-Fresh launch uses `droid -- <prompt>`, resume uses `droid --resume <id>`, fork uses `droid --fork <id>`, and `/compact` is the smart-compaction command. Profiles map `model` to `--model` and `append-system-prompt-file` to `--append-system-prompt-file`; `effort` and replacement `system-prompt-file` fail at profile validation.
+Fresh launch uses `droid -- <prompt>`, resume uses `droid --resume <id>`, fork uses `droid --fork <id>`, and `/compact` is the smart-compaction command. Profiles map `append-system-prompt-file` to `--append-system-prompt-file`; `model`, `effort`, and replacement `system-prompt-file` fail at profile validation. Interactive Droid 0.170.0 carries no `--model` or `--reasoning-effort` flag — both are `droid exec`-only, and its parser accepts unknown options, so an emitted `--model <id>` would be silently ignored and leak the id into the positional prompt. Model and effort are chosen in-session (`/model`, Tab) or through `droid exec`.
 
 Current interactive Droid accepts launch-scoped `--auto <level>` and `--use-spec`. `droid-auto` selects `--auto medium`, the closest fit for normal local development; `droid-plan` starts with `--use-spec`; and `droid`/`droid-ask` retain the user's configured autonomy and native permission UI. `droid-yolo` remains unavailable because `--skip-permissions-unsafe` belongs to `droid exec`; RimZ does not rewrite persistent autonomy settings.
 
 The stock CLI, hook wire fixtures, and goldens are researched against Droid CLI 0.170.0; the structured exec research remains pinned separately to the public SDK version named in the upstream reference. RimZ applies no runtime version gate; refresh the upstream reference and fixtures when Droid's behavior drifts.
 
-The 0.170.0 binary's help and the public docs verify the launch flags without authentication. A logged-in live-pane pass still needs to confirm hook delivery, session-id rotation, profile model selection, and the exact first-turn posture for each suffix.
+The 0.170.0 binary's help verifies the launch flags without authentication: interactive `droid --help` lists `--auto`, `--use-spec`, `--resume`/`--fork`, `--append-system-prompt[-file]`, `--settings`, `--cwd`, and `--worktree[-dir]`, but no `--model` or `--reasoning-effort` (those are `droid exec`-only, and interactive `-r` is `--resume`). A logged-in live-pane pass still needs to confirm hook delivery, session-id rotation, and the exact first-turn posture for each suffix.
 
 ## Deferred integration work
 
 The current adapter deliberately stays on the stock interactive pane and its native hooks. A future supervised `droid exec` transport can add authoritative permission/question requests, context stats, token usage, model/effort updates, failed outcomes, and identified mission workers, but it needs a process-lifecycle and ask-answer path that is larger than this adapter.
+
+Launch-time model and effort selection is deferred with it. The interactive CLI has no `--model`/`--reasoning-effort`, so `render_preset` rejects both today. Interactive `--settings <path>` merges a process-only settings file that *can* carry `model`, `reasoningEffort`, and `autonomyLevel`, so a per-launch model is reachable once RimZ grows a launch-scoped temp-file lifecycle: `render_preset` currently returns argv only, with no channel to materialize and clean up a generated settings file for the pane's lifetime. That temp-config plumbing is the missing abstraction — a note for a future `AgentAdapter` round, since a launch-scoped side-file would let every built-in carry richer presets than flags express.
 
 Compaction can rotate Droid's session id while one native event both closes the old bracket and introduces the replacement. `AgentAdapter::observe_lifecycle` emits one observation per event today, so the adapter records the close on the reported id and lets later activity establish the replacement row. Supporting a close-old/register-new pair requires a kind-agnostic multi-observation or explicit session-replacement abstraction.
 

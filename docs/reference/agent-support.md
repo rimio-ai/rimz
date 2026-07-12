@@ -174,7 +174,7 @@ Droid is a basic-lifecycle integration over Factory's native `settings.json` hoo
 - **Turn outcomes:** `Stop` carries no error field and maps to a clean turn end. Provider failure has no native hook; the displayed-status ladder, stall window, and pane liveness own that gap.
 - **Resume and fork:** `droid --resume <id>` reopens a session under the replacement session id Factory assigns; `droid --fork <id>` branches one for `rimz agents fork`.
 - **Permission modes:** `droid-auto` launches with `--auto medium`, `droid-plan` starts with `--use-spec`, and `droid`/`droid-ask` retain Droid's configured posture and native permission UI. `droid-yolo` stays unavailable because the unsafe bypass is exec-only; RimZ leaves persistent autonomy settings user-owned.
-- **Profiles:** `model` and `append-system-prompt-file` map to native flags. `effort` and replacement `system-prompt-file` fail profile validation.
+- **Profiles:** `append-system-prompt-file` maps to a native flag. `model`, `effort`, and replacement `system-prompt-file` fail profile validation — interactive Droid 0.170.0 has no `--model` or `--reasoning-effort` flag (both are `droid exec`-only), so RimZ rejects them rather than launching with a silently ignored flag.
 - **Install target:** `~/.factory/settings.json`, merged additively; RimZ leaves `statusLine` untouched and removes only its own hook entries on uninstall.
 
 Mapping detail: [droid.md](../internals/agents/droid.md); upstream protocol: [droid-reference.md](../externals/agent-adapter/droid-reference.md).

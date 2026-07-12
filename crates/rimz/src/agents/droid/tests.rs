@@ -185,11 +185,11 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
     assert!(descriptor.runs_as("droid-aarch64-unknown-linux-gnu"));
     assert!(!descriptor.runs_as("node"));
     assert_eq!(
-        DroidAdapter.launch_command(&["--model".to_owned(), "glm".to_owned()], Some("review")),
+        DroidAdapter.launch_command(&["--auto".to_owned(), "medium".to_owned()], Some("review")),
         Some(vec![
             "droid".to_owned(),
-            "--model".to_owned(),
-            "glm".to_owned(),
+            "--auto".to_owned(),
+            "medium".to_owned(),
             "--".to_owned(),
             "review".to_owned()
         ])
@@ -227,16 +227,26 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
 
     assert_eq!(
         DroidAdapter.render_preset(&LaunchPreset {
-            model: Some("glm-5".to_owned()),
             append_system_prompt_file: Some(Path::new("/tmp/append.md").to_path_buf()),
             ..Default::default()
         }),
         Ok(vec![
-            "--model".to_owned(),
-            "glm-5".to_owned(),
             "--append-system-prompt-file".to_owned(),
             "/tmp/append.md".to_owned()
         ])
+    );
+    // Interactive Droid 0.170.0 has no `--model`/`--reasoning-effort`; both are
+    // exec-only, so a profile that sets either fails fast rather than launching
+    // with a silently ignored (and prompt-corrupting) flag.
+    assert_eq!(
+        DroidAdapter.render_preset(&LaunchPreset {
+            model: Some("glm-5".to_owned()),
+            ..Default::default()
+        }),
+        Err(PresetErr::UnsupportedField {
+            agent: "droid",
+            field: "model"
+        })
     );
     assert_eq!(
         DroidAdapter.render_preset(&LaunchPreset {

@@ -412,9 +412,20 @@ impl AgentAdapter for DroidAdapter {
         &self,
         preset: &super::LaunchPreset,
     ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
+        // Interactive Droid 0.170.0 exposes no `--model` or `--reasoning-effort`
+        // flag; both are `droid exec`-only. Reject model and effort so a
+        // profile's launch intent fails fast rather than silently defaulting —
+        // and, worse, leaking an ignored `--model <id>` value into Droid's
+        // positional prompt variadic (its parser allows unknown options).
+        if preset
+            .model
+            .as_deref()
+            .is_some_and(|model| !model.is_empty())
+        {
+            return Err(super::PresetErr::UnsupportedField {
+                agent: "droid",
+                field: "model",
+            });
         }
         if preset
             .effort
@@ -432,6 +443,7 @@ impl AgentAdapter for DroidAdapter {
                 field: "system-prompt-file",
             });
         }
+        let mut argv = Vec::new();
         if let Some(path) = preset.append_system_prompt_file.as_deref() {
             argv.extend([
                 "--append-system-prompt-file".to_owned(),

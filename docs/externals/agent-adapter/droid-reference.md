@@ -61,7 +61,7 @@ The latest official surfaces do not support a fully faithful stock-pane adapter.
 | Compaction close | following `SessionStart.source = "compact"` | compact result `newSessionId` then load replacement |
 | Context fill | unavailable | `droid.get_context_stats` |
 | Token usage | unavailable | `session_token_usage_changed` |
-| Model and effort | launch/config inference only; live `/model` changes are invisible | init/load `settings`, `settings_updated` |
+| Model and effort | no interactive launch flag (config/`--settings` inference only); live `/model` changes are invisible | init/load `settings`, `settings_updated` |
 | Subagents | only identity-less `SubagentStop` | Task tool progress may carry `subagentSessionId`; missions expose worker session IDs |
 | Auth presence | browser login behavior or `FACTORY_API_KEY`; no machine-readable status command | stored-login fallback or explicit API key |
 | Quota / rate windows | no official local API | no official SDK field |
@@ -77,16 +77,18 @@ Treat all hook and JSON-RPC objects as forward-extensible: require the fields do
 | Flag | Meaning |
 | --- | --- |
 | `-v`, `--version` | print the CLI version |
-| `-m`, `--model <id>` | select a model |
 | `-r`, `--resume [sessionId]` | resume the named session or the most recently modified session when omitted |
 | `--fork <sessionId>` | copy the session and resume the copy under a fresh ID |
 | `--worktree [name]`, `-w [name]` | run in a native sibling Git worktree |
+| `--worktree-dir <path>` | directory for worktree creation |
 | `--append-system-prompt <text>` | append text to the system prompt |
 | `--append-system-prompt-file <path>` | append a file to the system prompt |
 | `--settings <path>` | merge a runtime settings file for this process only |
 | `--auto low\|medium\|high` | start this interactive session at the selected autonomy level |
 | `--use-spec` | start this interactive session in specification mode |
 | `--cwd <path>` | set the working directory |
+
+Interactive 0.170.0 exposes **no** `-m`/`--model` or `-r`/`--reasoning-effort` flag: verified against the installed binary's `droid --help` and by the fact that `droid --model` does not raise commander's "argument missing" error the way `droid --auto` and `droid --cwd` do (it launches the TUI, treating `--model` as an ignored unknown option). Interactive `-r` is `--resume`. Model and reasoning effort are `droid exec`-only launch flags (below) or in-session controls (`/model`, Tab); a runtime model can also ride `--settings <path>`. The interactive CLI accepts unknown options silently, so an ignored `--model <id>` would fold the id into the positional prompt rather than failing — do not emit exec-only flags on the interactive launch.
 
 `droid exec` is the non-interactive command. Its adapter-relevant flags are:
 
