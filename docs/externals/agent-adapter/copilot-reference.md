@@ -46,7 +46,7 @@ Use **command hooks** as the lifecycle and decision seam. They are local, sessio
 
 Use the **custom statusline command** or **file-exported OTel** for live context, model, quota, cost, and token enrichment. Statusline is the lighter UI-owned transport, but GitHub currently documents only that it receives session JSON, not that JSON's schema. OTel has a published schema and includes tokens, cost, model, session ID, compaction, errors, and subagents, but it is asynchronous telemetry and must remain enrichment rather than lifecycle truth.
 
-Use **`-p` prompt mode** for RimZ supervised runs if the stock CLI's process exit and output are sufficient. Evaluate **ACP** when RimZ needs structured streaming, permission requests, or session control for a supervised run. Do not replace the interactive pane with ACP: ACP changes RimZ from observing the user's stock CLI into hosting the agent protocol itself.
+Use **`-i, --interactive <prompt>`** for RimZ prompt-seeded panes and supervised runs: it submits the initial prompt while preserving the stock interactive UI, native asks, and the hook-driven completion path shared with other adapters. Native `-p` prompt mode is a future alternative if RimZ adds a process-output supervised backend. Evaluate **ACP** when RimZ needs structured streaming, permission requests, or session control for a supervised run. Do not replace the interactive pane with ACP: ACP changes RimZ from observing the user's stock CLI into hosting the agent protocol itself.
 
 The candidate transport matrix is:
 
@@ -395,6 +395,8 @@ The docs publish no rate-limit/quota attributes in the OTel schema. Quota is vis
 
 Programmatic mode requires enough pre-approved permissions to avoid an unanswered prompt. `permissionRequest` hooks are explicitly supported for CI and pipe mode and can supply policy decisions. For a user-facing RimZ `-p` pane, preserve the ability to answer in the pane rather than granting `--allow-all` by default.
 
+`copilot -i PROMPT` instead starts interactive mode and automatically executes the prompt. RimZ uses this form for its supervised pane because RimZ's `-p` surface supervises an interactive agent turn rather than adopting each provider's similarly named non-interactive mode.
+
 The official docs promise JSONL for `--output-format=json` but publish no event names, completion record, usage object, or compatibility contract. RimZ supervised runs should initially use process exit plus `--silent` text output, or pin a captured JSON schema behind a minimum CLI version.
 
 ## ACP server
@@ -459,9 +461,9 @@ Enable with `copilot --remote`, `/remote on`, or `remoteSessions: true`; disable
 
 The official prerequisite says the cwd must be a Git repository hosted on GitHub.com for remote control; account/organization availability also applies. Preflight both rather than launching a degraded remote mode. Ordinary RimZ pane launches should preserve the user's configured `remote` / `remoteSessions` behavior unless RimZ adds an explicit provider toggle.
 
-## Implementation checklist and open gaps
+## Implementation footprints and open gaps
 
-Before writing `crates/rimz/src/agents/copilot/`, capture version-pinned fixtures from Copilot CLI 1.0.70 or newer for every item below.
+The hooks-first adapter implements the lifecycle subset documented in [copilot.md](../../internals/agents/copilot.md). Capture version-pinned fixtures from Copilot CLI 1.0.70 or newer for the remaining live-verification items below.
 
 1. Install a user hook file containing every native camelCase event; prove discovery in interactive and `-p` modes, `disableAllHooks`, `COPILOT_HOME`, path quoting, cwd, environment inheritance, timeout, stderr, neutral stdout, and uninstall.
 2. Record hook payloads for new/resume/new-session switching, prompt, success/failure tool calls, every permission choice, `ask_user`, stop, errors, manual/auto compaction, all built-in subagents, simultaneous same-name subagents, and every session-end reason.

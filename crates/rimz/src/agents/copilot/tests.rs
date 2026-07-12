@@ -70,6 +70,7 @@ fn lifecycle_signals_drive_the_shared_state_machine() {
     let registered = observation("sessionStart", json!({"sessionId":"s","cwd":"/tmp/work"}));
     assert_eq!(registered.signal, LifecycleSignal::Registered);
     assert_eq!(registered.worktree_path.as_deref(), Some("/tmp/work"));
+    assert_eq!(registered.origin, None);
     let mut state = step(None, &registered.signal).next;
 
     let started = observation(
@@ -104,6 +105,21 @@ fn lifecycle_signals_drive_the_shared_state_machine() {
 }
 
 #[test]
+fn session_start_marks_only_fresh_identity_sources() {
+    for (source, expected) in [
+        ("startup", Some(SessionOrigin::Fresh)),
+        ("new", Some(SessionOrigin::Fresh)),
+        ("resume", None),
+    ] {
+        let registered = observation(
+            "sessionStart",
+            json!({"sessionId":"s","cwd":"/tmp/work","source":source}),
+        );
+        assert_eq!(registered.origin, expected, "{source}");
+    }
+}
+
+#[test]
 fn tool_mapping_uses_camel_case_names() {
     for (tool, expected) in [
         ("edit", Some((true, true))),
@@ -113,7 +129,7 @@ fn tool_mapping_uses_camel_case_names() {
         let signal = CopilotAdapter
             .observe_lifecycle(
                 "postToolUseFailure",
-                &json!({"sessionId":"s","toolName":tool}),
+                &json!({"sessionId":"s","toolName":tool,"error":"tool failed"}),
             )
             .map(|observation| observation.signal);
         let expected =
@@ -162,7 +178,7 @@ fn ask_details_are_best_effort() {
     let questions = CopilotAdapter
         .ask_question_detail(
             "preToolUse",
-            &json!({"toolName":"ask_user","toolArgs":{"question":"Which branch?"}}),
+            &json!({"toolName":"ask_user","toolArgs":"{\"question\":\"Which branch?\"}"}),
         )
         .expect("question");
     assert_eq!(questions[0].question, "Which branch?");
@@ -206,10 +222,18 @@ fn malformed_payloads_degrade_without_inventing_lifecycle_data() {
 #[test]
 fn launch_resume_permissions_and_presets_are_pinned() {
     assert_eq!(
-        CopilotAdapter.launch_command(&["--banner".to_owned()], None),
-        Some(vec!["copilot".to_owned(), "--banner".to_owned()])
+        CopilotAdapter.launch_command(&["--banner".to_owned()], Some("review this")),
+        Some(vec![
+            "copilot".to_owned(),
+            "--banner".to_owned(),
+            "--interactive".to_owned(),
+            "review this".to_owned()
+        ])
     );
-    assert_eq!(CopilotAdapter.launch_command(&[], Some("prompt")), None);
+    assert_eq!(
+        CopilotAdapter.launch_command(&[], None),
+        Some(vec!["copilot".to_owned()])
+    );
     assert_eq!(CopilotAdapter.ping_args(), None);
     assert_eq!(
         CopilotAdapter.resume_command("sess-1", Path::new("/tmp")),

@@ -97,7 +97,7 @@ Copilot reports through native camelCase command hooks in one RimZ-owned user ho
 - **Two derived cells (◐):** `compact` — `preCompact` opens a bracket that the next lifecycle signal closes because hooks expose no post-compact event; `idle` — reconstructed from `agentStop` plus the stall window without the unwired notification event.
 - **Nine unsupported cells (✗):** plan approval, structured answers, subagents, background parking, context usage, realtime cost, rich context, account spend, and remote control remain outside the documented hook surface or lack stable identity/schema.
 - **Resume:** `copilot --resume <id>` restores a session. Fork stays interactive-only upstream.
-- **Prompt launches:** interactive Copilot exposes no verified initial-prompt flag, so `rimz agents copilot -p` and other prompt-seeded launches refuse at preflight rather than discard the prompt or substitute unverified `-p` behavior.
+- **Prompt launches:** `copilot --interactive <prompt>` starts the stock interactive UI and submits the initial prompt, so prompt-seeded panes and supervised `rimz agents copilot -p` retain native asks and hook-driven completion.
 - **Permission modes:** ask adds no flag, plan uses `--plan`, auto uses `--autopilot`, and yolo uses `--allow-all`. Model and effort profiles use `--model` and `--effort`.
 - **Install target:** `~/.copilot/hooks/rimz.json`, owned whole-file through the first-line `_rimz_managed` marker.
 

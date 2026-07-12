@@ -24,8 +24,8 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, TurnErrorClass,
-    agent_config_path, classify_agent_hook, sanitize_user_prompt,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, SessionOrigin,
+    TurnErrorClass, agent_config_path, classify_agent_hook, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
@@ -450,6 +450,11 @@ impl AgentAdapter for CopilotAdapter {
         let agent_id = parsed.session_id.map(AgentSessionId::from);
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        if event_name == "sessionStart"
+            && matches!(parsed.source.as_deref(), Some("startup" | "new"))
+        {
+            observation.origin = Some(SessionOrigin::Fresh);
+        }
         if event_name == "userPromptSubmitted" {
             observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
             observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
@@ -471,7 +476,7 @@ impl AgentAdapter for CopilotAdapter {
         }
         let label = parsed
             .error
-            .and_then(|error| error.message)
+            .and_then(payloads::CopilotHookError::into_message)
             .map(|message| message.trim().chars().take(500).collect::<String>())
             .filter(|message| !message.is_empty())?;
         let at = parsed
@@ -581,14 +586,13 @@ impl AgentAdapter for CopilotAdapter {
     }
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        if prompt.is_some() {
-            return None;
+        let mut argv = std::iter::once("copilot".to_owned())
+            .chain(extra_args.iter().cloned())
+            .collect::<Vec<_>>();
+        if let Some(prompt) = prompt.filter(|prompt| !prompt.is_empty()) {
+            argv.extend(["--interactive".to_owned(), prompt.to_owned()]);
         }
-        Some(
-            std::iter::once("copilot".to_owned())
-                .chain(extra_args.iter().cloned())
-                .collect(),
-        )
+        Some(argv)
     }
 
     fn ping_args(&self) -> Option<Vec<String>> {
