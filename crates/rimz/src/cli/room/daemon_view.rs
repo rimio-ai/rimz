@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use rimz::config::DaemonConfig;
 use rimz::mux::{
-    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend,
-    SidebarPaneOptions,
+    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend, PaneListOptions,
+    SidebarPaneOptions, SplitDirection, SplitPaneOptions,
 };
 
 use super::RoomTarget;
@@ -109,10 +109,13 @@ pub(super) fn maybe_launch_remote_control(
             view = rimz::remote_control::VIEW_NAME,
             "launched the daemon view",
         ),
-        Ok(BackgroundViewLaunch::AlreadyRunning) => tracing::debug!(
-            session = %workspace.session_name,
-            "daemon view already present; skipping",
-        ),
+        Ok(BackgroundViewLaunch::AlreadyRunning) => {
+            tracing::debug!(
+                session = %workspace.session_name,
+                "daemon view already present; repairing missing managed panes",
+            );
+            repair_daemon_view(backend, workspace, opts);
+        }
         Err(rimz::mux::MuxErr::SessionNotFound { session }) => tracing::debug!(
             session = %session,
             "daemon view deferred; session not addressable yet (pre-attach gate will rebirth it)",
@@ -122,6 +125,58 @@ pub(super) fn maybe_launch_remote_control(
             error = %err,
             "daemon view launch failed; continuing without it",
         ),
+    }
+}
+
+fn repair_daemon_view(
+    backend: &dyn MuxBackend,
+    workspace: &rimz::ResolvedWorkspace,
+    opts: &BackgroundViewOptions,
+) {
+    let listing = match backend.list_panes(PaneListOptions {
+        session_name: Some(workspace.session_name.clone()),
+        workspace_id: Some(workspace.workspace_id.clone()),
+        command_timeout: Some(std::time::Duration::from_millis(500)),
+        ..Default::default()
+    }) {
+        Ok(listing) => listing,
+        Err(err) => {
+            tracing::debug!(
+                session = %workspace.session_name,
+                error = &err as &dyn std::error::Error,
+                "daemon view repair skipped; pane listing failed",
+            );
+            return;
+        }
+    };
+    let Some(anchor) = rimz::remote_control::find_daemon_view_anchor(&listing.panes) else {
+        tracing::debug!(
+            session = %workspace.session_name,
+            "daemon view repair skipped; no surviving daemon pane found",
+        );
+        return;
+    };
+    let missing = rimz::remote_control::missing_managed_panes(&opts.view, &listing.panes);
+    for pane in missing {
+        if let Err(err) = backend.split_pane(SplitPaneOptions {
+            session_name: Some(workspace.session_name.clone()),
+            target_view_id: anchor.view_id.clone(),
+            target_pane_id: Some(anchor.pane_id.clone()),
+            cwd: Some(pane.cwd.to_string_lossy().into_owned()),
+            command: Some(pane.argv.clone()),
+            env: Default::default(),
+            stacked: false,
+            direction: SplitDirection::Down,
+            focus: false,
+        }) {
+            tracing::warn!(
+                session = %workspace.session_name,
+                view = rimz::remote_control::VIEW_NAME,
+                argv = ?pane.argv,
+                error = &err as &dyn std::error::Error,
+                "daemon view repair could not recreate managed pane",
+            );
+        }
     }
 }
 

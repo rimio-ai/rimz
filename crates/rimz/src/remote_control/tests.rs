@@ -331,6 +331,77 @@ fn ensure_codex_daemon_requires_toggle_and_standalone() {
     assert!(should_ensure_codex_daemon(true, true));
 }
 
+fn host(argv: &[&str]) -> HostPane {
+    HostPane {
+        argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
+        cwd: PathBuf::from("/repo"),
+    }
+}
+
+fn daemon_view() -> DaemonView {
+    DaemonView {
+        name: VIEW_NAME.to_owned(),
+        content: vec![
+            host(&["rimz", "daemon", "content", "--slot", "0"]),
+            host(&["rimz", "daemon", "content", "--slot", "1"]),
+        ],
+        hosts: vec![
+            host(&["rimz", "codex", "app-server", "serve"]),
+            host(&["claude", "remote-control", "--spawn", "worktree"]),
+        ],
+        loop_panel: host(&["rimz", "loop", "watch", "--hold"]),
+    }
+}
+
+#[test]
+fn missing_managed_panes_diffs_the_daemon_view_spec() {
+    let present = [
+        pane(
+            Some("rimz daemon content --slot 0 --worktree-root /repo"),
+            Some(VIEW_NAME),
+        ),
+        pane(Some("rimz codex app-server serve"), Some(VIEW_NAME)),
+        pane(Some("rimz loop watch --hold"), Some(VIEW_NAME)),
+        pane(Some("user shell"), Some(VIEW_NAME)),
+        pane(Some("claude remote-control --spawn worktree"), Some("work")),
+    ];
+
+    let missing = missing_managed_panes(&daemon_view(), &present)
+        .into_iter()
+        .map(|host| host.argv.join(" "))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        missing,
+        vec![
+            "rimz daemon content --slot 1",
+            "claude remote-control --spawn worktree"
+        ]
+    );
+}
+
+#[test]
+fn missing_managed_panes_is_empty_when_every_managed_pane_is_present() {
+    let present = [
+        pane(
+            Some("rimz daemon content --slot 0 --worktree-root /repo"),
+            Some(VIEW_NAME),
+        ),
+        pane(
+            Some("rimz daemon content --slot 1 --worktree-root /repo"),
+            Some(VIEW_NAME),
+        ),
+        pane(Some("rimz codex app-server serve"), Some(VIEW_NAME)),
+        pane(
+            Some("claude remote-control --spawn worktree"),
+            Some(VIEW_NAME),
+        ),
+        pane(Some("rimz loop watch --hold"), Some(VIEW_NAME)),
+    ];
+
+    assert!(missing_managed_panes(&daemon_view(), &present).is_empty());
+}
+
 #[test]
 fn detects_both_hosts_by_full_command_line() {
     // Zellij reports the full command line. Claude spells the subcommand

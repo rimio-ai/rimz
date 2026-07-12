@@ -41,6 +41,7 @@ use crate::agents::claude::remote_control as claude_rc;
 use crate::agents::codex::app_server::codex_home;
 use crate::agents::version::CliVersion;
 use crate::config::RemoteControlConfig;
+use crate::mux::{DaemonView, HostPane};
 use crate::pane::PaneRef;
 
 /// View name for the managed daemon tab. Shared by the launcher (the idempotency
@@ -437,6 +438,95 @@ pub fn find_loop_panel(panes: &[PaneRef]) -> Option<&PaneRef> {
                 .is_some_and(command_is_loop_panel)
                 || pane.command.as_deref().is_some_and(command_is_loop_panel))
     })
+}
+
+pub fn find_daemon_view_anchor(panes: &[PaneRef]) -> Option<&PaneRef> {
+    panes
+        .iter()
+        .find(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ManagedPaneMarker {
+    ContentSlot(usize),
+    CodexAppServer,
+    ClaudeRemoteControl,
+    LoopPanel,
+}
+
+/// Return managed daemon-view panes absent from the live pane listing.
+///
+/// The repair pass only adds missing RimZ-owned panes. Extra user panes inside
+/// `rimzd` are left alone, and geometry is repaired at the next full view birth.
+pub fn missing_managed_panes(view: &DaemonView, panes: &[PaneRef]) -> Vec<HostPane> {
+    view.content
+        .iter()
+        .chain(view.hosts.iter())
+        .chain(std::iter::once(&view.loop_panel))
+        .filter(|host| {
+            host_marker(host)
+                .as_ref()
+                .is_some_and(|marker| !pane_listing_contains_marker(panes, marker))
+        })
+        .cloned()
+        .collect()
+}
+
+fn pane_listing_contains_marker(panes: &[PaneRef], marker: &ManagedPaneMarker) -> bool {
+    panes
+        .iter()
+        .filter(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
+        .flat_map(|pane| [pane.spawn_command.as_deref(), pane.command.as_deref()])
+        .flatten()
+        .any(|command| command_matches_marker(command, marker))
+}
+
+fn host_marker(host: &HostPane) -> Option<ManagedPaneMarker> {
+    content_slot_from_args(&host.argv)
+        .map(ManagedPaneMarker::ContentSlot)
+        .or_else(|| {
+            let command = host.argv.join(" ");
+            if command.contains(APP_SERVER_MARKER) {
+                Some(ManagedPaneMarker::CodexAppServer)
+            } else if command.contains(COMMAND_MARKER) {
+                Some(ManagedPaneMarker::ClaudeRemoteControl)
+            } else if command.contains(LOOP_PANEL_MARKER) {
+                Some(ManagedPaneMarker::LoopPanel)
+            } else {
+                None
+            }
+        })
+}
+
+fn command_matches_marker(command: &str, marker: &ManagedPaneMarker) -> bool {
+    match marker {
+        ManagedPaneMarker::ContentSlot(slot) => content_slot_from_command(command) == Some(*slot),
+        ManagedPaneMarker::CodexAppServer => command.contains(APP_SERVER_MARKER),
+        ManagedPaneMarker::ClaudeRemoteControl => command.contains(COMMAND_MARKER),
+        ManagedPaneMarker::LoopPanel => command.contains(LOOP_PANEL_MARKER),
+    }
+}
+
+fn content_slot_from_args(args: &[String]) -> Option<usize> {
+    if !args
+        .windows(2)
+        .any(|pair| pair[0] == "daemon" && pair[1] == "content")
+    {
+        return None;
+    }
+    args.windows(2).find_map(|pair| {
+        (pair[0] == "--slot")
+            .then(|| pair[1].parse().ok())
+            .flatten()
+    })
+}
+
+fn content_slot_from_command(command: &str) -> Option<usize> {
+    let args = command
+        .split_whitespace()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    content_slot_from_args(&args)
 }
 
 /// Whether `pane` belongs to the daemon dashboard. Command markers catch daemon
