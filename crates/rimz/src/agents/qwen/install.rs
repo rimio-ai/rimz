@@ -1,6 +1,6 @@
 //! Qwen settings installer for `settings.json`.
 //!
-//! This module owns managed hook merge/uninstall, hook ownership predicates, blocking-hook sync validation, and session/subagent statusline wrapping.
+//! This module owns managed hook merge/uninstall, hook ownership predicates, blocking-hook sync validation, and session statusline wrapping.
 
 use std::path::{Path, PathBuf};
 
@@ -87,9 +87,8 @@ fn install_candidate(path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
         installed.push(event_label(event, matcher));
     }
 
-    // Wrap both render commands so Rimz captures Qwen's rich per-render JSON —
-    // the session `statusLine` and the per-child `subagentStatusLine`. Idempotent
-    // by construction: a prior Rimz-managed value carries the user's original
+    // Wrap the session render command so Rimz captures Qwen's rich per-render
+    // JSON. Idempotent by construction: a prior Rimz-managed value carries the user's original
     // under `_rimz_wrapped`, which the upsert reads back rather than re-wrapping.
     upsert_rimz_status_line(&mut root);
 
@@ -108,7 +107,7 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     }
     let mut root = read_existing_json(path)?;
     let removed = strip_rimz_matchers(&mut root);
-    // Restore both render commands (or drop the field if Rimz added it).
+    // Restore the render command (or drop the field if Rimz added it).
     strip_rimz_status_line(&mut root);
     write_json(path, &root)?;
     Ok(HookUninstallReport {
@@ -282,7 +281,9 @@ fn reject_async_blocking_in_existing(root: &Map<String, Value>) -> Result<()> {
                         .iter()
                         .any(|hook| hook.get("async").and_then(Value::as_bool) == Some(true))
                 });
-            if matcher_matches(expected_matcher, actual_matcher) && async_handler {
+            let matches_owned_blocking_entry = matcher_matches(expected_matcher, actual_matcher)
+                || (event == "PreToolUse" && actual_matcher.is_none());
+            if matches_owned_blocking_entry && async_handler {
                 return Err(AgentErr::Install {
                     agent: "qwen",
                     reason: format!(

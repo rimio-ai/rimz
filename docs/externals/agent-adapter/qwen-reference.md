@@ -439,6 +439,7 @@ Error results carry an `error` object instead of result text. Preserve unknown f
 | `--fork-session` | fork resumed history |
 | `--session-id <id>` | caller-selected identity; version-gate |
 | `--model <id>` | startup model override |
+| `--system-prompt <text>` / `--append-system-prompt <text>` | direct prompt override/append; these accept text rather than file paths |
 | `--approval-mode <plan|default|auto-edit|auto|yolo>` | permission mapping |
 | `--yolo` | full auto-approval |
 | `--allowed-tools` / `--exclude-tools` | confirmation bypass / tool removal |

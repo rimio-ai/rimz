@@ -222,11 +222,12 @@ Mapping detail: [kiro.md](../internals/agents/kiro.md); upstream protocol: [kiro
 Qwen Code runs standalone in its pane and publishes Claude-shaped native hooks plus a command statusline. RimZ registers it eagerly on `SessionStart` and binds the hook's process and pane directly.
 
 - **Reports:** turn boundaries, per-tool activity, permission prompts, plan approvals, native user questions, background parking, subagent brackets, compaction, session end, and context usage.
-- **Two partial cells (◐):** `live$` and `spend` price transcript tokens through the model price book, while Qwen can route to multiple providers and subscriptions whose billing cannot be inferred from the model alone; off-book models retain tokens at zero dollars.
+- **Two partial cells (◐):** `live$` and `spend` price transcript tokens through the model price book, while multi-provider billing and rewind branch pruning remain unresolved and off-book models retain tokens at zero dollars.
 - **Two unsupported cells (✗):** `answer` keeps native dialog controls in the Qwen pane, and `remote` leaves ACP/daemon hosting outside the pane-first adapter.
-- **Live context:** a command-mode `ui.statusLine` is wrapped to publish Qwen's provider-selected context window, percentage, model label, version, token categories, Vim mode, and file-line totals. Preset statuslines stay untouched and fall back to the transcript tail.
+- **Live context:** a command-mode `ui.statusLine` is wrapped to publish Qwen's provider-selected context window, percentage, latest prompt-token gauge, model label, version, Vim mode, and file-line totals. Preset statuslines stay untouched and fall back to the transcript tail.
 - **Resume and fork:** `qwen --resume <id>` reopens a session; adding `--fork-session` branches one for `rimz agents fork`. Smart compaction types `/compress`.
 - **Permission modes:** plan → `--approval-mode plan`, ask → Qwen's default, auto → `--approval-mode auto-edit`, and yolo → `--approval-mode yolo`.
+- **Model selection:** stock launches preserve Qwen's configured provider and model; a RimZ profile adds `--model` explicitly.
 - **Account:** reads the selected provider from `~/.qwen/settings.json` and checks only credential-source presence. Qwen exposes no stable cross-provider quota endpoint.
 - **Install target:** `~/.qwen/settings.json` or `$QWEN_HOME/settings.json`, edited additively. A command statusline is restored exactly on uninstall; a preset remains untouched.
 

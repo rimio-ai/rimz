@@ -656,6 +656,7 @@ mod tests {
         assert!(!qwen.capabilities.remote_control.background_sessions);
         assert!(qwen.capabilities.rich_context);
         assert!(!qwen.capabilities.transcript_tail_context);
+        assert_eq!(qwen.default_model, None);
         assert!(!qwen.capabilities.daemon_hooked_sessions);
         assert!(!qwen.capabilities.realtime_usage.covers_account_while_live);
         assert!(

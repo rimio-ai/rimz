@@ -22,6 +22,7 @@ fn classifies_native_asks_and_keeps_neutral_stdout_silent() {
 #[test]
 fn launch_and_permission_argv_match_qwen_cli() {
     let adapter = QwenAdapter;
+    assert_eq!(adapter.default_launch_model(), None);
     assert_eq!(
         adapter.launch_command(&[], None),
         Some(vec!["qwen".to_owned()])
@@ -73,6 +74,12 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
             .and_then(Value::as_u64),
         Some(10_000)
     );
+    assert_eq!(
+        installed
+            .pointer("/hooks/PreToolUse/0/matcher")
+            .and_then(Value::as_str),
+        Some(BLOCKING_TOOL_MATCHER)
+    );
     install::uninstall_from(&path).unwrap();
     assert!(!install::hooks_installed_at(&path));
     let restored: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -107,6 +114,10 @@ fn rejects_async_managed_blocking_hooks() {
     fs::write(&path, format!(r#"{{"hooks":{{"PermissionRequest":[{{"_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}","async":true}}]}}]}}}}"#)).unwrap();
     let error = install::install_into(&path).unwrap_err().to_string();
     assert!(error.contains("async"));
+
+    fs::write(&path, format!(r#"{{"hooks":{{"PreToolUse":[{{"_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}","async":true}}]}}]}}}}"#)).unwrap();
+    let error = install::install_into(&path).unwrap_err().to_string();
+    assert!(error.contains("PreToolUse"));
 }
 
 #[test]
@@ -194,6 +205,9 @@ fn transcript_tail_and_statusline_supply_context() {
             .and_then(|tokens| tokens.used_percentage),
         Some(34)
     );
+    let tokens = context.tokens.as_ref().unwrap();
+    assert_eq!(tokens.used_tokens(), Some(45_000));
+    assert_eq!(tokens.current_usage.as_ref().unwrap().output_tokens, None);
     assert_eq!(
         context
             .cost

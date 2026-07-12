@@ -91,7 +91,10 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     coverage: QWEN_COVERAGE,
     lifecycle_hooks: QWEN_LIFECYCLE_HOOKS,
     default_context_window: None,
-    default_model: Some("qwen3-coder-plus"),
+    // Qwen routes across multiple provider protocols, each with its own model
+    // catalog. Preserve the model selected in Qwen settings unless a Rimz
+    // profile explicitly supplies `--model`.
+    default_model: None,
     process_names: &["qwen", "node"],
     extra_bin_dirs: &[],
     activity_events: &[
@@ -176,7 +179,7 @@ const QWEN_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::RealtimeCost,
         ConcernCoverage::Partial {
             via: "priced transcript tokens",
-            gap: "multi-provider endpoints; off-book models cost $0, subscription metering unknown",
+            gap: "multi-provider billing; rewind branch pruning is not reconstructed; off-book models cost $0",
         },
     ),
     (
@@ -193,7 +196,7 @@ const QWEN_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::AccountSpend,
         ConcernCoverage::Partial {
             via: "credential presence/transcripts",
-            gap: "multi-provider endpoints; off-book models cost $0, subscription metering unknown",
+            gap: "multi-provider billing; rewind branch pruning is not reconstructed; subscription metering unknown",
         },
     ),
     (
@@ -273,6 +276,7 @@ const QWEN_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
 ];
 
 const QWEN_HOOK_TIMEOUT_MS: u64 = 10_000;
+const BLOCKING_TOOL_MATCHER: &str = "exit_plan_mode|ask_user_question";
 const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("SessionStart", None),
     ("SessionEnd", None),
@@ -281,7 +285,7 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("StopFailure", None),
     ("Notification", None),
     ("PermissionRequest", None),
-    ("PreToolUse", None),
+    ("PreToolUse", Some(BLOCKING_TOOL_MATCHER)),
     ("PostToolUse", None),
     ("PostToolUseFailure", None),
     ("SubagentStart", None),
@@ -305,8 +309,10 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "PreCompact",
     "PostCompact",
 ];
-const BLOCKING_EVENTS: &[(&str, Option<&str>)] =
-    &[("PermissionRequest", None), ("PreToolUse", None)];
+const BLOCKING_EVENTS: &[(&str, Option<&str>)] = &[
+    ("PermissionRequest", None),
+    ("PreToolUse", Some(BLOCKING_TOOL_MATCHER)),
+];
 const HOOKS_KEY: &str = "hooks";
 const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
 const RIMZ_WRAPPED_KEY: &str = "_rimz_wrapped";
