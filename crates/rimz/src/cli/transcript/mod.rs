@@ -116,8 +116,6 @@ struct Scope {
     include_channel: bool,
 }
 
-const BODY_INDENT: &str = "  ";
-
 mod ask_card;
 mod chat;
 mod layout;

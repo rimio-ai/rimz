@@ -42,10 +42,10 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
             .args(["transcript", "sess-transcript-a", "--worktree", branch]),
     );
     assert!(single.contains("#feature-transcript"), "{single}");
-    assert!(single.contains("user → @claude"), "{single}");
-    assert!(single.contains("  first prompt"), "{single}");
+    assert!(single.contains(" user  → @claude"), "{single}");
+    assert!(single.contains("\nfirst prompt"), "{single}");
     assert!(single.contains("@claude"), "{single}");
-    assert!(single.contains("  final answer"), "{single}");
+    assert!(single.contains("│ final answer"), "{single}");
     assert!(!single.contains("needs attention"), "{single}");
     assert!(
         !single.contains("draft answer"),
@@ -54,14 +54,14 @@ fn transcript_renders_durable_turns_asks_answers_and_channels() {
 
     let channel = run_ok(env.rimz().args(["transcript", "#feature-transcript"]));
     assert!(channel.contains("#feature-transcript"), "{channel}");
-    assert!(channel.contains("user → @claude"), "{channel}");
-    assert!(channel.contains("  first prompt"), "{channel}");
+    assert!(channel.contains(" user  → @claude"), "{channel}");
+    assert!(channel.contains("\nfirst prompt"), "{channel}");
     assert!(channel.contains("@claude"), "{channel}");
-    assert!(channel.contains("  final answer"), "{channel}");
-    assert!(channel.contains("user → @codex"), "{channel}");
-    assert!(channel.contains("  second prompt"), "{channel}");
+    assert!(channel.contains("│ final answer"), "{channel}");
+    assert!(channel.contains(" user  → @codex"), "{channel}");
+    assert!(channel.contains("\nsecond prompt"), "{channel}");
     assert!(channel.contains("@codex"), "{channel}");
-    assert!(channel.contains("  second answer"), "{channel}");
+    assert!(channel.contains("│ second answer"), "{channel}");
     assert!(!channel.contains("other prompt"), "{channel}");
 
     let all = run_ok(env.rimz().args(["transcript", "@all", "--all"]));
@@ -197,14 +197,14 @@ fn transcript_records_native_ask_question_context_and_answer() {
 
     let output = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
     assert!(output.contains("here is my read"), "{output}");
-    assert!(output.contains("▌ Choose deployment path?"), "{output}");
-    assert!(output.contains("▌ ● safe — you"), "{output}");
+    assert!(output.contains("│ │ Choose deployment path?"), "{output}");
+    assert!(output.contains("│ │ ● safe — you"), "{output}");
     assert!(
-        output.contains("▌     Use staged rollout with rollback ready."),
+        output.contains("│ │     Use staged rollout with rollback ready."),
         "{output}"
     );
-    assert!(output.contains("▌ ○ fast"), "{output}");
-    assert!(!output.contains("you → @claude"), "{output}");
+    assert!(output.contains("│ │ ○ fast"), "{output}");
+    assert!(!output.contains(" you  → @claude"), "{output}");
     assert!(!output.contains("\"answers\""), "{output}");
     assert!(!output.contains("claude needs attention"), "{output}");
 
@@ -292,12 +292,12 @@ fn transcript_groups_chronological_entries_across_append_order() {
             .args(["transcript", "sess-order", "--worktree", branch]),
     );
 
-    assert!(output.contains("user → @claude"), "{output}");
-    assert!(output.contains("  first prompt"), "{output}");
+    assert!(output.contains(" user  → @claude"), "{output}");
+    assert!(output.contains("\nfirst prompt"), "{output}");
     assert!(output.contains("@claude"), "{output}");
-    assert!(output.contains("  first answer"), "{output}");
-    assert!(output.contains("  second prompt"), "{output}");
-    assert!(output.contains("  second answer"), "{output}");
+    assert!(output.contains("│ first answer"), "{output}");
+    assert!(output.contains("\nsecond prompt"), "{output}");
+    assert!(output.contains("│ second answer"), "{output}");
     assert!(
         output.find("first answer").unwrap() < output.find("second prompt").unwrap(),
         "{output}"
@@ -419,23 +419,23 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
 
     let channel = run_ok(env.rimz().args(["transcript", "#attribution-transcript"]));
     assert!(channel.contains("@claude → @codex"), "{channel}");
-    assert!(channel.contains("  do the thing"), "{channel}");
+    assert!(channel.contains("\ndo the thing"), "{channel}");
     assert!(channel.contains("@codex → @claude"), "{channel}");
-    assert!(channel.contains("  ack"), "{channel}");
+    assert!(channel.contains("\nack"), "{channel}");
     assert!(channel.contains("@claude"), "{channel}");
-    assert!(channel.contains("  visible claude reply"), "{channel}");
+    assert!(channel.contains("│ visible claude reply"), "{channel}");
     assert!(channel.contains("@codex"), "{channel}");
-    assert!(channel.contains("  visible codex reply"), "{channel}");
+    assert!(channel.contains("│ visible codex reply"), "{channel}");
 
     let codex = run_ok(
         env.rimz()
             .args(["transcript", "@codex#attribution-transcript"]),
     );
     assert!(codex.contains("@claude → @codex"), "{codex}");
-    assert!(codex.contains("  do the thing"), "{codex}");
+    assert!(codex.contains("\ndo the thing"), "{codex}");
     assert!(codex.contains("@codex → @claude"), "{codex}");
-    assert!(codex.contains("  ack"), "{codex}");
-    assert!(codex.contains("  visible codex reply"), "{codex}");
+    assert!(codex.contains("\nack"), "{codex}");
+    assert!(codex.contains("│ visible codex reply"), "{codex}");
     assert!(!codex.contains("visible claude reply"), "{codex}");
 }
 
@@ -466,9 +466,9 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
 
     let output = run_ok(env.rimz().args(["transcript", "#hook-routed-transcript"]));
     assert!(output.contains("@claude → @codex"), "{output}");
-    assert!(output.contains("  ship it"), "{output}");
+    assert!(output.contains("\nship it"), "{output}");
     assert!(output.contains("@codex"), "{output}");
-    assert!(output.contains("  codex reply"), "{output}");
+    assert!(output.contains("│ codex reply"), "{output}");
 }
 
 #[test]
@@ -519,8 +519,8 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
         env.rimz()
             .args(["transcript", &format!("#{branch}"), "--all"]),
     );
-    assert!(all.contains("History archive"), "{all}");
-    assert!(all.contains("Live session"), "{all}");
+    assert!(!all.contains("History archive"), "{all}");
+    assert_eq!(all.matches("Live ·").count(), 1, "{all}");
     assert!(all.contains("prior prompt"), "{all}");
     assert!(all.contains("current prompt"), "{all}");
 

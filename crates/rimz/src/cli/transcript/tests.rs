@@ -475,7 +475,7 @@ fn threaded_render_puts_replies_behind_a_spine() {
         first_root < first_reply && first_reply < second_root,
         "{out}"
     );
-    assert!(out.contains("│   question"), "{out}");
+    assert!(out.contains("│ question"), "{out}");
     assert!(out.contains("Jun 29 2026 · 00:02"), "{out}");
 }
 
@@ -705,9 +705,9 @@ fn chat_renders_configured_zone_and_day_boundaries() {
         today,
     );
 
-    let friday = out.find("──── Fri, Jun 26 2026 ────").expect("friday");
-    let saturday = out.find("──── Sat, Jun 27 2026 ────").expect("saturday");
-    let today = out.find("──── Today ").expect("today");
+    let friday = out.find("  Fri, Jun 26 2026  ").expect("friday");
+    let saturday = out.find("  Sat, Jun 27 2026  ").expect("saturday");
+    let today = out.find("  Today  ").expect("today");
     assert!(friday < saturday);
     assert!(saturday < today);
     assert!(out.contains("23:30"));
@@ -728,7 +728,7 @@ fn today_only_chat_omits_day_delimiter() {
 }
 
 #[test]
-fn chat_renders_speaker_headers_and_body_indent() {
+fn chat_renders_speaker_headers_and_flush_left_bodies() {
     let out = render(
         &[
             entry("2026-06-28T04:00:00Z", "hello\n\nagain"),
@@ -738,7 +738,7 @@ fn chat_renders_speaker_headers_and_body_indent() {
     );
 
     assert!(
-        out.contains("user → @claude  00:00\n  hello\n\n  again\n\n@claude  00:00\n  answer"),
+        out.contains(" user  → @claude  00:00\nhello\n\nagain\n\n@claude  00:00\nanswer"),
         "{out}"
     );
     assert!(!out.contains("user:"), "{out}");
@@ -755,8 +755,8 @@ fn chat_groups_same_sender_receiver_inside_window() {
         jiff::civil::date(2026, 6, 28),
     );
 
-    assert_eq!(out.matches("user → @claude").count(), 2, "{out}");
-    assert!(out.contains("first\n  second"), "{out}");
+    assert_eq!(out.matches(" user  → @claude").count(), 2, "{out}");
+    assert!(out.contains("first\nsecond"), "{out}");
 }
 
 #[test]
@@ -773,8 +773,8 @@ fn chat_breaks_group_on_receiver_change_and_ask_cards() {
         jiff::civil::date(2026, 6, 28),
     );
 
-    assert_eq!(out.matches("user →").count(), 3, "{out}");
-    assert!(out.contains("  ▌ Approve tool?\n  ▌ ◌ unanswered"), "{out}");
+    assert_eq!(out.matches(" user  →").count(), 3, "{out}");
+    assert!(out.contains("│ Approve tool?\n│ ◌ unanswered"), "{out}");
 }
 
 #[test]
@@ -810,24 +810,21 @@ fn structured_ask_card_folds_selected_answer_with_note() {
     let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
 
     assert!(
-        out.contains("@claude  14:00\n  I checked both paths."),
+        out.contains("@claude  14:00\nI checked both paths."),
         "{out}"
     );
-    assert!(out.contains("  ▌ Choose deployment path?"), "{out}");
+    assert!(out.contains("│ Choose deployment path?"), "{out}");
+    assert!(out.contains("│ ● safe — you · “use prod window”"), "{out}");
     assert!(
-        out.contains("  ▌ ● safe — you · “use prod window”"),
+        out.contains("│     Use staged rollout with rollback ready."),
         "{out}"
     );
+    assert!(out.contains("│ ○ fast"), "{out}");
     assert!(
-        out.contains("  ▌     Use staged rollout with rollback ready."),
+        out.contains("│     Ship immediately and monitor closely."),
         "{out}"
     );
-    assert!(out.contains("  ▌ ○ fast"), "{out}");
-    assert!(
-        out.contains("  ▌     Ship immediately and monitor closely."),
-        "{out}"
-    );
-    assert!(!out.contains("you → @claude"), "{out}");
+    assert!(!out.contains(" you  → @claude"), "{out}");
 
     let mut raw_ask = ask_entry("2026-06-28T18:00:00Z", "");
     raw_ask.chat.questions = vec![rimz::transcript::AskQuestion {
@@ -884,9 +881,9 @@ fn structured_ask_card_renders_other_and_multi_question_answers() {
 
     let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
 
-    assert!(out.contains("  ▌ ● other: live repro first — you"), "{out}");
-    assert!(out.contains("  ▌\n  ▌ Notify team?"), "{out}");
-    assert!(out.contains("  ▌ ● yes — you"), "{out}");
+    assert!(out.contains("│ ● other: live repro first — you"), "{out}");
+    assert!(out.contains("│\n│ Notify team?"), "{out}");
+    assert!(out.contains("│ ● yes — you"), "{out}");
 }
 
 #[test]
@@ -898,11 +895,11 @@ fn text_ask_card_folds_text_answer_or_stays_unanswered() {
     let unanswered = render(&[ask], jiff::civil::date(2026, 6, 28));
 
     assert!(
-        answered.contains("  ▌ Choose path? [safe, fast]\n  ▌ ● safe — you"),
+        answered.contains("│ Choose path? [safe, fast]\n│ ● safe — you"),
         "{answered}"
     );
     assert!(
-        unanswered.contains("  ▌ Choose path? [safe, fast]\n  ▌ ◌ unanswered"),
+        unanswered.contains("│ Choose path? [safe, fast]\n│ ◌ unanswered"),
         "{unanswered}"
     );
 }
@@ -917,9 +914,9 @@ fn exit_plan_text_falls_back_to_text_card() {
         jiff::civil::date(2026, 6, 28),
     );
 
-    assert!(out.contains("  ▌ Requesting plan approval:"), "{out}");
-    assert!(out.contains("  ▌ 1. Edit parser"), "{out}");
-    assert!(out.contains("  ▌ ◌ unanswered"), "{out}");
+    assert!(out.contains("│ Requesting plan approval:"), "{out}");
+    assert!(out.contains("│ 1. Edit parser"), "{out}");
+    assert!(out.contains("│ ◌ unanswered"), "{out}");
 }
 
 #[test]
@@ -957,19 +954,19 @@ fn card_lines_wrap_with_spine_and_option_hanging_indent() {
     let out = render(&[ask], jiff::civil::date(2026, 6, 28));
 
     assert!(
-        out.contains("\n  ▌ every reviewer needs one clear sentence"),
+        out.contains("\n│ every reviewer needs one clear sentence"),
         "{out}"
     );
     assert!(
-        out.contains("\n  ▌   the on-call lead watches dashboards"),
+        out.contains("\n│   the on-call lead watches dashboards"),
         "{out}"
     );
     assert!(
-        out.contains("\n  ▌     Choose this path when stakeholders need"),
+        out.contains("\n│     Choose this path when stakeholders need"),
         "{out}"
     );
     assert!(
-        out.contains("\n  ▌     wrapping under the option description indentation."),
+        out.contains("\n│     under the option description indentation."),
         "{out}"
     );
 }
@@ -983,12 +980,9 @@ fn answer_without_matching_agent_ask_stays_plain() {
 
     let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
 
-    assert!(
-        out.contains("  ▌ Native question?\n  ▌ ◌ unanswered"),
-        "{out}"
-    );
-    assert!(out.contains("you → @codex"), "{out}");
-    assert!(out.contains("  allow"), "{out}");
+    assert!(out.contains("│ Native question?\n│ ◌ unanswered"), "{out}");
+    assert!(out.contains(" you  → @codex"), "{out}");
+    assert!(out.contains("\nallow"), "{out}");
 }
 
 #[test]
@@ -1001,15 +995,15 @@ fn timestamped_asks_advance_day_delimiter() {
         jiff::civil::date(2026, 6, 28),
     );
 
-    let yesterday = out.find("──── Sat, Jun 27 2026 ────").expect("yesterday");
-    let today = out.find("──── Today ").expect("today");
+    let yesterday = out.find("  Sat, Jun 27 2026  ").expect("yesterday");
+    let today = out.find("  Today  ").expect("today");
     let ask = out.find("Approve tool?").expect("ask");
     assert!(yesterday < today);
     assert!(today < ask);
 }
 
 #[test]
-fn archive_prefix_renders_archive_and_live_markers() {
+fn archive_prefix_renders_only_the_live_boundary() {
     let out = render_with_archive(
         &[
             entry("2026-06-28T14:00:00Z", "prior life"),
@@ -1019,15 +1013,22 @@ fn archive_prefix_renders_archive_and_live_markers() {
         jiff::civil::date(2026, 6, 28),
     );
 
-    let archive = out
-        .find("History archive · earlier today · 10:00")
-        .expect("archive marker");
-    let live = out
-        .find("Live session · earlier today · 11:00")
-        .expect("live marker");
-    assert!(archive < live, "{out}");
+    assert!(!out.contains("History archive"), "{out}");
+    assert_eq!(
+        out.matches("Live · earlier today · 11:00").count(),
+        1,
+        "{out}"
+    );
     assert!(out.contains("prior life"), "{out}");
     assert!(out.contains("current life"), "{out}");
+
+    let all_history = render_with_archive(
+        &[entry("2026-06-28T14:00:00Z", "prior life")],
+        1,
+        jiff::civil::date(2026, 6, 28),
+    );
+    assert!(!all_history.contains("History archive"), "{all_history}");
+    assert!(!all_history.contains("Live ·"), "{all_history}");
 }
 
 #[test]
@@ -1038,7 +1039,28 @@ fn archive_prefix_zero_keeps_plain_chat_shape() {
         jiff::civil::date(2026, 6, 28),
     );
 
-    assert_eq!(out, "user → @claude  00:30\n  same day\n");
+    assert_eq!(out, " user  → @claude  00:30\nsame day\n");
+}
+
+#[test]
+fn chat_uses_human_chips_and_agent_brand_colors() {
+    let raw = render_raw(
+        &[entry("2026-06-28T04:30:00Z", "hello")],
+        jiff::civil::date(2026, 6, 28),
+    );
+    let claude = rimz::agents::registry::descriptor_by_kind("claude").expect("claude descriptor");
+
+    assert!(
+        raw.contains(&render::paint(render::palette::HUMAN_CHIP, " user ")),
+        "{raw:?}"
+    );
+    assert!(
+        raw.contains(&render::paint(
+            render::palette::rgb(claude.brand.color_rgb).bold(),
+            "@claude"
+        )),
+        "{raw:?}"
+    );
 }
 
 #[test]

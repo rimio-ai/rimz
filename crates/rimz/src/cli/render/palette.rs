@@ -25,6 +25,13 @@ pub(crate) const META: anstyle::Style = rgb(TONES.meta);
 pub(crate) const BODY: anstyle::Style = rgb(TONES.body);
 pub(crate) const MUTED: anstyle::Style = rgb(TONES.muted);
 pub(crate) const FAINT: anstyle::Style = rgb(TONES.faint);
+pub(crate) const HUMAN_CHIP: anstyle::Style = anstyle::Style::new()
+    .bg_color(Some(rgb_color(TONES.cool)))
+    .fg_color(Some(rgb_color(TONES.selection_bg)));
+pub(crate) const SYSTEM_CHIP: anstyle::Style = anstyle::Style::new()
+    .bg_color(Some(rgb_color(TONES.meta)))
+    .fg_color(Some(rgb_color(TONES.selection_bg)));
+pub(crate) const RULE: anstyle::Style = rgb(TONES.rule);
 
 /// Table and key/value headers: the `muted` tone, bolded — present but recessed.
 pub(crate) const HEADER: anstyle::Style = rgb(TONES.muted).bold();

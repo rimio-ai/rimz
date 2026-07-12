@@ -45,7 +45,7 @@ pub(super) struct WrapToken {
 
 pub(super) fn card_content_width() -> usize {
     let terminal = render::terminal_columns(MAX_CARD_WIDTH).min(MAX_CARD_WIDTH);
-    let prefix_width = UnicodeWidthStr::width(format!("{BODY_INDENT}▌ ").as_str());
+    let prefix_width = UnicodeWidthStr::width("│ ");
     terminal
         .saturating_sub(prefix_width)
         .max(MIN_CARD_CONTENT_WIDTH)
@@ -155,7 +155,7 @@ pub(super) fn write_spine_fragments(
     } else {
         render::palette::WARN
     };
-    write!(out, "{BODY_INDENT}{}", render::paint(style, "▌ "))?;
+    write!(out, "{}", render::paint(style, "│ "))?;
     for fragment in fragments {
         if fragment.mentions {
             write!(
@@ -179,6 +179,6 @@ pub(super) fn write_spine_blank(out: &mut impl Write, answered: bool) -> Result<
     } else {
         render::palette::WARN
     };
-    writeln!(out, "{BODY_INDENT}{}", render::paint(style, "▌"))?;
+    writeln!(out, "{}", render::paint(style, "│"))?;
     Ok(())
 }

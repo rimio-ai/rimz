@@ -106,29 +106,26 @@ pub(super) fn render_handle(base: &str, channel: Option<&str>, include_channel: 
     base.to_owned()
 }
 
-pub(super) const AGENT_TONES: [anstyle::Style; 3] = [
-    render::palette::META,
-    render::palette::GOOD,
-    render::palette::WARN,
-];
 pub(super) const GROUP_WINDOW_SECS: i64 = 5 * 60;
 
 #[derive(Default)]
-pub(super) struct AgentTones {
-    order: Vec<String>,
+pub(super) struct BrandColors {
+    by_handle: HashMap<String, AgentKind>,
 }
 
-impl AgentTones {
-    fn tone(&mut self, handle: &str) -> anstyle::Style {
-        let idx = self
-            .order
-            .iter()
-            .position(|seen| seen == handle)
-            .unwrap_or_else(|| {
-                self.order.push(handle.to_owned());
-                self.order.len() - 1
-            });
-        AGENT_TONES[idx % AGENT_TONES.len()]
+impl BrandColors {
+    fn insert(&mut self, handle: &str, kind: AgentKind) {
+        self.by_handle
+            .entry(base_handle(handle).to_owned())
+            .or_insert(kind);
+    }
+
+    fn style_for(&self, handle: &str) -> anstyle::Style {
+        self.by_handle
+            .get(base_handle(handle))
+            .and_then(|kind| rimz::agents::registry::descriptor_by_kind(kind.as_str()))
+            .map(|descriptor| render::palette::rgb(descriptor.brand.color_rgb).bold())
+            .unwrap_or(render::palette::META.bold())
     }
 }
 
@@ -185,7 +182,17 @@ pub(super) fn render_display_chat_to(
         .map(|display| display.entry.clone())
         .collect::<Vec<_>>();
     let folded = pair_answers(&rendered);
-    let mut tones = AgentTones::default();
+    let mut brands = BrandColors::default();
+    for display in entries {
+        let entry = &display.entry;
+        let handle = match entry.kind {
+            TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => {
+                entry.chat.from.as_str()
+            }
+            _ => entry.chat.to.as_deref().unwrap_or(entry.chat.from.as_str()),
+        };
+        brands.insert(handle, entry.agent.0.clone());
+    }
     let mut last_date = Some(today);
     let mut first_entry = true;
     let mut follows_day_delimiter = false;
@@ -197,10 +204,6 @@ pub(super) fn render_display_chat_to(
         .filter_map(|entry| entry.entry.chat.at)
         .max();
     let mut wrote_live_divider = newest_archived_at.is_none();
-    if let Some(at) = newest_archived_at {
-        write_archive_banner(out, at, tz, today)?;
-        follows_day_delimiter = true;
-    }
     for (index, display) in entries.iter().enumerate() {
         if folded.suppressed_answers.contains(&index) {
             continue;
@@ -232,7 +235,7 @@ pub(super) fn render_display_chat_to(
                 .is_some_and(|group| group.matches(display, grouped, entry_date));
         if !continuation && !first_entry && !follows_day_delimiter {
             if previous_block == Some(display.block) && !display.lane.is_margin() {
-                writeln!(out, "{}", render::paint(render::palette::FAINT, "  │"))?;
+                writeln!(out, "{}", render::paint(render::palette::FAINT, "│"))?;
             } else {
                 writeln!(out)?;
             }
@@ -248,7 +251,7 @@ pub(super) fn render_display_chat_to(
                 answer,
                 continuation,
                 grouped,
-                &mut tones,
+                &brands,
                 tz,
                 false,
             )?;
@@ -267,7 +270,7 @@ pub(super) fn render_display_chat_to(
                 answer,
                 continuation,
                 grouped,
-                &mut tones,
+                &brands,
                 tz,
                 show_date,
             )?;
@@ -292,12 +295,12 @@ fn write_entry_content(
     answer: Option<&RenderEntry>,
     continuation: bool,
     grouped: bool,
-    tones: &mut AgentTones,
+    brands: &BrandColors,
     tz: &TimeZone,
     show_date: bool,
 ) -> Result<()> {
     if !continuation {
-        write_entry_header(out, entry, grouped, tones, tz, show_date)?;
+        write_entry_header(out, entry, grouped, brands, tz, show_date)?;
     }
     if entry.kind == TranscriptKind::Ask {
         write_ask_card(out, entry, answer)
@@ -311,7 +314,7 @@ fn write_entry_content(
 fn write_thread_lines(out: &mut impl Write, rendered: &[u8]) -> Result<()> {
     let rendered = std::str::from_utf8(rendered).expect("transcript rendering is utf-8");
     for line in rendered.split_terminator('\n') {
-        let spine = render::paint(render::palette::FAINT, "  │");
+        let spine = render::paint(render::palette::FAINT, "│");
         if line.is_empty() {
             writeln!(out, "{spine}")?;
         } else {
@@ -413,14 +416,14 @@ pub(super) fn write_entry_header(
     out: &mut impl Write,
     entry: &RenderEntry,
     grouped: bool,
-    tones: &mut AgentTones,
+    brands: &BrandColors,
     tz: &TimeZone,
     show_date: bool,
 ) -> Result<()> {
-    let mut header = paint_handle(&entry.chat.from, grouped, tones);
+    let mut header = paint_handle(&entry.chat.from, grouped, brands);
     if let Some(to) = entry.chat.to.as_deref() {
         header.push_str(&render::paint(render::palette::FAINT, " → "));
-        header.push_str(&paint_handle(to, grouped, tones));
+        header.push_str(&paint_handle(to, grouped, brands));
     }
     if let Some(at) = entry.chat.at {
         header.push_str("  ");
@@ -438,15 +441,16 @@ pub(super) fn write_entry_header(
     Ok(())
 }
 
-pub(super) fn paint_handle(handle: &str, grouped: bool, tones: &mut AgentTones) -> String {
-    if handle == "user" {
-        render::paint(render::palette::COOL, "user")
-    } else if handle == "you" {
-        render::paint(render::palette::COOL.bold(), "you")
-    } else {
-        let display = display_handle(handle, grouped);
-        render::paint(tones.tone(base_handle(handle)).bold(), display)
+pub(super) fn paint_handle(handle: &str, grouped: bool, brands: &BrandColors) -> String {
+    match base_handle(handle) {
+        label @ ("user" | "you" | "answered") => chip(render::palette::HUMAN_CHIP, label),
+        "rimz" => chip(render::palette::SYSTEM_CHIP, "rimz"),
+        _ => render::paint(brands.style_for(handle), display_handle(handle, grouped)),
     }
+}
+
+fn chip(style: anstyle::Style, label: &str) -> String {
+    render::paint(style, &format!(" {label} "))
 }
 
 pub(super) fn write_body_lines(out: &mut impl Write, text: &str) -> Result<()> {
@@ -462,7 +466,7 @@ pub(super) fn write_body_lines_with(
         if line.is_empty() {
             writeln!(out)?;
         } else {
-            writeln!(out, "{BODY_INDENT}{}", paint_mentions_with(line, style))?;
+            writeln!(out, "{}", paint_mentions_with(line, style))?;
         }
     }
     Ok(())
@@ -550,18 +554,6 @@ pub(super) fn write_day_delimiter(out: &mut impl Write, date: Date, today: Date)
     write_faint_rule(out, &label)
 }
 
-pub(super) fn write_archive_banner(
-    out: &mut impl Write,
-    at: jiff::Timestamp,
-    tz: &TimeZone,
-    today: Date,
-) -> Result<()> {
-    write_faint_rule(
-        out,
-        &format!("History archive · {}", format_marker_when(at, tz, today)),
-    )
-}
-
 pub(super) fn write_live_divider(
     out: &mut impl Write,
     at: jiff::Timestamp,
@@ -570,7 +562,7 @@ pub(super) fn write_live_divider(
 ) -> Result<()> {
     write_faint_rule(
         out,
-        &format!("Live session · {}", format_marker_when(at, tz, today)),
+        &format!("Live · {}", format_marker_when(at, tz, today)),
     )
 }
 
@@ -585,11 +577,13 @@ pub(super) fn format_marker_when(at: jiff::Timestamp, tz: &TimeZone, today: Date
 }
 
 fn write_faint_rule(out: &mut impl Write, label: &str) -> Result<()> {
-    const WIDTH: usize = 26;
-    let mut rule = format!("──── {label} ");
-    while rule.chars().count() < WIDTH {
-        rule.push('─');
-    }
-    writeln!(out, "{}", render::paint(render::palette::FAINT, &rule))?;
+    let width = render::terminal_columns(48).min(48);
+    let label = format!("  {label}  ");
+    let dashes = width.saturating_sub(label.chars().count());
+    let (left, right) = (dashes / 2, dashes - dashes / 2);
+    let rule = format!("{}{label}{}", "─".repeat(left), "─".repeat(right));
+    writeln!(out)?;
+    writeln!(out, "{}", render::paint(render::palette::RULE, &rule))?;
+    writeln!(out)?;
     Ok(())
 }
