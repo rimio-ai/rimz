@@ -12,6 +12,8 @@ fn split_pane_injects_env_vars() {
     server
         .backend
         .split_pane(SplitPaneOptions {
+            session_name: None,
+            target_view_id: None,
             target_pane_id: None,
             cwd: None,
             command: Some(vec![
@@ -20,6 +22,7 @@ fn split_pane_injects_env_vars() {
                 "printf RIMZ_TEST_VAR=$RIMZ_TEST_VAR; sleep 5".to_owned(),
             ]),
             env,
+            stacked: false,
             direction: Default::default(),
             focus: false,
         })

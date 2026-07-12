@@ -12,7 +12,7 @@ use super::session::{
     DUMP_LAYOUT_RETRY_DELAY, scoped_zellij,
 };
 
-pub(super) fn poll_until<T: Debug>(
+pub(in crate::backend::zellij) fn poll_until<T: Debug>(
     timeout: Duration,
     mut observe: impl FnMut() -> Result<T, String>,
     mut ready: impl FnMut(&T) -> bool,

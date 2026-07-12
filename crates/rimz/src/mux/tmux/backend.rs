@@ -257,6 +257,8 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
+        // tmux has no native analogue for Zellij's stacked panes; the
+        // direction/target still place the pane in the requested zone.
         // `-d` keeps focus on the splitting pane; omit it to land in the new
         // pane (the focused launch path).
         let flag = match opts.direction {
@@ -273,6 +275,8 @@ impl MuxBackend for TmuxBackend {
         if let Some(target) = opts.target_pane_id {
             ensure_pane_backend(&target, MuxName::Tmux)?;
             spec = spec.args(["-t".to_owned(), target.raw().to_owned()]);
+        } else if let Some(session) = opts.session_name {
+            spec = spec.args(["-t".to_owned(), session]);
         }
         if let Some(cwd) = opts.cwd {
             spec = spec.args(["-c".to_owned(), cwd]);
@@ -658,7 +662,14 @@ impl MuxBackend for TmuxBackend {
             .run()?;
         let (window_id, first_content) = parse_new_window_ids(&output.stdout)?;
         let mut first_daemon_pane = None;
-        if let Some((first, rest)) = opts.view.hosts.split_first() {
+        if let Some((first, rest)) = opts
+            .view
+            .hosts
+            .iter()
+            .chain(std::iter::once(&opts.view.loop_panel))
+            .collect::<Vec<_>>()
+            .split_first()
+        {
             let size = self
                 .window_width(&window_id)
                 .map(|view_cols| {

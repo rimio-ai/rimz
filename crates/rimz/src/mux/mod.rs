@@ -419,10 +419,19 @@ impl ResumeTab {
 
 #[derive(Clone, Debug, Default)]
 pub struct SplitPaneOptions {
+    /// Backend session to target from out-of-pane callers. In-pane callers may
+    /// leave this unset and let mux ambient state resolve the session.
+    pub session_name: Option<String>,
+    /// Backend view/tab/window id to target when the backend cannot split
+    /// relative to a pane from an out-of-pane caller.
+    pub target_view_id: Option<String>,
     pub target_pane_id: Option<PaneId>,
     pub cwd: Option<String>,
     pub command: Option<Vec<String>>,
     pub env: BTreeMap<String, String>,
+    /// Zellij renders this split into a native stack; tmux has no native pane
+    /// stack and degrades to its normal vertical/horizontal tiling.
+    pub stacked: bool,
     /// Where the new pane lands relative to the pane it splits.
     pub direction: SplitDirection,
     /// Move focus to the new pane. `false` leaves focus on the splitting pane
@@ -478,7 +487,7 @@ pub struct PresencePluginOptions {
 
 /// One long-lived process hosted by the daemon view. The view is born as three
 /// columns: live render on the left, content in the middle (live stats by
-/// default), and managed daemon hosts stacked on the right.
+/// default), and runtime panes stacked on the right.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostPane {
     /// Host argv, program first.
@@ -540,6 +549,10 @@ pub struct DaemonView {
     /// host takes focus within the view when present, otherwise the first
     /// content pane takes it.
     pub hosts: Vec<HostPane>,
+    /// Always-present loop dashboard pane. Scheduled loop runs split against it
+    /// so their transient panes land in the runtime column, not beside the
+    /// sidebar or a user work pane.
+    pub loop_panel: HostPane,
 }
 
 /// Options for launching the daemon dashboard into a single dedicated, named

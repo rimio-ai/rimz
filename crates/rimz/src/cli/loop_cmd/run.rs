@@ -551,6 +551,7 @@ fn execute_spawn_task(
         stream,
         verify: entry.verify.clone(),
         max_attempts: entry.max_attempts,
+        loop_zone: execution.mode == LoopRunMode::Scheduled,
     });
     match crate::cli::agents_cmd::run_blocking_task(args, &run_globals) {
         Ok(Some(record)) => {

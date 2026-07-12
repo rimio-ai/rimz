@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
@@ -49,6 +50,7 @@ use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::paths::{RuntimePaths, StatePaths, config_home, state_home};
 use rimz::trust::{self, TrustState};
+use rimz::tui::{MouseCapture, TerminalModeGuard};
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;
@@ -81,6 +83,8 @@ enum LoopSubcmd {
     Resume(NameArgs),
     /// List configured tasks and whether their room is open.
     List,
+    /// Hold a live loop dashboard open and repaint countdowns.
+    Watch(WatchArgs),
     /// Show one task's schedule, next fire, and recent run forensics.
     Show(ShowArgs),
     /// Fire one task now in the foreground for testing; one-shots and schedules stay put.
@@ -221,6 +225,13 @@ struct ShowArgs {
     runs: usize,
 }
 
+#[derive(Debug, Args)]
+struct WatchArgs {
+    /// Keep the dashboard alive through Ctrl-C in the rimzd daemon view.
+    #[arg(long, hide = true)]
+    hold: bool,
+}
+
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         LoopSubcmd::Add(args) => add::add(*args, globals),
@@ -229,6 +240,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Pause(args) => add::pause(args, globals),
         LoopSubcmd::Resume(args) => add::resume(&args.name, globals),
         LoopSubcmd::List => render::list(globals),
+        LoopSubcmd::Watch(args) => render::watch(args, globals),
         LoopSubcmd::Show(args) => render::show(args, globals),
         LoopSubcmd::Fire(args) => {
             run_tasks::run_one(&args.name, LoopRunMode::Manual, args.keep, globals)

@@ -52,6 +52,7 @@ fn build_daemon_view_options(
         &workspace.project_root,
         &workspace.worktree_root,
     );
+    let loop_panel = loop_panel(&rimz_bin, &workspace.worktree_root);
     // The daemon view is born `sidebar | content | hosts…`, so it carries the
     // same global sidebar the working view runs (same session, workspace, and
     // `rimz` bin). The content column defaults to stats and keeps the view
@@ -62,6 +63,7 @@ fn build_daemon_view_options(
             name: rimz::remote_control::VIEW_NAME.to_owned(),
             content,
             hosts,
+            loop_panel,
         },
         sidebar: SidebarPaneOptions {
             session_name: workspace.session_name.clone(),
@@ -124,11 +126,11 @@ pub(super) fn maybe_launch_remote_control(
 }
 
 /// The daemon host panes for the [`rimz::remote_control::VIEW_NAME`] view, in
-/// display order (the first takes focus) — split out pure for testing. The Claude
-/// remote-control host leads when its toggle is on *and* `claude` is on PATH (the
-/// interactive host); the local Codex app-server broker follows whenever `codex`
-/// is on PATH (ungated — it links no account, only reads). Live stats is a
-/// separate content pane by default, not a daemon host.
+/// display order (the first takes focus) — split out pure for testing. The
+/// local Codex app-server broker leads whenever `codex` is on PATH (ungated —
+/// it links no account, only reads); the Claude remote-control host follows
+/// when its toggle is on *and* `claude` is on PATH (the interactive host). Live
+/// stats is a separate content pane by default, not a daemon host.
 #[allow(clippy::too_many_arguments)]
 fn daemon_hosts(
     config: &rimz::config::RemoteControlConfig,
@@ -141,12 +143,6 @@ fn daemon_hosts(
     worktree_root: &Path,
 ) -> Vec<HostPane> {
     let mut hosts = Vec::new();
-    if config.claude && claude_present {
-        hosts.push(HostPane {
-            argv: rimz::remote_control::claude_host_argv(),
-            cwd: project_root.to_path_buf(),
-        });
-    }
     if codex_present {
         hosts.push(HostPane {
             argv: vec![
@@ -162,7 +158,25 @@ fn daemon_hosts(
             cwd: worktree_root.to_path_buf(),
         });
     }
+    if config.claude && claude_present {
+        hosts.push(HostPane {
+            argv: rimz::remote_control::claude_host_argv(),
+            cwd: project_root.to_path_buf(),
+        });
+    }
     hosts
+}
+
+fn loop_panel(rimz_bin: &Path, worktree_root: &Path) -> HostPane {
+    HostPane {
+        argv: vec![
+            rimz_bin.to_string_lossy().into_owned(),
+            "loop".to_owned(),
+            "watch".to_owned(),
+            "--hold".to_owned(),
+        ],
+        cwd: worktree_root.to_path_buf(),
+    }
 }
 
 /// Birth one supervisor per configured middle-column slot. The child command is
@@ -193,7 +207,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn daemon_hosts_orders_claude_then_the_ungated_broker() {
+    fn daemon_hosts_orders_the_ungated_broker_then_claude() {
         use rimz::config::RemoteControlConfig;
         use rimz::ids::WorkspaceId;
 
@@ -243,9 +257,9 @@ mod tests {
         };
         let pair = hosts(&both, true, true);
         assert_eq!(pair.len(), 2);
-        assert_eq!(pair[0].argv[0], "claude");
-        assert_eq!(pair[1].argv[0], "/usr/bin/rimz");
-        assert!(pair[1].argv.iter().any(|arg| arg == "app-server"));
+        assert_eq!(pair[0].argv[0], "/usr/bin/rimz");
+        assert!(pair[0].argv.iter().any(|arg| arg == "app-server"));
+        assert_eq!(pair[1].argv[0], "claude");
     }
 
     #[test]
@@ -296,6 +310,10 @@ mod tests {
                 Path::new("/usr/bin/rimz"),
                 Path::new("/proj/wt")
             )]
+        );
+        assert_eq!(
+            opts.view.loop_panel,
+            loop_panel(Path::new("/usr/bin/rimz"), Path::new("/proj/wt"))
         );
         assert_eq!(opts.sidebar.birth_size, width.birth_size(Some(120)));
     }

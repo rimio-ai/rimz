@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use rimz::mux::{ClientFocusOptions, MuxBackend, NamedKey, SplitPaneOptions, ZellijBackend};
+use rimz::mux::{
+    ClientFocusOptions, MuxBackend, NamedKey, SplitDirection, SplitPaneOptions, ZellijBackend,
+};
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, Env};
@@ -113,6 +115,8 @@ fn split_pane_injects_env_vars() {
     env.insert("RIMZ_TEST_VAR".to_owned(), "marker-rimz-env".to_owned());
     ZellijBackend::with_runtime_dir(xdg.path())
         .split_pane(SplitPaneOptions {
+            session_name: Some(name.clone()),
+            target_view_id: None,
             target_pane_id: Some(target.clone()),
             cwd: Some(cwd.path().to_string_lossy().into_owned()),
             command: Some(vec![
@@ -124,6 +128,7 @@ fn split_pane_injects_env_vars() {
                 ),
             ]),
             env,
+            stacked: false,
             direction: Default::default(),
             focus: false,
         })
@@ -150,6 +155,62 @@ fn split_pane_injects_env_vars() {
         .capture_pane(&target, Some(1), true)
         .expect("capture split target with scrollback and ANSI");
 }
+
+#[test]
+fn split_pane_targets_non_focused_tab() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("splittarget");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    create_plain_background_session(xdg.path(), &name, cwd.path(), "60");
+    let _client = AttachedClient::attach(xdg.path(), &name, 120, 40);
+    wait_for_attached_client(xdg.path(), &name);
+    let first = wait_for_pane_count(xdg.path(), &name, 1)[0].clone();
+    let first_tab = first.view_id.clone().expect("target tab id");
+    open_new_tab(xdg.path(), &name);
+    wait_for_tab_count(xdg.path(), &name, 2);
+
+    ZellijBackend::with_runtime_dir(xdg.path())
+        .split_pane(SplitPaneOptions {
+            session_name: Some(name.clone()),
+            target_view_id: first.view_id.clone(),
+            target_pane_id: Some(first.pane_id.clone()),
+            cwd: Some(cwd.path().to_string_lossy().into_owned()),
+            command: Some(vec!["sleep".to_owned(), "5".to_owned()]),
+            env: BTreeMap::new(),
+            stacked: true,
+            direction: SplitDirection::Down,
+            focus: false,
+        })
+        .expect("targeted split_pane");
+
+    let panes = poll_until(
+        Duration::from_secs(10),
+        || Ok(expect_list_panes(xdg.path(), &name).pane_refs()),
+        |panes| {
+            panes
+                .iter()
+                .filter(|pane| pane.view_id.as_deref() == Some(first_tab.as_str()))
+                .count()
+                >= 2
+        },
+        "targeted split in non-focused Zellij tab",
+    );
+    assert_eq!(
+        panes
+            .iter()
+            .filter(|pane| pane.view_id.as_deref() == Some(first_tab.as_str()))
+            .count(),
+        2,
+        "targeted split should land beside the target pane, not in the focused tab: {panes:?}",
+    );
+}
+
 /// `paste_text` writes one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
 /// the payload as a raw decimal byte list — the message delivery path. A
 /// bare shell renders the markers literally, so the inner text still lands in

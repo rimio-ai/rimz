@@ -500,16 +500,30 @@ impl MuxBackend for ZellijBackend {
         let target = opts.target_pane_id;
         if let Some(target) = &target {
             ensure_pane_backend(target, MuxName::Zellij)?;
-            // Zellij's CLI opens relative to the current focus and does not
-            // expose a target-pane flag for `new-pane`.
         }
-        let direction = match opts.direction {
-            SplitDirection::Right => "right",
-            SplitDirection::Down => "down",
+        let mut spec = match opts.session_name.as_deref() {
+            Some(session) => self.zellij_action(session).arg("new-pane"),
+            None => self.cmd().args(["action", "new-pane"]),
         };
-        let mut spec = self
-            .cmd()
-            .args(["action", "new-pane", "--direction", direction]);
+        if opts.stacked {
+            spec = spec.arg("--stacked");
+        } else {
+            let direction = match opts.direction {
+                SplitDirection::Right => "right",
+                SplitDirection::Down => "down",
+            };
+            spec = spec.args(["--direction", direction]);
+        }
+        if let Some(target) = &target {
+            let pane_id = target
+                .creation_ordinal()
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| target.raw().to_owned());
+            spec = spec.env("ZELLIJ_PANE_ID", pane_id);
+        }
+        if let Some(tab_id) = opts.target_view_id.as_deref().and_then(zellij_numeric_id) {
+            spec = spec.args(["--tab-id".to_owned(), tab_id.to_string()]);
+        }
         if let Some(cwd) = opts.cwd {
             spec = spec.args(["--cwd".to_owned(), cwd]);
         }
@@ -530,7 +544,7 @@ impl MuxBackend for ZellijBackend {
         if !opts.focus
             && let Some(target) = &target
         {
-            let _ = self.focus_pane(target, None);
+            let _ = self.focus_pane(target, opts.session_name.as_deref());
         }
         Ok(())
     }
@@ -1296,6 +1310,11 @@ fn restore_tab_focus(
             }
         }
     }
+}
+
+fn zellij_numeric_id(raw: &str) -> Option<u64> {
+    raw.rsplit_once('_')
+        .and_then(|(_, tail)| tail.parse::<u64>().ok())
 }
 
 fn tab_focus_is(

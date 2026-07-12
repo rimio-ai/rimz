@@ -525,10 +525,13 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_default();
     backend
         .split_pane(SplitPaneOptions {
+            session_name: None,
+            target_view_id: None,
             target_pane_id: rimz::mux::own_pane_id(backend.name()),
             cwd: Some(workspace.worktree_root.display().to_string()),
             command: None,
             env: crate::cli::agents_launch::launch_identity_env(&workspace, None, true),
+            stacked: false,
             direction,
             focus: true,
         })

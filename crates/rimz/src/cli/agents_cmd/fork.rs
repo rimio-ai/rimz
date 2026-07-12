@@ -188,10 +188,13 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         Placement::NewPane => (
             backend
                 .split_pane(SplitPaneOptions {
+                    session_name: None,
+                    target_view_id: None,
                     target_pane_id: own_pane_id(mux),
                     cwd: Some(seed.cwd.to_string_lossy().into_owned()),
                     command: Some(argv.clone()),
                     env: agents_launch::launch_identity_env(&workspace, channel.as_deref(), false),
+                    stacked: false,
                     direction,
                     focus: !args.bg,
                 })

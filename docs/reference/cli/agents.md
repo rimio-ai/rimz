@@ -13,7 +13,7 @@ rimz message @codex#auth-refresh "After your turn, add coverage for the expiry e
 rimz agents focus @claude#auth-refresh        # jump to the pane when it needs you
 ```
 
-Each command around `rimz agents` has its own page: [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and drives raw panes, [`rimz loop`](./loop.md) schedules turns, and [`rimz channel`](./channel.md) and [`rimz worktree`](./worktree.md) manage the lanes they work in. The profiles, teams, and launch grammar these commands consume are configured per machine in the [configuration guide](../../guide/configuration.md#agent-profiles-commands-and-teams); the launch, run, and delivery machinery lives in [harness.md](../../internals/harness/harness.md).
+Each command around `rimz agents` has its own page: [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and drives raw panes, [`rimz loop`](./loop.md) schedules turns and exposes the live `rimz loop watch` dashboard, and [`rimz channel`](./channel.md) and [`rimz worktree`](./worktree.md) manage the lanes they work in. The profiles, teams, and launch grammar these commands consume are configured per machine in the [configuration guide](../../guide/configuration.md#agent-profiles-commands-and-teams); the launch, run, and delivery machinery lives in [harness.md](../../internals/harness/harness.md).
 
 ## Addressing agents
 

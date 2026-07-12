@@ -91,10 +91,13 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
     server
         .backend
         .split_pane(SplitPaneOptions {
+            session_name: None,
+            target_view_id: None,
             target_pane_id: Some(work_pane.pane_id),
             cwd: None,
             command: Some(foreign_command),
             env: BTreeMap::new(),
+            stacked: false,
             direction: Default::default(),
             focus: false,
         })

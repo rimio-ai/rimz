@@ -21,6 +21,7 @@ fn open_background_view_births_columns_and_is_idempotent() {
             name: "rimzd".to_owned(),
             content: vec![sleep_host()],
             hosts: vec![sleep_host(), sleep_host()],
+            loop_panel: sleep_host(),
         },
         sidebar: sidebar.clone(),
     };
@@ -57,8 +58,8 @@ fn open_background_view_births_columns_and_is_idempotent() {
         "rimzd",
         "launch must not focus the daemon window",
     );
-    // Born `sidebar | content | stacked hosts`: the hook-docked sidebar beside
-    // content and the daemon host column.
+    // Born `sidebar | content | runtime`: the hook-docked sidebar beside
+    // content and the runtime column.
     let rc_panes = server
         .backend
         .list_panes(PaneListOptions {
@@ -71,11 +72,11 @@ fn open_background_view_births_columns_and_is_idempotent() {
         .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
         .count();
     assert_eq!(
-        rc_panes, 4,
-        "rimzd window should be born sidebar | content | stacked hosts"
+        rc_panes, 5,
+        "rimzd window should be born sidebar | content | runtime"
     );
-    let panes = server.wait_for_panes("rimz-bgview:rimzd", 4);
-    assert_eq!(panes.len(), 4, "expected four rimzd panes, got {panes:?}");
+    let panes = server.wait_for_panes("rimz-bgview:rimzd", 5);
+    assert_eq!(panes.len(), 5, "expected five rimzd panes, got {panes:?}");
     let mut by_left: BTreeMap<u64, Vec<&PaneGeom>> = BTreeMap::new();
     for pane in &panes {
         by_left.entry(pane.left).or_default().push(pane);
@@ -83,7 +84,7 @@ fn open_background_view_births_columns_and_is_idempotent() {
     assert_eq!(
         by_left.len(),
         3,
-        "rimzd should have three columns: sidebar | content | hosts, got {panes:?}",
+        "rimzd should have three columns: sidebar | content | runtime, got {panes:?}",
     );
     let right_column = by_left
         .iter()
@@ -92,16 +93,16 @@ fn open_background_view_births_columns_and_is_idempotent() {
         .expect("right column");
     assert_eq!(
         right_column.len(),
-        2,
-        "daemon hosts should share the right column, got {panes:?}",
+        3,
+        "runtime panes should share the right column, got {panes:?}",
     );
     let mut host_tops: Vec<u64> = right_column.iter().map(|pane| pane.top).collect();
     host_tops.sort_unstable();
     host_tops.dedup();
     assert_eq!(
         host_tops.len(),
-        2,
-        "daemon hosts should be vertically stacked, got {panes:?}",
+        3,
+        "runtime panes should be vertically stacked, got {panes:?}",
     );
     let second = server
         .backend
@@ -117,6 +118,7 @@ fn open_background_view_births_columns_and_is_idempotent() {
             name: "rimzd-stats".to_owned(),
             content: vec![sleep_host()],
             hosts: Vec::new(),
+            loop_panel: sleep_host(),
         },
         sidebar: sidebar.clone(),
     };
@@ -127,17 +129,18 @@ fn open_background_view_births_columns_and_is_idempotent() {
             .expect("stats launch"),
         rimz::mux::BackgroundViewLaunch::Launched,
     );
-    let panes = server.wait_for_panes("rimz-bgview:rimzd-stats", 2);
+    let panes = server.wait_for_panes("rimz-bgview:rimzd-stats", 3);
     assert_eq!(
         panes.len(),
-        2,
-        "rimzd-stats window should be born sidebar | content without daemon hosts"
+        3,
+        "rimzd-stats window should be born sidebar | content | loop panel"
     );
     let stack = rimz::mux::BackgroundViewOptions {
         view: rimz::mux::DaemonView {
             name: "rimzd-stack".to_owned(),
             content: vec![sleep_host(), sleep_host()],
             hosts: Vec::new(),
+            loop_panel: sleep_host(),
         },
         sidebar,
     };
@@ -148,11 +151,11 @@ fn open_background_view_births_columns_and_is_idempotent() {
             .expect("stack launch"),
         rimz::mux::BackgroundViewLaunch::Launched,
     );
-    let panes = server.wait_for_panes("rimz-bgview:rimzd-stack", 3);
+    let panes = server.wait_for_panes("rimz-bgview:rimzd-stack", 4);
     assert_eq!(
         panes.len(),
-        3,
-        "expected three rimzd-stack panes, got {panes:?}"
+        4,
+        "expected four rimzd-stack panes, got {panes:?}"
     );
     let mut by_left: BTreeMap<u64, Vec<&PaneGeom>> = BTreeMap::new();
     for pane in &panes {
@@ -160,12 +163,12 @@ fn open_background_view_births_columns_and_is_idempotent() {
     }
     assert_eq!(
         by_left.len(),
-        2,
-        "rimzd should have two columns: sidebar | content, got {panes:?}",
+        3,
+        "rimzd should have three columns: sidebar | content | loop panel, got {panes:?}",
     );
     let content_column = by_left
         .iter()
-        .next_back()
+        .nth(1)
         .map(|(_, panes)| panes)
         .expect("content column");
     assert_eq!(

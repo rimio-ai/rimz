@@ -454,15 +454,18 @@ mod placement {
 
     #[test]
     fn supervised_run_placement_matrix() {
-        for (force_new_tab, has_ambient_pane, expected) in [
-            (false, true, RunPlacement::Split),
-            (true, true, RunPlacement::Tab),
-            (false, false, RunPlacement::Tab),
+        for (force_new_tab, has_ambient_pane, loop_zone, expected) in [
+            (false, true, false, RunPlacement::Split),
+            (true, true, false, RunPlacement::Tab),
+            (false, false, false, RunPlacement::Tab),
+            (false, true, true, RunPlacement::LoopZone),
+            (false, false, true, RunPlacement::LoopZone),
+            (true, true, true, RunPlacement::Tab),
         ] {
             assert_eq!(
-                run_placement(force_new_tab, has_ambient_pane),
+                run_placement(force_new_tab, has_ambient_pane, loop_zone),
                 expected,
-                "force_new_tab={force_new_tab}, has_ambient_pane={has_ambient_pane}"
+                "force_new_tab={force_new_tab}, has_ambient_pane={has_ambient_pane}, loop_zone={loop_zone}"
             );
         }
     }
@@ -1149,6 +1152,7 @@ mod automation {
             stream: true,
             verify: Some("cargo xtask test auth".to_owned()),
             max_attempts: Some(4),
+            loop_zone: false,
         });
         assert_eq!(
             (
@@ -1206,6 +1210,7 @@ mod automation {
             stream: false,
             verify: None,
             max_attempts: None,
+            loop_zone: false,
         });
         assert_eq!(unscoped.worktree, None);
         assert!(

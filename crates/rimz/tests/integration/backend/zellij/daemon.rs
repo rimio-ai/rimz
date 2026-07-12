@@ -12,9 +12,9 @@ use crate::common::CommandTimeoutExt;
 
 use super::support::*;
 
-/// A `BackgroundViewOptions` for a session whose content and host panes are
+/// A `BackgroundViewOptions` for a session whose content and runtime panes are
 /// long-lived `sleep` commands and whose sidebar runs the alive-keeping `stub`,
-/// so the launched tab is a faithful `sidebar | content | host`.
+/// so the launched tab is a faithful `sidebar | content | runtime`.
 fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundViewOptions {
     rimz::mux::BackgroundViewOptions {
         view: DaemonView {
@@ -27,6 +27,10 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
                 argv: vec!["sleep".to_owned(), "120".to_owned()],
                 cwd: std::env::temp_dir(),
             }],
+            loop_panel: rimz::mux::HostPane {
+                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                cwd: std::env::temp_dir(),
+            },
         },
         sidebar: SidebarPaneOptions {
             session_name: session.to_owned(),
@@ -47,7 +51,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
 }
 
 /// `open_background_view` opens a dedicated, named tab born `sidebar | content |
-/// host`, and is idempotent on that tab name: a second call launches nothing.
+/// runtime`, and is idempotent on that tab name: a second call launches nothing.
 #[test]
 fn open_background_view_creates_named_tab_idempotently() {
     require_zellij!();
@@ -101,6 +105,10 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
             argv: vec!["sleep".to_owned(), "120".to_owned()],
             cwd: cwd.path().to_path_buf(),
         }],
+        loop_panel: HostPane {
+            argv: vec!["sleep".to_owned(), "120".to_owned()],
+            cwd: cwd.path().to_path_buf(),
+        },
     };
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
     backend
@@ -139,11 +147,11 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
         2,
         "birth layout should produce exactly the daemon + working tabs",
     );
-    let panes = wait_for_tab_pane_count(xdg.path(), &name, "rimzd", 3);
+    let panes = wait_for_tab_pane_count(xdg.path(), &name, "rimzd", 4);
     assert_eq!(
         panes.len(),
-        3,
-        "rimzd should be born sidebar | content | host: {panes:?}",
+        4,
+        "rimzd should be born sidebar | content | runtime: {panes:?}",
     );
 }
 

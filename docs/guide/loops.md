@@ -102,7 +102,9 @@ A `--check` with no agent action is still worth having. It is a scheduled comman
 - A one-shot (bare `--at`, `--in`, or a `--until` deadline) persists as state instead, so an agent scheduling its own wake never touches your `loop.toml`; the entry retires itself after firing.
 - `--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a repeating task (a one-shot is machine state by definition). A committed task runs commands on whoever pulls it, so it enters the project trust hash and stays inert until each user approves it ([security.md](./security.md)); in a terminal RimZ shows the surface diff and offers the grant immediately, while off a terminal it prints the review and approve commands. A trusted project task wins over a same-named machine task without double-firing.
 
-There is no daemon; the room keeps time. While a room for the task's project is open, attached or not, that room's elected sidebar process fires due tasks on its regular tick, running each through the hidden `rimz loop run`. Close the room and the clock stops. Opening one late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
+There is no scheduler daemon; the room keeps time. While a room for the task's project is open, attached or not, that room's elected sidebar process fires due tasks on its regular tick, running each through the hidden `rimz loop run`. Close the room and the clock stops. Opening one late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
+
+A scheduled `--agent` fire lands in the `rimzd` loop zone: the runtime column's live loop panel stays open, and transient run panes stack under it instead of splitting the sidebar or a working tab. If the panel is gone, RimZ falls back to a new run tab. Manual `rimz loop fire` keeps splitting beside the caller so its foreground stream stays local.
 
 A fire leaves two things behind: whatever the task did (one transient supervised pane for `--agent`, one delivered message for `--wake`), and one line of run history that `rimz loop show <name>` reads back. Everything reverses in one move. `rimz loop remove <name>` deletes the entry; a project removal shows the surface diff and offers the refreshed grant in a terminal, or prints the review and approve commands elsewhere. Both files are plain TOML you can read and edit by hand.
 
@@ -146,6 +148,7 @@ The turn itself takes the launch-shaping flags you already know from [agents.md]
 
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run
+rimz loop watch                # live dashboard with countdowns and running tasks
 rimz loop show pr-watch        # one task's schedule, next fire, and recent run forensics
 rimz loop fire pr-watch        # fire now in the foreground for testing; the schedule stays put
 rimz loop fire pr-watch --keep # leave the transient pane open to inspect

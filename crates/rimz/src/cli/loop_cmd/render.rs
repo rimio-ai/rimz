@@ -195,6 +195,145 @@ pub(super) fn room_open(root: &Path) -> bool {
         .is_some_and(fresh_sidebar_present)
 }
 
+pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
+    let _input = TerminalModeGuard::enable(MouseCapture::Off)?;
+    loop {
+        repaint_watch(globals)?;
+        match event::poll(Duration::from_secs(1)) {
+            Ok(true) => match event::read() {
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => match key.code {
+                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('c') | KeyCode::Char('C')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && !args.hold =>
+                    {
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                Ok(_) => {}
+                Err(err) => return Err(err.into()),
+            },
+            Ok(false) => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+}
+
+fn repaint_watch(globals: &GlobalFlags) -> Result<()> {
+    use ratatui::crossterm::{
+        cursor::MoveTo,
+        execute,
+        terminal::{Clear, ClearType},
+    };
+
+    execute!(std::io::stdout(), MoveTo(0, 0))?;
+    render_watch_frame(&mut ui::out(), globals)?;
+    execute!(std::io::stdout(), Clear(ClearType::FromCursorDown))?;
+    Ok(())
+}
+
+fn render_watch_frame(out: &mut impl Write, globals: &GlobalFlags) -> Result<()> {
+    let tasks = load_all_tasks(globals)?;
+    let now = Timestamp::now();
+    writeln!(
+        out,
+        "{}",
+        ui::paint(ui::palette::ACCENT.bold(), "rimz loop watch")
+    )?;
+    writeln!(
+        out,
+        "{}",
+        ui::paint(ui::palette::MUTED, "press q to quit · updates every second")
+    )?;
+    if tasks.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "no loop tasks; add one with `rimz loop add …`")?;
+        return Ok(());
+    }
+
+    let pause_entries = pauses::load();
+    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    let stats = run_log::stats(&state_home(), &now_zoned);
+    let mut groups: BTreeMap<PathBuf, Vec<(&String, &TaskEntry, TaskSource)>> = BTreeMap::new();
+    for (name, (entry, source)) in &tasks {
+        groups
+            .entry(entry.resolved_root())
+            .or_default()
+            .push((name, entry, *source));
+    }
+
+    for (idx, (root, entries)) in groups.into_iter().enumerate() {
+        let runtime = runtime_for_root(&root);
+        let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
+        let stamps = runtime
+            .as_ref()
+            .map(rimz::harness::schedule::last_stamps)
+            .unwrap_or_default();
+        if idx > 0 {
+            writeln!(out)?;
+        }
+        write_root_heading(out, &root, room_is_open)?;
+        let context = ListRowContext {
+            pauses: &pause_entries,
+            stats: &stats,
+            stamps: &stamps,
+            now_zoned: &now_zoned,
+            now,
+        };
+        let mut table = ui::Table::new([
+            "NAME", "TASK", "SCHEDULE", "RUNNING", "LAST", "STATUS", "NEXT",
+        ])
+        .indent(2);
+        for (name, entry, source) in entries {
+            table.row(watch_row(name, entry, source, &context));
+        }
+        table.render(out)?;
+    }
+    Ok(())
+}
+
+fn watch_row(
+    name: &str,
+    entry: &TaskEntry,
+    source: TaskSource,
+    context: &ListRowContext<'_>,
+) -> Vec<ui::Cell> {
+    let parsed = schedule::parse_schedule(name, entry);
+    let when = match &parsed {
+        Ok(schedule) => schedule.describe(),
+        Err(err) => format!("invalid: {err}"),
+    };
+    let (last, status) = context
+        .stats
+        .get(name)
+        .map(|stats| last_run_cells(stats, context.now))
+        .unwrap_or_else(|| (ui::cell("-").dash(), ui::cell("-").dash()));
+    vec![
+        ui::cell(name).fg(ui::palette::ACCENT),
+        ui::cell(task_subject(entry)),
+        ui::cell(when),
+        running_cell(name, entry),
+        last,
+        status,
+        next_cell(
+            name,
+            entry,
+            blocked_project_state(source),
+            &parsed,
+            context.pauses.get(name),
+            context,
+        ),
+    ]
+}
+
+fn running_cell(name: &str, entry: &TaskEntry) -> ui::Cell {
+    match acquire_run_lock(name, entry) {
+        Ok(None) => ui::cell("now").fg(ui::palette::GOOD),
+        Ok(Some(_guard)) => ui::cell("-").dash(),
+        Err(_) => ui::cell("?").fg(ui::palette::WARN),
+    }
+}
+
 fn write_root_heading(
     out: &mut impl Write,
     root: &Path,

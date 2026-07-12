@@ -118,6 +118,7 @@ pub(super) fn render_session_layout(
                 &sidebar,
                 &daemon.content,
                 &daemon.hosts,
+                &daemon.loop_panel,
                 opts.birth_size.percent,
                 8,
             )?;
@@ -224,6 +225,7 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
         &sidebar,
         &opts.view.content,
         &opts.view.hosts,
+        &opts.view.loop_panel,
         opts.sidebar.birth_size.percent,
         4,
     )?;
@@ -301,13 +303,14 @@ fn render_daemon_columns(
     sidebar: &str,
     content: &[HostPane],
     daemons: &[HostPane],
+    loop_panel: &HostPane,
     width_percent: u16,
     indent: usize,
 ) -> Result<String> {
     let base = " ".repeat(indent);
     let child = " ".repeat(indent + 4);
-    let content_col = render_content_column(content, daemons.is_empty(), indent + 4)?;
-    let daemon_column = render_daemon_column(daemons, width_percent, indent + 4)?;
+    let content_col = render_content_column(content, false, indent + 4)?;
+    let daemon_column = render_daemon_column(daemons, loop_panel, width_percent, indent + 4)?;
     Ok(format!(
         r#"{base}pane split_direction="vertical" {{
 {child}{sidebar}
@@ -344,11 +347,15 @@ fn render_content_column(content: &[HostPane], focus_first: bool, indent: usize)
     }
 }
 
-fn render_daemon_column(daemons: &[HostPane], width_percent: u16, indent: usize) -> Result<String> {
+fn render_daemon_column(
+    daemons: &[HostPane],
+    loop_panel: &HostPane,
+    width_percent: u16,
+    indent: usize,
+) -> Result<String> {
     let size = format!("{}%", width_percent);
     match daemons {
-        [] => Ok(String::new()),
-        [daemon] => render_command_pane(&daemon.argv, &daemon.cwd, true, indent, Some(&size)),
+        [] => render_command_pane(&loop_panel.argv, &loop_panel.cwd, true, indent, Some(&size)),
         daemons => {
             let mut rendered = String::new();
             for (index, daemon) in daemons.iter().enumerate() {
@@ -360,6 +367,13 @@ fn render_daemon_column(daemons: &[HostPane], width_percent: u16, indent: usize)
                     None,
                 )?);
             }
+            rendered.push_str(&render_command_pane(
+                &loop_panel.argv,
+                &loop_panel.cwd,
+                false,
+                indent + 4,
+                None,
+            )?);
             let base = " ".repeat(indent);
             let size = kdl_string(&size)?;
             Ok(format!(

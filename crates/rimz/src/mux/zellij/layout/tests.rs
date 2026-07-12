@@ -42,6 +42,10 @@ fn background_view_opts(hosts: Vec<HostPane>) -> BackgroundViewOptions {
             name: "rimzd".to_owned(),
             content: vec![stats_host()],
             hosts,
+            loop_panel: host(
+                &["/usr/bin/rimz", "loop", "watch", "--hold"],
+                "/proj/worktree",
+            ),
         },
         sidebar: sidebar_opts("rimz-bg", None, None),
     }
@@ -52,6 +56,10 @@ fn daemon_view(hosts: Vec<HostPane>) -> DaemonView {
         name: "rimzd".to_owned(),
         content: vec![stats_host()],
         hosts,
+        loop_panel: host(
+            &["/usr/bin/rimz", "loop", "watch", "--hold"],
+            "/proj/worktree",
+        ),
     }
 }
 

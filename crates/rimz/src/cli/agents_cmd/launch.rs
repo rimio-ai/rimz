@@ -231,6 +231,8 @@ pub(super) fn launch_layout(
         Placement::NewPane => (
             backend
                 .split_pane(SplitPaneOptions {
+                    session_name: None,
+                    target_view_id: None,
                     target_pane_id: own_pane_id(mux),
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(single_pane_argv(&panes)?),
@@ -239,6 +241,7 @@ pub(super) fn launch_layout(
                         room_channel.as_deref(),
                         !worktree_launch,
                     ),
+                    stacked: false,
                     direction,
                     focus: !args.bg,
                 })
@@ -428,10 +431,13 @@ fn launch_resume_layout(
         Placement::NewPane => (
             backend
                 .split_pane(SplitPaneOptions {
+                    session_name: None,
+                    target_view_id: None,
                     target_pane_id: own_pane_id(mux),
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(single_pane_argv(&panes)?),
                     env: agents_launch::launch_identity_env(workspace, channel.as_deref(), false),
+                    stacked: false,
                     direction,
                     focus: !args.bg,
                 })

@@ -47,7 +47,10 @@ use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
-use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
+use rimz::mux::{
+    LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions, SplitDirection, SplitPaneOptions,
+    TabOptions, own_pane_id,
+};
 use rimz::store::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::workspace::WorkspaceResolver;
 
@@ -228,6 +231,9 @@ pub struct AgentsArgs {
     /// Total agent turns allowed while making --verify pass.
     #[arg(long, value_name = "N", requires = "verify")]
     max_attempts: Option<u32>,
+    /// Internal loop-scheduler placement: target the rimzd loop zone.
+    #[arg(skip)]
+    loop_zone: bool,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     passthrough: Vec<String>,
@@ -643,6 +649,7 @@ impl AgentsArgs {
             retries: None,
             verify: None,
             max_attempts: None,
+            loop_zone: false,
             passthrough: Vec::new(),
         }
     }
@@ -684,6 +691,7 @@ impl AgentsArgs {
             retries: None,
             verify: task.verify,
             max_attempts: task.max_attempts,
+            loop_zone: task.loop_zone,
             passthrough: Vec::new(),
         }
     }
@@ -702,6 +710,7 @@ pub(crate) struct TaskRunArgs {
     pub(crate) stream: bool,
     pub(crate) verify: Option<String>,
     pub(crate) max_attempts: Option<u32>,
+    pub(crate) loop_zone: bool,
 }
 
 fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {

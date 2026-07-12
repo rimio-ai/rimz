@@ -20,6 +20,9 @@
 //!   [`ensure_codex_daemon`] spawns the (idempotent) start command detached with
 //!   null stdio, and Codex enrichment reaches the daemon over the control socket
 //!   (see [`crate::agents::codex::app_server`]).
+//! - **Loops** run an always-present `rimz loop watch` panel in the runtime
+//!   column. Scheduled loop runs split against that pane so transient agents
+//!   stay in the daemon view's loop zone.
 //!
 //! `remote-control start` boots and updates its daemon from the standalone's
 //! fixed path, so a `codex` merely on PATH (a different binary) is not enough.
@@ -43,9 +46,9 @@ use crate::pane::PaneRef;
 /// View name for the managed daemon tab. Shared by the launcher (the idempotency
 /// key for the tmux window / Zellij tab) and the sidebar classifier
 /// ([`pane_is_host`]), so both speak the same name. The tab hosts configurable
-/// content in the middle (live stats by default) and stacks the Claude
-/// remote-control host and per-session Codex app-server broker on the right
-/// when they apply.
+/// content in the middle (live stats by default) and stacks the per-session
+/// Codex app-server broker, the Claude remote-control host, and the loop panel
+/// on the right when they apply.
 pub const VIEW_NAME: &str = "rimzd";
 
 /// Substring marking the Claude remote-control host in a pane's command line —
@@ -56,6 +59,10 @@ pub(crate) const COMMAND_MARKER: &str = "remote-control";
 /// (`rimz codex app-server serve …`). The broker is a per-session host pane in
 /// the same view, distinct from the per-user daemon [`ensure_codex_daemon`] runs.
 pub(crate) const APP_SERVER_MARKER: &str = "app-server";
+
+/// Substring marking the always-present loop panel command
+/// (`rimz loop watch --hold`).
+pub(crate) const LOOP_PANEL_MARKER: &str = "loop watch";
 
 /// The Claude Remote Control argv (program first). `--spawn worktree` isolates
 /// each on-demand remote session in its own git worktree — the worktree mode.
@@ -415,6 +422,21 @@ fn env_var_present(key: &str) -> bool {
 /// Whether a command line is one of Rimz's managed daemon hosts.
 pub fn command_is_host(command: &str) -> bool {
     command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
+}
+
+pub fn command_is_loop_panel(command: &str) -> bool {
+    command.contains(LOOP_PANEL_MARKER)
+}
+
+pub fn find_loop_panel(panes: &[PaneRef]) -> Option<&PaneRef> {
+    panes.iter().find(|pane| {
+        pane.view_name.as_deref() == Some(VIEW_NAME)
+            && (pane
+                .spawn_command
+                .as_deref()
+                .is_some_and(command_is_loop_panel)
+                || pane.command.as_deref().is_some_and(command_is_loop_panel))
+    })
 }
 
 /// Whether `pane` belongs to the daemon dashboard. Command markers catch daemon

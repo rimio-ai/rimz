@@ -8,6 +8,7 @@ use rimz::harness::run_wake::{self, ExpectedRunFrame, SocketGuard};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::cli::agents_cmd) enum RunPlacement {
     Split,
+    LoopZone,
     Tab,
 }
 
@@ -17,8 +18,11 @@ pub(in crate::cli::agents_cmd) enum RunPlacement {
 pub(in crate::cli::agents_cmd) fn run_placement(
     force_new_tab: bool,
     has_ambient_pane: bool,
+    loop_zone: bool,
 ) -> RunPlacement {
-    if force_new_tab || !has_ambient_pane {
+    if loop_zone && !force_new_tab {
+        RunPlacement::LoopZone
+    } else if force_new_tab || !has_ambient_pane {
         RunPlacement::Tab
     } else {
         RunPlacement::Split
@@ -105,20 +109,9 @@ fn open_attempt_pane(
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
     let room_target = room.target(&prepared.workspace, &prepared.launch.cwd);
-    let open_result = match run_placement(args.new_tab, target.is_some()) {
-        RunPlacement::Split => room.backend().split_pane(SplitPaneOptions {
-            target_pane_id: target,
-            cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
-            command: Some(pane.argv.clone()),
-            env: crate::cli::agents_launch::launch_identity_env(
-                &prepared.workspace,
-                prepared.room_channel.as_deref(),
-                args.worktree.is_none() && args.from_pr.is_none(),
-            ),
-            direction,
-            focus: false,
-        }),
-        RunPlacement::Tab => room.backend().open_tab(&TabOptions {
+    let sidebar = crate::cli::room::build_sidebar_opts(&room_target, Vec::new())?;
+    let tab = || {
+        room.backend().open_tab(&TabOptions {
             session_name: prepared.workspace.session_name.clone(),
             title: format!("run {}", prepared.adapter.descriptor().kind),
             cwd: prepared.launch.cwd.clone(),
@@ -130,8 +123,33 @@ fn open_attempt_pane(
             },
             focus: false,
             dock_sidebar: true,
-            sidebar: crate::cli::room::build_sidebar_opts(&room_target, Vec::new())?,
-        }),
+            sidebar: sidebar.clone(),
+        })
+    };
+    let open_result = match run_placement(args.new_tab, target.is_some(), args.loop_zone) {
+        RunPlacement::Split => room
+            .backend()
+            .split_pane(SplitPaneOptions {
+                session_name: None,
+                target_view_id: None,
+                target_pane_id: target,
+                cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
+                command: Some(pane.argv.clone()),
+                env: crate::cli::agents_launch::launch_identity_env(
+                    &prepared.workspace,
+                    prepared.room_channel.as_deref(),
+                    args.worktree.is_none() && args.from_pr.is_none(),
+                ),
+                stacked: false,
+                direction,
+                focus: false,
+            })
+            .map_err(anyhow::Error::from),
+        RunPlacement::LoopZone => match open_loop_zone_pane(prepared, room, args, pane)? {
+            true => Ok(()),
+            false => tab().map_err(anyhow::Error::from),
+        },
+        RunPlacement::Tab => tab().map_err(anyhow::Error::from),
     };
     if let Err(err) = open_result {
         let _ = rimz::harness::run::fail(prepared.store.paths(), run_id);
@@ -150,6 +168,59 @@ fn open_attempt_pane(
         return Err(err).context("opening run pane");
     }
     Ok(())
+}
+
+fn open_loop_zone_pane(
+    prepared: &PreparedRun,
+    room: &crate::cli::room::RunRoom,
+    args: &AgentsArgs,
+    pane: &PaneCmd,
+) -> Result<bool> {
+    let listing = match room.backend().list_panes(PaneListOptions {
+        session_name: Some(prepared.workspace.session_name.clone()),
+        workspace_id: Some(prepared.workspace.workspace_id.clone()),
+        command_timeout: Some(Duration::from_millis(500)),
+        ..Default::default()
+    }) {
+        Ok(listing) => listing,
+        Err(err) => {
+            tracing::debug!(
+                session = %prepared.workspace.session_name,
+                error = &err as &dyn std::error::Error,
+                "loop zone lookup failed; falling back to a run tab",
+            );
+            return Ok(false);
+        }
+    };
+    let Some(panel) = rimz::remote_control::find_loop_panel(&listing.panes) else {
+        return Ok(false);
+    };
+    match room.backend().split_pane(SplitPaneOptions {
+        session_name: Some(prepared.workspace.session_name.clone()),
+        target_view_id: panel.view_id.clone(),
+        target_pane_id: Some(panel.pane_id.clone()),
+        cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
+        command: Some(pane.argv.clone()),
+        env: crate::cli::agents_launch::launch_identity_env(
+            &prepared.workspace,
+            prepared.room_channel.as_deref(),
+            args.worktree.is_none() && args.from_pr.is_none(),
+        ),
+        stacked: true,
+        direction: SplitDirection::Down,
+        focus: false,
+    }) {
+        Ok(()) => Ok(true),
+        Err(err) => {
+            tracing::debug!(
+                session = %prepared.workspace.session_name,
+                pane = %panel.pane_id,
+                error = &err as &dyn std::error::Error,
+                "loop zone split failed; falling back to a run tab",
+            );
+            Ok(false)
+        }
+    }
 }
 
 fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<PreparedRun> {

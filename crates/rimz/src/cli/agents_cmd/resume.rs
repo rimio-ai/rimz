@@ -419,6 +419,8 @@ fn resume_closed_into_live_lane(
     let channel = lane_channel(lane, &liveness.closed);
     for command in commands {
         backend.split_pane(SplitPaneOptions {
+            session_name: None,
+            target_view_id: None,
             target_pane_id: Some(target.pane_id.clone()),
             cwd: Some(lane.path.to_string_lossy().into_owned()),
             command: Some(command),
@@ -427,6 +429,7 @@ fn resume_closed_into_live_lane(
                 channel.as_deref(),
                 false,
             ),
+            stacked: false,
             direction,
             focus: !bg,
         })?;
