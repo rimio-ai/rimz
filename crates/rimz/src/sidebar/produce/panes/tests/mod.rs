@@ -64,6 +64,39 @@ fn frame_with_presence(presence: Option<PresenceSample>) -> crate::sidebar::fram
     frame
 }
 
+fn focused_pane_in_tab(id: &str, tab: &str, tab_name: &str) -> crate::pane::PaneRef {
+    crate::pane::PaneRef {
+        is_focused: true,
+        view_id: Some(tab.to_owned()),
+        view_name: Some(tab_name.to_owned()),
+        ..pane(id, Some("zsh"), Some("/repo/main"))
+    }
+}
+
+#[test]
+fn multi_focus_topology_detects_multiple_focused_tiled_panes_per_tab() {
+    let mut floating = focused_pane_in_tab("terminal_3", "tab_7", "work");
+    floating.is_floating = true;
+    let anomalies = multi_focus_topology_anomalies(&[
+        focused_pane_in_tab("terminal_1", "tab_7", "work"),
+        focused_pane_in_tab("terminal_2", "tab_7", "work"),
+        floating,
+        focused_pane_in_tab("terminal_4", "tab_8", "other"),
+    ]);
+
+    assert_eq!(
+        anomalies,
+        vec![AnomalyKind::MultiFocusTopology {
+            tab_name: Some("work".to_owned()),
+            tab_position: Some(7),
+            pane_ids: vec![
+                "zellij:terminal_1".to_owned(),
+                "zellij:terminal_2".to_owned(),
+            ],
+        }],
+    );
+}
+
 #[test]
 fn presence_sample_due_requires_idle_capable_attached_stale_sample() {
     let stale = unix_now_ms()

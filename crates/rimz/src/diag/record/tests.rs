@@ -431,6 +431,14 @@ fn frame_anomaly_schema_and_identity_pin_detector_subjects() {
         from: "1234".to_owned(),
         pulled: Some("0".to_owned()),
     });
+    let multi_focus = frame_anomaly(AnomalyKind::MultiFocusTopology {
+        tab_name: Some("work".to_owned()),
+        tab_position: Some(7),
+        pane_ids: vec![
+            "zellij:terminal_1".to_owned(),
+            "zellij:terminal_2".to_owned(),
+        ],
+    });
 
     assert_eq!(
         row.identity_key(),
@@ -440,12 +448,21 @@ fn frame_anomaly_schema_and_identity_pin_detector_subjects() {
         aggregate.identity_key(),
         "frame_anomaly:aggregate_reset:provider_spend:claude"
     );
+    assert_eq!(
+        multi_focus.identity_key(),
+        "frame_anomaly:multi_focus_topology:7"
+    );
 
     let value = serde_json::to_value(&aggregate).expect("encode");
     assert_eq!(value["kind"], "frame_anomaly");
     assert_eq!(value["anomaly"]["detector"], "aggregate_reset");
     assert_eq!(value["anomaly"]["aggregate"]["aggregate"], "provider_spend");
     assert_eq!(value["anomaly"]["aggregate"]["kind"], "claude");
+
+    let value = serde_json::to_value(&multi_focus).expect("encode");
+    assert_eq!(value["anomaly"]["detector"], "multi_focus_topology");
+    assert_eq!(value["anomaly"]["tab_name"], "work");
+    assert_eq!(value["anomaly"]["tab_position"], 7);
 }
 
 #[test]

@@ -2,12 +2,14 @@
 //! process rotation, and the process-start stamp — everything the
 //! producer publishes to `snapshot.json` for consumers to fold in process.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::Result;
-use crate::diag::record::{DiagEvent, FrameRejectReason};
+use crate::diag::record::{
+    AnomalyKind, DiagEvent, EventsSig, FrameRejectReason, FrameStamp, ObserveRole,
+};
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::sidebar::cache::{
@@ -606,6 +608,7 @@ pub(super) fn cached_panes_or_produce(
             client_view: pushed_client_view,
         } = listing;
         let panes = filter_foreign_session_panes(panes, session, diag);
+        let topology_anomalies = multi_focus_topology_anomalies(&panes);
         let prior = read_snapshot_cache(&cache_path, session);
         // Renderer paint gating depends on fresh client focus. Zellij's
         // topology push carries it; backends without pushed presence fall back
@@ -642,6 +645,7 @@ pub(super) fn cached_panes_or_produce(
             });
         frame.presence = presence;
         emit_frame_diagnostics(diag, diagnostics);
+        emit_topology_anomalies(diag, &frame, topology_anomalies);
         let hosted_carry_drops = repair_pane_frame(
             &mut frame,
             runtime,
@@ -745,6 +749,81 @@ fn filter_foreign_session_panes(
 fn emit_frame_diagnostics(diag: &crate::diag::DiagSink, events: Vec<DiagEvent>) {
     for event in events {
         diag.emit(event);
+    }
+}
+
+#[derive(Default)]
+struct FocusedTopologyTab {
+    tab_name: Option<String>,
+    tab_position: Option<u64>,
+    pane_ids: Vec<String>,
+}
+
+fn multi_focus_topology_anomalies(panes: &[crate::pane::PaneRef]) -> Vec<AnomalyKind> {
+    let mut focused_by_tab = BTreeMap::<String, FocusedTopologyTab>::new();
+    for pane in panes
+        .iter()
+        .filter(|pane| pane.is_focused && !pane.is_floating)
+    {
+        let Some(view_id) = pane.view_id.as_deref() else {
+            continue;
+        };
+        let entry =
+            focused_by_tab
+                .entry(view_id.to_owned())
+                .or_insert_with(|| FocusedTopologyTab {
+                    tab_name: pane.view_name.clone(),
+                    tab_position: zellij_tab_position(view_id),
+                    pane_ids: Vec::new(),
+                });
+        if entry.tab_name.is_none() {
+            entry.tab_name.clone_from(&pane.view_name);
+        }
+        entry.pane_ids.push(pane.pane_id.to_string());
+    }
+
+    focused_by_tab
+        .into_values()
+        .filter(|tab| tab.pane_ids.len() > 1)
+        .map(|tab| AnomalyKind::MultiFocusTopology {
+            tab_name: tab.tab_name,
+            tab_position: tab.tab_position,
+            pane_ids: tab.pane_ids,
+        })
+        .collect()
+}
+
+fn zellij_tab_position(view_id: &str) -> Option<u64> {
+    view_id.strip_prefix("tab_")?.parse().ok()
+}
+
+fn emit_topology_anomalies(
+    diag: &crate::diag::DiagSink,
+    frame: &PaneFrame,
+    anomalies: Vec<AnomalyKind>,
+) {
+    for anomaly in anomalies {
+        diag.emit_at_ms(
+            DiagEvent::FrameAnomaly {
+                role: ObserveRole::Elder,
+                anomaly,
+                window_ms: None,
+                frame: FrameStamp {
+                    produced_at_ms: Some(frame.produced_at_ms),
+                    rows: pane_count(frame),
+                    agents: 0,
+                    processes: pane_count(frame),
+                    pulled_rows: None,
+                    pulled_panes_produced_at_ms: Some(frame.produced_at_ms),
+                },
+                events_recent: EventsSig::default(),
+                gate_reject_streak: 0,
+                health_failure_streak: 0,
+                suppressed_since_last: 0,
+                dropped_msgs: 0,
+            },
+            frame.produced_at_ms,
+        );
     }
 }
 
