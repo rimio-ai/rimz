@@ -11,7 +11,7 @@ use super::sections::{MakeUpHit, ProviderTabHit};
 use super::theme::Theme;
 use super::{CostRolls, ScrollbarFade, TallyAnim};
 
-pub(crate) use crate::sidebar::focus_anchor::FrozenOrder;
+pub(crate) use crate::sidebar::focus_anchor::{FrozenOrder, FrozenRow};
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {

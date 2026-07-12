@@ -1022,7 +1022,16 @@ fn record_focus_intent_writes_anchor_without_storing_an_overlay() {
     state.ui.scroll_offset = 11;
     state.ui.last_order = crate::sidebar_pane::render::FrozenOrder {
         groups: vec!["main".to_owned()],
-        rows: vec!["row-2".to_owned(), "row-1".to_owned()],
+        rows: vec![
+            crate::sidebar_pane::render::FrozenRow {
+                id: "row-2".to_owned(),
+                pane: None,
+            },
+            crate::sidebar_pane::render::FrozenRow {
+                id: "row-1".to_owned(),
+                pane: None,
+            },
+        ],
         visible: HashSet::from(["row-2".to_owned()]),
     };
     let recorded_order = state.ui.last_order.clone();
@@ -1171,7 +1180,16 @@ fn fresh_focus_anchor_with_order_installs_shared_hold() {
             stamp_ms,
             order: Some(crate::sidebar_pane::render::FrozenOrder {
                 groups: vec!["/repo/main".to_owned()],
-                rows: vec![target.to_string(), first.to_string()],
+                rows: vec![
+                    crate::sidebar_pane::render::FrozenRow {
+                        id: target.to_string(),
+                        pane: Some(target.to_string()),
+                    },
+                    crate::sidebar_pane::render::FrozenRow {
+                        id: first.to_string(),
+                        pane: Some(first.to_string()),
+                    },
+                ],
                 visible: HashSet::from([target.to_string()]),
             }),
         },

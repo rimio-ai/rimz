@@ -11,7 +11,7 @@ use crate::SidebarSnapshot;
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar::timing::REORDER_HOLD;
-use crate::sidebar_pane::render::{FrozenOrder, OrderHold, UiState, group_visible_rows};
+use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, OrderHold, UiState, group_visible_rows};
 
 /// The focused row leaving the attention class is the user answering that
 /// agent in its own pane -- the moment their eyes return to the sidebar.
@@ -52,8 +52,11 @@ pub(super) fn apply_order_hold(
     {
         ui.order_hold = None;
     }
-    if let Some(hold) = ui.order_hold.as_ref() {
+    if let Some(hold) = ui.order_hold.as_mut() {
+        migrate_frozen_order(current, &mut hold.frozen);
         reorder_to_frozen(current, &hold.frozen);
+    }
+    if ui.order_hold.is_some() {
         super::selection::anchor_selection(ui, current);
     }
 }
@@ -82,7 +85,12 @@ pub(super) fn capture_order(current: &SidebarSnapshot, ui: &UiState) -> FrozenOr
         rows: current
             .worktree_groups
             .iter()
-            .flat_map(|group| group.rows.iter().map(|row| row.id.clone()))
+            .flat_map(|group| {
+                group.rows.iter().map(|row| FrozenRow {
+                    id: row.id.clone(),
+                    pane: row.pane.as_ref().map(|pane| pane.pane_id.to_string()),
+                })
+            })
             .collect(),
         visible,
     }
@@ -91,9 +99,10 @@ pub(super) fn capture_order(current: &SidebarSnapshot, ui: &UiState) -> FrozenOr
 pub(super) fn adopt_shared_hold(
     ui: &mut UiState,
     current: &mut SidebarSnapshot,
-    order: FrozenOrder,
+    mut order: FrozenOrder,
     stamp_ms: i64,
 ) {
+    migrate_frozen_order(current, &mut order);
     reorder_to_frozen(current, &order);
     ui.order_hold = Some(OrderHold {
         frozen: order,
@@ -114,7 +123,7 @@ fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
         .rows
         .iter()
         .enumerate()
-        .map(|(index, id)| (id.as_str(), index))
+        .map(|(index, row)| (row.id.as_str(), index))
         .collect();
 
     current.worktree_groups.sort_by_key(|group| {
@@ -127,6 +136,47 @@ fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
         group
             .rows
             .sort_by_key(|row| row_pos.get(row.id.as_str()).copied().unwrap_or(usize::MAX));
+    }
+}
+
+fn migrate_frozen_order(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {
+    let mut frozen_ids: HashSet<String> = frozen.rows.iter().map(|row| row.id.clone()).collect();
+    let pane_pos: HashMap<String, usize> = frozen
+        .rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| row.pane.clone().map(|pane| (pane, index)))
+        .collect();
+    let mut migrated = HashSet::new();
+
+    for current_row in current
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+    {
+        if frozen_ids.contains(&current_row.id) {
+            continue;
+        }
+        let Some(pane) = current_row
+            .pane
+            .as_ref()
+            .map(|pane| pane.pane_id.to_string())
+        else {
+            continue;
+        };
+        let Some(index) = pane_pos.get(&pane).copied() else {
+            continue;
+        };
+        if !migrated.insert(index) {
+            continue;
+        }
+
+        let old_id = std::mem::replace(&mut frozen.rows[index].id, current_row.id.clone());
+        frozen_ids.remove(&old_id);
+        frozen_ids.insert(current_row.id.clone());
+        if frozen.visible.remove(&old_id) {
+            frozen.visible.insert(current_row.id.clone());
+        }
     }
 }
 
@@ -212,6 +262,24 @@ mod tests {
             .iter()
             .map(|row| row.id.as_str())
             .collect()
+    }
+
+    fn frozen_row(id: &str, raw_pane: &str) -> FrozenRow {
+        FrozenRow {
+            id: id.to_owned(),
+            pane: Some(pane(raw_pane, "tab_0", false).pane_id.to_string()),
+        }
+    }
+
+    fn frozen_paneless_row(id: &str) -> FrozenRow {
+        FrozenRow {
+            id: id.to_owned(),
+            pane: None,
+        }
+    }
+
+    fn frozen_row_ids(order: &FrozenOrder) -> Vec<&str> {
+        order.rows.iter().map(|row| row.id.as_str()).collect()
     }
 
     #[test]
@@ -305,10 +373,10 @@ mod tests {
         let frozen = FrozenOrder {
             groups: vec!["a".to_owned(), "b".to_owned()],
             rows: vec![
-                "a1".to_owned(),
-                "a2".to_owned(),
-                "b1".to_owned(),
-                "b2".to_owned(),
+                frozen_paneless_row("a1"),
+                frozen_paneless_row("a2"),
+                frozen_paneless_row("b1"),
+                frozen_paneless_row("b2"),
             ],
             visible: HashSet::new(),
         };
@@ -334,7 +402,11 @@ mod tests {
         let order = capture_order(&current, &ui);
 
         assert_eq!(order.groups, vec!["a"]);
-        assert_eq!(order.rows, ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"]);
+        assert_eq!(
+            frozen_row_ids(&order),
+            ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"]
+        );
+        assert_eq!(order.rows[0].pane, Some("zellij:terminal_0".to_owned()));
         assert_eq!(
             order.visible,
             HashSet::from([
@@ -353,7 +425,7 @@ mod tests {
         let mut ui = UiState {
             last_order: FrozenOrder {
                 groups: vec!["a".to_owned()],
-                rows: vec!["a2".to_owned(), "a1".to_owned()],
+                rows: vec![frozen_paneless_row("a2"), frozen_paneless_row("a1")],
                 visible: HashSet::from(["a2".to_owned(), "a1".to_owned()]),
             },
             ..UiState::default()
@@ -392,7 +464,7 @@ mod tests {
         )]);
         let order = FrozenOrder {
             groups: vec!["a".to_owned()],
-            rows: vec!["a2".to_owned(), "a1".to_owned()],
+            rows: vec![frozen_paneless_row("a2"), frozen_paneless_row("a1")],
             visible: HashSet::from(["a2".to_owned()]),
         };
         let stamp_ms = 2_000;
@@ -408,10 +480,64 @@ mod tests {
             ui.order_hold.as_ref().map(|hold| &hold.frozen),
             Some(&order)
         );
-        assert_eq!(ui.last_order.rows, vec!["a2", "a1"]);
+        assert_eq!(frozen_row_ids(&ui.last_order), vec!["a2", "a1"]);
         assert_eq!(
             ui.last_order.visible,
             HashSet::from(["a2".to_owned(), "a1".to_owned()])
+        );
+    }
+
+    #[test]
+    fn order_hold_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
+        let mut ui = UiState {
+            last_order: FrozenOrder {
+                groups: vec!["team".to_owned()],
+                rows: vec![
+                    frozen_row("launch-planner", "terminal_1"),
+                    frozen_row("launch-coder", "terminal_2"),
+                    frozen_row("launch-reviewer", "terminal_3"),
+                ],
+                visible: HashSet::from([
+                    "launch-planner".to_owned(),
+                    "launch-coder".to_owned(),
+                    "launch-reviewer".to_owned(),
+                ]),
+            },
+            ..UiState::default()
+        };
+        let mut current = snapshot_with_groups(vec![group(
+            "team",
+            vec![
+                row("session-coder", "terminal_2"),
+                row("session-reviewer", "terminal_3"),
+                row("session-planner", "terminal_1"),
+                row("new-agent", "terminal_4"),
+            ],
+        )]);
+
+        apply_order_hold(&mut ui, &mut current, true, 1_000);
+
+        assert_eq!(
+            row_ids(&current, "team"),
+            vec![
+                "session-planner",
+                "session-coder",
+                "session-reviewer",
+                "new-agent"
+            ],
+        );
+        let frozen = &ui.order_hold.as_ref().expect("hold").frozen;
+        assert_eq!(
+            frozen_row_ids(frozen),
+            vec!["session-planner", "session-coder", "session-reviewer"],
+        );
+        assert_eq!(
+            frozen.visible,
+            HashSet::from([
+                "session-planner".to_owned(),
+                "session-coder".to_owned(),
+                "session-reviewer".to_owned(),
+            ]),
         );
     }
 }

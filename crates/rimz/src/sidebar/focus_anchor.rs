@@ -14,7 +14,7 @@ use crate::ids::PaneId;
 use crate::sidebar::timing::FOCUS_ANCHOR_FRESH;
 use crate::store::{RuntimePaths, atomic};
 
-pub const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v1";
+pub const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v2";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FocusAnchor {
@@ -33,8 +33,15 @@ pub struct FocusAnchor {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrozenOrder {
     pub(crate) groups: Vec<String>,
-    pub(crate) rows: Vec<String>,
+    pub(crate) rows: Vec<FrozenRow>,
     pub(crate) visible: HashSet<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrozenRow {
+    pub(crate) id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pane: Option<String>,
 }
 
 pub fn store(runtime: &RuntimePaths, anchor: &FocusAnchor) -> atomic::Result<()> {
@@ -113,7 +120,16 @@ mod tests {
         let mut anchor = anchor(1_000);
         anchor.order = Some(FrozenOrder {
             groups: vec!["main".to_owned()],
-            rows: vec!["row-1".to_owned(), "row-2".to_owned()],
+            rows: vec![
+                FrozenRow {
+                    id: "row-1".to_owned(),
+                    pane: Some("tmux:%1".to_owned()),
+                },
+                FrozenRow {
+                    id: "row-2".to_owned(),
+                    pane: Some("tmux:%2".to_owned()),
+                },
+            ],
             visible: HashSet::from(["row-2".to_owned()]),
         });
 

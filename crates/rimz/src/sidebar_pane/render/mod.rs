@@ -41,7 +41,7 @@ use self::compose::{
 pub(crate) use self::ui_state::MoreHit;
 pub use self::ui_state::{Alert, UiState};
 pub(crate) use self::ui_state::{
-    BodyFilter, Browse, DashboardTab, FrozenOrder, GateNotice, ManualScroll, OrderHold,
+    BodyFilter, Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
 };
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
