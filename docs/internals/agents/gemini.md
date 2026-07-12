@@ -14,12 +14,20 @@ Gemini CLI reports through user-global command hooks merged into `~/.gemini/sett
 | `BeforeTool` (`ask_user`) | awaiting-user | `Question` | structured questions and choices are retained |
 | `BeforeTool` (`exit_plan_mode`) | awaiting-user | `PlanApproval` | the native plan dialog remains open in the pane |
 | `BeforeTool` (other) | lifecycle | — | classification only; pre-tool work is not activity |
-| `AfterTool` (mutating) | lifecycle | `ToolUsed { mutates: true, edits }` | `write_file` and `replace` edit; `run_shell_command` mutates only |
-| `Notification` | awaiting-user | kind from `details.type` | question and plan variants stay distinct; all others are permission |
+| `AfterTool` | lifecycle | `ToolUsed { mutates, edits }` | every completed tool clears a resolved wait; `write_file` and `replace` edit, while `run_shell_command` mutates only |
+| `Notification` | awaiting-user | `Permission` | ordinary native confirmation dialogs; question and plan notifications duplicate the richer `BeforeTool` event and are ignored |
 | `PreCompress` | lifecycle | `Compacting` | the next lifecycle signal closes the one-sided bracket |
 | `SessionEnd` | lifecycle | `Ended` | best-effort and asynchronous; pane liveness remains the backstop |
 
 Gemini exposes no post-compression event. The shared lifecycle step closes an open compaction bracket on the next signal, so the card cannot pulse forever, but the landing follows that later signal rather than the original `auto` or `manual` trigger. Model hooks remain unwired because `AfterModel` fires for every streaming chunk.
+
+Gemini emits both `BeforeTool` and `Notification` for `ask_user` and `exit_plan_mode`. The adapter records the typed `BeforeTool` payload once because it retains questions, choices, and plan identity; the later notification carries only a title and does not open a duplicate ask. Ordinary edit, shell, MCP, information, sandbox-expansion, and plan-entry confirmations enter waiting from `Notification`. A completed `AfterTool` clears either path immediately.
+
+Gemini's plan input changed across the supported hook surface: stable 0.50 sends `plan_filename`, while the pinned nightly reference names `plan_path`. The tolerant payload parser accepts both and exposes whichever non-empty value is present as the approval detail.
+
+The shared lifecycle coverage descriptor currently names one native event per signal kind. Gemini reaches `AwaitingInput` through two native events—typed questions and plan approval through `BeforeTool`, ordinary permissions through `Notification`—so the descriptor names `Notification` while the adapter and this table preserve the full mapping. A future descriptor shape can accept a native-event set when another adapter also needs multi-event provenance; this adapter does not broaden the shared abstraction alone.
+
+The upstream name `Notification` describes tool-confirmation notifications, not an idle-timeout nudge. Conformance therefore treats that event as a requirement when an adapter declares idle notification fully wired, without inferring full idle coverage merely from the native name. Gemini retains partial idle-notification coverage through turn boundaries, asks, and the shared stall window.
 
 Subagents stay declared off until hook behavior inside child sessions is live-verified. Gemini records child transcripts and parent `invoke_agent` calls, but exposes no dedicated child start/stop event. Native session fork is also absent; resume uses `gemini --resume <id>`, while `/compress` is the manual compaction command.
 

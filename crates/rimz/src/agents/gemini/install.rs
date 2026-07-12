@@ -170,9 +170,22 @@ fn strip_owned_hooks(root: &mut Map<String, Value>) -> Vec<String> {
         let Some(entries) = entries.as_array_mut() else {
             continue;
         };
-        let before = entries.len();
-        entries.retain(|entry| !owned_entry(entry));
-        if entries.len() != before {
+        let mut event_removed = false;
+        for entry in entries.iter_mut() {
+            let Some(commands) = entry.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            let before = commands.len();
+            commands.retain(|command| !owned_command(command));
+            event_removed |= commands.len() != before;
+        }
+        entries.retain(|entry| {
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_none_or(|commands| !commands.is_empty())
+        });
+        if event_removed {
             removed.push(event.clone());
         }
     }
@@ -199,13 +212,14 @@ fn owned_entry(entry: &Value) -> bool {
     entry
         .get("hooks")
         .and_then(Value::as_array)
-        .is_some_and(|hooks| {
-            hooks.iter().any(|hook| {
-                hook.get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(|command| command.contains(RIMZ_COMMAND_MARKER))
-            })
-        })
+        .is_some_and(|hooks| hooks.iter().any(owned_command))
+}
+
+fn owned_command(command: &Value) -> bool {
+    command
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| command.contains(RIMZ_COMMAND_MARKER))
 }
 
 fn hook_name(event: &str) -> String {

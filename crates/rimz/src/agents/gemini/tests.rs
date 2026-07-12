@@ -77,7 +77,10 @@ fn install_preview_reinstall_drift_and_uninstall_preserve_user_hooks() {
           "theme": "Default",
           "hooks": {
             "BeforeTool": [{"matcher":"read_file","hooks":[{"type":"command","name":"mine","command":"echo mine"}]}],
-            "SessionStart": [{"matcher":"*","hooks":[{"type":"command","name":"stale","command":"rimz hooks feed --source gemini --old"}]}]
+            "SessionStart": [{"matcher":"*","hooks":[
+              {"type":"command","name":"stale","command":"rimz hooks feed --source gemini --old"},
+              {"type":"command","name":"grouped-user-hook","command":"echo grouped"}
+            ]}]
           }
         }"#,
     )
@@ -110,11 +113,13 @@ fn install_preview_reinstall_drift_and_uninstall_preserve_user_hooks() {
         assert_eq!(owned, 1, "{event} idempotent reinstall");
     }
     assert!(installed.to_string().contains("echo mine"));
+    assert!(installed.to_string().contains("echo grouped"));
 
     let report = install::uninstall_from(&path).unwrap();
     assert!(!report.removed_events.is_empty());
     let uninstalled = std::fs::read_to_string(&path).unwrap();
     assert!(uninstalled.contains("echo mine"));
+    assert!(uninstalled.contains("echo grouped"));
     assert!(!uninstalled.contains("rimz hooks feed --source gemini"));
 }
 
@@ -156,9 +161,7 @@ fn lifecycle_mapping_steps_through_acting_compaction_and_end() {
         GeminiAdapter
             .observe_lifecycle(
                 "BeforeTool",
-                &json!({
-                    "session_id":"sess-1", "tool_name":"write_file"
-                })
+                &json!({"session_id":"sess-1", "tool_name":"write_file"})
             )
             .is_none()
     );
@@ -232,9 +235,18 @@ fn asks_classify_and_preserve_structured_question_detail() {
 
     let plan = GeminiAdapter.classify_hook(
         "BeforeTool",
-        &json!({"tool_name":"exit_plan_mode","tool_input":{"plan_path":"/tmp/plan.md"}}),
+        &json!({"session_id":"sess-1","tool_name":"exit_plan_mode","tool_input":{"plan_filename":"plan.md"}}),
     );
     assert_eq!(plan.ask_kind, Some(AskKind::PlanApproval));
+    assert_eq!(
+        GeminiAdapter
+            .ask_detail(
+                "BeforeTool",
+                &json!({"tool_name":"exit_plan_mode","tool_input":{"plan_filename":"plan.md"}})
+            )
+            .as_deref(),
+        Some("plan.md")
+    );
     for (kind, expected) in [
         ("exec", AskKind::Permission),
         ("edit", AskKind::Permission),
@@ -242,9 +254,23 @@ fn asks_classify_and_preserve_structured_question_detail() {
         ("exit_plan_mode", AskKind::PlanApproval),
         ("future", AskKind::Permission),
     ] {
-        let payload = json!({"details":{"type":kind,"title":"Confirm"},"message":"Allow?"});
+        let payload = json!({
+            "session_id":"sess-1",
+            "notification_type":"ToolPermission",
+            "details":{"type":kind,"title":"Confirm"},
+            "message":"Allow?"
+        });
         let classified = GeminiAdapter.classify_hook("Notification", &payload);
-        assert_eq!(classified.ask_kind, Some(expected), "{kind}");
+        if matches!(expected, AskKind::Question | AskKind::PlanApproval) {
+            assert_eq!(
+                classified.class,
+                AgentHookClass::Lifecycle,
+                "{kind} deduplicated"
+            );
+            assert_eq!(classified.ask_kind, None, "{kind} deduplicated");
+        } else {
+            assert_eq!(classified.ask_kind, Some(expected), "{kind}");
+        }
         assert_eq!(
             GeminiAdapter
                 .ask_detail("Notification", &payload)
@@ -252,6 +278,40 @@ fn asks_classify_and_preserve_structured_question_detail() {
             Some("Allow?")
         );
     }
+
+    let question_wait = observe("BeforeTool", payload);
+    assert!(matches!(
+        question_wait.signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question,
+            ..
+        }
+    ));
+    let permission_wait = observe(
+        "Notification",
+        json!({
+            "session_id":"sess-1",
+            "notification_type":"ToolPermission",
+            "details":{"type":"exec"}
+        }),
+    );
+    assert!(matches!(
+        permission_wait.signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Permission,
+            ..
+        }
+    ));
+
+    let working = step(None, &LifecycleSignal::TurnStarted).next;
+    let waiting = step(Some(&working), &question_wait.signal).next;
+    assert_eq!(waiting.status, AgentStatus::Waiting);
+    let answered = observe(
+        "AfterTool",
+        json!({"session_id":"sess-1", "tool_name":"ask_user"}),
+    );
+    let settled = step(Some(&waiting), &answered.signal).next;
+    assert_eq!(settled.status, AgentStatus::Running);
 }
 
 #[test]
@@ -271,8 +331,13 @@ fn neutral_output_is_gemini_empty_object_and_malformed_payloads_fail_soft() {
     assert_eq!(
         GeminiAdapter
             .classify_hook("Notification", &json!("bad"))
-            .ask_kind,
-        Some(AskKind::Permission)
+            .class,
+        AgentHookClass::Lifecycle
+    );
+    assert!(
+        GeminiAdapter
+            .observe_lifecycle("SessionStart", &json!({"source":"startup"}))
+            .is_none()
     );
     assert!(RIMZ_HOOK_COMMAND.starts_with("RIMZ_AGENT_PID=$PPID "));
 }
@@ -379,6 +444,7 @@ fn session_transcript_matches_only_the_first_eight_id_characters() {
     let files = vec![
         PathBuf::from("session-2026-06-02T10-00-deadbeef.jsonl"),
         PathBuf::from("session-2026-06-02T10-00-12345678.jsonl"),
+        PathBuf::from("session-12345678-collision.jsonl"),
     ];
     assert_eq!(
         find_session_transcript(files.clone(), "12345678"),

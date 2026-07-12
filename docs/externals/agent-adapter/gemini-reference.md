@@ -255,11 +255,11 @@ The initial mapping onto RimZ's existing signal vocabulary is:
 | --- | --- | --- |
 | `SessionStart` | `registered` | carry `session_id`, `transcript_path`; `source = clear` is a new session id |
 | `BeforeAgent` | `turn_started` | carry `prompt`; this is the authoritative prompt boundary |
-| `BeforeTool` / `AfterTool` for ordinary tools | `tool_used` | use one edge consistently to avoid double-counting; `AfterTool` proves execution completed |
+| `BeforeTool` / `AfterTool` for ordinary tools | `tool_used` | use `AfterTool`; completed non-mutating tools clear resolved waits without forcing durable activity, and mutating tools advance the phase |
 | first `AfterTool` for `write_file` or `replace` | `tool_used { edits: true }` | moves reasoning → acting |
 | `BeforeTool` with `ask_user` | `awaiting_input(Question)` | the tool opens its own interactive dialog |
-| `BeforeTool` with `exit_plan_mode` | `awaiting_input(PlanApproval)` | plan path is in `tool_input.plan_path` |
-| `Notification.ToolPermission` | `awaiting_input` chosen from `details.type` | `ask_user` → question, `exit_plan_mode` → plan approval, every other current type → permission; fires before the scheduler marks and waits |
+| `BeforeTool` with `exit_plan_mode` | `awaiting_input(PlanApproval)` | current stable CLIs send `tool_input.plan_filename`; the pinned nightly surface uses `plan_path`, so tolerate both |
+| `Notification.ToolPermission` | `awaiting_input(Permission)` | `ask_user` and `exit_plan_mode` duplicate the richer `BeforeTool` payload and should not open a second ask; every other current type is permission |
 | `AfterAgent` neutral completion | `turn_ended { errored: false }` | response validation hooks can retry; RimZ's hook must stay neutral |
 | `PreCompress` | `compacting` | retain `trigger` to close correctly later |
 | next lifecycle observation after an open bracket | implicit bracket close | Gemini has no `PostCompress`; emit `compaction_ended` first using the stored opener trigger |

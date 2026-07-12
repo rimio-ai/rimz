@@ -285,11 +285,25 @@ impl AgentAdapter for GeminiAdapter {
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let parsed = payloads::parse_hook(payload);
+        let has_session = parsed
+            .session_id
+            .as_deref()
+            .is_some_and(|session_id| !session_id.trim().is_empty());
         let ask_kind = match event_name {
-            "Notification" => Some(notification_ask_kind(parsed.details.as_ref())),
+            "Notification"
+                if has_session
+                    && parsed.notification_type.as_deref() == Some("ToolPermission")
+                    && !matches!(
+                        notification_ask_kind(parsed.details.as_ref()),
+                        AskKind::Question | AskKind::PlanApproval
+                    ) =>
+            {
+                Some(AskKind::Permission)
+            }
             "BeforeTool" => self
                 .descriptor()
-                .blocking_tool_kind(parsed.tool_name.as_deref()),
+                .blocking_tool_kind(parsed.tool_name.as_deref())
+                .filter(|_| has_session),
             _ => None,
         };
         classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
@@ -360,15 +374,15 @@ impl AgentAdapter for GeminiAdapter {
             ),
             ClassificationSample::new(
                 "Notification",
-                json!({"session_id":"sess-1","details":{"type":"edit"}}),
+                json!({"session_id":"sess-1","notification_type":"ToolPermission","details":{"type":"edit"}}),
                 AgentHookClass::AwaitingUser,
                 Some(AskKind::Permission),
             ),
             ClassificationSample::new(
                 "Notification",
-                json!({"session_id":"sess-1","details":{"type":"ask_user"}}),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Question),
+                json!({"session_id":"sess-1","notification_type":"ToolPermission","details":{"type":"ask_user"}}),
+                AgentHookClass::Lifecycle,
+                None,
             ),
             ClassificationSample::new(
                 "PreCompress",
@@ -401,6 +415,12 @@ impl AgentAdapter for GeminiAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         let parsed = payloads::parse_hook(payload);
+        let agent_id = parsed
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|session_id| !session_id.is_empty())
+            .map(AgentSessionId::from)?;
         let signal = match event_name {
             "SessionStart" => LifecycleSignal::Registered,
             "BeforeAgent" => LifecycleSignal::TurnStarted,
@@ -408,21 +428,36 @@ impl AgentAdapter for GeminiAdapter {
                 errored: false,
                 parked_on_background: false,
             },
-            "AfterTool" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
-                mutates: true,
+            "BeforeTool" => LifecycleSignal::AwaitingInput {
+                kind: self
+                    .descriptor()
+                    .blocking_tool_kind(parsed.tool_name.as_deref())?,
+                ask_id: None,
+                detail: None,
+            },
+            "Notification"
+                if parsed.notification_type.as_deref() == Some("ToolPermission")
+                    && !matches!(
+                        notification_ask_kind(parsed.details.as_ref()),
+                        AskKind::Question | AskKind::PlanApproval
+                    ) =>
+            {
+                LifecycleSignal::AwaitingInput {
+                    kind: AskKind::Permission,
+                    ask_id: None,
+                    detail: None,
+                }
+            }
+            "AfterTool" => LifecycleSignal::ToolUsed {
+                mutates: self.descriptor().tool_mutates(payload),
                 edits: self.descriptor().tool_edits_files(payload),
             },
             "PreCompress" => LifecycleSignal::Compacting,
             "SessionEnd" => LifecycleSignal::Ended,
             _ => return None,
         };
-        let agent_id = parsed
-            .session_id
-            .as_deref()
-            .filter(|session_id| !session_id.is_empty())
-            .map(AgentSessionId::from);
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        let mut observation = AgentLifecycleObservation::new(Some(agent_id), signal)
+            .with_worktree_from_payload(payload);
         let prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.prompt = prompt.clone();
         observation.task = prompt;
@@ -501,10 +536,19 @@ impl AgentAdapter for GeminiAdapter {
 
     fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
         if event_name != "Notification" {
+            let parsed = payloads::parse_hook(payload);
             return self
                 .ask_question_detail(event_name, payload)
                 .and_then(|questions| questions.into_iter().next())
-                .map(|question| question.question);
+                .map(|question| question.question)
+                .or_else(|| {
+                    (parsed.tool_name.as_deref() == Some("exit_plan_mode"))
+                        .then_some(parsed.tool_input)
+                        .flatten()
+                        .and_then(|input| input.plan_path.or(input.plan_filename))
+                        .as_deref()
+                        .and_then(non_empty_trimmed)
+                });
         }
         let parsed = payloads::parse_hook(payload);
         parsed
@@ -779,7 +823,11 @@ fn find_session_transcript(
     files.into_iter().find(|path| {
         path.file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.contains(session_prefix))
+            .and_then(|name| {
+                name.strip_suffix(".jsonl")
+                    .or_else(|| name.strip_suffix(".json"))
+            })
+            .is_some_and(|stem| stem.ends_with(&format!("-{session_prefix}")))
     })
 }
 

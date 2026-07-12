@@ -442,11 +442,14 @@ fn assert_coverage_honest(
                 .any(|event| adapter.ends_session(event)),
             "{kind} SessionEnd coverage must match an installed session-ending event"
         ),
-        IntegrationConcern::IdleNotification => assert_eq!(
-            wired,
-            installed_event_classifies(adapter, samples, installed_events, "Notification"),
-            "{kind} IdleNotification coverage must match an installed Notification event"
-        ),
+        IntegrationConcern::IdleNotification => {
+            if wired {
+                assert!(
+                    installed_event_classifies(adapter, samples, installed_events, "Notification"),
+                    "{kind} wired IdleNotification coverage requires an installed Notification event"
+                );
+            }
+        }
         IntegrationConcern::RichContext => assert_eq!(
             wired, descriptor.capabilities.rich_context,
             "{kind} RichContext coverage must match the rich_context capability"

@@ -31,6 +31,7 @@ pub(super) struct GeminiHookPayload {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)] // Detail variants grow independently; keep the known wire typed.
 pub(super) struct GeminiNotificationDetails {
     #[serde(rename = "type")]
@@ -42,10 +43,11 @@ pub(super) struct GeminiNotificationDetails {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-#[allow(dead_code)] // plan_path is retained for the native plan-approval payload.
+#[allow(dead_code)] // Both plan fields are retained across Gemini CLI wire versions.
 pub(super) struct GeminiToolInput {
     pub questions: Option<Vec<GeminiQuestion>>,
     pub plan_path: Option<String>,
+    pub plan_filename: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
