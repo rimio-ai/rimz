@@ -29,6 +29,12 @@ use crate::mux::{
 /// column amount — its step is Zellij's own ~5%-of-view increment.
 const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
 
+pub(super) fn equal_row_split_size(pane_count: usize, split_index: usize) -> String {
+    debug_assert!(pane_count >= 2 && (1..pane_count).contains(&split_index));
+    let remaining = pane_count - split_index;
+    format!("{}%", 100 * remaining / (remaining + 1))
+}
+
 fn live_cols_u16(
     width: crate::mux::SidebarWidth,
     width_override: Option<std::num::NonZeroU16>,
@@ -673,14 +679,13 @@ impl MuxBackend for TmuxBackend {
             .run()?;
         let (window_id, first_content) = parse_new_window_ids(&output.stdout)?;
         let mut first_daemon_pane = None;
-        if let Some((first, rest)) = opts
+        let runtime = opts
             .view
             .hosts
             .iter()
             .chain(std::iter::once(&opts.view.loop_panel))
-            .collect::<Vec<_>>()
-            .split_first()
-        {
+            .collect::<Vec<_>>();
+        if let Some((first, rest)) = runtime.split_first() {
             let size = self
                 .window_width(&window_id)
                 .map(|view_cols| {
@@ -697,11 +702,12 @@ impl MuxBackend for TmuxBackend {
                 "split-window did not print a daemon pane id",
             )?;
             let mut previous = first_daemon.clone();
-            for host in rest {
+            for (index, host) in rest.iter().enumerate() {
+                let size = equal_row_split_size(runtime.len(), index + 1);
                 previous = self.split_printed_with_reason(
                     "-v",
                     &previous,
-                    None,
+                    Some(&size),
                     &host.cwd,
                     &host.argv,
                     "split-window did not print a daemon pane id",
@@ -710,11 +716,12 @@ impl MuxBackend for TmuxBackend {
             first_daemon_pane = Some(first_daemon);
         }
         let mut previous_content = first_content.clone();
-        for content in rest_content {
+        for (index, content) in rest_content.iter().enumerate() {
+            let size = equal_row_split_size(opts.view.content.len(), index + 1);
             previous_content = self.split_printed_with_reason(
                 "-v",
                 &previous_content,
-                None,
+                Some(&size),
                 &content.cwd,
                 &content.argv,
                 "split-window did not print a content pane id",

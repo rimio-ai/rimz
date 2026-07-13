@@ -104,6 +104,16 @@ fn open_background_view_births_columns_and_is_idempotent() {
         3,
         "runtime panes should be vertically stacked, got {panes:?}",
     );
+    let runtime_heights = right_column
+        .iter()
+        .map(|pane| pane.height)
+        .collect::<Vec<_>>();
+    assert!(
+        runtime_heights.iter().max().expect("runtime height")
+            - runtime_heights.iter().min().expect("runtime height")
+            <= 1,
+        "runtime pane heights should be equal within rounding, got {panes:?}",
+    );
     let second = server
         .backend
         .open_background_view(&opts)
@@ -183,6 +193,16 @@ fn open_background_view_births_columns_and_is_idempotent() {
         content_tops.len(),
         2,
         "content panes should be vertically stacked, got {panes:?}",
+    );
+    let content_heights = content_column
+        .iter()
+        .map(|pane| pane.height)
+        .collect::<Vec<_>>();
+    assert!(
+        content_heights.iter().max().expect("content height")
+            - content_heights.iter().min().expect("content height")
+            <= 1,
+        "content pane heights should be equal within rounding, got {panes:?}",
     );
 }
 

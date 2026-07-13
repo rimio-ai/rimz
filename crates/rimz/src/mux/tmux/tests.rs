@@ -9,6 +9,19 @@ fn default_server_socket_path_uses_tmux_default_layout() {
 }
 
 #[test]
+fn equal_row_splits_size_each_remaining_stack() {
+    let sizes = |pane_count| {
+        (1..pane_count)
+            .map(|index| backend::equal_row_split_size(pane_count, index))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(sizes(2), ["50%"]);
+    assert_eq!(sizes(3), ["66%", "50%"]);
+    assert_eq!(sizes(4), ["75%", "66%", "50%"]);
+}
+
+#[test]
 fn version_parser_and_floor_hold() {
     assert_eq!(parse_version("tmux 3.5a"), Some((3, 5, 0)));
     assert_eq!(parse_version("tmux 3.2"), Some((3, 2, 0)));
