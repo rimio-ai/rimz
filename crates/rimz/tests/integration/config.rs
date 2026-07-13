@@ -175,7 +175,27 @@ fn config_get_set_round_trip_preserves_template_comments() {
         .success()
         .stdout("80\n");
 
+    env.rimz()
+        .args(["config", "set", "theme.display.width_percent", "25"])
+        .assert()
+        .success()
+        .stdout(contains("set theme.display.width_percent"));
+
+    env.rimz()
+        .args(["config", "get", "theme.display.width_percent"])
+        .assert()
+        .success()
+        .stdout("25\n");
+
     let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
+    assert!(
+        text.contains("## width_percent = 30"),
+        "set should preserve the commented default:\n{text}"
+    );
+    assert!(
+        text.contains("width_percent = 25"),
+        "set should write the override:\n{text}"
+    );
     assert!(
         text.contains("## max_cols = 72"),
         "set should preserve the commented default:\n{text}"

@@ -94,10 +94,13 @@ pub struct DisplayConfig {
     /// `max_provider_blocks`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub provider_list: Vec<String>,
-    /// Cap on the sidebar pane width in columns. Panes are born at the standard
-    /// percentage up to this cap. Reconcile on attach or `rimz reload` converges
-    /// a sidebar outside a roughly 5%-of-view band back toward the birth width;
-    /// small manual resizes inside the band stick.
+    /// Sidebar pane width as a percentage of each view, capped by `max_cols`
+    /// and clamped to 10-90 when used. A room-wide `a`/`d` width selection
+    /// outranks this percentage and the cap.
+    pub width_percent: u16,
+    /// Cap on the sidebar pane width in columns. Reconcile converges live panes
+    /// toward the configured percentage up to this cap unless a room-wide
+    /// `a`/`d` width selection is present.
     pub max_cols: NonZeroU16,
     /// How the agent-cards scrollbar shows when the cards overflow. `auto`
     /// (default) paints it only while the viewport moves and hides it once the
@@ -130,6 +133,7 @@ impl Default for DisplayConfig {
             max_provider_blocks: default_max_provider_blocks(),
             provider_tabs: ProviderTabsMode::default(),
             provider_list: Vec::new(),
+            width_percent: default_sidebar_width_percent(),
             max_cols: default_sidebar_max_cols(),
             scrollbar: ScrollbarMode::default(),
             card_density: CardDensityMode::default(),
@@ -299,8 +303,14 @@ impl Default for HighlightStepsConfig {
     }
 }
 
+/// Default sidebar width as a percentage of each view.
+fn default_sidebar_width_percent() -> u16 {
+    30
+}
+
 /// Default column cap on the sidebar pane width: comfortably past the widest
-/// card tier while keeping a 30% split from swallowing an ultra-wide terminal.
+/// card tier while keeping the configured split from swallowing an ultra-wide
+/// terminal.
 fn default_sidebar_max_cols() -> NonZeroU16 {
     // Provably non-zero literal.
     NonZeroU16::new(72).expect("non-zero literal")
