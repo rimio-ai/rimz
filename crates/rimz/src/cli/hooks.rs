@@ -125,14 +125,14 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     }
     let raw_agent_pid = hook_agent_pid(&source);
     let normalized_owner_pid = if source == "droid" {
-        match raw_agent_pid.map(rimz::agents::droid::process::hook_process_disposition) {
-            Some(rimz::agents::droid::process::HookProcessDisposition::StockTui) => {
+        match raw_agent_pid.map(rimz::agents::droid::hook_process_disposition) {
+            Some(rimz::agents::droid::HookProcessDisposition::StockTui) => {
                 debug!(source = %source, "hooks feed: suppressed duplicate outer Droid TUI hook");
                 return Ok(());
             }
             Some(
-                rimz::agents::droid::process::HookProcessDisposition::InternalWorker { owner_pid }
-                | rimz::agents::droid::process::HookProcessDisposition::Standalone { owner_pid },
+                rimz::agents::droid::HookProcessDisposition::InternalWorker { owner_pid }
+                | rimz::agents::droid::HookProcessDisposition::Standalone { owner_pid },
             ) => Some(owner_pid),
             None => None,
         }

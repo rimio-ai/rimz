@@ -7,8 +7,10 @@
 
 mod install;
 mod payloads;
-pub mod process;
+mod process;
 mod transcript;
+
+pub use self::process::{HookProcessDisposition, hook_process_disposition};
 
 use std::path::Path;
 
