@@ -904,7 +904,7 @@ fn several_resting_fresh_occupied_panes_stay_unbound_without_focus() {
     );
 
     assert_eq!(selected.pane_id, None);
-    assert_eq!(selected.candidate_count, 0);
+    assert_eq!(selected.candidate_count, 2);
 }
 
 #[test]

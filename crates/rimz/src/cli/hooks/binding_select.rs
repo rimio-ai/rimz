@@ -56,6 +56,7 @@ pub(super) fn select_focused_pane_binding(
         .collect::<Vec<_>>();
     let mut candidates = selectable_binding_candidates(panes, &candidate_records, false);
     let mut occupied_sole_candidate = false;
+    let mut occupied_candidate_count = None;
     if candidates.is_empty()
         && allow_occupied_daemon_pane
         && daemon_session_can_share_occupied_pane(incoming.kind, incoming.agent_id, prior_agents)
@@ -70,12 +71,13 @@ pub(super) fn select_focused_pane_binding(
             );
             occupied_sole_candidate = candidates.len() == 1;
             if !occupied_sole_candidate {
+                occupied_candidate_count = Some(candidates.len());
                 candidates.clear();
             }
         }
         allow_occupied_daemon_candidates(&mut candidate_records, &candidates);
     }
-    let candidate_count = candidates.len();
+    let candidate_count = occupied_candidate_count.unwrap_or(candidates.len());
     if candidates.is_empty() {
         return FocusedPaneBindingSelection {
             pane: None,
