@@ -504,6 +504,7 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
                 profile: Some("codex-coder".to_owned()),
                 role: Some("coder".to_owned()),
                 team: Some("forge".to_owned()),
+                channel: Some("auth".to_owned()),
                 ..LaunchParams::default()
             },
             pane_id: Some(PaneId::parse("zellij:terminal_1").expect("pane id")),
@@ -524,12 +525,97 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
 
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].agent_id.as_str(), "sess-1");
+    assert_eq!(agents[0].name.as_deref(), Some("lucid-atlas"));
     assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
     assert_eq!(agents[0].role.as_deref(), Some("coder"));
     assert_eq!(agents[0].team.as_deref(), Some("forge"));
+    assert_eq!(agents[0].channel.as_deref(), Some("auth"));
     assert_eq!(
         agents[0].pane.as_ref().map(|pane| pane.pane_id.to_string()),
         Some("zellij:terminal_1".to_owned())
+    );
+}
+
+#[test]
+fn stamped_turn_releases_provisional_from_pre_binding_split() {
+    let pane_id = "zellij:terminal_1";
+    let events = [
+        launch_event(
+            "codex",
+            AgentLaunchPayload {
+                pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
+                prompt: None,
+                ..launch_payload("launch_a", "lucid-atlas")
+            },
+        ),
+        raw_lifecycle_at(
+            "codex",
+            2,
+            json!({
+                "agent_id": "sess-1",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            3,
+            json!({
+                "agent_id": "sess-1",
+                "pane_id": pane_id,
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id.as_str(), "sess-1");
+    assert_eq!(
+        agents[0].pane.as_ref().map(|pane| pane.pane_id.as_str()),
+        Some(pane_id)
+    );
+}
+
+#[test]
+fn stamped_turn_keeps_provisional_when_existing_session_already_has_pane() {
+    let launch_pane = "zellij:terminal_1";
+    let events = [
+        launch_event(
+            "codex",
+            AgentLaunchPayload {
+                pane_id: Some(PaneId::parse(launch_pane).expect("pane id")),
+                prompt: None,
+                ..launch_payload("launch_a", "lucid-atlas")
+            },
+        ),
+        raw_lifecycle_at(
+            "codex",
+            2,
+            json!({
+                "agent_id": "sess-1",
+                "pane_id": "zellij:terminal_2",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            3,
+            json!({
+                "agent_id": "sess-1",
+                "pane_id": launch_pane,
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+
+    assert_eq!(agents.len(), 2);
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent.agent_id.as_str() == "launch_a")
     );
 }
 

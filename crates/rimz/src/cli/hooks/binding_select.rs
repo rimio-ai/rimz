@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct PriorAgentPane<'a> {
     pub(super) kind: &'a str,
     pub(super) agent_id: &'a str,
+    pub(super) is_provisional: bool,
     pub(super) pane_id: Option<&'a PaneId>,
     pub(super) status: rimz::agents::AgentStatus,
     pub(super) origin: Option<rimz::agents::SessionOrigin>,
@@ -17,6 +18,7 @@ pub(super) fn prior_agent_panes(agents: &[AgentState]) -> Vec<PriorAgentPane<'_>
         .map(|agent| PriorAgentPane {
             kind: agent.kind.as_str(),
             agent_id: agent.agent_id.as_str(),
+            is_provisional: agent.agent_id.is_provisional(),
             pane_id: agent.pane.as_ref().map(|pane| &pane.pane_id),
             status: agent.status,
             origin: agent.origin,
@@ -311,11 +313,11 @@ fn binding_candidate_record(
             got: pane.command.clone(),
         });
     }
-    let occupied_by_agent_id =
-        pane_stamped_to_other_agent(kind, agent_id, prior_agents, pane).map(ToOwned::to_owned);
-    if let Some(stamped) = &occupied_by_agent_id {
+    let occupied_by_agent = pane_stamped_to_other_agent(kind, agent_id, prior_agents, pane);
+    let occupied_by_agent_id = occupied_by_agent.map(|(agent_id, _)| agent_id.to_owned());
+    if let Some((stamped, _)) = occupied_by_agent.filter(|(_, is_provisional)| !is_provisional) {
         reject_reasons.push(BindingRejectReason::StampedToOther {
-            agent_id: stamped.clone(),
+            agent_id: stamped.to_owned(),
         });
     }
     if incoming_registered_at.is_some_and(|registered_at| {
@@ -386,7 +388,7 @@ fn pane_stamped_to_other_agent<'a>(
     agent_id: &str,
     prior_agents: &'a [PriorAgentPane<'_>],
     pane: &PaneRef,
-) -> Option<&'a str> {
+) -> Option<(&'a str, bool)> {
     if let Some(agent) = prior_agents.iter().find(|agent| {
         agent.kind == kind
             && agent.agent_id != agent_id
@@ -402,9 +404,9 @@ fn pane_stamped_to_other_agent<'a>(
             agent_id,
             stamped_agent_id = agent.agent_id,
             pane = %pane.pane_id,
-            "pane stamp belongs to another live agent; skipping focused binding candidate",
+            "pane carries another live agent's durable stamp",
         );
-        Some(agent.agent_id)
+        Some((agent.agent_id, agent.is_provisional))
     } else {
         None
     }

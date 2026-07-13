@@ -195,9 +195,12 @@ fn reduce_lifecycle_event(
         return;
     };
     let key = (kind.clone(), agent_id.clone());
-    let provisional_prior = (!map.contains_key(&key))
-        .then(|| adopt_provisional(map, identity, &kind, &key, observation))
-        .flatten();
+    let provisional_prior = if map.contains_key(&key) {
+        release_stamped_provisional_for_existing(map, identity, &kind, &key, observation);
+        None
+    } else {
+        adopt_provisional(map, identity, &kind, &key, observation)
+    };
     let event_name = payload.event_name.as_deref();
     let event_parent_agent_id =
         non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
@@ -306,6 +309,28 @@ fn adopt_provisional(
     identity.release_key(&provisional_key);
     identity.consume_launch_key(&provisional_key);
     prior
+}
+
+fn release_stamped_provisional_for_existing(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    identity: &mut CardIdentityAllocator,
+    kind: &AgentKind,
+    key: &(AgentKind, AgentSessionId),
+    observation: &AgentLifecycleObservation,
+) {
+    if map.get(key).is_none_or(|state| state.pane.is_some()) {
+        return;
+    }
+    let Some(provisional_key) = observation
+        .pane_id
+        .as_ref()
+        .and_then(|pane_id| identity.adoptable_owner_for_pane(map, kind, pane_id, key))
+    else {
+        return;
+    };
+    map.remove(&provisional_key);
+    identity.release_key(&provisional_key);
+    identity.consume_launch_key(&provisional_key);
 }
 
 fn reduce_agent_launch(

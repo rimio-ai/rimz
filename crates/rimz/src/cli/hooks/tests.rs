@@ -491,6 +491,7 @@ fn focused_pane_recovery_selects_or_rejects_by_focus_and_stamp_state() {
             .map(|((_, last_activity), pane_id)| PriorAgentPane {
                 kind: "codex",
                 agent_id: "old",
+                is_provisional: false,
                 pane_id: Some(pane_id),
                 status: AgentStatus::Idle,
                 origin: Some(SessionOrigin::Fresh),
@@ -701,6 +702,62 @@ fn focus_recovery_cases() -> Vec<Case> {
 }
 
 #[test]
+fn provisional_launch_stamp_allows_recovery_for_known_session() {
+    let pane_id = id("terminal_30");
+    let provisional = PriorAgentPane {
+        kind: "codex",
+        agent_id: "launch_abc",
+        is_provisional: true,
+        pane_id: Some(&pane_id),
+        status: AgentStatus::Idle,
+        origin: None,
+        last_activity: jiff::Timestamp::UNIX_EPOCH,
+    };
+    let known_session = PriorAgentPane {
+        kind: "codex",
+        agent_id: "new",
+        is_provisional: false,
+        pane_id: None,
+        status: AgentStatus::Running,
+        origin: Some(SessionOrigin::Fresh),
+        last_activity: jiff::Timestamp::UNIX_EPOCH,
+    };
+
+    let selected = select_focused_pane_binding(
+        incoming(Some(SessionOrigin::Fresh), None),
+        "/repo/main",
+        &[provisional, known_session],
+        &[candidate("terminal_30", true)],
+        Some(std::slice::from_ref(&pane_id)),
+        true,
+    );
+
+    assert_eq!(selected.pane_id.as_ref(), Some(&pane_id));
+    assert_eq!(selected.method, SingleCandidate);
+    assert_eq!(
+        selected.candidates[0].occupied_by_agent_id.as_deref(),
+        Some("launch_abc")
+    );
+    assert!(selected.candidates[0].reject_reasons.is_empty());
+
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("new")),
+        LifecycleSignal::TurnStarted,
+    );
+    super::binding::apply_recovered_pane_binding_with(
+        &mut observation,
+        "new",
+        selected.pane.expect("selected pane"),
+        |_| None,
+    );
+    assert_eq!(observation.pane_id.as_ref(), Some(&pane_id));
+    assert_eq!(
+        observation.pane_stamp.as_ref().map(|pane| &pane.pane_id),
+        Some(&pane_id)
+    );
+}
+
+#[test]
 fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     let epoch = jiff::Timestamp::UNIX_EPOCH;
     let occupied_pane_id = id("terminal_30");
@@ -708,6 +765,7 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     let old_codex = PriorAgentPane {
         kind: "codex",
         agent_id: "old",
+        is_provisional: false,
         pane_id: Some(&occupied_pane_id),
         status: AgentStatus::Idle,
         origin: Some(SessionOrigin::Fresh),
@@ -738,6 +796,7 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     let old_codex = PriorAgentPane {
         kind: "codex",
         agent_id: "old",
+        is_provisional: false,
         pane_id: Some(&occupied_pane_id),
         status: AgentStatus::Idle,
         origin: Some(SessionOrigin::Fresh),
@@ -760,6 +819,7 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     let old_codex = PriorAgentPane {
         kind: "codex",
         agent_id: "old",
+        is_provisional: false,
         pane_id: Some(&occupied_pane_id),
         status: AgentStatus::Idle,
         origin: Some(SessionOrigin::Fresh),
@@ -782,6 +842,7 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     let old_codex = PriorAgentPane {
         kind: "codex",
         agent_id: "old",
+        is_provisional: false,
         pane_id: Some(&occupied_pane_id),
         status: AgentStatus::Idle,
         origin: Some(SessionOrigin::Fresh),
@@ -790,6 +851,7 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
     let known_new_codex = PriorAgentPane {
         kind: "codex",
         agent_id: "new",
+        is_provisional: false,
         pane_id: None,
         status: AgentStatus::Running,
         origin: Some(SessionOrigin::Fresh),
@@ -813,10 +875,18 @@ fn occupied_pane_fallback_stays_daemon_hooked_and_first_event_only() {
         Some("old"),
         "blocked occupied pane still records the owner"
     );
+    assert!(
+        selected.candidates[0]
+            .reject_reasons
+            .contains(&StampedToOther {
+                agent_id: "old".to_owned()
+            })
+    );
 
     let old_claude = PriorAgentPane {
         kind: "claude",
         agent_id: "old",
+        is_provisional: false,
         pane_id: Some(&occupied_pane_id),
         status: AgentStatus::Idle,
         origin: Some(SessionOrigin::Fresh),
@@ -848,6 +918,7 @@ fn sole_resting_fresh_occupied_pane_binds_without_focus() {
     let owner = PriorAgentPane {
         kind: "codex",
         agent_id: "old",
+        is_provisional: false,
         pane_id: Some(&pane_id),
         status: AgentStatus::Idle,
         origin: Some(SessionOrigin::Fresh),
@@ -913,6 +984,7 @@ fn occupied_pane_without_focus_requires_clear_lineage_and_resting_owner() {
         let owner = PriorAgentPane {
             kind: "codex",
             agent_id: "old",
+            is_provisional: false,
             pane_id: Some(&pane_id),
             status,
             origin: owner_origin,
@@ -939,6 +1011,7 @@ fn several_resting_fresh_occupied_panes_stay_unbound_without_focus() {
     let first = PriorAgentPane {
         kind: "codex",
         agent_id: "old-1",
+        is_provisional: false,
         pane_id: Some(&first_id),
         status: AgentStatus::Idle,
         origin: Some(SessionOrigin::Fresh),
@@ -947,6 +1020,7 @@ fn several_resting_fresh_occupied_panes_stay_unbound_without_focus() {
     let second = PriorAgentPane {
         kind: "codex",
         agent_id: "old-2",
+        is_provisional: false,
         pane_id: Some(&second_id),
         status: AgentStatus::Success,
         origin: Some(SessionOrigin::Fresh),
