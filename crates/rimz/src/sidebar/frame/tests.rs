@@ -11,6 +11,7 @@ fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef 
         is_focused: focused,
         is_floating: false,
         command: command.map(ToOwned::to_owned),
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: Some("/repo/main".to_owned()),
         pane_pid: None,
@@ -27,13 +28,22 @@ fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef 
 fn floating_flag_survives_frame_round_trip() {
     let mut pane = pane("terminal_1", "tab_0", Some("codex"), true);
     pane.is_floating = true;
+    pane.foreground_cmdline = Some("codex resume session".to_owned());
 
     let frame = assemble_frame(vec![pane], 7, "rimz-test");
     assert!(frame.tabs[0].panes[0].is_floating);
+    assert_eq!(
+        frame.tabs[0].panes[0].current.foreground_cmdline.as_deref(),
+        Some("codex resume session")
+    );
 
     let projected = frame.to_pane_refs();
     assert_eq!(projected.len(), 1);
     assert!(projected[0].is_floating);
+    assert_eq!(
+        projected[0].foreground_cmdline.as_deref(),
+        Some("codex resume session")
+    );
 }
 
 #[test]
@@ -347,10 +357,12 @@ fn unchanged_command_repairs_raced_nulls_and_keeps_previous() {
         "rimz-test",
     );
     prior.tabs[0].panes[0].current.pid = Some(42);
+    prior.tabs[0].panes[0].current.foreground_cmdline = Some("claude --resume session".to_owned());
     prior.tabs[0].panes[0].current.spawn_command = Some("rimz agents exec claude".to_owned());
     prior.tabs[0].panes[0].previous = Some(PaneProcess {
         pid: Some(41),
         command: Some("zsh".to_owned()),
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: Some("/repo/main".to_owned()),
         started_at: None,
@@ -374,6 +386,10 @@ fn unchanged_command_repairs_raced_nulls_and_keeps_previous() {
 
     let state = &fresh.tabs[0].panes[0];
     assert_eq!(state.current.command.as_deref(), Some("claude"));
+    assert_eq!(
+        state.current.foreground_cmdline.as_deref(),
+        Some("claude --resume session")
+    );
     assert_eq!(
         state.current.spawn_command.as_deref(),
         Some("rimz agents exec claude")

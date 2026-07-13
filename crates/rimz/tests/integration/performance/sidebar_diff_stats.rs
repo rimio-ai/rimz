@@ -76,6 +76,7 @@ impl Fixture {
                 is_focused: false,
                 is_floating: false,
                 command: Some("bash".to_owned()),
+                foreground_cmdline: None,
                 spawn_command: None,
                 cwd: Some(worktree.to_string_lossy().into_owned()),
                 pane_pid: None,

@@ -68,7 +68,10 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     // The command earns a second line only when it adds something past the
     // primary label — an absolute program path trimmed to its basename, arguments
     // verbatim.
-    let command_detail = command
+    let command_detail = pane
+        .foreground_cmdline
+        .as_deref()
+        .or(command)
         .filter(|_| state.is_busy() || elevated.is_some())
         .map(command_program_basename)
         .filter(|full| *full != name);
@@ -221,6 +224,19 @@ mod tests {
             bare.as_process()
                 .and_then(|process| process.command_detail.as_ref()),
             None
+        );
+
+        let mut enriched = pane("%6", "rimz", "/repo");
+        enriched.pane_pid = Some(std::process::id());
+        enriched.foreground_cmdline = Some("rimz loop fire sync-repo-rimz".to_owned());
+        let owner = crate::proc::comm(std::process::id()).expect("current process name");
+        let enriched = row_from_process(&enriched, Timestamp::now());
+        assert_eq!(enriched.name, owner);
+        assert_eq!(
+            enriched
+                .as_process()
+                .and_then(|process| process.command_detail.as_deref()),
+            Some("rimz loop fire sync-repo-rimz")
         );
 
         let spawn_only = row_from_process(

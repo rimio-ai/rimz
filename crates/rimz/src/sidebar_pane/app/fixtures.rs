@@ -25,6 +25,7 @@ pub(crate) fn pane(raw: &str, view: &str, focused: bool) -> PaneRef {
         is_focused: focused,
         is_floating: false,
         command: Some("zsh".to_owned()),
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: Some("/repo/main".to_owned()),
         pane_pid: None,

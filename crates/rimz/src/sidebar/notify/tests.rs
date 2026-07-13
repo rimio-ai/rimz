@@ -128,6 +128,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
             is_focused: focused,
             is_floating: false,
             command: Some("claude".to_owned()),
+            foreground_cmdline: None,
             spawn_command: None,
             cwd: Some("/tmp/rimz-notify".to_owned()),
             pane_pid: None,

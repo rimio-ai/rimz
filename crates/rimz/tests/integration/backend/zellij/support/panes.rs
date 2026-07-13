@@ -88,6 +88,7 @@ impl ListedPane {
                 .as_deref()
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned),
+            foreground_cmdline: None,
             spawn_command: self
                 .terminal_command
                 .as_deref()

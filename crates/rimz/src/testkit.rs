@@ -230,6 +230,7 @@ pub mod fleet {
             is_focused: i == 0,
             is_floating: false,
             command: Some("zsh".to_owned()),
+            foreground_cmdline: None,
             spawn_command: None,
             cwd: None,
             pane_pid: None,

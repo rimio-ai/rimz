@@ -864,7 +864,7 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             vec![(100, "zsh")],
             vec![(100, "zsh")],
             vec![],
-            None,
+            (None, None),
             true,
         ),
         (
@@ -877,7 +877,7 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             ],
             vec![(100, "zsh"), (200, "bash"), (300, "cargo")],
             vec![(100, vec![200]), (200, vec![300])],
-            Some("cargo build --release"),
+            (Some("cargo build --release"), None),
             false,
         ),
         (
@@ -886,7 +886,7 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             vec![(100, "zsh"), (200, "cargo test")],
             vec![(100, "zsh"), (200, "cargo")],
             vec![(100, vec![200])],
-            None,
+            (None, None),
             false,
         ),
         (
@@ -895,7 +895,7 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             vec![(100, "cargo build --release")],
             vec![(100, "cargo")],
             vec![],
-            Some("cargo build --release"),
+            (Some("cargo build --release"), None),
             false,
         ),
         (
@@ -904,7 +904,7 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             vec![],
             vec![],
             vec![],
-            Some("cargo build --release"),
+            (Some("cargo build --release"), None),
             false,
         ),
         (
@@ -913,7 +913,7 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             vec![(100, "zsh"), (200, "/usr/bin/cargo build --release")],
             vec![(100, "zsh"), (200, "cargo")],
             vec![(100, vec![200])],
-            Some("cargo"),
+            (Some("cargo"), Some("/usr/bin/cargo build --release")),
             false,
         ),
         (
@@ -925,7 +925,19 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             ],
             vec![(100, "zsh"), (200, "mutable-unicor")],
             vec![(100, vec![200])],
-            Some("mutable-unicorn-server"),
+            (
+                Some("mutable-unicorn-server"),
+                Some("/opt/bin/mutable-unicorn-server --serve"),
+            ),
+            false,
+        ),
+        (
+            "tmux comm-only match keeps command without enrichment",
+            tmux_pane("cargo"),
+            vec![(100, "zsh")],
+            vec![(100, "zsh"), (200, "cargo")],
+            vec![(100, vec![200])],
+            (Some("cargo"), None),
             false,
         ),
         (
@@ -934,7 +946,7 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             vec![(100, "zsh"), (200, "make check")],
             vec![],
             vec![(100, vec![200])],
-            None,
+            (None, None),
             false,
         ),
     ] {
@@ -956,11 +968,14 @@ fn assert_active_command_case(
     cmdlines: Vec<(u32, &'static str)>,
     comms: Vec<(u32, &'static str)>,
     children: Vec<(u32, Vec<u32>)>,
-    expected: Option<&str>,
+    expected: (Option<&str>, Option<&str>),
     expect_metadata_clear: bool,
 ) {
     let mut frame = frame(vec![pane_ref]);
     first_mut(&mut frame).current.pid = Some(100);
+    if expected.0.is_none() {
+        first_mut(&mut frame).current.foreground_cmdline = Some("stale argv".to_owned());
+    }
     if expect_metadata_clear {
         first_mut(&mut frame).children = vec![200];
         first_mut(&mut frame).metrics = PaneMetrics {
@@ -980,14 +995,23 @@ fn assert_active_command_case(
         .collect::<HashMap<_, _>>();
     let children = children.into_iter().collect::<HashMap<_, _>>();
 
-    drop_finished_active_commands(
+    reconcile_active_commands(
         &mut frame,
         &|pid| cmdlines.get(&pid).cloned(),
         &|pid| comms.get(&pid).cloned(),
         &|pid| children.get(&pid).cloned().unwrap_or_default(),
     );
 
-    assert_eq!(first(&frame).current.command.as_deref(), expected, "{name}");
+    assert_eq!(
+        first(&frame).current.command.as_deref(),
+        expected.0,
+        "{name}"
+    );
+    assert_eq!(
+        first(&frame).current.foreground_cmdline.as_deref(),
+        expected.1,
+        "{name}"
+    );
     if expect_metadata_clear {
         assert_eq!(first(&frame).metrics, PaneMetrics::default(), "{name}");
         assert!(first(&frame).children.is_empty(), "{name}");
@@ -1000,7 +1024,7 @@ fn idle_agent_and_chrome_commands_are_not_process_gated() {
         let mut frame = frame(vec![pane("terminal_1", Some(command), Some("/repo"))]);
         first_mut(&mut frame).current.pid = Some(100);
 
-        drop_finished_active_commands(
+        reconcile_active_commands(
             &mut frame,
             &|pid| -> Option<String> { panic!("cmdline must not be read for {command}: {pid}") },
             &|pid| -> Option<String> { panic!("comm must not be read for {command}: {pid}") },

@@ -174,6 +174,7 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
         is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: Some(env.project_root.display().to_string()),
         pane_pid: None,

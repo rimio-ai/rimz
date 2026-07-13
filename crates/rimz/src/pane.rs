@@ -109,6 +109,10 @@ pub struct PaneRef {
     /// Foreground command as reported by the multiplexer, if available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Full `/proc` cmdline matched to [`Self::command`] when the mux reports
+    /// only a program basename. Display-only; never an identity key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground_cmdline: Option<String>,
     /// Spawn command used to launch the pane, if the backend reports it.
     /// Advisory identity/classification metadata; display prefers
     /// [`Self::command`].
@@ -163,6 +167,7 @@ impl PaneRef {
             is_focused: false,
             is_floating: false,
             command: None,
+            foreground_cmdline: None,
             spawn_command: None,
             cwd: None,
             pane_pid: None,

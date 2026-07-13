@@ -11,6 +11,7 @@ fn pane(command: Option<&str>, view_name: Option<&str>) -> PaneRef {
         is_focused: false,
         is_floating: false,
         command: command.map(ToOwned::to_owned),
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: None,
         pane_pid: None,

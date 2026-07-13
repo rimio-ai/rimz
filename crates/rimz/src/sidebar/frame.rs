@@ -96,6 +96,10 @@ pub struct PaneProcess {
     pub pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Full `/proc` cmdline of the matched foreground process when the mux
+    /// reports only a program basename. Display-only; never an identity key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground_cmdline: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,7 +123,7 @@ pub struct PaneProcess {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneMetrics {
     /// The sampler's stuck verdict only — `Some(Stuck)` when `/proc` reported a
-    /// zombie or repeated uninterruptible sleep, else `None`. Idle-vs-busy is
+    /// repeated zombie or uninterruptible sleep, else `None`. Idle-vs-busy is
     /// never carried here; the fold classifies it from the pane's program
     /// (`store::snapshot::process`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,6 +190,7 @@ impl PaneFrame {
                 || self.viewed_panes.contains(&pane.pane_id),
             is_floating: pane.is_floating,
             command: pane.current.command.clone(),
+            foreground_cmdline: pane.current.foreground_cmdline.clone(),
             spawn_command: pane.current.spawn_command.clone(),
             cwd: pane.current.cwd.clone(),
             pane_pid: pane.current.pid,
@@ -251,6 +256,7 @@ impl PaneState {
             );
             if prior_is_idle || same_known_pid {
                 self.current.command = prior.current.command.clone();
+                self.current.foreground_cmdline = prior.current.foreground_cmdline.clone();
             }
         }
         if self.current.spawn_command.is_none() {
@@ -398,6 +404,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
             current: PaneProcess {
                 pid: pane.pane_pid,
                 command: pane.command,
+                foreground_cmdline: pane.foreground_cmdline,
                 spawn_command: pane.spawn_command,
                 cwd: pane.cwd,
                 started_at: pane.pane_process_start,

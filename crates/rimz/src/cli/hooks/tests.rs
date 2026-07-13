@@ -42,6 +42,7 @@ fn pane(raw: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
         is_focused: focused,
         is_floating: false,
         command: Some(command.to_owned()),
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: Some(cwd.to_owned()),
         pane_pid: None,

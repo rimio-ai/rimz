@@ -744,6 +744,7 @@ mod tests {
                     current: PaneProcess {
                         pid: Some(909),
                         command: Some("zsh".to_owned()),
+                        foreground_cmdline: None,
                         spawn_command: None,
                         cwd: Some("/repo".to_owned()),
                         started_at: None,

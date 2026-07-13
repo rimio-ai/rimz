@@ -40,6 +40,7 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         } else {
             trimmed_nonempty(3)
         },
+        foreground_cmdline: None,
         spawn_command: trimmed_nonempty(10),
         cwd: trimmed_nonempty(4),
         pane_pid: cols

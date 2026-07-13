@@ -229,6 +229,7 @@ impl MuxBackend for FakeBackend {
                 is_focused: false,
                 is_floating: false,
                 command: Some("sh".to_owned()),
+                foreground_cmdline: None,
                 spawn_command: None,
                 cwd: None,
                 pane_pid: None,

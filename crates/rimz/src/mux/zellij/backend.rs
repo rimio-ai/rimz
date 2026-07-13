@@ -506,6 +506,7 @@ impl MuxBackend for ZellijBackend {
                 hosted_agent_kind: None,
                 hosted_agent_process_start: None,
                 command,
+                foreground_cmdline: None,
                 spawn_command: p.spawn_command().map(str::to_owned),
                 cwd: p.pane_cwd.take(),
                 resumed_session_id: None,

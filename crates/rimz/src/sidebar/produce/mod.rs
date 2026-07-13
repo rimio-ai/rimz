@@ -471,6 +471,7 @@ pub(crate) mod test_support {
             is_focused: false,
             is_floating: false,
             command: command.map(ToOwned::to_owned),
+            foreground_cmdline: None,
             spawn_command: None,
             cwd: cwd.map(ToOwned::to_owned),
             pane_pid: None,

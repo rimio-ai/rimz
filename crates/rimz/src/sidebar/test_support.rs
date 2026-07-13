@@ -17,6 +17,7 @@ pub(crate) fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
         is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: Some(cwd.to_owned()),
         pane_pid: None,

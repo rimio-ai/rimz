@@ -50,6 +50,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
             is_focused: false,
             is_floating: false,
             command: Some("node".to_owned()),
+            foreground_cmdline: None,
             spawn_command: None,
             cwd: Some(format!("/repo/wt{group}")),
             pane_pid: None,

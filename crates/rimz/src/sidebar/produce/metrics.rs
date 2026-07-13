@@ -402,17 +402,17 @@ fn process_state_from_tree(
     current: &[ProcessStateSample],
     prior: &[ProcessStateSample],
 ) -> Option<ProcessState> {
-    if current.iter().any(|sample| sample.state == 'Z') {
-        return Some(ProcessState::Stuck);
-    }
-    let prior_d: HashSet<(u32, u64)> = prior
+    let prior_stuck: HashSet<(u32, u64)> = prior
         .iter()
-        .filter(|sample| sample.state == 'D')
+        .filter(|sample| matches!(sample.state, 'Z' | 'D'))
         .map(|sample| (sample.pid, sample.start_ticks))
         .collect();
     current
         .iter()
-        .any(|sample| sample.state == 'D' && prior_d.contains(&(sample.pid, sample.start_ticks)))
+        .any(|sample| {
+            matches!(sample.state, 'Z' | 'D')
+                && prior_stuck.contains(&(sample.pid, sample.start_ticks))
+        })
         .then_some(ProcessState::Stuck)
 }
 

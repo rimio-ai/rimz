@@ -15,6 +15,7 @@ fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> Pa
         is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: Some("/repo/main".to_owned()),
         pane_pid: None,

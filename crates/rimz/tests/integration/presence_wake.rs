@@ -182,6 +182,7 @@ impl WakeEnv {
                 is_focused: true,
                 is_floating: false,
                 command: Some("zsh".to_owned()),
+                foreground_cmdline: None,
                 spawn_command: None,
                 cwd: Some(self.project_root.to_string_lossy().into_owned()),
                 pane_pid: None,

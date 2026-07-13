@@ -15,6 +15,7 @@ fn pane(raw: &str) -> PaneRef {
         is_focused: false,
         is_floating: false,
         command: None,
+        foreground_cmdline: None,
         spawn_command: None,
         cwd: None,
         pane_pid: None,

@@ -177,8 +177,9 @@ fn tree_stuck_detection_tracks_pid_start_identity() {
         Some(ProcessState::Stuck)
     );
     assert_eq!(process_state_from_tree(&reused_pid, &prior), None);
+    assert_eq!(process_state_from_tree(&zombie, &[]), None);
     assert_eq!(
-        process_state_from_tree(&zombie, &[]),
+        process_state_from_tree(&zombie, &zombie),
         Some(ProcessState::Stuck)
     );
 }

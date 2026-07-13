@@ -299,6 +299,7 @@ mod tests {
             is_focused: false,
             is_floating: false,
             command: Some(command.to_owned()),
+            foreground_cmdline: None,
             spawn_command: None,
             cwd: None,
             pane_pid: None,
