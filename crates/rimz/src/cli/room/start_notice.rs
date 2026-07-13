@@ -9,23 +9,11 @@ use crate::cli::render;
 
 use super::session_record::session_probe_timeout;
 
-fn one_line(message: &str) -> String {
-    message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
 fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
     let path = render::home_relative(&err.path().display().to_string());
-    let detail = std::error::Error::source(err)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| err.to_string());
     format!(
         "{path} is unparseable — every setting in it is ignored and built-in defaults apply: {}; fix the file, then restart",
-        one_line(&detail),
+        render::one_line_error(err),
     )
 }
 

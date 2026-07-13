@@ -497,6 +497,39 @@ fn setup_yes_leaves_unparseable_config_untouched() {
 }
 
 #[test]
+fn interactive_setup_stops_cleanly_before_partial_setup_for_unparseable_config() {
+    let env = Env::new();
+    let path = theme_config_path(&env);
+    let broken = "[theme.display]\nmax_cols = 64\nmax_cols = 72\n";
+    write_machine_file(&path, broken);
+
+    let output = run_setup_pty(&env, "\n");
+
+    assert!(
+        output.contains("Left "),
+        "merge outcome is visible:\n{output}"
+    );
+    assert!(output.contains("theme.toml untouched"), "{output}");
+    assert!(
+        output.contains("Fix the unparseable file(s), then rerun `rimz setup`."),
+        "clean early-exit guidance:\n{output}",
+    );
+    assert!(!output.contains("Error:"), "no raw error:\n{output}");
+    assert!(
+        !output.contains("Want a pet?"),
+        "first-run prompts do not start:\n{output}",
+    );
+    assert!(
+        !env.config_root().join("rimz/remote.toml").exists(),
+        "remote setup does not partially run",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read preserved theme"),
+        broken,
+    );
+}
+
+#[test]
 fn setup_yes_preserves_sentry_keys_during_merge() {
     let env = Env::new();
     write_machine_file(

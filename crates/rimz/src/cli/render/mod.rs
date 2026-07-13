@@ -175,6 +175,26 @@ pub(crate) fn home_relative(path: &str) -> String {
     home_relative_to(home.as_ref().and_then(|home| home.to_str()), path)
 }
 
+/// Collapse a diagnostic into one terminal-friendly line.
+pub(crate) fn one_line(message: &str) -> String {
+    message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Render an error's actionable source without repeating its outer context.
+pub(crate) fn one_line_error(error: &(dyn std::error::Error + 'static)) -> String {
+    one_line(
+        &error
+            .source()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| error.to_string()),
+    )
+}
+
 /// Format bytes for human CLI reports with 1024-based units.
 pub(crate) fn fmt_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];

@@ -44,7 +44,16 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     let exists = paths.iter().any(|path| path.exists());
     if exists {
         if super::confirm_with_default("Keep your current config?", true)? {
-            render_merge_report(&config::merge_default_config()?)?;
+            let merge = config::merge_default_config()?;
+            let left_unparseable = merge
+                .files
+                .iter()
+                .any(|file| matches!(file.action, config::MergeAction::LeftUnparseable { .. }));
+            render_merge_report(&merge)?;
+            if left_unparseable {
+                print_line("Fix the unparseable file(s), then rerun `rimz setup`.")?;
+                return Ok(());
+            }
         } else {
             write_fresh_config()?;
         }
@@ -197,20 +206,11 @@ fn render_merge_report(report: &config::MergeReport) -> Result<()> {
             }
         }
         for skipped in &file.skipped {
-            let reason = format!("invalid: {}", one_line(&skipped.reason));
+            let reason = format!("invalid: {}", render::one_line(&skipped.reason));
             print_line(&format!("  skipped {} ({reason})", skipped.key))?;
         }
     }
     Ok(())
-}
-
-fn one_line(message: &str) -> String {
-    message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 fn print_report(report: &SetupReport) -> std::io::Result<()> {

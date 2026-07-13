@@ -10,7 +10,7 @@ use rimz::store::atomic::write_bytes_atomically;
 use rimz::store::paths;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-use super::GlobalFlags;
+use super::{GlobalFlags, render};
 
 #[derive(Debug, Args)]
 pub struct ConfigArgs {
@@ -150,7 +150,7 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
             return Ok(FileMergeOutcome {
                 path: path.to_path_buf(),
                 action: MergeAction::LeftUnparseable {
-                    error: one_line(&err.to_string()),
+                    error: render::one_line(&err.to_string()),
                 },
                 skipped: Vec::new(),
             });
@@ -189,15 +189,6 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
         action: MergeAction::Merged { kept },
         skipped,
     })
-}
-
-fn one_line(message: &str) -> String {
-    message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 fn init(args: InitArgs) -> Result<()> {

@@ -76,26 +76,12 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
 fn collect_machine_config() -> model::MachineConfigHealth {
     let broken_files = rimz::config::broken_machine_files()
         .into_iter()
-        .map(|err| {
-            let error = std::error::Error::source(&err)
-                .map(ToString::to_string)
-                .unwrap_or_else(|| err.to_string());
-            model::MachineConfigProblem {
-                path: err.path().display().to_string(),
-                error: one_line(&error),
-            }
+        .map(|err| model::MachineConfigProblem {
+            path: err.path().display().to_string(),
+            error: ui::one_line_error(&err),
         })
         .collect();
     model::MachineConfigHealth { broken_files }
-}
-
-fn one_line(message: &str) -> String {
-    message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 /// The loop tasks from config plus transient instance state. Read-only and
