@@ -286,16 +286,22 @@ fn adopt_provisional(
     key: &(AgentKind, AgentSessionId),
     observation: &AgentLifecycleObservation,
 ) -> Option<AgentState> {
-    let provisional_key = observation
+    if let Some(provisional_key) = observation
         .agent_name
         .as_deref()
         .and_then(|name| identity.adoptable_owner_for_name(map, kind, name, key))
-        .or_else(|| {
-            observation
-                .pane_id
-                .as_ref()
-                .and_then(|pane_id| identity.adoptable_owner_for_pane(map, kind, pane_id, key))
-        })?;
+    {
+        let prior = map.remove(&provisional_key);
+        identity.release_key(&provisional_key);
+        identity.consume_launch_key(&provisional_key);
+        if prior.is_some() {
+            return prior;
+        }
+    }
+    let provisional_key = observation
+        .pane_id
+        .as_ref()
+        .and_then(|pane_id| identity.adoptable_owner_for_pane(map, kind, pane_id, key))?;
     let prior = map.remove(&provisional_key);
     identity.release_key(&provisional_key);
     identity.consume_launch_key(&provisional_key);
