@@ -365,6 +365,18 @@ mod tests {
             Some("/tmp/transcript.jsonl"),
             "downstream run-record/context paths keep the full observation"
         );
+
+        observation.signal = LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        };
+        let turn_end = event_lifecycle_observation(&observation);
+        assert_eq!(
+            turn_end.transcript_path.as_deref(),
+            Some("/tmp/transcript.jsonl"),
+            "a provider can first publish its authoritative path at turn end"
+        );
+        assert!(turn_end.worktree_path.is_none());
     }
 
     #[test]

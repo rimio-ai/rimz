@@ -1,5 +1,5 @@
-//! Transcript-tail fast path: refresh the context sidecar the moment a watched
-//! transcript grows.
+//! Local-source fast path: refresh the context sidecar the moment a watched
+//! transcript, rollout, or telemetry file grows.
 //!
 //! Adapters that declare transcript-tail context reach the sidecar through hook
 //! pushes after progress events plus the producer's stat-gated tick backstop.
@@ -38,9 +38,9 @@ const ROSTER_RESCAN: Duration = Duration::from_secs(5);
 /// refresh per session, bounding refresh rate during fast token streams.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
-/// One watched transcript file: the session it belongs to and the model hint its
-/// sidecar last carried, threaded into the refresh for cost pricing.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One watched local source target and the model hint its sidecar last carried,
+/// threaded into the refresh for cost pricing.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct WatchTarget {
     kind: String,
     session_id: String,
@@ -83,7 +83,7 @@ fn watch_while_elected(
             }
         }
     })?;
-    let mut roster: BTreeMap<PathBuf, WatchTarget> = BTreeMap::new();
+    let mut roster: BTreeMap<PathBuf, BTreeSet<WatchTarget>> = BTreeMap::new();
     let mut pending: BTreeSet<PathBuf> = BTreeSet::new();
     let mut flush_at: Option<Instant> = None;
     let mut rescan_at = Instant::now();
@@ -136,7 +136,7 @@ fn watch_while_elected(
 fn reconcile_roster(
     runtime: &RuntimePaths,
     watcher: &mut notify::RecommendedWatcher,
-    roster: &mut BTreeMap<PathBuf, WatchTarget>,
+    roster: &mut BTreeMap<PathBuf, BTreeSet<WatchTarget>>,
 ) {
     let live = transcript_targets(&crate::store::agent_context::read_all(runtime));
     roster.retain(|path, _| {
@@ -146,16 +146,16 @@ fn reconcile_roster(
         let _ = watcher.unwatch(path);
         false
     });
-    for (path, target) in live {
+    for (path, targets) in live {
         match roster.entry(path) {
             std::collections::btree_map::Entry::Occupied(mut entry) => {
-                // Keep the watch; refresh the model hint the sidecar carries.
-                entry.insert(target);
+                // Keep the one OS watch; refresh every session target sharing it.
+                entry.insert(targets);
             }
             std::collections::btree_map::Entry::Vacant(entry) => {
                 match watcher.watch(entry.key(), RecursiveMode::NonRecursive) {
                     Ok(()) => {
-                        entry.insert(target);
+                        entry.insert(targets);
                     }
                     Err(err) => {
                         debug!(path = %entry.key().display(), error = %err, "transcript watch registration failed");
@@ -166,26 +166,26 @@ fn reconcile_roster(
     }
 }
 
-/// The transcript paths worth watching: every sidecar for an adapter that
-/// declares transcript-tail context and names its transcript. Pure over the
+/// The local-source paths worth watching: every sidecar for an adapter that
+/// declares transcript-tail context and names its source. Pure over the
 /// records so the roster policy is testable without a watcher or a runtime dir.
-fn transcript_targets(records: &[AgentContextRecord]) -> BTreeMap<PathBuf, WatchTarget> {
-    records
-        .iter()
-        .filter(|record| {
-            crate::agents::descriptor_by_kind(record.kind.as_str())
-                .is_some_and(|descriptor| descriptor.capabilities.transcript_tail_context)
-        })
-        .filter_map(|record| {
-            let path = PathBuf::from(record.transcript_path.as_deref()?);
-            let target = WatchTarget {
-                kind: record.kind.as_str().to_owned(),
-                session_id: record.agent_id.as_str().to_owned(),
-                model_hint: record.context.model_id.clone(),
-            };
-            Some((path, target))
-        })
-        .collect()
+fn transcript_targets(records: &[AgentContextRecord]) -> BTreeMap<PathBuf, BTreeSet<WatchTarget>> {
+    let mut targets = BTreeMap::<PathBuf, BTreeSet<WatchTarget>>::new();
+    for record in records.iter().filter(|record| {
+        crate::agents::descriptor_by_kind(record.kind.as_str())
+            .is_some_and(|descriptor| descriptor.capabilities.transcript_tail_context)
+    }) {
+        let Some(path) = record.transcript_path.as_deref().map(PathBuf::from) else {
+            continue;
+        };
+        let target = WatchTarget {
+            kind: record.kind.as_str().to_owned(),
+            session_id: record.agent_id.as_str().to_owned(),
+            model_hint: record.context.model_id.clone(),
+        };
+        targets.entry(path).or_default().insert(target);
+    }
+    targets
 }
 
 /// The flush decision: map the pending event paths through the roster and
@@ -194,12 +194,13 @@ fn transcript_targets(records: &[AgentContextRecord]) -> BTreeMap<PathBuf, Watch
 /// raced a session ending) refreshes nothing.
 fn due_refreshes(
     pending: &BTreeSet<PathBuf>,
-    roster: &BTreeMap<PathBuf, WatchTarget>,
+    roster: &BTreeMap<PathBuf, BTreeSet<WatchTarget>>,
 ) -> Vec<WatchTarget> {
     let mut seen = BTreeSet::new();
     pending
         .iter()
         .filter_map(|path| roster.get(path))
+        .flatten()
         .filter(|target| seen.insert((target.kind.clone(), target.session_id.clone())))
         .cloned()
         .collect()
@@ -227,11 +228,15 @@ mod tests {
         }
     }
 
-    fn roster(entries: &[(&str, &str, &str)]) -> BTreeMap<PathBuf, WatchTarget> {
-        entries
-            .iter()
-            .map(|(path, kind, session)| (PathBuf::from(path), target(kind, session)))
-            .collect()
+    fn roster(entries: &[(&str, &str, &str)]) -> BTreeMap<PathBuf, BTreeSet<WatchTarget>> {
+        let mut roster = BTreeMap::<PathBuf, BTreeSet<WatchTarget>>::new();
+        for (path, kind, session) in entries {
+            roster
+                .entry(PathBuf::from(path))
+                .or_default()
+                .insert(target(kind, session));
+        }
+        roster
     }
 
     #[test]
@@ -255,6 +260,19 @@ mod tests {
         assert_eq!(
             due_refreshes(&pending, &roster),
             vec![target("codex", "sess-a")]
+        );
+    }
+
+    #[test]
+    fn one_path_two_sessions_refreshes_each_once() {
+        let roster = roster(&[
+            ("/t/shared.jsonl", "copilot", "sess-a"),
+            ("/t/shared.jsonl", "copilot", "sess-b"),
+        ]);
+        let pending: BTreeSet<PathBuf> = [PathBuf::from("/t/shared.jsonl")].into();
+        assert_eq!(
+            due_refreshes(&pending, &roster),
+            vec![target("copilot", "sess-a"), target("copilot", "sess-b")]
         );
     }
 
@@ -288,19 +306,19 @@ mod tests {
             BTreeMap::from([
                 (
                     PathBuf::from("/t/a.jsonl"),
-                    WatchTarget {
+                    BTreeSet::from([WatchTarget {
                         kind: "codex".to_owned(),
                         session_id: "sess-a".to_owned(),
                         model_hint: Some("gpt-5.5-codex".to_owned()),
-                    }
+                    }])
                 ),
                 (
                     PathBuf::from("/t/g.jsonl"),
-                    WatchTarget {
+                    BTreeSet::from([WatchTarget {
                         kind: "gemini".to_owned(),
                         session_id: "sess-g".to_owned(),
                         model_hint: None,
-                    }
+                    }])
                 )
             ])
         );

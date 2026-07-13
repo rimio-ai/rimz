@@ -4,7 +4,7 @@
 
 This is the single home for the **GitHub Copilot CLI upstream protocol surface** relevant to RimZ — lifecycle hooks and their decision channel, session identity and persistence, the statusline command, OpenTelemetry, programmatic and ACP modes, authentication, remote control, configuration, and permission modes. It is an implementation research record, not a claim that RimZ currently supports Copilot.
 
-Refresh baseline: GitHub Copilot CLI **1.0.70** (`758c2c9`, released 2026-07-10) and the official GitHub documentation available on **2026-07-10**. GitHub publishes the CLI executable and changelog in [`github/copilot-cli`](https://github.com/github/copilot-cli), but the runtime implementation and its session-event types are not published there. Treat the official hook, configuration, ACP, and OTel references as contracts; treat undocumented `events.jsonl`, `--output-format=json`, and custom-statusline fields as opaque until captured from the exact supported binary.
+Refresh baseline: GitHub Copilot CLI **1.0.70** (`758c2c9`, released 2026-07-10) and the official GitHub documentation available on **2026-07-10**. GitHub publishes the CLI executable and changelog in [`github/copilot-cli`](https://github.com/github/copilot-cli), but the runtime implementation and its session-event types are not published there. Treat the official hook, configuration, ACP, and OTel references as contracts; undocumented `events.jsonl`, `--output-format=json`, and custom-statusline fields are compatibility evidence only where a version-pinned capture below names them.
 
 Coverage is **depth on the surfaces an adapter should wire, breadth as an index**. The hook inputs and outputs are documented in full because they are the stable lifecycle and blocking seam. The local state, telemetry, launch, authentication, and remote-control sections identify the exact source of every RimZ concern and mark gaps where GitHub publishes no schema.
 
@@ -139,7 +139,7 @@ Every documented payload carries `sessionId`, `timestamp`, and `cwd` (or `sessio
 
 | Event | Fires | Event-specific camelCase fields | RimZ use |
 | --- | --- | --- | --- |
-| `sessionStart` | new or resumed session begins | `source: "startup" \| "resume" \| "new"`, `initialPrompt?` | start / resume identity |
+| `sessionStart` | new or resumed session begins | `source: "startup" \| "resume" \| "new"`, `initialPrompt?` | prompt-seeded duplicate turn edge or promptless start/resume identity |
 | `userPromptSubmitted` | user submits a prompt | `prompt` | turn start |
 | `preToolUse` | before every tool | `toolName`, `toolArgs` | proof of work; classify `ask_user`; optional blocking policy |
 | `postToolUse` | tool succeeds | `toolName`, `toolArgs`, `toolResult: { resultType: "success", textResultForLlm }` | silent activity / audit |
@@ -308,9 +308,13 @@ $COPILOT_HOME/
 └── session-store.db            # cross-session Chronicle index/search
 ```
 
-GitHub documents `events.jsonl` as the per-session event log and says the session directory is the complete record used for resume. It does **not** publish event discriminants, field schemas, append/durability guarantees, or compatibility rules. `session-store.db` is an automatically managed derivative index and can be rebuilt with `/chronicle reindex`; it is not the durable transcript authority.
+GitHub documents `events.jsonl` as the per-session event log and says the session directory is the complete record used for resume. It does **not** publish event discriminants, field schemas, append/durability guarantees, or compatibility rules. `session-store.db` is an automatically managed Chronicle derivative and can be rebuilt with `/chronicle reindex`; captured `turns` rows lagged the live event file until session shutdown, so it is unsuitable for live conversation streaming.
 
-An implementation may locate `$COPILOT_HOME/session-state/<sessionId>/events.jsonl` from a hook ID and inspect a bounded tail, but must first capture fixtures from every supported CLI version and treat all fields as optional. Do not infer the event schema from Copilot SDK docs: the SDK shares a runtime but its published persistence examples are not a CLI `events.jsonl` contract.
+Copilot CLI 1.0.70 capture shows root `user.message` and `assistant.message` records appended in conversation order with RFC3339 `timestamp` and visible text in `data.content`. The same turn includes `system.message`, hook, turn-boundary, and session records; user records can also carry `transformedContent`, while assistant records can carry encrypted and reasoning fields. These are captured compatibility facts, not an upstream schema guarantee.
+
+The captured hook order for a fresh prompt-seeded turn is `userPromptSubmitted`, `sessionStart`, `agentStop`, `sessionEnd`; `sessionStart.initialPrompt` repeats the already-submitted prompt. RimZ uses a non-empty `initialPrompt` only to normalize that start as the duplicate turn edge, while promptless starts retain ordinary registration semantics.
+
+The captured `agentStop` hook input names the same file in `transcriptPath`. RimZ validates the filename and session-ID parent, normalizes only visible user/assistant content, and ignores transformed/encrypted content, reasoning, systems, hooks, tools, and unknown events. Child-session filtering stays deferred until a child capture proves its identity shape.
 
 Local session data contains prompts, responses, tools, and modified-file details. It syncs to the user's GitHub account by default when policy permits. `remoteExport: false` opts out. Reading local files for RimZ enrichment stays local and read-only; diagnostics must not copy prompt content unless the user enabled an explicit privacy setting.
 
@@ -370,7 +374,9 @@ Lifecycle span events relevant to RimZ:
 | `exception` | Copilot error type, HTTP status, provider call ID |
 | `github.copilot.hook.start/end/error` | hook type and invocation ID; diagnostics only |
 
-OTel is asynchronous and exporters can drop data, so lifecycle still comes from hooks/store. Use OTel to enrich `AgentContext`, close a compaction bracket when available, and reconstruct spend. Keep content capture off: the default metadata is sufficient and avoids copying source, prompts, responses, tool inputs, and tool results.
+OTel is asynchronous and exporters can drop data, so lifecycle still comes from hooks/store. The RimZ 1.0.70 reader deliberately accepts only `chat` spans with an exact `gen_ai.conversation.id`, chooses the newest captured timestamp, prefers resolved over requested model, and maps latest-call input/output/cache counts. It ignores `invoke_agent`, inference/agent-turn logs, metrics, costs, quotas, and account data until ordering and units are pinned.
+
+Keep content capture off: RimZ-managed launches pin `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`, do not enable export automatically, and do not create a shared exporter path. A user-selected file can be shared by concurrent sessions because each refresh filters by conversation ID.
 
 The docs publish no rate-limit/quota attributes in the OTel schema. Quota is visible in the native footer but needs statusline capture or another documented API before RimZ can claim it.
 
@@ -464,23 +470,24 @@ The official prerequisite says the cwd must be a Git repository hosted on GitHub
 
 ## Implementation footprints and open gaps
 
-The hooks-first adapter implements the lifecycle subset documented in [copilot.md](../../internals/agents/copilot.md). Capture version-pinned fixtures from Copilot CLI 1.0.70 or newer for the remaining live-verification items below.
+The hooks-first adapter implements the lifecycle, transcript, and narrow OTel subset documented in [copilot.md](../../internals/agents/copilot.md). Version-pinned Copilot CLI 1.0.70 fixtures cover a clean prompt-mode turn, hook/system noise, final output, and metadata-only OTel; the remaining live-verification items follow.
 
 1. Install a user hook file containing every native camelCase event; prove discovery in interactive and `-p` modes, `disableAllHooks`, `COPILOT_HOME`, path quoting, cwd, environment inheritance, timeout, stderr, neutral stdout, and uninstall.
 2. Record hook payloads for new/resume/new-session switching, prompt, success/failure tool calls, every permission choice, `ask_user`, stop, errors, manual/auto compaction, all built-in subagents, simultaneous same-name subagents, and every session-end reason.
 3. Prove whether `permissionRequest` input contains permission kind, tool arguments, path/URL/command subject, or a stable request ID; the current official reference omits its input schema.
 4. Determine whether `preToolUse(ask_user)` carries the question/options and whether any hook output can answer it; otherwise map answers exclusively through pane send.
 5. Capture statusline input and invocation behavior, including chaining an existing command, before using it for `AgentContext`.
-6. Capture bounded `events.jsonl` tails and `--output-format=json` streams, but bind only fields corroborated by a versioned contract or guarded fixtures.
-7. Validate OTel file-export record shape, flush timing, file concurrency, cumulative-versus-turn token semantics, `github.copilot.cost` units, subagent span identity, compaction close, and process-exit flushing.
+6. Capture child and resumed `events.jsonl` shapes plus `--output-format=json`; keep the reader on guarded visible root messages until those identities are proven.
+7. Extend OTel only after shared-file interactive concurrency, cumulative-versus-turn replacement, `github.copilot.cost` units, subagent span identity, compaction close, and long-running flush behavior are pinned.
 8. Confirm process names, argv, parent/child tree, cwd, and environment stamping under normal, resume, remote, `-p`, ACP, worktree, and auto-update/restart paths for PID attribution.
-9. Decide whether RimZ owns a statusline wrapper, OTel file exporter, or both; add every executed command and output path to the trust hash.
-10. Declare honest coverage: partial compaction end without OTel, partial subagent identity, unsupported account probe/quota until a documented source exists, and transcript/context fields only after schemas are captured.
+9. Decide whether RimZ owns a statusline wrapper; OTel stays user-opt-in unless a managed exporter path and its trust/privacy contract become product behavior.
+10. Keep coverage honest: transcript/history are captured compatibility, usage/model are partial, and cost/account/quota/subagent remain unsupported until their own sources are proven.
 
 The expected initial lifecycle mapping is:
 
 ```text
-sessionStart            -> SessionStarted / SessionResumed
+sessionStart(initial)   -> duplicate PromptSubmitted edge
+sessionStart(promptless)-> SessionStarted / SessionResumed
 userPromptSubmitted     -> PromptSubmitted
 preToolUse              -> ToolStarted (proof of work)
 permissionRequest       -> AwaitingUser (permission)

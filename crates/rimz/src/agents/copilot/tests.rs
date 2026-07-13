@@ -105,6 +105,88 @@ fn lifecycle_signals_drive_the_shared_state_machine() {
 }
 
 #[test]
+fn native_prompt_before_registration_keeps_the_turn_running() {
+    let started = observation(
+        "userPromptSubmitted",
+        json!({"sessionId":"s","prompt":"start first"}),
+    );
+    let mut state = step(None, &started.signal).next;
+    assert_eq!(state.status, AgentStatus::Running);
+
+    let session_start = observation(
+        "sessionStart",
+        json!({"sessionId":"s","source":"startup","initialPrompt":"start first"}),
+    );
+    assert_eq!(session_start.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(session_start.origin, Some(SessionOrigin::Fresh));
+    assert!(
+        session_start.prompt.is_none(),
+        "the duplicate signal carries no prompt"
+    );
+    state = step(Some(&state), &session_start.signal).next;
+    assert_eq!(state.status, AgentStatus::Running);
+    assert_eq!(state.phase, TurnPhase::Reasoning);
+
+    state = step(
+        Some(&state),
+        &observation("agentStop", json!({"sessionId":"s"})).signal,
+    )
+    .next;
+    assert_eq!(state.status, AgentStatus::Success);
+}
+
+#[test]
+fn promptless_session_start_registers_idle() {
+    for payload in [
+        json!({"sessionId":"s","source":"startup"}),
+        json!({"sessionId":"s","source":"startup","initialPrompt":"  "}),
+    ] {
+        let session_start = observation("sessionStart", payload);
+        assert_eq!(session_start.signal, LifecycleSignal::Registered);
+        let running = step(None, &LifecycleSignal::TurnStarted).next;
+        assert_eq!(
+            step(Some(&running), &session_start.signal).next.status,
+            AgentStatus::Idle,
+        );
+    }
+}
+
+#[test]
+fn agent_stop_accepts_a_matching_native_transcript_and_reads_final_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let session_dir = dir.path().join("session-1");
+    std::fs::create_dir(&session_dir).unwrap();
+    let path = session_dir.join("events.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"assistant.message\",\"timestamp\":\"2026-07-13T15:13:23Z\",\"data\":{\"content\":\"final text\"}}\n",
+    )
+    .unwrap();
+    let payload = json!({
+        "sessionId": "session-1",
+        "transcriptPath": path,
+    });
+    let stopped = observation("agentStop", payload.clone());
+    assert_eq!(
+        stopped.transcript_path.as_deref(),
+        path.to_str(),
+        "validated native path replaces derivation"
+    );
+    assert_eq!(
+        CopilotAdapter
+            .last_assistant_message("agentStop", &payload, &stopped)
+            .as_deref(),
+        Some("final text")
+    );
+
+    let mismatched = observation(
+        "agentStop",
+        json!({"sessionId":"other-session","transcriptPath":path}),
+    );
+    assert_ne!(mismatched.transcript_path.as_deref(), path.to_str());
+}
+
+#[test]
 fn session_start_marks_only_fresh_identity_sources() {
     for (source, expected) in [
         ("startup", Some(SessionOrigin::Fresh)),
@@ -235,6 +317,13 @@ fn launch_resume_permissions_and_presets_are_pinned() {
         Some(vec!["copilot".to_owned()])
     );
     assert_eq!(CopilotAdapter.ping_args(), None);
+    assert_eq!(
+        CopilotAdapter.launch_env(),
+        vec![(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+            "false"
+        )]
+    );
     assert_eq!(
         CopilotAdapter.resume_command("sess-1", Path::new("/tmp")),
         Some(vec![

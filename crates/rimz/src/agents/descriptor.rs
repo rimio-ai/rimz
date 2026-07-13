@@ -559,7 +559,7 @@ mod tests {
         assert!(!copilot.capabilities.remote_control.pane_sessions);
         assert!(!copilot.capabilities.remote_control.background_sessions);
         assert!(!copilot.capabilities.rich_context);
-        assert!(!copilot.capabilities.transcript_tail_context);
+        assert!(copilot.capabilities.transcript_tail_context);
         assert!(!copilot.capabilities.daemon_hooked_sessions);
         assert!(
             !copilot

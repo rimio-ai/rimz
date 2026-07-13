@@ -2,12 +2,14 @@
 //!
 //! Copilot's native camelCase command hooks provide lifecycle truth and its
 //! synchronous permission/question gates. RimZ owns one whole hook file at
-//! `~/.copilot/hooks/rimz.json`; empty hook stdout preserves Copilot's native
-//! decision UI. The published hook surface carries no context gauge, cost,
-//! transcript schema, or machine-readable account state, so those concerns
-//! stay explicitly unsupported until captured fixtures make them honest.
+//! `$COPILOT_HOME/hooks/rimz.json`; empty hook stdout preserves Copilot's native
+//! decision UI. Per-session events provide conversation history and optional
+//! metadata-only OTel chat spans provide the live model/token composition.
 
+mod otel;
+mod paths;
 pub(crate) mod payloads;
+mod transcript;
 
 use std::path::{Path, PathBuf};
 
@@ -24,8 +26,9 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, SessionOrigin,
-    TurnErrorClass, agent_config_path, classify_agent_hook, sanitize_user_prompt,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextRefresh,
+    LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, TranscriptMessage,
+    TurnErrorClass, classify_agent_hook, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
@@ -50,7 +53,7 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking_asks: true,
         native_ask_ui: true,
         rich_context: false,
-        transcript_tail_context: false,
+        transcript_tail_context: true,
         context_usage: false,
         account_spend: false,
         subagents: false,
@@ -83,7 +86,6 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "agentStop",
     ],
     hook_install_unavailable: None,
-    // No transcript surface exists yet, so this key is inert until one lands.
     thread_key: ThreadKey::PerFile,
 };
 
@@ -150,26 +152,28 @@ const COPILOT_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::ContextUsage,
-        ConcernCoverage::Unsupported {
-            reason: "hooks carry no gauge and statusline input is unpublished",
+        ConcernCoverage::Partial {
+            via: "optional metadata-only OTel chat spans",
+            gap: "latest-call token composition has no context-window denominator",
         },
     ),
     (
         IntegrationConcern::RealtimeCost,
         ConcernCoverage::Unsupported {
-            reason: "events.jsonl is undocumented and OTel is not wired",
+            reason: "OTel chat spans expose token counts but no authoritative session cost",
         },
     ),
     (
         IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "no captured statusline or OTel schema",
+        ConcernCoverage::Partial {
+            via: "optional metadata-only OTel chat spans",
+            gap: "model only; no quota or account metadata",
         },
     ),
     (
         IntegrationConcern::HookInstall,
         ConcernCoverage::Wired {
-            via: "~/.copilot/hooks/rimz.json",
+            via: "$COPILOT_HOME/hooks/rimz.json",
         },
     ),
     (
@@ -402,6 +406,14 @@ impl AgentAdapter for CopilotAdapter {
     ) -> Option<AgentLifecycleObservation> {
         let parsed = payloads::parse_payload(payload);
         let signal = match event_name {
+            "sessionStart"
+                if parsed
+                    .initial_prompt
+                    .as_deref()
+                    .is_some_and(|prompt| !prompt.trim().is_empty()) =>
+            {
+                LifecycleSignal::TurnStarted
+            }
             "sessionStart" => LifecycleSignal::Registered,
             "userPromptSubmitted" => LifecycleSignal::TurnStarted,
             "permissionRequest" => LifecycleSignal::AwaitingInput {
@@ -445,9 +457,17 @@ impl AgentAdapter for CopilotAdapter {
             "sessionEnd" => LifecycleSignal::Ended,
             _ => return None,
         };
-        let agent_id = parsed.session_id.map(AgentSessionId::from);
+        let agent_id = parsed.session_id.clone().map(AgentSessionId::from);
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+        if let Some(session_id) = parsed.session_id.as_deref() {
+            observation.transcript_path = parsed
+                .transcript_path
+                .as_deref()
+                .and_then(|path| paths::validated_transcript_path(Path::new(path), session_id))
+                .or_else(|| paths::session_transcript_path(session_id))
+                .map(|path| path.to_string_lossy().into_owned());
+        }
         if event_name == "sessionStart"
             && matches!(parsed.source.as_deref(), Some("startup" | "new"))
         {
@@ -536,6 +556,52 @@ impl AgentAdapter for CopilotAdapter {
         matches!(event_name, "userPromptSubmitted" | "agentStop")
     }
 
+    fn last_assistant_message(
+        &self,
+        event_name: &str,
+        _payload: &Value,
+        observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        if event_name != "agentStop" {
+            return None;
+        }
+        transcript::last_assistant_message(Path::new(observation.transcript_path.as_deref()?))
+    }
+
+    fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
+        transcript::parse_messages(lines)
+    }
+
+    fn local_context_refresh(
+        &self,
+        trigger: RefreshTrigger<'_>,
+        ctx: &LocalContextRefreshCtx<'_>,
+    ) -> Option<LocalContextRefresh> {
+        if let RefreshTrigger::Hook(event_name) = trigger
+            && !matches!(
+                event_name,
+                "sessionStart"
+                    | "userPromptSubmitted"
+                    | "postToolUse"
+                    | "postToolUseFailure"
+                    | "agentStop"
+            )
+        {
+            return None;
+        }
+        otel::refresh(ctx)
+    }
+
+    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(path) = prior_path
+            .and_then(|path| paths::validated_transcript_path(path, session_id))
+            .filter(|path| path.is_file())
+        {
+            return Some(path);
+        }
+        paths::session_transcript_path(session_id)
+    }
+
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
         Some(vec![
             "copilot".to_owned(),
@@ -608,33 +674,32 @@ impl AgentAdapter for CopilotAdapter {
         None
     }
 
+    fn launch_env(&self) -> Vec<(&'static str, &'static str)> {
+        vec![(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+            "false",
+        )]
+    }
+
     fn install_hooks(&self) -> Result<HookInstallReport> {
-        COPILOT_MANAGED_SOURCE.install_into(&copilot_hooks_path()?)
+        COPILOT_MANAGED_SOURCE.install_into(&paths::hooks_path()?)
     }
 
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        COPILOT_MANAGED_SOURCE.preview_at(&copilot_hooks_path()?)
+        COPILOT_MANAGED_SOURCE.preview_at(&paths::hooks_path()?)
     }
 
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        COPILOT_MANAGED_SOURCE.uninstall_from(&copilot_hooks_path()?)
+        COPILOT_MANAGED_SOURCE.uninstall_from(&paths::hooks_path()?)
     }
 
     fn hooks_installed(&self) -> bool {
-        copilot_hooks_path().is_ok_and(|path| COPILOT_MANAGED_SOURCE.installed_at(&path))
+        paths::hooks_path().is_ok_and(|path| COPILOT_MANAGED_SOURCE.installed_at(&path))
     }
 
     fn managed_hook_artifacts_present(&self) -> bool {
         self.hooks_installed()
     }
-}
-
-fn copilot_hooks_path() -> Result<PathBuf> {
-    agent_config_path(
-        "copilot",
-        "RIMZ_COPILOT_HOOKS",
-        Path::new(".copilot/hooks/rimz.json"),
-    )
 }
 
 #[cfg(test)]

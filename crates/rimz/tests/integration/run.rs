@@ -91,6 +91,83 @@ fn hooks_bind_and_complete_supervised_run() {
 }
 
 #[test]
+fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
+    let env = Env::new();
+    let store = env.store();
+    let session_id = "copilot-run";
+    let session_dir = env
+        .home_root
+        .join(".copilot/session-state")
+        .join(session_id);
+    std::fs::create_dir_all(&session_dir).expect("mkdir Copilot session");
+    let transcript = session_dir.join("events.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"user.message\",\"timestamp\":\"2026-07-13T15:13:21Z\",\"data\":{\"content\":\"summarize\"}}\n",
+    )
+    .expect("seed Copilot events");
+    let record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("copilot"),
+        PermissionMode::Auto,
+        "summarize".to_owned(),
+        env.project_root.clone(),
+    );
+    let run_id = record.run_id.clone();
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
+
+    let mut prompt_cmd = env.copilot_hook_command("userPromptSubmitted");
+    prompt_cmd.env(rimz::harness::run::ENV_RUN_ID, run_id.as_str());
+    let out = env
+        .spawn_payload(
+            prompt_cmd,
+            &json!({"sessionId":session_id,"prompt":"summarize"}).to_string(),
+        )
+        .wait_with_output()
+        .expect("wait Copilot prompt hook");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty());
+    let running = rimz::harness::run::load(store.paths(), &run_id).expect("load running run");
+    assert_eq!(running.status, RunStatus::Running);
+    assert_eq!(running.agent_id.as_deref(), Some(session_id));
+    assert_eq!(running.transcript_path.as_deref(), transcript.to_str());
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap()
+        .write_all(
+            b"{\"type\":\"assistant.message\",\"timestamp\":\"2026-07-13T15:13:23Z\",\"data\":{\"content\":\"copilot done\"}}\n",
+        )
+        .unwrap();
+    let mut stop_cmd = env.copilot_hook_command("agentStop");
+    stop_cmd.env(rimz::harness::run::ENV_RUN_ID, run_id.as_str());
+    let out = env
+        .spawn_payload(
+            stop_cmd,
+            &json!({"sessionId":session_id,"transcriptPath":transcript,"stopReason":"end_turn"})
+                .to_string(),
+        )
+        .wait_with_output()
+        .expect("wait Copilot stop hook");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty());
+
+    let completed = rimz::harness::run::load(store.paths(), &run_id).expect("load completed run");
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(completed.last_message.as_deref(), Some("copilot done"));
+    assert_eq!(completed.transcript_path.as_deref(), transcript.to_str());
+}
+
+#[test]
 fn run_rejects_invalid_agent_env_before_recording() {
     let env = Env::new();
     env.write_config(
@@ -1271,60 +1348,71 @@ fn zellij_trace_shim() -> std::path::PathBuf {
 }
 
 #[test]
-fn run_stream_prints_text_until_terminal_record() {
-    let env = Env::new();
-    let store = env.store();
-    let transcript = env.runtime_root.join("run-stream.jsonl");
-    std::fs::write(&transcript, "").expect("seed transcript");
-    let mut record = RunRecord::new(
-        env.workspace_id.clone(),
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "summarize".to_owned(),
-        env.project_root.clone(),
-    );
-    record.status = RunStatus::Running;
-    record.transcript_path = Some(transcript.to_string_lossy().into_owned());
-    let run_id = record.run_id.clone();
-    rimz::harness::run::create(store.paths(), &record).expect("create run");
+fn run_stream_prints_codex_and_copilot_text_until_terminal_record() {
+    for (kind, line) in [
+        (
+            "codex",
+            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hello\"}}\n"
+                .as_slice(),
+        ),
+        (
+            "copilot",
+            b"{\"type\":\"assistant.message\",\"data\":{\"content\":\"hello\"}}\n".as_slice(),
+        ),
+    ] {
+        let env = Env::new();
+        let store = env.store();
+        let transcript = env.runtime_root.join("run-stream.jsonl");
+        std::fs::write(&transcript, "").expect("seed transcript");
+        let mut record = RunRecord::new(
+            env.workspace_id.clone(),
+            AgentKind::new_unchecked(kind),
+            PermissionMode::Auto,
+            "summarize".to_owned(),
+            env.project_root.clone(),
+        );
+        record.status = RunStatus::Running;
+        record.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        let run_id = record.run_id.clone();
+        rimz::harness::run::create(store.paths(), &record).expect("create run");
 
-    let child = env
-        .rimz()
-        .args([
-            "agents",
-            "wait",
-            run_id.as_str(),
-            "--stream",
-            "--from-start",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agents wait stream");
-    std::thread::sleep(Duration::from_millis(100));
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&transcript)
-        .expect("open transcript")
-        .write_all(
-            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"hello\"}}\n",
-        )
-        .expect("append transcript");
-    let mut terminal = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
-    terminal.status = RunStatus::Completed;
-    terminal.last_message = Some("hello".to_owned());
-    terminal.updated_at = Timestamp::now();
-    terminal.completed_at = Some(terminal.updated_at);
-    rimz::store::run_store::write(&store.paths().runs_dir, &terminal).expect("write terminal");
+        let child = env
+            .rimz()
+            .args([
+                "agents",
+                "wait",
+                run_id.as_str(),
+                "--stream",
+                "--from-start",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agents wait stream");
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .expect("open transcript")
+            .write_all(line)
+            .expect("append transcript");
+        let mut terminal = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
+        terminal.status = RunStatus::Completed;
+        terminal.last_message = Some("hello".to_owned());
+        terminal.updated_at = Timestamp::now();
+        terminal.completed_at = Some(terminal.updated_at);
+        rimz::store::run_store::write(&store.paths().runs_dir, &terminal)
+            .expect("write terminal");
 
-    let out = child.wait_with_output().expect("wait agents stream");
-    assert!(
-        out.status.success(),
-        "agents wait --stream failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "hello\n");
+        let out = child.wait_with_output().expect("wait agents stream");
+        assert!(
+            out.status.success(),
+            "{kind} agents wait --stream failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "hello\n", "{kind}");
+    }
 }
 
 #[test]

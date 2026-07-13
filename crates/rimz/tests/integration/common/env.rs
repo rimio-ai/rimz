@@ -155,6 +155,8 @@ impl Env {
             .env_remove("BASH_ENV")
             .env_remove("ZDOTDIR")
             .env_remove("RUST_LOG")
+            .env_remove("COPILOT_HOME")
+            .env_remove("COPILOT_OTEL_FILE_EXPORTER_PATH")
             .current_dir(&self.project_root);
         cmd
     }
@@ -192,6 +194,20 @@ impl Env {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         cmd
+    }
+
+    /// Copilot's installed hook commands carry the native event name as an
+    /// explicit flag because its payload has no event-name field.
+    pub fn copilot_hook_command(&self, event: &str) -> Command {
+        let mut cmd = self.hook_command("copilot");
+        cmd.args(["--event", event]);
+        cmd
+    }
+
+    pub fn run_copilot_hook(&self, event: &str, payload: &str) -> Output {
+        self.spawn_payload(self.copilot_hook_command(event), payload)
+            .wait_with_output()
+            .expect("wait Copilot hook")
     }
 
     /// Spawn a prepared command and write `payload` to its stdin.
@@ -233,6 +249,7 @@ impl Env {
         match source {
             "codex" => self.home_root.join(".codex").join("config.toml"),
             "claude" => self.home_root.join(".claude").join("settings.json"),
+            "copilot" => self.home_root.join(".copilot/hooks/rimz.json"),
             "pi" => self
                 .home_root
                 .join(".pi")
@@ -270,7 +287,7 @@ impl Env {
         };
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
-            "claude" | "pi" | "qwen" => text.contains("_rimz_managed"),
+            "claude" | "copilot" | "pi" | "qwen" => text.contains("_rimz_managed"),
             _ => false,
         }
     }

@@ -9,9 +9,13 @@ use serde_json::Value;
 pub(crate) struct CopilotHookPayload {
     #[serde(alias = "session_id")]
     pub session_id: Option<String>,
+    #[serde(alias = "transcript_path")]
+    pub transcript_path: Option<String>,
     pub cwd: Option<String>,
     pub timestamp: Option<Value>,
     pub prompt: Option<String>,
+    #[serde(alias = "initial_prompt")]
+    pub initial_prompt: Option<String>,
     #[serde(alias = "tool_name")]
     pub tool_name: Option<String>,
     #[serde(
@@ -81,20 +85,29 @@ mod tests {
             "sessionId": "native",
             "toolName": "edit",
             "toolArgs": { "path": "a.rs" },
+            "initialPrompt": "native prompt",
+            "transcriptPath": "/tmp/events.jsonl",
             "errorContext": "model_call"
         }));
         assert_eq!(native.session_id.as_deref(), Some("native"));
         assert_eq!(native.tool_name.as_deref(), Some("edit"));
+        assert_eq!(native.initial_prompt.as_deref(), Some("native prompt"));
+        assert_eq!(native.transcript_path.as_deref(), Some("/tmp/events.jsonl"));
         assert_eq!(native.error_context.as_deref(), Some("model_call"));
 
         let compatible = parse_payload(&json!({
             "session_id": "compatible",
             "tool_name": "bash",
             "tool_input": "{\"command\":\"true\"}",
+            "transcript_path": "/tmp/compatible/events.jsonl",
             "error_context": "tool_execution"
         }));
         assert_eq!(compatible.session_id.as_deref(), Some("compatible"));
         assert_eq!(compatible.tool_name.as_deref(), Some("bash"));
+        assert_eq!(
+            compatible.transcript_path.as_deref(),
+            Some("/tmp/compatible/events.jsonl")
+        );
         assert_eq!(compatible.tool_args, Some(json!({ "command": "true" })));
         assert_eq!(compatible.error_context.as_deref(), Some("tool_execution"));
         assert!(parse_payload(&json!(null)).session_id.is_none());

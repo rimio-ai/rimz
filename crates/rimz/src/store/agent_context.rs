@@ -51,7 +51,7 @@ pub struct AgentContextRecord {
     /// of whole-record freshness.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rich_observed_at: Option<Timestamp>,
-    /// Transcript/rollout file used for the latest local context refresh.
+    /// Transcript, rollout, or telemetry file used for the latest local context refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
     /// Stat gate for [`Self::transcript_path`], letting high-frequency hooks skip

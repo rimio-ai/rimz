@@ -17,10 +17,10 @@ pub(super) fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
     }
 }
 
-/// The agent session id from a hook payload (`agent_id`, `session_id`, then
-/// Cursor's `conversation_id`). Empty ids are filtered out.
+/// The agent session id from a hook payload (`agent_id`, snake/camel session
+/// id, then Cursor's `conversation_id`). Empty ids are filtered out.
 pub(super) fn payload_agent_id(payload: &Value) -> Option<&str> {
-    ["agent_id", "session_id", "conversation_id"]
+    ["agent_id", "session_id", "sessionId", "conversation_id"]
         .into_iter()
         .find_map(|key| {
             payload
@@ -31,10 +31,10 @@ pub(super) fn payload_agent_id(payload: &Value) -> Option<&str> {
 }
 
 /// The sidecar key for local context enrichment. Root sessions file context
-/// under `session_id` (or Cursor's `conversation_id`); child-specific
+/// under the snake/camel session id (or Cursor's `conversation_id`); child-specific
 /// `agent_id`s are lifecycle identities, not Codex rollout files.
 pub(super) fn payload_context_agent_id(payload: &Value) -> Option<&str> {
-    ["session_id", "agent_id", "conversation_id"]
+    ["session_id", "sessionId", "agent_id", "conversation_id"]
         .into_iter()
         .find_map(|key| {
             payload
@@ -42,4 +42,30 @@ pub(super) fn payload_context_agent_id(payload: &Value) -> Option<&str> {
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn camel_case_session_id_reaches_both_follow_on_selectors() {
+        let payload = json!({"sessionId": "copilot-session"});
+        assert_eq!(payload_agent_id(&payload), Some("copilot-session"));
+        assert_eq!(payload_context_agent_id(&payload), Some("copilot-session"));
+    }
+
+    #[test]
+    fn existing_precedence_remains_stable() {
+        let payload = json!({
+            "agent_id": "child",
+            "session_id": "snake",
+            "sessionId": "camel",
+            "conversation_id": "cursor"
+        });
+        assert_eq!(payload_agent_id(&payload), Some("child"));
+        assert_eq!(payload_context_agent_id(&payload), Some("snake"));
+    }
 }

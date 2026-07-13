@@ -280,7 +280,7 @@ Twelve agents ship built in. **Status** tracks lived confidence, how much each o
 | Pi          | 🟢 Beta         |   ●   |  ●   |    ●    |  ○  |  ○   |     ○     |
 | OpenCode    | 🟡 Alpha        |   ●   |  ●   |    ●    |  ●  |  ○   |     ●     |
 | Gemini CLI  | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ○     |
-| Copilot     | 🧪 Experimental |   ●   |  ○   |    ○    |  ●  |  ○   |     ○     |
+| Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |  ○   |     ○     |
 | Droid       | 🧪 Experimental |   ●   |  ○   |    ○    |  ○  |  ○   |     ○     |
 | Cursor      | 🧪 Experimental |   ●   |  ○   |    ◐    |  ○  |  ○   |     ○     |
 | Amp         | 🧪 Experimental |   ●   |  ○   |    ○    |  ●  |  ○   |     ○     |

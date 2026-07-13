@@ -2,13 +2,13 @@
 
 > The agent-agnostic boundary and state machine are in [model.md](./model.md); the pinned upstream hook, launch, telemetry, and storage surfaces are in [copilot-reference.md](../../externals/agent-adapter/copilot-reference.md).
 
-GitHub Copilot CLI reports through native camelCase command hooks installed as one RimZ-owned user file at `~/.copilot/hooks/rimz.json`. Each command passes its event name to `rimz hooks feed --source copilot --event <event>` because native payloads carry no event-name field. Hook stdout stays empty, preserving Copilot's own permission engine and question UI.
+GitHub Copilot CLI reports through native camelCase command hooks installed as one RimZ-owned user file at `$COPILOT_HOME/hooks/rimz.json`, falling back to `~/.copilot/hooks/rimz.json`. Each command passes its event name to `rimz hooks feed --source copilot --event <event>` because native payloads carry no event-name field. Hook stdout stays empty, preserving Copilot's own permission engine and question UI.
 
 ## Hooks and lifecycle
 
 | Native event | Channel | Normalized signal | Detail |
 | --- | --- | --- | --- |
-| `sessionStart` | lifecycle | `Registered` | `sessionId`, `cwd`; `startup`/`new` mark fresh identity while `resume` preserves the existing lineage |
+| `sessionStart` | lifecycle | `TurnStarted` with non-empty `initialPrompt`, otherwise `Registered` | `sessionId`, `cwd`; `startup`/`new` mark fresh identity while `resume` preserves the existing lineage |
 | `userPromptSubmitted` | lifecycle | `TurnStarted` | sanitized `prompt` labels the row |
 | `preToolUse(ask_user)` | awaiting-user (`Question`) | `AwaitingInput` | best-effort question text from object or JSON-string `toolArgs` |
 | `preToolUse` (other tools) | lifecycle | `ToolUsed { false, false }` | proof-of-work for clearing a prior ask; excluded from activity to avoid the ask race |
@@ -20,6 +20,8 @@ GitHub Copilot CLI reports through native camelCase command hooks installed as o
 | `sessionEnd` | lifecycle | `Ended` | tombstones the session |
 
 Copilot publishes no post-compaction hook. `preCompact` opens the bracket and the shared state machine closes it on the next lifecycle signal; the display window is the missed-edge backstop. This makes compaction partial rather than fully wired.
+
+Copilot CLI 1.0.70 emits `userPromptSubmitted` before a prompt-seeded `sessionStart`, whose payload repeats the prompt in `initialPrompt`. The adapter treats a non-empty `initialPrompt` as the duplicate `TurnStarted` edge without copying its text; a promptless start remains `Registered`, preserving the shared registration reset used by clear and rebirth flows.
 
 `errorOccurred` is a marker rather than a lifecycle end because recoverable model-call retries occur mid-turn. Only `recoverable: false` creates an `AgentTurnError`; `agentStop` remains turn truth and `sessionEnd` remains session truth.
 
@@ -35,13 +37,19 @@ Install owns the whole file through its first-line `_rimz_managed` marker. Reins
 
 Copilot CLI 1.0.70 exposes `-i, --interactive <prompt>`, which starts the stock interactive UI and automatically executes the prompt. RimZ appends `--interactive <prompt>` after profile and permission arguments for prompt-seeded panes and supervised `rimz agents copilot -p` runs, preserving native asks and the hook-driven completion path. Copilot's native non-interactive `-p` mode remains deferred because adopting its process output would introduce a second supervised-run backend and remove the pane's interactive answer surface. Fork and ping stay unsupported: Copilot 1.0.70 exposes `/fork` only as an experimental interactive slash command with no launch flag, and no lowest-effort priming turn is defined.
 
-A supervised `rimz agents copilot -p` run reports its lifecycle and exit status from `agentStop` and pane liveness, but carries no captured final assistant text: `last_assistant_message` stays unimplemented because the `agentStop` `transcriptPath` points at the opaque `events.jsonl` and `--output-format json` publishes no record schema. Scripts branch on the run's exit code and observe the answer in the pane until a pinned transcript or JSON-output fixture makes the final message extractable.
+A supervised `rimz agents copilot -p` run reports its lifecycle and exit status from `agentStop` and pane liveness. The hook's validated `transcriptPath` supplies the final visible `assistant.message`, so the run record, `agents wait --stream`, durable transcript, and `agents history` use the same provider-native conversation source.
 
 `--resume <session_id>` binds the id as a space-separated value on 1.0.70; `--session-id <session_id>` is the unambiguous exact-match alternative (a required-argument flag) if a future Copilot argument parser stops consuming the optional `--resume` value.
 
 ## Context and transcript
 
-Command hooks carry no context gauge, model, effort, or documented transcript schema. Context usage and rich context remain unsupported until captured custom-statusline or OTel fixtures establish a typed transport. `events.jsonl` remains opaque until a pinned release fixture proves its schema.
+`$COPILOT_HOME/session-state/<sessionId>/events.jsonl` is the append-only conversation source captured from Copilot CLI 1.0.70. RimZ derives this path as soon as a safe single-component session ID arrives, then accepts `agentStop.transcriptPath` only when its filename is `events.jsonl` and its parent matches that session ID.
+
+The transcript reader recognizes only root `user.message` and `assistant.message` records, reads visible `data.content`, and parses the RFC3339 top-level timestamp. It ignores system, hook, tool, reasoning, transformed, encrypted, malformed, and unknown records. User text passes through the shared control-prompt sanitizer; assistant text is preserved.
+
+Live model and latest-call token composition come from optional metadata-only OTel `chat` spans. RimZ uses an existing sidecar source first, then `COPILOT_OTEL_FILE_EXPORTER_PATH`, then the newest direct JSONL child of `$COPILOT_HOME/otel`; it never enables export or chooses a shared exporter path. Managed launches force `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`.
+
+The bounded tail reader requires an exact `gen_ai.conversation.id`, prefers `gen_ai.response.model` over `gen_ai.request.model`, and maps fresh input, cache read/write, and output counts. OTel provides no authoritative context-window denominator or fill percentage, so Context Usage and Rich Context remain partial even when the card shows a resolved model and token composition.
 
 ## Account and balance
 
@@ -49,16 +57,16 @@ Copilot publishes no machine-readable authentication or usage-status probe. The 
 
 ## Cost
 
-Realtime and historical cost remain unsupported. The hook payloads carry no usage figures, the local event log is undocumented, and OTel is not wired as enrichment. Add cost only after captured OTel or session-store fixtures make attribution and deduplication testable.
+Realtime and historical cost remain unsupported. The narrow OTel reader deliberately ignores `invoke_agent`, inference-log, agent-turn-log, cost, AI-unit, quota, and account fields until their ordering, replacement, and units have captured fixtures. `events.jsonl` is conversation history, not a spending walker input.
 
 ## Deferred integration
 
-Wired now: the turn lifecycle (`sessionStart`/`userPromptSubmitted`/`agentStop`), permission and `ask_user` asks, mutating-tool activity and the acting-phase edge, the `preCompact` bracket, the non-recoverable `errorOccurred` marker, `sessionEnd` tombstoning, install/uninstall of the whole `rimz.json` hook file, interactive and prompt-seeded launch with permission-mode and model/effort presets, and `--resume` restore. Deferred: subagents, context/quota/cost enrichment, a machine-readable account probe, remote control, and supervised-run final-message capture — each blocked below.
+Wired now: the turn lifecycle (`sessionStart`/`userPromptSubmitted`/`agentStop`), permission and `ask_user` asks, mutating-tool activity and the acting-phase edge, the `preCompact` bracket, the non-recoverable `errorOccurred` marker, `sessionEnd` tombstoning, install/uninstall of the whole `rimz.json` hook file, interactive and prompt-seeded launch with permission-mode and model/effort presets, `--resume` restore, provider-native transcript/history/final output, and optional OTel model/token enrichment. Deferred: subagents, context-window fill, quota/cost/account enrichment, a machine-readable account probe, and remote control.
 
-Copilot CLI 1.0.70 is installed, but an eligible account is unavailable. A temporary `COPILOT_HOME` probe verified hook-file discovery, tolerance of the `_rimz_managed` key, the documented millisecond `sessionEnd` payload, and `--interactive`; the request then stopped at account policy before `sessionStart` and a model turn. Successful-turn hook ordering, the exact `permissionRequest` input, `ask_user` argument shape, resume PID ancestry, and native `-p` output remain live-verification gaps.
+A logged-in Copilot CLI 1.0.70 prompt-mode capture verified successful-turn ordering, `agentStop.transcriptPath`, visible transcript message shapes, metadata-only OTel `chat` spans, resolved/requested model fields, token fields, and asynchronous exporter shutdown. Permission variants, `ask_user` options, resume PID ancestry, multi-turn interactive streaming, and remote sessions remain live-verification gaps.
 
 Yolo maps to `--allow-all` with no policy preflight. Managed `permissions.disableBypassPermissionsMode = "disable"` can suppress the flag, so a `copilot-yolo` launch under that policy degrades to a normal permission posture instead of failing fast at the entry point. Resolving the merged policy value at launch and refusing when the requested bypass is unavailable is the fail-fast footprint, deferred until the merged-policy read lands.
 
 Subagent coverage needs a stable child invocation identity. Copilot hooks expose the parent session and agent definition name, so concurrent children with the same definition collide; a future RimZ abstraction may admit provider-scoped synthetic child IDs only if OTel trace identity or another durable upstream key makes replay deterministic.
 
-Context, quota, and cost coverage needs an enrichment transport independent of lifecycle truth. A future adapter can map the published OTel schema through the existing context boundary after file concurrency, flush timing, and cumulative-versus-turn accounting have pinned fixtures; statusline wrapping stays deferred until its input and command-chaining behavior are documented or captured. The `default_context_window` stays `None` because the window depends on the live model and the `--context <tier>` selector (`default` or `long_context`, new in 1.0.70), so the gauge denominator resolves only once a transport reports the resolved model and tier.
+Context-window fill, quota, and cost need evidence beyond the current metadata-only `chat` span. Statusline wrapping stays deferred until its input and command-chaining behavior are documented or captured. The `default_context_window` stays `None` because the window depends on the live model and the `--context <tier>` selector (`default` or `long_context`, new in 1.0.70), so a denominator requires a provider-reported resolved tier rather than an invented table.

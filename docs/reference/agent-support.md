@@ -24,7 +24,7 @@ One row per agent, ordered by support tier — Claude, Codex, Pi, OpenCode, then
 | Pi | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
 | Gemini | ✓ | ✓ | ✓ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✗ | ✓ | ◐ | ✗ |
-| Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
+| Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ |
 | Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
@@ -37,6 +37,8 @@ One row per agent, ordered by support tier — Claude, Codex, Pi, OpenCode, then
 What each concern column drives: `turn` live status (session start and every turn boundary), `perm` permission prompts routed to your keyboard, `plan` a plan-approval gate raising a waiting row, `ask` the agent's ask-the-user tool raising a waiting row, `answer` structured answers driving supported native prompt actions, `compact` context compaction on the card, `sub` the subagent tree as nested rows, `bg` a turn parked on background work, `end` the card tombstoning when the session closes, `idle` an idle nudge when the agent goes quiet, `usage` context-window fill and token counts, `live$` the live dollar figure, `rich` provider extras (official model labels, account windows), `install` RimZ installing the reporting hooks, `spend` account spend for the [token-insight](../guide/insight.md) dashboard, and `remote` driving or spawning a session with no local pane.
 
 Claude Code is the reference integration and carries every concern natively; each other agent exposes less of its internals to a local observer. How much a given agent exposes is independent of how much it has been dogfooded — some experimental agents wire up a wide surface, and some higher-tier ones deliberately leave cells derived. A ✗ is an honest declared absence — the sidebar and `rimz doctor` read the same declaration, so a missing surface renders as a stated gap rather than a silent bug.
+
+Copilot history and supervised final output read its per-session `events.jsonl`. Its partial live usage and rich context come from opt-in, metadata-only OTel `chat` spans: the card can show the resolved model and latest-call token composition, but Copilot publishes no authoritative context-window denominator, quota, account metadata, or session-dollar total through that narrow source.
 
 ## The lifecycle hook surface
 

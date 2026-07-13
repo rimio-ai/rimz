@@ -1,0 +1,10 @@
+{"type":"session.start","timestamp":"2026-07-13T15:13:19.211Z","data":{"sessionId":"session-fixture","version":1,"producer":"copilot-cli"}}
+{"type":"hook.start","timestamp":"2026-07-13T15:13:20.810Z","data":{"hookInvocationId":"hook-fixture","hookType":"sessionStart","input":{"sessionId":"session-fixture","initialPrompt":"fixture prompt"}}}
+{"type":"system.message","timestamp":"2026-07-13T15:13:21.054Z","data":{"role":"system","content":"sanitized system instructions"}}
+{"type":"user.message","timestamp":"2026-07-13T15:13:21.061Z","data":{"content":"  fixture prompt  ","transformedContent":"sanitized transformed prompt","interactionId":"interaction-fixture"}}
+{"type":"assistant.turn_start","timestamp":"2026-07-13T15:13:21.093Z","data":{"model":"fixture-model","turnId":"turn-fixture"}}
+{"type":"assistant.message","timestamp":"2026-07-13T15:13:23.939Z","data":{"content":"fixture reply","encryptedContent":"sanitized","reasoningOpaque":"sanitized","requestId":"request-fixture"}}
+{"type":"unknown.future","timestamp":"not-a-timestamp","data":{"content":"ignored unknown content"}}
+not-json
+{"type":"assistant.message","timestamp":"2026-07-13T15:14:00Z","data":{"content":"second reply"}}
+{"type":"assistant.message","timestamp":"2026-07-13T15:15:00Z","data":{"content":"torn"

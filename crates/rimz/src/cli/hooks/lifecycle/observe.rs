@@ -129,7 +129,9 @@ pub(super) fn event_lifecycle_observation(
     // projection for per-session constants. A cold first-seen progress event
     // can miss this enrichment until the next identity-establishing event; the
     // sidebar already treats these fields as optional.
-    trimmed.transcript_path = None;
+    if !matches!(observation.signal, LifecycleSignal::TurnEnded { .. }) {
+        trimmed.transcript_path = None;
+    }
     trimmed.worktree_path = None;
     trimmed.worktree_branch = None;
     trimmed.launch.role = None;

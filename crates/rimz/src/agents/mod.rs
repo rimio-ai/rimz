@@ -348,7 +348,7 @@ pub struct LifecycleRefreshCtx<'a> {
     pub server_url: Option<&'a str>,
 }
 
-/// File identity for a bounded transcript/rollout tail read. Producers persist it
+/// File identity for a bounded transcript, rollout, or telemetry tail read. Producers persist it
 /// beside the sidecar so a high-frequency hook can stat-gate local enrichment
 /// before reading the tail again.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -364,7 +364,7 @@ fn is_zero_u32(value: &u32) -> bool {
 }
 
 /// Context for [`AgentAdapter::local_context_refresh`]: the session to refresh,
-/// its current model hint, and the transcript gate state from the latest
+/// its current model hint, and the local-source gate state from the latest
 /// sidecar.
 pub struct LocalContextRefreshCtx<'a> {
     pub agent_id: &'a str,
@@ -376,7 +376,7 @@ pub struct LocalContextRefreshCtx<'a> {
     pub shared_pricing_cache_path: &'a Path,
 }
 
-/// Display-only context derived from a local transcript/rollout read. The
+/// Display-only context derived from a local transcript, rollout, or telemetry read. The
 /// adapter owns the provider mapping; the CLI owns merging and writing the
 /// sidecar.
 #[derive(Clone, Debug, PartialEq)]
@@ -822,7 +822,7 @@ pub trait AgentAdapter: Send + Sync {
         probe_descriptor_version(self.descriptor())
     }
 
-    /// Every transcript/rollout JSONL this agent has on disk, fleet-wide — the
+    /// Every conversation/spend JSONL this agent has on disk, fleet-wide — the
     /// discovery walk for the full-history spending pass
     /// ([`spending::SpendingWalker`]). Distinct from the bounded tail read in
     /// [`observe_lifecycle`](Self::observe_lifecycle): this walks the whole
@@ -832,7 +832,7 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
-    /// Resolve the local transcript/store that carries a live session's spend.
+    /// Resolve the local conversation/store that carries a live session's spend.
     /// `prior_path` is the path already published in the context sidecar, so a
     /// steady session pays one stat before falling back to provider discovery.
     /// Providers with one-file-per-session stores usually need no override; stores

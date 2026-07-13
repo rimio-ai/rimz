@@ -120,6 +120,135 @@ fn session_start_hooks_write_lifecycle_rows() {
 }
 
 #[test]
+fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
+    let env = Env::new();
+    env.install_agent_hooks("copilot");
+    assert!(env.agent_hooks_installed("copilot"));
+
+    let session_id = "copilot-session";
+    let session_dir = env
+        .home_root
+        .join(".copilot/session-state")
+        .join(session_id);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    let transcript = session_dir.join("events.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            "{\"type\":\"user.message\",\"timestamp\":\"2026-07-13T15:13:21Z\",\"data\":{\"content\":\"integration prompt\"}}\n",
+            "{\"type\":\"assistant.message\",\"timestamp\":\"2026-07-13T15:13:23Z\",\"data\":{\"content\":\"integration answer\"}}\n",
+        ),
+    )
+    .unwrap();
+    let otel = env.home_root.join("copilot-otel.jsonl");
+    std::fs::write(
+        &otel,
+        format!(
+            "{{\"type\":\"span\",\"name\":\"chat auto\",\"endTime\":[1783955603,1],\"attributes\":{{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"{session_id}\",\"gen_ai.response.model\":\"gpt-5-mini\",\"gen_ai.usage.input_tokens\":100,\"gen_ai.usage.cache_read.input_tokens\":25,\"gen_ai.usage.output_tokens\":10}}}}\n"
+        ),
+    )
+    .unwrap();
+
+    let prompt = json!({"sessionId":session_id,"prompt":"integration prompt"}).to_string();
+    let mut prompt_cmd = env.copilot_hook_command("userPromptSubmitted");
+    prompt_cmd.env("COPILOT_OTEL_FILE_EXPORTER_PATH", &otel);
+    let out = env
+        .spawn_payload(prompt_cmd, &prompt)
+        .wait_with_output()
+        .expect("wait Copilot prompt");
+    assert_hook_succeeded_neutral("copilot", out);
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "running");
+    let contexts = env.agent_contexts();
+    assert_eq!(contexts.len(), 1);
+    assert_eq!(contexts[0].agent_id.as_str(), session_id);
+    assert_eq!(contexts[0].context.model_id.as_deref(), Some("gpt-5-mini"));
+    assert_eq!(
+        contexts[0]
+            .context
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.current_usage.as_ref())
+            .and_then(|usage| usage.input_tokens),
+        Some(75)
+    );
+
+    assert_hook_succeeded_neutral(
+        "copilot",
+        env.run_copilot_hook(
+            "sessionStart",
+            &json!({"sessionId":session_id,"source":"startup","initialPrompt":"integration prompt"}).to_string(),
+        ),
+    );
+    assert_eq!(
+        env.snapshot_json()["agents"][0]["status"],
+        "running",
+        "prompt-seeded session start normalizes to the duplicate turn edge"
+    );
+
+    assert_hook_succeeded_neutral(
+        "copilot",
+        env.run_copilot_hook(
+            "preToolUse",
+            &json!({"sessionId":session_id,"toolName":"ask_user","toolArgs":{"question":"Proceed?"}}).to_string(),
+        ),
+    );
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "waiting");
+    assert_hook_succeeded_neutral(
+        "copilot",
+        env.run_copilot_hook(
+            "preToolUse",
+            &json!({"sessionId":session_id,"toolName":"bash"}).to_string(),
+        ),
+    );
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "running");
+
+    assert_hook_succeeded_neutral(
+        "copilot",
+        env.run_copilot_hook(
+            "agentStop",
+            &json!({"sessionId":session_id,"stopReason":"end_turn","transcriptPath":transcript})
+                .to_string(),
+        ),
+    );
+    let snapshot = env.snapshot_json();
+    assert_eq!(snapshot["agents"][0]["status"], "success");
+    assert_eq!(
+        snapshot["agents"][0]["transcript_path"],
+        transcript.to_string_lossy().as_ref()
+    );
+    let history = env
+        .rimz()
+        .args(["agents", "history", session_id, "--json"])
+        .output()
+        .expect("run Copilot history");
+    assert!(
+        history.status.success(),
+        "{}",
+        String::from_utf8_lossy(&history.stderr)
+    );
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert_eq!(history[0]["prompt"], "integration prompt");
+    assert_eq!(history[0]["outcome"], "done");
+    let transcript_output = env
+        .rimz()
+        .args(["transcript", session_id])
+        .output()
+        .expect("run durable Copilot transcript");
+    assert!(transcript_output.status.success());
+    assert!(String::from_utf8_lossy(&transcript_output.stdout).contains("integration answer"));
+
+    assert_hook_succeeded_neutral(
+        "copilot",
+        env.run_copilot_hook(
+            "sessionEnd",
+            &json!({"sessionId":session_id,"reason":"user_exit"}).to_string(),
+        ),
+    );
+    assert!(env.snapshot_json()["agents"].as_array().unwrap().is_empty());
+    assert!(env.agent_contexts().is_empty());
+}
+
+#[test]
 fn cursor_lifecycle_hook_writes_state_and_returns_json_neutral() {
     let env = Env::new();
     let payload = serde_json::to_string(&json!({
