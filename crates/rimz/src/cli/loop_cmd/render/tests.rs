@@ -38,9 +38,34 @@ fn dashboard(group: &WatchGroup, cols: usize, rows: usize) -> String {
         cols,
         rows,
         Timestamp::from_second(100).unwrap(),
+        false,
     )
     .unwrap();
     String::from_utf8(out.into_inner()).unwrap()
+}
+
+#[test]
+fn held_watch_band_hides_the_quit_key() {
+    let group = WatchGroup {
+        root: PathBuf::from("/repo"),
+        room_is_open: true,
+        rows: vec![dashboard_row("task", RowState::NeverRun, false)],
+    };
+    let render = |hold| {
+        let mut out = anstream::StripStream::new(Vec::new());
+        write_watch_band(
+            &mut out,
+            std::slice::from_ref(&group),
+            100,
+            Timestamp::from_second(100).unwrap(),
+            hold,
+        )
+        .unwrap();
+        String::from_utf8(out.into_inner()).unwrap()
+    };
+
+    assert!(render(false).contains("q quit"));
+    assert!(!render(true).contains("q quit"));
 }
 
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {

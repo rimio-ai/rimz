@@ -233,7 +233,7 @@ struct ShowArgs {
 
 #[derive(Debug, Args)]
 struct WatchArgs {
-    /// Keep the dashboard alive through Ctrl-C in the rimzd daemon view.
+    /// Lock the rimzd dashboard in place by ignoring quit keys.
     #[arg(long, hide = true)]
     hold: bool,
 }

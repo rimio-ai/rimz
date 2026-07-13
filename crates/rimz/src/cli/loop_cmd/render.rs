@@ -201,11 +201,11 @@ pub(super) fn room_open(root: &Path) -> bool {
 pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
     loop {
-        repaint_watch(globals)?;
+        repaint_watch(globals, args.hold)?;
         match event::poll(Duration::from_secs(1)) {
             Ok(true) => match event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('q') if !args.hold => return Ok(()),
                     KeyCode::Char('c') | KeyCode::Char('C')
                         if key.modifiers.contains(KeyModifiers::CONTROL) && !args.hold =>
                     {
@@ -222,7 +222,7 @@ pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
-fn repaint_watch(globals: &GlobalFlags) -> Result<()> {
+fn repaint_watch(globals: &GlobalFlags, hold: bool) -> Result<()> {
     use ratatui::crossterm::{
         cursor::MoveTo,
         execute,
@@ -230,7 +230,7 @@ fn repaint_watch(globals: &GlobalFlags) -> Result<()> {
     };
 
     let mut frame = Vec::new();
-    render_watch_frame(&mut frame, globals)?;
+    render_watch_frame(&mut frame, globals, hold)?;
     if frame.last() == Some(&b'\n') {
         frame.pop();
         if frame.last() == Some(&b'\r') {
@@ -245,7 +245,7 @@ fn repaint_watch(globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-fn render_watch_frame(out: &mut impl Write, globals: &GlobalFlags) -> Result<()> {
+fn render_watch_frame(out: &mut impl Write, globals: &GlobalFlags, hold: bool) -> Result<()> {
     let tasks = load_all_tasks(globals)?;
     let now = Timestamp::now();
     let pause_entries = pauses::load();
@@ -286,7 +286,14 @@ fn render_watch_frame(out: &mut impl Write, globals: &GlobalFlags) -> Result<()>
         });
     }
     let (cols, rows) = rimz::mux::detect_terminal_size().unwrap_or((80, 24));
-    render_dashboard(out, &groups, usize::from(cols), usize::from(rows), now)?;
+    render_dashboard(
+        out,
+        &groups,
+        usize::from(cols),
+        usize::from(rows),
+        now,
+        hold,
+    )?;
     Ok(())
 }
 
@@ -424,8 +431,9 @@ fn render_dashboard(
     cols: usize,
     rows: usize,
     now: Timestamp,
+    hold: bool,
 ) -> std::io::Result<()> {
-    write_watch_band(out, groups, cols, now)?;
+    write_watch_band(out, groups, cols, now, hold)?;
     if rows <= 2 {
         return Ok(());
     }
@@ -544,6 +552,7 @@ fn write_watch_band(
     groups: &[WatchGroup],
     cols: usize,
     now: Timestamp,
+    hold: bool,
 ) -> std::io::Result<()> {
     let all = groups
         .iter()
@@ -602,7 +611,9 @@ fn write_watch_band(
             ui::palette::MUTED,
         ));
     }
-    candidates.push(("q quit".to_owned(), ui::palette::FAINT));
+    if !hold {
+        candidates.push(("q quit".to_owned(), ui::palette::FAINT));
+    }
     for (text, style) in candidates {
         if !push_band_segment(&mut segments, text, style, cols) {
             break;
