@@ -174,6 +174,7 @@ fn install_run_interrupt_handlers(_flag: Arc<AtomicBool>) -> Result<()> {
 pub(super) fn wait_for_run(
     sock: std::os::unix::net::UnixDatagram,
     expected: ExpectedRunFrame,
+    paths: &rimz::StatePaths,
     timeout: Option<Duration>,
     interrupt: &AtomicBool,
 ) -> Result<RunWaitOutcome> {
@@ -186,6 +187,10 @@ pub(super) fn wait_for_run(
         let sock = run_wake::adopt(sock).context("adopting run socket")?;
         let deadline = timeout.map(|duration| Instant::now() + duration);
         loop {
+            let record = rimz::harness::run::load(paths, &expected.run_id)?;
+            if record.status.is_terminal() {
+                return Ok(RunWaitOutcome::Completed);
+            }
             if interrupt.load(Ordering::SeqCst) {
                 return Ok(RunWaitOutcome::Interrupted);
             }
@@ -194,14 +199,7 @@ pub(super) fn wait_for_run(
             };
             match run_wake::wait_for_run_completion(&sock, &expected, Some(wait)).await? {
                 RunWakeOutcome::Completed(_status) => return Ok(RunWaitOutcome::Completed),
-                RunWakeOutcome::Neutral => {
-                    if interrupt.load(Ordering::SeqCst) {
-                        return Ok(RunWaitOutcome::Interrupted);
-                    }
-                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                        return Ok(RunWaitOutcome::TimedOut);
-                    }
-                }
+                RunWakeOutcome::Neutral => {}
             }
         }
     });

@@ -149,16 +149,17 @@ impl RunFixture {
         run_wake::bind_run(&self.runtime, &self.record.run_id).unwrap()
     }
 
-    fn complete(&mut self, message: &str) {
-        self.record.status = RunStatus::Completed;
-        self.record.last_message = Some(message.to_owned());
-        rimz::store::run_store::write(&self.paths.runs_dir, &self.record).unwrap();
+    fn complete(&self, message: &str) {
+        let mut record = self.record.clone();
+        record.status = RunStatus::Completed;
+        record.last_message = Some(message.to_owned());
+        rimz::store::run_store::write(&self.paths.runs_dir, &record).unwrap();
     }
 }
 
 #[test]
 fn blocking_stream_wakeup_reloads_terminal_record() {
-    let mut fixture = RunFixture::new(RunStatus::Running);
+    let fixture = RunFixture::new(RunStatus::Running);
     let run_id = fixture.run_id();
     let (sock, sock_path) = fixture.bind();
 
@@ -273,7 +274,7 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
 
 #[test]
 fn completed_run_wakeup_reloads_terminal_record() {
-    let mut fixture = RunFixture::new(RunStatus::Running);
+    let fixture = RunFixture::new(RunStatus::Running);
     let run_id = fixture.run_id();
     let (sock, sock_path) = fixture.bind();
 
@@ -288,6 +289,7 @@ fn completed_run_wakeup_reloads_terminal_record() {
     let outcome = wait_for_run(
         sock,
         fixture.expected(),
+        &fixture.paths,
         Some(Duration::from_secs(1)),
         &AtomicBool::new(false),
     )
@@ -308,6 +310,7 @@ fn neutral_run_wait_marks_timeout() {
     let outcome = wait_for_run(
         sock,
         fixture.expected(),
+        &fixture.paths,
         Some(Duration::from_millis(10)),
         &AtomicBool::new(false),
     )
@@ -319,6 +322,46 @@ fn neutral_run_wait_marks_timeout() {
 }
 
 #[test]
+fn wait_for_run_observes_terminal_record_without_wakeup() {
+    let fixture = RunFixture::new(RunStatus::Completed);
+    let (sock, _sock_path) = fixture.bind();
+
+    let outcome = wait_for_run(
+        sock,
+        fixture.expected(),
+        &fixture.paths,
+        Some(Duration::from_millis(100)),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+
+    assert_eq!(outcome, RunWaitOutcome::Completed);
+}
+
+#[test]
+fn wait_for_run_polls_terminal_record_without_wakeup() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let (sock, _sock_path) = fixture.bind();
+
+    let outcome = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(300));
+            fixture.complete("done");
+        });
+        wait_for_run(
+            sock,
+            fixture.expected(),
+            &fixture.paths,
+            Some(Duration::from_secs(1)),
+            &AtomicBool::new(false),
+        )
+    })
+    .unwrap();
+
+    assert_eq!(outcome, RunWaitOutcome::Completed);
+}
+
+#[test]
 fn wait_for_run_returns_interrupted_when_flag_is_set() {
     let fixture = RunFixture::new(RunStatus::Running);
     let (sock, _sock_path) = fixture.bind();
@@ -327,6 +370,7 @@ fn wait_for_run_returns_interrupted_when_flag_is_set() {
     let outcome = wait_for_run(
         sock,
         fixture.expected(),
+        &fixture.paths,
         Some(Duration::from_secs(1)),
         &interrupt,
     )

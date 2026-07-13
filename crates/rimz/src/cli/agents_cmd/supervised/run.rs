@@ -145,6 +145,7 @@ impl RunWaiter {
             let outcome = supervised::wait_for_run(
                 self.sock.try_clone().context("cloning run wait socket")?,
                 self.expected.clone(),
+                prepared.store.paths(),
                 args.timeout,
                 &self.interrupt,
             )?;
