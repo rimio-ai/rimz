@@ -172,6 +172,16 @@ fn approval_waiting_resolution_tool_activity_and_context_clamp_follow_file_order
 }
 
 #[test]
+fn invalid_context_metadata_preserves_the_latest_valid_percentage() {
+    let lines = concat!(
+        "{\"id\":\"valid\",\"timestamp\":\"2025-01-01T00:00:00Z\",\"payload\":{\"type\":\"session_metadata\",\"key\":\"contextUsage\",\"value\":{\"usagePercentage\":42.0}}}\n",
+        "{\"id\":\"invalid\",\"timestamp\":\"2025-01-01T00:00:01Z\",\"payload\":{\"type\":\"session_metadata\",\"key\":\"contextUsage\",\"value\":null}}\n",
+    );
+
+    assert_eq!(session::fold_for_test(lines).3, Some(42));
+}
+
+#[test]
 fn transcript_cursor_retains_torn_final_record() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("messages.jsonl");

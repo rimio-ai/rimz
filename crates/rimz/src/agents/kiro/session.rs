@@ -488,10 +488,13 @@ fn fold(lines: &str, created_at: Timestamp, metadata_status: &str) -> FoldedSess
                 }
             }
             Payload::SessionMetadata { key, value } if key.as_deref() == Some("contextUsage") => {
-                folded.context_pct = value
+                let context_pct = value
                     .and_then(|value| value.usage_percentage)
                     .filter(|value| value.is_finite())
                     .map(|value| value.clamp(0.0, 100.0).round() as u8);
+                if context_pct.is_some() {
+                    folded.context_pct = context_pct;
+                }
             }
             Payload::SessionEvent { category, context }
                 if category.as_deref() == Some("session_pause")
