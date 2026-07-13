@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::project::{
     AgentIdentityState, FoldEvent, backfill_agent_identities, decode_events,
     reduce_agent_states_seeded_with_identity, stamp_compact_commands_in_agents,
+    unstamp_for_rebirth,
 };
 use super::{Result, SnapshotErr};
 use crate::agents::AgentState;
@@ -235,10 +236,7 @@ fn fold_delta(
         .extend(agent_tombstones_for_decoded_events(events));
     let mut raw_agents: Vec<AgentState> = map.into_values().collect();
     if seed.saw_session_rebirth {
-        for agent in &mut carryover.agents {
-            agent.pane = None;
-            agent.kind_ordinal = None;
-        }
+        unstamp_for_rebirth(&mut carryover.agents);
         carryover.agent_identity = carryover.agent_identity.with_ordinals_reset();
         agent_identity = backfill_agent_identities(&mut raw_agents, agent_identity);
     }

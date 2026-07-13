@@ -471,7 +471,7 @@ impl AgentCard {
     }
 }
 
-fn derive_percent(used: u64, window: u64) -> Option<u8> {
+pub(crate) fn derive_percent(used: u64, window: u64) -> Option<u8> {
     (window > 0).then(|| (used.saturating_mul(100) / window).min(100) as u8)
 }
 

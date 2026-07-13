@@ -1256,7 +1256,7 @@ impl AgentState {
     }
 
     pub(crate) fn backfill_rotation_enrichment_from(&mut self, base: &Self) {
-        // Fill-only rotation merge. `store::snapshot::project::carried_state`
+        // Fill-only rotation merge. `store::snapshot::project::carried_base`
         // owns the authoritative reducer lifetime list.
         if self.transcript_path.is_none() {
             self.transcript_path = base.transcript_path.clone();

@@ -18,6 +18,8 @@ use crate::store::event::{
     MessageEventPayload,
 };
 
+use super::row::derive_percent;
+
 mod identity;
 
 pub(crate) use identity::AgentIdentityState;
@@ -80,6 +82,17 @@ pub(super) fn decode_events(events: &[EventEnvelope]) -> Vec<FoldEvent<'_>> {
         .collect()
 }
 
+/// A mux rebirth renumbers panes from zero, so every stamp recorded before
+/// the boundary names a pane that no longer exists and the reborn session can
+/// reuse it. Sessions stay alive across the boundary; only pane and ordinal
+/// stamps are retired.
+pub(super) fn unstamp_for_rebirth<'a>(agents: impl IntoIterator<Item = &'a mut AgentState>) {
+    for agent in agents {
+        agent.pane = None;
+        agent.kind_ordinal = None;
+    }
+}
+
 pub(super) fn stamp_compact_commands_in_agents(
     agents: &mut [AgentState],
     events: &[FoldEvent<'_>],
@@ -121,10 +134,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
         let envelope = event.envelope;
         match &event.kind {
             EventKind::SessionRebirth => {
-                for state in map.values_mut() {
-                    state.pane = None;
-                    state.kind_ordinal = None;
-                }
+                unstamp_for_rebirth(map.values_mut());
                 identity.reset_ordinals();
             }
             EventKind::AgentLaunch(payload) => {
@@ -314,7 +324,7 @@ fn reduce_agent_launch(
     if identity.launch_consumed(&payload.agent_id) {
         return;
     }
-    if is_provisional_agent_id(&payload.agent_id)
+    if payload.agent_id.is_provisional()
         && let Some(owner) = identity.owner_for_name(&payload.agent_name)
         && owner.0 == *kind
         && owner != key
@@ -377,10 +387,6 @@ fn compact_command_tokens(payload: &MessageEventPayload) -> Option<u64> {
         return None;
     }
     payload.compacted_context_tokens
-}
-
-fn is_provisional_agent_id(agent_id: &AgentSessionId) -> bool {
-    agent_id.is_provisional()
 }
 
 struct AgentStateInput<'a> {
@@ -515,7 +521,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.establishes_identity,
         input.event_name,
     );
-    let runtime = runtime_projection(input.observation, input.prior, input.agent_id);
+    let runtime_owner = runtime_projection(input.observation, input.prior, input.agent_id);
     let prompt = prompt_projection(
         input.observation,
         input.prior,
@@ -528,7 +534,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.status = lifecycle.status;
     state.phase = lifecycle.phase;
     state.pane = pane_projection(input.observation, input.prior);
-    state.runtime_owner = runtime.runtime_owner;
+    state.runtime_owner = runtime_owner;
     state.parent_agent_id = parent_agent_id;
     state.worktree_path = worktree.path;
     state.worktree_branch = worktree.branch;
@@ -782,7 +788,7 @@ fn context_used_tokens(
 /// back rather than rendering a fabricated 0%.
 fn derive_context_pct(used: Option<u64>, window: Option<u64>) -> Option<u8> {
     let (used, window) = (used?, window?);
-    (window > 0).then(|| (used.saturating_mul(100) / window).min(100) as u8)
+    derive_percent(used, window)
 }
 
 struct WorktreeProjection {
@@ -815,15 +821,11 @@ fn worktree_projection(
     }
 }
 
-struct RuntimeProjection {
-    runtime_owner: Option<RuntimeOwner>,
-}
-
 fn runtime_projection(
     observation: &AgentLifecycleObservation,
     prior: Option<&AgentState>,
     agent_id: &AgentSessionId,
-) -> RuntimeProjection {
+) -> Option<RuntimeOwner> {
     let event_owner = observation.runtime_owner.clone().or_else(|| {
         observation.agent_pid.map(|pid| {
             RuntimeOwner::new(
@@ -835,7 +837,7 @@ fn runtime_projection(
         })
     });
     let prior_owner = prior.and_then(|p| p.runtime_owner.clone());
-    let runtime_owner = match (event_owner, prior_owner) {
+    match (event_owner, prior_owner) {
         (Some(event), Some(prior))
             if event.kind == RuntimeOwnerKind::Daemon
                 && prior.kind == RuntimeOwnerKind::Agent
@@ -845,8 +847,7 @@ fn runtime_projection(
         }
         (Some(event), _) => Some(event),
         (None, prior) => prior,
-    };
-    RuntimeProjection { runtime_owner }
+    }
 }
 
 struct PromptProjection {
